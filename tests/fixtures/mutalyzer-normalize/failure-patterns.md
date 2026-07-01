@@ -278,8 +278,11 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_009930.1(NM_001099625.2):n.110del` | errors | accepted_divergence | — | — |
 | `NG_012337.1(10683):c.274G>T` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(DUMMYACCNO_9999.9):c.12_13insGATC` | errors | accepted_divergence | — | — |
+| `NG_012337.1(NM_003002.2):c.[274;600]` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.[274;600]` | normalized | known_bug | — | #487 |
+| `NG_012337.1(NM_003002.2):c.[274=;275del]` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.[274=;275del]` | normalized | known_bug | — | #487 |
+| `NG_012337.1(NM_003002.2):c.[274del;275=]` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.[274del;275=]` | normalized | known_bug | — | #487 |
 | `NG_012337.1(NM_003002.2):c.pterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.qterdel` | normalized | spec_citation | — | — |
@@ -321,7 +324,7 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 |---|---:|---:|---:|---:|---:|
 | coding_protein_descriptions | 10 | 0 | 0 | 0 | 0 |
 | errors | 16 | 0 | 0 | 0 | 0 |
-| genomic | 38 | 0 | 0 | 0 | 1 |
+| genomic | 41 | 0 | 0 | 0 | 1 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
 | normalized | 23 | 18 | 4 | 5 | 9 |

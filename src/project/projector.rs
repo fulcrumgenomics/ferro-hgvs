@@ -58,6 +58,26 @@ fn build_cis_whole_protein_unknown(member: &HgvsVariant) -> HgvsVariant {
     }
 }
 
+/// Sort projected genomic allele members into ascending genomic order
+/// (recommendations/DNA/alleles.md:118 "Variants should be listed in genomic
+/// order"). A minus-strand transcript projects members in descending genomic
+/// order, so this re-canonicalizes. Stable (`sort_by_key`); a non-Genome or
+/// unresolved-start member sorts to the end without reordering among such
+/// members. Scoped to the projection allele path — not the global normalizer —
+/// to bound blast radius, and applied by the caller to cis alleles only (#851).
+fn sort_genomic_allele_members(members: &mut [HgvsVariant]) {
+    members.sort_by_key(|m| match m {
+        HgvsVariant::Genome(g) => g
+            .loc_edit
+            .location
+            .start
+            .inner()
+            .map(|p| p.base)
+            .unwrap_or(u64::MAX),
+        _ => u64::MAX,
+    });
+}
+
 /// Combine the per-member protein consequences of an **in-cis** allele into a
 /// single description when the members are adjacent single substitutions (#855).
 ///
@@ -1260,6 +1280,29 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             return Ok(variant.clone());
         }
 
+        // #851: project a compound allele by projecting each member into the
+        // parent genomic frame and reassembling. Each member carries its own
+        // accession + genomic_context, so per-member `project_to_genomic`
+        // re-anchors and re-normalizes it (the `project_to_genomic` layer, not
+        // `project_to_genomic_nc`). All-or-nothing: a declining member errors the
+        // whole allele (mirrors `project_allele_inner`'s `all_have_genomic`).
+        if let HgvsVariant::Allele(allele) = variant {
+            let mut members = Vec::with_capacity(allele.variants.len());
+            for member in &allele.variants {
+                members.push(self.project_to_genomic(member)?);
+            }
+            // Genomic-order sort applies only to a CIS allele — a trans allele
+            // `[m1];[m2]` encodes haplotype assignment by member order, so
+            // reordering would swap haplotypes (alleles.md:118 is about variants
+            // within one bracket/chromosome).
+            if allele.phase == AllelePhase::Cis {
+                sort_genomic_allele_members(&mut members);
+            }
+            let mut projected = AlleleVariant::new(members, allele.phase);
+            projected.uncertain = allele.uncertain;
+            return Ok(HgvsVariant::Allele(projected));
+        }
+
         // #537: a `c.pter`/`c.qter` telomere-flank input resolves to the parent
         // reference's own genomic terminus, not a transcript-mapped coordinate.
         // Handle it before the cdot pivot below, which cannot (and per #534
@@ -1642,9 +1685,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                         .to_string(),
                 })
             }
+            // Unreachable in practice: `project_to_genomic` handles `Allele`
+            // before delegating here (#851). Kept for match exhaustiveness.
             HgvsVariant::Allele(_) => {
                 return Err(FerroError::UnsupportedProjection {
-                    reason: "project_to_genomic does not yet support allele inputs; see #328"
+                    reason: "project_to_genomic_nc does not handle allele inputs directly (#851)"
                         .to_string(),
                 })
             }
@@ -7913,29 +7958,22 @@ mod tests {
             );
         }
 
-        // -- 10: allele input → unsupported ------------------------------------
+        // -- 10: genome allele input → idempotent (#851) -----------------------
 
         #[test]
-        fn project_to_genomic_unsupported_for_allele() {
+        fn project_to_genomic_genome_allele_is_idempotent() {
             let (projector, provider) = make_test_provider_and_projector();
             let vp = VariantProjector::new(projector, provider);
 
             let v1 = crate::parse_hgvs("chr1:g.1003C>A").expect("parse v1");
             let v2 = crate::parse_hgvs("chr1:g.1006T>A").expect("parse v2");
             let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![v1, v2]));
-            let err = vp
+            // Members are already Genome → each passes through unchanged and the
+            // allele reassembles as itself (#851 routes alleles per member).
+            let out = vp
                 .project_to_genomic(&allele)
-                .expect_err("allele inputs should be rejected (see #328)");
-            match err {
-                FerroError::UnsupportedProjection { reason } => {
-                    assert!(
-                        reason.to_ascii_lowercase().contains("allele"),
-                        "expected reason to mention 'allele', got: {}",
-                        reason
-                    );
-                }
-                other => panic!("expected UnsupportedProjection, got: {:?}", other),
-            }
+                .expect("genome allele projects idempotently (#851)");
+            assert_eq!(out, allele);
         }
 
         // -- 11: ? position sentinel → unsupported -----------------------------

@@ -359,6 +359,88 @@ impl CoordinateMapper {
             return Ok((GenomePos::new(genome_pos), info));
         }
 
+        // #851: a 5'UTR position upstream of the modeled transcript start —
+        // `cds_to_tx` underflows (offset > cds_start). The NG_/LRG_ parent
+        // supplies the contiguous 5' flank (refseq.md:46), so extend linearly
+        // from transcript base 0 into the flank in the transcript's NC_ frame;
+        // the projector's affine step re-anchors into the parent. Non-intronic
+        // 5'UTR only (offset is already None here; the intronic block returned
+        // above). The extended NC_ coordinate is treated exactly as cds_to_tx +
+        // tx_to_genome would treat an in-range 5'UTR base, so the re-anchor is
+        // direction-agnostic.
+        if !cds_pos.utr3 && cds_pos.base < 0 {
+            if let Some(cds_start) = tx.cds_start {
+                // `cds_pos.base < 0` here, so the negation is positive — except
+                // for `i64::MIN`, where it overflows. Guard with checked_neg.
+                let offset =
+                    cds_pos
+                        .base
+                        .checked_neg()
+                        .ok_or_else(|| FerroError::InvalidCoordinates {
+                            msg: format!("5' UTR position c.{} is out of range", cds_pos.base),
+                        })? as u64;
+                if offset > cds_start {
+                    let under = offset - cds_start;
+                    // Anchor the flank at transcript base 0. Guard the anchor
+                    // against a transcript-only CIGAR insertion (mirrors the
+                    // non-intronic gap guard below): `tx_to_genome` derives the
+                    // genome coordinate via plain offset arithmetic that ignores
+                    // the CIGAR, so an anchor inside such a gap would fabricate a
+                    // wrong flank coordinate.
+                    let anchor_tx_pos: u64 = 0;
+                    if let Some(exon) = tx.exon_for_tx_pos(anchor_tx_pos) {
+                        let exon_idx = (exon.number as usize).saturating_sub(1);
+                        if let Some(gap) = tx.cigar_insertion_gap_at_tx_pos(exon_idx, anchor_tx_pos)
+                        {
+                            return Err(FerroError::AlignmentGap {
+                                msg: format!(
+                                    "transcript position {} falls in a transcript-genome alignment gap \
+                                     (CIGAR insertion of {} bp) in exon {}",
+                                    anchor_tx_pos, gap.length, exon.number
+                                ),
+                            });
+                        }
+                    }
+                    let g0 = tx.tx_to_genome(anchor_tx_pos).ok_or_else(|| {
+                        FerroError::InvalidCoordinates {
+                            msg: format!(
+                                "cannot anchor 5' flank for {transcript_id} at transcript base 0"
+                            ),
+                        }
+                    })?;
+                    let genome_pos =
+                        match tx.strand {
+                            Strand::Minus => g0.checked_add(under).ok_or_else(|| {
+                                FerroError::InvalidCoordinates {
+                                    msg: format!(
+                                        "5' flank extension overflows genome for c.{}",
+                                        cds_pos.base
+                                    ),
+                                }
+                            })?,
+                            Strand::Plus => g0.checked_sub(under).ok_or_else(|| {
+                                FerroError::InvalidCoordinates {
+                                    msg: format!(
+                                        "5' flank extension underflows genome for c.{}",
+                                        cds_pos.base
+                                    ),
+                                }
+                            })?,
+                            Strand::Unknown => {
+                                return Err(FerroError::ConversionError {
+                                    msg: "strand unknown for transcript".into(),
+                                })
+                            }
+                        };
+                    // Flank base is upstream of transcript base 0, so it has no
+                    // real exon; leave `info.exon_numbers` empty (no projection
+                    // output for these rows depends on it).
+                    info.in_5utr = true;
+                    return Ok((GenomePos::new(genome_pos), info));
+                }
+            }
+        }
+
         // Non-intronic position
         let tx_pos = cds_to_tx_aware(cds_pos.base)?;
 
