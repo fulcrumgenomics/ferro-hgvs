@@ -555,17 +555,19 @@ impl AxisTally {
                     return;
                 }
             }
-            if let Some(ar) = &case.accepted_rejection {
-                if ar.axis == self.axis {
-                    self.fail.push((
-                        case.input.clone(),
-                        format!(
-                            "XPASS: accepted_rejection ({}) now matches mutalyzer; ferro no longer rejects this input — remove the annotation and demote the row",
-                            ar.reason
-                        ),
-                    ));
-                    return;
-                }
+            if let Some(ar) = case
+                .accepted_rejections
+                .iter()
+                .find(|ar| ar.axis == self.axis)
+            {
+                self.fail.push((
+                    case.input.clone(),
+                    format!(
+                        "XPASS: accepted_rejection ({}) now matches mutalyzer; ferro no longer rejects this input — remove the annotation and demote the row",
+                        ar.reason
+                    ),
+                ));
+                return;
             }
             self.pass += 1;
             return;
@@ -577,9 +579,12 @@ impl AxisTally {
         // sentinel (#651) still hard-FAIL below. Tallied alongside
         // `accepted_divergence`. (An `Ok` here — ferro stopped rejecting — falls
         // through: a match XPASS-FAILs above, a mismatch FAILs below.)
-        if let Some(ar) = &case.accepted_rejection {
-            if ar.axis == self.axis
-                && matches!(&actual, Err(e) if !e.starts_with("panic:") && !e.starts_with(EMPTY_PROJECTION_SENTINEL))
+        if let Some(ar) = case
+            .accepted_rejections
+            .iter()
+            .find(|ar| ar.axis == self.axis)
+        {
+            if matches!(&actual, Err(e) if !e.starts_with("panic:") && !e.starts_with(EMPTY_PROJECTION_SENTINEL))
             {
                 self.divergence_accepted
                     .push((case.input.clone(), ar.reason.to_string()));
@@ -2351,7 +2356,7 @@ mod comparator_tests {
             improvement: None,
             reference_unavailable: None,
             spec_citations,
-            accepted_rejection: None,
+            accepted_rejections: Vec::new(),
         }
     }
 
@@ -2848,12 +2853,12 @@ mod comparator_tests {
     fn tally_accepted_rejection_buckets_nonpanic_err() {
         let mut t = AxisTally::new(Axis::Normalized);
         let case = Case {
-            accepted_rejection: Some(AcceptedRejection {
+            accepted_rejections: vec![AcceptedRejection {
                 axis: Axis::Normalized,
                 reason: RejectionReason::MalformedInputRejected654,
                 note: None,
                 cluster: None,
-            }),
+            }],
             ..make_case("in", None, None)
         };
         t.record(&case, "X", Err("parse: malformed substitution".to_string()));
@@ -2877,12 +2882,12 @@ mod comparator_tests {
     fn tally_accepted_rejection_panic_still_fails() {
         let mut t = AxisTally::new(Axis::Normalized);
         let case = Case {
-            accepted_rejection: Some(AcceptedRejection {
+            accepted_rejections: vec![AcceptedRejection {
                 axis: Axis::Normalized,
                 reason: RejectionReason::MalformedInputRejected654,
                 note: None,
                 cluster: None,
-            }),
+            }],
             ..make_case("in", None, None)
         };
         t.record(&case, "X", Err("panic: boom".to_string()));
@@ -2897,12 +2902,12 @@ mod comparator_tests {
     fn tally_accepted_rejection_xpass_fails_when_ferro_no_longer_errors() {
         let mut t = AxisTally::new(Axis::Normalized);
         let case = Case {
-            accepted_rejection: Some(AcceptedRejection {
+            accepted_rejections: vec![AcceptedRejection {
                 axis: Axis::Normalized,
                 reason: RejectionReason::MalformedInputRejected654,
                 note: None,
                 cluster: None,
-            }),
+            }],
             ..make_case("in", None, None)
         };
         t.record(&case, "X", Ok("X".to_string()));
@@ -2910,6 +2915,45 @@ mod comparator_tests {
         assert!(t.divergence_accepted.is_empty());
         assert_eq!(t.fail.len(), 1, "ferro no longer rejecting must XPASS-FAIL");
         assert!(t.fail[0].1.contains("XPASS"));
+    }
+
+    // (7r-multiaxis) A `Case` may carry a rejection on MORE THAN ONE axis (#870):
+    // an input ferro rejects at parse/projection time fails on every projected
+    // axis, so the same rejection is dispositioned on both `normalized` and
+    // `genomic`. Each axis tally buckets its own rejection independently.
+    #[test]
+    fn tally_accepted_rejection_multi_axis_buckets_per_axis() {
+        let case = Case {
+            accepted_rejections: vec![
+                AcceptedRejection {
+                    axis: Axis::Normalized,
+                    reason: RejectionReason::MalformedInputRejected654,
+                    note: None,
+                    cluster: None,
+                },
+                AcceptedRejection {
+                    axis: Axis::Genomic,
+                    reason: RejectionReason::MalformedInputRejected654,
+                    note: None,
+                    cluster: None,
+                },
+            ],
+            ..make_case("in", None, None)
+        };
+        // The genomic-axis tally buckets the genomic rejection (not the
+        // normalized one), proving the matcher keys each rejection to its axis.
+        let mut g = AxisTally::new(Axis::Genomic);
+        g.record(&case, "X", Err("project: cannot re-anchor".to_string()));
+        assert!(
+            g.fail.is_empty(),
+            "genomic Err with a genomic rejection must bucket"
+        );
+        assert_eq!(g.divergence_accepted.len(), 1);
+        // And the normalized-axis tally independently buckets on the same case.
+        let mut n = AxisTally::new(Axis::Normalized);
+        n.record(&case, "X", Err("parse: malformed".to_string()));
+        assert!(n.fail.is_empty());
+        assert_eq!(n.divergence_accepted.len(), 1);
     }
 
     // (7c) `reference_unavailable` deserializes including its closed `reason`

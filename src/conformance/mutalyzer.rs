@@ -43,9 +43,6 @@ impl Fixture {
                 case.reference_unavailable
                     .as_ref()
                     .and_then(|d| d.cluster.as_deref()),
-                case.accepted_rejection
-                    .as_ref()
-                    .and_then(|d| d.cluster.as_deref()),
             ]
             .into_iter()
             .flatten()
@@ -53,13 +50,18 @@ impl Fixture {
                 refs.push((input, cluster));
             }
             // A `Case` may carry multiple per-axis accepted divergences (#870),
-            // known bugs (#870), and spec citations (#827); collect the cluster
-            // ref of each.
+            // known bugs (#870), accepted rejections (#870), and spec citations
+            // (#827); collect the cluster ref of each.
             for cluster in case
                 .accepted_divergences
                 .iter()
                 .filter_map(|d| d.cluster.as_deref())
                 .chain(case.known_bugs.iter().filter_map(|d| d.cluster.as_deref()))
+                .chain(
+                    case.accepted_rejections
+                        .iter()
+                        .filter_map(|d| d.cluster.as_deref()),
+                )
                 .chain(
                     case.spec_citations
                         .iter()
@@ -85,7 +87,7 @@ impl Fixture {
     }
 
     /// Reject any `Case` whose multi-axis annotations (`spec_citations`,
-    /// `accepted_divergences`, `known_bugs`) name the same axis more than once
+    /// `accepted_divergences`, `known_bugs`, `accepted_rejections`) name the same axis more than once
     /// within a single annotation kind — the matcher `find`s the first match per
     /// axis, so a duplicate-axis entry would be silently ignored. Surfacing it
     /// here turns an authoring mistake into a hard error at fixture-validation
@@ -125,6 +127,11 @@ impl Fixture {
                 &case.input,
                 "known_bug",
                 case.known_bugs.iter().map(|d| d.axis),
+            )?;
+            check_unique(
+                &case.input,
+                "accepted_rejection",
+                case.accepted_rejections.iter().map(|d| d.axis),
             )?;
         }
         Ok(())
@@ -194,8 +201,9 @@ impl Fixture {
             // `accepted_rejection` (ferro correctly errors; mutalyzer lenient) is
             // an accepted, terminal divergence — aggregate it under the
             // `AcceptedDivergence` summary column. The distinct, reviewable
-            // disposition lives in `cases.json`.
-            if let Some(d) = &case.accepted_rejection {
+            // disposition lives in `cases.json`. One summary row per per-axis
+            // rejection (#870): a multi-axis row contributes one row per axis.
+            for d in &case.accepted_rejections {
                 rows.push(MemberRow {
                     cluster: d.cluster.clone(),
                     input: input.to_string(),
@@ -314,8 +322,22 @@ pub struct Case {
     /// an input mutalyzer leniently reinterprets (the only disposition that
     /// covers an `Err` on a projection axis). Tallied into
     /// `AxisTally::divergence_accepted`. See [`AcceptedRejection`].
-    #[serde(default)]
-    pub accepted_rejection: Option<AcceptedRejection>,
+    ///
+    /// Like [`accepted_divergences`](Self::accepted_divergences) and
+    /// [`known_bugs`](Self::known_bugs), a `Case` may carry MORE THAN ONE
+    /// rejection, each scoped to a different axis (#870): an input ferro rejects
+    /// at parse or projection time fails on *every* projected axis, so the same
+    /// rejection is dispositioned on both the `normalized` and `genomic` axes
+    /// once the genomic axis routes through the user-facing `project_variant`.
+    /// The wire (`cases.json`) key is `accepted_rejection` and accepts either a
+    /// single object or an array. Absent → empty vec. See
+    /// [`de_one_or_many`].
+    #[serde(
+        default,
+        rename = "accepted_rejection",
+        deserialize_with = "de_one_or_many"
+    )]
+    pub accepted_rejections: Vec<AcceptedRejection>,
 }
 
 /// Closed enum of corpus-runner axes. Replaces the previous free-form
@@ -1183,6 +1205,51 @@ mod tests {
     fn spec_citation_explicit_null_is_empty() {
         let fixture = parse("", r#"{"input":"N","spec_citation":null}"#);
         assert!(fixture.cases[0].spec_citations.is_empty());
+    }
+
+    #[test]
+    fn accepted_rejection_single_object_and_array_both_parse() {
+        // Single-object form (unchanged wire shape) -> one rejection.
+        let one = r#"{"input":"S","accepted_rejection":{"axis":"normalized",
+            "reason":"ferro-policy-654-malformed-input-rejected"}}"#;
+        let fixture = parse("", one);
+        assert_eq!(fixture.cases[0].accepted_rejections.len(), 1);
+        assert_eq!(
+            fixture.cases[0].accepted_rejections[0].axis,
+            Axis::Normalized
+        );
+
+        // Array form (#870) -> the same rejection dispositioned on two axes.
+        let many = r#"{"input":"M","accepted_rejection":[
+            {"axis":"normalized","reason":"ferro-policy-654-malformed-input-rejected"},
+            {"axis":"genomic","reason":"ferro-policy-654-malformed-input-rejected"}
+        ]}"#;
+        let case = &parse("", many).cases[0];
+        assert_eq!(case.accepted_rejections.len(), 2);
+        assert_eq!(case.accepted_rejections[0].axis, Axis::Normalized);
+        assert_eq!(case.accepted_rejections[1].axis, Axis::Genomic);
+
+        // Absent -> empty vec.
+        assert!(parse("", r#"{"input":"N"}"#).cases[0]
+            .accepted_rejections
+            .is_empty());
+    }
+
+    // #870: two rejections for the SAME axis on one case are rejected by
+    // `validate_clusters` — the matcher honors only one per axis, so a duplicate
+    // is an authoring mistake that must surface loudly (parity with
+    // `duplicate_spec_citation_axis_is_rejected`).
+    #[test]
+    fn duplicate_accepted_rejection_axis_is_rejected() {
+        let cases = r#"{"input":"D","accepted_rejection":[
+            {"axis":"genomic","reason":"ferro-policy-654-malformed-input-rejected"},
+            {"axis":"genomic","reason":"ferro-policy-758-transcript-flank-not-numberable-in-c"}
+        ]}"#;
+        let err = parse("", cases)
+            .validate_clusters()
+            .expect_err("two rejections on the same axis must be rejected");
+        assert!(err.contains("genomic"), "{err}");
+        assert!(err.contains("accepted_rejection"), "{err}");
     }
 
     // #827: two spec citations for the SAME axis on one case are rejected by
