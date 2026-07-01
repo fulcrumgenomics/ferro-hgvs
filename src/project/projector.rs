@@ -1364,10 +1364,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// `Cds` input, an endpoint that is not a `pter`/`qter` marker (numeric,
     /// `?`, `cen`, or a mixed marker/numeric range), or a reversed `qter_pter` —
     /// so the caller falls through to the normal transcript-mapped projection
-    /// (which declines or numbers as appropriate). Returns `Some(Err(..))` when
-    /// the parent reference is unresolvable or its length is unknown to the
-    /// provider (e.g. the pinned parent version is absent — a reference-coverage
-    /// gap, #645/#672 — not a projection bug).
+    /// (which declines or numbers as appropriate). Returns `Some(Err(..))` only
+    /// for a *supported* terminus whose parent reference is unresolvable or whose
+    /// length is unknown to the provider (e.g. the pinned parent version is
+    /// absent — a reference-coverage gap, #645/#672 — not a projection bug); the
+    /// marker-pair classification runs *before* the parent-length lookup, so an
+    /// unsupported pair always declines with `None` regardless of whether the
+    /// parent length could be resolved.
     fn project_cds_terminus_to_parent(
         &self,
         variant: &HgvsVariant,
@@ -1386,6 +1389,24 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let end = resolve_uncertain_boundary(&v.loc_edit.location.end, "c.", "end").ok()?;
         let (Some(start_marker), Some(end_marker)) = (start.special, end.special) else {
             return None;
+        };
+
+        // Classify the whole-arm terminus BEFORE resolving the parent length, so
+        // an unsupported marker pair (`cen`, a reversed `qter_pter`, a mixed
+        // `pter_cen`, …) declines here and falls through to the normal rejection
+        // path — rather than surfacing an incidental parent-length-lookup error,
+        // which is only meaningful for a supported terminus. `pter` → 5'-most
+        // (g.1), `qter` → 3'-most (g.<length>), `pter_qter` → the whole reference.
+        enum ArmTerminus {
+            Pter,
+            Qter,
+            Whole,
+        }
+        let terminus = match (start_marker, end_marker) {
+            (SpecialPosition::Pter, SpecialPosition::Pter) => ArmTerminus::Pter,
+            (SpecialPosition::Qter, SpecialPosition::Qter) => ArmTerminus::Qter,
+            (SpecialPosition::Pter, SpecialPosition::Qter) => ArmTerminus::Whole,
+            _ => return None,
         };
 
         // Resolve the parent genomic reference: an explicit `genomic_context`
@@ -1409,14 +1430,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             return None;
         }
 
-        // pter → 5'-most (g.1); qter → 3'-most (g.<length>); pter_qter → the
-        // whole reference. `cen` and a reversed `qter_pter` are out of scope and
-        // left to the normal path (which declines).
-        let (g_start, g_end) = match (start_marker, end_marker) {
-            (SpecialPosition::Pter, SpecialPosition::Pter) => (1, 1),
-            (SpecialPosition::Qter, SpecialPosition::Qter) => (length, length),
-            (SpecialPosition::Pter, SpecialPosition::Qter) => (1, length),
-            _ => return None,
+        let (g_start, g_end) = match terminus {
+            ArmTerminus::Pter => (1, 1),
+            ArmTerminus::Qter => (length, length),
+            ArmTerminus::Whole => (1, length),
         };
 
         let interval = GenomeInterval::new(GenomePos::new(g_start), GenomePos::new(g_end));
@@ -3535,6 +3552,63 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         normalized: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
+        // #887: resolve a whole-arm terminus (pter/qter) to the parent genome
+        // frame via the same handler the raw project_to_genomic pivot uses
+        // (1310), BEFORE the direct-path gate and the nc pivot — both reject the
+        // sentinel. Fires only for a CDS special-terminus with a derivable
+        // parent; otherwise falls through to the existing (correct) rejection.
+        // Enforce the transcript_id match first (mirrors the pivot arm at
+        // 3572-3584) so a mismatched target still errors.
+        if let HgvsVariant::Cds(c) = normalized {
+            // `.is_special()` lives on `CdsPos`, not on `UncertainBoundary<CdsPos>`,
+            // so reach through `.inner()` — the exact idiom normalize uses
+            // (normalize/mod.rs:1993).
+            let start_special = c
+                .loc_edit
+                .location
+                .start
+                .inner()
+                .is_some_and(|p| p.is_special());
+            let end_special = c
+                .loc_edit
+                .location
+                .end
+                .inner()
+                .is_some_and(|p| p.is_special());
+            if start_special || end_special {
+                if let Some(acc) = normalized.accession() {
+                    let input_tx = acc.transcript_accession();
+                    if input_tx != transcript_id {
+                        return Err(FerroError::UnsupportedProjection {
+                            reason: format!(
+                                "transcript_id mismatch: input is on {} but projection \
+                                 requested against {}; transcript-coordinate inputs must \
+                                 be projected against their own transcript",
+                                input_tx, transcript_id,
+                            ),
+                        });
+                    }
+                }
+                if let Some(result) = self.project_cds_terminus_to_parent(normalized) {
+                    // `result?` propagates a genuine terminus-resolution error
+                    // (parent known but its length lookup failed). Normalize the
+                    // resolved terminus to match the raw pivot + harness normalize;
+                    // on a normalize failure fall back to the un-normalized parent
+                    // terminus (still a valid coordinate) rather than aborting the
+                    // whole projection — the genomic axis degrades gracefully,
+                    // mirroring reanchor_and_normalize_genomic.
+                    let raw = result?;
+                    let genomic = self.normalizer.normalize(&raw).unwrap_or(raw);
+                    return Ok(self.terminus_multiaxis_projection(
+                        normalized,
+                        transcript_id,
+                        genomic,
+                    ));
+                }
+                // No derivable parent (bare NM_/NR_) or cen/?/reversed -> fall
+                // through; the direct-path gate / nc pivot rejects it as today.
+            }
+        }
         // Direct c.→p. path: a bare coding input (no genomic_context parent)
         // has no genome alignment to roundtrip through, but protein can be
         // predicted straight from the CDS (#498).
@@ -4016,6 +4090,42 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             is_utr: true,
             affects_init: false,
         })
+    }
+
+    /// Genomic-only projection for a whole-arm terminus (pter/qter) `c.` input
+    /// whose parent genome frame IS resolvable (#887). Mirrors
+    /// `polya_multiaxis_projection`'s shape: echo the input's bare coding form,
+    /// no protein/noncoding/rna axis (a whole-arm marker does not round-trip
+    /// through cdot). `genomic` is the already-normalized parent-frame
+    /// (NG_/LRG_) coordinate.
+    fn terminus_multiaxis_projection(
+        &self,
+        normalized: &HgvsVariant,
+        transcript_id: &str,
+        genomic: HgvsVariant,
+    ) -> VariantProjection {
+        let coding = match normalized {
+            HgvsVariant::Cds(c) => {
+                let mut c = c.clone();
+                c.accession.genomic_context = None;
+                (Some(HgvsVariant::Cds(c.clone())), c.gene_symbol.clone())
+            }
+            _ => (None, None),
+        };
+        VariantProjection {
+            genomic: Some(genomic),
+            coding: coding.0,
+            noncoding: None,
+            protein: None,
+            rna: None,
+            transcript_id: transcript_id.to_string(),
+            gene_symbol: coding.1,
+            is_frameshift: false,
+            is_intronic: false,
+            // A whole-arm terminus is not a canonical UTR position.
+            is_utr: false,
+            affects_init: false,
+        }
     }
 }
 
@@ -7937,6 +8047,101 @@ mod tests {
                 s.starts_with("NC_000001.11") && s.contains(":g.1003C>A"),
                 "expected NC_000001.11:g.1003C>A unchanged, got: {s}"
             );
+        }
+
+        // -- 8b: #887 — NG-parented pter/qter termini resolve on project_variant ---
+
+        /// A projector whose provider knows only the NG parent's sequence, so a
+        /// whole-arm terminus resolves against it. The reference's first and last
+        /// bases are deliberately NOT part of a homopolymer run (`C…G`) so that
+        /// `normalize(g.1del)` stays `g.1del` and `normalize(g.<len>del)` stays
+        /// `g.<len>del` (an all-`A` ref would 3'-shift both to the same
+        /// coordinate). Returns the projector and the transcript id to project
+        /// against (`NM_TEST.1`, the input's own transcript).
+        fn ng_parent_projector_with_seq(seq: &str) -> (VariantProjector<MockProvider>, String) {
+            let projector = Projector::new(CdotMapper::new());
+            let mut provider = MockProvider::new();
+            provider.add_genomic_sequence("NG_TEST.1", seq.to_string());
+            (
+                VariantProjector::new(projector, provider),
+                "NM_TEST.1".to_string(),
+            )
+        }
+
+        #[test]
+        fn project_variant_ng_parent_pter_resolves_genomic_887() {
+            // len = 50, first base `C` (not shiftable), last base `G`.
+            let (projector, tx_id) = ng_parent_projector_with_seq(&format!("C{}G", "A".repeat(48)));
+            let v = crate::parse_hgvs("NG_TEST.1(NM_TEST.1):c.pterdel").unwrap();
+            let proj = projector
+                .project_variant(&v, &tx_id)
+                .expect("pter must resolve, not error");
+            assert_eq!(
+                proj.genomic.as_ref().map(|g| g.to_string()),
+                Some("NG_TEST.1:g.1del".to_string())
+            );
+            assert!(proj.protein.is_none());
+            assert!(proj.coding.is_some(), "coding echoes the bare input form");
+        }
+
+        #[test]
+        fn project_variant_ng_parent_qter_resolves_genomic_887() {
+            let (projector, tx_id) = ng_parent_projector_with_seq(&format!("C{}G", "A".repeat(48)));
+            let v = crate::parse_hgvs("NG_TEST.1(NM_TEST.1):c.qterdel").unwrap();
+            let proj = projector
+                .project_variant(&v, &tx_id)
+                .expect("qter must resolve");
+            assert_eq!(
+                proj.genomic.as_ref().map(|g| g.to_string()),
+                Some("NG_TEST.1:g.50del".to_string())
+            );
+        }
+
+        #[test]
+        fn project_variant_ng_parent_pter_qter_range_resolves_887() {
+            let (projector, tx_id) = ng_parent_projector_with_seq(&format!("C{}G", "A".repeat(48)));
+            let v = crate::parse_hgvs("NG_TEST.1(NM_TEST.1):c.pter_qterdel").unwrap();
+            let proj = projector
+                .project_variant(&v, &tx_id)
+                .expect("pter_qter range must resolve");
+            assert_eq!(
+                proj.genomic.as_ref().map(|g| g.to_string()),
+                Some("NG_TEST.1:g.1_50del".to_string())
+            );
+        }
+
+        /// An unsupported terminus marker pair (`cen`) must decline with `None`
+        /// — falling through to the normal rejection path — **even when the
+        /// parent-length lookup would itself fail**. The marker-pair
+        /// classification runs *before* the parent-length lookup, so an
+        /// unsupported pair never leaks an incidental length-lookup `Some(Err)`
+        /// (which is meaningful only for a supported `pter`/`qter` terminus) and
+        /// so aborts the whole projection instead of the intended fall-through.
+        #[test]
+        fn unsupported_cen_terminus_declines_before_parent_length_lookup_887() {
+            let (projector, _tx) = ng_parent_projector_with_seq(&format!("C{}G", "A".repeat(48)));
+            // Parent `NG_MISSING.1` is unknown to the provider, so a length
+            // lookup against it errors — the exact condition that previously
+            // leaked a `Some(Err(..))` for the unsupported `cen` pair.
+            let HgvsVariant::Cds(cds) = crate::parse_hgvs("NM_TEST.1:c.cendel").unwrap() else {
+                panic!("c.cendel must parse as a Cds variant");
+            };
+            let cds = attach_genomic_context_cds(cds, ng_parent("MISSING", 1));
+            let variant = HgvsVariant::Cds(cds);
+            assert!(
+                projector.project_cds_terminus_to_parent(&variant).is_none(),
+                "unsupported cen terminus must decline with None, not surface a \
+                 parent-length-lookup error",
+            );
+        }
+
+        #[test]
+        fn project_variant_pter_transcript_id_mismatch_still_errors_887() {
+            // The early terminus guard must sit AFTER a transcript_id match check,
+            // so a mismatched target still errors instead of silently resolving.
+            let (projector, _tx) = ng_parent_projector_with_seq(&format!("C{}G", "A".repeat(48)));
+            let v = crate::parse_hgvs("NG_TEST.1(NM_TEST.1):c.pterdel").unwrap();
+            assert!(projector.project_variant(&v, "NM_OTHER.9").is_err());
         }
 
         // -- 9: protein input → unsupported ------------------------------------
