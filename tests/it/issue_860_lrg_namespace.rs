@@ -121,3 +121,31 @@ fn lrg_transcript_input_emits_lrg_protein_accession() {
         coding
     );
 }
+
+/// #886: a bare `LRG_<n>t<k>:c.` input has a structurally derivable genomic
+/// parent, so its genomic axis must resolve (namespaced to `LRG_1`), not stay
+/// `None`. Namespace preservation on the coding/protein axes is unchanged.
+#[test]
+fn lrg_transcript_input_populates_genomic_axis_886() {
+    let (projector, provider) = lrg_fixture();
+    let vp = VariantProjector::new(projector, provider);
+    let variant = parse_hgvs("LRG_1t1:c.4C>A").expect("parse");
+    let proj = vp.project_variant(&variant, "LRG_1t1").expect("projects");
+    assert_eq!(
+        proj.genomic.as_ref().map(|g| g.to_string()),
+        Some("LRG_1:g.4C>A".to_string())
+    );
+    // Namespace preservation unchanged:
+    assert!(proj
+        .coding
+        .as_ref()
+        .unwrap()
+        .to_string()
+        .starts_with("LRG_1t1"));
+    assert!(proj
+        .protein
+        .as_ref()
+        .unwrap()
+        .to_string()
+        .starts_with("LRG_1p1"));
+}

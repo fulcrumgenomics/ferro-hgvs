@@ -2962,8 +2962,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// `genomic_context` parent). The c.→g.→CDS roundtrip cannot run without a
     /// genome alignment, but protein prediction only needs the transcript's
     /// CDS sequence and the 1-based CDS position — which an exonic c. variant
-    /// already provides. The resulting projection has `genomic = None` (no
-    /// genomic representation is available for a bare-NM_ input) (#498).
+    /// already provides. The genomic axis is `None` for a bare `NM_`/`NR_`
+    /// input (no genome alignment), but is filled with the reanchored
+    /// `LRG_<n>:g.…` form when the input is a bare LRG transcript whose
+    /// structural parent resolves (`lrg_genomic_parent`, #886) (#498).
     fn project_coding_direct(
         &self,
         cds: &CdsVariant,
@@ -3093,8 +3095,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .and_then(|tx| crate::project::rna::predict_rna(normalized, &tx));
         let rna = Self::reframe_rna_from_input(rna, normalized);
 
+        // #886: a bare LRG transcript has a structurally derivable genomic
+        // parent, so its genomic axis IS resolvable (via the raw pivot, which
+        // fills the LRG parent and reanchors into the LRG frame). A bare
+        // NM_/NR_ has no genome alignment -> stays None. project_to_genomic
+        // already normalizes; `.ok()` degrades to None if the LRG placement is
+        // genuinely unavailable.
+        let genomic = if Self::lrg_genomic_parent(&cds.accession).is_some() {
+            self.project_to_genomic(normalized).ok()
+        } else {
+            None
+        };
+
         Ok(VariantProjection {
-            genomic: None,
+            genomic,
             coding: Some(normalized.clone()),
             noncoding,
             protein,
@@ -3114,9 +3128,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// 1-based transcript position: convert it to a CDS position via the
     /// transcript's `cds_start` (the exon/CIGAR-aware
     /// [`CoordinateMapper::tx_to_cds`]), then run the same protein-consequence
-    /// prediction the coding path uses. The resulting projection has
-    /// `genomic = None` (no genomic representation is available for a bare-NM_
-    /// input) (#506).
+    /// prediction the coding path uses. The genomic axis is `None` for a bare
+    /// `NM_`/`NR_` input (no genome alignment), but is filled with the
+    /// reanchored `LRG_<n>:g.…` form when the input is a bare LRG transcript
+    /// whose structural parent resolves (`lrg_genomic_parent`, #886) (#506).
     ///
     /// `normalized` must be an [`HgvsVariant::Tx`] or [`HgvsVariant::Rna`].
     fn project_noncoding_direct(
@@ -3257,12 +3272,22 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // U→T mapping. This is a no-op for n. (DNA) inputs.
         let c_edit = transform_edit_for_strand(&edit, RefStrand::Plus);
 
+        // #886: a bare LRG transcript has a structurally derivable genomic
+        // parent, so its genomic axis IS resolvable; a bare NM_/NR_ has no
+        // genome alignment -> stays None. Computed once here because the two
+        // return sites below sit in different branches (the `!is_coding` early
+        // return and the tail), so there is no shared tail to set it in.
+        let genomic = normalized
+            .accession()
+            .filter(|acc| Self::lrg_genomic_parent(acc).is_some())
+            .and_then(|_| self.project_to_genomic(normalized).ok());
+
         // Non-coding transcript: there is no CDS to convert into, so there is
         // no protein consequence and no c. form. The n. form is the input
         // itself; report it on the non-coding axis and stop.
         if !is_coding {
             return Ok(VariantProjection {
-                genomic: None,
+                genomic,
                 coding: None,
                 noncoding: Some(normalized.clone()),
                 protein: None,
@@ -3323,7 +3348,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // renders bare (or under the input's parent for an `NG_(NM_)` input).
         let rna = Self::reframe_rna_from_input(rna, normalized);
         Ok(VariantProjection {
-            genomic: None,
+            genomic,
             coding: Some(coding),
             // The non-coding axis is the input itself.
             noncoding: Some(normalized.clone()),
@@ -8142,6 +8167,17 @@ mod tests {
             let (projector, _tx) = ng_parent_projector_with_seq(&format!("C{}G", "A".repeat(48)));
             let v = crate::parse_hgvs("NG_TEST.1(NM_TEST.1):c.pterdel").unwrap();
             assert!(projector.project_variant(&v, "NM_OTHER.9").is_err());
+        }
+
+        #[test]
+        fn bare_nm_coding_input_genomic_stays_none_886() {
+            // A bare NM_ (no LRG parent, no genomic_context) must keep the genomic
+            // axis None — the #886 fill is gated on a derivable LRG parent.
+            let (projector, provider) = make_test_provider_and_projector();
+            let vp = VariantProjector::new(projector, provider);
+            let v = crate::parse_hgvs("NM_TEST.1:c.4C>A").unwrap();
+            let proj = vp.project_variant(&v, "NM_TEST.1").unwrap();
+            assert!(proj.genomic.is_none());
         }
 
         // -- 9: protein input → unsupported ------------------------------------
