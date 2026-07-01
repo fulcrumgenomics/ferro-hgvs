@@ -830,6 +830,54 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         self.project_variant(&variant, transcript_id)
     }
 
+    /// #879: project a bare `NG_`/`LRG_` genomic input onto a single requested
+    /// transcript by de-anchoring it into the `NC_` chromosome frame — so the
+    /// overlap guard and cdot see matching coordinates — then re-framing the
+    /// result under the parent. This mirrors the fan-out parent path
+    /// (`project_variant_all:946-989`), which the single-transcript entry points
+    /// otherwise skip; without it a parent-frame `g.` coordinate is compared
+    /// against `NC_`-frame cdot exon spans and the projection wrongly declines
+    /// with `TranscriptNotOverlapping`.
+    ///
+    /// Returns `None` for any input that is not a placement-backed bare-genomic
+    /// parent input, so the caller falls back to its normal path (which handles
+    /// the genuine non-overlap decline unchanged).
+    fn project_bare_genomic_parent(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Option<Result<VariantProjection, FerroError>> {
+        // Gate on a bare genomic input (review M1). A transcript-coordinate
+        // (c./n./r.) input carrying an `NG_`/`LRG_` `genomic_context` also has a
+        // `deanchor_genomic_parent_input` parent branch, but it must keep its
+        // existing pivot path here — so restrict this to `Genome` inputs.
+        if !matches!(variant, HgvsVariant::Genome(_)) {
+            return None;
+        }
+        // Capture the build the input carries BEFORE de-anchor shadows it: the
+        // de-anchored form is on an `NC_` accession whose build would be circular
+        // to read back, and the parent placement must be selected by the input's
+        // build, matching what `deanchor` itself used (#653/#713).
+        let input_build = self.build_hint_for_variant(variant);
+        let (deanchored, parent) = self.deanchor_genomic_parent_input(variant);
+        // No placement-backed parent → not our case; let the caller's normal path
+        // run (it emits the genuine non-overlap decline where appropriate).
+        let parent = parent?;
+        Some((|| {
+            // Re-normalize in the `NC_` frame: `deanchor` is a frame/strand
+            // transform that leaves the variant non-canonical, and even the
+            // `project_normalized` caller cannot pre-normalize it in the `NC_`
+            // frame because it does not know the placement (review M2).
+            let normalized = self.normalizer.normalize(&deanchored)?;
+            let target = Self::reconcile_self_projection_target(&normalized, transcript_id);
+            let result = self.project_variant_inner(&normalized, &target)?;
+            let placement = self
+                .provider
+                .genomic_placement_on_build(&parent, input_build);
+            Ok(self.frame_projection_owned(result, &parent, placement.as_ref()))
+        })())
+    }
+
     /// Normalize and project an already-parsed g. variant onto a transcript.
     ///
     /// The variant is normalized first; for pre-normalized variants use
@@ -840,6 +888,14 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
         self.warn_assembly_conflict(variant);
+        // 0. A bare `NG_`/`LRG_` genomic input carries parent-relative coordinates
+        //    that the overlap guard (NC_-frame) cannot compare against; de-anchor,
+        //    re-normalize, project, and re-frame under the parent (#879). Only a
+        //    placement-backed bare-genomic parent input takes this branch; every
+        //    other input falls through to the normal path below.
+        if let Some(r) = self.project_bare_genomic_parent(variant, transcript_id) {
+            return r;
+        }
         // 1. Normalize the genomic variant. The normalizer is built once at
         // construction time so we don't clone the (potentially heavy) provider
         // on every call.
@@ -894,6 +950,16 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
         self.warn_assembly_conflict(variant);
+        // A bare `NG_`/`LRG_` genomic input must still be de-anchored into the
+        // `NC_` frame before the overlap guard (#879). Its parent branch
+        // re-normalizes in the `NC_` frame — a documented exception to this
+        // method's skip-normalize contract, since a parent input is inherently
+        // non-canonical in the `NC_` frame and the caller cannot pre-normalize it
+        // there without knowing the placement (review M2). Non-parent inputs skip
+        // this and take the unchanged skip-normalize path below.
+        if let Some(r) = self.project_bare_genomic_parent(variant, transcript_id) {
+            return r;
+        }
         // Reconcile the requested target against any selector resolution carried
         // by the (already-normalized) variant, mirroring `project_variant` (#783).
         // A caller that pre-normalizes a legacy `NG_(GENE_v001):c.` once and then

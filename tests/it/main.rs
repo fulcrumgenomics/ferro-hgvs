@@ -193,6 +193,7 @@ mod issue_843_allele_rna_build_scoping;
 mod issue_851_compound_utr_projection;
 mod issue_857_cterminal_extension;
 mod issue_860_lrg_namespace;
+mod issue_879_ng_g_to_c_overlap;
 mod issue_91_protein_three_prime_shift;
 mod issue_92_protein_delins_to_dup;
 mod issue_92_protein_ins_to_dup;
