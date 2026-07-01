@@ -463,13 +463,15 @@ impl AxisTally {
     /// 6. `spec_overridden` when the case carries a `spec_citation`
     ///    matching this tally's axis.
     /// 7. `divergence_accepted` when the case carries an `accepted_rejection`
-    ///    matching this tally's axis AND `actual` is a non-panic,
-    ///    non-empty-projection `Err` — ferro *correctly* rejecting an input
-    ///    mutalyzer leniently reinterprets. This is the only disposition that
-    ///    buckets an `Err` on a *projection* axis (XPASS-guarded: an `Ok` here
-    ///    means the rejection is gone, so a match XPASS-FAILs and a mismatch
-    ///    FAILs). A genuine `panic:` and the empty-projection sentinel still
-    ///    hard-FAIL.
+    ///    matching this tally's axis AND `actual` is a non-panic `Err` — ferro
+    ///    *correctly* rejecting an input mutalyzer leniently reinterprets. This
+    ///    is the only disposition that buckets an `Err` on a *projection* axis
+    ///    (XPASS-guarded: an `Ok` here means the rejection is gone, so a match
+    ///    XPASS-FAILs and a mismatch FAILs). A genuine `panic:` always hard-FAILs.
+    ///    The empty-projection sentinel (#651) also hard-FAILs **unless** the
+    ///    reason opts in via `disposition_empty_projection()` (#903) — for a
+    ///    reason like `NonCdsNoProjection857` where ferro's no-output IS the
+    ///    spec-defensible decline.
     /// 8. FAIL otherwise.
     ///
     /// The five *mismatch* dispositions — `accepted_divergence`, `known_bug`,
@@ -479,8 +481,9 @@ impl AxisTally {
     /// result (panic, parse error, normalize failure) — a real bug that must
     /// surface as FAIL even when an annotation is present. `accepted_rejection`
     /// (item 7) is the deliberate exception: it is the one disposition that
-    /// buckets a non-panic, non-empty-projection `Err` on a projection axis into
-    /// `divergence_accepted` rather than FAIL.
+    /// buckets a non-panic `Err` on a projection axis into `divergence_accepted`
+    /// rather than FAIL — a non-empty `Err`, plus the empty-projection sentinel
+    /// when the reason opts in via `disposition_empty_projection()` (#903).
     ///
     /// The **errors axis is the exception**: there a non-matching `Err` is the
     /// *expected* "ferro diverges" signal — ferro emitted no error, or a
@@ -572,19 +575,28 @@ impl AxisTally {
             self.pass += 1;
             return;
         }
-        // `accepted_rejection`: a non-panic, non-empty-projection `Err` on the
-        // annotated axis is ferro *correctly rejecting* an input mutalyzer
-        // leniently reinterprets. It is the only disposition that buckets an
-        // `Err` on a projection axis; a genuine panic and the empty-projection
-        // sentinel (#651) still hard-FAIL below. Tallied alongside
-        // `accepted_divergence`. (An `Ok` here — ferro stopped rejecting — falls
-        // through: a match XPASS-FAILs above, a mismatch FAILs below.)
+        // `accepted_rejection`: a non-panic `Err` on the annotated axis is ferro
+        // *correctly rejecting/declining* an input mutalyzer leniently
+        // reinterprets. It is the only disposition that buckets an `Err` on a
+        // projection axis. A genuine panic still hard-FAILs. The empty-projection
+        // sentinel (#651) also hard-FAILs below **unless** the reason opts in via
+        // `disposition_empty_projection()` (#903) — for a reason like
+        // `NonCdsNoProjection857` where ferro's no-output IS the spec-defensible
+        // decline (empty-`Err` and non-empty-`Err` share the same "ferro declines"
+        // meaning here). The `#764` empty-projection count gate in `finish` still
+        // catches any *rise* in the empty count, bucketed or not, so a genuinely-
+        // new empty cannot be masked. Tallied alongside `accepted_divergence`. (An
+        // `Ok` here — ferro stopped declining — falls through: a match XPASS-FAILs
+        // above, a mismatch FAILs below.) Each axis's rejection is matched
+        // independently (#870 multi-axis).
         if let Some(ar) = case
             .accepted_rejections
             .iter()
             .find(|ar| ar.axis == self.axis)
         {
-            if matches!(&actual, Err(e) if !e.starts_with("panic:") && !e.starts_with(EMPTY_PROJECTION_SENTINEL))
+            if matches!(&actual, Err(e) if !e.starts_with("panic:")
+                && (!e.starts_with(EMPTY_PROJECTION_SENTINEL)
+                    || ar.reason.disposition_empty_projection()))
             {
                 self.divergence_accepted
                     .push((case.input.clone(), ar.reason.to_string()));
@@ -2954,6 +2966,132 @@ mod comparator_tests {
         n.record(&case, "X", Err("parse: malformed".to_string()));
         assert!(n.fail.is_empty());
         assert_eq!(n.divergence_accepted.len(), 1);
+    }
+
+    // (#903) An empty-projection `Err` is dispositioned when the accepted_rejection
+    // reason opts in via `disposition_empty_projection()` — ferro's no-output IS
+    // the spec-defensible decline. The empty count STILL increments (the #764 gate
+    // backstop is unaffected by bucketing).
+    #[test]
+    fn tally_accepted_rejection_buckets_empty_projection_with_opt_in_reason() {
+        let mut t = AxisTally::new(Axis::ProteinDescription);
+        let case = Case {
+            accepted_rejections: vec![AcceptedRejection {
+                axis: Axis::ProteinDescription,
+                reason: RejectionReason::NonCdsNoProjection857,
+                note: None,
+                cluster: None,
+            }],
+            ..make_case("in", None, None)
+        };
+        t.record(
+            &case,
+            "NP_000134.2:p.(=)",
+            Err(format!("{EMPTY_PROJECTION_SENTINEL}no protein predicted")),
+        );
+        assert_eq!(t.pass, 0);
+        assert!(
+            t.fail.is_empty(),
+            "an empty projection with an opt-in reason must bucket, not FAIL"
+        );
+        assert_eq!(
+            t.divergence_accepted,
+            vec![(
+                "in".to_string(),
+                "ferro-policy-857-non-cds-no-projection".to_string()
+            )]
+        );
+        assert_eq!(
+            t.empty_got, 1,
+            "the empty count must still increment (the #764 count gate backstop)"
+        );
+    }
+
+    // (#903) An empty-projection `Err` with a NON-opt-in reason is STILL a hard
+    // FAIL — the opt-in is required, so a value-rejection reason cannot silently
+    // absorb an empty projection. (Disjointness: only opt-in reasons bucket the
+    // sentinel; every other reason keeps the pre-#903 hard-FAIL.)
+    #[test]
+    fn tally_accepted_rejection_empty_projection_without_opt_in_still_fails() {
+        let mut t = AxisTally::new(Axis::ProteinDescription);
+        let case = Case {
+            accepted_rejections: vec![AcceptedRejection {
+                axis: Axis::ProteinDescription,
+                reason: RejectionReason::MalformedInputRejected654, // does NOT opt in
+                note: None,
+                cluster: None,
+            }],
+            ..make_case("in", None, None)
+        };
+        t.record(
+            &case,
+            "NP_000134.2:p.(=)",
+            Err(format!("{EMPTY_PROJECTION_SENTINEL}no protein predicted")),
+        );
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(
+            t.fail.len(),
+            1,
+            "an empty projection without an opt-in reason must still FAIL"
+        );
+        assert_eq!(t.empty_got, 1);
+    }
+
+    // (#903) An opt-in reason still buckets a normal NON-empty `Err` too — opting
+    // in to the empty sentinel doesn't narrow the reason to empty-only.
+    #[test]
+    fn tally_accepted_rejection_opt_in_reason_still_buckets_nonempty_err() {
+        let mut t = AxisTally::new(Axis::ProteinDescription);
+        let case = Case {
+            accepted_rejections: vec![AcceptedRejection {
+                axis: Axis::ProteinDescription,
+                reason: RejectionReason::NonCdsNoProjection857,
+                note: None,
+                cluster: None,
+            }],
+            ..make_case("in", None, None)
+        };
+        t.record(&case, "X", Err("project: some decline".to_string()));
+        assert!(t.fail.is_empty(), "a non-empty Err must still bucket");
+        assert_eq!(t.divergence_accepted.len(), 1);
+        assert_eq!(
+            t.empty_got, 0,
+            "a non-empty Err must not touch the empty count"
+        );
+    }
+
+    // (#903) The empty→output transition is NOT masked: if ferro starts emitting a
+    // non-empty value that MISMATCHES the expected, the opt-in reason (which
+    // buckets only `Err`) does not apply and the row hard-FAILs — surfacing that
+    // ferro stopped declining. (An `Ok` that *matches* XPASS-FAILs; covered by the
+    // shared XPASS test.)
+    #[test]
+    fn tally_accepted_rejection_opt_in_reason_ok_mismatch_still_fails() {
+        let mut t = AxisTally::new(Axis::ProteinDescription);
+        let case = Case {
+            accepted_rejections: vec![AcceptedRejection {
+                axis: Axis::ProteinDescription,
+                reason: RejectionReason::NonCdsNoProjection857,
+                note: None,
+                cluster: None,
+            }],
+            ..make_case("in", None, None)
+        };
+        t.record(
+            &case,
+            "NP_000134.2:p.(=)",
+            Ok("NP_000134.2:p.(Trp1*)".to_string()),
+        );
+        assert!(
+            t.divergence_accepted.is_empty(),
+            "an Ok mismatch must not bucket under an accepted_rejection"
+        );
+        assert_eq!(
+            t.fail.len(),
+            1,
+            "ferro emitting a differing value (no longer declining) must FAIL"
+        );
+        assert_eq!(t.empty_got, 0);
     }
 
     // (7c) `reference_unavailable` deserializes including its closed `reason`
