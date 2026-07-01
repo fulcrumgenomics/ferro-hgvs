@@ -2639,10 +2639,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // into `.genomic` (#508 review).
         let all_have_genomic = inner_projections.iter().all(|p| p.genomic.is_some());
         let genomic = if all_have_genomic {
-            let genomic_variants: Vec<HgvsVariant> = inner_projections
+            let mut genomic_variants: Vec<HgvsVariant> = inner_projections
                 .iter()
                 .filter_map(|p| p.genomic.clone())
                 .collect();
+            // #894: re-canonicalize cis members into ascending genomic order, so the
+            // user-facing `project_variant().genomic` matches the raw `project_to_genomic`
+            // pivot (which sorts at :1365). A minus-strand transcript projects members in
+            // descending genomic order; cis alleles must be listed genomic-ascending
+            // (alleles.md:118). Trans alleles encode haplotype assignment by member order
+            // and must NOT reorder — same cis-only guard as the raw path.
+            if allele.phase == AllelePhase::Cis {
+                sort_genomic_allele_members(&mut genomic_variants);
+            }
             Some(HgvsVariant::Allele(AlleleVariant::new(
                 genomic_variants,
                 allele.phase,

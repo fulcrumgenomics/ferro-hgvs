@@ -242,6 +242,54 @@ fn trans_allele_members_not_reordered() {
     );
 }
 
+/// Extract the `.genomic` axis allele's member start positions from a
+/// `project_variant` projection (the user-facing path, #894).
+fn genomic_member_starts(vp: &VariantProjector<MockProvider>, input: &str, tx: &str) -> Vec<u64> {
+    let v = parse_hgvs(input).expect("parse");
+    let g = vp
+        .project_variant(&v, tx)
+        .expect("should project")
+        .genomic
+        .expect("genomic axis present");
+    member_starts(&g)
+}
+
+#[test]
+fn minus_strand_cis_allele_via_project_variant_sorted_genomic_order() {
+    // #894: the user-facing `project_variant().genomic` path (what `ferro project
+    // --axis g` uses) must match the raw `project_to_genomic` pivot — a cis allele
+    // on a minus-strand transcript must render members ascending by genomic start,
+    // not in transcript (descending) order. Same fixture/input as the raw-path
+    // test above; only the entry point differs.
+    let vp = minus_fixture();
+    let starts = genomic_member_starts(&vp, "NG_M.1(NM_M.1):c.[1A>C;5A>C;9A>C]", "NM_M.1");
+    assert!(
+        starts.windows(2).all(|w| w[0] < w[1]),
+        "project_variant members must be ascending by genomic start, got {starts:?}"
+    );
+    assert_eq!(starts, vec![2009, 2013, 2017]);
+}
+
+#[test]
+fn trans_allele_via_project_variant_not_reordered() {
+    // #894: the cis-only guard must hold on the project_variant path too — a trans
+    // allele encodes haplotype assignment by member order, so it must NOT reorder.
+    let vp = minus_fixture();
+    let starts = genomic_member_starts(&vp, "NG_M.1(NM_M.1):c.[1A>C];[9A>C]", "NM_M.1");
+    assert_eq!(starts, vec![2017, 2009], "trans order must be preserved");
+}
+
+#[test]
+fn plus_strand_cis_allele_via_project_variant_stays_ascending() {
+    // #894 sibling symmetry: a plus-strand cis allele already projects members in
+    // ascending genomic order, so the cis sort is a stable no-op — but assert it on
+    // the project_variant path too, documenting plus/minus parity. c.1→g.1002,
+    // c.4→g.1005 (identity placement, no reverse-complement).
+    let vp = plus_fixture();
+    let starts = genomic_member_starts(&vp, "NG_P.1(NM_P.1):c.[1A>T;4C>A]", "NM_P.1");
+    assert_eq!(starts, vec![1002, 1005]);
+}
+
 #[test]
 fn minus_strand_5utr_within_modeled_utr_unchanged() {
     // cds_start=2 ⇒ c.-1→tx1→g.2018, c.-2→tx0→g.2019 (last in-UTR). These route
