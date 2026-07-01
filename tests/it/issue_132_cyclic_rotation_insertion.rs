@@ -1,10 +1,17 @@
-//! Issue #132: 3' rule misses cyclic-rotation single-copy insertions.
+//! Issue #132 / #882: cyclic-rotation single-copy insertions and the in-phase
+//! gate on dup/repeat conversion.
 //!
-//! When a literal `ins` payload is a non-zero cyclic rotation of an adjacent
-//! reference repeat unit, the 3' rule should shift the variant to the most-3'
-//! dup-aligned position. The 2+-copy path (`insertion_to_repeat`) already
-//! handles this; this file pins the single-copy fix and the round-trip
-//! equivalence between rotation-mismatched alts and the matched alt.
+//! Corrected understanding (#882): a cyclic rotation of the reference repeat
+//! unit only 3'-shifts to a `dup`/repeat when the rotation is IN PHASE with the
+//! tract at the insertion cut — i.e. when the emitted tandem edit decodes to
+//! exactly the same sequence as the input insertion. An IN-PHASE rotation
+//! (e.g. `ins_gt_matched_rotation_already_works`) becomes a dup. An OUT-OF-PHASE
+//! rotation would decode to a DIFFERENT sequence, so per HGVS duplication.md:19
+//! ("no evidence the extra copy is in tandem … it should be described as an
+//! insertion") the #882 phase gate rejects the conversion and the variant stays
+//! a plain `ins`. The synthetic cores below (`CORE_GT`, `CORE_CAG`) are phased
+//! so the tested rotations are OUT of phase, so they stay `ins` — matching live
+//! mutalyzer 3.1.1.
 
 use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
 
@@ -27,12 +34,16 @@ const CORE_CAG: &str = "AACAGCAGCAGCAACAGAA";
 const SEQID: &str = "NC_TEST.1";
 
 #[test]
-fn ins_tg_rotates_to_most_3prime_dup() {
-    // alt = TG, ref tract = GT (rotation r=1). Single copy added.
-    // Expected: 3'-shift through GT[3] then dup at most-3' GT.
+fn ins_tg_out_of_phase_stays_ins() {
+    // alt = TG, ref tract = GT (rotation r=1) — OUT OF PHASE at the 258_259
+    // cut. A candidate dup at the most-3' GT would decode to a different
+    // sequence than inserting "TG" here, so the #882 phase gate rejects it and
+    // the variant stays a plain `ins` (duplication.md:19). (Mutalyzer keeps
+    // out-of-phase insertions as ins; verified on real loci — this synthetic
+    // NC_TEST.1 accession isn't resolvable by mutalyzer.)
     let p = SyntheticBuilder::genomic(CORE_GT).build();
     let result = normalize_to_string(p, &format!("{}:g.258_259insTG", SEQID));
-    assert_eq!(result, format!("{}:g.263_264dup", SEQID));
+    assert_eq!(result, format!("{}:g.258_259insTG", SEQID));
 }
 
 #[test]
@@ -47,55 +58,48 @@ fn ins_gt_matched_rotation_already_works() {
 }
 
 #[test]
-fn ins_tgtg_two_copies_already_works() {
-    // alt = TGTG, ref tract = GT[3]. Multi-copy path
-    // (`insertion_to_repeat`) already handles this; lock the behavior.
+fn ins_tgtg_out_of_phase_stays_ins() {
+    // alt = TGTG, ref tract = GT[3] — OUT OF PHASE at the 258_259 cut. The
+    // candidate GT[5] repeat would decode to a different sequence than
+    // inserting "TGTG" here, so the #882 phase gate rejects it and the variant
+    // stays a plain `ins` (duplication.md:19).
     let p = SyntheticBuilder::genomic(CORE_GT).build();
     let result = normalize_to_string(p, &format!("{}:g.258_259insTGTG", SEQID));
-    assert_eq!(result, format!("{}:g.259_264GT[5]", SEQID));
+    assert_eq!(result, format!("{}:g.258_259insTGTG", SEQID));
 }
 
 #[test]
 fn ins_idempotent_post_fix() {
-    // Round-trip: normalize(normalize(insTG)) == normalize(insTG).
+    // Round-trip: normalize(normalize(insTG)) == normalize(insTG). The
+    // out-of-phase insTG stays a plain `ins` (#882) and is idempotent.
     let p = SyntheticBuilder::genomic(CORE_GT).build();
     let once = normalize_to_string(p, &format!("{}:g.258_259insTG", SEQID));
     let p2 = SyntheticBuilder::genomic(CORE_GT).build();
     let twice = normalize_to_string(p2, &once);
     assert_eq!(once, twice);
-    assert_eq!(once, format!("{}:g.263_264dup", SEQID));
+    assert_eq!(once, format!("{}:g.258_259insTG", SEQID));
 }
 
 #[test]
-fn ins_agc_cag_tract_rotates_to_dup() {
+fn ins_agc_out_of_phase_stays_ins() {
     // CAG[3] tract starting at HGVS 259 (core idx 2). Insert AGC at
     // HGVS 258_259 (just before tract's first C). alt "AGC" is the r=1
-    // rotation of canonical "CAG".
-    //
-    // CORE_CAG = "AACAGCAGCAGCAACAGAA": the CAG[3] tract is followed by a
-    // partial-match flank "CA" (from the trailing "CAA"). Per the HGVS 3'rule
-    // (DNA duplication.md: "the most 3' position possible … is arbitrarily
-    // assigned to have been changed"), the duplicated copy must shift as far 3'
-    // as the run allows — sliding one CAG copy right through the whole tandem
-    // run (valid while ref[s]==ref[s+3]) crosses the "CA" partial flank and
-    // lands on the GCA phase at HGVS [267..269]. The earlier `265_267dup`
-    // stopped at the pure-tandem boundary and was under-shifted (#864).
-    //
-    // Confirmed against mutalyzer on a real homologous locus:
-    // NC_000001.11:g.5010037_5010038insTG → g.5010045_5010046dup, and mutalyzer
-    // likewise re-normalizes the phase-aligned form to the most-3' slide.
+    // rotation of canonical "CAG" — OUT OF PHASE at this cut. A candidate dup
+    // anywhere in the tract would decode to a different sequence than inserting
+    // "AGC" here, so the #882 phase gate rejects the conversion and the variant
+    // stays a plain `ins` (duplication.md:19). (Mutalyzer keeps out-of-phase
+    // insertions as ins; verified on real loci — NC_TEST.1 is synthetic.)
     let p = SyntheticBuilder::genomic(CORE_CAG).build();
     let result = normalize_to_string(p, &format!("{}:g.258_259insAGC", SEQID));
-    assert_eq!(result, format!("{}:g.267_269dup", SEQID));
+    assert_eq!(result, format!("{}:g.258_259insAGC", SEQID));
 }
 
 #[test]
-fn ins_gca_cag_tract_rotates_to_dup() {
-    // Same layout/flank as `ins_agc_cag_tract_rotates_to_dup`, alt = GCA (a
-    // different rotation of the same tandem unit). Both spec-equivalent
-    // rotations yield the same most-3' canonical dup — the #864 3'rule slide
-    // through the "CA" partial flank → HGVS [267..269].
+fn ins_gca_out_of_phase_stays_ins() {
+    // Same layout/flank as `ins_agc_out_of_phase_stays_ins`, alt = GCA (a
+    // different out-of-phase rotation of the same tandem unit). It likewise
+    // stays a plain `ins` at the input position per the #882 phase gate.
     let p = SyntheticBuilder::genomic(CORE_CAG).build();
     let result = normalize_to_string(p, &format!("{}:g.258_259insGCA", SEQID));
-    assert_eq!(result, format!("{}:g.267_269dup", SEQID));
+    assert_eq!(result, format!("{}:g.258_259insGCA", SEQID));
 }
