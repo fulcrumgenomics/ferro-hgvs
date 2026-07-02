@@ -2725,11 +2725,18 @@
       "normalized": "NG_008835.1:g.320803_320804del",
       "genomic": "NG_008835.1:g.320803_320804del",
       "to_test": true,
-      "accepted_divergence": {
-        "axis": "normalized",
-        "policy": "ferro-policy-745-homopolymer-repeat-contraction",
-        "note": "ferro renders the deletion inside the genomic homopolymer as the spec-valid repeat contraction g.320802_320804T[1]; mutalyzer keeps del. Same class as #745/#750 on the genomic axis."
-      }
+      "accepted_divergence": [
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-745-homopolymer-repeat-contraction",
+          "note": "ferro renders the deletion inside the genomic homopolymer as the spec-valid repeat contraction g.320802_320804T[1]; mutalyzer keeps del. Same class as #745/#750 on the genomic axis."
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-745-homopolymer-repeat-contraction",
+          "note": "The genomic axis routes this pure g. input through the same normalizer (#870), so it emits the same spec-valid repeat contraction g.320802_320804T[1] while mutalyzer keeps del."
+        }
+      ]
     },
     {
       "keywords": [],
@@ -3285,6 +3292,11 @@
         "tracking_issue": 487,
         "note": "ferro keeps c.250del; mutalyzer 3'-shifts it to c.*189del. Compound-allele 3' shift tracked in #487."
       },
+      "accepted_rejection": {
+        "axis": "genomic",
+        "reason": "ferro-policy-853-ng-partial-transcript-coverage-declined",
+        "note": "NG_009299.1 annotates NM_017668.3 only partially, so the c.41 endpoint falls outside the placed genomic span; the user-facing genomic axis (#870) declines to re-anchor (#480/#655) rather than emit chromosome coordinates under the NG_ accession. mutalyzer resolves the full genomic form."
+      },
       "spec_citation": {
         "axis": "protein_description",
         "section": "HGVS protein reference (bare NP)",
@@ -3321,11 +3333,18 @@
         "ICORRECTEDPOINT"
       ],
       "to_test": true,
-      "accepted_rejection": {
-        "axis": "normalized",
-        "reason": "ferro-policy-654-malformed-input-rejected",
-        "note": "'41>CA' is a substitution lacking a reference base (malformed HGVS); ferro rejects it at parse time. mutalyzer leniently reinterprets the allele (-> c.[40dup;*189del])."
-      }
+      "accepted_rejection": [
+        {
+          "axis": "normalized",
+          "reason": "ferro-policy-654-malformed-input-rejected",
+          "note": "'41>CA' is a substitution lacking a reference base (malformed HGVS); ferro rejects it at parse time. mutalyzer leniently reinterprets the allele (-> c.[40dup;*189del])."
+        },
+        {
+          "axis": "genomic",
+          "reason": "ferro-policy-654-malformed-input-rejected",
+          "note": "The same malformed '41>CA' fails at parse time, so the user-facing genomic axis (#870) produces no output either, while mutalyzer leniently reinterprets."
+        }
+      ]
     },
     {
       "keywords": [
@@ -3848,12 +3867,20 @@
       "normalized": "LRG_24t1:c.126_133delinsGTGGGAATTGTAAAAAAA",
       "genomic": "LRG_24:g.5525_5532delinsGTGGGAATTGTAAAAAAA",
       "to_test": true,
-      "accepted_rejection": {
-        "axis": "normalized",
-        "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
-        "cluster": "transcript-flank-not-numberable",
-        "note": "bracketed delins payload references both the 5' (pter) and 3' (qter) transcript flanks in c. (refseq.md L45-46). ferro rejects (cross-reference shape error explicitly lists pter/qter decorations as out of scope); mutalyzer resolves the concatenated flank bases. ferro's refusal is spec-correct."
-      }
+      "accepted_rejection": [
+        {
+          "axis": "normalized",
+          "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+          "cluster": "transcript-flank-not-numberable",
+          "note": "bracketed delins payload references both the 5' (pter) and 3' (qter) transcript flanks in c. (refseq.md L45-46). ferro rejects (cross-reference shape error explicitly lists pter/qter decorations as out of scope); mutalyzer resolves the concatenated flank bases. ferro's refusal is spec-correct."
+        },
+        {
+          "axis": "genomic",
+          "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+          "cluster": "transcript-flank-not-numberable",
+          "note": "Same unsupported cross-reference payload: ferro rejects rather than expand it, so the user-facing genomic axis (#870) produces no output either, while mutalyzer resolves the concatenated flank bases."
+        }
+      ]
     },
     {
       "keywords": [],
@@ -3861,12 +3888,20 @@
       "normalized": "LRG_24t1:c.=",
       "genomic": "LRG_24:g.=",
       "to_test": true,
-      "accepted_rejection": {
-        "axis": "normalized",
-        "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
-        "cluster": "transcript-flank-not-numberable",
-        "note": "the variant coordinate `c.pter_qter` numbers both transcript flanks in c. (refseq.md L45-46). ferro rejects (parse error); mutalyzer treats pter_qter delins pter_qter as a whole-transcript identity (c.=). ferro's refusal is spec-correct."
-      }
+      "accepted_rejection": [
+        {
+          "axis": "normalized",
+          "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+          "cluster": "transcript-flank-not-numberable",
+          "note": "the variant coordinate `c.pter_qter` numbers both transcript flanks in c. (refseq.md L45-46). ferro rejects (parse error); mutalyzer treats pter_qter delins pter_qter as a whole-transcript identity (c.=). ferro's refusal is spec-correct."
+        },
+        {
+          "axis": "genomic",
+          "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+          "cluster": "transcript-flank-not-numberable",
+          "note": "The same `c.pter_qter` coordinate fails at parse time, so the user-facing genomic axis (#870) produces no output either, while mutalyzer resolves it to a whole-transcript identity (g.=)."
+        }
+      ]
     },
     {
       "keywords": [],
@@ -3874,12 +3909,20 @@
       "normalized": "LRG_24t1:c.*2327_*2328insAAAAAAA",
       "genomic": "LRG_24:g.11486_11487insAAAAAAA",
       "to_test": true,
-      "accepted_rejection": {
-        "axis": "normalized",
-        "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
-        "cluster": "transcript-flank-not-numberable",
-        "note": "the variant coordinate `c.pter_qter` and the bracketed payload both number transcript flanks (pter/qter) in c. (refseq.md L45-46). ferro rejects (parse error); mutalyzer resolves it to a 3'-flank insertion. ferro's refusal is spec-correct."
-      }
+      "accepted_rejection": [
+        {
+          "axis": "normalized",
+          "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+          "cluster": "transcript-flank-not-numberable",
+          "note": "the variant coordinate `c.pter_qter` and the bracketed payload both number transcript flanks (pter/qter) in c. (refseq.md L45-46). ferro rejects (parse error); mutalyzer resolves it to a 3'-flank insertion. ferro's refusal is spec-correct."
+        },
+        {
+          "axis": "genomic",
+          "reason": "ferro-policy-758-transcript-flank-not-numberable-in-c",
+          "cluster": "transcript-flank-not-numberable",
+          "note": "The same `c.pter_qter` coordinate and bracketed flank payload fail at parse time, so the user-facing genomic axis (#870) produces no output either, while mutalyzer resolves it to a 3'-flank insertion."
+        }
+      ]
     },
     {
       "keywords": [],
@@ -4155,6 +4198,11 @@
       ],
       "protein_description": "NG_012337.1(NP_036591.2):p.(Cys6TrpfsTer13)",
       "to_test": true,
+      "accepted_divergence": {
+        "axis": "genomic",
+        "policy": "ferro-policy-654-positional-insert-literal-expansion",
+        "note": "ferro renders the projected insertion as its literal expanded sequence (g.4907_4908insAGGCTCGCCACCTTCCA, the reverse complement of the minus-strand c. payload); mutalyzer compresses the same bases into the positional copy-range form ins[4888_4903;A]. The inserted sequence is identical — both are spec-valid (#654)."
+      },
       "spec_citation": {
         "axis": "protein_description",
         "section": "HGVS protein reference (bare NP)",

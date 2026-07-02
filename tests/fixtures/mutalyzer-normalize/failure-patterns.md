@@ -170,8 +170,11 @@ A coding/non-coding DNA reference does not contain the gene's 5'/3' flanking seq
 |---|---|---|---|---|
 | `LRG_24:g.5525_5532delinsNM_003002.2:c.*835_qter` | normalized | accepted_divergence | — | — |
 | `LRG_24:g.5525_5532delinsNM_003002.2:c.pter_-51` | normalized | accepted_divergence | — | — |
+| `LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]` | genomic | accepted_divergence | — | — |
 | `LRG_24t1:c.126_133delins[NM_003002.2:c.pter_-51;NM_003002.2:c.*835_qter]` | normalized | accepted_divergence | — | — |
+| `LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]` | genomic | accepted_divergence | — | — |
 | `LRG_24t1:c.pter_qterdelins[pter_qter;NM_003002.2:c.*835_qter]` | normalized | accepted_divergence | — | — |
+| `LRG_24t1:c.pter_qterdelinspter_qter` | genomic | accepted_divergence | — | — |
 | `LRG_24t1:c.pter_qterdelinspter_qter` | normalized | accepted_divergence | — | — |
 
 ### RNA predicted allele bracket placement
@@ -238,6 +241,7 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | genomic | accepted_divergence | — | — |
 | `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | normalized | spec_citation | — | — |
 | `NG_008835.1(NM_022124.6):c.3304_3305del` | genomic | accepted_divergence | — | — |
+| `NG_008835.1:g.320802_320803del` | genomic | accepted_divergence | — | — |
 | `NG_008835.1:g.320802_320803del` | normalized | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins180_188` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins180_188` | normalized | accepted_divergence | — | — |
@@ -264,7 +268,9 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_009299.1(NM_017668.3):c.41A>C` | genomic | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[250del;41>CA]` | normalized | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[250del;41A>C]` | normalized | known_bug | — | #487 |
+| `NG_009299.1(NM_017668.3):c.[41>CA;250del]` | genomic | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[41>CA;250del]` | normalized | accepted_divergence | — | — |
+| `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | genomic | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | normalized | known_bug | — | #487 |
 | `NG_009930.1(NM_001099625.2):c.1010` | errors | accepted_divergence | — | — |
 | `NG_009930.1(NM_001099625.2):n.110del` | errors | accepted_divergence | — | — |
@@ -279,6 +285,7 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_012337.1(NM_003002.2):c.pterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.qterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.-1_*1del` | normalized | known_bug | — | #487 |
+| `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.[8del;7_8insC]` | normalized | known_bug | — | #487 |
 | `NG_012337.1:274` | normalized | accepted_divergence | — | — |
 | `NG_012337.1:g.4delins7_31` | normalized | accepted_divergence | — | — |
@@ -302,7 +309,7 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 |---|---:|---:|---:|---:|---:|
 | coding_protein_descriptions | 10 | 0 | 0 | 0 | 0 |
 | errors | 16 | 0 | 0 | 0 | 0 |
-| genomic | 15 | 4 | 0 | 0 | 1 |
+| genomic | 22 | 4 | 0 | 0 | 1 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
 | normalized | 23 | 18 | 4 | 5 | 9 |
