@@ -654,9 +654,39 @@ pub enum RejectionReason {
     /// behaviour (#853, residual of #480/#655; subsumes #865).
     #[serde(rename = "ferro-policy-853-ng-partial-transcript-coverage-declined")]
     NgPartialTranscriptCoverageDeclined853,
+    /// ferro emits **no projection** on this axis for a variant its policy says
+    /// has no consequence there — e.g. a variant wholly outside the CDS
+    /// (pure-5'UTR / pure-3'UTR) produces no protein prediction (the #857 policy,
+    /// tested by `pure_3utr_deletion_has_no_protein_consequence`) — where the
+    /// comparator instead emits a value (e.g. mutalyzer `p.(=)`, "analysed, no
+    /// change"). The HGVS spec is ambiguous on no-projection vs the "analysed,
+    /// unchanged" value for a non-CDS variant, so ferro's decline is a spec-
+    /// defensible accepted rejection rather than a bug (#857/#891; #466 tracks the
+    /// upstream spec clarification). This is the **only** `RejectionReason` that
+    /// opts in to bucketing an empty-projection `Err` (see
+    /// [`RejectionReason::disposition_empty_projection`]): the harness represents
+    /// "ferro produced nothing" as an `EMPTY_PROJECTION_SENTINEL` `Err`, which is
+    /// otherwise a hard FAIL. The empty→output transition is handled honestly:
+    /// because `accepted_rejection` buckets only `Err`, if ferro later starts
+    /// emitting a value it is NOT masked — an `Ok` that *matches* XPASS-FAILs (the
+    /// stale annotation is caught), and an `Ok` that *mismatches* falls through to
+    /// a hard FAIL (ferro stopped declining, now produces a differing value). The
+    /// `#764` empty-projection count gate additionally catches any *rise* in the
+    /// empty count.
+    #[serde(rename = "ferro-policy-857-non-cds-no-projection")]
+    NonCdsNoProjection857,
 }
 
 impl RejectionReason {
+    /// Whether this reason opts in to dispositioning an **empty-projection**
+    /// `Err` (ferro produced no output on the axis) as an accepted rejection.
+    /// `accepted_rejection` normally excludes the `EMPTY_PROJECTION_SENTINEL`
+    /// (an empty projection is otherwise a hard FAIL, #651); a reason returning
+    /// `true` here relaxes that for its rows only. Closed match (`_ => false`) so
+    /// adding a reason is a deliberate, reviewed opt-in — never an ad-hoc flag.
+    pub fn disposition_empty_projection(self) -> bool {
+        matches!(self, RejectionReason::NonCdsNoProjection857)
+    }
     /// Stable identifier used in summary lines so reviewers can grep across runs.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -675,6 +705,7 @@ impl RejectionReason {
             RejectionReason::NgPartialTranscriptCoverageDeclined853 => {
                 "ferro-policy-853-ng-partial-transcript-coverage-declined"
             }
+            RejectionReason::NonCdsNoProjection857 => "ferro-policy-857-non-cds-no-projection",
         }
     }
 }
@@ -690,10 +721,14 @@ impl std::fmt::Display for RejectionReason {
 /// divergence: ferro *correctly* declines an input that mutalyzer leniently
 /// reinterprets. Distinct from [`AcceptedDivergence`] (which covers a string
 /// *mismatch* from a successful run) — this is the only disposition that
-/// buckets an `Err` on a projection axis. A genuine panic and the
-/// empty-projection sentinel still hard-FAIL, and if ferro *starts* producing
-/// output (the rejection is gone) the harness FAILs loudly (XPASS). Tallied
-/// into `AxisTally::divergence_accepted` alongside `accepted_divergence`.
+/// buckets an `Err` on a projection axis. A genuine panic still hard-FAILs, and
+/// if ferro *starts* producing output (the rejection is gone) the harness FAILs
+/// loudly (XPASS). The empty-projection sentinel also hard-FAILs by default —
+/// **except** when `reason.disposition_empty_projection()` is `true` (#903), for
+/// a reason like [`RejectionReason::NonCdsNoProjection857`] where ferro's
+/// no-output is itself the spec-defensible decline; the `#764` empty-projection
+/// count gate remains the backstop against a genuinely-new empty. Tallied into
+/// `AxisTally::divergence_accepted` alongside `accepted_divergence`.
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct AcceptedRejection {
@@ -1077,6 +1112,36 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn non_cds_no_projection_857_opts_in_to_empty_projection() {
+        // #903: exactly one reason opts in to dispositioning an empty projection.
+        assert!(RejectionReason::NonCdsNoProjection857.disposition_empty_projection());
+        for r in [
+            RejectionReason::MalformedInputRejected654,
+            RejectionReason::TranscriptFlankNotNumberableInC758,
+            RejectionReason::VersionSubstitutionRefused785,
+            RejectionReason::NonstandardOrAbsentSelectorDeclined858,
+            RejectionReason::NgPartialTranscriptCoverageDeclined853,
+        ] {
+            assert!(
+                !r.disposition_empty_projection(),
+                "{} must NOT opt in to empty-projection bucketing",
+                r.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn accepted_rejection_857_reason_round_trips() {
+        // The new reason deserializes from its serde rename and stringifies back.
+        let ar: AcceptedRejection = serde_json::from_str(
+            r#"{"axis":"protein_description","reason":"ferro-policy-857-non-cds-no-projection"}"#,
+        )
+        .expect("accepted_rejection with the #903 reason should deserialize");
+        assert_eq!(ar.reason, RejectionReason::NonCdsNoProjection857);
+        assert_eq!(ar.reason.as_str(), "ferro-policy-857-non-cds-no-projection");
+    }
 
     const BASE: &str =
         r#""description":"t","source":"t","source_commit":"t","license":"t","refreshed_at":"t""#;
