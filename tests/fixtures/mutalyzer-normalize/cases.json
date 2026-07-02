@@ -115,6 +115,12 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NG_x(NP_y):p. is non-standard. ferro's bare-NP output is the spec-correct value.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
       }
     },
     {
@@ -148,6 +154,12 @@
         "tracking_issue": 646,
         "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
         "cluster": "noncoding-overlap-enumeration-646"
+      },
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
       }
     },
     {
@@ -220,6 +232,12 @@
         "tracking_issue": 646,
         "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
         "cluster": "noncoding-overlap-enumeration-646"
+      },
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
       }
     },
     {
@@ -291,6 +309,12 @@
         "tracking_issue": 646,
         "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
         "cluster": "noncoding-overlap-enumeration-646"
+      },
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
       }
     },
     {
@@ -379,6 +403,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "HGVS p. descriptions reference the protein accession alone (bare NP_); mutalyzer's genomic-context wrapper NM_x(NP_y):p. is non-standard. ferro's bare-NP output (now produced via the direct c.→p. path, #498) is the spec-correct value.",
         "cluster": "bare-np-protein"
+      },
+      "accepted_divergence": {
+        "axis": "infos",
+        "policy": "ferro-policy-499-shuffle-applied-single-variant",
+        "note": "Single-variant genuine 3'-shift (c.273del -> c.274del); ferro emits the spec-truthful SHUFFLE_APPLIED info (insertion.md L21, 3'-most-position rule), mutalyzer emits only its non-HGVS internal I* codes. Both spec-defensible."
       }
     },
     {
@@ -481,6 +510,11 @@
         "tracking_issue": 646,
         "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
         "cluster": "noncoding-overlap-enumeration-646"
+      },
+      "accepted_rejection": {
+        "axis": "coding_protein_descriptions",
+        "reason": "ferro-policy-857-non-cds-no-projection",
+        "note": "Every projected overlapping transcript places the variant outside the CDS (deep 5'UTR / intron / deep 3'UTR), p.(=); ferro's #857 policy declines per-transcript protein prediction, so project_variant_all yields no pairs (empty projection). mutalyzer emits 'analysed, unchanged' p.(=). Empty-projection Err bucketed via the reason-857 opt-in (#903)."
       }
     },
     {
@@ -492,7 +526,12 @@
       "input": "NM_000143.3:c.-1_1insCAT",
       "normalized": "NM_000143.3:c.-1_1insCAT",
       "protein_description": "NP_000134.2:p.(=)",
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "protein_description",
+        "reason": "ferro-policy-857-non-cds-no-projection",
+        "note": "Insertion c.-1_1insCAT sits at the 5'UTR/CDS boundary upstream of the ATG, leaves the initiation codon intact, and has no CDS consequence; ferro predicts no protein (#857). mutalyzer emits p.(=). Empty-projection Err bucketed via the reason-857 opt-in (#903)."
+      }
     },
     {
       "keywords": [
@@ -693,7 +732,13 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5AspfsTer21)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: the p.(...) body is byte-identical; ferro emits the spec-correct bare NP_ reference, mutalyzer wraps it as NG_x(NP_y):p. (no spec counterpart, refseq.md).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -752,7 +797,13 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5AspfsTer21)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: the p.(...) body is byte-identical; ferro emits the spec-correct bare NP_ reference, mutalyzer wraps it as NG_x(NP_y):p. (no spec counterpart, refseq.md).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -813,7 +864,13 @@
       "normalized": "NG_012337.1(NM_012459.2):c.12_13insTTTGATC",
       "genomic": "NG_012337.1:g.4911_4912insATCAAAG",
       "protein_description": "NG_012337.1(NP_036591.2):p.(Ser5PhefsTer22)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: the p.(...) body is byte-identical; ferro emits the spec-correct bare NP_ reference, mutalyzer wraps it as NG_x(NP_y):p. (no spec counterpart, refseq.md).",
+        "cluster": "bare-np-protein"
+      }
     },
     {
       "keywords": [
@@ -984,6 +1041,11 @@
           "axis": "genomic",
           "policy": "ferro-policy-654-positional-insert-literal-expansion",
           "note": "On the user-facing project_variant().genomic path (#870) ferro expands the copy-range payload ins180_188 to the literal spliced bases g.5207_5208insGCGAGGAAA (per insertion.md: an inserted sequence copied from a range is written as the literal bases). mutalyzer emits the positional intron-spanning range g.5207_5208ins5231_10536, which silently changes the inserted sequence. Same edit; ferro's literal form is spec-correct."
+        },
+        {
+          "axis": "protein_description",
+          "policy": "ferro-policy-654-positional-insert-literal-expansion",
+          "note": "Protein consequence is downstream of the accepted #654 positional-insert literal-expansion already carried on normalized+genomic. ferro expands ins180_188 to the literal spliced bases (insertion.md) -> an in-frame insert whose protein is internally consistent with ferro's own normalized form; mutalyzer's positional read gives a frameshift. Both spec-valid. (Bare NP_ framing also differs.)"
         }
       ]
     },
@@ -1008,6 +1070,11 @@
           "axis": "genomic",
           "policy": "ferro-policy-654-positional-insert-literal-expansion",
           "note": "On the user-facing project_variant().genomic path (#870) ferro expands the inverted copy-range payload to the literal spliced bases g.5207_5208insTTTCCTCGC; mutalyzer keeps the positional intron-spanning range. Same edit; ferro's literal form is spec-correct."
+        },
+        {
+          "axis": "protein_description",
+          "policy": "ferro-policy-654-positional-insert-literal-expansion",
+          "note": "Protein consequence is downstream of the accepted #654 positional-insert literal-expansion already carried on normalized+genomic. ferro expands ins180_188 to the literal spliced bases (insertion.md) -> an in-frame insert whose protein is internally consistent with ferro's own normalized form; mutalyzer's positional read gives a frameshift. Both spec-valid. (Bare NP_ framing also differs.)"
         }
       ]
     },
@@ -1033,6 +1100,11 @@
           "axis": "genomic",
           "policy": "ferro-policy-654-positional-insert-literal-expansion",
           "note": "On the user-facing project_variant().genomic path (#870) ferro expands the bracketed copy-range payload to the literal spliced bases g.5207_5208insGCGAGGAAA; mutalyzer keeps the positional intron-spanning range. Same edit; ferro's literal form is spec-correct."
+        },
+        {
+          "axis": "protein_description",
+          "policy": "ferro-policy-654-positional-insert-literal-expansion",
+          "note": "Protein consequence is downstream of the accepted #654 positional-insert literal-expansion already carried on normalized+genomic. ferro expands ins180_188 to the literal spliced bases (insertion.md) -> an in-frame insert whose protein is internally consistent with ferro's own normalized form; mutalyzer's positional read gives a frameshift. Both spec-valid. (Bare NP_ framing also differs.)"
         }
       ]
     },
@@ -1058,6 +1130,11 @@
           "axis": "genomic",
           "policy": "ferro-policy-654-positional-insert-literal-expansion",
           "note": "On the user-facing project_variant().genomic path (#870) ferro expands the bracketed inverted copy-range payload to the literal spliced bases g.5207_5208insTTTCCTCGC; mutalyzer keeps the positional intron-spanning range. Same edit; ferro's literal form is spec-correct."
+        },
+        {
+          "axis": "protein_description",
+          "policy": "ferro-policy-654-positional-insert-literal-expansion",
+          "note": "Protein consequence is downstream of the accepted #654 positional-insert literal-expansion already carried on normalized+genomic. ferro expands ins180_188 to the literal spliced bases (insertion.md) -> an in-frame insert whose protein is internally consistent with ferro's own normalized form; mutalyzer's positional read gives a frameshift. Both spec-valid. (Bare NP_ framing also differs.)"
         }
       ]
     },
@@ -1484,7 +1561,13 @@
           "NG_007485.1(NP_478102.2):p.(Pro64del)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
+      }
     },
     {
       "keywords": [
@@ -1500,7 +1583,13 @@
           "NG_007485.1(NP_478102.2):p.(Pro64del)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
+      }
     },
     {
       "keywords": [
@@ -1542,11 +1631,18 @@
         "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500.",
         "cluster": "refseqgene-selector"
       },
-      "accepted_rejection": {
-        "axis": "genomic",
-        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
-        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
-      }
+      "accepted_rejection": [
+        {
+          "axis": "genomic",
+          "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+        },
+        {
+          "axis": "protein_description",
+          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined",
+          "note": "Bare NG_:c. input with no transcript selector; ferro cannot resolve a unique transcript (refseq.md L40-41) and declines projection -> no protein, the same decline already dispositioned on the genomic axis (858). Empty-projection Err bucketed via the reason-858 empty-projection opt-in (#861)."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1566,11 +1662,18 @@
         "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500.",
         "cluster": "refseqgene-selector"
       },
-      "accepted_rejection": {
-        "axis": "genomic",
-        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
-        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
-      }
+      "accepted_rejection": [
+        {
+          "axis": "genomic",
+          "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+        },
+        {
+          "axis": "protein_description",
+          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined",
+          "note": "Bare NG_:c. input with no transcript selector; ferro cannot resolve a unique transcript (refseq.md L40-41) and declines projection -> no protein, the same decline already dispositioned on the genomic axis (858). Empty-projection Err bucketed via the reason-858 empty-projection opt-in (#861)."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1590,11 +1693,18 @@
         "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500.",
         "cluster": "refseqgene-selector"
       },
-      "accepted_rejection": {
-        "axis": "genomic",
-        "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
-        "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
-      }
+      "accepted_rejection": [
+        {
+          "axis": "genomic",
+          "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
+          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
+        },
+        {
+          "axis": "protein_description",
+          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined",
+          "note": "Bare NG_:c. input with no transcript selector; ferro cannot resolve a unique transcript (refseq.md L40-41) and declines projection -> no protein, the same decline already dispositioned on the genomic axis (858). Empty-projection Err bucketed via the reason-858 empty-projection opt-in (#861)."
+        }
+      ]
     },
     {
       "keywords": [
@@ -1686,7 +1796,12 @@
       ],
       "input": "NG_012337.1(NM_003002.2):c.276C>T",
       "protein_description": "NG_012337.1(NP_002993.1):p.(=)",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS §Synonymous (residue-level p.(Xaa=))",
+        "note": "For a single synonymous substitution the spec's predicted-consequence form is the residue-level p.(Asp92=) (substitution.md L24/L41-43 p.(Lys874=); SVD-WG001 p.(Phe41=)); p.(=) is reserved for 'the entire coding region was analysed'. ferro's residue-level p.(Asp92=) is spec-preferred vs mutalyzer's whole-protein p.(=). (Bare NP_ framing also differs.)"
+      }
     },
     {
       "keywords": [
@@ -1711,7 +1826,12 @@
       ],
       "input": "NG_012337.1(NM_003002.2):c.1A>G",
       "protein_description": "NG_012337.1(NP_002993.1):p.?",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein initiation codon (Met1?)",
+        "note": "Variant affecting the translation initiation codon: p.(Met1?) is the spec-designated form (substitution.md L45-52); mutalyzer's generic p.? is non-preferred. ferro spec-correct. (Bare NP_ framing also differs.)"
+      }
     },
     {
       "keywords": [
@@ -1737,7 +1857,12 @@
       ],
       "input": "NG_012337.1(NM_003002.2):c.1A>T",
       "protein_description": "NG_012337.1(NP_002993.1):p.?",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein initiation codon (Met1?)",
+        "note": "Variant affecting the translation initiation codon: p.(Met1?) is the spec-designated form (substitution.md L45-52); mutalyzer's generic p.? is non-preferred. ferro spec-correct. (Bare NP_ framing also differs.)"
+      }
     },
     {
       "keywords": [
@@ -1763,7 +1888,12 @@
       ],
       "input": "NG_012337.1(NM_003002.2):c.1_4delinsTTGA",
       "protein_description": "NG_012337.1(NP_002993.1):p.?",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein initiation codon (Met1?)",
+        "note": "Variant affecting the translation initiation codon: p.(Met1?) is the spec-designated form (substitution.md L45-52); mutalyzer's generic p.? is non-preferred. ferro spec-correct. (Bare NP_ framing also differs.)"
+      }
     },
     {
       "keywords": [
@@ -2229,6 +2359,12 @@
         "policy": "ferro-policy-763-transcript-set-enumeration",
         "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different set and puts the input gene's consequence on `protein_description`. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). See cluster note. Accepted divergence (#763).",
         "cluster": "transcript-set-enumeration-763"
+      },
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: p.(...) body byte-identical; ferro's bare NP_ is spec-correct vs mutalyzer's NG_(NP_) wrapper. (coding_protein_descriptions axis carries a separate #763 divergence.)",
+        "cluster": "bare-np-protein"
       }
     },
     {
@@ -2260,6 +2396,12 @@
         "policy": "ferro-policy-763-transcript-set-enumeration",
         "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different set and puts the input gene's consequence on `protein_description`. Both spec-valid (refseq.md L256/L259 open; L264 endorses latest build). See cluster note. Accepted divergence (#763).",
         "cluster": "transcript-set-enumeration-763"
+      },
+      "spec_citation": {
+        "axis": "protein_description",
+        "section": "HGVS protein reference (bare NP)",
+        "note": "Framing-only divergence: p.(...) body byte-identical; ferro's bare NP_ is spec-correct vs mutalyzer's NG_(NP_) wrapper. (coding_protein_descriptions axis carries a separate #763 divergence.)",
+        "cluster": "bare-np-protein"
       }
     },
     {
@@ -3056,6 +3198,12 @@
         "axis": "genomic",
         "note": "NG_009299.1 (MYH11-centric RefSeqGene) annotates NM_017668.3 (NDE1) only partially -- mRNA complement(135678..>137840), CDS complement(137780..>137840) (60 bp, 5'-incomplete); NDE1 itself complement(135678..>160896) extends beyond the NG_. cdot's authoritative alignment places this coordinate ~60 kb outside the NG_'s placed span (NC_000016.10 15701135-15862030), so there is no valid NG_ coordinate for it. mutalyzer maps it against the partial-annotation stub; ferro's decline is spec-correct. Subsumes #865; residual of #480/#655.",
         "reason": "ferro-policy-853-ng-partial-transcript-coverage-declined"
+      },
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
       }
     },
     {
@@ -3067,7 +3215,13 @@
           "NG_012337.1(NP_002993.1):p.(Asp92Tyr)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
+      }
     },
     {
       "keywords": [],
@@ -3148,7 +3302,13 @@
           "NG_012337.1(NP_002993.1):p.(Ter160CysextTer29)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
+      }
     },
     {
       "keywords": [
@@ -3262,6 +3422,11 @@
         "axis": "normalized",
         "tracking_issue": 487,
         "note": "ferro echoes the input c.-1_*1del; mutalyzer 3'-shifts the deletion across the CDS boundary to c.1_*2del. 3' shift tracked in #487."
+      },
+      "accepted_divergence": {
+        "axis": "protein_description",
+        "policy": "ferro-policy-whole-cds-del-met1",
+        "note": "Whole-CDS deletion (c.-1_*1del removes the start codon and entire CDS). deletion.md L62-65 prescribes p.? / p.0? for a deletion removing the initiation codon (mutalyzer's p.?); ferro reports the start-loss p.(Met1?) by analogy to substitution.md L51 (a variant affecting the initiation codon). Both convey the undetermined initiation / no-protein outcome; terminal convention difference (p.0? arguably the future-preferred refinement). (Bare NP_ framing also differs.)"
       }
     },
     {
@@ -3302,6 +3467,12 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "An in-cis allele mixing a sense change with a downstream frameshift has no combined spec form, so its protein consequence collapses to p.? ('an effect is expected but cannot be reliably predicted', uncertain.md) — the spec-correct body (#855), matching mutalyzer's p.?. The remaining divergence is framing only: ferro emits the bare NP_ reference, mutalyzer wraps it as NG_x(NP_y):p. — ferro's bare-NP form is the spec-correct value (#483/#495).",
         "cluster": "bare-np-protein"
+      },
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-763-transcript-set-enumeration",
+        "note": "ferro enumerates the latest curated overlapping-transcript set (#710); mutalyzer lists a different/older-version set and partitions the input gene's consequence to protein_description. background/refseq.md L256/L259 leave transcript choice open, L264 endorses the latest build; shared c./p. semantics agree. Transcript-set divergence (#763).",
+        "cluster": "transcript-set-enumeration-763"
       }
     },
     {
@@ -3343,6 +3514,11 @@
           "axis": "genomic",
           "reason": "ferro-policy-654-malformed-input-rejected",
           "note": "The same malformed '41>CA' fails at parse time, so the user-facing genomic axis (#870) produces no output either, while mutalyzer leniently reinterprets."
+        },
+        {
+          "axis": "infos",
+          "reason": "ferro-policy-654-malformed-input-rejected",
+          "note": "Malformed '41>CA' member (a substitution lacking a reference base, substitution.md L5) is rejected at parse time; mutalyzer leniently reinterprets it. Same rejection already dispositioned on the normalized/genomic axes."
         }
       ]
     },
@@ -3358,11 +3534,18 @@
         "ISORTEDVARIANTS"
       ],
       "to_test": true,
-      "accepted_rejection": {
-        "axis": "normalized",
-        "reason": "ferro-policy-654-malformed-input-rejected",
-        "note": "Same malformed '41>CA' substitution (no reference base); ferro rejects at parse time, mutalyzer leniently reinterprets."
-      }
+      "accepted_rejection": [
+        {
+          "axis": "normalized",
+          "reason": "ferro-policy-654-malformed-input-rejected",
+          "note": "Same malformed '41>CA' substitution (no reference base); ferro rejects at parse time, mutalyzer leniently reinterprets."
+        },
+        {
+          "axis": "infos",
+          "reason": "ferro-policy-654-malformed-input-rejected",
+          "note": "Malformed '41>CA' member (a substitution lacking a reference base, substitution.md L5) is rejected at parse time; mutalyzer leniently reinterprets it. Same rejection already dispositioned on the normalized/genomic axes."
+        }
+      ]
     },
     {
       "keywords": [
@@ -3475,6 +3658,11 @@
         "axis": "errors",
         "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
         "note": "ferro rejects this malformed allele (embedded accession in the insert) with a structured parse error; mutalyzer reports EINTRONIC. Both reject."
+      },
+      "accepted_rejection": {
+        "axis": "infos",
+        "reason": "ferro-policy-654-malformed-input-rejected",
+        "note": "Single-position intronic-offset cross-reference insert payload (ins[NM_003002.2:274+20]) on a bare mRNA is a spec-undefined shape (numbering.md: an mRNA reference has no intron; insertion.md: a cross-ref insert payload denotes a range, not a single position). ferro declines with a structured normalize error (#466); mutalyzer leniently reinterprets. errors axis already dispositioned this input."
       }
     },
     {
@@ -3680,6 +3868,12 @@
         "axis": "normalized",
         "tracking_issue": 487,
         "note": "ferro keeps the two-member allele ([9del;7_8insC]); mutalyzer collapses the delete+insert into the equivalent substitution c.8A>C. Allele->substitution collapse tracked in #487."
+      },
+      "accepted_divergence": {
+        "axis": "infos",
+        "policy": "ferro-policy-499-shuffle-applied-compound-allele",
+        "note": "Compound-allele per-member 3'-shift; ferro emits SHUFFLE_APPLIED, mutalyzer emits only the allele-level ISORTEDVARIANTS internal code. Both spec-defensible (#499, precedent #481).",
+        "cluster": "shuffle-applied-compound-allele-499"
       }
     },
     {
@@ -4143,7 +4337,12 @@
           "NG_008835.1(NP_071407.4):p.(=)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_rejection": {
+        "axis": "coding_protein_descriptions",
+        "reason": "ferro-policy-857-non-cds-no-projection",
+        "note": "Every projected overlapping transcript places the variant outside the CDS (deep 5'UTR / intron / deep 3'UTR), p.(=); ferro's #857 policy declines per-transcript protein prediction, so project_variant_all yields no pairs (empty projection). mutalyzer emits 'analysed, unchanged' p.(=). Empty-projection Err bucketed via the reason-857 opt-in (#903)."
+      }
     },
     {
       "keywords": [
@@ -4173,6 +4372,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "A tandem insertion directly C-terminal of and identical to the original residue is a duplication, not an insertion (duplication.md), so the spec-correct body is p.(Cys6dup) (#855). The remaining divergence is framing only: ferro emits the bare NP_ reference, mutalyzer wraps it as NG_x(NP_y):p. — ferro's bare-NP form is the spec-correct value (#483/#495).",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "coding_protein_descriptions",
+        "reason": "ferro-policy-857-non-cds-no-projection",
+        "note": "Every projected overlapping transcript places the variant outside the CDS (deep 5'UTR / intron / deep 3'UTR), p.(=); ferro's #857 policy declines per-transcript protein prediction, so project_variant_all yields no pairs (empty projection). mutalyzer emits 'analysed, unchanged' p.(=). Empty-projection Err bucketed via the reason-857 opt-in (#903)."
       }
     },
     {
@@ -4208,6 +4412,11 @@
         "section": "HGVS protein reference (bare NP)",
         "note": "Framing-only divergence: ferro emits the bare NP_ protein reference; mutalyzer wraps it as <parent>(NP_y):p. The p.(…) body is byte-identical (same NP version, same amino-acid consequence). ferro's bare-NP form is the spec-correct value per docs/recommendations/protein/* (#483/#495).",
         "cluster": "bare-np-protein"
+      },
+      "accepted_rejection": {
+        "axis": "coding_protein_descriptions",
+        "reason": "ferro-policy-857-non-cds-no-projection",
+        "note": "Every projected overlapping transcript places the variant outside the CDS (deep 5'UTR / intron / deep 3'UTR), p.(=); ferro's #857 policy declines per-transcript protein prediction, so project_variant_all yields no pairs (empty projection). mutalyzer emits 'analysed, unchanged' p.(=). Empty-projection Err bucketed via the reason-857 opt-in (#903)."
       }
     },
     {
@@ -4321,7 +4530,12 @@
       "errors": [
         "ENOCDS"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-73-cross-ref-cds-resolved-no-enocds",
+        "note": "Reference-data-completeness divergence: ferro's cdot carries the NM_001099625.2 CDS (backfill #802), so it resolves the plain-position cross-ref insert and emits no error; mutalyzer's backend lacks that CDS and returns ENOCDS. An NM_ mRNA has a CDS by definition (refseq.md); ferro is correct given its more complete reference data (#73)."
+      }
     },
     {
       "keywords": [

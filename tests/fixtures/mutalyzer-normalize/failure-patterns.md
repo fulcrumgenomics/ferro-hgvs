@@ -58,6 +58,11 @@ A p. description references the protein accession alone (NP_); mutalyzer's genom
 | `NG_012337.1(NM_012459.2):c.4_6delinsGTA` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.5_6delinsTAG` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.6C[4]` | protein_description | spec_citation | — | — |
+| `NG_012337.1(TIMM8B):c.12_15dupCAGC` | protein_description | spec_citation | — | — |
+| `NG_012337.1(TIMM8B):c.12dupC` | protein_description | spec_citation | — | — |
+| `NG_012337.1(TIMM8B_v001):c.12_13insGATC` | protein_description | spec_citation | — | — |
+| `NG_012337.1(TIMM8B_v001):c.12_13ins[GATC]` | protein_description | spec_citation | — | — |
+| `NG_012337.1(TIMM8B_v001):c.12_13ins[TTT;GATC]` | protein_description | spec_citation | — | — |
 | `NG_012337.3(NM_003002.4):c.274delinsNG_012337.1(NM_012459.2):c.200_203` | protein_description | spec_citation | — | — |
 | `NG_012772.1(BRCA2_v001):c.622_672del` | protein_description | spec_citation | — | — |
 | `NG_012772.1(BRCA2_v001):c.622_674del` | protein_description | spec_citation | — | — |
@@ -114,6 +119,7 @@ ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift in a compound al
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
 | `NG_009299.1(NM_002474.3):c.[310del;295G>A]` | infos | accepted_divergence | — | — |
+| `NG_012337.1(NM_012459.2):c.[8del;7_8insC]` | infos | accepted_divergence | — | — |
 | `NG_012337.1:g.[104_105insA;105_106insC;105del]` | infos | accepted_divergence | — | — |
 | `NG_012337.1:g.[105_106insC;105del;104_105insA]` | infos | accepted_divergence | — | — |
 | `NG_012337.1:g.[105del;104_105insA;105_106insC]` | infos | accepted_divergence | — | — |
@@ -148,16 +154,26 @@ On `coding_protein_descriptions` (expected ⊆ got, version- and gene-suffix-ins
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
+| `NG_007485.1(NM_000077.4):c.161_162delTGinsATCCC` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_007485.1(NM_000077.4):c.161_162delTGins[ATCCC]` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_007485.1(NM_000077.4):c.161_162delins[ATCCC]` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162insATC` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_007485.1(NM_000077.4):c.161_162ins[ATC]` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_007485.1(NM_000077.4):c.161_163del` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_007485.1(NM_058195.3):c.141_142del` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_007485.1:g.5350_5352del3` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_007485.1:g.5350_5352delCCA` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_008835.1(NM_022153.2):c.568del` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_009299.1(NM_017668.3):c.41A>C` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.129G>T` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.130G>A` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1(TIMM8B):c.12_15dupCAGC` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1(TIMM8B):c.12dupC` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_012337.1:g.13124_13125del` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1:g.4812_4813insTAC` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_012337.1:g.7125G>T` | coding_protein_descriptions | accepted_divergence | — | — |
 
 ### Transcript 5'/3' flank not c.-numberable (pter/qter)
 
@@ -236,19 +252,25 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_007485.1(CDKN2A):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(CDKN2A_v001):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(NM_058195.3):n.204_205insATC` | normalized | accepted_divergence | — | — |
+| `NG_007485.1:g.5479_5480insACT` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | genomic | accepted_divergence | — | — |
 | `NG_008835.1(NM_001168390.2):c.*3186_*3187del` | normalized | spec_citation | — | — |
 | `NG_008835.1(NM_022124.6):c.3304_3305del` | genomic | accepted_divergence | — | — |
+| `NG_008835.1(NM_022153.2):c.82del` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_008835.1:g.320802_320803del` | genomic | accepted_divergence | — | — |
 | `NG_008835.1:g.320802_320803del` | normalized | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins180_188` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins180_188` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins180_188` | protein_description | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins180_188inv` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins180_188inv` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins180_188inv` | protein_description | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins[180_188]` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins[180_188]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[180_188]` | protein_description | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins[180_188inv]` | genomic | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_157ins[180_188inv]` | normalized | accepted_divergence | — | — |
+| `NG_008939.1(PCCB_v001):c.156_157ins[180_188inv]` | protein_description | accepted_divergence | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins180_188` | genomic | known_bug | — | #480 |
 | `NG_008939.1(PCCB_v001):c.156_161delins180_188` | normalized | known_bug | — | #480 |
 | `NG_008939.1(PCCB_v001):c.156_161delins180_188inv` | genomic | known_bug | — | #480 |
@@ -258,15 +280,20 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]` | genomic | known_bug | — | #480 |
 | `NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]` | normalized | known_bug | — | #480 |
 | `NG_008939.1:c.155_157del3` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:c.155_157del3` | protein_description | accepted_divergence | — | — |
 | `NG_008939.1:c.155_157delAAC` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:c.155_157delAAC` | protein_description | accepted_divergence | — | — |
 | `NG_008939.1:c.274_275inv` | genomic | accepted_divergence | — | — |
+| `NG_008939.1:c.274_275inv` | protein_description | accepted_divergence | — | — |
 | `NG_009299.1(NM_002474.3):c.[310del;295G>A]` | normalized | spec_citation | — | — |
 | `NG_009299.1(NM_017668.3):c.33_35CAA[5]` | genomic | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.33_35CAA[5]` | normalized | known_bug | — | #487 |
 | `NG_009299.1(NM_017668.3):c.41A>C` | genomic | accepted_divergence | — | — |
+| `NG_009299.1(NM_017668.3):c.[250del;41>CA]` | infos | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[250del;41>CA]` | normalized | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[250del;41A>C]` | normalized | known_bug | — | #487 |
 | `NG_009299.1(NM_017668.3):c.[41>CA;250del]` | genomic | accepted_divergence | — | — |
+| `NG_009299.1(NM_017668.3):c.[41>CA;250del]` | infos | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[41>CA;250del]` | normalized | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | genomic | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.[41A>C;250del]` | normalized | known_bug | — | #487 |
@@ -274,6 +301,10 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_009930.1(NM_001099625.2):n.110del` | errors | accepted_divergence | — | — |
 | `NG_012337.1(10683):c.274G>T` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(DUMMYACCNO_9999.9):c.12_13insGATC` | errors | accepted_divergence | — | — |
+| `NG_012337.1(NM_003002.2):c.1A>G` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_003002.2):c.1A>T` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_003002.2):c.1_4delinsTTGA` | protein_description | spec_citation | — | — |
+| `NG_012337.1(NM_003002.2):c.276C>T` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.[274;600]` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.[274;600]` | normalized | known_bug | — | #487 |
 | `NG_012337.1(NM_003002.2):c.[274=;275del]` | genomic | accepted_divergence | — | — |
@@ -283,7 +314,10 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_012337.1(NM_003002.2):c.pterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.qterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_012459.2):c.-1_*1del` | normalized | known_bug | — | #487 |
+| `NG_012337.1(NM_012459.2):c.-1_*1del` | protein_description | accepted_divergence | — | — |
+| `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | genomic | accepted_divergence | — | — |
+| `NG_012337.1(NM_012459.2):c.15_17dup` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.[8del;7_8insC]` | normalized | known_bug | — | #487 |
 | `NG_012337.1:274` | normalized | accepted_divergence | — | — |
 | `NG_012337.1:g.4delins7_31` | normalized | accepted_divergence | — | — |
@@ -293,11 +327,15 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_012337.1:g.[4del;4_5insT;4insA;4_5insA;5del]` | errors | accepted_divergence | — | — |
 | `NG_012337.1:g.[4del;4_5insT;4insA;4_5insA]` | errors | accepted_divergence | — | — |
 | `NG_012337.3(NM_003002):274+400G>T` | errors | accepted_divergence | — | — |
+| `NG_012337.3(NM_003002.4):c.274delinsNG_009930.1(NM_001099625.2):c.1010` | errors | accepted_divergence | — | — |
 | `NG_012337.3(NM_003002.4):r.274+10G>T` | errors | accepted_divergence | — | — |
 | `NG_017013.2:g.17496_17497insAGCTGCTCAGATAGCGA` | normalized | accepted_divergence | — | — |
 | `NG_029724.1(NM_004321.7):c.101del` | normalized | accepted_divergence | — | — |
+| `NM_000143.3:c.-1_1insCAT` | protein_description | accepted_divergence | — | — |
 | `NM_002001.2:c.1_3delinsATG` | normalized | accepted_divergence | — | — |
+| `NM_003002.2:c.273del` | infos | accepted_divergence | — | — |
 | `NM_003002.2:c.[100del;200_201insNM_003002.2:274+20]` | errors | accepted_divergence | — | — |
+| `NM_003002.2:c.[100del;200_201insNM_003002.2:274+20]` | infos | accepted_divergence | — | — |
 | `NM_003002.4:c.206_210delins190_220inv` | normalized | accepted_divergence | — | — |
 | `NM_003002.4:n.206_210del` | normalized | accepted_divergence | — | — |
 
@@ -305,11 +343,11 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 
 | axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
 |---|---:|---:|---:|---:|---:|
-| coding_protein_descriptions | 10 | 0 | 0 | 0 | 0 |
-| errors | 16 | 0 | 0 | 0 | 0 |
+| coding_protein_descriptions | 24 | 0 | 0 | 0 | 0 |
+| errors | 17 | 0 | 0 | 0 | 0 |
 | genomic | 22 | 4 | 0 | 0 | 1 |
-| infos | 4 | 0 | 0 | 0 | 0 |
+| infos | 9 | 0 | 0 | 0 | 0 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
 | normalized | 23 | 17 | 4 | 5 | 9 |
-| protein_description | 0 | 0 | 0 | 0 | 51 |
+| protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |
