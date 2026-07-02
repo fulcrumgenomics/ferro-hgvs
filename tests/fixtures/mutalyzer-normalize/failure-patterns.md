@@ -233,7 +233,6 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[0]` | normalized | known_bug | — | #487 |
 | `LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[1]` | normalized | known_bug | — | #487 |
 | `LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[2]` | normalized | known_bug | — | #487 |
-| `LRG_303t1:c.10_11insLRG_1t1:c.100_101` | normalized | known_bug | — | #487 |
 | `NG_007485.1(1787):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(CDKN2A):n.204_205insATC` | errors | accepted_divergence | — | — |
 | `NG_007485.1(CDKN2A_v001):n.204_205insATC` | errors | accepted_divergence | — | — |
@@ -312,6 +311,6 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | genomic | 22 | 4 | 0 | 0 | 1 |
 | infos | 4 | 0 | 0 | 0 | 0 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
-| normalized | 23 | 18 | 4 | 5 | 9 |
+| normalized | 23 | 17 | 4 | 5 | 9 |
 | protein_description | 0 | 0 | 0 | 0 | 52 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |

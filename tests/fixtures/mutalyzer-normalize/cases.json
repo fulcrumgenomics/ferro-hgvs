@@ -3121,12 +3121,7 @@
         "ICORRECTEDLRGREFERENCE",
         "ILRGWARNING"
       ],
-      "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro resolves the cross-reference payload then renders it as a duplication (c.10_11dup); mutalyzer keeps the literal insGA. ins->dup canonicalization (and the dup anchor position) tracked in #487."
-      }
+      "to_test": true
     },
     {
       "keywords": [],
