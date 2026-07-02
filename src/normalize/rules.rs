@@ -19,7 +19,7 @@
 
 use std::str::FromStr;
 
-use crate::coords::index_to_hgvs_pos;
+use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
 use crate::hgvs::edit::{InsertedPart, InsertedSequence, NaEdit, Sequence};
 use crate::reference::ReferenceProvider;
@@ -261,12 +261,16 @@ pub fn find_homopolymer_at(ref_seq: &[u8], pos: usize) -> Option<RepeatAnalysis>
 /// audit was performed in #357 and locked in by
 /// `insertion_to_repeat_output_is_direction_invariant_on_n_axis`.
 ///
-/// Shares the 3'-phase step (`three_prime_align_tract`) with
-/// [`normalize_repeat`]; the two are kept in lockstep by the cross-check test
-/// `insertion_to_repeat_agrees_with_normalize_repeat_phase`. They keep separate
-/// tract-finders (`find_tandem_extent` here, [`count_tandem_repeats`] there)
-/// because their anchoring contracts genuinely differ — see #866 and the note on
-/// [`count_tandem_repeats`].
+/// This function owns only the insertion-specific work: rotation-aware
+/// discovery of the adjacent tandem tract (`find_tandem_extent`) and the #882
+/// preservation gate. The canonicalization arithmetic — the 3'-phase
+/// (`three_prime_align_tract`), the copy count, and the c.-codon gate — is
+/// **delegated to [`normalize_repeat`]** (#866), making that function the single
+/// source of truth for ins→repeat canonicalization (the #852 non-idempotency
+/// lived in exactly this seam). The two keep separate tract-*finders*
+/// (`find_tandem_extent` here, [`count_tandem_repeats`] there) because their
+/// anchoring contracts genuinely differ; the cross-check test
+/// `insertion_to_repeat_agrees_with_normalize_repeat_phase` pins their agreement.
 pub fn insertion_to_repeat(
     ref_seq: &[u8],
     pos: u64,
@@ -284,11 +288,8 @@ pub fn insertion_to_repeat(
         return None;
     }
 
-    // HGVS spec (repeated.md): in c. context, repeat notation requires
-    // unit_len % 3 == 0. Falls back to literal `ins` when the gate blocks.
-    if is_coding && !base_unit.len().is_multiple_of(3) {
-        return None;
-    }
+    // The c.-context codon gate (repeated.md: unit_len % 3 == 0) is applied
+    // inside `normalize_repeat` below, not here — see the delegation note.
 
     // The inserted sequence may be written as any cyclic rotation of the
     // reference repeat unit (e.g. `insCAGCAG` against a `GCA` tract). Try
@@ -308,23 +309,55 @@ pub fn insertion_to_repeat(
     }
 
     let (unit, ref_start, ref_count) = best?;
-    let total_count = ref_count + added_copies;
-    // 3'-align the reported window so it agrees with `normalize_repeat` — the
-    // HGVS 3'-rule (idempotency; #852). `find_tandem_extent` returns the 5'-most
-    // unit-aligned start; convert to an exclusive end, slide to the most-3' phase,
-    // and report the rotated unit + window. The count is invariant under the shift.
     let ref_end_excl = ref_start + ref_count as usize * unit.len();
-    let (start, end_excl, rotated_unit) =
-        three_prime_align_tract(ref_seq, ref_start, ref_end_excl, &unit);
+
+    // #866: delegate the canonical-window + count + codon-gate decision to
+    // `normalize_repeat` (the single source of truth for ins→repeat
+    // canonicalization). Re-express the discovered tract as the well-formed
+    // explicit repeat range `unit[ref_count]` over `[ref_start, ref_end_excl)` and
+    // expand it by the inserted copies. Because `find_tandem_extent` and
+    // `count_tandem_repeats` walk the tract identically, `normalize_repeat`
+    // re-discovers the same tract, absorbs no flanks, and applies the SAME
+    // `three_prime_align_tract` + codon gate — so the emitted window/unit/count
+    // equal today's inline computation. `added_copies >= 2` ⇒ the target is
+    // `>= ref_count + 2`, so only `Repeat` (or the codon-gated `Insertion` → None)
+    // is reachable; `Deletion`/`Duplication`/`Unchanged` cannot occur.
+    let target = ref_count + added_copies;
+    let end_pos_incl = ref_end_excl - 1;
+    let (start_idx, emitted_end_hgvs, rotated_unit, total_count) =
+        match normalize_repeat(ref_seq, ref_start, end_pos_incl, &unit, target, is_coding) {
+            RepeatNormResult::Repeat {
+                start,
+                end,
+                sequence,
+                count,
+            } => (hgvs_pos_to_index(start), end, sequence, count),
+            // Codon gate (c. + non-codon unit) reroutes the expansion to `Insertion`;
+            // the caller then emits the literal `ins` form. Matches the pre-#866 gate.
+            RepeatNormResult::Insertion { .. } => return None,
+            // `added_copies >= 2` ⇒ `target = ref_count + added_copies >= ref_count + 2`,
+            // so a contraction / one-copy-expansion / identity result cannot arise here.
+            // Assert it loudly rather than silently returning `None`, so a future change
+            // that relaxes the `added_copies >= 2` guard is caught at test time.
+            RepeatNormResult::Deletion { .. }
+            | RepeatNormResult::Duplication { .. }
+            | RepeatNormResult::Unchanged => unreachable!(
+                "insertion_to_repeat delegates with added_copies >= 2, so target >= \
+                 ref_count + 2; only Repeat or the codon-gated Insertion are reachable"
+            ),
+        };
+    // `emitted_end_hgvs` is a 1-based INCLUSIVE HGVS position, numerically equal to
+    // the 0-based EXCLUSIVE aligned end; recover the exclusive end for the #882 gate
+    // with no double correction.
+    let end_excl = hgvs_pos_to_index(emitted_end_hgvs) + 1;
 
     // #882: only emit the repeat when it decodes to the same sequence as the
-    // input insertion. `start`/`end_excl`/`rotated_unit`/`total_count` are the
-    // post-alignment emitted window, unit, and count.
+    // input insertion.
     if !tandem_edit_preserves_insertion(
         ref_seq,
         pos as usize,
         inserted_seq,
-        start,
+        start_idx,
         end_excl,
         &rotated_unit,
         total_count,
@@ -335,8 +368,8 @@ pub fn insertion_to_repeat(
     Some((
         rotated_unit[0],
         total_count,
-        index_to_hgvs_pos(start),
-        index_to_hgvs_pos(end_excl - 1),
+        index_to_hgvs_pos(start_idx),
+        emitted_end_hgvs,
         rotated_unit,
     ))
 }
@@ -2893,6 +2926,41 @@ mod tests {
                 nr_unit: b"GC",
                 nr_count: 5,
             },
+            // Case 3 (#866): tri-nucleotide `CAG` tract ref[2..11); ins abuts its 3'
+            // end. Both paths must agree on window (3,11,"CAG").
+            Case {
+                ref_seq: b"GGCAGCAGCAGGG",
+                ins_pos: 10,
+                ins_seq: b"CAGCAG",
+                nr_pos: 2,
+                nr_end: 10,
+                nr_unit: b"CAG",
+                nr_count: 5,
+            },
+            // Case 4 (#866): multi-copy homopolymer `A` tract ref[3..8). Window (4,8,"A").
+            Case {
+                ref_seq: b"GGGAAAAAGGG",
+                ins_pos: 7,
+                ins_seq: b"AA",
+                nr_pos: 3,
+                nr_end: 7,
+                nr_unit: b"A",
+                nr_count: 7,
+            },
+            // Case 5 (#866): single-reference-copy homopolymer (`ref_count == 1`) — the
+            // one structurally distinct delegated branch, where the re-expressed range
+            // collapses to `end_pos == pos` with `unit_len == 1`. `count_tandem_repeats`
+            // still succeeds, so the len>=2 rotation fallback is unreachable. Window
+            // (2,2,"A").
+            Case {
+                ref_seq: b"GAG",
+                ins_pos: 1,
+                ins_seq: b"AA",
+                nr_pos: 1,
+                nr_end: 1,
+                nr_unit: b"A",
+                nr_count: 3,
+            },
         ];
         for c in cases {
             let (_b, _c, ins_start, ins_end, ins_unit) =
@@ -2914,6 +2982,24 @@ mod tests {
                 }
                 other => panic!("expected Repeat for {:?}, got {other:?}", c.ref_seq),
             }
+        }
+
+        // Case 6 (#866): coding codon-gate agreement. A non-codon-aligned (`A`, len 1)
+        // expansion in c. context is NOT repeat notation — the two paths must agree that
+        // it degrades: `insertion_to_repeat` declines (→ literal `ins`), and
+        // `normalize_repeat` routes the expansion to `Insertion`. Kept out of the shared
+        // loop above (which unwraps a `Repeat`) since this case is intentionally None.
+        assert!(
+            insertion_to_repeat(b"CAAAAAC", 5, b"AA", true).is_none(),
+            "coding non-codon-aligned expansion must not be repeat notation"
+        );
+        match normalize_repeat(b"CAAAAAC", 1, 5, b"A", 7, true) {
+            RepeatNormResult::Insertion {
+                start,
+                end,
+                sequence,
+            } => assert_eq!((start, end, sequence), (6, 7, b"AA".to_vec())),
+            other => panic!("expected codon-gated Insertion, got {other:?}"),
         }
     }
 
