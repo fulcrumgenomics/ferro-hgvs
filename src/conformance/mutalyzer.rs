@@ -29,7 +29,47 @@ pub struct Fixture {
     /// field. Optional so a corpus with no taxonomy still parses.
     #[serde(default)]
     pub clusters: Vec<Cluster>,
+    /// Comparator runtime provenance (#890): the exact comparator versions the
+    /// corpus expected values are validated against, plus the ferro
+    /// `reference_identity()` hash (#764). Optional so a corpus without it still
+    /// parses; recorded so "which mutalyzer/biocommons/hgvs-rs" is unambiguous
+    /// (the root-cause provenance gap #890 identified).
+    #[serde(default)]
+    pub comparator_provenance: Option<ComparatorProvenance>,
     pub cases: Vec<Case>,
+}
+
+/// Comparator runtime versions the corpus expected values are validated against
+/// (#890). The `mutalyzer-normalize` corpus is *derived from* the mutalyzer
+/// normalizer, so `mutalyzer` / `mutalyzer_hgvs_parser` are its authoritative
+/// source; the biocommons/hgvs-rs versions are the benchmark suite's other
+/// comparators, recorded here for one canonical provenance record. Prefer
+/// **deriving** expected values from these pinned comparators (via
+/// `ferro-benchmark compare-normalize`) over copying an upstream test suite —
+/// the practice that prevents the Mutalyzer2-era drift #882 surfaced.
+#[derive(Debug, Deserialize, Default)]
+#[allow(dead_code)]
+pub struct ComparatorProvenance {
+    /// Free-text provenance note (validation scope, derivation practice).
+    pub note: String,
+    /// Date the versions below were confirmed against the corpus (ISO-8601).
+    pub validated_at: String,
+    /// ferro prepared-reference identity hash (#764) the corpus was blessed
+    /// against; must match `reference_identity_from_manifest`.
+    pub reference_identity: String,
+    /// mutalyzer normalizer version — the source of this corpus's values.
+    pub mutalyzer: String,
+    /// mutalyzer-hgvs-parser version (mutalyzer's HGVS parser dependency).
+    pub mutalyzer_hgvs_parser: String,
+    /// biocommons/hgvs version (cross-check comparator; empty if not recorded).
+    #[serde(default)]
+    pub biocommons_hgvs: String,
+    /// biocommons.seqrepo version (cross-check comparator).
+    #[serde(default)]
+    pub biocommons_seqrepo: String,
+    /// hgvs-rs version/tag (cross-check comparator; projection-fixture source).
+    #[serde(default)]
+    pub hgvs_rs: String,
 }
 
 impl Fixture {
@@ -1149,6 +1189,42 @@ mod tests {
     fn parse(clusters: &str, cases: &str) -> Fixture {
         let json = format!("{{{BASE},\"clusters\":[{clusters}],\"cases\":[{cases}]}}");
         serde_json::from_str(&json).expect("fixture should deserialize")
+    }
+
+    #[test]
+    fn comparator_provenance_absent_still_parses() {
+        // Backward-compat (#890): a corpus header with no `comparator_provenance`
+        // block (the pre-#890 shape, and every other corpus) parses with the
+        // field as `None`.
+        let f = parse("", "");
+        assert!(f.comparator_provenance.is_none());
+    }
+
+    #[test]
+    fn comparator_provenance_parses_and_exposes_versions() {
+        // #890: the recorded provenance deserializes into typed fields (not
+        // silently dropped as an unknown key), so a future test can assert the
+        // recorded reference_identity matches the pinned reference.
+        let json = format!(
+            "{{{BASE},{},\"clusters\":[],\"cases\":[]}}",
+            r#""comparator_provenance":{
+                "note":"n","validated_at":"2026-06-30",
+                "reference_identity":"28288ed4c39ee856",
+                "mutalyzer":"3.1.1","mutalyzer_hgvs_parser":"0.3.9",
+                "biocommons_hgvs":"1.5.6","biocommons_seqrepo":"0.6.11",
+                "hgvs_rs":"0.20.2-1-gb6513b3"
+            }"#
+        );
+        let f: Fixture = serde_json::from_str(&json).expect("provenance should deserialize");
+        let p = f
+            .comparator_provenance
+            .expect("comparator_provenance present");
+        assert_eq!(p.reference_identity, "28288ed4c39ee856");
+        assert_eq!(p.mutalyzer, "3.1.1");
+        assert_eq!(p.mutalyzer_hgvs_parser, "0.3.9");
+        assert_eq!(p.biocommons_hgvs, "1.5.6");
+        assert_eq!(p.biocommons_seqrepo, "0.6.11");
+        assert_eq!(p.hgvs_rs, "0.20.2-1-gb6513b3");
     }
 
     #[test]
