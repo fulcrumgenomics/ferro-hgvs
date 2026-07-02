@@ -43,7 +43,7 @@ jobs:
         run: cargo install cargo-fuzz
 
       - name: Cache cargo
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
             ~/.cargo/bin/
@@ -54,7 +54,7 @@ jobs:
           key: ${{ runner.os }}-fuzz-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Download corpus
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -74,7 +74,7 @@ jobs:
           timeout "${FUZZ_SECONDS}s" cargo +nightly fuzz run "${FUZZ_TARGET}" -- -max_len=1024 || true
 
       - name: Save corpus
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5.0.5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         if: always()
         with:
           path: fuzz/corpus/${{ matrix.target }}
