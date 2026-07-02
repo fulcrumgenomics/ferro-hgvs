@@ -1209,7 +1209,7 @@ mod tests {
             "{{{BASE},{},\"clusters\":[],\"cases\":[]}}",
             r#""comparator_provenance":{
                 "note":"n","validated_at":"2026-06-30",
-                "reference_identity":"28288ed4c39ee856",
+                "reference_identity":"629f0400076369c8",
                 "mutalyzer":"3.1.1","mutalyzer_hgvs_parser":"0.3.9",
                 "biocommons_hgvs":"1.5.6","biocommons_seqrepo":"0.6.11",
                 "hgvs_rs":"0.20.2-1-gb6513b3"
@@ -1219,7 +1219,7 @@ mod tests {
         let p = f
             .comparator_provenance
             .expect("comparator_provenance present");
-        assert_eq!(p.reference_identity, "28288ed4c39ee856");
+        assert_eq!(p.reference_identity, "629f0400076369c8");
         assert_eq!(p.mutalyzer, "3.1.1");
         assert_eq!(p.mutalyzer_hgvs_parser, "0.3.9");
         assert_eq!(p.biocommons_hgvs, "1.5.6");
