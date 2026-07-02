@@ -2,7 +2,7 @@
   "schema_version": 1,
   "_comment": "SOURCE OF TRUTH for tool-support tables. Edit cells here, then run: cargo run --features dev --example generate_tool_support_tables. Every cell is source-verified; each non-obvious value carries a 'note' citing the deciding behavior.",
   "tools": [
-    { "id": "ferro", "name": "ferro", "version": "0.6.0", "url": "https://github.com/fulcrumgenomics/ferro-hgvs" },
+    { "id": "ferro", "name": "ferro", "version": "0.7.0", "url": "https://github.com/fulcrumgenomics/ferro-hgvs" },
     { "id": "mutalyzer", "name": "mutalyzer", "version": "3.1.1", "url": "https://mutalyzer.nl/" },
     { "id": "biocommons", "name": "biocommons", "version": "fa02ca5ec0c9e28a1a6377b551e41ae77b450ce9", "url": "https://github.com/biocommons/hgvs" },
     { "id": "hgvs-rs", "name": "hgvs-rs", "version": "0.20.2", "url": "https://github.com/varfish-org/hgvs-rs" }
