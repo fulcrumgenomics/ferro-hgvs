@@ -187,10 +187,80 @@ fn reference_identity() -> Option<String> {
     ID.get_or_init(|| {
         let path = manifest_path()?;
         let bytes = fs::read(&path).ok()?;
-        let manifest: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        let mut manifest: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        // #905 Part 2: stamp the out-of-band-regenerated derived artifacts by the
+        // FNV-1a of their *current bytes*, read here at identity time and injected
+        // into the manifest value the signature consumes. Computing from the files
+        // (rather than a manifest-stored stamp written by `save`) is what makes
+        // this load-bearing: an in-place content rewrite is caught even when the
+        // rewrite bypasses `save` and so leaves `prepared_at` and every basename
+        // unchanged (a hand-edit or a standalone derive example).
+        let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        inject_content_stamps(&mut manifest, base_dir);
         Some(reference_identity_from_manifest(&manifest))
     })
     .clone()
+}
+
+/// The out-of-band-regenerated derived artifacts whose *content* is stamped into
+/// the reference identity (#905 Part 2). These constant-named artifacts can be
+/// rewritten in place — by a targeted `ferro prepare --derive-*` / `--backfill-*`
+/// step or a hand-edit — without moving `prepared_at` or changing a filename, so
+/// hashing their bytes at identity time is the only way to catch such a change
+/// (the basename part, #905 Part 1, cannot). Scoped to the small derived
+/// artifacts; the large FASTAs change via re-download, i.e. a new basename or a
+/// moved `prepared_at`.
+const CONTENT_STAMPED_ARTIFACTS: &[&str] = &[
+    "derived_transcript_placements",
+    "derived_refseqgene_placements",
+    "ng_hosted_transcripts",
+    "backfill_transcripts_fasta",
+];
+
+/// Read each present content-stamped artifact (resolving its manifest-relative
+/// path against `base_dir`) and inject a `derived_artifact_stamps` object
+/// (field name → FNV-1a hex of the bytes) into `manifest`. A missing or
+/// unreadable artifact contributes no stamp (so a removed artifact also changes
+/// the signature); a no-op when none are present.
+fn inject_content_stamps(manifest: &mut serde_json::Value, base_dir: &Path) {
+    let mut stamps = serde_json::Map::new();
+    for &field in CONTENT_STAMPED_ARTIFACTS {
+        let Some(rel) = manifest.get(field).and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        let rel_path = Path::new(rel);
+        let path = if rel_path.is_absolute() {
+            rel_path.to_path_buf()
+        } else {
+            base_dir.join(rel_path)
+        };
+        if let Ok(bytes) = fs::read(&path) {
+            stamps.insert(
+                field.to_string(),
+                serde_json::Value::String(fnv1a_hex(&bytes)),
+            );
+        }
+    }
+    if !stamps.is_empty() {
+        if let Some(obj) = manifest.as_object_mut() {
+            obj.insert(
+                "derived_artifact_stamps".to_string(),
+                serde_json::Value::Object(stamps),
+            );
+        }
+    }
+}
+
+/// FNV-1a (64-bit) hex digest of `bytes` — small, dependency-free, and stable
+/// across platforms/toolchains. Shared by the reference-identity signature and
+/// the #905 content stamps so they compose with one identical hash.
+fn fnv1a_hex(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in bytes {
+        hash ^= b as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 /// Compute the reference identity (#764) from a parsed manifest value.
@@ -200,9 +270,18 @@ fn reference_identity() -> Option<String> {
 /// *content* changes and that are invariant to machine-local paths:
 /// - `prepared_at` — refreshed on every re-prepare, so it changes whenever the
 ///   reference is regenerated even if every other field is unchanged;
-/// - `transcript_count` — content-derived;
-/// - the *basenames* (not full paths) of the content-bearing cdot / genome /
-///   transcript artifacts, whose names encode the source build/version.
+/// - `transcript_count` and the sorted `available_prefixes` — content-derived;
+/// - the *basenames* (not full paths) of **every** content-bearing artifact the
+///   manifest tracks (cdot / genome / transcript / derived-placement / NG-hosted
+///   / RefSeqGene / supplemental / backfill / legacy / LRG / ensembl / canonical),
+///   whose names encode the source build/version — Part 1 of #905, catching an
+///   artifact being added/removed or version-renamed;
+/// - the per-derived-artifact **content stamps** (`derived_artifact_stamps`) —
+///   Part 2 of #905 (the root fix): an FNV-1a of each out-of-band-regenerated
+///   artifact's bytes, so an **in-place** content change bumps the identity even
+///   when `prepared_at` and every basename are unchanged (the gap that let the
+///   #790/#795 `derived_transcript_placements` and #859/#871 `ng_hosted_transcripts`
+///   additions leave the identity stale).
 ///
 /// Split out from [`reference_identity`] so it can be unit-tested without a live
 /// prepared reference.
@@ -255,33 +334,91 @@ fn reference_identity_from_manifest(manifest: &serde_json::Value) -> String {
     {
         parts.push(format!("transcript_count={count}"));
     }
+    // Part 1 (#905): every single-path content-bearing artifact's basename.
+    // Expanded from the original cdot/genome-only set to cover the derived,
+    // NG-hosted, RefSeqGene, supplemental, backfill, legacy, LRG, ensembl, and
+    // canonical artifacts — so adding/removing an artifact, or a version-name
+    // change on any of them, bumps the identity (previously only the cdot/genome/
+    // transcript basenames did). Mirrors `ReferenceManifest::for_each_path`.
     for key in [
         "cdot_json",
         "cdot_grch37_json",
+        "ensembl_cdot_json",
+        "ensembl_cdot_grch37_json",
         "genome_fasta",
         "genome_grch37_fasta",
+        "refseqgene_alignments",
+        "refseqgene_alignments_grch37",
+        "assembly_report",
+        "assembly_report_grch37",
+        "derived_refseqgene_placements",
+        "ng_hosted_transcripts",
+        "derived_transcript_placements",
+        "refseqgene_summary",
+        "lrg_refseq_mapping",
+        "supplemental_fasta",
+        "backfill_transcripts_fasta",
+        "legacy_transcripts_fasta",
+        "legacy_transcripts_metadata",
+        "legacy_genbank_fasta",
+        "legacy_genbank_metadata",
+        "canonical_overrides",
     ] {
         if let Some(name) = basename(key) {
             parts.push(format!("{key}={name}"));
         }
     }
-    for key in ["transcript_fastas", "ensembl_transcript_fastas"] {
+    for key in [
+        "transcript_fastas",
+        "protein_fastas",
+        "refseqgene_fastas",
+        "lrg_fastas",
+        "lrg_xmls",
+        "ensembl_transcript_fastas",
+    ] {
         let mut names = basenames(key);
         names.sort();
         if !names.is_empty() {
             parts.push(format!("{key}=[{}]", names.join(",")));
         }
     }
+    // `available_prefixes` is content-derived (which accession namespaces the
+    // reference serves); include it, sorted for order-independence.
+    if let Some(arr) = manifest
+        .get("available_prefixes")
+        .and_then(serde_json::Value::as_array)
+    {
+        let mut prefixes: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
+        prefixes.sort();
+        if !prefixes.is_empty() {
+            parts.push(format!("available_prefixes=[{}]", prefixes.join(",")));
+        }
+    }
+    // Part 2 (#905, root fix): per-derived-artifact content stamps folded in from
+    // the `derived_artifact_stamps` object — an FNV-1a of each out-of-band-
+    // regenerated artifact's bytes, computed from the files at identity time by
+    // `inject_content_stamps` (the live [`reference_identity`] path) or supplied
+    // directly (unit tests). An **in-place** content regeneration of a
+    // constant-named artifact (without moving `prepared_at` or a basename)
+    // changes its stamp here, so the identity bumps — the case the basename part
+    // cannot catch.
+    if let Some(stamps) = manifest
+        .get("derived_artifact_stamps")
+        .and_then(serde_json::Value::as_object)
+    {
+        let mut stamp_parts: Vec<String> = stamps
+            .iter()
+            .filter_map(|(k, v)| v.as_str().map(|s| format!("stamp:{k}={s}")))
+            .collect();
+        stamp_parts.sort();
+        parts.extend(stamp_parts);
+    }
     parts.sort();
     let signature = parts.join("\n");
-
-    // FNV-1a (64-bit) — small, dependency-free, and stable across builds.
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for &b in signature.as_bytes() {
-        hash ^= b as u64;
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    fnv1a_hex(signature.as_bytes())
 }
 
 fn provider() -> Option<Arc<MultiFastaProvider>> {
@@ -3989,6 +4126,121 @@ mod comparator_tests {
             id_base,
             reference_identity_from_manifest(&new_count),
             "a different transcript_count must change the identity"
+        );
+    }
+
+    #[test]
+    fn reference_identity_changes_when_a_derived_artifact_is_added_or_renamed() {
+        // Part 1 (#905): a content-bearing artifact outside the original
+        // cdot/genome/transcript set now contributes — adding it, and
+        // version-renaming it, each change the identity.
+        let base = serde_json::json!({
+            "prepared_at": "2026-06-17T09:44:18.428902+00:00",
+            "transcript_count": 273423,
+            "cdot_json": "cdot/cdot-0.2.32.refseq.GRCh38.json",
+            "genome_fasta": "genome/GRCh38.fna",
+        });
+        let id_base = reference_identity_from_manifest(&base);
+
+        let mut with_derived = base.clone();
+        with_derived["derived_transcript_placements"] =
+            serde_json::json!("derived/derived_transcript_placements.json");
+        let id_added = reference_identity_from_manifest(&with_derived);
+        assert_ne!(
+            id_base, id_added,
+            "adding a derived-placements artifact must change the identity"
+        );
+
+        let mut renamed = with_derived.clone();
+        renamed["derived_transcript_placements"] =
+            serde_json::json!("derived/derived_transcript_placements.v2.json");
+        assert_ne!(
+            id_added,
+            reference_identity_from_manifest(&renamed),
+            "a version-name change on the artifact must change the identity"
+        );
+    }
+
+    #[test]
+    fn reference_identity_changes_when_a_content_stamp_changes_in_place() {
+        // Part 2 (#905) acceptance: an in-place content change of a
+        // constant-named derived artifact — surfaced only via its
+        // `derived_artifact_stamps` entry — bumps the identity even though every
+        // basename, `prepared_at`, and `transcript_count` are byte-identical.
+        let base = serde_json::json!({
+            "prepared_at": "2026-06-17T09:44:18.428902+00:00",
+            "transcript_count": 273423,
+            "cdot_json": "cdot/cdot-0.2.32.refseq.GRCh38.json",
+            "genome_fasta": "genome/GRCh38.fna",
+            "derived_transcript_placements": "derived/derived_transcript_placements.json",
+            "derived_artifact_stamps": { "derived_transcript_placements": "0123456789abcdef" },
+        });
+        let id_base = reference_identity_from_manifest(&base);
+
+        let mut restamped = base.clone();
+        restamped["derived_artifact_stamps"] =
+            serde_json::json!({ "derived_transcript_placements": "fedcba9876543210" });
+        assert_ne!(
+            id_base,
+            reference_identity_from_manifest(&restamped),
+            "an in-place content change (new stamp, unchanged basename) must bump the identity"
+        );
+
+        // A manifest with no stamps map (prepared before #905) is still
+        // deterministic and distinct from a stamped one.
+        let mut no_stamps = base.clone();
+        no_stamps
+            .as_object_mut()
+            .unwrap()
+            .remove("derived_artifact_stamps");
+        let id_no_stamps = reference_identity_from_manifest(&no_stamps);
+        assert_ne!(id_base, id_no_stamps);
+        assert_eq!(id_no_stamps, reference_identity_from_manifest(&no_stamps));
+    }
+
+    #[test]
+    fn inject_content_stamps_hashes_files_and_tracks_in_place_changes() {
+        // #905 Part 2 computation: stamps are the FNV-1a of the artifact bytes,
+        // read fresh from disk (resolving the manifest-relative path), and an
+        // in-place rewrite changes the stamp — hence the identity — with the
+        // manifest value otherwise untouched.
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+        let artifact = base.join("derived_transcript_placements.json");
+        std::fs::write(&artifact, br#"{"v":1}"#).unwrap();
+        let manifest = || {
+            serde_json::json!({
+                "derived_transcript_placements": "derived_transcript_placements.json",
+            })
+        };
+
+        let mut m1 = manifest();
+        inject_content_stamps(&mut m1, base);
+        let s1 = m1["derived_artifact_stamps"]["derived_transcript_placements"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(s1, fnv1a_hex(br#"{"v":1}"#));
+
+        std::fs::write(&artifact, br#"{"v":2}"#).unwrap();
+        let mut m2 = manifest();
+        inject_content_stamps(&mut m2, base);
+        let s2 = m2["derived_artifact_stamps"]["derived_transcript_placements"]
+            .as_str()
+            .unwrap();
+        assert_ne!(s1, s2, "an in-place content change must change the stamp");
+        assert_ne!(
+            reference_identity_from_manifest(&m1),
+            reference_identity_from_manifest(&m2),
+            "the in-place change must bump the identity"
+        );
+
+        // A wired-but-absent artifact contributes no stamp.
+        let mut m3 = serde_json::json!({ "derived_transcript_placements": "missing.json" });
+        inject_content_stamps(&mut m3, base);
+        assert!(
+            m3.get("derived_artifact_stamps").is_none(),
+            "an absent artifact must not add a stamps map"
         );
     }
 
