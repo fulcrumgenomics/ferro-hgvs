@@ -1333,6 +1333,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// resolved position (uncertain/compound boundary) (#655). See
     /// [`Self::project_to_genomic_nc`] for the rest of the error contract
     /// (`UnsupportedProjection` / `InvalidCoordinates` / `ReferenceNotFound`).
+    ///
+    /// Most callers should prefer [`Self::project_to_genomic_normalized`], which
+    /// returns the spec-canonical 3'-shifted form; this raw pivot intentionally
+    /// does **not** normalize its input (#785).
     pub fn project_to_genomic(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         self.warn_assembly_conflict(variant);
         // A `Genome` input is already in its parent frame: an `NC_` chromosome
@@ -1378,11 +1382,36 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
 
         match self.project_to_genomic_nc(variant)? {
+            // Raw pivot: re-anchor into the parent frame but do NOT normalize
+            // (#785/#867). The pivot was 3'-normalized in *transcript* space,
+            // which is the genome's 5' end on a minus-strand transcript, so the
+            // genomic image can still be non-3'-most; `project_to_genomic_normalized`
+            // owns the genomic-frame 3'-shift. Normalizing here would make the
+            // raw (`normalize=False`) contract indistinguishable from the
+            // normalized one for c./n./r. inputs.
             HgvsVariant::Genome(gv) => {
-                self.reanchor_and_normalize_genomic(gv, self.build_hint_for_variant(variant))
+                self.reanchor_genome_output(gv, self.build_hint_for_variant(variant))
             }
             other => Ok(other),
         }
+    }
+
+    /// Normalize `v` in its own frame, falling back to the un-normalized form on a
+    /// normalize error (the dropped error is `warn!`-logged so a regression is
+    /// discoverable without enabling `trace` logs — this now backs the default
+    /// `normalize=True` surface, so a silent non-canonical fallback would
+    /// otherwise be invisible in production). Shared by
+    /// [`Self::reanchor_and_normalize_genomic`] and
+    /// [`Self::project_to_genomic_normalized`] so the fallback/log semantics stay
+    /// identical between the two call sites.
+    fn normalize_or_fallback(&self, v: HgvsVariant) -> HgvsVariant {
+        self.normalizer.normalize(&v).unwrap_or_else(|e| {
+            log::warn!(
+                "genomic-frame renormalization failed for {v}; \
+                 emitting un-normalized form: {e}"
+            );
+            v
+        })
     }
 
     /// Re-anchor an NC-frame pivot into its parent frame, then re-normalize in the
@@ -1405,13 +1434,35 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         build: Option<&str>,
     ) -> Result<HgvsVariant, FerroError> {
         let reanchored = self.reanchor_genome_output(gv, build)?;
-        Ok(self.normalizer.normalize(&reanchored).unwrap_or_else(|e| {
-            log::trace!(
-                "genomic-frame renormalization failed for {reanchored}; \
-                 emitting un-normalized re-anchored form: {e}"
-            );
-            reanchored
-        }))
+        Ok(self.normalize_or_fallback(reanchored))
+    }
+
+    /// Project a transcript-coordinate (`c.`/`n.`/`r.`) variant onto its genomic
+    /// parent, or canonicalize an already-genomic (`g.`) variant, and return the
+    /// **spec-canonical, normalized** genomic form.
+    ///
+    /// [`Self::project_to_genomic`] is the raw pivot: it intentionally does not
+    /// normalize (#785), so a non-3'-most input yields a non-3'-most genomic
+    /// output. This wrapper applies the projector's normalizer to the pivot
+    /// output, so callers get the 3'-shifted / `ins`→`dup` canonical form they
+    /// usually want (#867). Reach for the raw [`Self::project_to_genomic`] only
+    /// when you explicitly need the un-normalized coordinate image.
+    ///
+    /// # Errors
+    ///
+    /// Propagates [`Self::project_to_genomic`]'s error contract. A normalization
+    /// failure on the projected genomic variant is NOT propagated — it is logged at
+    /// `warn` and the un-normalized projection is returned instead (the graceful
+    /// fallback shared with [`Self::reanchor_and_normalize_genomic`] via
+    /// [`Self::normalize_or_fallback`]), so the default (`normalize=True`) path never
+    /// regresses a result that the pre-#867 `project_to_genomic` would have returned
+    /// into a hard error.
+    pub fn project_to_genomic_normalized(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<HgvsVariant, FerroError> {
+        let projected = self.project_to_genomic(variant)?;
+        Ok(self.normalize_or_fallback(projected))
     }
 
     /// Project a `c.pter`/`c.qter` (telomere-flank marker) coding input onto its
@@ -3162,13 +3213,14 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let rna = Self::reframe_rna_from_input(rna, normalized);
 
         // #886: a bare LRG transcript has a structurally derivable genomic
-        // parent, so its genomic axis IS resolvable (via the raw pivot, which
-        // fills the LRG parent and reanchors into the LRG frame). A bare
-        // NM_/NR_ has no genome alignment -> stays None. project_to_genomic
-        // already normalizes; `.ok()` degrades to None if the LRG placement is
-        // genuinely unavailable.
+        // parent, so its genomic axis IS resolvable (the normalized wrapper
+        // fills the LRG parent, reanchors into the LRG frame, and 3'-shifts). A
+        // bare NM_/NR_ has no genome alignment -> stays None. Use
+        // `project_to_genomic_normalized` (not the raw pivot) so the reported
+        // genomic axis is spec-canonical (#867); `.ok()` degrades to None if the
+        // LRG placement is genuinely unavailable.
         let genomic = if Self::lrg_genomic_parent(&cds.accession).is_some() {
-            self.project_to_genomic(normalized).ok()
+            self.project_to_genomic_normalized(normalized).ok()
         } else {
             None
         };
@@ -3340,13 +3392,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         // #886: a bare LRG transcript has a structurally derivable genomic
         // parent, so its genomic axis IS resolvable; a bare NM_/NR_ has no
-        // genome alignment -> stays None. Computed once here because the two
-        // return sites below sit in different branches (the `!is_coding` early
-        // return and the tail), so there is no shared tail to set it in.
+        // genome alignment -> stays None. Use `project_to_genomic_normalized`
+        // (not the raw pivot) so the reported genomic axis is spec-canonical
+        // (#867). Computed once here because the two return sites below sit in
+        // different branches (the `!is_coding` early return and the tail), so
+        // there is no shared tail to set it in.
         let genomic = normalized
             .accession()
             .filter(|acc| Self::lrg_genomic_parent(acc).is_some())
-            .and_then(|_| self.project_to_genomic(normalized).ok());
+            .and_then(|_| self.project_to_genomic_normalized(normalized).ok());
 
         // Non-coding transcript: there is no CDS to convert into, so there is
         // no protein consequence and no c. form. The n. form is the input
@@ -3687,9 +3741,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     // on a normalize failure fall back to the un-normalized parent
                     // terminus (still a valid coordinate) rather than aborting the
                     // whole projection — the genomic axis degrades gracefully,
-                    // mirroring reanchor_and_normalize_genomic.
+                    // via the same `normalize_or_fallback` helper (warn-logs the
+                    // dropped error) that `reanchor_and_normalize_genomic` uses.
                     let raw = result?;
-                    let genomic = self.normalizer.normalize(&raw).unwrap_or(raw);
+                    let genomic = self.normalize_or_fallback(raw);
                     return Ok(self.terminus_multiaxis_projection(
                         normalized,
                         transcript_id,
@@ -7391,16 +7446,19 @@ mod tests {
         }
 
         #[test]
-        fn project_to_genomic_minus_strand_deletion_renormalizes_to_genomic_3prime() {
+        fn project_to_genomic_minus_strand_deletion_raw_vs_normalized() {
             let (projector, provider) = make_minus_homopolymer_provider_and_projector();
             let vp = VariantProjector::new(projector, provider);
 
             // c.9del is the transcript-3'-most representation of the deletion in
             // the poly-A run. On the minus strand that maps to g.1000 — the
-            // genome-5' end of the poly-T run. The spec-canonical genomic output
-            // is the genome-3'-most position, g.1006del. Before #737 the projector
-            // emitted the un-renormalized coordinate image (g.1000del); the
-            // re-anchored output is now normalized in its own frame.
+            // genome-5' end of the poly-T run. The raw pivot intentionally does
+            // NOT renormalize in the genomic frame (#785/#867), so
+            // `project_to_genomic` returns the 5'-anchored g.1000del;
+            // `project_to_genomic_normalized` 3'-shifts it to the spec-canonical
+            // genome-3'-most position, g.1006del (#737). A minus-strand transcript
+            // input is the case that actually exercises the split: tx-3' is
+            // genome-5', so the raw and normalized genomic images genuinely differ.
             let cds = CdsVariant {
                 accession: parse_accession("NM_HOMO_MINUS.1"),
                 gene_symbol: Some("HOMOGENE".to_string()),
@@ -7414,25 +7472,48 @@ mod tests {
             };
             let cds = attach_genomic_context_cds(cds, nc_parent());
             let input = HgvsVariant::Cds(cds);
-            let out = vp
+
+            let raw = vp
                 .project_to_genomic(&input)
                 .expect("minus-strand c.9del should project to g.");
-            let g = match out {
-                HgvsVariant::Genome(ref g) => g,
-                _ => panic!("expected Genome variant, got: {}", out),
+            let raw_start = match raw {
+                HgvsVariant::Genome(ref g) => {
+                    assert_eq!(g.accession.to_string(), "NC_000001.11");
+                    g.loc_edit
+                        .location
+                        .start
+                        .inner()
+                        .expect("start should be concrete")
+                        .base
+                }
+                _ => panic!("expected Genome variant, got: {}", raw),
             };
-            assert_eq!(g.accession.to_string(), "NC_000001.11");
-            let start = g
-                .loc_edit
-                .location
-                .start
-                .inner()
-                .expect("start should be concrete");
             assert_eq!(
-                start.base, 1006,
-                "minus-strand c.9del must re-normalize to the genome-3' end of the \
-                 poly-T run (g.1006del), got g.{}del (#737)",
-                start.base
+                raw_start, 1000,
+                "raw project_to_genomic must NOT renormalize: the minus-strand c.9del \
+                 pivot is the genome-5' end of the poly-T run (g.1000del), got g.{}del",
+                raw_start
+            );
+
+            let norm = vp
+                .project_to_genomic_normalized(&input)
+                .expect("minus-strand c.9del should project (normalized)");
+            let norm_start = match norm {
+                HgvsVariant::Genome(ref g) => {
+                    g.loc_edit
+                        .location
+                        .start
+                        .inner()
+                        .expect("start should be concrete")
+                        .base
+                }
+                _ => panic!("expected Genome variant, got: {}", norm),
+            };
+            assert_eq!(
+                norm_start, 1006,
+                "project_to_genomic_normalized must re-normalize to the genome-3' end \
+                 of the poly-T run (g.1006del), got g.{}del (#737)",
+                norm_start
             );
         }
 

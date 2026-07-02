@@ -651,3 +651,109 @@ class TestAssemblyOverride:
     def test_default_assembly_is_none(self) -> None:
         # Omitting the kwarg is unchanged behavior (no override).
         ferro_hgvs.VariantProjector()
+
+
+def _write_poly_reference(tmp_path: Path) -> str:
+    """Write the shared poly-A reference JSON and return its path.
+
+    Plus-strand NM_POLY.1 on chr1 with a poly-A run in the CDS, so a deletion in
+    the run is directional: the 5'-anchored form is g.1003del and the 3'-most is
+    g.1007del (g.1003..1007 = AAAAA). CDS "ATGAAAAACGCTAA" (14 nt). Mirrors the
+    issue_867 Rust fixture.
+    """
+    fixture = {
+        "transcripts": [
+            {
+                "id": "NM_POLY.1",
+                "gene_symbol": "POLYGENE",
+                "strand": "+",
+                "sequence": "ATGAAAAACGCTAA",
+                "cds_start": 1,
+                "cds_end": 14,
+                "exons": [
+                    {
+                        "number": 1,
+                        "start": 1,
+                        "end": 14,
+                        "genomic_start": 1000,
+                        "genomic_end": 1013,
+                    }
+                ],
+                "chromosome": "NC_000001.11",
+                "genomic_start": 1000,
+                "genomic_end": 1013,
+            }
+        ],
+        "genomic_sequences": {
+            "NC_000001.11": "N" * 999 + "ATGAAAAACGCTAA" + "N" * 100,
+        },
+    }
+    path = tmp_path / "poly.json"
+    path.write_text(json.dumps(fixture))
+    return str(path)
+
+
+@pytest.fixture
+def poly_projector(tmp_path: Path) -> ferro_hgvs.VariantProjector:
+    """Default (3'-shifting) projector over the shared poly-A reference."""
+    return ferro_hgvs.VariantProjector(reference_json=_write_poly_reference(tmp_path))
+
+
+@pytest.fixture
+def poly_projector_5prime(tmp_path: Path) -> ferro_hgvs.VariantProjector:
+    """5'-shifting projector over the shared poly-A reference (#867 direction)."""
+    return ferro_hgvs.VariantProjector(
+        reference_json=_write_poly_reference(tmp_path), direction="5prime"
+    )
+
+
+class TestProjectToGenomicNormalize:
+    """#867: project_to_genomic(normalize=...) — default normalizes, False=raw."""
+
+    def test_default_returns_3prime_canonical(
+        self, poly_projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        # g.1003del is a non-3'-most deletion in the poly-A run g.1003..1007.
+        v = ferro_hgvs.parse("NC_000001.11:g.1003del")
+        # Default (normalize=True) → spec-canonical 3'-most.
+        assert str(poly_projector.project_to_genomic(v)) == "NC_000001.11:g.1007del"
+        assert str(poly_projector.project_to_genomic(v, normalize=True)) == "NC_000001.11:g.1007del"
+
+    def test_normalize_false_returns_raw_pivot(
+        self, poly_projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        # Raw pivot is idempotent on Genome input → passes through un-normalized.
+        v = ferro_hgvs.parse("NC_000001.11:g.1003del")
+        assert (
+            str(poly_projector.project_to_genomic(v, normalize=False)) == "NC_000001.11:g.1003del"
+        )
+
+    def test_transcript_input_split_raw_vs_normalized(
+        self, poly_projector: ferro_hgvs.VariantProjector
+    ) -> None:
+        # Exercise the transcript-coordinate (c.) projection path, not just the
+        # Genome passthrough. The pivot does NOT 3'-shift, so c.4del (the first A of
+        # the poly-A run c.4..c.8 → g.1003..1007) projects to the 5'-anchored
+        # g.1003del raw; the default (normalize=True) 3'-shifts it to the
+        # spec-canonical g.1007del. This is the transcript-side contract split #867
+        # advertises — a c. input is NOT pre-canonicalized in tx-space.
+        v = ferro_hgvs.parse("NC_000001.11(NM_POLY.1):c.4del")
+        assert str(poly_projector.project_to_genomic(v)) == "NC_000001.11:g.1007del"
+        assert (
+            str(poly_projector.project_to_genomic(v, normalize=False)) == "NC_000001.11:g.1003del"
+        )
+
+    def test_normalize_follows_projector_direction(
+        self, poly_projector_5prime: ferro_hgvs.VariantProjector
+    ) -> None:
+        # normalize=True must honor the projector's configured shuffle direction,
+        # not hard-code 3'. c.8del is the last A of the poly-A run (c.4..c.8 →
+        # g.1003..1007), so its raw pivot is the 3'-anchored g.1007del; a
+        # 5'-shifting projector re-shuffles that to the 5'-anchored g.1003del.
+        # (The default 3'-shifting projector would leave it at g.1007del.)
+        v = ferro_hgvs.parse("NC_000001.11(NM_POLY.1):c.8del")
+        assert str(poly_projector_5prime.project_to_genomic(v)) == "NC_000001.11:g.1003del"
+        assert (
+            str(poly_projector_5prime.project_to_genomic(v, normalize=False))
+            == "NC_000001.11:g.1007del"
+        )

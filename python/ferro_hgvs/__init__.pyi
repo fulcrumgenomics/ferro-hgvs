@@ -1720,6 +1720,47 @@ class VariantProjector:
         """
         ...
 
+    def project_to_genomic(self, variant: HgvsVariant, normalize: bool = True) -> HgvsVariant:
+        """Project a transcript-coordinate variant (c./n./r.) onto its parent
+        genomic reference and return a Genome-kind HgvsVariant.
+
+        The output g. variant carries the parent NG/NC accession from the input's
+        ``Accession.genomic_context``.
+
+        By default (``normalize=True``) the result is the projector-normalized
+        genomic form — what most callers want; a Genome input is canonicalized
+        too. The normalizer follows this projector's configured shuffle
+        direction (``VariantProjector(direction=...)``): with the default
+        ``direction="3prime"`` that is the spec-canonical, 3'-shifted form (e.g.
+        a non-3'-most ``g.1003del`` in a poly-A run → ``g.1007del``); a
+        ``direction="5prime"`` projector instead returns the 5'-anchored form.
+        Pass ``normalize=False`` for the raw pivot, which intentionally does not
+        normalize its input (#785): a non-canonical input then yields a
+        non-canonical genomic output, and a Genome input passes through
+        unchanged (idempotent).
+
+        Limitations:
+            - ``Allele`` inputs are rejected pending #328.
+            - Plus-strand ``Base::U`` in r. inputs is forwarded verbatim into the
+              g. output; callers should pre-translate U→T.
+            - Intronic offsets on non-coding transcripts are rejected pending
+              #332.
+
+        Args:
+            variant: A c./n./r./g. HgvsVariant. Transcript-coordinate variants
+                must carry a genomic_context (NG/NC parent) on their Accession.
+            normalize: When True (default), return the normalized genomic form;
+                when False, return the raw un-normalized pivot.
+
+        Returns:
+            The Genome-kind HgvsVariant for the requested projection.
+
+        Raises:
+            RuntimeError: If the input lacks a parent reference, carries an
+                unknown (`?`) position, or is otherwise unsupported.
+        """
+        ...
+
     def project_normalized_many(self, variants: list[HgvsVariant]) -> list[list[VariantProjection]]:
         """Batched ``project_normalized_all`` over a list of already-normalized
         g. variants.
