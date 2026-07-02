@@ -542,6 +542,30 @@ pub enum Policy {
     /// spec-valid; both representations are correct. Accepted divergence (#763).
     #[serde(rename = "ferro-policy-763-transcript-set-enumeration")]
     TranscriptSetEnumeration763,
+    /// ferro emits a per-variant `SHUFFLE_APPLIED` info for a genuine 3'-shift of
+    /// a *single* variant (e.g. `NM_003002.2:c.273del` → `c.274del`), whereas
+    /// mutalyzer reports only its internal, non-HGVS `I*` diagnostics
+    /// (`IWHOLETRANSCRIPTEXON`, `IMRNAGENOMICTIP`, …) and no shuffle info. The
+    /// 3'-most-position rule both tools apply is spec-mandated
+    /// (`docs/recommendations/DNA/insertion.md` L21); ferro's `SHUFFLE_APPLIED`
+    /// truthfully reports it. Sibling of
+    /// [`Policy::ShuffleAppliedCompoundAllele499`] for the single-variant case
+    /// (that policy is scoped to compound alleles / `ISORTEDVARIANTS`).
+    /// Accepted divergence (#499 family, #861).
+    #[serde(rename = "ferro-policy-499-shuffle-applied-single-variant")]
+    ShuffleAppliedSingleVariant499,
+    /// On the `errors` axis, ferro resolves a plain-position cross-reference
+    /// insert payload (`…delins<accession>:c.<pos>`) because its prepared cdot
+    /// carries the CDS of the referenced transcript (e.g. `NM_001099625.2`,
+    /// provisioned by the #802 backfill), so it emits no error; mutalyzer's
+    /// backend lacks that CDS and rejects with `ENOCDS`. An `NM_` mRNA has a CDS
+    /// by definition (`background/refseq.md`), so ferro's resolution is correct
+    /// given its (more complete) reference data — a reference-data-completeness
+    /// divergence, not a ferro defect (keyword "no cds for coding transcripts",
+    /// #73). Distinct from the #486 parse-time rejection policies: ferro
+    /// *resolves* the input here rather than rejecting it. Accepted divergence.
+    #[serde(rename = "ferro-policy-73-cross-ref-cds-resolved-no-enocds")]
+    CrossRefCdsResolvedNoEnocds,
 }
 
 impl Policy {
@@ -554,6 +578,12 @@ impl Policy {
                 "ferro-policy-499-shuffle-applied-compound-allele"
             }
             Policy::TranscriptSetEnumeration763 => "ferro-policy-763-transcript-set-enumeration",
+            Policy::ShuffleAppliedSingleVariant499 => {
+                "ferro-policy-499-shuffle-applied-single-variant"
+            }
+            Policy::CrossRefCdsResolvedNoEnocds => {
+                "ferro-policy-73-cross-ref-cds-resolved-no-enocds"
+            }
             Policy::WholeCdsDeletionMet1 => "ferro-policy-whole-cds-del-met1",
             Policy::HomopolymerRepeatContraction745 => {
                 "ferro-policy-745-homopolymer-repeat-contraction"
@@ -724,8 +754,27 @@ impl RejectionReason {
     /// (an empty projection is otherwise a hard FAIL, #651); a reason returning
     /// `true` here relaxes that for its rows only. Closed match (`_ => false`) so
     /// adding a reason is a deliberate, reviewed opt-in — never an ad-hoc flag.
+    ///
+    /// Two reasons opt in, both cases where ferro's *no output* on the axis IS
+    /// the spec-defensible decline:
+    /// - [`NonCdsNoProjection857`](Self::NonCdsNoProjection857) — a variant with
+    ///   no CDS consequence yields no protein prediction (#903).
+    /// - [`NonstandardOrAbsentSelectorDeclined858`](Self::NonstandardOrAbsentSelectorDeclined858)
+    ///   — a bare `NG_:c.` / gene-symbol-selector input gives no resolvable
+    ///   transcript, so ferro emits no protein projection on the
+    ///   `protein_description` axis exactly as it declines the genomic
+    ///   projection (#861). (On the genomic axis the same decline surfaces as a
+    ///   non-empty `Err` — "no parent reference" — which is bucketed without this
+    ///   opt-in; the opt-in only covers the *empty*-projection surface.)
+    ///
+    /// The `#764` empty-projection count gate remains the backstop against a
+    /// genuinely-new empty for both.
     pub fn disposition_empty_projection(self) -> bool {
-        matches!(self, RejectionReason::NonCdsNoProjection857)
+        matches!(
+            self,
+            RejectionReason::NonCdsNoProjection857
+                | RejectionReason::NonstandardOrAbsentSelectorDeclined858
+        )
     }
     /// Stable identifier used in summary lines so reviewers can grep across runs.
     pub fn as_str(self) -> &'static str {
@@ -1038,6 +1087,19 @@ pub enum SpecSection {
     /// is invalid HGVS. ferro's output is the spec-correct value (#854).
     #[serde(rename = "HGVS §Inserted inversion (reverse complement)")]
     InsertedInversion,
+    /// HGVS synonymous substitution — residue-level predicted-consequence form.
+    /// For a single synonymous (silent) coding substitution the spec's
+    /// predicted-consequence form names the residue: `p.(Asp92=)`
+    /// (`docs/recommendations/protein/substitution.md` L24/L41-43, e.g.
+    /// `p.(Lys874=)`; `consultation/SVD-WG001.md` `p.(Phe41=)` for a single
+    /// `c.123C>T`). The bare `p.=` / `p.(=)` form is reserved for "the **entire**
+    /// protein coding region was analysed and no change was found"
+    /// (`substitution.md` L43 NOTE) — a broader statement than a single-variant
+    /// predicted consequence. ferro emits the residue-level `p.(Asp92=)`;
+    /// mutalyzer emits the whole-protein `p.(=)`. ferro's residue-level form is
+    /// the spec-preferred predicted-consequence value (#861).
+    #[serde(rename = "HGVS §Synonymous (residue-level p.(Xaa=))")]
+    SynonymousResidueLevel,
 }
 
 impl SpecSection {
@@ -1063,6 +1125,7 @@ impl SpecSection {
                 "HGVS §RNA alleles (predicted bracket placement)"
             }
             SpecSection::InsertedInversion => "HGVS §Inserted inversion (reverse complement)",
+            SpecSection::SynonymousResidueLevel => "HGVS §Synonymous (residue-level p.(Xaa=))",
         }
     }
 }
@@ -1154,19 +1217,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn non_cds_no_projection_857_opts_in_to_empty_projection() {
-        // #903: exactly one reason opts in to dispositioning an empty projection.
-        assert!(RejectionReason::NonCdsNoProjection857.disposition_empty_projection());
+    fn empty_projection_opt_in_reasons_are_exactly_857_and_858() {
+        // #903 opted in NonCdsNoProjection857; #861 additionally opted in
+        // NonstandardOrAbsentSelectorDeclined858 (bare-NG_/absent-selector inputs
+        // produce an empty protein projection ferro spec-correctly declines).
+        //
+        // Drive the expectation off an exhaustive `match` rather than a
+        // hand-enumerated opt-in/opt-out pair: adding a `RejectionReason` variant
+        // fails to compile here until its expectation is recorded, so a new
+        // variant can never silently escape this assertion.
+        fn expected_opt_in(reason: RejectionReason) -> bool {
+            match reason {
+                RejectionReason::NonCdsNoProjection857
+                | RejectionReason::NonstandardOrAbsentSelectorDeclined858 => true,
+                RejectionReason::MalformedInputRejected654
+                | RejectionReason::TranscriptFlankNotNumberableInC758
+                | RejectionReason::VersionSubstitutionRefused785
+                | RejectionReason::NgPartialTranscriptCoverageDeclined853 => false,
+            }
+        }
         for r in [
             RejectionReason::MalformedInputRejected654,
             RejectionReason::TranscriptFlankNotNumberableInC758,
             RejectionReason::VersionSubstitutionRefused785,
             RejectionReason::NonstandardOrAbsentSelectorDeclined858,
             RejectionReason::NgPartialTranscriptCoverageDeclined853,
+            RejectionReason::NonCdsNoProjection857,
         ] {
-            assert!(
-                !r.disposition_empty_projection(),
-                "{} must NOT opt in to empty-projection bucketing",
+            assert_eq!(
+                r.disposition_empty_projection(),
+                expected_opt_in(r),
+                "{} empty-projection opt-in disagrees with the exhaustive expectation",
                 r.as_str()
             );
         }
