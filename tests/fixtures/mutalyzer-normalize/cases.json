@@ -486,18 +486,13 @@
     {
       "keywords": [
         "M2: test_ins_cds_start",
-        "M2: Insertion on CDS start boundary should not be included in CDS."
+        "M2: Insertion on CDS start boundary should not be included in CDS.",
+        "ferro #857 policy (accepted divergence): the pure 5'UTR insertion c.-1_1insCAT is wholly upstream of the ATG (between c.-1 and c.1), leaves the initiation codon intact, and has no CDS/protein consequence, so ferro declines protein prediction and emits an empty protein projection. mutalyzer 3.1.1 emits p.(=) (protein unchanged) — recorded here as the upstream-truth expected value. The prior p.(Met1?) was stale: it was derived from the now-superseded normalized form c.-1_2dup (an out-of-phase insertion is not a tandem duplication — duplication.md:19; #882) whose duplicated copy split the ATG. The spec is ambiguous on p.(=)-vs-no-protein for a non-CDS variant (both defensible), so this is an accepted, spec-defensible divergence rather than a ferro bug. Demotion mechanism: because ferro's output is an empty-projection Err, NO per-axis disposition can bucket it out of the FAIL set (AxisTally::record only applies accepted_divergence/spec_citation/known_bug/improvement when actual.is_ok(); accepted_rejection explicitly excludes the EMPTY_PROJECTION_SENTINEL), so this row is demoted via baseline-failures/protein_description.txt (the accepted-FAIL ledger). Its empty projection is already counted in empty-projection/protein_description.count. Resolves #891."
       ],
       "input": "NM_000143.3:c.-1_1insCAT",
       "normalized": "NM_000143.3:c.-1_1insCAT",
-      "protein_description": "NP_000134.2:p.(Met1?)",
-      "to_test": true,
-      "spec_citation": {
-        "axis": "protein_description",
-        "section": "HGVS protein initiation codon (Met1?)",
-        "note": "Normalized was corrected from the stale Mutalyzer2 value c.-1_2dup to the insertion form: an out-of-phase insertion is not a tandem duplication (duplication.md:19; #882), and live mutalyzer 3.1.1 agrees (both keep it as the insertion). protein_description p.(Met1?) is ferro's hermetic output (bare NP_ per #483/#495) and passes the gate_protein_snapshot check. Whether p.(Met1?) is the biologically-correct translation-initiation consequence for the insertion form — the value was originally derived from the now-superseded c.-1_2dup, whose duplicated copy split the ATG — is tracked for re-derivation in #891.",
-        "cluster": "protein-init-codon"
-      }
+      "protein_description": "NP_000134.2:p.(=)",
+      "to_test": true
     },
     {
       "keywords": [
@@ -511,7 +506,7 @@
       "spec_citation": {
         "axis": "protein_description",
         "section": "HGVS protein initiation codon (Met1?)",
-        "note": "Normalized was corrected from the stale Mutalyzer2 value c.-1_2dup to the insertion form: an out-of-phase insertion is not a tandem duplication (duplication.md:19; #882), and live mutalyzer 3.1.1 agrees (both keep it as the insertion). protein_description p.(Met1?) is ferro's hermetic output (bare NP_ per #483/#495) and passes the gate_protein_snapshot check. Whether p.(Met1?) is the biologically-correct translation-initiation consequence for the insertion form — the value was originally derived from the now-superseded c.-1_2dup, whose duplicated copy split the ATG — is tracked for re-derivation in #891.",
+        "note": "p.(Met1?) is confirmed spec-correct and this row PASSES. The in-frame insertion c.1_2insCAT falls between nucleotides 1 and 2 of the ATG initiation codon, splitting it, so the translation-initiation consequence is unpredictable and reported p.(Met1?) (substitution.md:51-52; deletion.md:62). ferro derives this from the canonical normalized variant (bare NP_ per #483/#495; #504, #512) and it passes the gate_protein_snapshot check. mutalyzer 3.1.1 emits the equivalent generic p.? for the same split-ATG start-loss. (Contrast the sibling row c.-1_1insCAT, a pure 5'UTR insertion wholly upstream of the ATG: it leaves the initiation codon intact, so ferro declines with no protein consequence.) #891 resolved.",
         "cluster": "protein-init-codon"
       }
     },
