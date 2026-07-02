@@ -1772,6 +1772,203 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Some(g)
     }
 
+    /// #785 silent-version-substitution gate for the c./n./r. → g. pivot: decline
+    /// (`TranscriptVersionNotExact`) when the input names an explicit transcript
+    /// version the reference does not carry exactly but a *sibling* version
+    /// resolves — projecting onto the sibling's exon/CDS frame would silently
+    /// disagree with the stated reference. `version_present` is the caller's
+    /// `accession.version.is_some() && is_transcript_accession(id)` guard; an LRG
+    /// transcript (no version) and a genuinely-absent transcript are both left
+    /// untouched (the latter falls through to the `ReferenceNotFound` miss).
+    /// Extracted from `project_to_genomic_nc`'s step 4 (#868); pure predicate over
+    /// the provider + cdot.
+    fn enforce_exact_transcript_version(
+        &self,
+        transcript_id: &str,
+        version_present: bool,
+        build_hint: Option<&'static str>,
+    ) -> Result<(), FerroError> {
+        let cdot_mapper = self.projector.mapper();
+        // Silent version-substitution gate (#785), c.→g. direction. Unlike
+        // `project_variant`/`project_variant_all`, this path does not normalize
+        // the original transcript-coordinate input first, so it would not inherit
+        // the gate the normalizer applies in `normalize_core`. Apply the same
+        // guarantee here: when the input names an EXPLICIT transcript version the
+        // reference does not carry exactly, the lenient `get_transcript[_on_build]`
+        // pivot below would silently fall back to a *sibling* version and project
+        // onto the genome using that sibling's exon/CDS frame — a spec-invalid
+        // result whose stated reference and coordinate frame disagree, with no
+        // error. Decline with `TranscriptVersionNotExact` instead of fuzzing the
+        // version. The predicate permits exact-version cdot-genome synthesis and
+        // rejects only cross-version substitution; an LRG transcript carries no
+        // version (`accession.version == None`), so its exact RefSeq alias path is
+        // untouched. A transcript that is simply absent with no sibling to
+        // substitute is left to the `ReferenceNotFound` miss below, unchanged.
+        if version_present && is_transcript_accession(transcript_id) {
+            let exact = self.provider.has_transcript_version_exact(transcript_id);
+            let resolves = match build_hint {
+                Some(b) => cdot_mapper
+                    .cdot()
+                    .get_transcript_on_build(transcript_id, b)
+                    .is_some(),
+                None => cdot_mapper.cdot().get_transcript(transcript_id).is_some(),
+            };
+            if !exact && resolves {
+                return Err(FerroError::TranscriptVersionNotExact {
+                    requested: transcript_id.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Map a single c./n./r. position (as `CdsPos`) onto a genome coordinate on
+    /// the transcript's chromosome. Encapsulates: the n./r. → CDS-frame
+    /// conversion (`to_cds_frame`, #693), the coding (`cds_to_genome_on_build`)
+    /// vs non-coding (`tx_to_genome`) primitive split, the #797 poly-A `c.*`
+    /// fallback (coding, cds input only), and the #644 sequence-aware exon-indel
+    /// correction. This is the reusable "coordinate math" #868 wanted separable
+    /// from the outer pivot (step 5). Lifts the former `map_pos`/`to_cds_frame`
+    /// closures verbatim.
+    #[allow(clippy::too_many_arguments)]
+    fn map_cnr_position_to_genome(
+        &self,
+        cdot_tx: &crate::data::cdot::CdotTranscript,
+        transcript_id: &str,
+        p: crate::hgvs::location::CdsPos,
+        is_coding: bool,
+        is_cds_input: bool,
+        input_is_transcript_coord: bool,
+        build_hint: Option<&'static str>,
+    ) -> Result<u64, FerroError> {
+        use crate::hgvs::location::CdsPos;
+        let cdot_mapper = self.projector.mapper();
+        // For an `n.`/`r.` input on a coding transcript, the carried `base` is a
+        // 1-based *transcript* position, not a CDS coordinate; convert it to the
+        // CDS frame before the CDS-aware genome mapping (#693). An exonic
+        // position converts directly; an intronic-offset position converts its
+        // exon-anchor `base` and keeps the offset/utr3 flags. A transcript
+        // position that cannot be expressed in the CDS frame (`base < 1`, or a
+        // `None` conversion for a position past the last exon) is rejected here:
+        // leaving it unconverted would let the CDS-aware mapping interpret an
+        // `n.`/`r.` coordinate as a `c.` coordinate and emit the wrong g.
+        // position (#693).
+        let to_cds_frame = |p: CdsPos| -> Result<CdsPos, FerroError> {
+            // A position already flagged 3'UTR/downstream (`r.*N`, `n.*N`) carries
+            // its `*N` distance in `base`, not an absolute 1-based transcript
+            // position — feeding it to `cds_pos_from_tx_pos` would renumber it as a
+            // transcript base. Leave such positions untouched so the downstream
+            // CDS-aware mapping interprets the `*N` directly.
+            if !(input_is_transcript_coord && is_coding) || p.utr3 {
+                return Ok(p);
+            }
+            if p.base < 1 {
+                return Err(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "transcript position {} is outside coding transcript {} and cannot be \
+                         mapped as a CDS coordinate",
+                        p.base, transcript_id
+                    ),
+                });
+            }
+            match cdot_tx.cds_pos_from_tx_pos((p.base - 1) as u64) {
+                Some(cds) => Ok(CdsPos {
+                    base: cds.base,
+                    offset: p.offset,
+                    // Keep the resolved 3'UTR flag even for intronic anchors
+                    // (`c.*N±M`); dropping it when an offset is present would
+                    // collapse a 3'UTR intron into a plain `c.N±M`.
+                    utr3: cds.utr3,
+                    special: p.special,
+                }),
+                None => Err(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "transcript position {} is outside coding transcript {} and cannot be \
+                         mapped as a CDS coordinate",
+                        p.base, transcript_id
+                    ),
+                }),
+            }
+        };
+        let p = to_cds_frame(p)?;
+        if is_coding {
+            let result = match cdot_mapper.cds_to_genome_on_build(transcript_id, &p, build_hint) {
+                Ok(r) => r,
+                Err(e) => {
+                    // Poly-A-region 3'UTR fallback (#797). A `c.*` position
+                    // can land in the transcript's post-transcriptional
+                    // poly-A tail, which the (e.g. #790-derived) exon→genome
+                    // map strips — so `cds_to_genome` declines. mutalyzer
+                    // maps such positions by a contiguous coordinate walk into
+                    // downstream genome from the transcript's own 3'-terminal
+                    // exon. `try_extend_polya_to_genome` self-gates (a `c.*`
+                    // position whose base lands in the poly-A region, an
+                    // optional positive downstream offset, and an effective
+                    // tx position within the transcript's TRUE length, i.e.
+                    // inside the real poly-A tail) and returns None to
+                    // propagate the original decline otherwise — so beyond
+                    // the tail we never walk into non-transcript genome.
+                    if is_cds_input {
+                        if let Some(g) = self.try_extend_polya_to_genome(cdot_tx, transcript_id, &p)
+                        {
+                            return Ok(g);
+                        }
+                    }
+                    return Err(e);
+                }
+            };
+            // Sequence-aware correction (#644), mirroring the g.→c. path.
+            // Only simple exonic positions are corrected; intronic / special
+            // positions are derived by boundary arithmetic the realignment
+            // doesn't model, so leave them to the naive result.
+            if p.offset.is_some() || p.special.is_some() || p.utr3 {
+                return Ok(result.variant.base);
+            }
+            let tx_pos = match cdot_tx.cds_to_tx(p.base) {
+                Some(t) => t,
+                None => return Ok(result.variant.base),
+            };
+            self.correct_genome_for_exon_indel(cdot_tx, transcript_id, tx_pos, result.variant.base)
+        } else {
+            if p.offset.is_some() {
+                // Intronic n. offsets require coding-style exon-boundary
+                // arithmetic; we don't currently expose that primitive
+                // for non-coding transcripts. Surface a clear error.
+                return Err(FerroError::UnsupportedProjection {
+                    reason: format!(
+                        "project_to_genomic does not yet support intronic offsets on \
+                         non-coding transcripts ({}); see #332",
+                        transcript_id
+                    ),
+                });
+            }
+            // `base` is 1-based on TxPos / RnaPos; cdot's tx coords are
+            // 0-based, so subtract 1.
+            if p.base <= 0 {
+                return Err(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "non-coding transcript {} position must be positive, got {}",
+                        transcript_id, p.base
+                    ),
+                });
+            }
+            let tx_pos_0based = (p.base - 1) as u64;
+            let naive = cdot_tx.tx_to_genome(tx_pos_0based).ok_or_else(|| {
+                FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "tx position {} not in any exon of {}",
+                        p.base, transcript_id
+                    ),
+                }
+            })?;
+            // Sequence-aware correction (#644): the inbound g.→n. path runs
+            // `correct_cds_for_exon_indel` regardless of coding status, so a
+            // non-coding `n.`/`r.` coordinate is corrected on the way in.
+            // Apply the matching outbound correction here so it round-trips.
+            self.correct_genome_for_exon_indel(cdot_tx, transcript_id, tx_pos_0based, naive)
+        }
+    }
+
     fn project_to_genomic_nc(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         use crate::hgvs::edit::NaEdit;
         use crate::hgvs::interval::GenomeInterval;
@@ -1969,36 +2166,14 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             })
             .or_else(|| self.provider.infer_genome_build(&parent));
         let cdot_mapper = self.projector.mapper();
-        // Silent version-substitution gate (#785), c.→g. direction. Unlike
-        // `project_variant`/`project_variant_all`, this path does not normalize
-        // the original transcript-coordinate input first, so it would not inherit
-        // the gate the normalizer applies in `normalize_core`. Apply the same
-        // guarantee here: when the input names an EXPLICIT transcript version the
-        // reference does not carry exactly, the lenient `get_transcript[_on_build]`
-        // pivot below would silently fall back to a *sibling* version and project
-        // onto the genome using that sibling's exon/CDS frame — a spec-invalid
-        // result whose stated reference and coordinate frame disagree, with no
-        // error. Decline with `TranscriptVersionNotExact` instead of fuzzing the
-        // version. The predicate permits exact-version cdot-genome synthesis and
-        // rejects only cross-version substitution; an LRG transcript carries no
-        // version (`accession.version == None`), so its exact RefSeq alias path is
-        // untouched. A transcript that is simply absent with no sibling to
-        // substitute is left to the `ReferenceNotFound` miss below, unchanged.
-        if accession.version.is_some() && is_transcript_accession(&transcript_id) {
-            let exact = self.provider.has_transcript_version_exact(&transcript_id);
-            let resolves = match build_hint {
-                Some(b) => cdot_mapper
-                    .cdot()
-                    .get_transcript_on_build(&transcript_id, b)
-                    .is_some(),
-                None => cdot_mapper.cdot().get_transcript(&transcript_id).is_some(),
-            };
-            if !exact && resolves {
-                return Err(FerroError::TranscriptVersionNotExact {
-                    requested: transcript_id.to_string(),
-                });
-            }
-        }
+        // Silent version-substitution gate (#785), c.→g. direction. Extracted to
+        // `enforce_exact_transcript_version` (#868); called here before the
+        // `get_transcript` pivot, with the same guard predicate as its argument.
+        self.enforce_exact_transcript_version(
+            &transcript_id,
+            accession.version.is_some() && is_transcript_accession(&transcript_id),
+            build_hint,
+        )?;
         let cdot_tx = match build_hint {
             Some(b) => cdot_mapper
                 .cdot()
@@ -2024,151 +2199,36 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    input `base` is the 1-based tx_pos directly; convert it to the
         //    0-based form cdot exposes and use `CdotTranscript::tx_to_genome`.
         let is_coding = cdot_tx.cds_start.is_some() && cdot_tx.cds_end.is_some();
-        // For an `n.`/`r.` input on a coding transcript, the carried `base` is a
-        // 1-based *transcript* position, not a CDS coordinate; convert it to the
-        // CDS frame before the CDS-aware genome mapping (#693). An exonic
-        // position converts directly; an intronic-offset position converts its
-        // exon-anchor `base` and keeps the offset/utr3 flags. A transcript
-        // position that cannot be expressed in the CDS frame (`base < 1`, or a
-        // `None` conversion for a position past the last exon) is rejected here:
-        // leaving it unconverted would let the CDS-aware mapping interpret an
-        // `n.`/`r.` coordinate as a `c.` coordinate and emit the wrong g.
-        // position (#693).
-        let to_cds_frame = |p: CdsPos| -> Result<CdsPos, FerroError> {
-            // A position already flagged 3'UTR/downstream (`r.*N`, `n.*N`) carries
-            // its `*N` distance in `base`, not an absolute 1-based transcript
-            // position — feeding it to `cds_pos_from_tx_pos` would renumber it as a
-            // transcript base. Leave such positions untouched so the downstream
-            // CDS-aware mapping interprets the `*N` directly.
-            if !(input_is_transcript_coord && is_coding) || p.utr3 {
-                return Ok(p);
-            }
-            if p.base < 1 {
-                return Err(FerroError::InvalidCoordinates {
-                    msg: format!(
-                        "transcript position {} is outside coding transcript {} and cannot be \
-                         mapped as a CDS coordinate",
-                        p.base, transcript_id
-                    ),
-                });
-            }
-            match cdot_tx.cds_pos_from_tx_pos((p.base - 1) as u64) {
-                Some(cds) => Ok(CdsPos {
-                    base: cds.base,
-                    offset: p.offset,
-                    // Keep the resolved 3'UTR flag even for intronic anchors
-                    // (`c.*N±M`); dropping it when an offset is present would
-                    // collapse a 3'UTR intron into a plain `c.N±M`.
-                    utr3: cds.utr3,
-                    special: p.special,
-                }),
-                None => Err(FerroError::InvalidCoordinates {
-                    msg: format!(
-                        "transcript position {} is outside coding transcript {} and cannot be \
-                         mapped as a CDS coordinate",
-                        p.base, transcript_id
-                    ),
-                }),
-            }
-        };
-        // The poly-A 3'UTR fallback below is a `c.*`-only refinement (#797): it
-        // reinterprets a `c.*` 3'UTR endpoint that lands in the transcript's
-        // post-transcriptional poly-A tail. `n.`/`r.` inputs are reshaped into
-        // `CdsPos` for this closure (with `utr3` carrying their own
-        // downstream/3'UTR flag), so without this gate an off-exon `n.*`/`r.*`
+        // The poly-A 3'UTR fallback inside `map_cnr_position_to_genome` is a
+        // `c.*`-only refinement (#797): it reinterprets a `c.*` 3'UTR endpoint
+        // that lands in the transcript's post-transcriptional poly-A tail.
+        // `n.`/`r.` inputs are reshaped into `CdsPos` (with `utr3` carrying their
+        // own downstream/3'UTR flag), so without this gate an off-exon `n.*`/`r.*`
         // endpoint would be reinterpreted as a `c.*` poly-A walk and emit a
         // genomic coordinate from a coordinate class that has no poly-A
         // semantics. Restrict the fallback to genuine `c.` (CDS) inputs.
         let is_cds_input = matches!(variant, HgvsVariant::Cds(_));
-        let map_pos = |p: CdsPos| -> Result<u64, FerroError> {
-            let p = to_cds_frame(p)?;
-            if is_coding {
-                let result =
-                    match cdot_mapper.cds_to_genome_on_build(&transcript_id, &p, build_hint) {
-                        Ok(r) => r,
-                        Err(e) => {
-                            // Poly-A-region 3'UTR fallback (#797). A `c.*` position
-                            // can land in the transcript's post-transcriptional
-                            // poly-A tail, which the (e.g. #790-derived) exon→genome
-                            // map strips — so `cds_to_genome` declines. mutalyzer
-                            // maps such positions by a contiguous coordinate walk into
-                            // downstream genome from the transcript's own 3'-terminal
-                            // exon. `try_extend_polya_to_genome` self-gates (a `c.*`
-                            // position whose base lands in the poly-A region, an
-                            // optional positive downstream offset, and an effective
-                            // tx position within the transcript's TRUE length, i.e.
-                            // inside the real poly-A tail) and returns None to
-                            // propagate the original decline otherwise — so beyond
-                            // the tail we never walk into non-transcript genome.
-                            if is_cds_input {
-                                if let Some(g) =
-                                    self.try_extend_polya_to_genome(cdot_tx, &transcript_id, &p)
-                                {
-                                    return Ok(g);
-                                }
-                            }
-                            return Err(e);
-                        }
-                    };
-                // Sequence-aware correction (#644), mirroring the g.→c. path.
-                // Only simple exonic positions are corrected; intronic / special
-                // positions are derived by boundary arithmetic the realignment
-                // doesn't model, so leave them to the naive result.
-                if p.offset.is_some() || p.special.is_some() || p.utr3 {
-                    return Ok(result.variant.base);
-                }
-                let tx_pos = match cdot_tx.cds_to_tx(p.base) {
-                    Some(t) => t,
-                    None => return Ok(result.variant.base),
-                };
-                self.correct_genome_for_exon_indel(
-                    cdot_tx,
-                    &transcript_id,
-                    tx_pos,
-                    result.variant.base,
-                )
-            } else {
-                if p.offset.is_some() {
-                    // Intronic n. offsets require coding-style exon-boundary
-                    // arithmetic; we don't currently expose that primitive
-                    // for non-coding transcripts. Surface a clear error.
-                    return Err(FerroError::UnsupportedProjection {
-                        reason: format!(
-                            "project_to_genomic does not yet support intronic offsets on \
-                             non-coding transcripts ({}); see #332",
-                            transcript_id
-                        ),
-                    });
-                }
-                // `base` is 1-based on TxPos / RnaPos; cdot's tx coords are
-                // 0-based, so subtract 1.
-                if p.base <= 0 {
-                    return Err(FerroError::InvalidCoordinates {
-                        msg: format!(
-                            "non-coding transcript {} position must be positive, got {}",
-                            transcript_id, p.base
-                        ),
-                    });
-                }
-                let tx_pos_0based = (p.base - 1) as u64;
-                let naive = cdot_tx.tx_to_genome(tx_pos_0based).ok_or_else(|| {
-                    FerroError::InvalidCoordinates {
-                        msg: format!(
-                            "tx position {} not in any exon of {}",
-                            p.base, transcript_id
-                        ),
-                    }
-                })?;
-                // Sequence-aware correction (#644): the inbound g.→n. path runs
-                // `correct_cds_for_exon_indel` regardless of coding status, so a
-                // non-coding `n.`/`r.` coordinate is corrected on the way in.
-                // Apply the matching outbound correction here so it round-trips.
-                self.correct_genome_for_exon_indel(cdot_tx, &transcript_id, tx_pos_0based, naive)
-            }
-        };
-
-        let start_g = map_pos(start_cds)?;
-        let end_g = map_pos(end_cds)?;
+        // The coordinate map (n./r.→CDS frame #693, coding/non-coding split, #797
+        // poly-A fallback, #644 correction) is extracted to
+        // `map_cnr_position_to_genome` (#868).
+        let start_g = self.map_cnr_position_to_genome(
+            cdot_tx,
+            &transcript_id,
+            start_cds,
+            is_coding,
+            is_cds_input,
+            input_is_transcript_coord,
+            build_hint,
+        )?;
+        let end_g = self.map_cnr_position_to_genome(
+            cdot_tx,
+            &transcript_id,
+            end_cds,
+            is_coding,
+            is_cds_input,
+            input_is_transcript_coord,
+            build_hint,
+        )?;
 
         // 6. Build the genomic interval. On minus strand the c./n./r. interval
         //    runs anti-parallel to the genome, so the smaller genomic coord
