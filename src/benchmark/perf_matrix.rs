@@ -7,6 +7,8 @@
 
 use std::collections::BTreeMap;
 
+use crate::benchmark::types::ParseResult;
+
 use serde::{Deserialize, Serialize};
 
 /// One tool's measured throughput at a given worker count.
@@ -151,6 +153,19 @@ fn mean(xs: &[f64]) -> f64 {
     } else {
         xs.iter().sum::<f64>() / xs.len() as f64
     }
+}
+
+/// The error message of the first unsuccessful result that captured one, if any.
+///
+/// Scans past failures with no captured error (`error: None` is allowed) so a later failure's real
+/// diagnostic is not masked. Used to surface *why* a tool produced zero successes. Without this the
+/// matrix records an unexplained `not_run`, which hides real setup problems (e.g. a reference that
+/// fails to load, so every normalization declines) behind a generic "did not run" message.
+fn first_failure_reason(results: &[ParseResult]) -> Option<&str> {
+    results
+        .iter()
+        .filter(|r| !r.success)
+        .find_map(|r| r.error.as_deref())
 }
 
 /// Run one operation across the worker × tool × rep matrix.
@@ -367,6 +382,16 @@ impl HarnessMeasure {
         // known path inconsistency tracked separately; both W=1 and W=8 will now
         // consistently return None when there are no successes.
         if total == 0 || successful == 0 {
+            match first_failure_reason(&shard.sample_results) {
+                Some(reason) => eprintln!(
+                    "[perf-matrix] ferro normalize: 0/{total} succeeded — recording not_run; \
+                     first failure: {reason}"
+                ),
+                None => eprintln!(
+                    "[perf-matrix] ferro normalize: 0/{total} succeeded — recording not_run \
+                     (no per-variant error captured)"
+                ),
+            }
             return None;
         }
         Some(RepRate {
@@ -951,6 +976,43 @@ pub fn run_matrix(args: &super::cli::MatrixArgs) -> Result<(), crate::FerroError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_failure_reason_reports_first_error() {
+        let pr = |success: bool, error: Option<&str>| ParseResult {
+            input: "x".to_string(),
+            success,
+            output: None,
+            error: error.map(str::to_string),
+            error_category: None,
+            ref_mismatch: None,
+            details: None,
+        };
+        // The first unsuccessful result's error is returned, skipping leading successes.
+        let results = vec![
+            pr(true, None),
+            pr(false, Some("stream did not contain valid UTF-8")),
+            pr(false, Some("later error")),
+        ];
+        assert_eq!(
+            first_failure_reason(&results),
+            Some("stream did not contain valid UTF-8")
+        );
+        // A failure with no captured error is skipped so a later failure's real error surfaces.
+        let with_empty_leading_failure = vec![pr(false, None), pr(false, Some("later error"))];
+        assert_eq!(
+            first_failure_reason(&with_empty_leading_failure),
+            Some("later error")
+        );
+        // Every failure lacking an error still reports no reason.
+        assert_eq!(
+            first_failure_reason(&[pr(false, None), pr(false, None)]),
+            None
+        );
+        // All-success and empty inputs report no reason.
+        assert_eq!(first_failure_reason(&[pr(true, None)]), None);
+        assert_eq!(first_failure_reason(&[]), None);
+    }
 
     #[test]
     fn aggregates_median_min_max() {
