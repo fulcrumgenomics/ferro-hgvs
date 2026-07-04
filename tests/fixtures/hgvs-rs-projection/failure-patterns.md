@@ -38,12 +38,12 @@ For a C-terminal stop-loss extension, ferro canonicalizes to the three-letter fo
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
-| `NM_000051.3:c.9170_9171delGA` | protein_description | improvement | — | #224 |
-| `NM_000249.3:c.2266_2269dupTGTT` | protein_description | improvement | — | #224 |
-| `NM_000249.3:c.2269dupT` | protein_description | improvement | — | #224 |
-| `NM_000425.3:c.3772dupT` | protein_description | improvement | — | #224 |
-| `NM_000488.3:c.1391dupA` | protein_description | improvement | — | #224 |
-| `NM_152263.2:c.855delA` | protein_description | improvement | — | #224 |
+| `NM_000051.3:c.9170_9171delGA` | protein_description | spec_citation | — | — |
+| `NM_000249.3:c.2266_2269dupTGTT` | protein_description | spec_citation | — | — |
+| `NM_000249.3:c.2269dupT` | protein_description | spec_citation | — | — |
+| `NM_000425.3:c.3772dupT` | protein_description | spec_citation | — | — |
+| `NM_000488.3:c.1391dupA` | protein_description | spec_citation | — | — |
+| `NM_152263.2:c.855delA` | protein_description | spec_citation | — | — |
 
 ### whole-CDS-deletion protein form: corpus p.0? vs ferro p.(Met1?)
 
@@ -59,4 +59,4 @@ For a deletion spanning the entire coding sequence (including the initiation cod
 
 | axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
 |---|---:|---:|---:|---:|---:|
-| protein_description | 1 | 0 | 6 | 0 | 0 |
+| protein_description | 1 | 0 | 0 | 0 | 6 |
