@@ -203,20 +203,20 @@ A predicted (uncertain) cis RNA allele places the '( )' predicted wrapper inside
 
 ### n. projection onto an overlapping transcript outside its exonic span
 
-Spec: `background/numbering.md#DNAn (3' downstream offset)`
+Spec: `HGVS §Transcript flanking (not c.-numberable)`
 
-The n. corpus rows expect a projection onto the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), where the variant lies 3' downstream of its single exon and mutalyzer addresses it as n.616+offset. ferro's transcript fan-out enumerates only transcripts the variant overlaps, so it emits valid n. forms on the overlapping NM_ isoforms but declines NR_024274.1 ('variant does not overlap transcript'). Spec tension: numbering.md L43-44 bars describing variants beyond a bare transcript's boundaries, so a bare NR_024274.1:n.616+offset would be invalid; but mutalyzer (and the corpus) frame it under its NG_007485.1 genomic parent (NG_007485.1(NR_024274.1):n.616+offset), the same genomic-context construction numbering.md L65 endorses (e.g. NG_012232.1(NM_004006.2):r.186+1_186+4), where the parent supplies the flanking sequence. Under that framing the form is valid and ferro should produce it -> known_bug, not accepted_divergence. Cross-isoform enumeration scope tracked by #646 (core landed in #647); ferro should extend enumeration/addressing to the downstream-of-last-exon case when the genomic parent is present. XPASS-guarded: if #646 lands and ferro starts matching, the annotation fails loudly and the row demotes.
+The n. corpus rows expect an additional projection onto the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), which mutalyzer addresses as NG_007485.1(NR_024274.1):n.616+<offset>. But NR_024274.1 is single-exon (GRCh38 21967138-21967754 = n.1-616) and this locus lies 3' downstream of its only exon, so n.616+<offset> numbers into the un-transcribed 3'-flanking region. HGVS forbids describing variants beyond a transcript's boundaries (numbering.md:43-45,54), and the c.*N+dM downstream-offset scheme that would be needed was formally rejected (open-issues.md:231). The numbering.md L65 genomic-parent construction (e.g. NG_012232.1(NM_004006.2):r.186+1_186+4) endorses *intronic* offsets between a transcript's own exons; it does not license numbering past the last exon of a single-exon transcript into its 3'-flank, so it is misapplied here. ferro fans out only onto transcripts the variant overlaps and emits valid n. forms for each, declining the non-overlapping NR_024274.1 -- which is the spec-correct behavior (more spec-faithful than mutalyzer 3.1.1 here, not a missing valid form). Reclassified from known_bug (#646, closed) to spec_citation per #921.
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
-| `NG_007485.1(NM_000077.4):c.161_162delTGinsATCCC` | noncoding | known_bug | — | #921 |
-| `NG_007485.1(NM_000077.4):c.161_162delTGins[ATCCC]` | noncoding | known_bug | — | #921 |
-| `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` | noncoding | known_bug | — | #921 |
-| `NG_007485.1(NM_000077.4):c.161_162delins[ATCCC]` | noncoding | known_bug | — | #921 |
-| `NG_007485.1(NM_000077.4):c.161_162insATC` | noncoding | known_bug | — | #921 |
-| `NG_007485.1(NM_000077.4):c.161_162ins[ATC]` | noncoding | known_bug | — | #921 |
-| `NG_007485.1(NM_058195.3):c.141_142del` | noncoding | known_bug | — | #921 |
-| `NG_007485.1:g.5479_5480insACT` | noncoding | known_bug | — | #921 |
+| `NG_007485.1(NM_000077.4):c.161_162delTGinsATCCC` | noncoding | spec_citation | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delTGins[ATCCC]` | noncoding | spec_citation | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delinsATCCC` | noncoding | spec_citation | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162delins[ATCCC]` | noncoding | spec_citation | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162insATC` | noncoding | spec_citation | — | — |
+| `NG_007485.1(NM_000077.4):c.161_162ins[ATC]` | noncoding | spec_citation | — | — |
+| `NG_007485.1(NM_058195.3):c.141_142del` | noncoding | spec_citation | — | — |
+| `NG_007485.1:g.5479_5480insACT` | noncoding | spec_citation | — | — |
 
 ### Inserted inversion (reverse complement) not applied by mutalyzer
 
@@ -346,7 +346,7 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | errors | 17 | 0 | 0 | 0 | 0 |
 | genomic | 22 | 0 | 0 | 0 | 5 |
 | infos | 8 | 0 | 0 | 0 | 1 |
-| noncoding | 0 | 8 | 0 | 0 | 0 |
+| noncoding | 0 | 0 | 0 | 0 | 8 |
 | normalized | 25 | 5 | 4 | 5 | 15 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |
