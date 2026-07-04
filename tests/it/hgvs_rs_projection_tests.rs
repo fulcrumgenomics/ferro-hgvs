@@ -620,6 +620,78 @@ fn consequence_matches(expected: &str, actual: &str) -> bool {
     }
 }
 
+/// Strip the *stated deleted bases* from a `del`/`delins` consequence body.
+///
+/// HGVS-preferred form does not restate the deleted bases (`c.…del`), whereas
+/// the pinned hgvs-rs oracle spells them out (`c.…delACCTT`, `c.…delGGinsAT`).
+/// This removes the maximal run of uppercase base letters that *immediately*
+/// follows a `del` token, so `delACCTT` → `del` and `delGGinsAT` → `delinsAT`.
+/// The `ins` payload is preserved: those bases follow the lowercase `ins`
+/// keyword, not `del`, and are meaningful (ferro states them too).
+fn strip_deleted_bases(consequence: &str) -> String {
+    let chars: Vec<char> = consequence.chars().collect();
+    let mut out = String::with_capacity(consequence.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i..].starts_with(&['d', 'e', 'l']) {
+            out.push_str("del");
+            i += 3;
+            // Drop the deleted bases: the uppercase run right after `del`. This
+            // stops at the lowercase `ins` (delins) or a non-letter, so `ins`
+            // payload bases (which follow `ins`, not `del`) are kept.
+            while i < chars.len() && chars[i].is_ascii_uppercase() {
+                i += 1;
+            }
+        } else {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Canonicalize a consequence body by erasing the known-acceptable *form*
+/// differences between ferro (latest curated versions + spec-preferred glyphs)
+/// and the pinned hgvs-rs oracle (older versions + legacy glyphs):
+///
+/// - (b) stated deleted bases in `del`/`delins` are dropped ([`strip_deleted_bases`]);
+/// - (c) the frameshift terminator glyph is normalized `fsTer<n>` → `fs*<n>`;
+/// - (d) the start-loss form `p.(Met1?)` is normalized to `p.0?`.
+///
+/// Coordinates, residues, and edit operations are otherwise preserved, so a
+/// genuine coordinate/residue/algorithm difference survives canonicalization
+/// and will *not* compare equal.
+fn canonicalize_form(consequence: &str) -> String {
+    let mut s = strip_deleted_bases(consequence);
+    // (c) frameshift terminator glyph: three-letter `fsTer` (ferro, spec) vs
+    // one-letter `fs*` (oracle).
+    s = s.replace("fsTer", "fs*");
+    // (d) start-loss: ferro's `p.(Met1?)` vs the oracle's `p.0?`.
+    if s == "p.(Met1?)" {
+        s = "p.0?".to_string();
+    }
+    s
+}
+
+/// Do `expected` and `actual` describe the *same* variant once the known
+/// acceptable form differences are normalized away? The (a) transcript version
+/// suffix is forgiven via [`base_accession`]; (b) `del`/`delins` deleted bases,
+/// (c) `fsTer`↔`fs*`, and (d) `p.0?`↔`p.(Met1?)` are forgiven via
+/// [`canonicalize_form`]. Everything else — coordinates, residues, edit
+/// operations — must match byte-for-byte after canonicalization, so a genuine
+/// coordinate skew or residue/algorithm difference does *not* match here and
+/// still routes to a FAIL.
+fn form_normalized_matches(expected: &str, actual: &str) -> bool {
+    match (base_accession(expected), base_accession(actual)) {
+        (Some(expected_base), Some(actual_base)) => {
+            expected_base == actual_base
+                && canonicalize_form(consequence_part(expected))
+                    == canonicalize_form(consequence_part(actual))
+        }
+        _ => false,
+    }
+}
+
 /// Structural detector for the **predicted-parenthesization** improvement: is
 /// `actual` exactly `expected` with the `p.`-token wrapped in `(...)`?
 ///
@@ -789,6 +861,15 @@ const CLUSTER_TRANSCRIPT_SELECTION: &str = "transcript-selection-vs-uta";
 /// spec-preferred `p.(…)` predicted form; hgvs-rs emits the bare legacy form).
 const CLUSTER_PREDICTED_PARENTHESIZATION: &str = "predicted-parenthesization";
 
+/// Cluster id for form-currency divergence: ferro and the pinned hgvs-rs oracle
+/// describe the *same* variant at the *same* coordinate, differing only in
+/// acceptable form — transcript version suffix, restated `del`/`delins` bases,
+/// the `fsTer`/`fs*` frameshift glyph, or `p.(Met1?)`/`p.0?` start-loss form
+/// (see [`form_normalized_matches`]). Ferro uses the latest curated versions and
+/// spec-preferred glyphs; the oracle is pinned to older versions and legacy
+/// glyphs. These are accepted, not FAILs.
+const CLUSTER_FORM_CURRENCY: &str = "form-currency-vs-legacy-oracle";
+
 /// Detect the **predicted-parenthesization** improvement on a `(c., p.)`-pair
 /// axis: for every expected `[c, p]` pair, ferro returned a pair whose coding
 /// matches version-insensitively ([`consequence_matches`]) AND whose protein is
@@ -815,6 +896,33 @@ fn is_predicted_parenthesization_pairs(
         returned_pairs.iter().any(|(c, p)| {
             consequence_matches(want_c, c) && is_predicted_parenthesization(want_p, p)
         })
+    })
+}
+
+/// Detect the **form-currency** divergence on a `(c., p.)`-pair axis: for every
+/// expected `[c, p]` pair, ferro returned a pair whose coding AND protein each
+/// match the expectation once the known acceptable form differences are
+/// normalized away ([`form_normalized_matches`]).
+///
+/// Requiring *both* components to form-normalize-match (not just the coding)
+/// keeps a genuine protein residue/algorithm difference — where only the coding
+/// is pure form-currency — from being silently accepted: such a pair fails this
+/// check and falls through to the structural classifier, which surfaces it as a
+/// FAIL. Returns `false` when no expected pair is applicable.
+fn is_form_currency_pairs(
+    expected_pairs: &[Vec<String>],
+    returned_pairs: &[(String, String)],
+) -> bool {
+    let applicable: Vec<&Vec<String>> = expected_pairs.iter().filter(|p| p.len() == 2).collect();
+    if applicable.is_empty() {
+        return false;
+    }
+    applicable.iter().all(|pair| {
+        let want_c = &pair[0];
+        let want_p = &pair[1];
+        returned_pairs
+            .iter()
+            .any(|(c, p)| form_normalized_matches(want_c, c) && form_normalized_matches(want_p, p))
     })
 }
 
@@ -957,6 +1065,15 @@ fn axis_coding_protein_descriptions() {
             ));
             continue;
         }
+        // Form-currency: ferro and the oracle describe the same variant at the
+        // same coordinate on both the coding and protein components, differing
+        // only in acceptable form (version suffix, restated del bases, fsTer/fs*,
+        // Met1?/0?). Accept — the coordinate/residue content is identical.
+        if !is_match && is_form_currency_pairs(pairs, &returned_pairs) {
+            t.divergence_accepted
+                .push((case.input.clone(), CLUSTER_FORM_CURRENCY.to_string()));
+            continue;
+        }
 
         // Classify on the coding (c.) component against ferro's returned coding
         // set — transcript selection and alignment-source skew manifest on the
@@ -1062,6 +1179,22 @@ fn axis_coding() {
         t.selection_total += 1;
         if set_has_base(&returned, expected) {
             t.selection_hits += 1;
+        }
+        // Form-currency: ferro returned the expected transcript at the expected
+        // coordinate, differing only in acceptable form (version suffix or
+        // restated del/delins bases). Accept before the structural classifier —
+        // a coordinate skew or selection miss will *not* form-normalize-match
+        // (coordinates/base accession must survive canonicalization), so those
+        // still route through `record_classified` as before.
+        let is_match = matches!(&actual, Ok(s) if s == expected);
+        if !is_match
+            && returned
+                .iter()
+                .any(|r| form_normalized_matches(expected, r))
+        {
+            t.divergence_accepted
+                .push((case.input.clone(), CLUSTER_FORM_CURRENCY.to_string()));
+            continue;
         }
         t.record_classified(case, expected, actual, &[expected.to_string()], &returned);
     }
@@ -1541,6 +1674,118 @@ mod comparator_tests {
             ),
             Divergence::FormOnly
         ));
+    }
+
+    // form_normalized_matches (a): the transcript version suffix is forgiven —
+    // same base accession + identical consequence differing only in `.N`.
+    #[test]
+    fn form_currency_forgives_version_suffix() {
+        assert!(form_normalized_matches(
+            "NM_001277115.1:c.10026+1049del",
+            "NM_001277115.2(DNAH11):c.10026+1049del"
+        ));
+    }
+
+    // form_normalized_matches (b): restated `del`/`delins` deleted bases are
+    // forgiven — `delACCTT`/`delA` vs bare `del`, and `delGGinsAT` vs `delinsAT`
+    // (the `ins` payload is preserved).
+    #[test]
+    fn form_currency_forgives_deleted_bases() {
+        assert!(form_normalized_matches(
+            "NM_001277115.1:c.10332+17_10332+21delACCTT",
+            "NM_001277115.2(DNAH11):c.10332+17_10332+21del"
+        ));
+        assert!(form_normalized_matches(
+            "NM_001077527.1:c.1582-1758_1582-1757delGGinsAT",
+            "NM_001077527.3(JRK):c.1582-1758_1582-1757delinsAT"
+        ));
+        // The `ins` payload must still match: a differing insert is NOT accepted.
+        assert!(!form_normalized_matches(
+            "NM_001077527.1:c.1581+964delCinsAT",
+            "NM_001077527.3(JRK):c.1581+964delinsGG"
+        ));
+    }
+
+    // form_normalized_matches (c): the frameshift terminator glyph is forgiven —
+    // `fsTer<n>` (ferro, spec) vs `fs*<n>` (oracle).
+    #[test]
+    fn form_currency_forgives_fs_ter_glyph() {
+        assert!(form_normalized_matches(
+            "NP_001264044.1:p.(Leu1146Hisfs*5)",
+            "NP_001264044.1:p.(Leu1146HisfsTer5)"
+        ));
+    }
+
+    // form_normalized_matches (d): the start-loss form is forgiven —
+    // `p.0?` (oracle) vs `p.(Met1?)` (ferro).
+    #[test]
+    fn form_currency_forgives_start_loss_form() {
+        assert!(form_normalized_matches(
+            "NP_000240.1:p.0?",
+            "NP_000240.1:p.(Met1?)"
+        ));
+    }
+
+    // form_normalized_matches negative: a genuine COORDINATE difference is NOT
+    // accepted (the MLH1 residual — `-20_*20` vs `-19_*21` survives
+    // canonicalization), so it still routes to a FAIL.
+    #[test]
+    fn form_currency_rejects_coordinate_difference() {
+        assert!(!form_normalized_matches(
+            "NM_000249.3:c.-20_*20del",
+            "NM_000249.4(MLH1):c.-19_*21del"
+        ));
+    }
+
+    // form_normalized_matches negative: a genuine RESIDUE difference is NOT
+    // accepted even when the surrounding form (fs glyph) is currency-equivalent.
+    #[test]
+    fn form_currency_rejects_residue_difference() {
+        assert!(!form_normalized_matches(
+            "NP_001264044.1:p.(Leu1146Hisfs*5)",
+            "NP_001264044.1:p.(Leu1146ArgfsTer5)"
+        ));
+    }
+
+    // form_normalized_matches negative: a different base accession (a selection
+    // miss) is NOT accepted, regardless of form.
+    #[test]
+    fn form_currency_rejects_selection_miss() {
+        assert!(!form_normalized_matches(
+            "NM_000804.2:c.168+206del",
+            "NM_001412270.1(FOLR3):c.168+206del"
+        ));
+    }
+
+    // is_form_currency_pairs requires BOTH coding and protein to
+    // form-normalize-match: the DNAH11 frameshift pair (version + del bases on
+    // coding, fsTer glyph on protein) is accepted...
+    #[test]
+    fn form_currency_pairs_accepts_when_both_components_match() {
+        let expected = vec![vec![
+            "NM_001277115.1:c.3437delT".to_string(),
+            "NP_001264044.1:p.(Leu1146Hisfs*5)".to_string(),
+        ]];
+        let returned = vec![(
+            "NM_001277115.2(DNAH11):c.3437del".to_string(),
+            "NP_001264044.1:p.(Leu1146HisfsTer5)".to_string(),
+        )];
+        assert!(is_form_currency_pairs(&expected, &returned));
+    }
+
+    // ...but a genuine protein residue difference (coding still pure
+    // form-currency) is NOT accepted, so the pair falls through to a FAIL.
+    #[test]
+    fn form_currency_pairs_rejects_protein_residue_difference() {
+        let expected = vec![vec![
+            "NM_001277115.1:c.3437delT".to_string(),
+            "NP_001264044.1:p.(Leu1146Hisfs*5)".to_string(),
+        ]];
+        let returned = vec![(
+            "NM_001277115.2(DNAH11):c.3437del".to_string(),
+            "NP_001264044.1:p.(Leu1146ArgfsTer5)".to_string(),
+        )];
+        assert!(!is_form_currency_pairs(&expected, &returned));
     }
 
     // classify_divergence: a match short-circuits to `Match`.
