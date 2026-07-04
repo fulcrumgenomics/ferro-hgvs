@@ -197,6 +197,7 @@ mod issue_867_project_to_genomic_normalized;
 mod issue_868_genomic_nc_units;
 mod issue_879_ng_g_to_c_overlap;
 mod issue_91_protein_three_prime_shift;
+mod issue_920_allele_sub_collapse;
 mod issue_92_protein_delins_to_dup;
 mod issue_92_protein_ins_to_dup;
 mod issue_97_utr_del_position;
