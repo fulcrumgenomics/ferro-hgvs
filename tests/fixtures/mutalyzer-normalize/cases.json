@@ -3423,11 +3423,6 @@
       "genomic": "NG_012337.1:g.3449_4924del",
       "protein_description": "NG_012337.1(NP_036591.2):p.?",
       "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro echoes the input c.-1_*1del; mutalyzer 3'-shifts the deletion across the CDS boundary to c.1_*2del. 3' shift tracked in #487."
-      },
       "accepted_divergence": {
         "axis": "protein_description",
         "policy": "ferro-policy-whole-cds-del-met1",

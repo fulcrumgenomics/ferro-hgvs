@@ -531,58 +531,61 @@ fn axis_clamp_emits_warning_when_constraining_5prime_c_star_1_dup_shuffle() {
     );
 }
 
-// --- 3'-direction CDS-end clamp: c.<cds_end> 3'-shuffle must not leak --
-//     into the 3'UTR. Mirror of the 5'-direction c.1 clamp on the
-//     CDS-start side. The fixture re-uses `provider_with_cds_utr3_homopolymer_transcript`
-//     because the CDS-end A-tract abuts the 3'UTR A-tract.
+// --- 3'-direction CDS-end del/dup: c.<cds_end> 3'-shuffle SHIFTS into the ----
+//     3'UTR per the HGVS 3'-rule (#918). The prior CDS↔3'UTR clamp held the
+//     shuffle at the boundary, which was spec-incorrect for del/dup: the coding
+//     DNA reference is contiguous (5'UTR+CDS+3'UTR; refseq.md), so a del/dup
+//     whose most-3' position lies in the abutting 3'UTR A-tract must reach it
+//     (`c.9del` → `c.*4del`), matching mutalyzer. The fixture's CDS-end A-tract
+//     abuts the 3'UTR A-tract. (The 5'-direction and insertion clamps above are
+//     unaffected — #918 relaxed only the 3'-direction del/dup case.)
 
 #[test]
-fn three_prime_no_cross_does_not_shift_c_cds_end_del_into_utr3() {
-    // 3'-direction symmetry of `five_prime_no_cross_does_not_shift_c1_del_into_5utr`.
-    // `c.9del` (last CDS base, an A) under 3prime + cross_boundaries=false
-    // must stay at c.9del — the 3'-direction shuffle clamps at the
-    // CDS↔3'UTR boundary even though the A-tract continues 4 bases into
-    // the 3'UTR.
+fn three_prime_no_cross_shifts_c_cds_end_del_into_utr3() {
+    // #918: `c.9del` (last CDS base, an A) under 3prime + cross_boundaries=false
+    // 3'-shifts through the abutting 3'UTR A-tract to its most-3' position
+    // `c.*4del`. (Pre-#918 the CDS↔3'UTR clamp wrongly held it at `c.9del`.)
     assert_eq!(
         normalize_utr3_with(ShuffleDirection::ThreePrime, false, "NM_UTR3.1:c.9del"),
-        "NM_UTR3.1:c.9del",
+        "NM_UTR3.1:c.*4del",
     );
 }
 
 #[test]
-fn three_prime_cross_does_not_shift_c_cds_end_del_into_utr3() {
-    // `cross_boundaries=true` authorizes crossing exon-intron junctions
-    // but NOT the CDS↔3'UTR sub-axis. Clamp fires in both cross modes.
+fn three_prime_cross_shifts_c_cds_end_del_into_utr3() {
+    // `cross_boundaries=true` variant; #918 shifts in both cross modes (the
+    // relaxation is to the exon bound and the A-tract is exonic).
     assert_eq!(
         normalize_utr3_with(ShuffleDirection::ThreePrime, true, "NM_UTR3.1:c.9del"),
-        "NM_UTR3.1:c.9del",
+        "NM_UTR3.1:c.*4del",
     );
 }
 
 #[test]
-fn three_prime_no_cross_does_not_shift_c_cds_end_dup_into_utr3() {
-    // Dup symmetry of `three_prime_no_cross_does_not_shift_c_cds_end_del_into_utr3`.
+fn three_prime_no_cross_shifts_c_cds_end_dup_into_utr3() {
+    // Dup symmetry of `three_prime_no_cross_shifts_c_cds_end_del_into_utr3` (#918).
     assert_eq!(
         normalize_utr3_with(ShuffleDirection::ThreePrime, false, "NM_UTR3.1:c.9dup"),
-        "NM_UTR3.1:c.9dup",
+        "NM_UTR3.1:c.*4dup",
     );
 }
 
 #[test]
-fn three_prime_cross_does_not_shift_c_cds_end_dup_into_utr3() {
-    // Closes the (del × dup) × (cross={false,true}) matrix on the
-    // 3'-direction CDS-end side.
+fn three_prime_cross_shifts_c_cds_end_dup_into_utr3() {
+    // Closes the (del × dup) × (cross={false,true}) matrix on the 3'-direction
+    // CDS-end side under #918.
     assert_eq!(
         normalize_utr3_with(ShuffleDirection::ThreePrime, true, "NM_UTR3.1:c.9dup"),
-        "NM_UTR3.1:c.9dup",
+        "NM_UTR3.1:c.*4dup",
     );
 }
 
 #[test]
-fn axis_clamp_emits_warning_when_constraining_3prime_c_cds_end_shuffle() {
-    // 3'-direction mirror of the c.*1 5'-direction warning test. The
-    // clamp prevents `c.9del` from shifting into the 3'UTR's AAAA
-    // tract; that constraint must surface as `AXIS_CLAMP_APPLIED`.
+fn three_prime_c_cds_end_del_shifts_without_axis_clamp_warning() {
+    // #918 removed the 3'-direction CDS↔3'UTR clamp for del/dup, so `c.9del`
+    // now shifts to `c.*4del` and — because nothing constrained the shuffle —
+    // emits NO `AXIS_CLAMP_APPLIED` warning (the inverse of the pre-#918
+    // behavior this test previously asserted).
     let normalizer = Normalizer::with_config(
         provider_with_cds_utr3_homopolymer_transcript(),
         NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
@@ -591,14 +594,14 @@ fn axis_clamp_emits_warning_when_constraining_3prime_c_cds_end_shuffle() {
     let result = normalizer
         .normalize_with_diagnostics(&variant)
         .expect("normalize");
-    assert_eq!(format!("{}", result.result), "NM_UTR3.1:c.9del");
+    assert_eq!(format!("{}", result.result), "NM_UTR3.1:c.*4del");
     assert!(
-        result
+        !result
             .warnings
             .iter()
             .any(|w| w.code() == "AXIS_CLAMP_APPLIED"),
-        "expected AXIS_CLAMP_APPLIED warning on CDS-end 3'-shuffle that the \
-         clamp held; got {:?}",
+        "the CDS-end clamp was relaxed for del/dup (#918), so no AXIS_CLAMP_APPLIED \
+         warning should fire; got {:?}",
         result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>(),
     );
 }

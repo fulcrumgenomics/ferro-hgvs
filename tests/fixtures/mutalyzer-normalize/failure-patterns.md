@@ -315,7 +315,6 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_012337.1(NM_003002.2):c.[274del;275=]` | normalized | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.pterdel` | normalized | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.qterdel` | normalized | spec_citation | — | — |
-| `NG_012337.1(NM_012459.2):c.-1_*1del` | normalized | known_bug | — | #487 |
 | `NG_012337.1(NM_012459.2):c.-1_*1del` | protein_description | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | genomic | accepted_divergence | — | — |
@@ -350,6 +349,6 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | genomic | 22 | 4 | 0 | 0 | 1 |
 | infos | 9 | 0 | 0 | 0 | 1 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
-| normalized | 25 | 11 | 4 | 5 | 11 |
+| normalized | 25 | 10 | 4 | 5 | 11 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |
