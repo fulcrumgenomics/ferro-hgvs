@@ -298,6 +298,20 @@ impl MultiFastaProvider {
             })?;
 
             let path = entry.path();
+
+            // Skip hidden files and macOS AppleDouble sidecars (names beginning with '.', e.g.
+            // `._LRG_430.fasta`). These are not real FASTAs — an accompanying `._*.fasta.fai` is a
+            // binary extended-attribute blob, and attempting to parse it as a FAI index would abort
+            // the entire reference load with a "stream did not contain valid UTF-8" error. Such files
+            // are commonly introduced when a reference directory is copied through macOS tooling.
+            let is_hidden = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'));
+            if is_hidden {
+                continue;
+            }
+
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
             // Look for .fna, .fa, or .fasta files
@@ -4296,6 +4310,39 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
 
         assert!(provider.has_sequence("NM_000001.1"));
         assert!(provider.has_sequence("NM_000001")); // Without version
+        assert_eq!(provider.sequence_length("NM_000001.1"), Some(10));
+    }
+
+    #[test]
+    fn test_from_directory_skips_macos_appledouble_sidecars() {
+        // A reference directory copied through macOS tooling can gain AppleDouble sidecar files
+        // (names beginning with `._`). Their `._*.fasta.fai` is a binary xattr blob; parsing it as
+        // a FAI index fails with "stream did not contain valid UTF-8". The scanner must skip these
+        // and still load the real FASTA rather than aborting the whole reference load.
+        let dir = tempdir().unwrap();
+
+        // Real, valid FASTA + index.
+        let mut fasta_file = File::create(dir.path().join("real.fna")).unwrap();
+        writeln!(fasta_file, ">NM_000001.1").unwrap();
+        writeln!(fasta_file, "ATGCATGCAT").unwrap();
+        let mut fai_file = File::create(dir.path().join("real.fna.fai")).unwrap();
+        writeln!(fai_file, "NM_000001.1\t10\t13\t10\t11").unwrap();
+
+        // AppleDouble sidecars with a `.fasta` extension and non-UTF-8 index content.
+        std::fs::write(
+            dir.path().join("._real.fasta"),
+            [0x00, 0x05, 0x16, 0x07, 0xff],
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("._real.fasta.fai"),
+            [0xff, 0xfe, 0x00, 0x80],
+        )
+        .unwrap();
+
+        // Must succeed (not abort on the sidecar) and expose the real sequence.
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        assert!(provider.has_sequence("NM_000001.1"));
         assert_eq!(provider.sequence_length("NM_000001.1"), Some(10));
     }
 
