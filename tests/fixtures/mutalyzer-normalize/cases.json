@@ -1653,23 +1653,11 @@
       "genomic": "NG_008939.1:g.5206_5208del",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52del)",
       "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 923,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #923.",
-        "cluster": "refseqgene-selector"
-      },
-      "accepted_rejection": [
-        {
-          "axis": "genomic",
-          "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
-          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
-        },
+      "accepted_divergence": [
         {
           "axis": "protein_description",
-          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined",
-          "note": "Bare NG_:c. input with no transcript selector; ferro cannot resolve a unique transcript (refseq.md L40-41) and declines projection -> no protein, the same decline already dispositioned on the genomic axis (858). Empty-projection Err bucketed via the reason-858 empty-projection opt-in (#861)."
+          "policy": "ferro-policy-923-bare-np-no-parent-context",
+          "note": "ferro synthesizes the NM_000532.5 selector this NG_ uniquely hosts (#923) and projects a valid predicted protein p.(Gln52del), but renders it as a bare NP_ (NP_000523.2:p.(Gln52del)) — dropping the NG_(NP_) genomic-context wrapper the corpus expects. The protein consequence is correct; only the outer genomic-context rendering is absent (a known gap on the single project_variant path)."
         }
       ]
     },
@@ -1684,23 +1672,11 @@
       "genomic": "NG_008939.1:g.5206_5208del",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Gln52del)",
       "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 923,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #923.",
-        "cluster": "refseqgene-selector"
-      },
-      "accepted_rejection": [
-        {
-          "axis": "genomic",
-          "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
-          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
-        },
+      "accepted_divergence": [
         {
           "axis": "protein_description",
-          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined",
-          "note": "Bare NG_:c. input with no transcript selector; ferro cannot resolve a unique transcript (refseq.md L40-41) and declines projection -> no protein, the same decline already dispositioned on the genomic axis (858). Empty-projection Err bucketed via the reason-858 empty-projection opt-in (#861)."
+          "policy": "ferro-policy-923-bare-np-no-parent-context",
+          "note": "ferro synthesizes the NM_000532.5 selector this NG_ uniquely hosts (#923) and projects a valid predicted protein p.(Gln52del), but renders it as a bare NP_ (NP_000523.2:p.(Gln52del)) — dropping the NG_(NP_) genomic-context wrapper the corpus expects. The protein consequence is correct; only the outer genomic-context rendering is absent (a known gap on the single project_variant path)."
         }
       ]
     },
@@ -1715,23 +1691,11 @@
       "genomic": "NG_008939.1:g.10622_10623inv",
       "protein_description": "NG_008939.1(NP_000523.2):p.(Asp92Ser)",
       "to_test": true,
-      "improvement": {
-        "axis": "normalized",
-        "tracking_issue": 923,
-        "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #923.",
-        "cluster": "refseqgene-selector"
-      },
-      "accepted_rejection": [
-        {
-          "axis": "genomic",
-          "note": "On an NG_ genomic reference ferro declines to project a transcript-coordinate variant whose selector is a gene symbol / GENE_v001 / numeric gene-id (refseq.md L40-41: gene symbols are not valid HGVS specifications) or is absent (no transcript specification given on the genomic reference). mutalyzer leniently resolves these and projects anyway; ferro's refusal is spec-correct. Optional convergence with mutalyzer is tracked in #872.",
-          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined"
-        },
+      "accepted_divergence": [
         {
           "axis": "protein_description",
-          "reason": "ferro-policy-858-nonstandard-or-absent-selector-declined",
-          "note": "Bare NG_:c. input with no transcript selector; ferro cannot resolve a unique transcript (refseq.md L40-41) and declines projection -> no protein, the same decline already dispositioned on the genomic axis (858). Empty-projection Err bucketed via the reason-858 empty-projection opt-in (#861)."
+          "policy": "ferro-policy-923-bare-np-no-parent-context",
+          "note": "ferro synthesizes the NM_000532.5 selector this NG_ uniquely hosts (#923) and projects a valid predicted protein p.(Asp92Ser), but renders it as a bare NP_ (NP_000523.2:p.(Asp92Ser)) — dropping the NG_(NP_) genomic-context wrapper the corpus expects. The protein consequence is correct; only the outer genomic-context rendering is absent (a known gap on the single project_variant path)."
         }
       ]
     },

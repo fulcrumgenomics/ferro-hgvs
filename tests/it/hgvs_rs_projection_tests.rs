@@ -204,6 +204,12 @@ impl ReferenceProvider for ArcProvider {
     ) -> Option<String> {
         self.0.resolve_legacy_gene_selector(selector, ng_parent)
     }
+    fn sole_hosted_transcript(
+        &self,
+        ng_parent: &ferro_hgvs::hgvs::variant::Accession,
+    ) -> Option<String> {
+        self.0.sole_hosted_transcript(ng_parent)
+    }
     fn get_protein_length(&self, accession: &str) -> Result<u64, FerroError> {
         self.0.get_protein_length(accession)
     }

@@ -577,6 +577,16 @@ pub enum Policy {
     /// fixed in #913). Accepted divergence from the stale corpus value.
     #[serde(rename = "ferro-policy-911-stop-insertion-not-cterminal-delins")]
     StopInsertionNotCterminalDelins911,
+    /// On `protein_description`, ferro synthesizes the transcript selector for a
+    /// bare-`NG_` `c.` input the `NG_` uniquely hosts (#923) and projects a
+    /// valid predicted protein (e.g. `NP_000523.2:p.(Gln52del)`), but renders it
+    /// as a bare `NP_` — it drops the `NG_(NP_)` genomic-context wrapper the
+    /// corpus expects. The projected protein consequence itself is correct; only
+    /// the outer genomic-context rendering is absent, a known gap on the single
+    /// `project_variant` path (the genomic parent is not threaded onto the
+    /// protein accession). Terminal rendering divergence, not a defect (#923).
+    #[serde(rename = "ferro-policy-923-bare-np-no-parent-context")]
+    BareNpNoParentContext923,
 }
 
 impl Policy {
@@ -595,6 +605,7 @@ impl Policy {
             Policy::CrossRefCdsResolvedNoEnocds => {
                 "ferro-policy-73-cross-ref-cds-resolved-no-enocds"
             }
+            Policy::BareNpNoParentContext923 => "ferro-policy-923-bare-np-no-parent-context",
             Policy::WholeCdsDeletionMet1 => "ferro-policy-whole-cds-del-met1",
             Policy::HomopolymerRepeatContraction745 => {
                 "ferro-policy-745-homopolymer-repeat-contraction"

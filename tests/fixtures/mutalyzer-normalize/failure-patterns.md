@@ -14,9 +14,6 @@ On an `NG_/NC_/LRG_` reference ferro preserves the input's gene-symbol selector;
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
-| `NG_008939.1:c.155_157del3` | normalized | improvement | — | #923 |
-| `NG_008939.1:c.155_157delAAC` | normalized | improvement | — | #923 |
-| `NG_008939.1:c.274_275inv` | normalized | improvement | — | #923 |
 | `NG_012337.1(10683):c.274G>T` | normalized | improvement | — | #923 |
 
 ### Bare NP_ protein reference
@@ -276,11 +273,8 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_008939.1(PCCB_v001):c.156_161delins[180_188]` | normalized | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]` | genomic | spec_citation | — | — |
 | `NG_008939.1(PCCB_v001):c.156_161delins[180_188inv]` | normalized | spec_citation | — | — |
-| `NG_008939.1:c.155_157del3` | genomic | accepted_divergence | — | — |
 | `NG_008939.1:c.155_157del3` | protein_description | accepted_divergence | — | — |
-| `NG_008939.1:c.155_157delAAC` | genomic | accepted_divergence | — | — |
 | `NG_008939.1:c.155_157delAAC` | protein_description | accepted_divergence | — | — |
-| `NG_008939.1:c.274_275inv` | genomic | accepted_divergence | — | — |
 | `NG_008939.1:c.274_275inv` | protein_description | accepted_divergence | — | — |
 | `NG_008939.1:g.5207_5208ins4300_4320inv` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_008939.1:g.5207_5208ins[4300_4320inv]` | coding_protein_descriptions | accepted_divergence | — | — |
@@ -344,9 +338,9 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 |---|---:|---:|---:|---:|---:|
 | coding_protein_descriptions | 27 | 0 | 0 | 0 | 0 |
 | errors | 17 | 0 | 0 | 0 | 0 |
-| genomic | 22 | 0 | 0 | 0 | 5 |
+| genomic | 19 | 0 | 0 | 0 | 5 |
 | infos | 8 | 0 | 0 | 0 | 1 |
 | noncoding | 0 | 0 | 0 | 0 | 8 |
-| normalized | 25 | 5 | 4 | 5 | 15 |
+| normalized | 25 | 5 | 1 | 5 | 15 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |

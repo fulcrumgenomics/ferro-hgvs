@@ -43,6 +43,22 @@ impl NgHostedTranscripts {
         }
     }
 
+    /// The single transcript this NG_ hosts across ALL its genes, or None when
+    /// absent, multi-gene, or the sole gene hosts >1 transcript. For synthesizing
+    /// the selector on a bare-NG_ c. input where the mapping is unambiguous (#923).
+    pub fn sole_hosted(&self, ng_acc_version: &str) -> Option<&str> {
+        let per_gene = self.records.get(ng_acc_version)?;
+        let mut genes = per_gene.values();
+        let only_gene = genes.next()?;
+        if genes.next().is_some() {
+            return None;
+        }
+        match only_gene.as_slice() {
+            [one] => Some(one.as_str()),
+            _ => None,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.records.is_empty()
     }
@@ -92,6 +108,38 @@ mod tests {
         // wrong version / unknown gene → declines
         assert_eq!(nh.hosted_unique("NG_012337.3", "TIMM8B"), None);
         assert_eq!(nh.hosted_unique("NG_012337.1", "SDHD"), None);
+    }
+
+    #[test]
+    fn sole_hosted_resolves_single_gene_single_tx_and_declines_otherwise() {
+        let nh = NgHostedTranscripts::from_records([
+            // Single gene hosting exactly one transcript → resolves.
+            (
+                "NG_008939.1".to_string(),
+                vec![("SLC26A4".to_string(), "NM_000441.1".to_string())],
+            ),
+            // Two genes → ambiguous → None.
+            (
+                "NG_MULTI_GENE.1".to_string(),
+                vec![
+                    ("GENEA".to_string(), "NM_1.1".to_string()),
+                    ("GENEB".to_string(), "NM_2.1".to_string()),
+                ],
+            ),
+            // Sole gene hosting two transcripts → ambiguous → None.
+            (
+                "NG_MULTI_TX.1".to_string(),
+                vec![
+                    ("GENEC".to_string(), "NM_3.1".to_string()),
+                    ("GENEC".to_string(), "NM_4.1".to_string()),
+                ],
+            ),
+        ]);
+        assert_eq!(nh.sole_hosted("NG_008939.1"), Some("NM_000441.1"));
+        assert_eq!(nh.sole_hosted("NG_MULTI_GENE.1"), None);
+        assert_eq!(nh.sole_hosted("NG_MULTI_TX.1"), None);
+        // Absent NG_ → None.
+        assert_eq!(nh.sole_hosted("NG_999999.9"), None);
     }
 
     #[test]
