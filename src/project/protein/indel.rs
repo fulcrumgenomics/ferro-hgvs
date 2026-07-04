@@ -168,6 +168,39 @@ fn build_inframe_variant(
         return build_identity_variant(ref_protein, protein_accession, transcript);
     }
 
+    // Did the edit introduce a premature termination codon? An in-frame edit
+    // that does not truncate yields `ref_protein.len() + net/3` residues; a
+    // shorter `alt_protein` means translation halted at a new stop before the
+    // reference terminus (the truncating `Ter` is dropped by translation). Such
+    // a change must be rendered with the terminating `Ter`, capped at the change
+    // site — never as a C-terminal-spanning delins (#911, insertion.md:37-41,
+    // delins.md:27-28). The codon-aligned-insertion arm handles its own stop in
+    // `build_inframe_insertion`; every other path routes through the
+    // stop-aware delins builder below.
+    let expected_alt_len = (ref_protein.len() as i64 + net / 3).max(0) as usize;
+    let premature_stop = alt_protein.len() < expected_alt_len;
+
+    // Dispatch to the stop-aware or plain delins builder as appropriate.
+    let delins = |cds_start: i64| -> Result<HgvsVariant, FerroError> {
+        if premature_stop {
+            build_inframe_stop_delins(
+                ref_protein,
+                alt_protein,
+                cds_pos_end,
+                protein_accession,
+                transcript,
+            )
+        } else {
+            build_inframe_delins(
+                ref_protein,
+                alt_protein,
+                cds_start,
+                protein_accession,
+                transcript,
+            )
+        }
+    };
+
     // Is the edit codon-aligned (i.e. starts at the first base of a codon)?
     let frame_at_start = (cds_pos_start - 1) % 3; // 0, 1, or 2
 
@@ -179,13 +212,7 @@ fn build_inframe_variant(
                 build_inframe_deletion(ref_protein, alt_protein, protein_accession, transcript)
             } else {
                 // Straddles a codon boundary: effectively a delins at the AA level.
-                build_inframe_delins(
-                    ref_protein,
-                    alt_protein,
-                    cds_pos_start,
-                    protein_accession,
-                    transcript,
-                )
+                delins(cds_pos_start)
             }
         }
         NaEdit::Insertion { .. } => {
@@ -197,18 +224,13 @@ fn build_inframe_variant(
                     ref_protein,
                     alt_protein,
                     cds_pos_start,
+                    premature_stop,
                     protein_accession,
                     transcript,
                 )
             } else {
                 // Mid-codon insertion: treated as a delins at the AA level.
-                build_inframe_delins(
-                    ref_protein,
-                    alt_protein,
-                    cds_pos_start,
-                    protein_accession,
-                    transcript,
-                )
+                delins(cds_pos_start)
             }
         }
         NaEdit::Duplication { .. } => {
@@ -224,24 +246,12 @@ fn build_inframe_variant(
                 )
             } else {
                 // Mid-codon duplication: treated as a delins.
-                build_inframe_delins(
-                    ref_protein,
-                    alt_protein,
-                    cds_pos_start,
-                    protein_accession,
-                    transcript,
-                )
+                delins(cds_pos_start)
             }
         }
         NaEdit::Delins { .. } | NaEdit::Inversion { .. } => {
             // Always use the generic delins pathway for delins and inversion.
-            build_inframe_delins(
-                ref_protein,
-                alt_protein,
-                cds_pos_start,
-                protein_accession,
-                transcript,
-            )
+            delins(cds_pos_start)
         }
         _ => Err(FerroError::UnsupportedProjection {
             reason: format!(
@@ -336,27 +346,11 @@ fn build_inframe_deletion(
 fn build_inframe_insertion(
     ref_protein: &[AminoAcid],
     alt_protein: &[AminoAcid],
-    cds_pos_start: i64, // last base of the codon before insertion
+    cds_pos_start: i64,   // last base of the codon before insertion
+    premature_stop: bool, // did translation halt at a new stop before the reference terminus?
     protein_accession: &str,
     transcript: &Transcript,
 ) -> Result<HgvsVariant, FerroError> {
-    // If the inserted nucleotides translate to a stop, `alt_protein` is truncated
-    // at the new Ter and ends up no longer than `ref_protein`. That's not a pure
-    // insertion any more — re-attach the implicit Ter (the stop that truncated
-    // translation) and fall back to the generic delins pathway, which can
-    // represent the asymmetric ref/alt sizes correctly.
-    if alt_protein.len() <= ref_protein.len() {
-        let mut alt_with_stop = alt_protein.to_vec();
-        alt_with_stop.push(AminoAcid::Ter);
-        return build_inframe_delins(
-            ref_protein,
-            &alt_with_stop,
-            cds_pos_start,
-            protein_accession,
-            transcript,
-        );
-    }
-
     // The insertion happens between codon N and N+1.
     // cds_pos_start is the last base (frame 2) of codon N.
     // codon_N = (cds_pos_start - 1) / 3  (0-based), so 1-based = (cds_pos_start + 2) / 3
@@ -372,24 +366,70 @@ fn build_inframe_insertion(
         .unwrap_or(AminoAcid::Ter);
     let aa_after_pos = aa_before_pos + 1;
 
-    // The inserted amino acids are the additional ones in alt_protein between
-    // aa_before_idx and aa_before_idx+1.
-    let n_inserted = alt_protein.len() - ref_protein.len();
-    let insert_end = (aa_before_idx + 1 + n_inserted).min(alt_protein.len());
-    let inserted_aas: Vec<AminoAcid> = alt_protein[aa_before_idx + 1..insert_end].to_vec();
+    // The inserted amino acids are the residues in `alt_protein` after the
+    // unchanged prefix `ref_protein[..=aa_before_idx]`. Decide the branch from
+    // the caller's `premature_stop` flag, NOT `alt.len() > ref.len()`: a
+    // codon-aligned insertion near the C-terminus can introduce a premature stop
+    // while `alt_protein` is still longer than `ref_protein` (when the inserted
+    // sense residues before the new stop outnumber the reference residues after
+    // the insertion point), and a length comparison would misclassify it as a
+    // plain insertion and drop the terminating `Ter` (#911).
+    let inserted_aas: Vec<AminoAcid> = if !premature_stop {
+        // No premature stop: the inserted residues are the extra ones in alt.
+        let n_inserted = alt_protein.len() - ref_protein.len();
+        let insert_end = (aa_before_idx + 1 + n_inserted).min(alt_protein.len());
+        alt_protein[aa_before_idx + 1..insert_end].to_vec()
+    } else {
+        // The inserted nucleotides translate to a premature stop, so
+        // translation truncated `alt_protein` at the new (dropped) Ter. Per
+        // `insertion.md` L37-41 (`p.(Met3_His4insGlyTer)`,
+        // `p.(Pro46_Asn47insSerSerTer)`), this is described as an **insertion**
+        // of the translated residues up to and **including** the terminating
+        // `Ter` — NOT a deletion-insertion replacing the entire C-terminal
+        // sequence (explicitly forbidden), and residues after the stop are not
+        // listed. The inserted residues are the alt tail after the prefix; the
+        // stop that truncated translation is re-attached as `Ter` (#911).
+        let tail_start = (aa_before_idx + 1).min(alt_protein.len());
+        let mut ins = alt_protein[tail_start..].to_vec();
+        ins.push(AminoAcid::Ter);
+        ins
+    };
+
+    // An **immediate** stop insertion — the inserted sequence is a bare `Ter`
+    // with no sense residue before it — is a nonsense variant, NOT an insertion
+    // of `Ter` (insertion.md:25; the `ins…Ter` form of insertion.md:26 is for a
+    // stop *encoded within* a sense-carrying insert). The stop lands at the
+    // residue immediately 3' of the insertion point (#911).
+    if inserted_aas.as_slice() == [AminoAcid::Ter] && aa_before_idx + 1 < ref_protein.len() {
+        let variant = ProteinVariant {
+            accession: parse_accession(protein_accession),
+            gene_symbol: transcript.gene_symbol.clone(),
+            loc_edit: LocEdit::new_predicted(
+                ProtInterval::point(ProtPos::new(aa_after, aa_after_pos)),
+                ProteinEdit::Substitution {
+                    reference: aa_after,
+                    alternative: AminoAcid::Ter,
+                },
+            ),
+        };
+        return Ok(HgvsVariant::Protein(variant));
+    }
 
     // A directly-C-terminal tandem copy is a duplication, not an insertion
     // (duplication.md). The insertion sits before `ref_protein[aa_before_idx + 1]`.
-    if let Some((dup_start, dup_end)) =
-        protein_tandem_dup_range(ref_protein, aa_before_idx + 1, &inserted_aas)
-    {
-        return Ok(build_dup_variant(
-            ref_protein,
-            dup_start,
-            dup_end,
-            protein_accession,
-            transcript,
-        ));
+    // A stop-terminated insertion is never a plain tandem duplication.
+    if inserted_aas.last() != Some(&AminoAcid::Ter) {
+        if let Some((dup_start, dup_end)) =
+            protein_tandem_dup_range(ref_protein, aa_before_idx + 1, &inserted_aas)
+        {
+            return Ok(build_dup_variant(
+                ref_protein,
+                dup_start,
+                dup_end,
+                protein_accession,
+                transcript,
+            ));
+        }
     }
 
     let protein_edit = ProteinEdit::Insertion {
@@ -681,9 +721,9 @@ fn build_inframe_delins(
     // substitution, not a deletion-insertion (delins.md: "when **one** amino acid
     // is replaced by **one** other amino acid, the change is a substitution").
     // This applies to every edit routed here, including a whole-codon inversion
-    // that changes a single residue. An immediate stop (1 AA → Ter) is a nonsense
-    // substitution per spec, but is left to the existing path (no corpus case;
-    // such a delins typically truncates `alt_protein` before reaching here).
+    // that changes a single residue. A premature-stop edit never reaches this
+    // function — it is routed to `build_inframe_stop_delins` upstream (#911) —
+    // so the `inserted[0] != Ter` guard below only ever excludes a spurious Ter.
     if start_pos == end_pos && inserted.len() == 1 && inserted[0] != AminoAcid::Ter {
         let protein_edit = ProteinEdit::Substitution {
             reference: start_aa,
@@ -716,6 +756,94 @@ fn build_inframe_delins(
         accession,
         gene_symbol: transcript.gene_symbol.clone(),
         loc_edit: LocEdit::new_predicted(loc, protein_edit),
+    };
+    Ok(HgvsVariant::Protein(variant))
+}
+
+/// Build the protein consequence for an in-frame edit that introduces a
+/// **premature stop** codon (#911).
+///
+/// Translation truncated `alt_protein` at the new stop (the `Ter` was dropped),
+/// so `alt_protein` = the unchanged prefix + the new residues up to the stop.
+/// Per `insertion.md:27-28` / `delins.md:27-28`, the change is described capped
+/// at the edit's site with the terminating `Ter`, never as a deletion-insertion
+/// replacing the entire C-terminal sequence (the forbidden form), and residues
+/// after the stop are not listed:
+/// - an **immediate** stop (the inserted sequence is a bare `Ter`, no sense
+///   residue before it) is a nonsense **substitution** (`p.Xaa{N}Ter`),
+///   regardless of how many codons the edit deletes (delins.md:27,
+///   deletion.md:22-24);
+/// - otherwise a `delins` over the codons the edit deletes, whose inserted
+///   sequence is the new residues followed by `Ter`
+///   (`p.(Asn47delinsSerSerTer)`, `p.(Pro578_Lys579delinsLeuTer)`).
+fn build_inframe_stop_delins(
+    ref_protein: &[AminoAcid],
+    alt_protein: &[AminoAcid],
+    cds_pos_end: i64,
+    protein_accession: &str,
+    transcript: &Transcript,
+) -> Result<HgvsVariant, FerroError> {
+    let ref_len = ref_protein.len();
+    // Range **start**: the first codon whose residue changed (protein-derived).
+    let first_diff = first_diff_position(ref_protein, alt_protein);
+    let start_idx = first_diff.min(ref_len.saturating_sub(1));
+    // Range **end**: the last codon the edit deletes, `codon(cds_pos_end)`
+    // (DNA-derived), never past the reference terminus. Start and end are on
+    // different bases on purpose; `.max(start_idx)` keeps the range ascending
+    // even in the (contrived) case where the leading deleted codons are
+    // protein-silent so `first_diff` runs past the deleted span.
+    let end_codon = ((cds_pos_end - 1).max(0) / 3) as usize;
+    let end_idx = end_codon.max(start_idx).min(ref_len.saturating_sub(1));
+
+    // Inserted residues: the new residues from the first change up to the stop,
+    // plus the terminating `Ter` (dropped by translation).
+    let mut inserted: Vec<AminoAcid> = alt_protein.get(start_idx..).unwrap_or(&[]).to_vec();
+    inserted.push(AminoAcid::Ter);
+
+    let start_aa = ref_protein
+        .get(start_idx)
+        .copied()
+        .unwrap_or(AminoAcid::Xaa);
+    let start_pos = (start_idx + 1) as u64;
+    let accession = parse_accession(protein_accession);
+
+    // An **immediate** stop (the inserted sequence is a bare `Ter` — alt ends
+    // exactly at the first changed codon) is a nonsense substitution anchored at
+    // that codon, regardless of how many codons the edit deletes (delins.md:27):
+    // never the C-terminal-spanning `p.(X_YdelinsTer)` range form.
+    if inserted.as_slice() == [AminoAcid::Ter] {
+        let variant = ProteinVariant {
+            accession,
+            gene_symbol: transcript.gene_symbol.clone(),
+            loc_edit: LocEdit::new_predicted(
+                ProtInterval::point(ProtPos::new(start_aa, start_pos)),
+                ProteinEdit::Substitution {
+                    reference: start_aa,
+                    alternative: AminoAcid::Ter,
+                },
+            ),
+        };
+        return Ok(HgvsVariant::Protein(variant));
+    }
+
+    let loc = if start_idx == end_idx {
+        ProtInterval::point(ProtPos::new(start_aa, start_pos))
+    } else {
+        let end_aa = ref_protein.get(end_idx).copied().unwrap_or(AminoAcid::Xaa);
+        ProtInterval::new(
+            ProtPos::new(start_aa, start_pos),
+            ProtPos::new(end_aa, (end_idx + 1) as u64),
+        )
+    };
+    let variant = ProteinVariant {
+        accession,
+        gene_symbol: transcript.gene_symbol.clone(),
+        loc_edit: LocEdit::new_predicted(
+            loc,
+            ProteinEdit::Delins {
+                sequence: AminoAcidSeq::new(inserted),
+            },
+        ),
     };
     Ok(HgvsVariant::Protein(variant))
 }
@@ -1473,24 +1601,117 @@ mod tests {
     }
 
     #[test]
-    fn ins_three_bases_premature_stop_falls_back_to_delins() {
-        // Regression for malformed `p.(...ins)` with empty sequence: insert
-        // "TAA" between c.3 (last base of Met codon) and c.4 (first base of
-        // Arg codon). The inserted codon is a stop, so translate_full_cds
-        // truncates alt_protein to [Met]. ref_protein = [Met, Arg, Lys]
-        // (CDS "ATGCGCAAATAA"). alt is shorter than ref -> falls back to
-        // build_inframe_delins which can represent the asymmetric change
-        // without emitting an empty `ins` sequence.
+    fn ins_codon_aligned_immediate_stop_renders_nonsense_substitution() {
+        // #911: insert the stop codon "TAA" between c.3 (last base of Met codon)
+        // and c.4 (first base of Arg codon). The inserted codon is a bare stop
+        // (no sense residue before it), so translation truncates alt_protein to
+        // [Met]. ref_protein = [Met, Arg, Lys] (CDS "ATGCGCAAATAA"). Per
+        // insertion.md:25 an *immediate* stop is a nonsense variant — the stop
+        // lands at the residue 3' of the insertion point: `p.(Arg2Ter)`. NOT the
+        // `ins…Ter` form (reserved for a sense-carrying insert, insertion.md:26)
+        // and NOT the spec-forbidden C-terminal delins.
         let t = tx("ATGCGCAAATAA", 1, 12);
         let seq: crate::hgvs::edit::Sequence = "TAA".parse().unwrap();
         let edit = NaEdit::Insertion {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
         };
         let result = predict_indel(&t, 3, 3, &edit, "NP_TEST.1").unwrap();
-        let s = prot_str(&result);
-        // delins fallback re-attaches the implicit Ter (truncated by translate_full_cds)
-        // before computing the AA diff, so the new stop appears in the inserted sequence.
-        assert_eq!(s, "NP_TEST.1:p.(Arg2_Lys3delinsTer)");
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Arg2Ter)");
+    }
+
+    #[test]
+    fn ins_codon_aligned_residues_then_stop_renders_insertion_with_ter() {
+        // #911: insert "GCGTAA" (Ala + stop) between c.3 and c.4. New CDS
+        // "ATG GCG TAA CGCAAATAA" = Met-Ala-Stop; alt truncates to [Met, Ala].
+        // ref = [Met, Arg, Lys]. Per insertion.md:41 (`p.(Pro46_Asn47insSerSerTer)`)
+        // the inserted residues up to and including the Ter are listed, using the
+        // reference flanking positions: `p.(Met1_Arg2insAlaTer)`.
+        let t = tx("ATGCGCAAATAA", 1, 12);
+        let seq: crate::hgvs::edit::Sequence = "GCGTAA".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel(&t, 3, 3, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met1_Arg2insAlaTer)");
+    }
+
+    #[test]
+    fn ins_codon_aligned_late_stop_longer_than_ref_tail_keeps_ter() {
+        // #911 regression (CodeRabbit MAJOR): a codon-aligned insertion can
+        // introduce a premature stop while the truncated `alt_protein` is still
+        // LONGER than `ref_protein` — when the inserted sense residues before the
+        // new stop outnumber the reference residues after the insertion point.
+        // Deciding the stop branch from `alt.len() > ref.len()` misclassifies this
+        // as a plain insertion and drops the terminating `Ter`; the caller's
+        // `premature_stop` flag must be used instead.
+        //
+        // CDS "ATGCGCTAA" = Met-Arg-Ter; ref_protein = [Met, Arg] (len 2). Insert
+        // "GCGGCGTAA" (Ala-Ala-Stop) between c.3 and c.4 → new CDS
+        // "ATG GCGGCGTAA CGCTAA"; alt truncates to [Met, Ala, Ala] (len 3 > 2).
+        // Per insertion.md:37-41 the inserted residues up to and including the Ter
+        // are listed at the reference flanking positions: `p.(Met1_Arg2insAlaAlaTer)`.
+        let t = tx("ATGCGCTAA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "GCGGCGTAA".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel(&t, 3, 3, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met1_Arg2insAlaAlaTer)");
+    }
+
+    #[test]
+    fn delins_immediate_stop_renders_nonsense_substitution() {
+        // #911: a delins whose inserted sequence starts with a stop is a nonsense
+        // substitution, not a C-terminal-spanning (or empty) delins. CDS
+        // "ATGAAAGGGCCCTAA" = Met-Lys-Gly-Pro-Stop; `c.4_6delinsTAAGGG` replaces
+        // codon 2 (Lys) → new CDS "ATG TAAGGG GGGCCCTAA" = Met-Stop.
+        // delins.md:27 / deletion.md:22-24: `p.(Lys2Ter)`, not
+        // `p.(Lys2_Pro4delins)`.
+        let t = tx("ATGAAAGGGCCCTAA", 1, 15);
+        let seq: crate::hgvs::edit::Sequence = "TAAGGG".parse().unwrap();
+        let edit = NaEdit::Delins {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+            deleted: None,
+            deleted_length: None,
+        };
+        let result = predict_indel(&t, 4, 6, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2Ter)");
+    }
+
+    #[test]
+    fn delins_multi_codon_immediate_stop_renders_nonsense_substitution() {
+        // #911 (MAJOR-1 guard): an immediate stop whose DNA edit deletes TWO
+        // codons must still collapse to a nonsense substitution, not a range
+        // delins `p.(Lys2_Gly3delinsTer)`. CDS "ATGAAAGGGCCCTAA"; `c.4_9delinsTAAAAA`
+        // replaces codons 2-3 → new CDS "ATG TAAAAA CCCTAA" = Met-Stop.
+        // delins.md:27: `p.(Lys2Ter)`, anchored at the first changed codon.
+        let t = tx("ATGAAAGGGCCCTAA", 1, 15);
+        let seq: crate::hgvs::edit::Sequence = "TAAAAA".parse().unwrap();
+        let edit = NaEdit::Delins {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+            deleted: None,
+            deleted_length: None,
+        };
+        let result = predict_indel(&t, 4, 9, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2Ter)");
+    }
+
+    #[test]
+    fn delins_residues_then_stop_caps_at_change_site() {
+        // #911: a delins whose inserted sequence encodes residues then a stop is
+        // a delins capped at the changed codon(s), ending in Ter — not spanning
+        // the C-terminal (delins.md:27-28, `p.(Asn47delinsSerSerTer)`). CDS
+        // "ATGAAAGGGCCCTAA" = Met-Lys-Gly-Pro-Stop; `c.7_9delinsAGCTAA` replaces
+        // codon 3 (Gly) → new CDS "ATGAAA AGCTAA CCCTAA" = Met-Lys-Ser-Stop.
+        let t = tx("ATGAAAGGGCCCTAA", 1, 15);
+        let seq: crate::hgvs::edit::Sequence = "AGCTAA".parse().unwrap();
+        let edit = NaEdit::Delins {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+            deleted: None,
+            deleted_length: None,
+        };
+        let result = predict_indel(&t, 7, 9, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Gly3delinsSerTer)");
     }
 
     #[test]
@@ -1738,11 +1959,14 @@ mod tests {
         );
     }
 
-    /// Mid-codon insertion that introduces a stop codon — covers the
-    /// `inframe_delins → premature stop` fallback path with a positionally
-    /// non-trivial insertion.
+    /// Mid-codon in-frame insertion that does NOT truncate the protein — the
+    /// inserted "TAA" is distributed across codons so no premature stop appears
+    /// before the reference terminus. Covers the plain mid-codon
+    /// `inframe_delins` path (`premature_stop == false`), i.e.
+    /// `build_inframe_delins`, not the stop-aware builder. The truncating
+    /// counterpart is `ins_mid_codon_premature_stop_caps_at_change_site`.
     #[test]
-    fn ins_mid_codon_introduces_stop() {
+    fn ins_mid_codon_no_premature_stop_renders_plain_delins() {
         // CDS "ATGCGCTGCAAATAA" = Met-Arg-Cys-Lys-Stop (15 bases, 5 codons).
         // Insert "TAA" at c.4_5 (mid-codon, between first and second base of
         // codon 2 / Arg = "CGC"). Mutated CDS:
@@ -1759,12 +1983,46 @@ mod tests {
         let result = predict_indel(&t, 4, 4, &edit, "NP_TEST.1").unwrap();
         let s = prot_str(&result);
         // Mid-codon ins of multiple of 3 bases is still in-frame; the
-        // protein changes via a delins-at-the-AA-level rewrite.
+        // protein changes via a delins-at-the-AA-level rewrite. No stop was
+        // introduced, so there must be no terminating `Ter` in the output.
         assert!(
             s.contains("delins") || s.contains("ins"),
             "expected delins/ins, got '{}'",
             s
         );
+        assert!(
+            !s.contains("Ter"),
+            "no premature stop was introduced, so no Ter expected, got '{}'",
+            s
+        );
+    }
+
+    /// Mid-codon in-frame insertion that DOES introduce a premature stop,
+    /// truncating `alt_protein` before the reference terminus. This is the
+    /// route the previous test's name promised but never exercised: a
+    /// `NaEdit::Insertion` at a non-codon-aligned position (`frame_at_start !=
+    /// 2`) reaches `build_inframe_variant`'s mid-codon delins arm with
+    /// `premature_stop == true`, so it must dispatch to
+    /// `build_inframe_stop_delins` and be capped at the first changed codon
+    /// ending in `Ter` — never a C-terminal-spanning delins (#911).
+    #[test]
+    fn ins_mid_codon_premature_stop_caps_at_change_site() {
+        // CDS "ATGCGCTGCAAATAA" = Met-Arg-Cys-Lys-Stop (15 bases, 5 codons).
+        // Insert "GCGAATAAG" (9 bases, in-frame) at c.4_5 (mid-codon, after the
+        // first base of codon 2 / Arg = "CGC"). Mutated CDS:
+        //   "ATG" + "C" + "GCGAATAAG" + "GCTGCAAATAA" = "ATGCGCGAATAAGGCTGCAAATAA"
+        //   = ATG CGC GAA TAA GGC TGC AAA TAA = Met-Arg-Glu-Stop.
+        // Translation truncates at the new stop: alt = [Met, Arg, Glu],
+        // ref = [Met, Arg, Cys, Lys]. The first changed codon is Cys3, which
+        // becomes Glu then an immediate stop ⇒ a delins capped at Cys3 ending
+        // in Ter: p.(Cys3delinsGluTer). NOT a C-terminal-spanning delins.
+        let t = tx("ATGCGCTGCAAATAA", 1, 15);
+        let seq: crate::hgvs::edit::Sequence = "GCGAATAAG".parse().unwrap();
+        let edit = NaEdit::Insertion {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+        };
+        let result = predict_indel(&t, 4, 4, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&result), "NP_TEST.1:p.(Cys3delinsGluTer)");
     }
 
     /// Frame-restoring compound: an insertion of net 0 mod 3 that crosses
