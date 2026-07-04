@@ -768,7 +768,12 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Leu539delinsAlaArg)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-911-stop-insertion-not-cterminal-delins",
+        "note": "ferro renders the premature-stop protein consequence as the spec insertion form p.(Gln52_Arg53insAlaArgTer) (insertion.md L37-41); the corpus carries the M2-era spec-forbidden C-terminal delins p.(Arg53_Leu539delinsAlaArg). Spec-correct per #911 (fixed in #913)."
+      }
     },
     {
       "keywords": [
@@ -837,7 +842,12 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Leu539delinsAlaArg)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-911-stop-insertion-not-cterminal-delins",
+        "note": "ferro renders the premature-stop protein consequence as the spec insertion form p.(Gln52_Arg53insAlaArgTer) (insertion.md L37-41); the corpus carries the M2-era spec-forbidden C-terminal delins p.(Arg53_Leu539delinsAlaArg). Spec-correct per #911 (fixed in #913)."
+      }
     },
     {
       "keywords": [
@@ -1321,7 +1331,12 @@
           "NG_008939.1(NP_000523.2):p.(Arg53_Leu539delinsSerCysAlaAlaArg)"
         ]
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "coding_protein_descriptions",
+        "policy": "ferro-policy-911-stop-insertion-not-cterminal-delins",
+        "note": "ferro renders the stop-encoding delins protein consequence capped at the change site p.(Arg53_Arg54delinsSerCysAlaAlaArgTer) (delins.md L27-28); the corpus carries the M2-era spec-forbidden C-terminal delins p.(Arg53_Leu539delinsSerCysAlaAlaArg). Spec-correct per #911 (fixed in #913)."
+      }
     },
     {
       "keywords": [
