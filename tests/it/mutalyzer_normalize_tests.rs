@@ -673,6 +673,15 @@ impl AxisTally {
     /// `Err` actual, mirroring the OK-path on every other axis. A genuine panic
     /// (`"panic: …"`) is still a hard FAIL there, so real crashes are never
     /// masked by an annotation.
+    ///
+    /// The **infos axis** has a parallel, narrower `Err` exception for
+    /// *under-emission* (ferro emits fewer mapped info codes than the corpus
+    /// expects): a non-panic `Err` there buckets into `known_bug` (a tracked
+    /// ferro bug) or `spec_overridden` (a `spec_citation` asserting ferro is
+    /// spec-correct to emit fewer codes, e.g. no `SHUFFLE_APPLIED` across an
+    /// exon/exon junction — #918). `accepted_divergence` is deliberately excluded
+    /// (it has no spec basis), and a genuine panic still hard-FAILs. See
+    /// #908 / #918.
     fn record(&mut self, case: &Case, expected: &str, actual: Result<String, String>) {
         // Output-quality signal (#651): the axis runner stamps
         // `EMPTY_PROJECTION_SENTINEL` on its `Err` when ferro produced nothing
@@ -813,6 +822,44 @@ impl AxisTally {
                         .push((case.input.clone(), ad.policy.to_string()));
                     return;
                 }
+            }
+        }
+        // On the `infos` axis an under-emission `Err` (ferro emits fewer mapped
+        // info codes than the corpus expects) is bucketed by two — and only two —
+        // per-axis dispositions, mirroring the errors-axis `Err` exception below:
+        //
+        //   - `known_bug`: a *tracked* ferro bug (e.g. a genuinely missed 3'
+        //     shift) is xfail'd honestly rather than papered over.
+        //   - `spec_citation`: ferro is affirmatively spec-CORRECT to emit fewer
+        //     codes — e.g. it correctly does NOT emit `SHUFFLE_APPLIED` because
+        //     the HGVS 3'-rule exon/exon-junction exception forbids the shift
+        //     mutalyzer performed, so mutalyzer's `ICORRECTEDPOINT` has no ferro
+        //     equivalent (#918). The citation names the governing spec section.
+        //
+        // `accepted_divergence` is deliberately NOT in this set: it only asserts
+        // "we accept ferro differs", which for an under-emission would paper over
+        // a possibly-real bug with no spec basis (see
+        // `tally_infos_under_emission_err_with_accepted_divergence_still_fails`).
+        // A genuine panic still hard-FAILs below; a match XPASS-FAILs above (so a
+        // stale known_bug annotation is removed once the bug is fixed). See
+        // #908 / #918.
+        // Match ONLY the under-emission shape (the runner's `missing expected
+        // code` message). A parse/normalize/over-emission `Err` is a real
+        // failure and must fall through to FAIL — these two dispositions cover
+        // under-emission alone (see the `axis_infos` runner comment). Mirrors
+        // the runner's own string-match on `ferro emitted extra info`.
+        if self.axis == Axis::Infos
+            && matches!(&actual, Err(e) if e.contains("missing expected code"))
+        {
+            if let Some(kb) = case.known_bugs.iter().find(|kb| kb.axis == self.axis) {
+                self.known_bug
+                    .push((case.input.clone(), format!("#{}", kb.tracking_issue)));
+                return;
+            }
+            if let Some(sc) = case.spec_citations.iter().find(|sc| sc.axis == self.axis) {
+                self.spec_overridden
+                    .push((case.input.clone(), sc.section.to_string()));
+                return;
             }
         }
         // On the errors axis a non-panic `Err` is the expected "ferro diverges"
@@ -1198,6 +1245,35 @@ fn map_mutalyzer_code(code: &str) -> Option<&'static str> {
 /// `info_map::NO_FERRO_INFO_EQUIV`).
 fn map_mutalyzer_info_code(code: &str) -> Option<&'static str> {
     ferro_hgvs::error_handling::mutalyzer_info_to_ferro(code).map(|t| t.code())
+}
+
+/// True when a case is an out-of-boundary coordinate *clamp* — its errors axis
+/// expects `EOUTOFBOUNDARY` (the position is outside the transcript, e.g.
+/// `NG_012337.1(NM_003002.2):c.2740000T>T` at ~2.74 Mb on a ~1.4 kb
+/// transcript). On such a row mutalyzer's `ICORRECTEDPOINT` is a coordinate
+/// clamp, not an HGVS 3' shift.
+fn case_is_out_of_boundary_clamp(case: &Case) -> bool {
+    case.errors
+        .as_ref()
+        .is_some_and(|errs| errs.iter().any(|e| e == "EOUTOFBOUNDARY"))
+}
+
+/// Context-aware mapping of a mutalyzer info code to ferro's equivalent for a
+/// *specific* case. `ICORRECTEDPOINT` is overloaded in mutalyzer: on a genuine
+/// 3' shift it corresponds to ferro's `SHUFFLE_APPLIED`, but on an
+/// out-of-boundary no-op it is a *coordinate clamp* (mutalyzer snaps the OOB
+/// position back in range) with no ferro equivalent — ferro applies no shift
+/// (a no-op has no 3' shift; `substitution.md` L19, `numbering.md` L22) and
+/// instead flags `EOUTOFBOUNDARY` on the errors axis (where it matches). So on
+/// a case whose errors axis expects `EOUTOFBOUNDARY`, `ICORRECTEDPOINT` has no
+/// ferro equivalent and must not require `SHUFFLE_APPLIED`, exactly like the
+/// other mutalyzer-internal `ICORRECTED*` codes. A sibling case with a genuine
+/// 3' shift carries no `EOUTOFBOUNDARY` and is unaffected. See #908.
+fn map_case_info_code(case: &Case, code: &str) -> Option<&'static str> {
+    if code == "ICORRECTEDPOINT" && case_is_out_of_boundary_clamp(case) {
+        return None;
+    }
+    map_mutalyzer_info_code(code)
 }
 
 // ----------------------------------------------------------------------------
@@ -1855,14 +1931,14 @@ fn axis_infos() {
         // #326). A *mapped* code ferro fails to emit remains a hard FAIL.
         let has_no_equiv = expected_list
             .iter()
-            .any(|c| map_mutalyzer_info_code(c).is_none());
+            .any(|c| map_case_info_code(case, c).is_none());
 
         let actual = catch_panics(|| -> Result<String, String> {
             // Only the modelled codes are required; drop the no-equivalent
             // ones from the comparison entirely.
             let mapped: Vec<&str> = expected_list
                 .iter()
-                .filter_map(|c| map_mutalyzer_info_code(c))
+                .filter_map(|c| map_case_info_code(case, c))
                 .collect();
 
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse error: {e:?}"))?;
@@ -2827,6 +2903,187 @@ mod comparator_tests {
             "under-emission Err must not silence into divergence_accepted bucket"
         );
         assert_eq!(t.fail.len(), 1);
+    }
+
+    // (7c') Infos axis: an under-emission `Err` WITH a `known_bug` on the infos
+    // axis buckets into `known_bug` (not FAIL) — the infos-axis Err exception
+    // added in #908, mirroring the errors-axis exception. Lets a genuine,
+    // tracked ferro bug (e.g. #918 compound-allele 3'-shift, which under-emits
+    // SHUFFLE_APPLIED) be xfail'd honestly rather than papered over as
+    // accepted_divergence (which `..._with_accepted_divergence_still_fails`
+    // above proves is still rejected).
+    #[test]
+    fn tally_infos_under_emission_err_with_known_bug_buckets() {
+        let mut t = AxisTally::new(Axis::Infos);
+        let mut case = make_case("in", None, None);
+        case.known_bugs = vec![KnownBug {
+            axis: Axis::Infos,
+            tracking_issue: 918,
+            note: None,
+            cluster: None,
+        }];
+        t.record(
+            &case,
+            "SHUFFLE_APPLIED",
+            Err("ferro infos [] missing expected code \"SHUFFLE_APPLIED\" x1 (got 0)".to_string()),
+        );
+        assert_eq!(t.pass, 0);
+        assert_eq!(
+            t.fail.len(),
+            0,
+            "an infos-axis known_bug must bucket an under-emission Err, not FAIL"
+        );
+        assert_eq!(
+            t.known_bug,
+            vec![("in".to_string(), "#918".to_string())],
+            "the under-emission Err must land in the known_bug bucket with the tracker"
+        );
+    }
+
+    // (7c'') Infos axis: a genuine PANIC still hard-FAILs even with an infos
+    // `known_bug` — real crashes are never masked, same as the errors-axis rule.
+    #[test]
+    fn tally_infos_known_bug_panic_still_fails() {
+        let mut t = AxisTally::new(Axis::Infos);
+        let mut case = make_case("in", None, None);
+        case.known_bugs = vec![KnownBug {
+            axis: Axis::Infos,
+            tracking_issue: 918,
+            note: None,
+            cluster: None,
+        }];
+        t.record(&case, "SHUFFLE_APPLIED", Err("panic: boom".to_string()));
+        assert!(
+            t.known_bug.is_empty(),
+            "a panic must not bucket into known_bug"
+        );
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // (7c'''') Infos axis: an under-emission `Err` WITH a `spec_citation` on the
+    // infos axis buckets into `spec_overridden` (not FAIL). Unlike the
+    // accepted_divergence path (which still FAILs, above), a spec_citation is an
+    // affirmative claim that ferro is spec-CORRECT to emit fewer codes — e.g. it
+    // correctly does NOT emit SHUFFLE_APPLIED because the HGVS 3'-rule
+    // exon/exon-junction exception forbids the shift mutalyzer performed, so
+    // mutalyzer's ICORRECTEDPOINT has no ferro equivalent (#918). The complement
+    // `tally_infos_under_emission_err_with_accepted_divergence_still_fails`
+    // proves accepted_divergence is NOT enough.
+    #[test]
+    fn tally_infos_under_emission_err_with_spec_citation_buckets() {
+        let mut t = AxisTally::new(Axis::Infos);
+        let case = make_case(
+            "in",
+            None,
+            Some(SpecCitation {
+                axis: Axis::Infos,
+                section: SpecSection::ThreePrimeRuleExonJunction,
+                note: None,
+                cluster: None,
+            }),
+        );
+        t.record(
+            &case,
+            "SHUFFLE_APPLIED",
+            Err("ferro infos [] missing expected code \"SHUFFLE_APPLIED\" x1 (got 0)".to_string()),
+        );
+        assert_eq!(t.pass, 0);
+        assert_eq!(
+            t.fail.len(),
+            0,
+            "an infos-axis spec_citation must bucket an under-emission Err, not FAIL"
+        );
+        assert_eq!(
+            t.spec_overridden,
+            vec![(
+                "in".to_string(),
+                "HGVS §3'-rule (exon/exon-junction exception)".to_string()
+            )],
+            "the under-emission Err must land in spec_overridden with the cited section"
+        );
+    }
+
+    // (7c''''') Infos axis: a genuine PANIC still hard-FAILs even with an infos
+    // `spec_citation` — real crashes are never masked, same as the known_bug rule.
+    #[test]
+    fn tally_infos_spec_citation_panic_still_fails() {
+        let mut t = AxisTally::new(Axis::Infos);
+        let case = make_case(
+            "in",
+            None,
+            Some(SpecCitation {
+                axis: Axis::Infos,
+                section: SpecSection::ThreePrimeRuleExonJunction,
+                note: None,
+                cluster: None,
+            }),
+        );
+        t.record(&case, "SHUFFLE_APPLIED", Err("panic: boom".to_string()));
+        assert!(
+            t.spec_overridden.is_empty(),
+            "a panic must not bucket into spec_overridden"
+        );
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // (7c'''''') Infos axis: a NON-under-emission `Err` (e.g. a `parse error:`)
+    // must STILL FAIL even with an infos `spec_citation`. The known_bug/
+    // spec_citation dispositions cover the under-emission shape ONLY (the
+    // runner's `missing expected code` message); a parse/normalize/over-emission
+    // `Err` is a real failure the runner routes through `record`, and must not
+    // be masked. Guards the narrowed match at the infos-axis Err exception.
+    #[test]
+    fn tally_infos_parse_error_with_spec_citation_still_fails() {
+        let mut t = AxisTally::new(Axis::Infos);
+        let case = make_case(
+            "in",
+            None,
+            Some(SpecCitation {
+                axis: Axis::Infos,
+                section: SpecSection::ThreePrimeRuleExonJunction,
+                note: None,
+                cluster: None,
+            }),
+        );
+        t.record(
+            &case,
+            "SHUFFLE_APPLIED",
+            Err("parse error: SomeParseError".to_string()),
+        );
+        assert!(
+            t.spec_overridden.is_empty(),
+            "a parse-error Err must NOT bucket into spec_overridden — only under-emission does"
+        );
+        assert_eq!(
+            t.fail.len(),
+            1,
+            "a non-under-emission Err must still FAIL even with an infos spec_citation"
+        );
+    }
+
+    // (7c''') `map_case_info_code` is context-aware: mutalyzer's overloaded
+    // `ICORRECTEDPOINT` maps to ferro's `SHUFFLE_APPLIED` on a genuine 3'-shift
+    // row, but to *no equivalent* on an out-of-boundary clamp row (errors axis
+    // expects `EOUTOFBOUNDARY`) — ferro applies no shift there, so requiring
+    // SHUFFLE_APPLIED would be a false under-emission FAIL (#908).
+    #[test]
+    fn map_case_info_code_treats_oob_clamp_icorrectedpoint_as_no_equiv() {
+        let shift = make_case("in", None, None);
+        assert_eq!(
+            map_case_info_code(&shift, "ICORRECTEDPOINT"),
+            Some("SHUFFLE_APPLIED"),
+            "a genuine 3'-shift ICORRECTEDPOINT maps to SHUFFLE_APPLIED"
+        );
+
+        let mut clamp = make_case("in", None, None);
+        clamp.errors = Some(vec!["EOUTOFBOUNDARY".to_string()]);
+        assert_eq!(
+            map_case_info_code(&clamp, "ICORRECTEDPOINT"),
+            None,
+            "an out-of-boundary clamp ICORRECTEDPOINT has no ferro equivalent"
+        );
+        // Non-ICORRECTEDPOINT codes are unaffected by the clamp context.
+        assert_eq!(map_case_info_code(&clamp, "ISORTEDVARIANTS"), None);
     }
 
     // (7d) Errors axis: a non-panic `Err` (ferro emitted no error, or a
