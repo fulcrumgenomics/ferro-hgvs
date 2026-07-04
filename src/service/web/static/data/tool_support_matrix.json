@@ -573,7 +573,7 @@
       "id": "ferro",
       "name": "ferro",
       "url": "https://github.com/fulcrumgenomics/ferro-hgvs",
-      "version": "0.6.0"
+      "version": "0.7.0"
     },
     {
       "id": "mutalyzer",
