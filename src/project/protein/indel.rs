@@ -717,6 +717,24 @@ fn build_inframe_delins(
         vec![]
     };
 
+    // Pure-deletion guard (generalizes #847/#850): nothing is inserted (the alt
+    // protein is the reference with a contiguous residue block removed) and the
+    // alt is shorter than the reference, so the net effect is a pure deletion —
+    // never a `delins` with an empty inserted sequence (invalid HGVS). The #847
+    // guard above only fires when the forward/backward diff scans *cross over*
+    // (`last_diff_ref < first_diff`), which happens inside a run of identical
+    // residues. This one also catches the codon-straddling in-frame deletion
+    // whose merged boundary codon happens to equal the following reference
+    // residue: the scans then *meet* at a single index (`last_diff_ref ==
+    // first_diff`) rather than crossing, leaving `inserted` empty and falling
+    // through to the malformed `p.(Xaa delins)` (e.g. `NM_000532.5:c.155_157del`
+    // → `p.(Gln52del)`, previously `p.(Gln52delins)`). Delegate to the shared
+    // codon-aligned-deletion builder, which recomputes the deleted range from
+    // `first_diff` and `ref_len - alt_len` (point when one residue, else range).
+    if inserted.is_empty() && alt_len < ref_len {
+        return build_inframe_deletion(ref_protein, alt_protein, protein_accession, transcript);
+    }
+
     // One amino acid replaced by one (non-stop) amino acid is, by definition, a
     // substitution, not a deletion-insertion (delins.md: "when **one** amino acid
     // is replaced by **one** other amino acid, the change is a substitution").
@@ -1448,6 +1466,98 @@ mod tests {
         let result = predict_indel(&t, 5, 7, &edit, "NP_TEST.1").unwrap();
         let s = prot_str(&result);
         assert_eq!(s, "NP_TEST.1:p.(Arg2_Lys3delinsGln)");
+    }
+
+    /// Regression (generalizes #847/#850): a codon-straddling in-frame
+    /// single-codon deletion that is NOT inside a run of identical residues, but
+    /// whose merged boundary codon happens to translate to the *same residue* as
+    /// the following reference codon, is a clean single-residue deletion and must
+    /// render `p.(Xaa del)` — never an empty `p.(Xaa delins)`. This is the
+    /// `NM_000532.5:c.155_157del` → `p.(Gln52del)` case (previously
+    /// `p.(Gln52delins)`), which the #850 run-crossover guard (which fires only
+    /// when `last_diff_ref < first_diff`) does NOT cover: here the forward and
+    /// backward diff scans *meet* at a single index (`last_diff_ref ==
+    /// first_diff`), leaving an empty inserted sequence.
+    ///
+    /// CDS "ATGCATCAGGGGTAA" = Met-His-Gln-Gly-Ter. `c.5_7del` is codon-straddling
+    /// (`(5-1)%3 == 1`): removing bases 5,6,7 ("A","T","C") merges His's first
+    /// base with Gln's last two → new codon "CAG" = Gln, so the mutated CDS
+    /// "ATGCAGGGGTAA" = Met-Gln-Gly-Ter. ref = [Met,His,Gln,Gly], alt =
+    /// [Met,Gln,Gly]: His2 is deleted ⇒ p.(His2del). His, Gln, Gly are all
+    /// distinct, so this is not a homopolymer run.
+    #[test]
+    fn del_single_codon_straddling_not_in_run_renders_del() {
+        let t = tx("ATGCATCAGGGGTAA", 1, 15);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 5, 7, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(His2del)");
+        assert!(
+            !s.contains("ins"),
+            "single-codon in-frame deletion must not render as an insertion/delins: '{}'",
+            s
+        );
+    }
+
+    /// Regression (generalizes #847/#850): the two-codon analogue of
+    /// [`del_single_codon_straddling_not_in_run_renders_del`] — a codon-straddling
+    /// in-frame deletion removing two residues from a *non-run* context must
+    /// render a range `del`, not an empty `delins`.
+    ///
+    /// CDS "ATGCATAAACAGGGGTAA" = Met-His-Lys-Gln-Gly-Ter. `c.5_10del` is
+    /// codon-straddling and removes 6 bases (5..10 = "A T A A A C"); the mutated
+    /// CDS "ATGCAGGGGTAA" = Met-Gln-Gly-Ter. ref = [Met,His,Lys,Gln,Gly], alt =
+    /// [Met,Gln,Gly]: His2 and Lys3 are deleted ⇒ p.(His2_Lys3del). The backward
+    /// scan stops at Lys3 (`last_diff_ref == 2`, not `< first_diff == 1`), so the
+    /// #850 crossover guard does not fire.
+    #[test]
+    fn del_two_codons_straddling_not_in_run_renders_range_del() {
+        let t = tx("ATGCATAAACAGGGGTAA", 1, 18);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 5, 10, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(His2_Lys3del)");
+        assert!(
+            !s.contains("ins"),
+            "two-codon in-frame deletion must not render as an insertion/delins: '{}'",
+            s
+        );
+    }
+
+    /// Guard (#911, no-regression): a codon-straddling in-frame deletion whose
+    /// merged boundary codon becomes a *stop* must still route to the
+    /// premature-stop path (nonsense substitution `p.(Xaa Ter)`), NOT be
+    /// swallowed by the new pure-deletion guard as a plain `del`. A deletion that
+    /// introduces a premature stop makes `alt_protein` shorter than the expected
+    /// in-frame length, so `predict_indel_protein` sets `premature_stop` and
+    /// dispatches to `build_inframe_stop_delins` before `build_inframe_delins` is
+    /// ever reached.
+    ///
+    /// CDS "ATGTCCCAAGGGGGGTAA" = Met-Ser-Gln-Gly-Gly-Ter. `c.5_7del`
+    /// (codon-straddling) removes bases 5,6,7 ("C","C","C"); the merged boundary
+    /// codon becomes "TAA" → mutated CDS "ATGTAAGGGGGGTAA" = Met-Ter. The stop
+    /// lands immediately at codon 2 ⇒ nonsense substitution p.(Ser2Ter).
+    #[test]
+    fn del_straddling_introducing_stop_stays_nonsense_not_del() {
+        let t = tx("ATGTCCCAAGGGGGGTAA", 1, 18);
+        let edit = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let result = predict_indel(&t, 5, 7, &edit, "NP_TEST.1").unwrap();
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(Ser2Ter)");
+        assert!(
+            !s.contains("del"),
+            "a stop-encoding deletion must not render as a plain del: '{}'",
+            s
+        );
     }
 
     #[test]
