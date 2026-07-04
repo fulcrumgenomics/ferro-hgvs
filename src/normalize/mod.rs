@@ -33,7 +33,7 @@ pub mod validate;
 
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
-use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, ProteinEdit, Sequence};
+use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, ProteinEdit, RepeatCount, Sequence};
 use crate::hgvs::interval::{Interval, ProtInterval};
 use crate::hgvs::location::{
     AminoAcid, CdsPos, GenomePos, ProtPos, RnaPos, SpecialPosition, TxPos,
@@ -5838,6 +5838,52 @@ impl<P: ReferenceProvider> Normalizer<P> {
         {
             if reference == alternative {
                 return Ok((start, end, NaEdit::position_identity(), warnings));
+            }
+        }
+
+        // A bracketed inserted repeat with an exact count — either a multi-base
+        // `ins<seq>[N]` (`SequenceRepeat`) or a single-base `ins<base>[N]`
+        // (`Repeat`) — is syntactic shorthand the plain-insertion path never
+        // canonicalizes: both `bases()` to `None`, so the alt-extraction below
+        // returns the edit verbatim. Rewrite the degenerate counts, matching
+        // mutalyzer:
+        //   [0] — zero copies inserted is a no-op → whole-entity identity (`g.=`).
+        //   [1] — a single inserted copy is equivalent to the plain
+        //         `ins<seq>`, which flows through insertion→duplication
+        //         detection below, so rewrite to `Literal` and recurse (a
+        //         single copy of the adjacent reference then becomes `dup`,
+        //         `duplication.md` L17).
+        // Counts >= 2 are a genuine multi-copy repeat, left for the
+        // repeat-tract machinery (out of scope). The rewrite is purely
+        // syntactic on the stated sequence, so it runs before shuffling. See #920.
+        if let NaEdit::Insertion { sequence } = edit {
+            let degenerate = match sequence {
+                InsertedSequence::SequenceRepeat {
+                    sequence,
+                    count: RepeatCount::Exact(n),
+                } => Some((*n, sequence.clone())),
+                InsertedSequence::Repeat {
+                    base,
+                    count: RepeatCount::Exact(n),
+                } => Some((*n, Sequence::new(vec![*base]))),
+                _ => None,
+            };
+            if let Some((count, unit)) = degenerate {
+                match count {
+                    0 => return Ok((start, end, NaEdit::whole_entity_identity(), warnings)),
+                    1 => {
+                        let literal = NaEdit::Insertion {
+                            sequence: InsertedSequence::Literal(unit),
+                        };
+                        let (new_start, new_end, new_edit, mut child_warnings) = self
+                            .normalize_na_edit(
+                                ref_seq, &literal, start, end, boundaries, is_coding,
+                            )?;
+                        warnings.append(&mut child_warnings);
+                        return Ok((new_start, new_end, new_edit, warnings));
+                    }
+                    _ => {}
+                }
             }
         }
 
