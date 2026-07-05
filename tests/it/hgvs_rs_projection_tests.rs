@@ -413,34 +413,65 @@ impl AxisTally {
         }
 
         let all_selection_miss = diverging.iter().all(|d| *d == Divergence::SelectionMiss);
-        // A coordinate skew is quarantinable only on a gate-listed transcript.
+        // A coordinate skew is quarantinable as alignment-source skew only on a
+        // `SOURCE_SKEW_TRANSCRIPTS` transcript.
         let listed_coordinate_skew = |entry: &str| -> bool {
             base_accession(entry).is_some_and(|b| SOURCE_SKEW_TRANSCRIPTS.contains(&b.as_str()))
+        };
+        // A coordinate skew is quarantinable as version-currency skew only on a
+        // `VERSION_CURRENCY_SKEW_TRANSCRIPTS` transcript AND only when ferro
+        // returned that base at a *strictly newer* version than the oracle's.
+        // A same-version coordinate skew on a listed transcript is a genuine
+        // projection bug and is deliberately NOT quarantined here.
+        let version_currency_skew = |entry: &str| -> bool {
+            let Some(base) = base_accession(entry) else {
+                return false;
+            };
+            if !VERSION_CURRENCY_SKEW_TRANSCRIPTS.contains(&base.as_str()) {
+                return false;
+            }
+            let Some(want_version) = accession_version(entry) else {
+                return false;
+            };
+            returned.iter().any(|a| {
+                base_accession(a).as_deref() == Some(base.as_str())
+                    && accession_version(a).is_some_and(|got| got > want_version)
+            })
         };
         let all_quarantinable = expected_entries
             .iter()
             .map(|e| (e, classify_divergence(e, returned)))
             .all(|(e, d)| match d {
                 Divergence::Match | Divergence::SelectionMiss => true,
-                Divergence::CoordinateSkew => listed_coordinate_skew(e),
+                Divergence::CoordinateSkew => listed_coordinate_skew(e) || version_currency_skew(e),
                 Divergence::FormOnly => false,
             });
         let has_listed_skew = expected_entries.iter().any(|e| {
             classify_divergence(e, returned) == Divergence::CoordinateSkew
                 && listed_coordinate_skew(e)
         });
+        let has_version_skew = expected_entries.iter().any(|e| {
+            classify_divergence(e, returned) == Divergence::CoordinateSkew
+                && version_currency_skew(e)
+        });
 
         if all_selection_miss {
             self.divergence_accepted
                 .push((case.input.clone(), CLUSTER_TRANSCRIPT_SELECTION.to_string()));
-        } else if all_quarantinable && has_listed_skew {
+        } else if all_quarantinable && has_listed_skew && !has_version_skew {
             self.divergence_accepted.push((
                 case.input.clone(),
                 CLUSTER_ALIGNMENT_SOURCE_SKEW.to_string(),
             ));
+        } else if all_quarantinable && has_version_skew && !has_listed_skew {
+            self.divergence_accepted.push((
+                case.input.clone(),
+                CLUSTER_VERSION_CURRENCY_SKEW.to_string(),
+            ));
         } else {
-            // FormOnly, or CoordinateSkew on a non-listed transcript (gate gap),
-            // or a mix that isn't cleanly one source-skew category: surface it.
+            // FormOnly, a CoordinateSkew on a non-listed transcript (gate gap),
+            // a same-version skew on a listed transcript (a real bug), or a mix
+            // that isn't cleanly one skew category: surface it.
             let diag = match actual {
                 Ok(got) => format!("expected={expected_repr:?} got={got:?}"),
                 Err(e) => format!("expected={expected_repr:?} err={e}"),
@@ -596,6 +627,24 @@ fn base_accession(rendered: &str) -> Option<String> {
         None => accession,
     };
     Some(base.to_string())
+}
+
+/// Extract the `.N` version integer from a rendered variant's accession.
+///
+/// Mirrors [`base_accession`]'s parsing (substring before the first `:`, a
+/// trailing `(GENE)` group dropped) but returns the version digit instead of
+/// the bare base: both `NM_000249.4(MLH1):c.…` and `NM_000249.3:c.…` yield
+/// `Some(4)` / `Some(3)`. Returns `None` when there is no `:` boundary or no
+/// parseable `.N` version suffix (the base accession's own `_` is not a `.`).
+fn accession_version(rendered: &str) -> Option<u32> {
+    let (accession, _consequence) = rendered.split_once(':')?;
+    let accession = match accession.split_once('(') {
+        Some((before_paren, _gene)) => before_paren,
+        None => accession,
+    };
+    accession
+        .rsplit_once('.')
+        .and_then(|(_base, version)| version.parse::<u32>().ok())
 }
 
 /// Return everything after the first `:` in a rendered variant string — the
@@ -798,6 +847,20 @@ fn classify_divergence(expected: &str, actual_set: &[String]) -> Divergence {
     if actual_set.iter().any(|a| consequence_matches(expected, a)) {
         return Divergence::Match;
     }
+    // A form-currency difference (restated `del` bases, `fsTer`/`fs*`, or the
+    // start-loss `p.0?`/`p.(Met1?)` pair) describes the *same* variant at the
+    // *same* coordinate and is NOT a coordinate skew. Short-circuit it to
+    // `Match` so the `position_prefix` heuristic below never miscategorizes it:
+    // e.g. `p.0?` vs `p.(Met1?)` have prefixes `"0"` and `""`, which would
+    // otherwise read as a spurious `CoordinateSkew`. A genuine coordinate or
+    // residue difference does not `form_normalized_match`, so this cannot mask
+    // real signal (see `form_currency_rejects_coordinate_difference`).
+    if actual_set
+        .iter()
+        .any(|a| form_normalized_matches(expected, a))
+    {
+        return Divergence::Match;
+    }
     if !set_has_base(actual_set, expected) {
         return Divergence::SelectionMiss;
     }
@@ -869,6 +932,33 @@ const CLUSTER_PREDICTED_PARENTHESIZATION: &str = "predicted-parenthesization";
 /// spec-preferred glyphs; the oracle is pinned to older versions and legacy
 /// glyphs. These are accepted, not FAILs.
 const CLUSTER_FORM_CURRENCY: &str = "form-currency-vs-legacy-oracle";
+
+/// Base accessions where ferro emits a *newer curated transcript version* than
+/// the pinned hgvs-rs oracle, and that version's re-annotation legitimately
+/// shifts the `c.`/`n.` coordinate (so the divergence is a [`Divergence::
+/// CoordinateSkew`], not a form-only one). This is a distinct root cause from
+/// the alignment-source skew of [`SOURCE_SKEW_TRANSCRIPTS`] (RefSeq-GFF vs UTA
+/// splign): here both sources agree on the alignment, but the corpus is pinned
+/// to an *older* transcript version whose UTR/coordinate bounds differ from the
+/// current one ferro selects.
+///
+/// A `CoordinateSkew` on one of these is auto-quarantined as `divergence_
+/// accepted` **only when guarded** by a strict version-monotonicity check in
+/// [`AxisTally::record_classified`]: ferro must have returned this base at a
+/// version *strictly newer* than the oracle's. A *same-version* coordinate skew
+/// on a listed transcript is a genuine projection bug and still FAILs — the
+/// gate list alone never accepts it. A skew on any *other* transcript also stays
+/// a FAIL (an incomplete gate list surfaces rather than silently accepting).
+///
+/// `NM_000249` (MLH1): oracle `.3` `c.-20_*20del` vs ferro `.4` `c.-19_*21del`
+/// — the `.4` 5'/3' UTR bounds shifted by one, a real re-annotation. See
+/// `tests/fixtures/hgvs-rs-projection/ALIGNMENT_SOURCE_DIVERGENCE.md`.
+const VERSION_CURRENCY_SKEW_TRANSCRIPTS: &[&str] = &["NM_000249"];
+
+/// Cluster id for version-currency coordinate skew (coordinate differs because
+/// ferro emits a strictly-newer curated transcript version; base is on the
+/// [`VERSION_CURRENCY_SKEW_TRANSCRIPTS`] gate list).
+const CLUSTER_VERSION_CURRENCY_SKEW: &str = "version-currency-coordinate-skew";
 
 /// Detect the **predicted-parenthesization** improvement on a `(c., p.)`-pair
 /// axis: for every expected `[c, p]` pair, ferro returned a pair whose coding
@@ -1755,6 +1845,82 @@ mod comparator_tests {
             "NM_000804.2:c.168+206del",
             "NM_001412270.1(FOLR3):c.168+206del"
         ));
+    }
+
+    // accession_version: the `.N` version is parsed through a trailing `(GENE)`
+    // group; a versionless accession or a missing `:` yields None.
+    #[test]
+    fn accession_version_parses_through_gene_suffix() {
+        assert_eq!(accession_version("NM_000249.4(MLH1):c.-19_*21del"), Some(4));
+        assert_eq!(accession_version("NM_000249.3:c.-20_*20del"), Some(3));
+        assert_eq!(accession_version("NM_000249:c.5del"), None);
+        assert_eq!(accession_version("no-colon-here"), None);
+    }
+
+    // classify_divergence: a form-currency-only protein difference (`p.0?` vs
+    // `p.(Met1?)`) is a Match, not a spurious CoordinateSkew — guards against the
+    // `position_prefix` artifact (`"0"` vs `""`).
+    #[test]
+    fn classify_forgives_start_loss_form_artifact() {
+        assert!(matches!(
+            classify_divergence("NP_000240.1:p.0?", &["NP_000240.1:p.(Met1?)".into()]),
+            Divergence::Match
+        ));
+    }
+
+    // record_classified: a CoordinateSkew on a VERSION_CURRENCY_SKEW_TRANSCRIPTS
+    // base where ferro returned a STRICTLY NEWER version is quarantined as
+    // version-currency skew (the MLH1 .3 -> .4 residual), not a FAIL.
+    #[test]
+    fn version_currency_skew_quarantined_when_newer() {
+        let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
+        let case = make_case("NC_000003.11:g.37035019_37092164del");
+        t.record_classified(
+            &case,
+            "NM_000249.3:c.-20_*20del",
+            Ok("NM_000249.4(MLH1):c.-19_*21del".to_string()),
+            &["NM_000249.3:c.-20_*20del".to_string()],
+            &["NM_000249.4(MLH1):c.-19_*21del".to_string()],
+        );
+        assert!(t.fail.is_empty());
+        assert_eq!(t.divergence_accepted.len(), 1);
+        assert_eq!(t.divergence_accepted[0].1, CLUSTER_VERSION_CURRENCY_SKEW);
+    }
+
+    // record_classified: the critical guard — a SAME-version coordinate skew on
+    // a version-currency-listed transcript is a genuine projection bug and still
+    // FAILs (the version-newer check is what makes the gate list safe).
+    #[test]
+    fn version_currency_skew_same_version_still_fails() {
+        let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
+        let case = make_case("NC_000003.11:g.37035019_37092164del");
+        t.record_classified(
+            &case,
+            "NM_000249.3:c.-20_*20del",
+            Ok("NM_000249.3(MLH1):c.-19_*21del".to_string()),
+            &["NM_000249.3:c.-20_*20del".to_string()],
+            &["NM_000249.3(MLH1):c.-19_*21del".to_string()],
+        );
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(t.fail.len(), 1);
+    }
+
+    // record_classified: a version-newer coordinate skew on a transcript NOT on
+    // the gate list still FAILs (an incomplete gate list surfaces, it is not
+    // silently accepted).
+    #[test]
+    fn version_currency_skew_non_listed_base_still_fails() {
+        let mut t = AxisTally::new(Axis::CodingProteinDescriptions);
+        let case = make_case("g");
+        t.record_classified(
+            &case,
+            "NM_999999.1:c.-20_*20del",
+            Ok("NM_999999.2:c.-19_*21del".to_string()),
+            &["NM_999999.1:c.-20_*20del".to_string()],
+            &["NM_999999.2:c.-19_*21del".to_string()],
+        );
+        assert!(t.divergence_accepted.is_empty());
+        assert_eq!(t.fail.len(), 1);
     }
 
     // is_form_currency_pairs requires BOTH coding and protein to
