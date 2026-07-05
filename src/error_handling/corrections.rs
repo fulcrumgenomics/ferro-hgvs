@@ -981,8 +981,10 @@ pub fn detect_missing_version(input: &str) -> Option<(usize, String)> {
         ("XM_", false),
         ("XP_", false),
         ("XR_", false),
-        ("ENST", true), // Ensembl doesn't always have versions
-        ("ENSP", true),
+        // Per HGVS refseq.md L24-25, Ensembl identifiers require a version too
+        // (unversioned is not a valid description) — same as RefSeq (#933).
+        ("ENST", false),
+        ("ENSP", false),
         ("LRG_", false),
     ];
 
@@ -1018,8 +1020,8 @@ pub fn detect_missing_version(input: &str) -> Option<(usize, String)> {
 ///
 /// Walks the input character-by-character, identifying contiguous
 /// `[A-Za-z_]+\d+` accession bodies, then classifying each by prefix.
-/// Accessions whose prefix is in the optional-version set (Ensembl
-/// ENST/ENSP/ENSG/ENSR) are skipped.
+/// Every recognised RefSeq/Ensembl/LRG family requires a version (#933), so an
+/// unversioned accession of any of them is flagged.
 pub fn detect_missing_versions(input: &str) -> Vec<DetectedCorrection> {
     let mut hits = Vec::new();
     let bytes = input.as_bytes();
@@ -1091,14 +1093,19 @@ pub fn detect_missing_versions(input: &str) -> Vec<DetectedCorrection> {
 /// Returns `(recognised, optional_version)`:
 /// - `recognised = true` when the prefix matches a known RefSeq/Ensembl/LRG
 ///   accession family.
-/// - `optional_version = true` when that family routinely appears in the
-///   wild without a version suffix (Ensembl).
+/// - `optional_version = true` when a version suffix is not required.
+///
+/// Per HGVS `background/refseq.md` (L24-25) "RefSeq **and Ensembl** reference
+/// sequence identifiers use version numbers … variant descriptions lacking a
+/// version number are **not** valid" — so Ensembl (`ENST`/`ENSP`/`ENSG`/`ENSR`)
+/// requires a version just like RefSeq (#933). No family is version-optional;
+/// the flag is retained for shape/future use.
 fn classify_accession_prefix(prefix: &str) -> (bool, bool) {
     match prefix {
         "NM_" | "NP_" | "NC_" | "NG_" | "NR_" | "NT_" | "NW_" | "XM_" | "XP_" | "XR_" | "LRG_" => {
             (true, false)
         }
-        "ENST" | "ENSP" | "ENSG" | "ENSR" => (true, true),
+        "ENST" | "ENSP" | "ENSG" | "ENSR" => (true, false),
         _ => (false, false),
     }
 }
@@ -4081,9 +4088,14 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_missing_versions_ensembl_optional() {
+    fn test_detect_missing_versions_ensembl_requires_version() {
+        // Ensembl identifiers require a version, same as RefSeq (HGVS
+        // refseq.md L24-25) — an unversioned ENST is flagged (#933).
         let hits = detect_missing_versions("ENST00000380152:c.100A>G");
-        assert!(hits.is_empty());
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].original, "ENST00000380152");
+        // A versioned ENST is accepted.
+        assert!(detect_missing_versions("ENST00000380152.7:c.100A>G").is_empty());
     }
 
     #[test]
@@ -4186,9 +4198,13 @@ mod tests {
 
     #[test]
     fn test_detect_missing_version_ensembl() {
-        // Ensembl accessions don't require versions
+        // Ensembl identifiers require a version too, per HGVS refseq.md L24-25
+        // ("variant descriptions lacking a version number are not valid") — same
+        // rule as RefSeq (#933). An unversioned ENST is flagged MissingVersion.
         let result = detect_missing_version("ENST00000123456:c.100A>G");
-        assert!(result.is_none());
+        assert_eq!(result, Some((0, "ENST00000123456".to_string())));
+        // A versioned ENST is accepted.
+        assert!(detect_missing_version("ENST00000123456.7:c.100A>G").is_none());
     }
 
     #[test]
