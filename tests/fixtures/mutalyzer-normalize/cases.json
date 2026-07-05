@@ -447,11 +447,14 @@
     {
       "keywords": [
         "M2: test_roll_after_splice",
-        "M2: Here we can roll and should, we stay in the same exon."
+        "M2: Here we can roll and should, we stay in the same exon.",
+        "3.1.1: mutalyzer 3.1.1 rejects (ECOORDINATESYSTEMMISMATCH: g. coordinate system on an NM_ transcript); M2-era n.460del dropped (verified 2026-07-05, #890)"
       ],
       "input": "NM_000088.3:g.460del",
-      "normalized": "NM_000088.3:n.460del",
-      "to_test": false
+      "to_test": false,
+      "errors": [
+        "ECOORDINATESYSTEMMISMATCH"
+      ]
     },
     {
       "keywords": [
@@ -653,40 +656,38 @@
       "keywords": [
         "M2: del_exon_unknown_offsets",
         "Deletion of an entire exon with unknown offsets should be possible.",
-        "To be implemented."
+        "To be implemented.",
+        "3.1.1: mutalyzer 3.1.1 rejects (EUNCERTAIN: uncertain-offset exon deletion not normalizable); M2-era expected values dropped (verified 2026-07-05, #890)"
       ],
       "input": "NG_012772.1(BRCA2_v001):c.632-?_681+?del",
-      "normalized": "NG_012772.1(NM_000059.3):c.632-?_681+?del",
-      "genomic": "NG_012772.1:g.(17550_19725)del",
-      "protein_description": "NG_012772.1(NP_000050.2):p.(Val211GlufsTer10)",
-      "to_test": false
+      "to_test": false,
+      "errors": [
+        "EUNCERTAIN"
+      ]
     },
     {
       "keywords": [
         "M2: test_del_exon_unknown_offsets_in_frame",
-        "M2:\n            Deletion of an entire exon with unknown offsets and length a\n            triplicate should give a proteine product with just this deletion\n            (and possibly substitutions directly before and after).\n            NG_012772.1(BRCA2_v001):c.68-?_316+?del is such a variant, since\n            positions 68 through 316 are exactly one exon and (316-68+1)/3 = 83.\n            "
+        "M2:\n            Deletion of an entire exon with unknown offsets and length a\n            triplicate should give a proteine product with just this deletion\n            (and possibly substitutions directly before and after).\n            NG_012772.1(BRCA2_v001):c.68-?_316+?del is such a variant, since\n            positions 68 through 316 are exactly one exon and (316-68+1)/3 = 83.\n            ",
+        "3.1.1: mutalyzer 3.1.1 rejects (EUNCERTAIN: uncertain-offset exon deletion not normalizable); M2-era expected values dropped (verified 2026-07-05, #890)"
       ],
       "input": "NG_012772.1(BRCA2_v001):c.68-?_316+?del",
-      "normalized": "NG_012772.1(NM_000059.3):c.68-?_316+?del",
-      "genomic": "NG_012772.1:g.(7324_11720)del",
-      "protein_description": "NG_012772.1(NP_000050.2):p.(Asp23_Leu105del)",
-      "to_test": false
+      "to_test": false,
+      "errors": [
+        "EUNCERTAIN"
+      ]
     },
     {
       "keywords": [
         "M2: test_del_exon_unknown_offsets_composed",
-        "M2: Deletion of an entire exon with unknown offsets and another composed variant with exact positioning should be possible."
+        "M2: Deletion of an entire exon with unknown offsets and another composed variant with exact positioning should be possible.",
+        "3.1.1: mutalyzer 3.1.1 rejects (EUNCERTAIN: uncertain-offset exon deletion not normalizable); M2-era expected values dropped (verified 2026-07-05, #890)"
       ],
       "input": "NG_012772.1(BRCA2_v001):c.[632-?_681+?del;681+4del]",
-      "normalized": "NG_012772.1(NM_000059.3):c.[632-?_681+?del;681+4del]",
-      "genomic": "NG_012772.1:g.[(17550_19725)del;19017del]",
-      "coding_protein_descriptions": [
-        [
-          "NG_012772.1(NM_000059.3):c.[632-?_681+?del;681+4del]",
-          "NG_012772.1(NP_000050.2):p.?"
-        ]
-      ],
-      "to_test": false
+      "to_test": false,
+      "errors": [
+        "EUNCERTAIN"
+      ]
     },
     {
       "keywords": [
@@ -700,11 +701,12 @@
     {
       "keywords": [
         "M2: test_del_exon_transcript_reference",
-        "M2:\n            Deletion of entire exon on a transcript reference should remove the\n            expected splice sites (only that of the deleted exon), and not those\n            of the flanking exons (as would happen using the mechanism for genomic\n            references).\n            "
+        "M2:\n            Deletion of entire exon on a transcript reference should remove the\n            expected splice sites (only that of the deleted exon), and not those\n            of the flanking exons (as would happen using the mechanism for genomic\n            references).\n            ",
+        "3.1.1: mutalyzer 3.1.1 3'-shifts to c.740_905del; M2-era c.739_904del corrected (verified 2026-07-05, #890)"
       ],
       "input": "NM_000143.3:c.739_904del",
-      "normalized": "NM_000143.3:c.739_904del",
-      "protein_description": "NM_000143.3(NP_000134.2):p.(Glu247AlafsTer27)",
+      "normalized": "NM_000143.3:c.740_905del",
+      "protein_description": "NM_000143.3(NM_000143.3_protein):p.(Glu247AlafsTer27)",
       "to_test": false
     },
     {
