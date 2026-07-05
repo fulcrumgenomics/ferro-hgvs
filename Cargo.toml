@@ -113,7 +113,7 @@ version = "3.14"
 optional = true
 
 [dependencies.hgvs]
-version = "0.20.1"
+version = "0.22"
 optional = true
 
 [dependencies.postgres]
@@ -121,7 +121,7 @@ version = "0.19"
 optional = true
 
 [dependencies.biocommons-bioutils]
-version = "0.1"
+version = "0.2"
 optional = true
 
 [dependencies.indexmap]
