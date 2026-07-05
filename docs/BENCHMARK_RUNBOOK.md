@@ -29,6 +29,7 @@ Run this a few times a year when refreshing the published numbers, or when tooli
 | PostgreSQL client | `psql` + `pg_isready`; `setup uta` probes the UTA database over the published host port. Install e.g. `postgresql-client` (Debian/Ubuntu), `libpq` (Homebrew), or `postgresql` (conda/pixi) |
 | pixi | Manages the Python tool environment (mutalyzer, biocommons/hgvs, hgvs-rs) |
 | Rust toolchain | `cargo build --release` for the ferro-benchmark binary |
+| System build libraries | The `benchmark` / `hgvs-rs` features link native C libraries, so a fresh machine needs a C toolchain plus dev headers. In particular the `benchmark` feature's `rusqlite` links **system SQLite** — without it the build fails at link time with `rust-lld: error: unable to find library -lsqlite3`. Install: **RHEL / Amazon Linux 2023** — `gcc gcc-c++ make cmake sqlite-devel zlib-devel bzip2-devel xz-devel openssl-devel`; **Debian / Ubuntu** — `build-essential cmake libsqlite3-dev zlib1g-dev libbz2-dev liblzma-dev libssl-dev`; **macOS** — Xcode Command Line Tools plus Homebrew `sqlite`. |
 
 ### Reference Stack
 
@@ -99,13 +100,15 @@ pixi run ./target/release/ferro-benchmark setup uta \
 
 This pulls `biocommons/uta:uta_20210129b` if not already present, starts the container, and waits (polling the host port for the `uta_20210129b` schema) until the database is ready.
 
+> **⚠️ The image no longer self-loads its data — you must supply a local dump.** The `biocommons/uta` image ships **empty**; on first boot its `load-uta.sh` init script downloads the ~2–3 GB dump from `https://dl.biocommons.org/uta/uta_20210129b.pgd.gz`. That URL is now behind a **human-verification wall** (`302 → /human-verify.html`), so the container's `curl` saves a 154-byte HTML page instead of the dump, `gzip` rejects it (`not in gzip format`), and the container comes up with an **empty schema** — `setup uta` then times out waiting for `uta_20210129b` (only the `public` schema exists). A plain `setup uta --image-tag …` therefore **cannot** provision UTA on a fresh host. You must obtain `uta_20210129b.pgd.gz` once by clicking through the verification page in a browser, then load it locally with **`setup uta --uta-dump /path/to/uta_20210129b.pgd.gz`** (see [Appendix: UTA Dump Recovery](#appendix-uta-dump-recovery)). Keep the dump on a stable local/scratch path; it is gitignored and not distributed in the repo.
+
 **Readiness wait.** The wait is patient and configurable via `--uta-ready-timeout-secs` (default **300**); the biocommons/uta image can take a few minutes to initialize its schema on first start, so a heartbeat reports progress while it waits. If it does time out, the error is state-specific (container exited → check `docker logs`; postgres never came up; or schema never appeared) — re-run `setup uta` (it is **idempotent**) with a larger `--uta-ready-timeout-secs` if the disk is slow.
 
 **Idempotency & re-runs.** Re-running `setup uta` is safe: a ready container is a no-op; a stopped one is started; one still initializing is waited on. If a container of the same name already exists with a **different published port or image** than requested, the command errors rather than silently using the wrong one — re-run with `--force` to recreate, or pass a matching `--uta-port` / `--uta-image-tag`.
 
 **Port collisions.** The default `--uta-port` is 5432, commonly occupied by a local Postgres. If `docker run` reports the port is already allocated, pass `--uta-port <other>`.
 
-**Offline / verification-gated dump.** `setup uta` pulls a Docker image; it never auto-downloads the dump. If the image pull is blocked, supply a local dump with `--uta-dump <path>` (see the recovery appendix). The file must be a real gzip `.pgd.gz` — a saved HTML verification page is rejected with a clear error before any Docker work.
+**Offline / verification-gated dump.** `setup uta` pulls a Docker image; it never auto-downloads the dump, and (per the warning above) the image's *own* boot-time download is now broken by the biocommons human-verification wall. So on any fresh host you must pass a local dump with `--uta-dump <path>` (see the recovery appendix). The file must be a real gzip `.pgd.gz` — a saved HTML verification page is rejected with a clear error before any Docker work (this guard exists precisely because the wall serves HTML in place of the dump).
 
 ### Step 4: Discover the UTA host port and verify reachability
 
@@ -359,21 +362,32 @@ For mutalyzer normalize at more than one worker under the pre-sharded cache, the
 
 ## Appendix: UTA Dump Recovery
 
-If the `ferro-uta` Docker container is fresh or its data volume is empty (the schema is unloaded), the database will not have the `uta_20210129b` schema and tool checks will fail with errors like `relation "uta_20210129b.transcript" does not exist`.
+If the `ferro-uta` Docker container is fresh or its data volume is empty (the schema is unloaded), the database will not have the `uta_20210129b` schema and tool checks will fail with errors like `relation "uta_20210129b.transcript" does not exist`. As explained in [Step 3](#step-3-start-the-uta-docker-container), this is now the **default** state on a fresh host, because the image's boot-time auto-download is broken by the biocommons human-verification wall.
 
-The UTA dump lives in the repo at:
+### Obtaining the dump
 
+The dump is **not** distributed in this repo (it is gitignored). You must download `uta_20210129b.pgd.gz` (~281 MB) yourself:
+
+```text
+https://dl.biocommons.org/uta/uta_20210129b.pgd.gz
 ```
-manuscript/benchmark/output/data/uta/uta_20210129b.pgd.gz
+
+`curl -O`/`wget` on that URL **does not work** — it is behind a JavaScript human-verification wall that returns a 154-byte HTML redirect stub instead of the dump (which is why the container's own `load-uta.sh` fails silently). **Download it in a web browser**, which clears the challenge, and save the file to a stable local path (e.g. `/path/to/uta_20210129b.pgd.gz`). Verify it is a real gzip before using it:
+
+```bash
+file /path/to/uta_20210129b.pgd.gz   # => "gzip compressed data"; NOT "HTML document"
+gzip -t /path/to/uta_20210129b.pgd.gz && echo OK
 ```
 
-To restore it into a running `ferro-uta` container:
+Then either pass it to `setup uta --uta-dump /path/to/uta_20210129b.pgd.gz` (preferred — it loads and readies the container in one step), or load it into an already-running container by hand with the steps below.
+
+To restore it into a running `ferro-uta` container by hand:
 
 **Step 1: Copy the dump into the container**
 
 ```bash
-docker cp manuscript/benchmark/output/data/uta/uta_20210129b.pgd.gz \
-  ferro-uta:/tmp/dump.gz
+# Use the dump you downloaded in "Obtaining the dump" above.
+docker cp /path/to/uta_20210129b.pgd.gz ferro-uta:/tmp/dump.gz
 ```
 
 **Step 2: Load the schema and data (first psql pass)**
