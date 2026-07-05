@@ -224,6 +224,91 @@ pub struct LegacyMetadata {
 }
 
 /// Prepare reference data for normalization.
+/// Print the actions a `prepare_references` run would take, for `--dry-run`
+/// (#939). Lists the download/derive steps the current config selects, plus the
+/// always-run legacy-GenBank fetch and manifest write. Performs no network or
+/// filesystem side effects. `--skip-existing` (the default) means any listed
+/// target already on disk would be left in place rather than re-fetched.
+fn print_dry_run_plan(config: &PrepareConfig) {
+    eprintln!("\n=== [dry-run] planned actions ===");
+    eprintln!("  output dir: {}", config.output_dir.display());
+    if config.skip_existing {
+        eprintln!("  --skip-existing: targets already on disk would be left as-is");
+    }
+    eprintln!("  would download / process:");
+    let step = |selected: bool, desc: &str| {
+        if selected {
+            eprintln!("    - {desc}");
+        }
+    };
+    step(
+        config.download_transcripts,
+        "RefSeq transcripts (human.1-20.rna.fna.gz) + decompress + index",
+    );
+    step(
+        config.download_proteins,
+        "RefSeq companion proteins (*.protein.faa.gz, #520)",
+    );
+    step(
+        config.download_genome,
+        "GRCh38 genome (~3GB) + assembly report",
+    );
+    step(
+        config.download_genome_grch37,
+        "GRCh37 genome (~3GB) + assembly report",
+    );
+    step(
+        config.download_refseqgene,
+        "RefSeqGene NG_ sequences (~600MB) + RefSeqGene->genome alignments",
+    );
+    step(config.download_lrg, "LRG sequences (~1325 files)");
+    step(
+        config.download_cdot,
+        "GRCh38 cdot transcript metadata (~200MB)",
+    );
+    step(
+        config.download_cdot_grch37,
+        "GRCh37 cdot transcript metadata (~200MB)",
+    );
+    step(
+        config.download_ensembl,
+        "Ensembl cDNA (~75MB) + Ensembl cdot metadata",
+    );
+    if config.clinvar_file.is_some() || config.patterns_file.is_some() {
+        // Match the runtime gating: the ClinVar/pattern fetch only runs under
+        // the `benchmark` feature, so a non-benchmark build would skip it —
+        // the dry-run preview must say so rather than promise work that won't
+        // happen (#939).
+        #[cfg(feature = "benchmark")]
+        step(true, "supplemental transcripts from ClinVar/pattern files");
+        #[cfg(not(feature = "benchmark"))]
+        eprintln!(
+            "    - skip supplemental transcripts from ClinVar/pattern files \
+             (requires the benchmark feature)"
+        );
+    }
+    if let Some(p) = &config.validate_canonical_accessions {
+        eprintln!(
+            "    - canonical-record validation for {} (GenBank fetch, #520)",
+            p.display()
+        );
+    }
+    if let Some(p) = &config.backfill_transcripts {
+        eprintln!(
+            "    - transcript backfill from {} (NCBI EFetch per accession, #842)",
+            p.display()
+        );
+    }
+    if let Some(p) = &config.derive_ng_placements {
+        eprintln!(
+            "    - derive NG_ placements from {} (NCBI EFetch per accession, #728/#740)",
+            p.display()
+        );
+    }
+    eprintln!("    - legacy GenBank sequences (referenced non-RefSeq accessions)");
+    eprintln!("    - write/update manifest.json");
+}
+
 pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, FerroError> {
     eprintln!(
         "Preparing reference data in {}",
@@ -247,16 +332,11 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         });
     }
 
-    // Create output directory
-    fs::create_dir_all(&config.output_dir).map_err(|e| FerroError::Io {
-        msg: format!(
-            "Failed to create directory {}: {}",
-            config.output_dir.display(),
-            e
-        ),
-    })?;
-
-    // Load existing manifest if present, else default
+    // Load existing manifest if present, else default. Done BEFORE any
+    // directory creation so the `--dry-run` gate below can return the current
+    // manifest without touching the filesystem. `load_or_default` reads the
+    // manifest when present and returns a default otherwise; it never creates
+    // the output directory.
     let mut manifest = ReferenceManifest::load_or_default(&config.output_dir)?;
 
     // Pre-flight: the version-aware backfill (#842) targets the cdot-vs-FASTA
@@ -322,6 +402,34 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
             });
         }
     }
+
+    // Dry-run is a true no-op preview (#939): report the planned actions and
+    // return WITHOUT creating the output directory, downloading anything, or
+    // writing the manifest. This is the single authoritative dry-run gate — it
+    // precedes the `create_dir_all` below and every download section (RefSeq
+    // transcripts/proteins, genome, RefSeqGene, cdot, Ensembl) plus the final
+    // `manifest.save()`, all of which are otherwise ungated by dry-run and
+    // would run (the bug this fixes). The read-only pre-flight validations
+    // above still run under `--dry-run`, so a dry-run still surfaces config
+    // errors.
+    if config.dry_run {
+        print_dry_run_plan(config);
+        eprintln!(
+            "\n=== [dry-run] complete — nothing was downloaded and {} was not modified ===",
+            config.output_dir.join("manifest.json").display()
+        );
+        return Ok(manifest);
+    }
+
+    // Create output directory (non-dry-run path only — a dry-run must not touch
+    // the filesystem, #939).
+    fs::create_dir_all(&config.output_dir).map_err(|e| FerroError::Io {
+        msg: format!(
+            "Failed to create directory {}: {}",
+            config.output_dir.display(),
+            e
+        ),
+    })?;
 
     // Download transcripts
     if config.download_transcripts {
@@ -2445,6 +2553,73 @@ mod tests {
         assert!(
             format!("{err}").contains("--backfill-transcripts requires cdot"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn dry_run_downloads_nothing_and_leaves_manifest_untouched() {
+        // #939: `--dry-run` must be a true no-op — no downloads, and an existing
+        // manifest must not be rewritten (the bug bumped `prepared_at`, changing
+        // the reference identity). Hermetic: the early-return precedes every
+        // network step, so no download flag reaches a fetch.
+        let tmp = tempfile::tempdir().unwrap();
+        let ref_dir = tmp.path().join("ref");
+        std::fs::create_dir_all(&ref_dir).unwrap();
+
+        // Persist a manifest and capture its exact bytes.
+        let mut manifest = ReferenceManifest::load_or_default(&ref_dir).unwrap();
+        manifest.save().unwrap();
+        let manifest_path = ref_dir.join("manifest.json");
+        let before = std::fs::read(&manifest_path).unwrap();
+
+        // A config that would otherwise download the full RefSeq + Ensembl set.
+        let config = PrepareConfig {
+            output_dir: ref_dir.clone(),
+            download_transcripts: true,
+            download_genome: true,
+            download_cdot: true,
+            download_ensembl: true,
+            dry_run: true,
+            ..Default::default()
+        };
+        prepare_references(&config).expect("dry-run should succeed");
+
+        // The manifest is byte-for-byte unchanged...
+        let after = std::fs::read(&manifest_path).unwrap();
+        assert_eq!(before, after, "dry-run must not rewrite the manifest");
+        // ...and no download directories were created.
+        for dir in ["transcripts", "genome", "cdot", "ensembl", "refseqgene"] {
+            assert!(
+                !ref_dir.join(dir).exists(),
+                "dry-run must not create the {dir} directory"
+            );
+        }
+    }
+
+    #[test]
+    fn dry_run_does_not_create_output_dir() {
+        // #939 regression: `--dry-run` must not create the output directory
+        // itself. This pins the `create_dir_all` leak — the guard must precede
+        // directory creation, not follow it. Point `output_dir` at a path that
+        // does NOT exist and confirm the dry-run leaves it absent.
+        let tmp = tempfile::tempdir().unwrap();
+        let missing_dir = tmp.path().join("does-not-exist-yet");
+        assert!(!missing_dir.exists(), "precondition: output dir is absent");
+
+        let config = PrepareConfig {
+            output_dir: missing_dir.clone(),
+            download_transcripts: true,
+            download_genome: true,
+            download_cdot: true,
+            download_ensembl: true,
+            dry_run: true,
+            ..Default::default()
+        };
+        prepare_references(&config).expect("dry-run should succeed with no output dir");
+
+        assert!(
+            !missing_dir.exists(),
+            "dry-run must not create the output directory"
         );
     }
 
