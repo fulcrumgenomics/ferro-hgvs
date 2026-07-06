@@ -3365,12 +3365,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// uniquely hosts the gene, its hosted transcript wins; only otherwise does
     /// resolution fall back to the global reference-standard map.
     ///
-    /// Returns `None` (preserve the input selector unchanged) when there is no
-    /// gene-symbol selector, the reference is not genomic (`NM_(GENE)` keeps the
-    /// #121 behavior), the selector already names a transcript context, or the
-    /// gene is unresolvable (unknown, higher locus version, or no summary
-    /// ingested) — mirroring the #121 "preserve when present, don't synthesize"
-    /// policy. Never an error.
+    /// With no gene-symbol selector, synthesizes the transcript the `NG_`
+    /// uniquely hosts via [`ReferenceProvider::sole_hosted_transcript`] (#923),
+    /// returning `Some(NG_(NM_))`; it returns `None` there only when that hosted
+    /// mapping is absent or ambiguous. Also returns `None` when the reference is
+    /// not genomic (`NM_(GENE)` keeps the #121 behavior), the selector already
+    /// names a transcript context, or a present gene-symbol selector is
+    /// unresolvable (unknown, higher locus version, or no summary ingested) —
+    /// mirroring the #121 "preserve when present, don't synthesize" policy for
+    /// the gene-symbol case. Never an error.
     fn rewrite_legacy_gene_selector(
         &self,
         variant: &crate::hgvs::variant::HgvsVariant,
@@ -3383,7 +3386,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let HgvsVariant::Cds(c) = variant else {
             return None;
         };
-        let gene_symbol = c.gene_symbol.as_deref()?;
         let accession = &c.accession;
         // Only a genomic-reference selector slot (`NG_`/`NC_`/`LRG_`) is in scope.
         let is_genomic_ref = matches!(accession.prefix.as_ref(), "NG" | "NC") || accession.is_lrg();
@@ -3392,9 +3394,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if !is_genomic_ref || accession.genomic_context.is_some() {
             return None;
         }
-        let nm = self
-            .provider
-            .resolve_legacy_gene_selector(gene_symbol, Some(accession))?;
+        // With a gene-symbol selector, resolve it via the legacy gene model
+        // (#500/#792). With no selector at all, synthesize the transcript the
+        // `NG_` parent uniquely hosts (#923) — declining when ambiguous.
+        let nm = match c.gene_symbol.as_deref() {
+            Some(gene_symbol) => self
+                .provider
+                .resolve_legacy_gene_selector(gene_symbol, Some(accession))?,
+            None => self.provider.sole_hosted_transcript(accession)?,
+        };
         let (rest, nm_accession) = parse_accession(&nm).ok()?;
         // The resolver yields a reference-standard `NM_` coding transcript
         // (`parse_refseqgene_summary` keeps only `NM_` rows); reject anything else

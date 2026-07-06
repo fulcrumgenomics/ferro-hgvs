@@ -236,6 +236,18 @@ pub trait ReferenceProvider {
         None
     }
 
+    /// Synthesize the transcript selector for a bare-`NG_` `c.` input that
+    /// carries no selector, by returning the single transcript the `NG_` parent
+    /// hosts when — and only when — that mapping is unambiguous (#923).
+    ///
+    /// Returns `None` (preserve the bare input) when the parent is absent from
+    /// the hosted-transcript map, hosts more than one gene, or its sole gene
+    /// hosts more than one transcript. Providers that ingest an
+    /// `ng_hosted_transcripts` artifact override this; the default declines.
+    fn sole_hosted_transcript(&self, _ng_parent: &Accession) -> Option<String> {
+        None
+    }
+
     /// Get a sequence region
     ///
     /// # Arguments
@@ -491,6 +503,12 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for std::sync::Arc<T> {
         (**self).resolve_legacy_gene_selector(selector, ng_parent)
     }
 
+    fn sole_hosted_transcript(&self, ng_parent: &Accession) -> Option<String> {
+        // Forward so bare-NG_ selector synthesis survives an Arc wrapper; the
+        // default declines (`None`) and would bypass the wrapped provider.
+        (**self).sole_hosted_transcript(ng_parent)
+    }
+
     fn get_protein_sequence(
         &self,
         accession: &str,
@@ -592,6 +610,12 @@ impl<T: ReferenceProvider + ?Sized> ReferenceProvider for Box<T> {
         // Forward so legacy gene-model resolution survives a Box wrapper; the
         // default declines (`None`) and would bypass the wrapped provider.
         (**self).resolve_legacy_gene_selector(selector, ng_parent)
+    }
+
+    fn sole_hosted_transcript(&self, ng_parent: &Accession) -> Option<String> {
+        // Forward so bare-NG_ selector synthesis survives a Box wrapper; the
+        // default declines (`None`) and would bypass the wrapped provider.
+        (**self).sole_hosted_transcript(ng_parent)
     }
 
     fn get_protein_sequence(

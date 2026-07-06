@@ -2798,6 +2798,16 @@ impl ReferenceProvider for MultiFastaProvider {
         )
     }
 
+    fn sole_hosted_transcript(
+        &self,
+        ng_parent: &crate::hgvs::variant::Accession,
+    ) -> Option<String> {
+        self.ng_hosted
+            .as_ref()?
+            .sole_hosted(&ng_parent.full())
+            .map(str::to_string)
+    }
+
     fn infer_genome_build(
         &self,
         accession: &crate::hgvs::variant::Accession,
