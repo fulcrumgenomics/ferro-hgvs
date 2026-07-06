@@ -3,6 +3,10 @@
     "c.123C>C": {
       "spec_expected": "NM_004006.2:c.123="
     },
+    "NM_004006.2:c.[762_768del;767_774dup]": {
+      "spec_expected": null,
+      "note": "The spec's OWN canonical example of a *disallowed* description (general.md:58: \"descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed (e.g., NM_004006.2:c.[762_768del;767_774dup])\"). The del (762-768) and dup (767-774) overlap at 767-768; HGVS forbids a del+dup over overlapping reference positions (rewrite as a single delins). The generator harvested the string from that `e.g.` code span and seeded it as a valid example, so ferro's spec-correct E3006 rejection read as `parse-error`. Force spec-rejects so it reads as `correctly-rejected` (#954)."
+    },
     "NM_004006.2:c.6775_6777delGAGinsC": {
       "note": "Spec rejects the long-form `delGAGinsC` (`<code class=\"invalid\">`); ferro accepts but emits the spec-recommended canonical short form `delinsC` (DNA/delins.md). Status remains `false-acceptance` for the accepted-bad-input fact; `note` clarifies the canonical-on-output behavior. (#353)"
     },

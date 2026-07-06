@@ -144,7 +144,7 @@
     {
       "code": "E3006",
       "description": "SelfCancellingAllele — overlapping del+dup pair within a single cis allele (e.g. 'c.[762_768del;767_774dup]').",
-      "spec_section": "recommendations/general.md line 47: 'descriptions removing part of a reference sequence replacing it with part of the same sequence are not allowed'",
+      "spec_section": "recommendations/general.md line 58: 'descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed'",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
       "status": "enforced"
     },

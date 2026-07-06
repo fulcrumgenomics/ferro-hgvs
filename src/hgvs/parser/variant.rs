@@ -7098,7 +7098,7 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     };
 
     // Spec-mandated post-parse semantic check: reject self-cancelling alleles
-    // (HGVS recommendations/general.md line 47, tracked under issue #115).
+    // (HGVS recommendations/general.md line 58, tracked under issue #115).
     validate_no_self_cancelling(&variant, input)?;
 
     // Spec-mandated post-parse semantic check: reject `dupins` mash-up
@@ -7439,7 +7439,7 @@ fn reject_protein_bracketed_aa_insertion(input: &str) -> Result<(), FerroError> 
 }
 
 /// Walk the variant tree and reject any `AlleleVariant` that contains an
-/// overlapping `del` + `dup` pair (HGVS `recommendations/general.md` line 47:
+/// overlapping `del` + `dup` pair (HGVS `recommendations/general.md` line 58:
 /// "descriptions removing part of a reference sequence replacing it with
 /// part of the same sequence are not allowed").
 ///
