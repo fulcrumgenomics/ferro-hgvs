@@ -200,6 +200,7 @@ mod issue_91_protein_three_prime_shift;
 mod issue_920_allele_sub_collapse;
 mod issue_92_protein_delins_to_dup;
 mod issue_92_protein_ins_to_dup;
+mod issue_953_multirepeat_normalization;
 mod issue_97_utr_del_position;
 mod issue_98_minus_strand_intronic_orientation;
 mod issue_l2_w4001_swapped_positions;

@@ -25,6 +25,16 @@ use crate::hgvs::edit::{InsertedPart, InsertedSequence, NaEdit, Sequence};
 use crate::reference::ReferenceProvider;
 
 /// Check if an edit type needs normalization
+///
+/// "Needs normalization" gates entry into `normalize_na_edit`, which performs
+/// both reference-allele validation AND 3'-shifting. Most listed kinds need the
+/// shift; `MultiRepeat` is the exception — it is flagged `true` for the
+/// *validation* half (`validate_multirepeat_tract`), not the shift. A compound
+/// multi-unit tract has no canonical shuffle target, so `normalize_na_edit`'s
+/// `MultiRepeat` arm passes it through unchanged after validating (#953). If
+/// that arm ever gains a real canonicalization, this flag already routes it
+/// correctly; until then the two are reconciled and documented, not silently
+/// contradictory.
 pub fn needs_normalization(edit: &NaEdit) -> bool {
     if matches!(
         edit,
