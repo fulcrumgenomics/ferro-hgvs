@@ -1861,6 +1861,27 @@ mod spec_mandated_rejections {
         );
     }
 
+    #[test]
+    fn e3006_fires_on_overlap_not_exact_cancellation() {
+        // #954: the guard keys on positional OVERLAP, not exact (equal/inverse)
+        // cancellation — matching the spec. This del (10–20, 11 bases) and dup
+        // (15–25, 11 bases) overlap only at 15–20 and do NOT exactly cancel,
+        // yet HGVS disallows any del+dup over overlapping reference positions
+        // (general.md:58; the spec's own example `c.[762_768del;767_774dup]`
+        // likewise overlaps without cancelling). A narrower "genuine
+        // cancellation" rule would wrongly accept these.
+        let err = parse_hgvs("NM_004006.2:c.[10_20del;15_25dup]")
+            .expect_err("overlapping-but-not-cancelling del+dup must still be rejected");
+        assert_eq!(err.code(), Some(ErrorCode::SelfCancellingAllele));
+
+        // The counterpart: shift the dup fully clear of the del (no shared
+        // positions) and the same pair is accepted — overlap is the trigger.
+        assert!(
+            parse_hgvs("NM_004006.2:c.[10_20del;25_35dup]").is_ok(),
+            "disjoint del+dup on the same allele must be accepted",
+        );
+    }
+
     // ----- Registry sanity -----
 
     #[test]

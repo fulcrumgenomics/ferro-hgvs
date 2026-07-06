@@ -10,7 +10,7 @@
     },
     "[spec_self_cancelling_allele]": {
       "category": "rejected_by_design",
-      "reason": "Overlapping del+dup in the same cis-allele that partially undo each other. HGVS recommendations/general.md line 47 forbids this; ferro emits E3006 SelfCancellingAllele.",
+      "reason": "Overlapping del+dup in the same cis-allele that partially undo each other. HGVS recommendations/general.md line 58 forbids this; ferro emits E3006 SelfCancellingAllele.",
       "tracking": "#115"
     },
     "[uncertain_range_to_3utr_end]": {

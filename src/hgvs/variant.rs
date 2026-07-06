@@ -619,10 +619,21 @@ impl AlleleVariant {
         Self::new(variants, AllelePhase::Unknown)
     }
 
-    /// Detect whether the allele contains a self-cancelling (`del` + `dup`)
-    /// pair that the HGVS spec disallows ("descriptions removing part of a
-    /// reference sequence replacing it with part of the same sequence are
-    /// not allowed", `recommendations/general.md` line 47).
+    /// Detect whether the allele contains a `del` + `dup` pair over
+    /// **overlapping** reference positions, which the HGVS spec disallows:
+    /// "descriptions removing part of a reference sequence and replacing it
+    /// with part of the same sequence are not allowed" — with the spec's own
+    /// example being exactly `NM_004006.2:c.[762_768del;767_774dup]`
+    /// (`recommendations/general.md` line 58).
+    ///
+    /// The trigger is positional **overlap**, not exact cancellation — and
+    /// that is deliberate, matching the spec. The spec's example overlaps only
+    /// at 767–768 (a 7-base `del` vs an 8-base `dup`) and does *not* exactly
+    /// cancel, yet it is disallowed: a `del` combined with a `dup` of
+    /// overlapping bases describes removing-then-restoring part of the same
+    /// sequence and must be rewritten as a single `delins`. So the check is
+    /// intentionally broader than "equal/inverse edits over the same span".
+    /// Non-overlapping `del` + `dup` members on the same allele are accepted.
     ///
     /// Returns `Some((idx_del, idx_dup))` for the first offending pair found
     /// (deterministic by ascending pair index), or `None` otherwise.
@@ -687,7 +698,7 @@ impl AlleleVariant {
     /// Build a new allele after running the spec-mandated self-cancelling
     /// check. Returns `FerroError::Parse` with
     /// `ErrorCode::SelfCancellingAllele` if the allele violates HGVS
-    /// `recommendations/general.md` line 47.
+    /// `recommendations/general.md` line 58.
     ///
     /// `source_span` is the byte range of the offending allele in the
     /// caller's source string. Pass it through whenever it's known so that
@@ -725,7 +736,7 @@ pub(crate) fn build_self_cancelling_error(
         .with_hint(
             "HGVS does not allow describing both a deletion and a duplication \
              of overlapping reference positions in the same allele \
-             (recommendations/general.md line 47); drop one edit or rewrite \
+             (recommendations/general.md line 58); drop one edit or rewrite \
              as a single delins",
         );
     if let Some(span) = source_span {
@@ -3600,7 +3611,7 @@ mod tests {
 
     #[test]
     fn test_self_cancelling_cds_3utr_star_overlap() {
-        // 3'UTR (`c.*N`) range; HGVS general.md line 47 forbids overlapping
+        // 3'UTR (`c.*N`) range; HGVS general.md line 58 forbids overlapping
         // del+dup just as much in *-region as in the CDS proper.
         let del = parse_variant("NM_004006.2:c.*100_*150del").unwrap();
         let dup = parse_variant("NM_004006.2:c.*145_*160dup").unwrap();
