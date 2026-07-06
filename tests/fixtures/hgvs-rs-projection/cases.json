@@ -33,7 +33,7 @@
       "id": "wholeCDSdel-form",
       "title": "whole-CDS-deletion protein form: corpus p.0? vs ferro p.(Met1?)",
       "spec_section": "recommendations/protein/deletion.md",
-      "note": "For a deletion spanning the entire coding sequence (including the initiation codon), the corpus emits p.0? (no protein produced) while ferro emits p.(Met1?) (uncertain start-loss). Both are spec-allowed predicted forms for a variant removing the start codon; ferro reports the start-loss form it derives from the normalized variant. Terminal convention difference (accepted_divergence, policy ferro-policy-whole-cds-del-met1), not a bug; p.0? is arguably preferable as a future refinement."
+      "note": "For a deletion spanning the entire coding sequence (including the initiation codon), the corpus emits p.0? (no protein produced, deletion.md L62-65) while ferro emits p.(Met1?) (initiation-codon effect uncertain, substitution.md translation-initiation-codon section). Both are spec-accepted predicted forms for a variant removing the start codon, and neither is uniquely preferred by the spec; ferro reports the start-loss form it derives from the normalized variant. Terminal convention difference (accepted_divergence, policy ferro-policy-whole-cds-del-met1) — ferro's form is spec-valid, not a pending fix."
     }
   ],
   "cases": [
@@ -9882,7 +9882,7 @@
         "axis": "protein_description",
         "policy": "ferro-policy-whole-cds-del-met1",
         "cluster": "wholeCDSdel-form",
-        "note": "whole-CDS deletion (spans the initiation codon): the corpus emits NP_000240.1:p.0? (no protein), ferro emits NP_000240.1:p.(Met1?) (start-loss, uncertain). Both are spec-allowed predicted forms for a variant removing the start codon; p.0? is arguably preferable and is tracked as a possible future refinement."
+        "note": "whole-CDS deletion (spans the initiation codon): the corpus emits NP_000240.1:p.0? (no protein), ferro emits NP_000240.1:p.(Met1?) (start-loss, uncertain). Both are spec-accepted predicted forms for a variant removing the start codon (deletion.md L62-65; substitution.md translation-initiation-codon section); neither is uniquely preferred by the spec. Terminal accepted divergence — ferro's form is spec-valid."
       }
     },
     {

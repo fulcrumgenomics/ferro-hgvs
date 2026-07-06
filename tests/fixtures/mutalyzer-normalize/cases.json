@@ -3406,7 +3406,7 @@
       "accepted_divergence": {
         "axis": "protein_description",
         "policy": "ferro-policy-whole-cds-del-met1",
-        "note": "Whole-CDS deletion (c.-1_*1del removes the start codon and entire CDS). deletion.md L62-65 prescribes p.? / p.0? for a deletion removing the initiation codon (mutalyzer's p.?); ferro reports the start-loss p.(Met1?) by analogy to substitution.md L51 (a variant affecting the initiation codon). Both convey the undetermined initiation / no-protein outcome; terminal convention difference (p.0? arguably the future-preferred refinement). (Bare NP_ framing also differs.)"
+        "note": "Whole-CDS deletion (c.-1_*1del removes the start codon and entire CDS). Both p.0? (mutalyzer; 'no protein', deletion.md L62-65) and p.(Met1?) (ferro; initiation-codon effect uncertain, substitution.md translation-initiation-codon section) are spec-accepted predicted forms for a variant removing the initiation codon; neither is uniquely preferred by the spec. Terminal convention difference — ferro's start-loss form is spec-valid, not a pending fix. (Bare NP_ framing also differs.)"
       }
     },
     {

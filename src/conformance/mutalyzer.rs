@@ -456,7 +456,8 @@ pub enum Policy {
     /// ("unknown effect on translation initiation") describe the same
     /// undetermined outcome. ferro reports the start-loss form it derives from
     /// the normalized variant; this is a terminal convention difference, not a
-    /// bug. (`p.0?` is arguably preferable as a future refinement.)
+    /// bug. Neither `p.0?` nor `p.(Met1?)` is uniquely spec-preferred, so this
+    /// is a settled accepted divergence rather than a pending refinement.
     #[serde(rename = "ferro-policy-whole-cds-del-met1")]
     WholeCdsDeletionMet1,
     /// ferro renders a deletion inside a genomic homopolymer (mononucleotide
