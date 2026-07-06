@@ -151,8 +151,8 @@
       },
       "known_bug": {
         "axis": "noncoding",
-        "tracking_issue": 646,
-        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "tracking_issue": 921,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #921.",
         "cluster": "noncoding-overlap-enumeration-646"
       },
       "accepted_divergence": {
@@ -197,8 +197,8 @@
       },
       "known_bug": {
         "axis": "noncoding",
-        "tracking_issue": 646,
-        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "tracking_issue": 921,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #921.",
         "cluster": "noncoding-overlap-enumeration-646"
       }
     },
@@ -229,8 +229,8 @@
       },
       "known_bug": {
         "axis": "noncoding",
-        "tracking_issue": 646,
-        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "tracking_issue": 921,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #921.",
         "cluster": "noncoding-overlap-enumeration-646"
       },
       "accepted_divergence": {
@@ -273,8 +273,8 @@
       },
       "known_bug": {
         "axis": "noncoding",
-        "tracking_issue": 646,
-        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "tracking_issue": 921,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #921.",
         "cluster": "noncoding-overlap-enumeration-646"
       }
     },
@@ -306,8 +306,8 @@
       },
       "known_bug": {
         "axis": "noncoding",
-        "tracking_issue": 646,
-        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "tracking_issue": 921,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #921.",
         "cluster": "noncoding-overlap-enumeration-646"
       },
       "accepted_divergence": {
@@ -352,8 +352,8 @@
       },
       "known_bug": {
         "axis": "noncoding",
-        "tracking_issue": 646,
-        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "tracking_issue": 921,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #921.",
         "cluster": "noncoding-overlap-enumeration-646"
       }
     },
@@ -507,8 +507,8 @@
       "to_test": true,
       "known_bug": {
         "axis": "noncoding",
-        "tracking_issue": 646,
-        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "tracking_issue": 921,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #921.",
         "cluster": "noncoding-overlap-enumeration-646"
       },
       "accepted_rejection": {
@@ -1435,13 +1435,13 @@
       "known_bug": [
         {
           "axis": "normalized",
-          "tracking_issue": 480,
-          "note": "ferro expands the c.180_188 copy range as transcript-contiguous bases; mutalyzer expands it through the genomic reference (whose introns split the range), yielding a decomposed allele with intronic offsets. Genomic-context copy-range expansion tracked in #480."
+          "tracking_issue": 922,
+          "note": "ferro expands the c.180_188 copy range as transcript-contiguous bases; mutalyzer expands it through the genomic reference (whose introns split the range), yielding a decomposed allele with intronic offsets. Genomic-context copy-range expansion tracked in #922."
         },
         {
           "axis": "genomic",
-          "tracking_issue": 480,
-          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the c.180_188 copy range as transcript-contiguous spliced bases (g.5207_5212delinsGCGAGGAAA); mutalyzer expands it through the genomic reference (whose introns split the range), yielding a decomposed allele. Genomic-context copy-range expansion tracked in #480."
+          "tracking_issue": 922,
+          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the c.180_188 copy range as transcript-contiguous spliced bases (g.5207_5212delinsGCGAGGAAA); mutalyzer expands it through the genomic reference (whose introns split the range), yielding a decomposed allele. Genomic-context copy-range expansion tracked in #922."
         }
       ]
     },
@@ -1458,13 +1458,13 @@
       "known_bug": [
         {
           "axis": "normalized",
-          "tracking_issue": 480,
-          "note": "inverted copy-range delins; ferro expands transcript-contiguous, mutalyzer through the genomic (intron-split) reference. Tracked in #480."
+          "tracking_issue": 922,
+          "note": "inverted copy-range delins; ferro expands transcript-contiguous, mutalyzer through the genomic (intron-split) reference. Tracked in #922."
         },
         {
           "axis": "genomic",
-          "tracking_issue": 480,
-          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the inverted copy-range delins as transcript-contiguous bases (g.5207_5212delinsTTTCCTCGC); mutalyzer expands it through the genomic (intron-split) reference. Tracked in #480."
+          "tracking_issue": 922,
+          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the inverted copy-range delins as transcript-contiguous bases (g.5207_5212delinsTTTCCTCGC); mutalyzer expands it through the genomic (intron-split) reference. Tracked in #922."
         }
       ]
     },
@@ -1482,13 +1482,13 @@
       "known_bug": [
         {
           "axis": "normalized",
-          "tracking_issue": 480,
-          "note": "bracketed copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #480."
+          "tracking_issue": 922,
+          "note": "bracketed copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #922."
         },
         {
           "axis": "genomic",
-          "tracking_issue": 480,
-          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the bracketed copy-range delins as transcript-contiguous bases; mutalyzer expands it through the genomic (intron-split) reference. Tracked in #480."
+          "tracking_issue": 922,
+          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the bracketed copy-range delins as transcript-contiguous bases; mutalyzer expands it through the genomic (intron-split) reference. Tracked in #922."
         }
       ]
     },
@@ -1506,13 +1506,13 @@
       "known_bug": [
         {
           "axis": "normalized",
-          "tracking_issue": 480,
-          "note": "bracketed inverted copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #480."
+          "tracking_issue": 922,
+          "note": "bracketed inverted copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #922."
         },
         {
           "axis": "genomic",
-          "tracking_issue": 480,
-          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the bracketed inverted copy-range delins as transcript-contiguous bases; mutalyzer expands it through the genomic (intron-split) reference. Tracked in #480."
+          "tracking_issue": 922,
+          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the bracketed inverted copy-range delins as transcript-contiguous bases; mutalyzer expands it through the genomic (intron-split) reference. Tracked in #922."
         }
       ]
     },
@@ -1641,9 +1641,9 @@
       "to_test": true,
       "improvement": {
         "axis": "normalized",
-        "tracking_issue": 500,
+        "tracking_issue": 923,
         "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500.",
+        "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #923.",
         "cluster": "refseqgene-selector"
       },
       "accepted_rejection": [
@@ -1672,9 +1672,9 @@
       "to_test": true,
       "improvement": {
         "axis": "normalized",
-        "tracking_issue": 500,
+        "tracking_issue": 923,
         "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500.",
+        "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #923.",
         "cluster": "refseqgene-selector"
       },
       "accepted_rejection": [
@@ -1703,9 +1703,9 @@
       "to_test": true,
       "improvement": {
         "axis": "normalized",
-        "tracking_issue": 500,
+        "tracking_issue": 923,
         "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #500.",
+        "note": "ferro emits no transcript selector on a bare NG_ c. input; HGVS refseq.md:138-139 says the transcript used should be indicated (mutalyzer synthesizes the NM_ accession). Valid HGVS but spec-non-preferred; convergence tracked in #923.",
         "cluster": "refseqgene-selector"
       },
       "accepted_rejection": [
@@ -2470,8 +2470,8 @@
       "to_test": true,
       "known_bug": {
         "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro keeps the block delins c.235_237delinsTAT; mutalyzer trims the unchanged interior base and decomposes to per-position substitutions c.[235A>T;237G>T]. Canonical edit-form convergence tracked in #487."
+        "tracking_issue": 920,
+        "note": "ferro keeps the block delins c.235_237delinsTAT; mutalyzer trims the unchanged interior base and decomposes to per-position substitutions c.[235A>T;237G>T]. Canonical edit-form convergence tracked in #920."
       }
     },
     {
@@ -2980,8 +2980,8 @@
       },
       "known_bug": {
         "axis": "noncoding",
-        "tracking_issue": 646,
-        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #646.",
+        "tracking_issue": 921,
+        "note": "ferro fans out across the transcripts the variant overlaps and emits valid n. forms on the overlapping NM_ isoforms, but mutalyzer's expected n. form is on the overlapping single-exon non-coding transcript NR_024274.1 (CDKN2A-AS1), framed under the NG_ parent, where the variant lies 3' downstream of its only exon (NG_(NR_024274.1):n.616+offset). ferro declines to project onto a transcript the variant does not overlap, so it omits the NR_024274.1 form. The genomic-context framing makes mutalyzer's downstream-offset form valid (numbering.md L65), so this is a ferro gap, not an accepted divergence. Cross-isoform enumeration scope tracked by #921.",
         "cluster": "noncoding-overlap-enumeration-646"
       }
     },
@@ -3033,8 +3033,8 @@
       "to_test": true,
       "known_bug": {
         "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "two inserted copies plus the existing copy form a 3-copy repeat; mutalyzer renders the repeat. ferro keeps ins[2]. Repeat canonicalization tracked in #487."
+        "tracking_issue": 920,
+        "note": "two inserted copies plus the existing copy form a 3-copy repeat; mutalyzer renders the repeat. ferro keeps ins[2]. Repeat canonicalization tracked in #920."
       }
     },
     {
@@ -3054,8 +3054,8 @@
       "to_test": true,
       "known_bug": {
         "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro keeps the inserted repeat as ins GT[5]; mutalyzer merges it with the adjacent existing GT tract into g.1_4GT[7]. Tandem-repeat canonicalization tracked in #487."
+        "tracking_issue": 920,
+        "note": "ferro keeps the inserted repeat as ins GT[5]; mutalyzer merges it with the adjacent existing GT tract into g.1_4GT[7]. Tandem-repeat canonicalization tracked in #920."
       }
     },
     {
@@ -3112,8 +3112,8 @@
       "to_test": true,
       "known_bug": {
         "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro keeps the input repeat anchor (c.33_35CAA[5]); mutalyzer 3'-shifts the repeat unit to c.34_39AAC[6]. Repeat 3' normalization tracked in #487."
+        "tracking_issue": 920,
+        "note": "ferro keeps the input repeat anchor (c.33_35CAA[5]); mutalyzer 3'-shifts the repeat unit to c.34_39AAC[6]. Repeat 3' normalization tracked in #920."
       },
       "accepted_rejection": {
         "axis": "genomic",
@@ -3158,9 +3158,9 @@
       "to_test": true,
       "improvement": {
         "axis": "normalized",
-        "tracking_issue": 500,
+        "tracking_issue": 923,
         "section": "HGVS §RefSeqGene transcript selection",
-        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #500. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
+        "note": "ferro preserves the input's non-transcript selector (gene symbol, gene-symbol-version, or numeric gene ID) on an NG_ reference; HGVS refseq.md:38-42 says the NG_ specification should be a transcript (NM_) accession, which mutalyzer resolves to. Valid HGVS but spec-non-preferred; convergence tracked in #923. Migrated from accepted_divergence (#121); the NM_(GENE) policy from #121 is unaffected.",
         "cluster": "refseqgene-selector"
       },
       "accepted_rejection": {
@@ -3379,8 +3379,8 @@
       "to_test": true,
       "known_bug": {
         "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro renders the bare-position allele members with explicit identity and an absolute past-CDS coordinate (c.[274=;600=]); mutalyzer uses the 3'UTR form and drops the identity (c.[274;*120]). Past-CDS coordinate rendering + allele identity tracked in #487."
+        "tracking_issue": 920,
+        "note": "ferro renders the bare-position allele members with explicit identity and an absolute past-CDS coordinate (c.[274=;600=]); mutalyzer uses the 3'UTR form and drops the identity (c.[274;*120]). Past-CDS coordinate rendering + allele identity tracked in #920."
       },
       "accepted_divergence": {
         "axis": "genomic",
@@ -3691,8 +3691,8 @@
       "reference_unavailable": {
         "axis": "normalized",
         "reason": "ensembl-absent-from-refseq-manifest",
-        "tracking_issue": 671,
-        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+        "tracking_issue": 933,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest (ferro prepare --ensembl is opt-in), so the reference cannot be resolved and no shift is applied. The Ensembl-reference capability (#671) and exon/intron 3'-shift (#670) both shipped; converges once the conformance reference is provisioned with --ensembl and these rows are re-blessed (#933)."
       },
       "normalized": "ENST00000375549.8:c.102del",
       "to_test": true
@@ -3706,8 +3706,8 @@
       "reference_unavailable": {
         "axis": "normalized",
         "reason": "ensembl-absent-from-refseq-manifest",
-        "tracking_issue": 671,
-        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+        "tracking_issue": 933,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest (ferro prepare --ensembl is opt-in), so the reference cannot be resolved and no shift is applied. The Ensembl-reference capability (#671) and exon/intron 3'-shift (#670) both shipped; converges once the conformance reference is provisioned with --ensembl and these rows are re-blessed (#933)."
       },
       "normalized": "ENST00000375549.8:c.102del",
       "to_test": true
@@ -3721,8 +3721,8 @@
       "reference_unavailable": {
         "axis": "normalized",
         "reason": "ensembl-absent-from-refseq-manifest",
-        "tracking_issue": 671,
-        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+        "tracking_issue": 933,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest (ferro prepare --ensembl is opt-in), so the reference cannot be resolved and no shift is applied. The Ensembl-reference capability (#671) and exon/intron 3'-shift (#670) both shipped; converges once the conformance reference is provisioned with --ensembl and these rows are re-blessed (#933)."
       },
       "normalized": "ENSG00000204370.13(ENST00000375549.8):c.102del",
       "to_test": true
@@ -3751,8 +3751,8 @@
       "reference_unavailable": {
         "axis": "normalized",
         "reason": "ensembl-absent-from-refseq-manifest",
-        "tracking_issue": 671,
-        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+        "tracking_issue": 933,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest (ferro prepare --ensembl is opt-in), so the reference cannot be resolved and no shift is applied. The Ensembl-reference capability (#671) and exon/intron 3'-shift (#670) both shipped; converges once the conformance reference is provisioned with --ensembl and these rows are re-blessed (#933)."
       },
       "normalized": "ENST00000452863.10:c.10del",
       "to_test": true
@@ -3766,8 +3766,8 @@
       "reference_unavailable": {
         "axis": "normalized",
         "reason": "ensembl-absent-from-refseq-manifest",
-        "tracking_issue": 671,
-        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest, so the reference cannot be resolved and no shift is applied. Converges once Ensembl reference is added (#671)."
+        "tracking_issue": 933,
+        "note": "ferro echoes the input: Ensembl transcripts (ENST/ENSG) are absent from the RefSeq-only prepared manifest (ferro prepare --ensembl is opt-in), so the reference cannot be resolved and no shift is applied. The Ensembl-reference capability (#671) and exon/intron 3'-shift (#670) both shipped; converges once the conformance reference is provisioned with --ensembl and these rows are re-blessed (#933)."
       },
       "normalized": "ENSG00000184937.16(ENST00000452863.10):c.10del",
       "to_test": true
