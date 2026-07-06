@@ -3467,22 +3467,24 @@
       ],
       "protein_description": "NG_009299.1(NP_060138.1):p.?",
       "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro keeps c.250del; mutalyzer 3'-shifts it to c.*189del. Compound-allele 3' shift tracked in #487."
-      },
       "accepted_rejection": {
         "axis": "genomic",
         "reason": "ferro-policy-853-ng-partial-transcript-coverage-declined",
         "note": "NG_009299.1 annotates NM_017668.3 only partially, so the c.41 endpoint falls outside the placed genomic span; the user-facing genomic axis (#870) declines to re-anchor (#480/#655) rather than emit chromosome coordinates under the NG_ accession. mutalyzer resolves the full genomic form."
       },
-      "spec_citation": {
-        "axis": "protein_description",
-        "section": "HGVS protein reference (bare NP)",
-        "note": "An in-cis allele mixing a sense change with a downstream frameshift has no combined spec form, so its protein consequence collapses to p.? ('an effect is expected but cannot be reliably predicted', uncertain.md) — the spec-correct body (#855), matching mutalyzer's p.?. The remaining divergence is framing only: ferro emits the bare NP_ reference, mutalyzer wraps it as NG_x(NP_y):p. — ferro's bare-NP form is the spec-correct value (#483/#495).",
-        "cluster": "bare-np-protein"
-      },
+      "spec_citation": [
+        {
+          "axis": "protein_description",
+          "section": "HGVS protein reference (bare NP)",
+          "note": "An in-cis allele mixing a sense change with a downstream frameshift has no combined spec form, so its protein consequence collapses to p.? ('an effect is expected but cannot be reliably predicted', uncertain.md) — the spec-correct body (#855), matching mutalyzer's p.?. The remaining divergence is framing only: ferro emits the bare NP_ reference, mutalyzer wraps it as NG_x(NP_y):p. — ferro's bare-NP form is the spec-correct value (#483/#495).",
+          "cluster": "bare-np-protein"
+        },
+        {
+          "axis": "normalized",
+          "section": "HGVS §3'-rule (exon/exon-junction exception)",
+          "note": "ferro keeps the within-exon most-3' form (c.250del is already most-3' in a GG dinucleotide); mutalyzer's c.*189del spans ~947 bases across 8 exon junctions, which the HGVS 3'-rule exon/exon-junction exception forbids (general.md 3'-rule exception; numbering.md#DNAc), and additionally arises from the truncated reverse-strand NG_009299.1 partial embedding. ferro's value is spec-correct (#918)."
+        }
+      ],
       "accepted_divergence": {
         "axis": "coding_protein_descriptions",
         "policy": "ferro-policy-763-transcript-set-enumeration",
@@ -3501,11 +3503,18 @@
         "ISORTEDVARIANTS"
       ],
       "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro keeps the c.250del member; mutalyzer 3'-shifts it across the allele to c.*189del (c.[41A>C;*189del]). Compound-allele 3' shift tracked in #487."
-      }
+      "spec_citation": [
+        {
+          "axis": "normalized",
+          "section": "HGVS §3'-rule (exon/exon-junction exception)",
+          "note": "ferro keeps the within-exon most-3' form (c.250del is already most-3' in a GG dinucleotide); mutalyzer's c.*189del spans ~947 bases across 8 exon junctions, which the HGVS 3'-rule exon/exon-junction exception forbids (general.md 3'-rule exception; numbering.md#DNAc), and additionally arises from the truncated reverse-strand NG_009299.1 partial embedding. ferro's value is spec-correct (#918)."
+        },
+        {
+          "axis": "infos",
+          "section": "HGVS §3'-rule (exon/exon-junction exception)",
+          "note": "ferro correctly does not 3'-shift c.250del across the 8 exon/exon junctions to mutalyzer's c.*189del (HGVS 3'-rule exon/exon-junction exception; general.md 3'-rule exception; numbering.md#DNAc), so it emits no SHUFFLE_APPLIED info. mutalyzer's ICORRECTEDPOINT is a consequence of its spec-violating cross-junction shift; ferro's info set is the spec-correct one (#918)."
+        }
+      ]
     },
     {
       "keywords": [

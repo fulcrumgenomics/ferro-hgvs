@@ -1114,6 +1114,18 @@ pub enum SpecSection {
     /// the spec-preferred predicted-consequence value (#861).
     #[serde(rename = "HGVS §Synonymous (residue-level p.(Xaa=))")]
     SynonymousResidueLevel,
+    /// HGVS 3'-rule exon/exon-junction exception (`general.md` 3'-rule
+    /// exception; `background/numbering.md#DNAc`): the 3' rule is NOT applied
+    /// when a deletion/duplication around an exon/exon junction would shift the
+    /// variant into the next exon (projecting back to `g.` would then land in
+    /// the wrong exon). ferro correctly keeps the within-exon most-3' form and
+    /// does not shift across the junction. Here mutalyzer's cross-junction
+    /// `c.*<M>` form (`NM_017668.3:c.250del` → `c.*189del` spans ~947 bases
+    /// across 8 exon/exon junctions) both violates that exception and is an artifact
+    /// of the truncated reverse-strand `NG_009299.1` partial embedding — ferro's
+    /// within-exon value is the spec-correct one (#918).
+    #[serde(rename = "HGVS §3'-rule (exon/exon-junction exception)")]
+    ThreePrimeRuleExonJunction,
 }
 
 impl SpecSection {
@@ -1140,6 +1152,9 @@ impl SpecSection {
             }
             SpecSection::InsertedInversion => "HGVS §Inserted inversion (reverse complement)",
             SpecSection::SynonymousResidueLevel => "HGVS §Synonymous (residue-level p.(Xaa=))",
+            SpecSection::ThreePrimeRuleExonJunction => {
+                "HGVS §3'-rule (exon/exon-junction exception)"
+            }
         }
     }
 }
