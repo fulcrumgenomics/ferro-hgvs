@@ -3014,12 +3014,7 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[0]",
       "normalized": "LRG_303:g.=",
-      "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ins[0] is a zero-copy (no-op) insertion; mutalyzer collapses to g.=. ferro should canonicalize the zero-copy insert to identity. Tracked in #487."
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -3027,12 +3022,7 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[1]",
       "normalized": "LRG_303:g.6908_6932dup",
-      "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "a single inserted copy of the adjacent 25-mer is a duplication; mutalyzer renders g.6908_6932dup. ferro keeps ins[1]. ins->dup canonicalization tracked in #487."
-      }
+      "to_test": true
     },
     {
       "keywords": [

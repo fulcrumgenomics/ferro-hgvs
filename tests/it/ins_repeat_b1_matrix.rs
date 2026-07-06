@@ -74,6 +74,36 @@ mod genomic {
         let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}_{1}insAC", &[4, 5]));
         assert_eq!(result, hgvs("NC_TEST.1:g.{0}_{1}dup", &[5, 6]));
     }
+
+    // --- #920: degenerate bracketed inserted-repeat counts ------------------
+    // `ins<seq>[N]` with an exact count previously bypassed normalization (its
+    // `bases()` is `None`), so `[0]`/`[1]` were left verbatim. `[1]` is a single
+    // copy ≡ the plain `ins<seq>` (→ `dup` when it matches the adjacent
+    // reference, `duplication.md` L17); `[0]` inserts nothing (→ `g.=`).
+
+    #[rstest]
+    fn single_copy_bracketed_ins_repeat_emits_dup() {
+        // insAC[1] at 4_5 must canonicalize identically to the plain insAC above.
+        let p = provider("ACGTACGT");
+        let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}_{1}insAC[1]", &[4, 5]));
+        assert_eq!(result, hgvs("NC_TEST.1:g.{0}_{1}dup", &[5, 6]));
+    }
+
+    #[rstest]
+    fn single_base_bracketed_ins_repeat_emits_dup() {
+        // Single-base insA[1] in an A-tract → dup, matching the plain insA.
+        let p = provider("ACAAAACG");
+        let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}_{1}insA[1]", &[2, 3]));
+        assert_eq!(result, hgvs("NC_TEST.1:g.{0}dup", &[6]));
+    }
+
+    #[rstest]
+    fn zero_copy_bracketed_ins_repeat_is_identity() {
+        // insAC[0] inserts zero copies — a no-op → whole-entity identity g.=.
+        let p = provider("ACGTACGT");
+        let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}_{1}insAC[0]", &[4, 5]));
+        assert_eq!(result, "NC_TEST.1:g.=");
+    }
 }
 
 mod cds_plus {
