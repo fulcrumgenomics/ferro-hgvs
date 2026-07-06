@@ -2304,7 +2304,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Ok(b) => b,
             Err(_) => return Ok((HV::Cds(self.canonicalize_cds_variant(variant)), vec![])),
         };
-        let boundaries = axis_info.clamped.clone();
+        let mut boundaries = axis_info.clamped.clone();
         let exon_only = axis_info.exon.clone();
         let start_axis = axis_info.axis_region;
         let end_axis = boundary::axis_region_of(&transcript, tx_end);
@@ -2323,10 +2323,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // catch any result that would silently re-ax the input.
         let is_zero_width_insertion =
             matches!(edit, NaEdit::Insertion { .. }) && tx_end == tx_start + 1;
+        // **Whole-CDS del/dup exception (#918).** A deletion/duplication that
+        // spans the ENTIRE CDS — one endpoint in the 5'UTR (`c.-N`), the other
+        // in the 3'UTR (`c.*M`) — has a well-defined 3'-rule shuffle even though
+        // its endpoints sit in different axes: the coding DNA reference is a
+        // single contiguous spliced string (5'UTR+CDS+3'UTR; refseq.md), so the
+        // deleted block simply rolls 3' within that string (e.g.
+        // `NM_012459.2:c.-1_*1del` → `c.1_*2del`, matching mutalyzer). The axis
+        // labels change but the sequence operation does not. Scoped to
+        // 3'-direction del/dup; the result flows through `normalize_na_edit` over
+        // the full transcript span below. A non-shifting span is left unchanged
+        // (the CDS-start/-end clamps are gated on `start_axis == Cds`, which this
+        // is not), so this only ever *adds* the spec-mandated shift.
+        let is_whole_cds_span_delup = self.config.shuffle_direction == ShuffleDirection::ThreePrime
+            && matches!(edit, NaEdit::Deletion { .. } | NaEdit::Duplication { .. })
+            && matches!(start_axis, boundary::AxisRegion::FiveUtr)
+            && matches!(end_axis, boundary::AxisRegion::ThreeUtr);
         if start_axis != end_axis
             && !matches!(start_axis, boundary::AxisRegion::None)
             && !matches!(end_axis, boundary::AxisRegion::None)
             && !is_zero_width_insertion
+            && !is_whole_cds_span_delup
         {
             let acc = variant.accession.transcript_accession();
             let warning = NormalizationWarning::CrossAxisVariantNotShuffled {
@@ -2338,6 +2355,55 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 HV::Cds(self.canonicalize_cds_variant(variant)),
                 vec![warning],
             ));
+        }
+
+        // #918: relax the CDS↔3'UTR axis clamp for a CDS-resident del/dup so
+        // the 3'-rule shuffle reaches its true most-3' position even when that
+        // position lies past `cds_end`, in the 3'UTR (positive `c.<N>` →
+        // `c.*<M>`). The HGVS 3' rule is unconditional — "for all descriptions,
+        // the most 3' position possible **of the reference sequence** is
+        // arbitrarily assigned to have been changed" (general.md; deletion.md
+        // L20; duplication.md L24) — and its **only** stated exception is
+        // deletions/duplications around exon/exon junctions (general.md;
+        // numbering.md#DNAc), which is a genomic-projection concern, not the
+        // CDS/UTR coordinate-label transition. The coding DNA reference
+        // sequence is a single contiguous string (5'UTR+CDS+3'UTR; refseq.md),
+        // so shifting from `c.250` into `c.*189` stays within that one sequence.
+        // mutalyzer performs this shift (e.g. `c.250del` → `c.*189del`); ferro's
+        // maintainers track the prior no-shift behavior as a bug (#487/#918),
+        // not an accepted divergence.
+        //
+        // Scope (deliberately narrow — refuse anything the spec doesn't clearly
+        // govern):
+        //   - only when BOTH endpoints are CDS-resident (`start_axis` /
+        //     `end_axis` == Cds) so we never reinterpret a variant that already
+        //     straddles an axis (those keep the #350 bail above);
+        //   - only del/dup (the spec-clear "most-3' of the reference sequence"
+        //     shapes). Insertions keep the clamp — their re-axing into the 3'UTR
+        //     is governed by the dedicated #387 CDS-end clamp;
+        //   - only the 3'-direction shuffle;
+        //   - the bound is relaxed to the **exon** bound, not seq_len, so the
+        //     spec's exon/exon exception stays enforced: a 3'UTR intron still
+        //     stops the shuffle at the exon edge (the #670 machinery then
+        //     governs any genomic-space continuation).
+        // `tx_to_cds_pos` re-expresses any resulting `tx > cds_end` as `c.*<M>`.
+        if self.config.shuffle_direction == ShuffleDirection::ThreePrime
+            && matches!(start_axis, boundary::AxisRegion::Cds)
+            && matches!(end_axis, boundary::AxisRegion::Cds)
+            && matches!(edit, NaEdit::Deletion { .. } | NaEdit::Duplication { .. })
+        {
+            boundaries = Boundaries::new(boundaries.left, exon_only.right);
+        }
+
+        // #918: a whole-CDS-spanning del/dup (5'UTR→3'UTR, carved out of the
+        // #350 bail above) shuffles over the full contiguous spliced transcript
+        // — its deleted block already crosses every internal CDS exon/intron
+        // junction, so the single-exon `exon_only` bound does not apply; the
+        // spliced sequence has no introns and the natural bound is the whole
+        // transcript. The genomic-projection exon/exon exception is handled
+        // downstream (#670), not by this spliced-coordinate bound.
+        if is_whole_cds_span_delup {
+            boundaries = Boundaries::new(0, transcript.sequence_length());
         }
 
         // Perform normalization on transcript sequence (CDS context).
@@ -7918,6 +7984,169 @@ mod tests {
             format!("{}", result.unwrap()),
             "Missing transcript should return variant unchanged"
         );
+    }
+
+    /// Build a single-exon coding transcript whose poly-A run starts inside
+    /// the CDS (`c.5`) and continues into the 3'UTR, ending at `c.*4`:
+    ///
+    /// ```text
+    ///   tx pos:  1  2  3  4  5  6  7  8 | 9 10 11 12 |13 14 15
+    ///   base:    A  T  G  C  A  A  A  A | A  A  A  A | G  C  T
+    ///   c.:      1  2  3  4  5  6  7  8 |*1 *2 *3 *4 |*5 *6 *7
+    ///                        \___ CDS ___/  \_ 3'UTR run _/
+    /// ```
+    ///
+    /// `cds_end = 8`, so the A-run spans the CDS↔3'UTR boundary. A single-base
+    /// deletion/duplication anywhere in the run has its most-3' equivalent at
+    /// `c.*4` (tx 12), which is in the 3'UTR. Single exon so the exon/exon
+    /// exception never applies.
+    fn provider_with_boundary_homopolymer() -> MockProvider {
+        use crate::reference::transcript::{Exon, ManeStatus, Strand};
+        let mut provider = MockProvider::new();
+        provider.add_transcript(crate::reference::transcript::Transcript {
+            id: "NM_TEST918.1".to_string(),
+            gene_symbol: Some("BND918".to_string()),
+            strand: Strand::Plus,
+            sequence: Some("ATGCAAAAAAAAGCT".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(8),
+            exons: vec![Exon::new(1, 1, 15)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: ManeStatus::Select,
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: std::sync::OnceLock::new(),
+        });
+        provider
+    }
+
+    #[test]
+    fn cds_deletion_3prime_shifts_across_cds_utr_boundary() {
+        // #918: the HGVS 3' rule (general.md; deletion.md L20) mandates the
+        // most-3' position "of the reference sequence" even when it lies in the
+        // 3'UTR (positive c.N -> c.*M). A CDS-resident del in a poly-A run that
+        // continues past cds_end must shift to c.*4del, not clamp at cds_end.
+        let normalizer = Normalizer::new(provider_with_boundary_homopolymer());
+        let variant = parse_hgvs("NM_TEST918.1:c.5del").unwrap();
+        let normalized = normalizer.normalize(&variant).unwrap();
+        assert_eq!(
+            format!("{}", normalized),
+            "NM_TEST918.1:c.*4del",
+            "a CDS del whose most-3' equivalent is in the 3'UTR must re-express as c.*Ndel"
+        );
+    }
+
+    #[test]
+    fn cds_duplication_3prime_shifts_across_cds_utr_boundary() {
+        // Mirror of the deletion case for a duplication (duplication.md L24).
+        let normalizer = Normalizer::new(provider_with_boundary_homopolymer());
+        let variant = parse_hgvs("NM_TEST918.1:c.5dup").unwrap();
+        let normalized = normalizer.normalize(&variant).unwrap();
+        assert_eq!(
+            format!("{}", normalized),
+            "NM_TEST918.1:c.*4dup",
+            "a CDS dup whose most-3' equivalent is in the 3'UTR must re-express as c.*Ndup"
+        );
+    }
+
+    #[test]
+    fn cds_utr_boundary_shift_is_idempotent() {
+        // Normalizing the already-shifted 3'UTR form is a fixed point.
+        let normalizer = Normalizer::new(provider_with_boundary_homopolymer());
+        let once = normalizer
+            .normalize(&parse_hgvs("NM_TEST918.1:c.5del").unwrap())
+            .unwrap();
+        let twice = normalizer.normalize(&once).unwrap();
+        assert_eq!(
+            format!("{}", once),
+            format!("{}", twice),
+            "re-normalizing the shifted c.*4del must be a fixed point"
+        );
+        assert_eq!(format!("{}", twice), "NM_TEST918.1:c.*4del");
+    }
+
+    /// Transcript for the whole-CDS-spanning deletion case (#918 cross-axis).
+    ///
+    /// ```text
+    ///   tx:   1  2  3  4  5  6  7  8  9 10
+    ///   seq:  C  A  T  G  A  A  A  G  C  T
+    ///   c.:  -1  1  2  3  4  5  6 *1 *2 *3
+    ///           \______ CDS ______/ \_3'UTR_/
+    /// ```
+    ///
+    /// `cds_start = 2`, `cds_end = 7`. A deletion spanning the entire CDS
+    /// (`c.-1_*1del`, 5'UTR→3'UTR) 3'-shifts exactly one base to `c.1_*2del`
+    /// because `seq[c.-1] == seq[c.*2] == C`, then stops (`seq[c.1]=A !=
+    /// seq[c.*3]=T`). Single exon, so the exon/exon exception never applies.
+    fn provider_with_whole_cds_span() -> MockProvider {
+        use crate::reference::transcript::{Exon, ManeStatus, Strand};
+        let mut provider = MockProvider::new();
+        provider.add_transcript(crate::reference::transcript::Transcript {
+            id: "NM_TESTCDS.1".to_string(),
+            gene_symbol: Some("SPAN918".to_string()),
+            strand: Strand::Plus,
+            sequence: Some("CATGAAAGCT".to_string()),
+            cds_start: Some(2),
+            cds_end: Some(7),
+            exons: vec![Exon::new(1, 1, 10)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: ManeStatus::Select,
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: std::sync::OnceLock::new(),
+        });
+        provider
+    }
+
+    #[test]
+    fn whole_cds_span_deletion_3prime_shifts_across_both_axes() {
+        // #918: a deletion spanning the ENTIRE CDS (one endpoint in the 5'UTR,
+        // the other in the 3'UTR) is a well-defined 3'-rule shuffle on the
+        // contiguous spliced transcript, even though its endpoints sit in
+        // different axes. `c.-1_*1del` must 3'-shift to `c.1_*2del` (matching
+        // mutalyzer), not echo the input via the #350 cross-axis bail.
+        let normalizer = Normalizer::new(provider_with_whole_cds_span());
+        let variant = parse_hgvs("NM_TESTCDS.1:c.-1_*1del").unwrap();
+        let normalized = normalizer.normalize(&variant).unwrap();
+        assert_eq!(
+            format!("{}", normalized),
+            "NM_TESTCDS.1:c.1_*2del",
+            "a whole-CDS-spanning deletion must 3'-shift across the CDS/UTR axes"
+        );
+    }
+
+    #[test]
+    fn whole_cds_span_deletion_shift_is_idempotent() {
+        // Re-normalizing the already-shifted `c.1_*2del` is a fixed point.
+        let normalizer = Normalizer::new(provider_with_whole_cds_span());
+        let once = normalizer
+            .normalize(&parse_hgvs("NM_TESTCDS.1:c.-1_*1del").unwrap())
+            .unwrap();
+        let twice = normalizer.normalize(&once).unwrap();
+        assert_eq!(format!("{}", once), format!("{}", twice));
+        assert_eq!(format!("{}", twice), "NM_TESTCDS.1:c.1_*2del");
+    }
+
+    #[test]
+    fn whole_cds_span_deletion_that_cannot_shift_is_unchanged() {
+        // A whole-CDS-spanning deletion already at its most-3' position must be
+        // left unchanged — the carve-out only ever ADDS the spec-mandated shift,
+        // never invents one. `c.-1_*2del` cannot roll right (`seq[c.-1]=C !=
+        // seq[c.*3]=T`), so it stays put.
+        let normalizer = Normalizer::new(provider_with_whole_cds_span());
+        let variant = parse_hgvs("NM_TESTCDS.1:c.-1_*2del").unwrap();
+        let normalized = normalizer.normalize(&variant).unwrap();
+        assert_eq!(format!("{}", normalized), "NM_TESTCDS.1:c.-1_*2del");
     }
 
     #[test]
