@@ -6,6 +6,7 @@ divergence clusters in the hgvs-rs projection corpus
 
 - `alignment-source-skew`
 - `transcript-selection-vs-uta`
+- `version-currency-coordinate-skew`
 
 It records *why* a large fraction of the corpus diverges from ferro's output
 without being a ferro bug, and it backs the **structural** quarantine in
@@ -184,10 +185,35 @@ CIGAR shown above. ferro's RefSeq-GFF alignment for the same transcript comes
 from the cdot bundle in the reference manifest (`cdot-0.2.32.refseq`); the
 divergence is the difference between the two CIGARs.
 
+## Third cluster: `version-currency-coordinate-skew`
+
+A distinct, non-alignment root cause. Here ferro and the corpus agree on the
+transcript→genome alignment, but the corpus oracle is pinned to an **older
+transcript version** whose re-annotation in the newer version shifted the
+`c.`/`n.` coordinate bounds. ferro selects the **latest curated version**, so
+the coordinate differs — a [`Divergence::CoordinateSkew`] — even though ferro
+is *more* current, not wrong.
+
+- `NC_000003.11:g.37035019_37092164del` (MLH1 whole-gene deletion): oracle
+  `NM_000249.3:c.-20_*20del` / `NP_000240.1:p.0?`; ferro `NM_000249.4:c.-19_*21del`
+  / `NP_000240.1:p.(Met1?)`. The `.4` annotation moved the 5'UTR start by one
+  (`-20`→`-19`) and the 3'UTR end by one (`*20`→`*21`); the start-loss glyph is
+  the spec-accepted `p.(Met1?)`/`p.0?` pair. Neither is an alignment disagreement.
+
+This cluster is gated by `VERSION_CURRENCY_SKEW_TRANSCRIPTS` **and** a strict
+version-monotonicity guard in `record_classified`: a `CoordinateSkew` on a
+listed base is quarantined only when ferro returned that base at a version
+*strictly newer* than the oracle's. A **same-version** coordinate skew on a
+listed transcript is a genuine projection bug and still FAILs — the gate list
+alone never accepts a coordinate difference. This is what keeps "red = real":
+the list records *which* transcripts have a reviewed version-currency shift, and
+the guard bounds acceptance to newer-version divergences only.
+
 ## See also
 
 - `tests/hgvs_rs_projection_tests.rs` — `classify_divergence`,
-  `SOURCE_SKEW_TRANSCRIPTS`, and the per-axis structural routing.
+  `SOURCE_SKEW_TRANSCRIPTS`, `VERSION_CURRENCY_SKEW_TRANSCRIPTS`, and the per-axis
+  structural routing.
 - `tests/fixtures/hgvs-rs-projection/cases.json` — the `clusters` registry
   entries `alignment-source-skew` and `transcript-selection-vs-uta`.
 - `tests/fixtures/CORPUS_LAYOUT.md` — corpus layout and consumer table.
