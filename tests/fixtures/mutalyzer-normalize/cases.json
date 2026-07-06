@@ -1432,16 +1432,16 @@
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins180_183+69;156_161inv;161_162ins183+76_188]",
       "genomic": "NG_008939.1:g.[5206_5207ins5231_5303;5207_5212inv;5212_5213ins5310_10536]",
       "to_test": true,
-      "known_bug": [
+      "spec_citation": [
         {
           "axis": "normalized",
-          "tracking_issue": 922,
-          "note": "ferro expands the c.180_188 copy range as transcript-contiguous bases; mutalyzer expands it through the genomic reference (whose introns split the range), yielding a decomposed allele with intronic offsets. Genomic-context copy-range expansion tracked in #922."
+          "section": "HGVS §Copy-range delins (coding-frame reference)",
+          "note": "ferro copies the c.180_188 range as 9 contiguous spliced coding bases (c.156_161delinsGCGAGGAAA; inv = its reverse-complement), the faithful reading of a c.-prefixed copy-range: c. coordinates are spliced coding DNA and exclude introns (numbering.md; intronic positions require +/- offsets), and the copy-range shares the variant's frame (delins.md L61 'from the same reference sequence'; insertion.md L36/L53/L56). mutalyzer expands c.180_188 through the genomic NG_ reference, pulling in intronic bases (183+69) and decomposing the allele. ferro's coding-frame expansion is spec-correct (#922)."
         },
         {
           "axis": "genomic",
-          "tracking_issue": 922,
-          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the c.180_188 copy range as transcript-contiguous spliced bases (g.5207_5212delinsGCGAGGAAA); mutalyzer expands it through the genomic reference (whose introns split the range), yielding a decomposed allele. Genomic-context copy-range expansion tracked in #922."
+          "section": "HGVS §Copy-range delins (coding-frame reference)",
+          "note": "Same divergence on the user-facing project_variant().genomic path (#870): ferro projects the spliced coding-frame copy (g.5207_5212delinsGCGAGGAAA; inv = its reverse-complement); mutalyzer expands c.180_188 through the intron-containing genomic reference and decomposes the allele. A c.-prefixed copy-range denotes spliced coding bases (numbering.md; delins.md L61; insertion.md L36) — a genomic copy would carry a g. prefix (insertion.md L49). ferro is spec-correct (#922)."
         }
       ]
     },
@@ -1455,16 +1455,16 @@
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins183+76_188inv;161_162ins180_183+69inv]",
       "genomic": "NG_008939.1:g.[5206_5207ins5310_10536inv;5212_5213ins5231_5303inv]",
       "to_test": true,
-      "known_bug": [
+      "spec_citation": [
         {
           "axis": "normalized",
-          "tracking_issue": 922,
-          "note": "inverted copy-range delins; ferro expands transcript-contiguous, mutalyzer through the genomic (intron-split) reference. Tracked in #922."
+          "section": "HGVS §Copy-range delins (coding-frame reference)",
+          "note": "ferro copies the c.180_188 range as 9 contiguous spliced coding bases (c.156_161delinsGCGAGGAAA; inv = its reverse-complement), the faithful reading of a c.-prefixed copy-range: c. coordinates are spliced coding DNA and exclude introns (numbering.md; intronic positions require +/- offsets), and the copy-range shares the variant's frame (delins.md L61 'from the same reference sequence'; insertion.md L36/L53/L56). mutalyzer expands c.180_188 through the genomic NG_ reference, pulling in intronic bases (183+69) and decomposing the allele. ferro's coding-frame expansion is spec-correct (#922)."
         },
         {
           "axis": "genomic",
-          "tracking_issue": 922,
-          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the inverted copy-range delins as transcript-contiguous bases (g.5207_5212delinsTTTCCTCGC); mutalyzer expands it through the genomic (intron-split) reference. Tracked in #922."
+          "section": "HGVS §Copy-range delins (coding-frame reference)",
+          "note": "Same divergence on the user-facing project_variant().genomic path (#870): ferro projects the spliced coding-frame copy (g.5207_5212delinsGCGAGGAAA; inv = its reverse-complement); mutalyzer expands c.180_188 through the intron-containing genomic reference and decomposes the allele. A c.-prefixed copy-range denotes spliced coding bases (numbering.md; delins.md L61; insertion.md L36) — a genomic copy would carry a g. prefix (insertion.md L49). ferro is spec-correct (#922)."
         }
       ]
     },
@@ -1479,16 +1479,16 @@
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins180_183+69;156_161inv;161_162ins183+76_188]",
       "genomic": "NG_008939.1:g.[5206_5207ins5231_5303;5207_5212inv;5212_5213ins5310_10536]",
       "to_test": true,
-      "known_bug": [
+      "spec_citation": [
         {
           "axis": "normalized",
-          "tracking_issue": 922,
-          "note": "bracketed copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #922."
+          "section": "HGVS §Copy-range delins (coding-frame reference)",
+          "note": "ferro copies the c.180_188 range as 9 contiguous spliced coding bases (c.156_161delinsGCGAGGAAA; inv = its reverse-complement), the faithful reading of a c.-prefixed copy-range: c. coordinates are spliced coding DNA and exclude introns (numbering.md; intronic positions require +/- offsets), and the copy-range shares the variant's frame (delins.md L61 'from the same reference sequence'; insertion.md L36/L53/L56). mutalyzer expands c.180_188 through the genomic NG_ reference, pulling in intronic bases (183+69) and decomposing the allele. ferro's coding-frame expansion is spec-correct (#922)."
         },
         {
           "axis": "genomic",
-          "tracking_issue": 922,
-          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the bracketed copy-range delins as transcript-contiguous bases; mutalyzer expands it through the genomic (intron-split) reference. Tracked in #922."
+          "section": "HGVS §Copy-range delins (coding-frame reference)",
+          "note": "Same divergence on the user-facing project_variant().genomic path (#870): ferro projects the spliced coding-frame copy (g.5207_5212delinsGCGAGGAAA; inv = its reverse-complement); mutalyzer expands c.180_188 through the intron-containing genomic reference and decomposes the allele. A c.-prefixed copy-range denotes spliced coding bases (numbering.md; delins.md L61; insertion.md L36) — a genomic copy would carry a g. prefix (insertion.md L49). ferro is spec-correct (#922)."
         }
       ]
     },
@@ -1503,16 +1503,16 @@
       "normalized": "NG_008939.1(NM_000532.5):c.[155_156ins183+76_188inv;161_162ins180_183+69inv]",
       "genomic": "NG_008939.1:g.[5206_5207ins5310_10536inv;5212_5213ins5231_5303inv]",
       "to_test": true,
-      "known_bug": [
+      "spec_citation": [
         {
           "axis": "normalized",
-          "tracking_issue": 922,
-          "note": "bracketed inverted copy-range delins; same transcript-vs-genomic expansion divergence. Tracked in #922."
+          "section": "HGVS §Copy-range delins (coding-frame reference)",
+          "note": "ferro copies the c.180_188 range as 9 contiguous spliced coding bases (c.156_161delinsGCGAGGAAA; inv = its reverse-complement), the faithful reading of a c.-prefixed copy-range: c. coordinates are spliced coding DNA and exclude introns (numbering.md; intronic positions require +/- offsets), and the copy-range shares the variant's frame (delins.md L61 'from the same reference sequence'; insertion.md L36/L53/L56). mutalyzer expands c.180_188 through the genomic NG_ reference, pulling in intronic bases (183+69) and decomposing the allele. ferro's coding-frame expansion is spec-correct (#922)."
         },
         {
           "axis": "genomic",
-          "tracking_issue": 922,
-          "note": "On the user-facing project_variant().genomic path (#870) ferro expands the bracketed inverted copy-range delins as transcript-contiguous bases; mutalyzer expands it through the genomic (intron-split) reference. Tracked in #922."
+          "section": "HGVS §Copy-range delins (coding-frame reference)",
+          "note": "Same divergence on the user-facing project_variant().genomic path (#870): ferro projects the spliced coding-frame copy (g.5207_5212delinsGCGAGGAAA; inv = its reverse-complement); mutalyzer expands c.180_188 through the intron-containing genomic reference and decomposes the allele. A c.-prefixed copy-range denotes spliced coding bases (numbering.md; delins.md L61; insertion.md L36) — a genomic copy would carry a g. prefix (insertion.md L49). ferro is spec-correct (#922)."
         }
       ]
     },

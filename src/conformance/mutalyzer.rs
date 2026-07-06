@@ -1126,6 +1126,19 @@ pub enum SpecSection {
     /// within-exon value is the spec-correct one (#918).
     #[serde(rename = "HGVS §3'-rule (exon/exon-junction exception)")]
     ThreePrimeRuleExonJunction,
+    /// Copy-range delins/insertion coding-frame reference (`delins.md` L61;
+    /// `insertion.md` L36/L53/L56; `background/numbering.md`): when the inserted
+    /// sequence is given as a range of the reference (`c.<start>_<end>`), that
+    /// range is read in the SAME coordinate frame as the variant — here `c.`
+    /// (coding DNA), which is spliced and excludes introns (intronic positions
+    /// require `+`/`-` offset notation). So `c.180_188` copies 9 contiguous
+    /// spliced coding bases; a genomic copy would be written with a `g.` prefix
+    /// (`insertion.md` L49). ferro copies the spliced coding range
+    /// (`c.156_161delinsGCGAGGAAA`); mutalyzer expands it through the genomic
+    /// NG_ reference, pulling in intronic bases (`183+69`) and decomposing the
+    /// allele. ferro's coding-frame expansion is the spec-correct one (#922).
+    #[serde(rename = "HGVS §Copy-range delins (coding-frame reference)")]
+    CopyRangeCodingFrame,
 }
 
 impl SpecSection {
@@ -1155,6 +1168,7 @@ impl SpecSection {
             SpecSection::ThreePrimeRuleExonJunction => {
                 "HGVS §3'-rule (exon/exon-junction exception)"
             }
+            SpecSection::CopyRangeCodingFrame => "HGVS §Copy-range delins (coding-frame reference)",
         }
     }
 }
