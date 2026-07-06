@@ -826,11 +826,19 @@ impl Provider for InMemoryProvider {
         &self.schema_version
     }
 
-    fn get_assembly_map(&self, assembly: Assembly) -> IndexMap<String, String> {
-        self.assembly_maps
+    fn get_assembly_map(&self, assembly: &str) -> Result<IndexMap<String, String>, HgvsDataError> {
+        // hgvs 0.22 changed this trait method to take the assembly by name
+        // (`&str`, e.g. "grch38") and return a `Result`; parse it to the
+        // `Assembly` enum our maps are keyed by via biocommons-bioutils' own
+        // `TryFrom<&str>` (Error = String), mirroring hgvs's cdot provider impl.
+        let assembly: Assembly = assembly
+            .try_into()
+            .map_err(HgvsDataError::UnknownAssembly)?;
+        Ok(self
+            .assembly_maps
             .get(&assembly)
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
     fn get_gene_info(&self, hgnc: &str) -> Result<GeneInfoRecord, HgvsDataError> {
