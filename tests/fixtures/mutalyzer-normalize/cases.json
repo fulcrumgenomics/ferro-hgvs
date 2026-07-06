@@ -3872,18 +3872,7 @@
       "infos": [
         "ISORTEDVARIANTS"
       ],
-      "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro keeps the two-member allele ([9del;7_8insC]); mutalyzer collapses the delete+insert into the equivalent substitution c.8A>C. Allele->substitution collapse tracked in #487."
-      },
-      "accepted_divergence": {
-        "axis": "infos",
-        "policy": "ferro-policy-499-shuffle-applied-compound-allele",
-        "note": "Compound-allele per-member 3'-shift; ferro emits SHUFFLE_APPLIED, mutalyzer emits only the allele-level ISORTEDVARIANTS internal code. Both spec-defensible (#499, precedent #481).",
-        "cluster": "shuffle-applied-compound-allele-499"
-      }
+      "to_test": true
     },
     {
       "keywords": [

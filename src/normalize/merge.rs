@@ -3,7 +3,7 @@
 //! See `docs/superpowers/specs/2026-04-30-merge-consecutive-allele-edits-design.md`.
 
 use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
-use crate::hgvs::interval::{GenomeInterval, Interval, UncertainBoundary};
+use crate::hgvs::interval::{Interval, UncertainBoundary};
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
@@ -238,39 +238,47 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     if phase != AllelePhase::Cis || variants.len() < 2 {
         return variants;
     }
-    // The genomic (`g.`) and mitochondrial (`m.`) axes share one single-axis
-    // coordinate system (`Region::Genome`), so both flow through this collapse.
-    // Track which kind the group is so we rebuild the correct variant at the
-    // end; a mixed Genome+Mt group is refused (mirrors the accession check).
+    // The single-axis genomic (`g.`) / mitochondrial (`m.`) systems share
+    // `Region::Genome`; the transcript axes (`c.`, `n.`, `r.`) each have a
+    // positive body region (`Cds` / `Tx` / `Rna`). Track which kind the group
+    // is so we rebuild the correct variant at the end and translate window
+    // coordinates correctly; a mixed-kind group is refused (mirrors the
+    // accession check). Transcript members are collapsed only within the
+    // positive body (issue #920) — see the `region != body` refusal below.
     let kind = match &variants[0] {
         HgvsVariant::Genome(_) => CisKind::Genome,
         HgvsVariant::Mt(_) => CisKind::Mt,
+        HgvsVariant::Cds(_) => CisKind::Cds,
+        HgvsVariant::Tx(_) => CisKind::Tx,
+        HgvsVariant::Rna(_) => CisKind::Rna,
         _ => return variants,
     };
-    // Borrow the head's `(accession, loc_edit)` as the template once; the
-    // helper rejects any variant whose kind doesn't match `kind`.
-    let Some((template_accession, _)) = cis_genome_axis_parts(&variants[0], kind) else {
+    // The positive body region every member must lie in for this axis.
+    let body = body_region(kind);
+    // Borrow the head's accession as the template once; the helper rejects any
+    // variant whose kind doesn't match `kind`.
+    let Some((template_accession, _, _, _, _)) = cis_axis_parts(&variants[0], kind) else {
         return variants;
     };
     let template_accession = template_accession.clone();
 
     let mut edits: Vec<GEdit> = Vec::with_capacity(variants.len());
     for v in &variants {
-        let Some((accession, loc_edit)) = cis_genome_axis_parts(v, kind) else {
+        let Some((accession, region, s, e, edit)) = cis_axis_parts(v, kind) else {
             return variants;
         };
         if *accession != template_accession {
             return variants;
         }
-        let Some((_region, s, e)) = simple_genome_range(&loc_edit.location) else {
-            return variants;
-        };
-        if !loc_edit.edit.is_certain() {
+        // CDS-body-only scope (issue #920): every member must lie in the
+        // positive body region for the axis — `Cds` for `c.`, `Tx` for `n.`,
+        // `Rna` for `r.`, `Genome` for `g.`/`m.`. Any 5'UTR (`c.-N`), 3'UTR
+        // (`c.*N`), intronic-offset, upstream/downstream, or mixed-region
+        // member refuses the whole group (all-or-nothing, mirroring the other
+        // conservative refusals). For `g.`/`m.` this is always satisfied.
+        if region != body {
             return variants;
         }
-        let Some(edit) = loc_edit.edit.inner() else {
-            return variants;
-        };
         match edit {
             NaEdit::Insertion { sequence } => {
                 let Some(bases) = sequence.bases() else {
@@ -368,10 +376,40 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
         return variants;
     }
 
-    // Fetch the reference window [w_lo, w_hi] (1-based inclusive -> 0-based
-    // half-open). Bail on any provider miss or short read.
+    // Fetch the reference window [w_lo, w_hi] (1-based inclusive on the axis)
+    // as a 0-based half-open slice of the underlying sequence. Bail on any
+    // provider miss or short read.
+    //
+    // The window is expressed in the axis's own coordinates; the underlying
+    // sequence offset differs per axis:
+    //   * `g.`/`m.` and `n.` (`Tx`): the axis IS the fetched sequence, so a
+    //     1-based position `N` is sequence offset `N` (delta = 0).
+    //   * `c.` (`Cds`) and `r.` (`Rna`): the axis is CDS-relative, so a
+    //     1-based position `N` maps to transcript position `cds_start + N - 1`
+    //     (delta = `cds_start - 1`) — the same mapping `lookup_codon_middle_ref`
+    //     uses. Both regions have been restricted to the positive body above.
     let accession = template_accession.transcript_accession();
-    let Ok(ref_seq) = provider.get_sequence(&accession, (w_lo - 1) as u64, w_hi as u64) else {
+    let delta: i64 = match kind {
+        CisKind::Genome | CisKind::Mt | CisKind::Tx => 0,
+        CisKind::Cds | CisKind::Rna => {
+            let Ok(tx) = provider.get_transcript(&accession) else {
+                return variants;
+            };
+            let Some(cds_start) = tx.cds_start else {
+                return variants;
+            };
+            let Ok(cds_start) = i64::try_from(cds_start) else {
+                return variants;
+            };
+            cds_start - 1
+        }
+    };
+    let start0 = w_lo + delta - 1;
+    let end0 = w_hi + delta;
+    if start0 < 0 {
+        return variants;
+    }
+    let Ok(ref_seq) = provider.get_sequence(&accession, start0 as u64, end0 as u64) else {
         return variants;
     };
     let ref_bytes = ref_seq.as_bytes();
@@ -450,47 +488,96 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
         (del_start, w_lo + hi_ref as i64 - 1)
     };
     let anchor = Anchor {
-        region: Region::Genome,
+        region: body,
         start: a_start,
         end: a_end,
         alt: alt_bases,
     };
-    // Rebuild the variant kind the group came in as. Both `g.` and `m.` use
-    // the same single-axis `Region::Genome` anchor; the head carries the
-    // accession / gene symbol to seed the merged variant. `kind` was derived
-    // from `variants[0]` and every member passed `cis_genome_axis_parts(_,
-    // kind)`, so the head necessarily matches `kind` here.
+    // Rebuild the variant kind the group came in as. `g.`/`m.` use the
+    // single-axis `Region::Genome` anchor; `c.`/`n.`/`r.` use the positive
+    // body region threaded into `anchor` so the builder reconstructs the
+    // right position shape. The head carries the accession / gene symbol to
+    // seed the merged variant. `kind` was derived from `variants[0]` and
+    // every member passed `cis_axis_parts(_, kind)`, so the head necessarily
+    // matches `kind` here.
     match (kind, &variants[0]) {
         (CisKind::Genome, HgvsVariant::Genome(g)) => {
             vec![HgvsVariant::Genome(build_genome_merged(g, anchor))]
         }
         (CisKind::Mt, HgvsVariant::Mt(m)) => vec![HgvsVariant::Mt(build_mt_merged(m, anchor))],
+        (CisKind::Cds, HgvsVariant::Cds(c)) => vec![HgvsVariant::Cds(build_cds_merged(c, anchor))],
+        (CisKind::Tx, HgvsVariant::Tx(t)) => vec![HgvsVariant::Tx(build_tx_merged(t, anchor))],
+        (CisKind::Rna, HgvsVariant::Rna(r)) => vec![HgvsVariant::Rna(build_rna_merged(r, anchor))],
         _ => variants,
     }
 }
 
-/// Which single-axis variant kind a cis-collapse group is. `g.` and `m.`
-/// share `Region::Genome` and the same `GenomeInterval`/`NaEdit` machinery,
-/// so the collapse handles both — but they must rebuild to distinct variant
-/// kinds, and a group mixing the two is refused.
+/// Which variant kind a cis-collapse group is. `g.` and `m.` share
+/// `Region::Genome` and the same `GenomeInterval`/`NaEdit` machinery; the
+/// transcript kinds (`c.`/`n.`/`r.`) each collapse within their positive body
+/// region (issue #920). Every kind rebuilds to a distinct variant kind, and a
+/// mixed-kind group is refused.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CisKind {
     Genome,
     Mt,
+    Cds,
+    Tx,
+    Rna,
 }
 
-/// Borrow the `(accession, loc_edit)` of a `g.`/`m.` variant, but only when
-/// its kind matches `kind`. Returns `None` for any other variant kind (or a
-/// kind mismatch), which the caller treats as "decline to collapse".
-fn cis_genome_axis_parts(
+/// The positive body region a cis-collapse group of this kind must lie in.
+/// The collapse only ever operates within this single region — 5'UTR / 3'UTR
+/// / intronic-offset / upstream / downstream members are refused (issue #920).
+fn body_region(kind: CisKind) -> Region {
+    match kind {
+        CisKind::Genome | CisKind::Mt => Region::Genome,
+        CisKind::Cds => Region::Cds,
+        CisKind::Tx => Region::Tx,
+        CisKind::Rna => Region::Rna,
+    }
+}
+
+/// Extract the `(accession, region, start, end, edit)` of a variant for the
+/// cis-collapse pass, but only when its kind matches `kind` and the edit is
+/// certain. The `(region, start, end)` are the location's *raw* endpoints on
+/// the axis (unlike `simple_range_for_variant`, which swaps insertion
+/// endpoints into anchor form); the collapse reads insertion gaps from the
+/// raw endpoints. Returns `None` for any other variant kind, a kind mismatch,
+/// a disqualifying position (offset / special / mixed-region), or an
+/// uncertain / non-`NaEdit` edit — the caller treats that as "decline to
+/// collapse".
+fn cis_axis_parts(
     v: &HgvsVariant,
     kind: CisKind,
-) -> Option<(&Accession, &LocEdit<GenomeInterval, NaEdit>)> {
-    match (kind, v) {
-        (CisKind::Genome, HgvsVariant::Genome(g)) => Some((&g.accession, &g.loc_edit)),
-        (CisKind::Mt, HgvsVariant::Mt(m)) => Some((&m.accession, &m.loc_edit)),
-        _ => None,
+) -> Option<(&Accession, Region, i64, i64, &NaEdit)> {
+    let (accession, region, s, e, edit) = match (kind, v) {
+        (CisKind::Genome, HgvsVariant::Genome(g)) => {
+            let (r, s, e) = simple_genome_range(&g.loc_edit.location)?;
+            (&g.accession, r, s, e, &g.loc_edit.edit)
+        }
+        (CisKind::Mt, HgvsVariant::Mt(m)) => {
+            let (r, s, e) = simple_genome_range(&m.loc_edit.location)?;
+            (&m.accession, r, s, e, &m.loc_edit.edit)
+        }
+        (CisKind::Cds, HgvsVariant::Cds(c)) => {
+            let (r, s, e) = simple_cds_range(&c.loc_edit.location)?;
+            (&c.accession, r, s, e, &c.loc_edit.edit)
+        }
+        (CisKind::Tx, HgvsVariant::Tx(t)) => {
+            let (r, s, e) = simple_tx_range(&t.loc_edit.location)?;
+            (&t.accession, r, s, e, &t.loc_edit.edit)
+        }
+        (CisKind::Rna, HgvsVariant::Rna(rv)) => {
+            let (r, s, e) = simple_rna_range(&rv.loc_edit.location)?;
+            (&rv.accession, r, s, e, &rv.loc_edit.edit)
+        }
+        _ => return None,
+    };
+    if !edit.is_certain() {
+        return None;
     }
+    Some((accession, region, s, e, edit.inner()?))
 }
 
 /// Replace `output.last()` with a freshly-built variant from `anchor`.

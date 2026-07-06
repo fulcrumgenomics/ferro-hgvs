@@ -119,7 +119,6 @@ ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift in a compound al
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
 | `NG_009299.1(NM_002474.3):c.[310del;295G>A]` | infos | accepted_divergence | — | — |
-| `NG_012337.1(NM_012459.2):c.[8del;7_8insC]` | infos | accepted_divergence | — | — |
 | `NG_012337.1:g.[104_105insA;105_106insC;105del]` | infos | accepted_divergence | — | — |
 | `NG_012337.1:g.[105_106insC;105del;104_105insA]` | infos | accepted_divergence | — | — |
 | `NG_012337.1:g.[105del;104_105insA;105_106insC]` | infos | accepted_divergence | — | — |
@@ -319,7 +318,6 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.15_16insTGGAAGGTGGCGAGCCT` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(NM_012459.2):c.15_17dup` | coding_protein_descriptions | accepted_divergence | — | — |
-| `NG_012337.1(NM_012459.2):c.[8del;7_8insC]` | normalized | known_bug | — | #487 |
 | `NG_012337.1:274` | normalized | accepted_divergence | — | — |
 | `NG_012337.1:g.4delins7_31` | normalized | accepted_divergence | — | — |
 | `NG_012337.1:g.4delins7_50` | normalized | accepted_divergence | — | — |
@@ -347,8 +345,8 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | coding_protein_descriptions | 27 | 0 | 0 | 0 | 0 |
 | errors | 17 | 0 | 0 | 0 | 0 |
 | genomic | 22 | 4 | 0 | 0 | 1 |
-| infos | 9 | 0 | 0 | 0 | 1 |
+| infos | 8 | 0 | 0 | 0 | 1 |
 | noncoding | 0 | 8 | 0 | 0 | 0 |
-| normalized | 25 | 10 | 4 | 5 | 11 |
+| normalized | 25 | 9 | 4 | 5 | 11 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |
