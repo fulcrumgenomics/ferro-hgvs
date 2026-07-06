@@ -4124,16 +4124,18 @@
       "normalized": "NG_012337.1(NM_003002.2):c.275del",
       "genomic": "NG_012337.1:g.7126del",
       "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro keeps the redundant c.274= identity member; mutalyzer drops it, collapsing the allele to c.275del. Allele identity-member collapse tracked in #487."
-      },
-      "accepted_divergence": {
-        "axis": "genomic",
-        "policy": "ferro-policy-654-explicit-identity-rendering",
-        "note": "ferro projects the cis allele faithfully, retaining the explicit identity member: g.[7125=;7126del]; mutalyzer drops the c.274= no-change member and de-brackets to g.7126del. The cited 'redundant =' prohibition (alleles.md:18-19,:49) governs trans cross-spelling, not a single cis bracket; the spec provides the = no-change form (substitution.md:19), so ferro's retention is at least as spec-faithful (#851)."
-      }
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-654-explicit-identity-rendering",
+          "note": "ferro projects the cis allele faithfully, retaining the explicit identity member: g.[7125=;7126del]; mutalyzer drops the c.274= no-change member and de-brackets to g.7126del. The cited 'redundant =' prohibition (alleles.md:18-19,:49) governs trans cross-spelling, not a single cis bracket; the spec provides the = no-change form (substitution.md:19), so ferro's retention is at least as spec-faithful (#851)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-654-explicit-identity-rendering",
+          "note": "ferro retains the explicit cis identity member (c.[274=;275del]); mutalyzer drops the no-change member and collapses to c.275del. alleles.md:18-19,:49 governs trans cross-spelling, not a single cis bracket; substitution.md:19 provides the = no-change form, so ferro's retention is at least as spec-faithful (#851). Reconciled with the genomic-axis divergence per #912 action 4 (was known_bug)."
+        }
+      ]
     },
     {
       "keywords": [],
@@ -4141,16 +4143,18 @@
       "normalized": "NG_012337.1(NM_003002.2):c.274del",
       "genomic": "NG_012337.1:g.7125del",
       "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 487,
-        "note": "ferro keeps the redundant c.275= identity member; mutalyzer collapses to c.274del. Allele identity-member collapse tracked in #487."
-      },
-      "accepted_divergence": {
-        "axis": "genomic",
-        "policy": "ferro-policy-654-explicit-identity-rendering",
-        "note": "ferro projects the cis allele faithfully, retaining the explicit identity member: g.[7125del;7126=]; mutalyzer drops the c.275= no-change member and de-brackets to g.7125del. The cited 'redundant =' prohibition (alleles.md:18-19,:49) governs trans cross-spelling, not a single cis bracket; the spec provides the = no-change form (substitution.md:19), so ferro's retention is at least as spec-faithful (#851)."
-      }
+      "accepted_divergence": [
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-654-explicit-identity-rendering",
+          "note": "ferro projects the cis allele faithfully, retaining the explicit identity member: g.[7125del;7126=]; mutalyzer drops the c.275= no-change member and de-brackets to g.7125del. The cited 'redundant =' prohibition (alleles.md:18-19,:49) governs trans cross-spelling, not a single cis bracket; the spec provides the = no-change form (substitution.md:19), so ferro's retention is at least as spec-faithful (#851)."
+        },
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-654-explicit-identity-rendering",
+          "note": "ferro retains the explicit cis identity member (c.[274del;275=]); mutalyzer drops the no-change member and collapses to c.274del. alleles.md:18-19,:49 governs trans cross-spelling, not a single cis bracket; substitution.md:19 provides the = no-change form, so ferro's retention is at least as spec-faithful (#851). Reconciled with the genomic-axis divergence per #912 action 4 (was known_bug)."
+        }
+      ]
     },
     {
       "keywords": [
