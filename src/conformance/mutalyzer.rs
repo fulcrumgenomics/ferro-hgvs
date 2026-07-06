@@ -588,6 +588,17 @@ pub enum Policy {
     /// protein accession). Terminal rendering divergence, not a defect (#923).
     #[serde(rename = "ferro-policy-923-bare-np-no-parent-context")]
     BareNpNoParentContext923,
+    /// On the `normalized` axis, ferro requires an explicit version on an Ensembl
+    /// accession (`ENST`/`ENSG`/`ENSP`) and declines an *unversioned* input,
+    /// whereas mutalyzer leniently infers the current version and normalizes
+    /// (e.g. `ENST00000375549:c.100del` → mutalyzer `ENST00000375549.8:c.102del`;
+    /// ferro echoes the unversioned input). ferro is spec-correct:
+    /// `background/refseq.md` states "variant descriptions lacking a version
+    /// number are not valid", and #938 enforces the version requirement at parse
+    /// time. mutalyzer's version inference is a lenient convenience, not a form
+    /// ferro is wrong to withhold. Accepted divergence (#938).
+    #[serde(rename = "ferro-policy-938-ensembl-version-required")]
+    EnsemblVersionRequired938,
 }
 
 impl Policy {
@@ -607,6 +618,7 @@ impl Policy {
                 "ferro-policy-73-cross-ref-cds-resolved-no-enocds"
             }
             Policy::BareNpNoParentContext923 => "ferro-policy-923-bare-np-no-parent-context",
+            Policy::EnsemblVersionRequired938 => "ferro-policy-938-ensembl-version-required",
             Policy::WholeCdsDeletionMet1 => "ferro-policy-whole-cds-del-met1",
             Policy::HomopolymerRepeatContraction745 => {
                 "ferro-policy-745-homopolymer-repeat-contraction"

@@ -91,6 +91,10 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     "NC_000001.11:g.12345_12350del",
     "NC_000001.11:g.12345_12350dup",
     "ENST00000357033.8:c.100_200del",
+    // Compound Ensembl cross-reference `ENSG(ENST)` (#933): the fast path has no
+    // pattern for the `(` genomic-context wrapper, so it must defer to the
+    // generic parser — and the two must agree on the compound form.
+    "ENSG00000204370.13(ENST00000375549.8):c.100del",
     "LRG_1:g.5000_5010dup",
     "GRCh38(chr1):g.12345_12350del",
     // --- del/dup edges that must defer to (and agree with) the generic parser ---
