@@ -993,37 +993,42 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
         });
     }
     if pos.utr3 {
-        // r.*N is the Nth base of the 3' UTR — anchored at `cds_end`
-        // (the last 1-based CDS position), so r.*1 sits at the base
-        // immediately after the stop codon (`cds_end + 1`), not at
-        // `tx_len + 1` (which is one past the end of the entire
-        // mRNA). For non-coding transcripts r.*N has no meaning;
-        // surface `MissingReferenceData` rather than fall back to
-        // `tx_len` (#390 item 2).
-        //
-        // TODO(#390-follow-up): the c.*N path goes through
-        // `CoordinateMapper::cds_to_tx` which is exon-aware and
-        // honors CIGAR insertions in the 3'UTR; this plain
-        // `cds_end + base` short-circuits the same arithmetic. For
-        // contiguous single-exon 3'UTRs the two agree, but
-        // multi-exon 3'UTRs with cdot tx-coordinate gaps will see
-        // r.*N and c.*N land at slightly different transcript
-        // positions. Route this through the same exon-aware helper.
+        // r.*N is the Nth base of the 3' UTR — anchored after the stop codon,
+        // so r.*1 sits at the base immediately after the last CDS position, not
+        // at `tx_len + 1` (one past the entire mRNA). For non-coding transcripts
+        // r.*N has no meaning; surface `MissingReferenceData` rather than fall
+        // back to `tx_len` (#390 item 2).
         if pos.base < 1 {
             return Err(ConversionError::InvalidPosition {
                 description: format!("3' UTR position *{} must be >= 1", pos.base),
             });
         }
-        let cds_end = transcript
-            .cds_end
-            .ok_or_else(|| ConversionError::MissingReferenceData {
+        // r.*N and c.*N denote the same transcript position, so resolve r.*N
+        // through the same exon-aware `CoordinateMapper::cds_to_tx` the c.*N
+        // path (`resolve_cds_to_tx`) uses. A plain `cds_end + base` agrees with
+        // it only for a contiguous single-exon 3'UTR; a multi-exon 3'UTR with
+        // cdot tx-coordinate (CIGAR) gaps would otherwise land r.*N and c.*N at
+        // different transcript positions (#390-follow-up / #944). Requires a CDS
+        // end — non-coding transcripts have no 3'UTR anchor.
+        if transcript.cds_end.is_none() {
+            return Err(ConversionError::MissingReferenceData {
                 description: format!(
                     "r.*{} requires a CDS end on the transcript; non-coding \
                      transcripts have no 3'UTR anchor",
                     pos.base
                 ),
-            })?;
-        return Ok(cds_end.saturating_add(pos.base as u64));
+            });
+        }
+        let mapper = CoordinateMapper::new(transcript);
+        let tx = mapper.cds_to_tx(&CdsPos::utr3(pos.base)).map_err(|e| {
+            ConversionError::MissingReferenceData {
+                description: format!(
+                    "could not resolve r.*{} to transcript position: {}",
+                    pos.base, e
+                ),
+            }
+        })?;
+        return ensure_positive_tx(tx.base, "r", pos);
     }
     ensure_positive_tx(pos.base, "r", pos)
 }
@@ -2747,6 +2752,118 @@ mod tests {
         let mut provider = MockProvider::new();
         provider.add_transcript(tx);
         provider
+    }
+
+    // ----- r.*N / c.*N 3'UTR agreement (#944) --------------------------------
+
+    /// #944: r.*N and c.*N denote the same 3'UTR transcript position, so both
+    /// must resolve to the same SPDI position. `resolve_rna_pos` now routes the
+    /// 3'UTR case through the same exon-aware `CoordinateMapper::cds_to_tx` the
+    /// c.*N path uses (previously it short-circuited with `cds_end + base`).
+    #[test]
+    fn r_star_and_c_star_resolve_to_same_spdi_position() {
+        let provider = make_test_provider();
+        // NM_TEST.1: cds_end = tx 35, so *1 is tx 36 (1-based) → SPDI 0-based 35.
+        let c = parse_hgvs("NM_TEST.1:c.*1del").unwrap();
+        let r = parse_hgvs("NM_TEST.1:r.*1del").unwrap();
+        let c_spdi = hgvs_to_spdi(&c, &provider).unwrap();
+        let r_spdi = hgvs_to_spdi(&r, &provider).unwrap();
+        assert_eq!(
+            c_spdi.position, r_spdi.position,
+            "c.*1 and r.*1 must resolve to the same SPDI position"
+        );
+        assert_eq!(c_spdi.position, 35);
+    }
+
+    /// Build a transcript whose 3'UTR lives in a *separate exon across a
+    /// tx-coordinate gap*, so the exon-aware mapper and the old
+    /// `cds_end + base` short-circuit DISAGREE:
+    ///
+    /// - Exon 1: tx 1..35 (5'UTR tx 1-5, CDS tx 6-35; `cds_end` = 35 is the
+    ///   last base of exon 1).
+    /// - Gap in tx coordinates: tx 36..39 do not exist (cdot-style alignment
+    ///   gap — `exon1.end + 1 (36) != exon2.start (40)`).
+    /// - Exon 2: tx 40..44 — the entire 3'UTR.
+    ///
+    /// For `*1`, `CoordinateMapper::cds_to_tx` walks forward from `cds_end`
+    /// (35), finds it is the last base of exon 1, skips the tx 36-39 gap, and
+    /// lands on `exon2.start` = tx 40. The reverted `cds_end + base` path would
+    /// instead land on tx 36 (a nonexistent coordinate inside the gap). Thus
+    /// r.*1 and c.*1 only agree here if r.*N routes through the exon-aware
+    /// mapper — this is the fixture that makes the #944 test non-vacuous.
+    fn make_gapped_utr3_provider() -> MockProvider {
+        let tx = Transcript::new(
+            "NM_GAP.1".to_string(),
+            Some("GAP".to_string()),
+            Strand::Plus,
+            "A".repeat(44),
+            Some(6),
+            Some(35),
+            vec![Exon::new(1, 1, 35), Exon::new(2, 40, 44)],
+            None,
+            None,
+            None,
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        let mut provider = MockProvider::new();
+        provider.add_transcript(tx);
+        provider
+    }
+
+    /// #944 (non-vacuous): on a transcript whose 3'UTR sits in a separate exon
+    /// across a tx-coordinate gap, r.*1 and c.*1 must STILL resolve to the same
+    /// SPDI position. The only way they agree is if r.*N is mapped through the
+    /// exon-aware `CoordinateMapper::cds_to_tx` (tx 40 → SPDI 39). The reverted
+    /// `cds_end + base` short-circuit would put r.*1 at tx 36 → SPDI 35, so this
+    /// test fails if the fix is reverted (unlike the single-exon sibling test,
+    /// where old and new code coincide).
+    #[test]
+    fn r_star_c_star_agree_across_exon_gap() {
+        let provider = make_gapped_utr3_provider();
+        // cds_end = tx 35 is the last base of exon 1; the 3'UTR resumes at
+        // exon 2 (tx 40) across the tx 36-39 gap. So *1 = tx 40 → SPDI 0-based 39.
+        let c = parse_hgvs("NM_GAP.1:c.*1A>G").unwrap();
+        let r = parse_hgvs("NM_GAP.1:r.*1a>g").unwrap();
+        let c_spdi = hgvs_to_spdi(&c, &provider).unwrap();
+        let r_spdi = hgvs_to_spdi(&r, &provider).unwrap();
+        assert_eq!(
+            c_spdi.position, r_spdi.position,
+            "c.*1 and r.*1 must resolve to the same SPDI position across the exon gap"
+        );
+        assert_eq!(
+            c_spdi.position, 39,
+            "*1 must map through the tx 36-39 gap to exon 2 (tx 40) → SPDI 39, \
+             not the reverted cds_end+base tx 36 → SPDI 35"
+        );
+    }
+
+    /// A 3'UTR r.*N on a non-coding transcript (no CDS end) still declines
+    /// cleanly rather than mapping through a missing anchor.
+    #[test]
+    fn r_star_on_non_coding_transcript_declines() {
+        let mut provider = MockProvider::new();
+        let tx = Transcript::new(
+            "NR_TEST.1".to_string(),
+            Some("NCTEST".to_string()),
+            Strand::Plus,
+            "A".repeat(40),
+            None,
+            None,
+            vec![Exon::new(1, 1, 40)],
+            None,
+            None,
+            None,
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        provider.add_transcript(tx);
+        let r = parse_hgvs("NR_TEST.1:r.*1del").unwrap();
+        assert!(hgvs_to_spdi(&r, &provider).is_err());
     }
 
     // ----- m. (mitochondrial) ------------------------------------------------
