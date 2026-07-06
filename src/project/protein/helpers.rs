@@ -735,6 +735,13 @@ pub(crate) fn net_length_change(edit: &NaEdit, del_len: usize) -> Option<i64> {
         NaEdit::Delins { sequence, .. } => sequence.len().map(|n| n as i64 - del_len as i64),
         NaEdit::Inversion { .. } => Some(0),
         NaEdit::Substitution { .. } => Some(0),
+        // Repeat / MultiRepeat / DupIns / Conversion / NPaddedDeletion /
+        // SubstitutionNoRef / BreakpointInsertion / Identity (and the
+        // whole-entity kinds) have no c.→p. predictor yet, so their net length
+        // change is intentionally left undetermined here; the caller declines
+        // the protein consequence for them (#952). This `None` is deliberate,
+        // not a silent gap — it mirrors the documented per-edit decline in
+        // `predict_protein_consequence`.
         _ => None,
     }
 }

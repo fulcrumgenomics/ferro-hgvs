@@ -253,6 +253,16 @@ fn build_inframe_variant(
             // Always use the generic delins pathway for delins and inversion.
             delins(cds_pos_start)
         }
+        // Defensive, currently unreachable: the five indel kinds handled above
+        // are the only ones the caller routes here. Any other edit kind (Repeat
+        // / MultiRepeat / Conversion / …) would be a routing bug rather than an
+        // expected input, so we return an explicit typed `UnsupportedProjection`
+        // naming the edit rather than an ambiguous empty result (#952). Note the
+        // caller (`predict_protein_consequence`) currently swallows this `Err` to
+        // `None` without logging, so if this arm ever became reachable the
+        // decline would still be silent at the call site — the observability the
+        // enclosing decline path adds (`projector.rs`'s outer `match c_edit`
+        // trace) does not cover this inner defensive arm.
         _ => Err(FerroError::UnsupportedProjection {
             reason: format!(
                 "build_inframe_variant does not support edit type for protein prediction: {:?}",

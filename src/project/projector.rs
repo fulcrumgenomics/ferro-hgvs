@@ -3139,7 +3139,27 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     Err(other) => return Err(other),
                 }
             }
-            _ => {}
+            // No c.→p. consequence predictor exists yet for the remaining edit
+            // kinds — Repeat / MultiRepeat (STR expansion/contraction), DupIns,
+            // Conversion, NPaddedDeletion, SubstitutionNoRef, BreakpointInsertion,
+            // and Identity — nor for the whole-entity / non-coding-DNA kinds
+            // (Unknown, Methylation, CopyNumber, Splice, NoProduct, PositionOnly).
+            // A concrete Deletion / Insertion / Duplication / Delins / Inversion
+            // whose CDS position failed the coding-span guards above (e.g. a `*N`
+            // 3'UTR endpoint, or an intronic offset not caught by the whole-exon
+            // or boundary arms) also lands here. We decline by leaving
+            // `protein = None`, but log the edit kind so the gap is *observable*
+            // rather than a silent empty result callers cannot distinguish from a
+            // deliberate "no consequence". Implementing these consequences (e.g.
+            // a repeat-expansion `p.` form) is future work tracked by #952.
+            other => {
+                log::trace!(
+                    "no c.→p. protein consequence predicted for {transcript_id}: edit \
+                     {other:?} has no protein predictor (or a concrete indel here failed \
+                     the coding-span guards); declining (protein=None) rather than emitting \
+                     a silent empty result (#952)",
+                );
+            }
         }
         Ok(protein)
     }
