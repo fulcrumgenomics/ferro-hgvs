@@ -285,6 +285,9 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_008939.1:c.155_157delAAC` | protein_description | accepted_divergence | — | — |
 | `NG_008939.1:c.274_275inv` | genomic | accepted_divergence | — | — |
 | `NG_008939.1:c.274_275inv` | protein_description | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5208ins4300_4320inv` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5208ins[4300_4320inv]` | coding_protein_descriptions | accepted_divergence | — | — |
+| `NG_008939.1:g.5207_5212delins[GTCCTGTGCT;4310_4320inv]` | coding_protein_descriptions | accepted_divergence | — | — |
 | `NG_009299.1(NM_002474.3):c.[310del;295G>A]` | normalized | spec_citation | — | — |
 | `NG_009299.1(NM_017668.3):c.33_35CAA[5]` | genomic | accepted_divergence | — | — |
 | `NG_009299.1(NM_017668.3):c.33_35CAA[5]` | normalized | known_bug | — | #487 |
@@ -343,7 +346,7 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 
 | axis | accepted_divergence | known_bug | improvement | reference_unavailable | spec_citation |
 |---|---:|---:|---:|---:|---:|
-| coding_protein_descriptions | 24 | 0 | 0 | 0 | 0 |
+| coding_protein_descriptions | 27 | 0 | 0 | 0 | 0 |
 | errors | 17 | 0 | 0 | 0 | 0 |
 | genomic | 22 | 4 | 0 | 0 | 1 |
 | infos | 9 | 0 | 0 | 0 | 0 |

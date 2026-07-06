@@ -566,6 +566,17 @@ pub enum Policy {
     /// *resolves* the input here rather than rejecting it. Accepted divergence.
     #[serde(rename = "ferro-policy-73-cross-ref-cds-resolved-no-enocds")]
     CrossRefCdsResolvedNoEnocds,
+    /// coding_protein_descriptions axis: for an in-frame insertion / delins that
+    /// encodes a premature stop, ferro renders the protein consequence as the
+    /// spec-mandated insertion / capped-delins form (`p.(…insXaaTer)` /
+    /// `p.(…delinsXaaTer)`, `protein/insertion.md` L37-41, `protein/delins.md`
+    /// L27-28), NOT the C-terminal-spanning `p.(Xaa_LastResiduedelins…)` that
+    /// those sections forbid. The mutalyzer-normalize corpus carries the
+    /// Mutalyzer2-era (`M2:`) spec-forbidden C-terminal delins (e.g.
+    /// `p.(Arg53_Leu539delinsAlaArg)`); ferro's form is spec-correct (#911,
+    /// fixed in #913). Accepted divergence from the stale corpus value.
+    #[serde(rename = "ferro-policy-911-stop-insertion-not-cterminal-delins")]
+    StopInsertionNotCterminalDelins911,
 }
 
 impl Policy {
@@ -608,6 +619,9 @@ impl Policy {
             }
             Policy::MutalyzerNoNormalizedForm654 => "ferro-policy-654-mutalyzer-no-normalized-form",
             Policy::ExplicitIdentityRendering654 => "ferro-policy-654-explicit-identity-rendering",
+            Policy::StopInsertionNotCterminalDelins911 => {
+                "ferro-policy-911-stop-insertion-not-cterminal-delins"
+            }
         }
     }
 }
