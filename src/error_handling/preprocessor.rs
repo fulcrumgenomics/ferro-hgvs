@@ -385,7 +385,7 @@ impl InputPreprocessor {
                                 .with_span(SourceSpan::new(first.start, first.end))
                                 .with_source(input)
                                 .with_hint(
-                                    "RefSeq accessions require a `.<version>` suffix (e.g. NM_000088.3, NC_000023.11)",
+                                    "RefSeq and Ensembl accessions require a `.<version>` suffix (e.g. NM_000088.3, NC_000023.11, ENST00000123456.7)",
                                 ),
                         ),
                     );

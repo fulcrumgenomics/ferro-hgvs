@@ -449,13 +449,38 @@ fn parse_compound_inner(input: &str) -> IResult<&str, Accession> {
     )))
 }
 
-/// Parse an Ensembl-style accession without underscore (e.g., "ENST00000012345.1")
+/// Parse an Ensembl-style accession without underscore (e.g., "ENST00000012345.1").
+///
+/// Also handles the compound reference form `ENSG(ENST)` — an Ensembl gene
+/// wrapping the transcript that defines the coordinates, the Ensembl analogue of
+/// `NG_(NM_)` (`background/refseq.md`: the parenthetical specification names the
+/// annotated transcript). Mirrors the compound branch in
+/// [`parse_standard_accession`]: the inner transcript becomes the primary
+/// accession and the outer gene becomes its `genomic_context`, so
+/// `Accession::transcript_accession` resolves the inner `ENST` (not the gene).
 fn parse_ensembl_accession(input: &str) -> IResult<&str, Accession> {
     let (input, prefix) = parse_ensembl_prefix(input)?;
     let (input, number) = digit1.parse(input)?;
     let (input, version) = opt(preceded(tag("."), parse_version)).parse(input)?;
 
-    Ok((input, Accession::with_style(prefix, number, version, true)))
+    let outer = Accession::with_style(prefix, number, version, true);
+
+    // Compound reference syntax: outer(inner), e.g. `ENSG…(ENST…)`. Only attempt
+    // when the next char is '(' and the content looks like an accession start.
+    if let Some(rest) = input.strip_prefix('(') {
+        if looks_like_accession_start(rest) {
+            if let Ok((after_inner, inner)) = parse_compound_inner(rest) {
+                // Reject nested compound refs: inner must not already be compound.
+                if inner.genomic_context.is_none() {
+                    if let Some(after_close) = after_inner.strip_prefix(')') {
+                        return Ok((after_close, inner.with_genomic_context(outer)));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok((input, outer))
 }
 
 /// Parse an Ensembl prefix of the shape `ENS<species_code><feature>`.
@@ -595,6 +620,49 @@ mod tests {
         assert_eq!(remaining, ":p");
         assert_eq!(&*acc.prefix, "ENSP");
         assert!(acc.ensembl_style);
+    }
+
+    #[test]
+    fn test_parse_ensembl_gene_transcript_compound() {
+        // #933: `ENSG(ENST)` is the Ensembl analogue of `NG_(NM_)` — the inner
+        // transcript defines the coordinates (refseq.md: the parenthetical names
+        // the annotated transcript). The inner ENST must become the PRIMARY
+        // accession (so `transcript_accession` resolves it), with the outer ENSG
+        // as its `genomic_context`.
+        let (remaining, acc) = parse_accession("ENSG00000204370.13(ENST00000375549.8):c").unwrap();
+        assert_eq!(remaining, ":c");
+        // Primary = inner transcript.
+        assert_eq!(&*acc.prefix, "ENST");
+        assert_eq!(&*acc.number, "00000375549");
+        assert_eq!(acc.version, Some(8));
+        assert_eq!(acc.transcript_accession(), "ENST00000375549.8");
+        // Context = outer gene.
+        let ctx = acc.genomic_context.as_ref().expect("has genomic context");
+        assert_eq!(&*ctx.prefix, "ENSG");
+        assert_eq!(ctx.version, Some(13));
+        // Round-trips to the compound display form.
+        assert_eq!(acc.full(), "ENSG00000204370.13(ENST00000375549.8)");
+    }
+
+    #[test]
+    fn test_parse_ensembl_compound_rejects_nested() {
+        // A bare Ensembl transcript (no parens) is unchanged — no context.
+        let (_rest, acc) = parse_accession("ENST00000375549.8:c").unwrap();
+        assert!(acc.genomic_context.is_none());
+
+        // A nested Ensembl compound `ENSG(ENSG(ENST))` must be rejected the same
+        // way the RefSeq `NC_(NG_(NM_))` nesting is: the outer accession parses
+        // as a bare `ENSG` (not a compound), because its inner is itself compound
+        // and the guard refuses an inner that already carries a genomic_context.
+        let (remaining, acc) =
+            parse_accession("ENSG00000204370.13(ENSG00000000001.1(ENST00000375549.8)):c").unwrap();
+        assert!(
+            acc.genomic_context.is_none(),
+            "nested Ensembl compound refs should be rejected, got: {}",
+            acc.full()
+        );
+        assert_eq!(&*acc.prefix, "ENSG");
+        assert!(remaining.starts_with('('));
     }
 
     #[test]
