@@ -6340,6 +6340,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     }
                 }
             }
+            // MultiRepeat (compound tandem repeat, e.g. `GT[2]GC[2]…`) is
+            // deliberately NOT 3'-shifted: unlike a single-unit `Repeat`, a
+            // multi-unit tract has no canonical shuffle target — the spec
+            // describes it as reported, and the rules-layer shuffler
+            // (`normalize_repeat`) only handles one repeat unit + count. It is
+            // still routed here (via `needs_normalization` → `true`) for the
+            // reference-tract validation (`validate_multirepeat_tract`, run at the
+            // top of this function) — that validation, not shuffling, is why the
+            // flag stays `true`. Return the (validated) edit unchanged. Giving it
+            // an explicit arm — rather than letting it fall to the generic `_`
+            // below — makes this pass-through intentional and documented, not a
+            // silent contradiction of the `needs_normalization` flag (#953).
+            NaEdit::MultiRepeat { .. } => return Ok((start, end, edit.clone(), warnings.clone())),
             _ => return Ok((start, end, edit.clone(), warnings.clone())), // Other edits don't need shuffling
         };
 
