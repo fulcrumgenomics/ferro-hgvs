@@ -221,11 +221,36 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
 
         // Get the CDS interval
         let interval = &variant.loc_edit.location;
-        let edit = variant.loc_edit.edit.inner().expect("Edit must be known");
+        let edit = variant
+            .loc_edit
+            .edit
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "CDS variant with unknown edit cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
 
         // Map CDS positions to genomic positions
-        let start_cds = interval.start.inner().expect("Edit must be known");
-        let end_cds = interval.end.inner().expect("Edit must be known");
+        let start_cds = interval
+            .start
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "CDS variant with unknown start position cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
+        let end_cds = interval
+            .end
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "CDS variant with unknown end position cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
 
         let genomic_start = self.cds_to_genomic(start_cds)?;
         let genomic_end = self.cds_to_genomic(end_cds)?;
@@ -262,11 +287,36 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
         let warnings = Vec::new();
 
         let interval = &variant.loc_edit.location;
-        let edit = variant.loc_edit.edit.inner().expect("Edit must be known");
+        let edit = variant
+            .loc_edit
+            .edit
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "Transcript variant with unknown edit cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
 
         // Map transcript positions to genomic
-        let start_tx = interval.start.inner().expect("Edit must be known");
-        let end_tx = interval.end.inner().expect("Edit must be known");
+        let start_tx = interval
+            .start
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "Transcript variant with unknown start position cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
+        let end_tx = interval
+            .end
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "Transcript variant with unknown end position cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
 
         let genomic_start =
             self.mapper
@@ -440,10 +490,37 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
         let warnings = Vec::new();
 
         let interval = &variant.loc_edit.location;
-        let edit = variant.loc_edit.edit.inner().expect("Edit must be known");
+        let edit = variant
+            .loc_edit
+            .edit
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "Genomic variant with unknown edit cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?;
 
-        let genomic_start = interval.start.inner().expect("Edit must be known").base;
-        let genomic_end = interval.end.inner().expect("Edit must be known").base;
+        let genomic_start = interval
+            .start
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "Genomic variant with unknown start position cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?
+            .base;
+        let genomic_end = interval
+            .end
+            .inner()
+            .ok_or_else(|| FerroError::ConversionError {
+                msg: format!(
+                    "Genomic variant with unknown end position cannot be converted to VCF: {}",
+                    hgvs_string
+                ),
+            })?
+            .base;
 
         // For genomic variants, we need to derive chromosome from accession
         // NC_000001.11 -> chr1, etc.
@@ -845,10 +922,37 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
 /// [`HgvsToVcfConverter`], which fetches the anchor base from the provider.
 pub fn genomic_hgvs_to_vcf(variant: &GenomeVariant) -> Result<VcfRecord, FerroError> {
     let interval = &variant.loc_edit.location;
-    let edit = variant.loc_edit.edit.inner().expect("Edit must be known");
+    let edit = variant
+        .loc_edit
+        .edit
+        .inner()
+        .ok_or_else(|| FerroError::ConversionError {
+            msg: format!(
+                "Genomic variant with unknown edit cannot be converted to VCF: {}",
+                variant
+            ),
+        })?;
 
-    let start = interval.start.inner().expect("Edit must be known").base;
-    let _end = interval.end.inner().expect("Edit must be known").base;
+    let start = interval
+        .start
+        .inner()
+        .ok_or_else(|| FerroError::ConversionError {
+            msg: format!(
+                "Genomic variant with unknown start position cannot be converted to VCF: {}",
+                variant
+            ),
+        })?
+        .base;
+    let _end = interval
+        .end
+        .inner()
+        .ok_or_else(|| FerroError::ConversionError {
+            msg: format!(
+                "Genomic variant with unknown end position cannot be converted to VCF: {}",
+                variant
+            ),
+        })?
+        .base;
 
     let chrom = accession_to_chromosome(&variant.accession.to_string())
         .unwrap_or_else(|| variant.accession.number.to_string());
@@ -1675,6 +1779,109 @@ mod tests {
         });
 
         let err = converter.convert(&variant).unwrap_err();
+        assert!(matches!(err, FerroError::ConversionError { .. }));
+    }
+
+    /// An unknown CDS *position* (`c.?_123del`) must decline cleanly, not panic
+    /// on the position `inner()` unwrap (#943 — the CDS/Tx/Genome siblings of
+    /// the already-hardened RNA path). This is the exact input the CLI reaches
+    /// with no upstream guard.
+    #[test]
+    fn test_converter_cds_unknown_start_position_declines() {
+        use crate::hgvs::uncertainty::Mu;
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::with_uncertainty(Mu::Unknown, Mu::Certain(CdsPos::new(123))),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+
+        let err = converter.convert(&variant).unwrap_err();
+        assert!(matches!(err, FerroError::ConversionError { .. }));
+    }
+
+    /// An unknown CDS *edit* (`Mu::Unknown`) must decline, not panic.
+    #[test]
+    fn test_converter_cds_unknown_edit_declines() {
+        use crate::hgvs::uncertainty::Mu;
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit {
+                location: CdsInterval::point(CdsPos::new(1)),
+                edit: Mu::Unknown,
+            },
+        });
+
+        let err = converter.convert(&variant).unwrap_err();
+        assert!(matches!(err, FerroError::ConversionError { .. }));
+    }
+
+    /// An unknown transcript (`n.`) position must decline, not panic (#943).
+    #[test]
+    fn test_converter_tx_unknown_start_position_declines() {
+        use crate::hgvs::uncertainty::Mu;
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let variant = HgvsVariant::Tx(TxVariant {
+            accession: Accession::new("NR", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                TxInterval::with_uncertainty(Mu::Unknown, Mu::Certain(TxPos::new(123))),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+
+        let err = converter.convert(&variant).unwrap_err();
+        assert!(matches!(err, FerroError::ConversionError { .. }));
+    }
+
+    /// An unknown genomic (`g.`) position must decline, not panic (#943) — both
+    /// via the converter and the standalone `genomic_hgvs_to_vcf`.
+    #[test]
+    fn test_converter_genome_unknown_position_declines() {
+        use crate::hgvs::uncertainty::Mu;
+        let transcript = create_test_transcript();
+        let provider = MockProvider::new();
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+
+        let genome = GenomeVariant {
+            accession: Accession::new("NC", "000001", Some(11)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                GenomeInterval::with_uncertainty(Mu::Unknown, Mu::Certain(GenomePos::new(123))),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        };
+
+        let err = converter
+            .convert(&HgvsVariant::Genome(genome.clone()))
+            .unwrap_err();
+        assert!(matches!(err, FerroError::ConversionError { .. }));
+
+        // The standalone entry point must also decline rather than panic.
+        let err = genomic_hgvs_to_vcf(&genome).unwrap_err();
         assert!(matches!(err, FerroError::ConversionError { .. }));
     }
 
