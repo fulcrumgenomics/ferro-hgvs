@@ -1406,7 +1406,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
             HV::Rna(v) => self.normalize_rna(v)?,
             HV::Mt(v) => self.normalize_mt(v)?,
             HV::Allele(a) => self.normalize_allele(a)?,
-            // Circular variants normalize like genomic variants
+            // Circular (`o.`, SVD-WG006) variants are returned unchanged: no
+            // 3'-shift runs and no warning is emitted. A genuine circular
+            // normalizer would 3'-shift with origin-wraparound semantics (cf.
+            // the mitochondrial wraparound handling in `normalize_mt`), which is
+            // not yet implemented. Tracked by #951. (The earlier "normalize like
+            // genomic variants" note overstated this pass-through clone.)
             HV::Circular(v) => (
                 HV::Circular(crate::hgvs::variant::CircularVariant {
                     accession: v.accession.clone(),
@@ -7250,8 +7255,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
 ///
 /// `Circular` (o.) is included even though its current normalizer is a
 /// pass-through clone (positions cannot change); the surface is
-/// forward-safe for when #129 wires real circular shuffling and costs
-/// nothing today (the post-hoc equality check trivially returns no info).
+/// forward-safe for when circular shuffling is implemented (tracked by
+/// #951 — the prior reference to the now-closed #129 was to its MT-scoped
+/// deferral) and costs nothing today (the post-hoc equality check trivially
+/// returns no info).
 fn position_text_if_shuffleable(variant: &HgvsVariant) -> Option<String> {
     match variant {
         HV::Genome(v) => Some(format!("{}", v.loc_edit.location)),
