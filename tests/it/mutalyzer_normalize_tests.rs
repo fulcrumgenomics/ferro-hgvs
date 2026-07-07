@@ -172,16 +172,21 @@ fn manifest_path() -> Option<PathBuf> {
 ///
 /// The identity is a FNV-1a hash of a canonical, path-independent *content*
 /// signature derived from the parsed manifest (see
-/// [`reference_identity_from_manifest`]): the `prepared_at` stamp (refreshed on
-/// every re-prepare, so it moves whenever the underlying data is regenerated even
-/// if nothing else does), the `transcript_count`, and the file *names* (basenames,
-/// not paths) of the content-bearing cdot / genome / transcript artifacts — whose
-/// names encode the source build/version (e.g. `cdot-0.2.32.refseq.GRCh38.json`).
-/// Hashing the basenames rather than the full paths keeps the identity invariant
-/// to machine-local absolute paths, so two byte-identical references on different
-/// hosts share one identity. FNV-1a is deterministic across platforms/toolchains
-/// (unlike `DefaultHasher`). Returns `None` when no manifest is available or it
-/// fails to parse (the gate then has nothing reference-specific to enforce).
+/// [`reference_identity_from_manifest`]): the `transcript_count`, the file *names*
+/// (basenames, not paths) of the content-bearing cdot / genome / transcript
+/// artifacts — whose names encode the source build/version (e.g.
+/// `cdot-0.2.32.refseq.GRCh38.json`) — and FNV content-stamps of the derived
+/// artifacts (see [`CONTENT_STAMPED_ARTIFACTS`]). `prepared_at` is deliberately
+/// NOT part of the signature (#933): it is a wall-clock stamp refreshed on every
+/// `save()`, so hashing it made a re-bless of byte-identical data mint a new
+/// identity and force a needless fixture re-record. Excluding it makes the
+/// identity a reproducible pure-content hash — re-blessing the same data is
+/// idempotent. Hashing the basenames rather than the full paths keeps the
+/// identity invariant to machine-local absolute paths, so two byte-identical
+/// references on different hosts share one identity. FNV-1a is deterministic
+/// across platforms/toolchains (unlike `DefaultHasher`). Returns `None` when no
+/// manifest is available or it fails to parse (the gate then has nothing
+/// reference-specific to enforce).
 fn reference_identity() -> Option<String> {
     static ID: OnceLock<Option<String>> = OnceLock::new();
     ID.get_or_init(|| {
@@ -192,9 +197,10 @@ fn reference_identity() -> Option<String> {
         // FNV-1a of their *current bytes*, read here at identity time and injected
         // into the manifest value the signature consumes. Computing from the files
         // (rather than a manifest-stored stamp written by `save`) is what makes
-        // this load-bearing: an in-place content rewrite is caught even when the
-        // rewrite bypasses `save` and so leaves `prepared_at` and every basename
-        // unchanged (a hand-edit or a standalone derive example).
+        // this load-bearing: an in-place content rewrite of a derived artifact is
+        // caught even when it keeps the same basename (a hand-edit or a standalone
+        // derive example). This is now the *sole* content-change signal for those
+        // artifacts, since `prepared_at` is no longer hashed (#933).
         let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
         inject_content_stamps(&mut manifest, base_dir);
         Some(reference_identity_from_manifest(&manifest))
@@ -205,21 +211,22 @@ fn reference_identity() -> Option<String> {
 /// The tracked artifacts whose *content* is stamped into the reference identity
 /// (#905 Part 2): every manifest artifact small enough to FNV-hash on each
 /// identity computation. A stamp catches an *in-place* content change — a rewrite
-/// that keeps the same filename and does not move `prepared_at` (a standalone
-/// derive/backfill example that bypasses `manifest.save()`, or a hand-edit) —
-/// which the Part-1 basename set cannot, and which matters most for the artifacts
-/// with *unversioned* basenames (`LRG_RefSeqGene`, `lrg_refseq_mapping.txt`, the
-/// derived/legacy JSONs), where Part 1 gives no content protection at all.
+/// that keeps the same filename (a standalone derive/backfill example that
+/// bypasses `manifest.save()`, or a hand-edit) — which the Part-1 basename set
+/// cannot, and which matters most for the artifacts with *unversioned* basenames
+/// (`LRG_RefSeqGene`, `lrg_refseq_mapping.txt`, the derived/legacy JSONs), where
+/// Part 1 gives no content protection at all.
 ///
 /// The cut is size, not artifact class, so there are no arbitrary sibling gaps:
 /// deliberately excluded are the bulk artifacts (all ≥100 MB on a live reference)
 /// — the cdot JSONs (~200–500 MB), the genome FASTAs (~3 GB each),
 /// `supplemental_fasta` (~1.3 GB), and the transcript/protein/refseqgene/LRG/
 /// ensembl sequence-FASTA lists (~100–600 MB). Hashing any of those on every
-/// `reference_identity()` call would be prohibitive I/O; they also carry
-/// build/version-tagged basenames and are rebuilt only by a full `ferro prepare`
-/// (which refreshes `prepared_at`, already hashed), so Part 1 + `prepared_at`
-/// already cover them. Absent fields simply contribute no stamp.
+/// `reference_identity()` call would be prohibitive I/O; they carry
+/// build/version-tagged basenames (Part 1), and a real data update bumps that
+/// version — so a *same-basename* in-place rewrite of a bulk artifact is the one
+/// content change the identity does not catch, an accepted gap now that
+/// `prepared_at` is no longer hashed (#933). Absent fields contribute no stamp.
 const CONTENT_STAMPED_ARTIFACTS: &[&str] = &[
     "derived_transcript_placements",
     "derived_refseqgene_placements",
@@ -343,12 +350,17 @@ fn reference_identity_from_manifest(manifest: &serde_json::Value) -> String {
     // is joined deterministically so the same content always yields the same
     // signature regardless of manifest key ordering or host paths.
     let mut parts: Vec<String> = Vec::new();
-    if let Some(prepared_at) = manifest
-        .get("prepared_at")
-        .and_then(serde_json::Value::as_str)
-    {
-        parts.push(format!("prepared_at={prepared_at}"));
-    }
+    // `prepared_at` is deliberately EXCLUDED from the signature (#933): it is a
+    // wall-clock stamp refreshed on every `save()`, so hashing it made the
+    // identity non-reproducible — a re-bless of byte-identical data produced a
+    // new identity and forced a fixture re-record for no content change. The
+    // identity is now a pure content signature (transcript_count + artifact
+    // basenames, whose names encode source build/version, + FNV content-stamps
+    // of the derived artifacts). Tradeoff: a same-basename, same-count artifact
+    // whose bytes changed in place is caught only for the content-stamped
+    // derived artifacts, not the big cdot/genome/transcript FASTAs — but a real
+    // data update bumps the version in the filename (a basename change), so this
+    // is a negligible gap versus the reproducibility win.
     if let Some(count) = manifest
         .get("transcript_count")
         .and_then(serde_json::Value::as_u64)
@@ -4385,13 +4397,15 @@ mod comparator_tests {
         });
         let id_base = reference_identity_from_manifest(&base);
 
-        // A re-prepare bumps `prepared_at` even with identical artifacts → drift.
+        // A re-bless bumps `prepared_at` but leaves every artifact byte-identical:
+        // the identity must be UNCHANGED (#933). `prepared_at` is not hashed, so
+        // re-blessing the same data is idempotent and forces no fixture re-record.
         let mut reprepared = base.clone();
         reprepared["prepared_at"] = serde_json::json!("2026-06-18T00:00:00.000000+00:00");
-        assert_ne!(
+        assert_eq!(
             id_base,
             reference_identity_from_manifest(&reprepared),
-            "a re-prepare (new prepared_at) must change the identity"
+            "a re-bless of identical data (new prepared_at only) must NOT change the identity"
         );
 
         // A different cdot version (encoded in the filename) → different identity.
