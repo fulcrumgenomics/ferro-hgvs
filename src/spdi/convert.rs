@@ -1030,6 +1030,37 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
         })?;
         return ensure_positive_tx(tx.base, "r", pos);
     }
+    if pos.is_5utr() {
+        // r.-N is the Nth base of the 5' UTR — numbered upstream from the start
+        // codon, exactly mirroring c.-N (numbering.md:58/61: RNA numbering
+        // follows the coding DNA reference, which includes c.-N). Resolve it
+        // through the same exon-aware `CoordinateMapper::cds_to_tx` the c.-N path
+        // (`resolve_cds_to_tx`) uses — via the equivalent `CdsPos` with base < 1 —
+        // so r.-N and c.-N always land at the same transcript/SPDI position. A
+        // plain `cds_start - base` would agree only for a contiguous single-exon
+        // 5'UTR; a multi-exon 5'UTR with cdot tx-coordinate (CIGAR) gaps needs the
+        // exon-aware walk. Requires a CDS start — non-coding transcripts have no
+        // 5'UTR anchor.
+        if transcript.cds_start.is_none() {
+            return Err(ConversionError::MissingReferenceData {
+                description: format!(
+                    "r.{} requires a CDS start on the transcript; non-coding \
+                     transcripts have no 5'UTR anchor",
+                    pos.base
+                ),
+            });
+        }
+        let mapper = CoordinateMapper::new(transcript);
+        let tx = mapper.cds_to_tx(&CdsPos::new(pos.base)).map_err(|e| {
+            ConversionError::MissingReferenceData {
+                description: format!(
+                    "could not resolve r.{} to transcript position: {}",
+                    pos.base, e
+                ),
+            }
+        })?;
+        return ensure_positive_tx(tx.base, "r", pos);
+    }
     ensure_positive_tx(pos.base, "r", pos)
 }
 
@@ -2863,6 +2894,117 @@ mod tests {
         );
         provider.add_transcript(tx);
         let r = parse_hgvs("NR_TEST.1:r.*1del").unwrap();
+        assert!(hgvs_to_spdi(&r, &provider).is_err());
+    }
+
+    // ----- r.-N / c.-N 5'UTR agreement (#960) --------------------------------
+
+    /// #960: r.-N and c.-N denote the same 5'UTR transcript position, so both
+    /// must resolve to the same SPDI position. `resolve_rna_pos` now routes the
+    /// 5'UTR case through the same exon-aware `CoordinateMapper::cds_to_tx` the
+    /// c.-N path uses (previously it fell through to `ensure_positive_tx` and was
+    /// rejected as a non-positive base).
+    #[test]
+    fn r_minus_and_c_minus_resolve_to_same_spdi_position() {
+        let provider = make_test_provider();
+        // NM_TEST.1: cds_start = tx 6, so c.-3 / r.-3 is tx 3 (1-based) → SPDI 2.
+        let c = parse_hgvs("NM_TEST.1:c.-3del").unwrap();
+        let r = parse_hgvs("NM_TEST.1:r.-3del").unwrap();
+        let c_spdi = hgvs_to_spdi(&c, &provider).unwrap();
+        let r_spdi = hgvs_to_spdi(&r, &provider).unwrap();
+        assert_eq!(
+            c_spdi.position, r_spdi.position,
+            "c.-3 and r.-3 must resolve to the same SPDI position"
+        );
+        assert_eq!(c_spdi.position, 2);
+    }
+
+    /// Build a transcript whose 5'UTR straddles a *tx-coordinate gap*, so the
+    /// exon-aware mapper and a plain `cds_start - base` short-circuit DISAGREE:
+    ///
+    /// - Exon 1: tx 1..5 — the upstream part of the 5'UTR.
+    /// - Gap in tx coordinates: tx 6..9 do not exist (`exon1.end + 1 (6) !=
+    ///   exon2.start (10)`).
+    /// - Exon 2: tx 10..44 — 5'UTR tx 10-11 then CDS from `cds_start` = tx 12.
+    ///
+    /// For `c.-3`, `CoordinateMapper::cds_to_tx` walks backward from `cds_start`
+    /// (12): c.-1 = tx 11, c.-2 = tx 10 (start of exon 2), then skips the tx 6-9
+    /// gap and lands on `exon1.end` = tx 5. A plain `cds_start - 3` = tx 9 would
+    /// instead land inside the nonexistent gap. So r.-3 and c.-3 only agree here
+    /// if r.-N routes through the exon-aware mapper — the fixture that makes the
+    /// #960 test non-vacuous against a naive re-implementation.
+    fn make_gapped_utr5_provider() -> MockProvider {
+        let tx = Transcript::new(
+            "NM_GAP5.1".to_string(),
+            Some("GAP5".to_string()),
+            Strand::Plus,
+            "A".repeat(44),
+            Some(12),
+            Some(40),
+            vec![Exon::new(1, 1, 5), Exon::new(2, 10, 44)],
+            None,
+            None,
+            None,
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        let mut provider = MockProvider::new();
+        provider.add_transcript(tx);
+        provider
+    }
+
+    /// #960 (non-vacuous): on a transcript whose 5'UTR straddles a tx-coordinate
+    /// gap, r.-3 and c.-3 must STILL resolve to the same SPDI position. The only
+    /// way they agree is if r.-N is mapped through the exon-aware
+    /// `CoordinateMapper::cds_to_tx` (tx 5 → SPDI 4). A naive `cds_start - base`
+    /// would put r.-3 at tx 9 → SPDI 8, so this test fails against such a
+    /// re-implementation (unlike the single-exon sibling test, where the two
+    /// coincide).
+    #[test]
+    fn r_minus_c_minus_agree_across_exon_gap() {
+        let provider = make_gapped_utr5_provider();
+        // cds_start = tx 12 (exon 2); counting 3 bases upstream skips the tx 6-9
+        // gap to exon 1's last base (tx 5). So c.-3 / r.-3 = tx 5 → SPDI 4.
+        let c = parse_hgvs("NM_GAP5.1:c.-3A>G").unwrap();
+        let r = parse_hgvs("NM_GAP5.1:r.-3a>g").unwrap();
+        let c_spdi = hgvs_to_spdi(&c, &provider).unwrap();
+        let r_spdi = hgvs_to_spdi(&r, &provider).unwrap();
+        assert_eq!(
+            c_spdi.position, r_spdi.position,
+            "c.-3 and r.-3 must resolve to the same SPDI position across the exon gap"
+        );
+        assert_eq!(
+            c_spdi.position, 4,
+            "-3 must map through the tx 6-9 gap to exon 1 (tx 5) → SPDI 4, \
+             not the naive cds_start-base tx 9 → SPDI 8"
+        );
+    }
+
+    /// A 5'UTR r.-N on a non-coding transcript (no CDS start) declines cleanly
+    /// rather than mapping through a missing anchor.
+    #[test]
+    fn r_minus_on_non_coding_transcript_declines() {
+        let mut provider = MockProvider::new();
+        let tx = Transcript::new(
+            "NR_TEST5.1".to_string(),
+            Some("NCTEST5".to_string()),
+            Strand::Plus,
+            "A".repeat(40),
+            None,
+            None,
+            vec![Exon::new(1, 1, 40)],
+            None,
+            None,
+            None,
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        provider.add_transcript(tx);
+        let r = parse_hgvs("NR_TEST5.1:r.-3del").unwrap();
         assert!(hgvs_to_spdi(&r, &provider).is_err());
     }
 
