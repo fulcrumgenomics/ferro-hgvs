@@ -229,12 +229,8 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
-| `ENSG00000184937.16(ENST00000452863.10):c.9del` | normalized | reference_unavailable | — | #933 |
-| `ENSG00000204370.13(ENST00000375549.8):c.100del` | normalized | reference_unavailable | — | #933 |
 | `ENST00000375549.7:c.100del` | errors | accepted_divergence | — | — |
-| `ENST00000375549.8:c.100del` | normalized | reference_unavailable | — | #933 |
-| `ENST00000375549:c.100del` | normalized | reference_unavailable | — | #933 |
-| `ENST00000452863.10:c.9del` | normalized | reference_unavailable | — | #933 |
+| `ENST00000375549:c.100del` | normalized | accepted_divergence | — | — |
 | `LRG_199t1:c.11LRG_199t1:c.11` | errors | accepted_divergence | — | — |
 | `LRG_199t1:c.11LRG_199t1:c.11[10]` | normalized | accepted_divergence | — | — |
 | `LRG_199t1:c.11NG_012337.3(NM_003002.4):c.14[10]` | normalized | accepted_divergence | — | — |
@@ -341,6 +337,6 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | genomic | 19 | 0 | 0 | 0 | 5 |
 | infos | 8 | 0 | 0 | 0 | 1 |
 | noncoding | 0 | 0 | 0 | 0 | 8 |
-| normalized | 25 | 5 | 1 | 5 | 15 |
+| normalized | 26 | 5 | 1 | 0 | 15 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |

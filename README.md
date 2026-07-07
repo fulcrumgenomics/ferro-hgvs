@@ -73,7 +73,7 @@ ferro parse "NM_000088.3:c.459A>G"
 # Parse from file
 ferro parse -i variants.txt -f json
 
-# Prepare reference data (downloads RefSeq, genome, cdot)
+# Prepare reference data (downloads RefSeq, genome, cdot — RefSeq-only by default)
 ferro prepare --output-dir ferro-reference
 
 # Verify reference data is ready
@@ -88,6 +88,29 @@ ferro normalize "NM_000088.3:c.459del" --reference ferro-reference/
 ```
 
 > **Throughput tip:** when normalizing many variants, feed them **sorted by transcript accession (or by genomic position)**. ferro caches each resolved transcript, so consecutive variants on the same transcript skip the (dominant) cost of re-reading and re-building it from the reference. Sorted input keeps the relevant transcripts resident in the cache and is markedly faster on large batches — see [Performance Comparison](#performance-comparison).
+
+### Optional reference data
+
+A bare `ferro prepare` builds a **RefSeq-only** reference (accessions `NM_`/`NR_`/`NP_`/`NG_`). Two opt-in flags provision additional data — pass them at prepare time; they are what a fully-provisioned ("blessed") reference is built with:
+
+```bash
+# Add Ensembl support (accessions ENST/ENSG/ENSP). Downloads the Ensembl cdot
+# metadata and cDNA FASTAs (~1 GB+); off by default. Without it, an ENST/ENSG/ENSP
+# input reports "Reference not found" and the message points back at this flag.
+ferro prepare --output-dir ferro-reference --ensembl
+
+# Derive version-independent NG_ placements and the NG_→transcript-version map
+# (ng_hosted_transcripts) for a curated list of RefSeqGene accessions. Required to
+# resolve legacy gene-symbol selectors (NG_(GENE):c.…) and bare-NG_ hosted lookups.
+ferro prepare --output-dir ferro-reference \
+  --derive-ng-placements path/to/ng_accessions.txt
+
+# A fully-provisioned reference combines both in one run:
+ferro prepare --output-dir ferro-reference --ensembl \
+  --derive-ng-placements path/to/ng_accessions.txt
+```
+
+Both flags are incremental: re-running `ferro prepare` over an existing reference adds the requested data and preserves already-provisioned artifacts.
 
 ### Library
 

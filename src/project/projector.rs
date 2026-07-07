@@ -2534,18 +2534,30 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // 3. Find overlapping transcripts via the Projector (sorted by priority).
         let projection_result = self.projector.project(&contig, pos)?;
 
-        // 3a. Apply the enumeration policy (#656): collapse superseded versions
-        //     and prefer curated transcripts over predicted models, so the
-        //     enumerated set matches mutalyzer's curated set rather than every
+        // 3a. Apply the enumeration policy (#656/#933): scope to the input's own
+        //     source database, collapse superseded versions, and prefer curated
+        //     transcripts over predicted models, so the enumerated set matches
+        //     the comparator's curated, single-source set rather than every
         //     cdot-overlapping record.
+        // Classify the input's source by its accession *prefix* pattern, not the
+        // `ensembl_style` flag: that flag means "no `_` separator" (true for bare
+        // chromosome names like `chr1`), whereas `is_ensembl_prefix` strictly
+        // matches the Ensembl `ENS<species><feature>` stable-id shape — the same
+        // `ENS`-prefix classification `ReferenceSource::of` applies to the
+        // transcript ids being filtered.
+        let input_source = match variant.accession() {
+            Some(a) if Accession::is_ensembl_prefix(&a.prefix) => ReferenceSource::Ensembl,
+            _ => ReferenceSource::RefSeq,
+        };
         let all_ids: Vec<&str> = projection_result
             .projections
             .iter()
             .map(|p| p.transcript_id.as_str())
             .collect();
-        let keep: std::collections::HashSet<&str> = select_enumerated_transcript_ids(&all_ids)
-            .into_iter()
-            .collect();
+        let keep: std::collections::HashSet<&str> =
+            select_enumerated_transcript_ids(&all_ids, input_source)
+                .into_iter()
+                .collect();
 
         // 4. Project against each kept overlapping transcript (priority order preserved).
         let mut results = Vec::with_capacity(keep.len());
@@ -4464,9 +4476,44 @@ fn is_transcript_accession(id: &str) -> bool {
         || id.starts_with("ENST")
 }
 
+/// The source database an accession comes from, used to scope transcript-set
+/// enumeration to the input's own source (#933).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReferenceSource {
+    /// RefSeq / GenBank (`NC_`, `NG_`, `NM_`, `NR_`, `XM_`, `XR_`, …).
+    RefSeq,
+    /// Ensembl (`ENSG`, `ENST`, `ENSP`, and species-qualified variants).
+    Ensembl,
+}
+
+impl ReferenceSource {
+    /// Classify a rendered accession/transcript id by its prefix, using the
+    /// **same** predicate the input path applies (`Accession::is_ensembl_prefix`)
+    /// so the two classifications cannot drift: extract the id's leading
+    /// ASCII-letter run (`ENST00000375549.8` → `ENST`, `NM_000249.4` → `NM`) and
+    /// test it against the strict Ensembl `ENS<species><feature>` stable-id shape.
+    /// Everything else is RefSeq.
+    fn of(id: &str) -> Self {
+        let prefix: String = id.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+        if crate::hgvs::variant::Accession::is_ensembl_prefix(&prefix) {
+            ReferenceSource::Ensembl
+        } else {
+            ReferenceSource::RefSeq
+        }
+    }
+}
+
 /// Apply the `project_*_all` enumeration policy (#656) to a priority-ordered
 /// list of overlapping transcript ids:
 ///
+/// 0. **Source scoping (#933)** — enumerate only transcripts from the *input's
+///    own* source database (`input_source`). A RefSeq/genomic input never fans
+///    out onto Ensembl transcripts, and an Ensembl input never fans out onto
+///    RefSeq. This extends the #656 "enumerate the oracle's set" principle to
+///    the source dimension: provisioning Ensembl into the reference must not
+///    make a RefSeq-anchored input suddenly gain `ENST`/`ENSP` consequences the
+///    RefSeq-centric comparator can never produce (and vice-versa). Before any
+///    Ensembl transcripts exist in the reference this filter is a no-op.
 /// 1. **Collapse superseded versions** — keep only the highest version per base
 ///    accession (drop `NM_000532.4` when `NM_000532.5` overlaps the same locus).
 /// 2. **Prefer curated transcripts** — drop predicted `XM_`/`XR_` models when a
@@ -4475,8 +4522,18 @@ fn is_transcript_accession(id: &str) -> bool {
 ///    so a locus a predicted model would have covered never returns empty.
 ///
 /// Input order (clinical priority) is preserved among the kept ids.
-pub(crate) fn select_enumerated_transcript_ids<'a>(ids: &[&'a str]) -> Vec<&'a str> {
+pub(crate) fn select_enumerated_transcript_ids<'a>(
+    ids: &[&'a str],
+    input_source: ReferenceSource,
+) -> Vec<&'a str> {
     use std::collections::HashMap;
+    // 0. Source scoping: keep only ids from the input's own source database.
+    let ids: Vec<&'a str> = ids
+        .iter()
+        .copied()
+        .filter(|id| ReferenceSource::of(id) == input_source)
+        .collect();
+    let ids = ids.as_slice();
     // 1. Highest version seen per base accession.
     let mut max_ver: HashMap<&str, u32> = HashMap::new();
     for id in ids {
@@ -4515,7 +4572,7 @@ pub(crate) fn select_enumerated_transcript_ids<'a>(ids: &[&'a str]) -> Vec<&'a s
 
 #[cfg(test)]
 mod enumeration_policy_tests {
-    use super::select_enumerated_transcript_ids;
+    use super::{select_enumerated_transcript_ids, ReferenceSource};
 
     #[test]
     fn collapses_superseded_versions() {
@@ -4527,7 +4584,7 @@ mod enumeration_policy_tests {
             "NM_001178014.2",
         ];
         assert_eq!(
-            select_enumerated_transcript_ids(&ids),
+            select_enumerated_transcript_ids(&ids, ReferenceSource::RefSeq),
             vec!["NM_000532.5", "NM_001178014.2"]
         );
     }
@@ -4535,7 +4592,10 @@ mod enumeration_policy_tests {
     #[test]
     fn drops_predicted_models_when_curated_present() {
         let ids = ["NM_000532.5", "XM_011512873.2", "XM_005247508.1"];
-        assert_eq!(select_enumerated_transcript_ids(&ids), vec!["NM_000532.5"]);
+        assert_eq!(
+            select_enumerated_transcript_ids(&ids, ReferenceSource::RefSeq),
+            vec!["NM_000532.5"]
+        );
     }
 
     #[test]
@@ -4543,7 +4603,7 @@ mod enumeration_policy_tests {
         // No curated transcript overlaps → keep predicted models (never empty).
         let ids = ["XM_005247508.1", "XM_011512873.2"];
         assert_eq!(
-            select_enumerated_transcript_ids(&ids),
+            select_enumerated_transcript_ids(&ids, ReferenceSource::RefSeq),
             vec!["XM_005247508.1", "XM_011512873.2"]
         );
     }
@@ -4551,15 +4611,58 @@ mod enumeration_policy_tests {
     #[test]
     fn collapses_predicted_versions_then_drops_when_curated_present() {
         let ids = ["NM_000532.5", "XM_011512873.1", "XM_011512873.2"];
-        assert_eq!(select_enumerated_transcript_ids(&ids), vec!["NM_000532.5"]);
+        assert_eq!(
+            select_enumerated_transcript_ids(&ids, ReferenceSource::RefSeq),
+            vec!["NM_000532.5"]
+        );
     }
 
     #[test]
     fn preserves_priority_order_among_kept() {
         let ids = ["NM_B.1", "NM_A.2", "NM_A.1"];
         assert_eq!(
-            select_enumerated_transcript_ids(&ids),
+            select_enumerated_transcript_ids(&ids, ReferenceSource::RefSeq),
             vec!["NM_B.1", "NM_A.2"]
+        );
+    }
+
+    // #933 source scoping: a RefSeq/genomic input never fans out onto Ensembl
+    // transcripts that overlap the same locus — the ENST/ENSP ids are dropped
+    // before the version/curated policy.
+    #[test]
+    fn refseq_input_drops_overlapping_ensembl_transcripts() {
+        let ids = [
+            "NM_000249.4",
+            "ENST00000231790.8",
+            "NR_999999.1",
+            "ENSP00000231790.3",
+        ];
+        assert_eq!(
+            select_enumerated_transcript_ids(&ids, ReferenceSource::RefSeq),
+            vec!["NM_000249.4", "NR_999999.1"]
+        );
+    }
+
+    // #933 source scoping: an Ensembl input enumerates only Ensembl transcripts;
+    // the co-located RefSeq ids are dropped.
+    #[test]
+    fn ensembl_input_drops_overlapping_refseq_transcripts() {
+        let ids = ["NM_000249.4", "ENST00000231790.8", "ENST00000375549.8"];
+        assert_eq!(
+            select_enumerated_transcript_ids(&ids, ReferenceSource::Ensembl),
+            vec!["ENST00000231790.8", "ENST00000375549.8"]
+        );
+    }
+
+    // #933: source scoping composes with the version-collapse policy within the
+    // kept source (highest Ensembl version wins; RefSeq dropped for an Ensembl
+    // input).
+    #[test]
+    fn source_scoping_composes_with_version_collapse() {
+        let ids = ["ENST00000375549.7", "ENST00000375549.8", "NM_000249.4"];
+        assert_eq!(
+            select_enumerated_transcript_ids(&ids, ReferenceSource::Ensembl),
+            vec!["ENST00000375549.8"]
         );
     }
 }

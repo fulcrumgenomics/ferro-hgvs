@@ -311,6 +311,21 @@ impl Diagnostic {
     }
 }
 
+/// Discoverability hint (#933) appended to a `ReferenceNotFound` message when the
+/// missing id is an Ensembl accession (`ENST`/`ENSG`/`ENSP`). A prepared reference
+/// is RefSeq-only unless built with `ferro prepare --ensembl`, so an unresolved
+/// Ensembl accession most often means Ensembl data was never provisioned. Phrased
+/// conditionally ("if your reference was prepared without Ensembl data") so it is
+/// accurate whether or not this particular reference happens to carry Ensembl data.
+fn ensembl_prepare_hint(id: &str) -> &'static str {
+    if id.starts_with("ENST") || id.starts_with("ENSG") || id.starts_with("ENSP") {
+        " — this is an Ensembl accession; if your reference was prepared without \
+         Ensembl data, re-run `ferro prepare --ensembl` to enable ENST/ENSG/ENSP support"
+    } else {
+        ""
+    }
+}
+
 /// Main error type for ferro-hgvs operations
 #[derive(Error, Debug, Clone, PartialEq)]
 pub enum FerroError {
@@ -324,7 +339,7 @@ pub enum FerroError {
     },
 
     /// Reference sequence or transcript not found
-    #[error("Reference not found: {id}")]
+    #[error("Reference not found: {id}{}", ensembl_prepare_hint(.id.as_str()))]
     ReferenceNotFound { id: String },
 
     /// A transcript was requested at an exact versioned accession under
@@ -859,6 +874,33 @@ mod tests {
         let diag = Diagnostic::new().with_code(ErrorCode::InvalidEdit);
         let err = FerroError::parse_with_diagnostic(5, "bad edit", diag);
         assert!(matches!(err, FerroError::Parse { pos: 5, .. }));
+    }
+
+    #[test]
+    fn reference_not_found_appends_ensembl_prepare_hint() {
+        // #933: an unresolved Ensembl accession points the user at
+        // `ferro prepare --ensembl` (the reference is RefSeq-only by default).
+        for id in ["ENST00000375549.8", "ENSG00000204370.13", "ENSP00000000001"] {
+            let msg = FerroError::ReferenceNotFound { id: id.to_string() }.to_string();
+            assert!(
+                msg.starts_with(&format!("Reference not found: {id}")),
+                "keeps the base message: {msg}"
+            );
+            assert!(
+                msg.contains("ferro prepare --ensembl"),
+                "Ensembl accession must surface the --ensembl hint: {msg}"
+            );
+        }
+        // A RefSeq (or any non-Ensembl) accession gets the bare message — no hint.
+        let refseq = FerroError::ReferenceNotFound {
+            id: "NM_000088.3".to_string(),
+        }
+        .to_string();
+        assert_eq!(refseq, "Reference not found: NM_000088.3");
+        assert!(
+            !refseq.contains("--ensembl"),
+            "no hint for RefSeq: {refseq}"
+        );
     }
 
     #[test]

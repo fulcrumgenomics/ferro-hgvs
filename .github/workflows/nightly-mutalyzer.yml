@@ -35,8 +35,12 @@ env:
   # invocation changes meaningfully, so stale caches are invalidated
   # without manual purging. (v2: added --derive-ng-placements so the
   # prepared reference carries derived NG_ placements + ng_hosted_transcripts,
-  # matching the blessed reference; #875.) Keep in sync with nightly-perf.yml.
-  MANIFEST_CACHE_VERSION: v2
+  # matching the blessed reference; #875. v3: added --ensembl so the reference
+  # provisions Ensembl cdot + cDNA, matching the Ensembl-inclusive blessed
+  # reference the corpus identity is recorded against; #933.) nightly-perf.yml
+  # keeps its OWN RefSeq-only cache (its `-refseq-` key) and does NOT provision
+  # Ensembl, so the two caches deliberately diverge — do not re-sync them (#933).
+  MANIFEST_CACHE_VERSION: v3
 
 jobs:
   reference-aware-tests:
@@ -70,9 +74,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Cache prepared reference manifest
-        # SHARED cache key with .github/workflows/nightly-perf.yml — keep this
-        # key and MANIFEST_CACHE_VERSION identical across both files so the perf
-        # gate reuses the manifest this job prepares; bump them together.
+        # This job's Ensembl-inclusive manifest cache. nightly-perf.yml no longer
+        # reuses it — it keeps a separate RefSeq-only cache (its `-refseq-` key)
+        # so its startup-budget gate is not perturbed by the eager Ensembl merge
+        # (#933). The two keys are intentionally distinct; do not re-merge them.
         id: cache-manifest
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
@@ -101,6 +106,7 @@ jobs:
           ./target/release/ferro prepare \
             --output-dir benchmark-output \
             --genome grch38 \
+            --ensembl \
             --derive-ng-placements tests/fixtures/mutalyzer-normalize/ng_accessions.txt
 
       - name: Confirm manifest present

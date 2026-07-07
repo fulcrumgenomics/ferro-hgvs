@@ -39,9 +39,14 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # SHARED with nightly-mutalyzer.yml — keep identical, bump together.
-  # (v2: --derive-ng-placements added to the prepare step; #875.)
-  MANIFEST_CACHE_VERSION: v2
+  # Perf keeps a SEPARATE, RefSeq-only manifest cache (its own `-refseq-` key
+  # below) — deliberately NOT shared with nightly-mutalyzer.yml's Ensembl-inclusive
+  # cache. The startup-budget gate must measure the RefSeq `ferro normalize`
+  # startup it was tuned for (#585); provisioning Ensembl would make a RefSeq
+  # startup eagerly merge ~198k Ensembl transcripts into the primary build and
+  # inflate the baseline (#933). Bump on any `ferro prepare` change that alters
+  # the RefSeq manifest shape. (v2: --derive-ng-placements added; #875.)
+  MANIFEST_CACHE_VERSION: v3
   # Budget knobs (seconds). Today's startup floor is ~1.0s; the #585 bug was
   # ~4.8s. 2.5s sits ~2.5x above healthy and ~2x below the bug — outside runner
   # noise in both directions.
@@ -79,15 +84,16 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Cache prepared reference manifest
-        # SHARED cache key with nightly-mutalyzer.yml — DO NOT diverge. GitHub
-        # Actions cache is repo-scoped, so this restores the same benchmark-output/
-        # the mutalyzer nightly prepared. Keep the key and MANIFEST_CACHE_VERSION
-        # identical across both files; bump them together.
+        # SEPARATE, RefSeq-only cache (own `-refseq-` namespace) — deliberately
+        # NOT shared with nightly-mutalyzer.yml's Ensembl-inclusive cache, so the
+        # startup-budget gate measures RefSeq `ferro normalize` startup without the
+        # eager Ensembl-merge cost (#585/#933). Repopulated by this workflow's own
+        # RefSeq-only `ferro prepare` below on a cache miss.
         id: cache-manifest
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: benchmark-output/
-          key: ${{ runner.os }}-ferro-manifest-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**', 'src/bin/ferro.rs', 'tests/fixtures/mutalyzer-normalize/ng_accessions.txt') }}
+          key: ${{ runner.os }}-ferro-manifest-refseq-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**', 'src/bin/ferro.rs', 'tests/fixtures/mutalyzer-normalize/ng_accessions.txt') }}
 
       - name: Build ferro (release)
         run: cargo build --release --bin ferro
