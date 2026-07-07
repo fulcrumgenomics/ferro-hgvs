@@ -147,6 +147,38 @@ impl Consequence {
         }
     }
 
+    /// Severity rank for deterministic most-severe selection.
+    ///
+    /// A higher value is more severe. Unlike [`Consequence::impact`], which buckets terms into
+    /// four coarse levels, this is a strict total order over the individual terms following the
+    /// Ensembl VEP consequence-severity ordering. It exists so that selecting the most severe
+    /// consequence among several terms in the same impact bucket (e.g. `splice_donor_variant`
+    /// vs `stop_gained` vs `frameshift_variant`, all `High`) is deterministic rather than
+    /// dependent on input order.
+    pub fn severity_rank(&self) -> u8 {
+        match self {
+            Consequence::TranscriptAblation => 19,
+            Consequence::SpliceAcceptorVariant => 18,
+            Consequence::SpliceDonorVariant => 17,
+            Consequence::StopGained => 16,
+            Consequence::FrameshiftVariant => 15,
+            Consequence::StopLost => 14,
+            Consequence::StartLost => 13,
+            Consequence::InframeInsertion => 12,
+            Consequence::InframeDeletion => 11,
+            Consequence::MissenseVariant => 10,
+            Consequence::ProteinAlteringVariant => 9,
+            Consequence::SpliceRegionVariant => 8,
+            Consequence::StartRetainedVariant => 7,
+            Consequence::StopRetainedVariant => 6,
+            Consequence::SynonymousVariant => 5,
+            Consequence::CodingSequenceVariant => 4,
+            Consequence::FivePrimeUtrVariant => 3,
+            Consequence::ThreePrimeUtrVariant => 2,
+            Consequence::IntronVariant => 1,
+        }
+    }
+
     /// Get a human-readable description.
     pub fn description(&self) -> &'static str {
         match self {
@@ -240,8 +272,12 @@ pub struct ProteinEffect {
 
 impl ProteinEffect {
     /// Get the most severe consequence.
+    ///
+    /// Selection is by [`Consequence::severity_rank`] — a strict per-term total order — so the
+    /// winner among several terms in the same coarse [`Impact`] bucket is deterministic rather
+    /// than dependent on the order they appear in `consequences`.
     pub fn most_severe(&self) -> Option<&Consequence> {
-        self.consequences.iter().max_by_key(|c| c.impact())
+        self.consequences.iter().max_by_key(|c| c.severity_rank())
     }
 
     /// Check if this is a high-impact variant.
@@ -288,14 +324,27 @@ impl EffectPredictor {
         alt_aa: &AminoAcid,
         position: u64,
     ) -> ProteinEffect {
-        let consequence = if ref_aa == alt_aa {
-            Consequence::SynonymousVariant
+        let consequence = if position == 1 && *ref_aa == AminoAcid::Met {
+            // The initiator codon. Any change away from Met loses the start (start_lost),
+            // regardless of what it becomes — a start→stop is a lost start, not stop_gained.
+            // This branch decides start-loss from the (alt) residue at the start, not merely
+            // from the position, so an unchanged start is start_retained rather than synonymous.
+            if ref_aa == alt_aa {
+                Consequence::StartRetainedVariant
+            } else {
+                Consequence::StartLost
+            }
+        } else if ref_aa == alt_aa {
+            // A stop-to-stop change is stop_retained, not a generic synonymous change.
+            if *ref_aa == AminoAcid::Ter {
+                Consequence::StopRetainedVariant
+            } else {
+                Consequence::SynonymousVariant
+            }
         } else if *alt_aa == AminoAcid::Ter {
             Consequence::StopGained
         } else if *ref_aa == AminoAcid::Ter {
             Consequence::StopLost
-        } else if *ref_aa == AminoAcid::Met && position == 1 {
-            Consequence::StartLost
         } else {
             Consequence::MissenseVariant
         };
@@ -1199,6 +1248,128 @@ mod tests {
 
         assert_eq!(effect.consequences[0], Consequence::StartLost);
         assert_eq!(effect.impact, Impact::High);
+    }
+
+    // Bug 1 (#973): a stop-to-stop change is stop_retained_variant, not synonymous_variant.
+    #[test]
+    fn test_classify_stop_retained() {
+        let predictor = EffectPredictor::new();
+        let effect = predictor.classify_amino_acid_change(&AminoAcid::Ter, &AminoAcid::Ter, 300);
+
+        assert_eq!(effect.consequences[0], Consequence::StopRetainedVariant);
+        assert_eq!(effect.impact, Impact::Low);
+    }
+
+    // Bug 2 (#973): the initiator codon is recognized from the alt residue, not a bare
+    // position heuristic. An unchanged start (Met stays Met) is start_retained, not synonymous.
+    #[test]
+    fn test_classify_start_retained() {
+        let predictor = EffectPredictor::new();
+        let effect = predictor.classify_amino_acid_change(&AminoAcid::Met, &AminoAcid::Met, 1);
+
+        assert_eq!(effect.consequences[0], Consequence::StartRetainedVariant);
+        assert_eq!(effect.impact, Impact::Low);
+    }
+
+    // Bug 2 (#973): a change of the initiator codon to a stop is start_lost (loss of the
+    // start), not stop_gained — the initiator branch takes precedence at position 1.
+    #[test]
+    fn test_classify_start_codon_to_stop_is_start_lost() {
+        let predictor = EffectPredictor::new();
+        let effect = predictor.classify_amino_acid_change(&AminoAcid::Met, &AminoAcid::Ter, 1);
+
+        assert_eq!(effect.consequences[0], Consequence::StartLost);
+        assert_eq!(effect.impact, Impact::High);
+    }
+
+    // Bug 2 (#973): a Met that is not the initiator (position != 1) is an ordinary missense,
+    // never start_lost.
+    #[test]
+    fn test_classify_internal_met_is_not_start_lost() {
+        let predictor = EffectPredictor::new();
+        let effect = predictor.classify_amino_acid_change(&AminoAcid::Met, &AminoAcid::Val, 50);
+
+        assert_eq!(effect.consequences[0], Consequence::MissenseVariant);
+        assert_eq!(effect.impact, Impact::Moderate);
+    }
+
+    // Bug 3 (#973): most_severe is a deterministic per-term severity order, not coarse Impact
+    // bucketing — among several High-impact terms the same one wins regardless of input order.
+    #[test]
+    fn test_most_severe_deterministic_among_equal_impact() {
+        let make = |consequences: Vec<Consequence>| ProteinEffect {
+            impact: Impact::High,
+            consequences,
+            amino_acid_change: None,
+            intronic_offset: None,
+        };
+
+        // splice_donor_variant outranks stop_gained and frameshift_variant, and the winner is
+        // independent of the order the (all-High) terms appear in.
+        let forward = make(vec![
+            Consequence::FrameshiftVariant,
+            Consequence::StopGained,
+            Consequence::SpliceDonorVariant,
+        ]);
+        let reversed = make(vec![
+            Consequence::SpliceDonorVariant,
+            Consequence::StopGained,
+            Consequence::FrameshiftVariant,
+        ]);
+
+        assert_eq!(
+            forward.most_severe(),
+            Some(&Consequence::SpliceDonorVariant)
+        );
+        assert_eq!(
+            reversed.most_severe(),
+            Some(&Consequence::SpliceDonorVariant)
+        );
+    }
+
+    // Bug 3 (#973): severity_rank is a strict total order over every consequence term — each
+    // rank is unique and strictly decreases down the Ensembl VEP severity ladder.
+    #[test]
+    fn test_severity_rank_total_order() {
+        // Most-severe first, matching `Consequence::severity_rank`'s VEP ordering. Listing all
+        // terms also pins the ladder: a new variant or a reordered rank breaks this test.
+        let ordered = [
+            Consequence::TranscriptAblation,
+            Consequence::SpliceAcceptorVariant,
+            Consequence::SpliceDonorVariant,
+            Consequence::StopGained,
+            Consequence::FrameshiftVariant,
+            Consequence::StopLost,
+            Consequence::StartLost,
+            Consequence::InframeInsertion,
+            Consequence::InframeDeletion,
+            Consequence::MissenseVariant,
+            Consequence::ProteinAlteringVariant,
+            Consequence::SpliceRegionVariant,
+            Consequence::StartRetainedVariant,
+            Consequence::StopRetainedVariant,
+            Consequence::SynonymousVariant,
+            Consequence::CodingSequenceVariant,
+            Consequence::FivePrimeUtrVariant,
+            Consequence::ThreePrimeUtrVariant,
+            Consequence::IntronVariant,
+        ];
+
+        let mut seen_ranks = std::collections::HashSet::new();
+        for consequence in &ordered {
+            assert!(
+                seen_ranks.insert(consequence.severity_rank()),
+                "duplicate severity_rank for {consequence:?}"
+            );
+        }
+        for pair in ordered.windows(2) {
+            assert!(
+                pair[0].severity_rank() > pair[1].severity_rank(),
+                "{:?} should outrank {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
     }
 
     #[test]
