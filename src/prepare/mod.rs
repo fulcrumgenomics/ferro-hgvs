@@ -2624,6 +2624,71 @@ mod tests {
     }
 
     #[test]
+    fn reprepare_without_derive_flag_preserves_ng_and_derived_wiring() {
+        // #933 regression: re-running `ferro prepare` over an existing reference
+        // WITHOUT `--derive-ng-placements` must PRESERVE the already-wired derived
+        // artifacts (`ng_hosted_transcripts`, `derived_refseqgene_placements`,
+        // `derived_transcript_placements`), not reset them to null. The derive
+        // block is skipped when the flag is absent, and `load_or_default` + `save`
+        // round-trip the full manifest, so the wiring survives. (An operator note
+        // once claimed a flagless re-prepare nulled `ng_hosted_transcripts`; this
+        // locks the preservation invariant so it cannot regress — e.g. a future
+        // `#[serde(skip)]` or an errant `= None` on the skipped path.)
+        let tmp = tempfile::tempdir().unwrap();
+        let ref_dir = tmp.path().join("ref");
+        std::fs::create_dir_all(&ref_dir).unwrap();
+
+        // Seed the three derived-artifact files and wire them into a saved manifest.
+        for name in [
+            "ng_hosted_transcripts.json",
+            "derived_refseqgene_placements.json",
+            "derived_transcript_placements.json",
+        ] {
+            std::fs::write(ref_dir.join(name), b"{}").unwrap();
+        }
+        let mut seeded = ReferenceManifest::load_or_default(&ref_dir).unwrap();
+        seeded.ng_hosted_transcripts = Some(ref_dir.join("ng_hosted_transcripts.json"));
+        seeded.derived_refseqgene_placements =
+            Some(ref_dir.join("derived_refseqgene_placements.json"));
+        seeded.derived_transcript_placements =
+            Some(ref_dir.join("derived_transcript_placements.json"));
+        seeded.save().unwrap();
+
+        // A flagless re-prepare with every download disabled: an offline
+        // load → (skip every step) → save.
+        let config = PrepareConfig {
+            output_dir: ref_dir.clone(),
+            download_transcripts: false,
+            download_proteins: false,
+            download_genome: false,
+            download_genome_grch37: false,
+            download_refseqgene: false,
+            download_lrg: false,
+            download_cdot: false,
+            download_cdot_grch37: false,
+            download_ensembl: false,
+            derive_ng_placements: None,
+            ..Default::default()
+        };
+        prepare_references(&config).expect("flagless re-prepare should succeed offline");
+
+        // The wiring must survive the re-prepare.
+        let reloaded = ReferenceManifest::load_or_default(&ref_dir).unwrap();
+        assert!(
+            reloaded.ng_hosted_transcripts.is_some(),
+            "flagless re-prepare must preserve ng_hosted_transcripts (not reset to null)"
+        );
+        assert!(
+            reloaded.derived_refseqgene_placements.is_some(),
+            "flagless re-prepare must preserve derived_refseqgene_placements"
+        );
+        assert!(
+            reloaded.derived_transcript_placements.is_some(),
+            "flagless re-prepare must preserve derived_transcript_placements"
+        );
+    }
+
+    #[test]
     fn backfill_rejects_stale_manifest_cdot_path() {
         // A manifest that *references* cdot but whose cdot file is no longer on
         // disk (deleted/moved) must be rejected up front, just like a cdot-less
