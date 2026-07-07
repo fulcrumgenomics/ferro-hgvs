@@ -1542,6 +1542,23 @@ pub struct CdotMapper {
     /// loads `deferred_alt_sources[build]` on first use; the inner `Option` is
     /// `None` when the source is missing/unreadable (best-effort, never retried).
     lazy_alt_mappers: HashMap<String, OnceCell<Option<Box<CdotMapper>>>>,
+    /// Deferred Ensembl cdot source (#964): the `ensembl_cdot_json` path recorded
+    /// by `MultiFastaProvider::from_manifest` so the ~198k Ensembl (`ENST`/`ENSG`/
+    /// `ENSP`) transcripts are NOT merged into the primary build at construction.
+    /// Unlike `deferred_alt_sources` (build-keyed), this is *source*-keyed: the
+    /// Ensembl transcripts share the primary genome build, so the deferred mapper
+    /// is consulted from the primary *accession-lookup* paths rather than an alt
+    /// build. Genomic overlap enumeration stays RefSeq-scoped and does NOT consult
+    /// it. `None` when the manifest carries no Ensembl cdot. NOT serialized —
+    /// a purely runtime handle.
+    deferred_ensembl_source: Option<PathBuf>,
+    /// Lazily-loaded Ensembl mapper (#964). `get_or_init` loads
+    /// `deferred_ensembl_source` on the first `ENS*`-accession lookup; the inner
+    /// `Option` is `None` when the source is missing/unreadable (best-effort,
+    /// never retried). A pure-RefSeq workload never touches it (genomic
+    /// enumeration is RefSeq-scoped and does not consult it), so RefSeq startup
+    /// pays nothing for Ensembl.
+    lazy_ensembl_mapper: OnceCell<Option<Box<CdotMapper>>>,
 }
 
 /// Per-contig stab-query index entry for a non-primary build, used by
@@ -1576,6 +1593,8 @@ impl CdotMapper {
             transcript_genome_spans: OnceCell::new(),
             deferred_alt_sources: HashMap::new(),
             lazy_alt_mappers: HashMap::new(),
+            deferred_ensembl_source: None,
+            lazy_ensembl_mapper: OnceCell::new(),
         }
     }
 
@@ -1769,6 +1788,8 @@ impl CdotMapper {
             transcript_genome_spans: OnceCell::new(),
             deferred_alt_sources: HashMap::new(),
             lazy_alt_mappers: HashMap::new(),
+            deferred_ensembl_source: None,
+            lazy_ensembl_mapper: OnceCell::new(),
         })
     }
 
@@ -1910,6 +1931,8 @@ impl CdotMapper {
             transcript_genome_spans: OnceCell::new(),
             deferred_alt_sources: HashMap::new(),
             lazy_alt_mappers: HashMap::new(),
+            deferred_ensembl_source: None,
+            lazy_ensembl_mapper: OnceCell::new(),
         })
     }
 
@@ -2551,7 +2574,16 @@ impl CdotMapper {
     /// sibling version" — e.g. the cdot-driven base synthesis path in
     /// `MultiFastaProvider::get_transcript` (closes #331).
     pub fn has_transcript_exact(&self, accession: &str) -> bool {
+        // Mirror `get_transcript_exact`'s deferred-Ensembl consult (#964): an
+        // exact `ENS*.version` present only in the lazily-loaded Ensembl mapper
+        // must probe `true`, or this presence check would return a false negative
+        // that disagrees with the resolving lookup. Exact (no version fallback);
+        // ENS*-gated so a RefSeq probe never materializes the Ensembl mapper.
         self.transcripts.contains_key(accession)
+            || (accession.starts_with("ENS")
+                && self
+                    .deferred_ensembl_mapper()
+                    .is_some_and(|ens| ens.has_transcript_exact(accession)))
     }
 
     /// Name of the genome build whose data populates [`Self::transcripts`],
@@ -2608,7 +2640,11 @@ impl CdotMapper {
             }
         }
 
-        None
+        // Deferred Ensembl (#964): an `ENS*` accession absent from the primary
+        // (RefSeq) map resolves via the lazily-loaded Ensembl mapper, including
+        // that mapper's own version fallback. RefSeq accessions never reach here
+        // for Ensembl, so a pure-RefSeq workload never materializes it.
+        self.ensembl_fallback(accession, |ens| ens.get_transcript(accession))
     }
 
     /// Version-**exact** transcript lookup: like [`get_transcript`](Self::get_transcript)
@@ -2636,7 +2672,11 @@ impl CdotMapper {
                 return self.transcripts.get(refseq);
             }
         }
-        None
+        // Deferred Ensembl (#964): version-exact ENS* lookup via the lazy mapper.
+        // The build-aware `*_on_build_exact` / `*_exact_any_build` variants reach
+        // GRCh38 Ensembl through their delegation to this method on the primary
+        // build, so wiring here covers them too.
+        self.ensembl_fallback(accession, |ens| ens.get_transcript_exact(accession))
     }
 
     /// Build-aware version-**exact** lookup: the
@@ -2854,6 +2894,82 @@ impl CdotMapper {
             .is_some_and(|c| c.get().is_some())
     }
 
+    /// Record the Ensembl cdot to merge lazily on first use, instead of folding
+    /// its ~198k `ENST`/`ENSG`/`ENSP` transcripts into the primary build eagerly
+    /// (#964). `path` is any cdot source [`load`](Self::load) accepts. The
+    /// transcripts are not read until [`deferred_ensembl_mapper`](Self::deferred_ensembl_mapper)
+    /// is first called — from the primary-lookup miss path for an `ENS*`
+    /// accession (`get_transcript` / `get_transcript_exact`). Genomic-overlap
+    /// enumeration is RefSeq-scoped (#933) and does NOT consult it, so a
+    /// pure-RefSeq workload never triggers it and RefSeq startup pays nothing for
+    /// Ensembl.
+    ///
+    /// Ensembl transcripts share the *primary* genome build (they are a different
+    /// source, not a different build), so they are held in the deferred mapper's
+    /// own primary build and consulted alongside — not as an alt build.
+    pub fn defer_ensembl_primary_merge(&mut self, path: PathBuf) {
+        // Honor init-once/no-retry: only (re)declare the source and reset the
+        // once-cell BEFORE the first materialization. After a lookup has already
+        // loaded the Ensembl mapper, leave it in place rather than silently
+        // swapping the transcript data out from under prior results.
+        if self.lazy_ensembl_mapper.get().is_none() {
+            self.deferred_ensembl_source = Some(path);
+            self.lazy_ensembl_mapper = OnceCell::new();
+        }
+    }
+
+    /// Return the lazily-loaded Ensembl mapper, loading it from its deferred
+    /// source on first call (#964). `None` if no Ensembl source was deferred or
+    /// it could not be loaded (best-effort; resolved once and not retried).
+    fn deferred_ensembl_mapper(&self) -> Option<&CdotMapper> {
+        self.lazy_ensembl_mapper
+            .get_or_init(|| {
+                let path = self.deferred_ensembl_source.as_ref()?;
+                match Self::load(path) {
+                    Ok(m) => {
+                        eprintln!(
+                            "Loaded {} Ensembl transcripts (deferred primary merge)",
+                            m.transcripts.len()
+                        );
+                        Some(Box::new(m))
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "warning: failed to load deferred Ensembl cdot {}: {e}",
+                            path.display()
+                        );
+                        None
+                    }
+                }
+            })
+            .as_deref()
+    }
+
+    /// Consult the lazily-loaded Ensembl mapper for an `ENS*` accession (#964)
+    /// via `lookup` (an exact / fallback lookup on that mapper). Returns `None`
+    /// for non-Ensembl accessions and when no Ensembl cdot was deferred, so a
+    /// pure-RefSeq lookup never materializes the Ensembl mapper. Centralizes the
+    /// `ENS*` guard so every primary-map `-> Option<&CdotTranscript>` accessor
+    /// delegates to the *same* method on the Ensembl mapper (exact→exact, etc.),
+    /// preserving each accessor's version-fallback semantics.
+    fn ensembl_fallback<'a>(
+        &'a self,
+        accession: &str,
+        lookup: impl FnOnce(&'a CdotMapper) -> Option<&'a CdotTranscript>,
+    ) -> Option<&'a CdotTranscript> {
+        if accession.starts_with("ENS") {
+            self.deferred_ensembl_mapper().and_then(lookup)
+        } else {
+            None
+        }
+    }
+
+    /// Test probe: has the deferred Ensembl load been triggered yet (#964)?
+    #[cfg(test)]
+    pub(crate) fn deferred_ensembl_loaded(&self) -> bool {
+        self.lazy_ensembl_mapper.get().is_some()
+    }
+
     /// List every genome build that has data for the given transcript.
     ///
     /// Includes the primary build if the transcript is present there. The
@@ -2926,6 +3042,16 @@ impl CdotMapper {
         let Ok(p) = i32::try_from(pos) else {
             return Vec::new();
         };
+
+        // NOTE (#964): genomic-overlap enumeration deliberately does NOT consult
+        // the deferred Ensembl mapper. Enumeration serves genomic inputs, which
+        // #933 source-scoping always classifies as RefSeq, so any Ensembl overlap
+        // would be dropped downstream regardless. Ensembl inputs (`ENST`/`ENSG`/
+        // `ENSP`) resolve by *accession* via `get_transcript`/`get_transcript_exact`
+        // (which do consult the deferred mapper), never by genomic enumeration —
+        // so a genomic RefSeq projection never needs to materialize the Ensembl
+        // cdot here. If Ensembl-scoped genomic enumeration is ever needed, gate it
+        // on the requested source (which this low-level query does not know).
 
         // Primary build: the contig lives in `contig_index` / `transcripts`.
         let by_contig = self
@@ -5298,6 +5424,123 @@ mod tests {
             builds,
             vec!["GRCh37".to_string()],
             "deferred GRCh37 must be the sole available build"
+        );
+    }
+
+    // ---- #964: deferred Ensembl primary merge -----------------------------
+
+    /// Primary RefSeq mapper (NM_000088.3 on NC_000001.11, exon2 [2000,2200])
+    /// with a deferred Ensembl cdot (ENST00000375549.8 on the same contig,
+    /// overlapping exon [2000,2200]). Returns the mapper plus the `TempDir`
+    /// backing the deferred file — kept alive so the deferred path stays valid.
+    fn deferred_ensembl_fixture() -> (CdotMapper, tempfile::TempDir) {
+        let ensembl_json = r#"
+        {
+            "transcripts": {
+                "ENST00000375549.8": {
+                    "gene_name": "SDHD",
+                    "genome_builds": {
+                        "GRCh38": { "contig": "NC_000001.11", "strand": "+", "exons": [[2000, 2200, 1, 0, 200, "M200"]] }
+                    }
+                }
+            }
+        }
+        "#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("cdot-ensembl.GRCh38.json");
+        std::fs::write(&path, ensembl_json).unwrap();
+
+        let mut mapper = CdotMapper::new();
+        mapper.add_transcript("NM_000088.3".to_string(), sample_transcript());
+        mapper.defer_ensembl_primary_merge(path);
+        (mapper, dir)
+    }
+
+    #[test]
+    fn deferred_ensembl_resolves_lazily_and_refseq_never_triggers() {
+        let (mapper, _dir) = deferred_ensembl_fixture();
+
+        // Nothing materialized at construction.
+        assert!(
+            !mapper.deferred_ensembl_loaded(),
+            "deferring must not load the Ensembl cdot up front"
+        );
+
+        // A RefSeq hit resolves without materializing the Ensembl mapper.
+        assert!(mapper.get_transcript("NM_000088.3").is_some());
+        assert!(
+            !mapper.deferred_ensembl_loaded(),
+            "a RefSeq lookup must not materialize the deferred Ensembl mapper"
+        );
+
+        // A RefSeq MISS (non-ENS*) also must not trigger it.
+        assert!(mapper.get_transcript("NM_999999.9").is_none());
+        assert!(
+            !mapper.deferred_ensembl_loaded(),
+            "a non-Ensembl miss must not materialize the deferred Ensembl mapper"
+        );
+
+        // The first ENS* lookup resolves via the deferred mapper, materializing
+        // it exactly once.
+        let enst = mapper.get_transcript("ENST00000375549.8");
+        assert_eq!(
+            enst.and_then(|t| t.gene_name.as_deref()),
+            Some("SDHD"),
+            "deferred Ensembl transcript must resolve on first ENS* use"
+        );
+        assert!(
+            mapper.deferred_ensembl_loaded(),
+            "first ENS* use materializes the deferred Ensembl mapper"
+        );
+    }
+
+    #[test]
+    fn deferred_ensembl_version_fallback() {
+        let (mapper, _dir) = deferred_ensembl_fixture();
+        // An unversioned Ensembl accession resolves via the deferred mapper's own
+        // base->versioned fallback (ENST00000375549 -> .8).
+        assert!(
+            mapper.get_transcript("ENST00000375549").is_some(),
+            "deferred Ensembl lookup must apply the mapper's version fallback"
+        );
+    }
+
+    #[test]
+    fn has_transcript_exact_consults_deferred_ensembl() {
+        let (mapper, _dir) = deferred_ensembl_fixture();
+        // The exact-presence probe must agree with `get_transcript_exact` for a
+        // versioned Ensembl accession resolved via the deferred mapper (#964) —
+        // otherwise a presence check false-negatives while the lookup succeeds.
+        assert!(
+            mapper.has_transcript_exact("ENST00000375549.8"),
+            "has_transcript_exact must consult the deferred Ensembl mapper"
+        );
+        // Exact means exact: an unversioned ENST is not a hit (no version fallback).
+        assert!(
+            !mapper.has_transcript_exact("ENST00000375549"),
+            "has_transcript_exact must not apply version fallback"
+        );
+        // A non-Ensembl exact probe is unaffected (and never materializes Ensembl).
+        assert!(!mapper.has_transcript_exact("NM_999999.9"));
+    }
+
+    #[test]
+    fn genomic_enumeration_does_not_consult_deferred_ensembl() {
+        let (mapper, _dir) = deferred_ensembl_fixture();
+        // Genomic-overlap enumeration is RefSeq-scoped (#933), so it must NOT
+        // consult (or materialize) the deferred Ensembl mapper — even at a
+        // position an Ensembl transcript overlaps. Only the primary RefSeq hit
+        // is returned, and the Ensembl cdot stays unloaded.
+        let hits = mapper.transcripts_at_position("NC_000001.11", 2050);
+        let ids: Vec<&str> = hits.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            ids,
+            vec!["NM_000088.3"],
+            "enumeration returns only the RefSeq overlap: {ids:?}"
+        );
+        assert!(
+            !mapper.deferred_ensembl_loaded(),
+            "genomic enumeration must not materialize the deferred Ensembl mapper"
         );
     }
 
