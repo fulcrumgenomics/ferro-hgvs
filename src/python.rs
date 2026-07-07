@@ -174,6 +174,61 @@ impl ReferenceProvider for PyProvider {
             PyProvider::MultiFasta(p) => p.sole_hosted_transcript(ng_parent),
         }
     }
+
+    fn get_sequence_length(&self, id: &str) -> Result<u64, crate::error::FerroError> {
+        // Forward to the inner provider so the real transcript/contig length
+        // reaches the Python path (#968). The trait default returns
+        // `Err(ReferenceNotFound)` unconditionally, so without this every
+        // length-dependent path on the Python side (mt/`qter` bounds checks,
+        // poly-A tail extension in projection) silently degrades even when the
+        // wrapped `MultiFasta` provider knows the length.
+        match self {
+            PyProvider::Mock(p) => p.get_sequence_length(id),
+            PyProvider::MultiFasta(p) => p.get_sequence_length(id),
+        }
+    }
+
+    fn infer_genome_build(
+        &self,
+        accession: &crate::hgvs::variant::Accession,
+    ) -> Option<&'static str> {
+        // Forward to the inner provider so its build inference reaches the Python
+        // path (#968). The trait default infers from the accession alone; the
+        // wrapped `MultiFasta` provider layers in assembly-report contig aliases,
+        // which the default would otherwise bypass for Python consumers.
+        match self {
+            PyProvider::Mock(p) => p.infer_genome_build(accession),
+            PyProvider::MultiFasta(p) => p.infer_genome_build(accession),
+        }
+    }
+
+    fn get_transcript_for_accession(
+        &self,
+        accession: &crate::hgvs::variant::Accession,
+    ) -> Result<Arc<crate::reference::transcript::Transcript>, crate::error::FerroError> {
+        // Forward to the inner provider so build-aware transcript resolution
+        // (#332) reaches the Python path (#968). The trait default self-dispatches
+        // to the build-*unaware* `get_transcript`, so without this a Python
+        // consumer resolving a transcript for an `NC_*.10/.11`- or `NG_`-contexted
+        // variant would bypass the wrapped `MultiFasta` provider's parent-build
+        // probe and get the primary-build (or wrong-build) transcript.
+        match self {
+            PyProvider::Mock(p) => p.get_transcript_for_accession(accession),
+            PyProvider::MultiFasta(p) => p.get_transcript_for_accession(accession),
+        }
+    }
+
+    fn get_transcript_for_variant(
+        &self,
+        variant: &crate::hgvs::variant::HgvsVariant,
+    ) -> Result<Arc<crate::reference::transcript::Transcript>, crate::error::FerroError> {
+        // Forward to the inner provider so the by-variant build-aware resolution
+        // (#332) reaches the Python path (#968), matching `get_transcript_for_accession`.
+        match self {
+            PyProvider::Mock(p) => p.get_transcript_for_variant(variant),
+            PyProvider::MultiFasta(p) => p.get_transcript_for_variant(variant),
+        }
+    }
 }
 
 impl PyProvider {
@@ -3933,5 +3988,155 @@ mod tests {
             assert_eq!(py.code, expected_code, "code mismatch for {expected_code}");
             assert_eq!(py.message, w.message(), "message round-trip mismatch");
         }
+    }
+
+    /// #968: `PyProvider` must forward `infer_genome_build` to its inner provider,
+    /// so the wrapped `MultiFasta` provider's assembly-report-derived build
+    /// inference reaches the Python path. Complements
+    /// `tests/python/test_issue_968_length_build_forwarders.py` (which covers the
+    /// sibling `get_sequence_length` forwarder through the Python surface).
+    ///
+    /// There is no Python-facing surface for `infer_genome_build` — it is consulted
+    /// only internally by projection — so the forwarding contract is verified here
+    /// at the Rust level (runs under `cargo test --features python`).
+    ///
+    /// The probe uses the report-only accession `NC_000017.99`: the hardcoded,
+    /// accession-only heuristic (the trait default) returns `None` for it, so a
+    /// `Some("GRCh38")` answer through the wrapper can only come from the
+    /// assembly-report `ContigAliases` the inner `MultiFasta` provider loads —
+    /// making the test non-vacuous (it fails if `PyProvider` falls through to the
+    /// trait default instead of forwarding).
+    #[test]
+    fn infer_genome_build_is_forwarded_to_inner_provider() {
+        use crate::hgvs::variant::Accession;
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+        // A minimal transcript FASTA (required by `from_manifest`) + its `.fai`.
+        fs::write(d.join("tx.fna"), ">NM_000001.1\nACGT\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+        // A minimal assembly report whose chr17 row uses `.99` — a version the
+        // hardcoded heuristic does not know, so only the report can classify it.
+        let report = "# Assembly name:  GRCh38.test\n\
+            # Sequence-Name\tSequence-Role\tAssigned-Molecule\tAssigned-Molecule-Location/Type\t\
+            GenBank-Accn\tRelationship\tRefSeq-Accn\tAssembly-Unit\tSequence-Length\tUCSC-style-name\n\
+            17\tassembled-molecule\t17\tChromosome\tCM000679.9\t=\tNC_000017.99\t\
+            Primary Assembly\t83257441\tchr17\n";
+        fs::write(d.join("assembly_report.txt"), report).unwrap();
+        fs::write(
+            d.join("manifest.json"),
+            r#"{"prepared_at":"test","transcript_fastas":["tx.fna"],"assembly_report":"assembly_report.txt","transcript_count":1,"available_prefixes":[]}"#,
+        )
+        .unwrap();
+
+        // Build the inner provider directly and wrap it, mirroring how the Python
+        // constructors produce a `PyProvider::MultiFasta` (avoids the PyO3 GIL).
+        let inner = MultiFastaProvider::from_manifest(d.join("manifest.json"))
+            .expect("manifest with an assembly report loads");
+        let provider = PyProvider::MultiFasta(Arc::new(inner));
+
+        let future_chr17 = Accession::new("NC", "000017", Some(99));
+        // Premise: the accession-only default cannot classify `.99`.
+        assert_eq!(
+            crate::liftover::aliases::infer_genome_build_from_accession(&future_chr17),
+            None,
+            "hardcoded heuristic must not know NC_000017.99 (test premise)",
+        );
+        // Forwarded: the wrapper reaches the inner provider's report-derived table.
+        assert_eq!(
+            provider.infer_genome_build(&future_chr17),
+            Some("GRCh38"),
+            "PyProvider must forward infer_genome_build to the inner MultiFasta provider",
+        );
+    }
+
+    /// #968: `PyProvider` must forward the build-aware `get_transcript_for_accession`
+    /// / `get_transcript_for_variant` (#332) to its inner provider. The trait default
+    /// self-dispatches to the build-*unaware* `get_transcript`, so without the
+    /// forwarder a Python consumer resolving a transcript for a build-bearing
+    /// `genomic_context` parent would silently get the primary-build transcript
+    /// instead of the parent-build one.
+    ///
+    /// These methods have no Python-facing surface, so the contract is verified here
+    /// at the Rust level (runs under `cargo test --features python`), mirroring the
+    /// `infer_genome_build` test above.
+    ///
+    /// The fixture gives `NM_TEST.1` a GRCh38 primary cdot (contig `NC_000017.11`)
+    /// and a deferred GRCh37 secondary cdot (contig `NC_000017.10`). A bare
+    /// `get_transcript` resolves the primary build (`.11`); resolving *for* an
+    /// accession whose parent is the GRCh37 `NC_000017.10` must probe GRCh37 first
+    /// and return the `.10` transcript. The differing chromosome makes the test
+    /// non-vacuous — the trait default (bare `get_transcript`) would return `.11`.
+    #[test]
+    fn get_transcript_for_accession_build_aware_is_forwarded() {
+        use crate::hgvs::variant::Accession;
+        use std::fs;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // A 73-base transcript FASTA (matches the exon tx-span 0..73 below).
+        let seq = "A".repeat(73);
+        fs::write(d.join("tx.fna"), format!(">NM_TEST.1\n{seq}\n")).unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_TEST.1\t73\t11\t73\t74\n").unwrap();
+
+        // Primary GRCh38 cdot: NM_TEST.1 on NC_000017.11.
+        fs::write(
+            d.join("cdot.json"),
+            r#"{"transcripts":{"NM_TEST.1":{"gene_name":"COL1A1","contig":"NC_000017.11",
+                "strand":"+","exons":[[50184096,50184169,0,73,"M73"]],
+                "start_codon":10,"stop_codon":60}}}"#,
+        )
+        .unwrap();
+
+        // Deferred GRCh37 secondary cdot: same transcript on NC_000017.10, nested
+        // under genome_builds["GRCh37"] (the real GRCh37 cdot shape).
+        fs::write(
+            d.join("cdot-grch37.json"),
+            r#"{"transcripts":{"NM_TEST.1":{"gene_name":"COL1A1","genome_builds":{"GRCh37":{
+                "contig":"NC_000017.10","strand":"+","exons":[[48263025,48263098,0,73,"M73"]],
+                "cds_start":48263035,"cds_end":48263085}}}}}"#,
+        )
+        .unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{"prepared_at":"test","transcript_fastas":["tx.fna"],"cdot_json":"cdot.json",
+                "cdot_grch37_json":"cdot-grch37.json","transcript_count":1,"available_prefixes":[]}"#,
+        )
+        .unwrap();
+
+        let inner = MultiFastaProvider::from_manifest(d.join("manifest.json"))
+            .expect("manifest with primary + GRCh37 cdot loads");
+        let provider = PyProvider::MultiFasta(Arc::new(inner));
+
+        // Bare resolution → primary GRCh38 build (contig .11).
+        let bare = provider.get_transcript("NM_TEST.1").expect("bare resolves");
+        assert_eq!(bare.chromosome.as_deref(), Some("NC_000017.11"));
+
+        // Build-aware resolution for a GRCh37 (`NC_000017.10`) parent → probes GRCh37
+        // first and returns the .10 transcript. Only reachable if PyProvider forwards
+        // get_transcript_for_accession to the inner provider.
+        let context = Accession::new("NC", "000017", Some(10));
+        let accession = Accession::new("NM", "TEST", Some(1)).with_genomic_context(context);
+        let aware = provider
+            .get_transcript_for_accession(&accession)
+            .expect("build-aware resolution succeeds");
+        assert_eq!(
+            aware.chromosome.as_deref(),
+            Some("NC_000017.10"),
+            "PyProvider must forward the build-aware get_transcript_for_accession \
+             (GRCh37 parent → .10 transcript), not fall through to the primary-build default",
+        );
+
+        // The by-variant sibling delegates to the same build-aware path.
+        let variant = crate::parse_hgvs("NC_000017.10(NM_TEST.1):c.1A>G").expect("parse");
+        let via_variant = provider
+            .get_transcript_for_variant(&variant)
+            .expect("build-aware by-variant resolution succeeds");
+        assert_eq!(via_variant.chromosome.as_deref(), Some("NC_000017.10"));
     }
 }
