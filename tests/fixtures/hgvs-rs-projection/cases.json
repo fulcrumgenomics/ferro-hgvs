@@ -1,5 +1,5 @@
 {
-  "description": "biocommons hgvs-rs projection test corpus (curated subset)",
+  "description": "biocommons hgvs-rs projection test corpus (curated subset) Dormant rows keyworded `proj-near-disc` (34, on NM_007121.5 / NM_183425.2 / NM_198455.2) are near-alignment-discontinuity projection candidates imported with the corpus (#598); their expected genomic value is carried in the `expected:` keyword rather than a wired axis field, so they are `to_test:false` pending wiring + disposition in the #925 hgvs-rs-projection burn-down.",
   "source": "https://github.com/biocommons/hgvs-rs",
   "source_commit": "cf0e5a8d1b9a2ae3e883a58826f397aa6cb52e23",
   "license": "Apache-2.0",
@@ -9417,7 +9417,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:covers",
-        "expected:NC_000019.10:g.50378562_50378565del"
+        "expected:NC_000019.10:g.50378562_50378565del",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.794_800del"
@@ -9428,7 +9429,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:covers",
-        "expected:NC_000019.10:g.50378562_50378565delinsTC"
+        "expected:NC_000019.10:g.50378562_50378565delinsTC",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.794_800delinsTC"
@@ -9439,7 +9441,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:partial",
-        "expected:NC_000019.10:g.50378563_50378564delinsACA"
+        "expected:NC_000019.10:g.50378563_50378564delinsACA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.795_796del"
@@ -9450,7 +9453,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:partial",
-        "expected:NC_000019.10:g.50378563_50378564delinsTTACA"
+        "expected:NC_000019.10:g.50378563_50378564delinsTTACA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.795_796delinsTT"
@@ -9461,7 +9465,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:partial",
-        "expected:NC_000019.10:g.50378563_50378564delinsATAACA"
+        "expected:NC_000019.10:g.50378563_50378564delinsATAACA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.795_796insT"
@@ -9472,7 +9477,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:within",
-        "expected:NC_000019.10:g.50378563_50378564delinsAATACA"
+        "expected:NC_000019.10:g.50378563_50378564delinsAATACA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.796_797insT"
@@ -9483,7 +9489,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:exact",
-        "expected:NC_000019.10:g.50378563_50378564delinsAAACA"
+        "expected:NC_000019.10:g.50378563_50378564delinsAAACA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.796_798="
@@ -9494,7 +9501,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:exact",
-        "expected:NC_000019.10:g.50378563_50378564="
+        "expected:NC_000019.10:g.50378563_50378564=",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.796_798del"
@@ -9505,7 +9513,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:exact",
-        "expected:NC_000019.10:g.50378563_50378564delinsATCGGA"
+        "expected:NC_000019.10:g.50378563_50378564delinsATCGGA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.796_798delinsTCGG"
@@ -9516,7 +9525,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:exact",
-        "expected:NC_000019.10:g.50378563_50378564delinsAAACAACA"
+        "expected:NC_000019.10:g.50378563_50378564delinsAAACAACA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.796_798dup"
@@ -9527,7 +9537,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:within",
-        "expected:NC_000019.10:g.50378563_50378564delinsAATCA"
+        "expected:NC_000019.10:g.50378563_50378564delinsAATCA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.797A>T"
@@ -9538,7 +9549,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:within",
-        "expected:NC_000019.10:g.50378563_50378564delinsAAGTA"
+        "expected:NC_000019.10:g.50378563_50378564delinsAAGTA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.797_798inv"
@@ -9549,7 +9561,8 @@
         "file:proj-near-disc.tsv",
         "class:gdel",
         "position:within",
-        "expected:NC_000019.10:g.50378563_50378564delinsAACA"
+        "expected:NC_000019.10:g.50378563_50378564delinsAACA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_007121.5:n.797del"
@@ -9560,7 +9573,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:partial",
-        "expected:NC_000020.11:g.57391437_57391438del"
+        "expected:NC_000020.11:g.57391437_57391438del",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.40_41del"
@@ -9571,7 +9585,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:partial",
-        "expected:NC_000020.11:g.57391437_57391438delinsTC"
+        "expected:NC_000020.11:g.57391437_57391438delinsTC",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.40_41delinsTC"
@@ -9582,7 +9597,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:partial",
-        "expected:NC_000020.11:g.57391437_57391438delinsTT"
+        "expected:NC_000020.11:g.57391437_57391438delinsTT",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.40_41delinsTT"
@@ -9593,7 +9609,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:partial",
-        "expected:NC_000020.11:g.57391437_57391438insT"
+        "expected:NC_000020.11:g.57391437_57391438insT",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.40_41insT"
@@ -9604,7 +9621,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:covers",
-        "expected:NC_000020.11:g.57391437_57391440del"
+        "expected:NC_000020.11:g.57391437_57391440del",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.40_43del"
@@ -9615,7 +9633,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:covers",
-        "expected:NC_000020.11:g.57391437_57391440delinsCG"
+        "expected:NC_000020.11:g.57391437_57391440delinsCG",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.40_43delinsCG"
@@ -9626,7 +9645,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:within",
-        "expected:NC_000020.11:g.57391438C>G"
+        "expected:NC_000020.11:g.57391438C>G",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.41="
@@ -9637,7 +9657,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:within",
-        "expected:NC_000020.11:g.57391438="
+        "expected:NC_000020.11:g.57391438=",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.41G>C"
@@ -9648,7 +9669,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:within",
-        "expected:NC_000020.11:g.57391438C>T"
+        "expected:NC_000020.11:g.57391438C>T",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.41G>T"
@@ -9659,7 +9681,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:exact",
-        "expected:NC_000020.11:g.57391438_57391439del"
+        "expected:NC_000020.11:g.57391438_57391439del",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.41_42del"
@@ -9670,7 +9693,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:exact",
-        "expected:NC_000020.11:g.57391438_57391439="
+        "expected:NC_000020.11:g.57391438_57391439=",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.41_42delinsCG"
@@ -9681,7 +9705,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:exact",
-        "expected:NC_000020.11:g.57391438_57391439delinsTAA"
+        "expected:NC_000020.11:g.57391438_57391439delinsTAA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.41_42delinsTAA"
@@ -9692,7 +9717,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:within",
-        "expected:NC_000020.11:g.57391438_57391439insT"
+        "expected:NC_000020.11:g.57391438_57391439insT",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.41_42insT"
@@ -9703,7 +9729,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:within",
-        "expected:NC_000020.11:g.57391438del"
+        "expected:NC_000020.11:g.57391438del",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.41del"
@@ -9714,7 +9741,8 @@
         "file:proj-near-disc.tsv",
         "class:sub",
         "position:partial",
-        "expected:NC_000020.11:g.57391439_57391440insG"
+        "expected:NC_000020.11:g.57391439_57391440insG",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_183425.2:n.42_43insG"
@@ -9725,7 +9753,8 @@
         "file:proj-near-disc.tsv",
         "class:gins",
         "position:cover",
-        "expected:NC_000007.14:g.149779573_149779579del"
+        "expected:NC_000007.14:g.149779573_149779579del",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_198455.2:n.1114_1117del"
@@ -9736,7 +9765,8 @@
         "file:proj-near-disc.tsv",
         "class:gins",
         "position:cover",
-        "expected:NC_000007.14:g.149779573_149779579delinsCAG"
+        "expected:NC_000007.14:g.149779573_149779579delinsCAG",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_198455.2:n.1114_1117delinsCAG"
@@ -9747,7 +9777,8 @@
         "file:proj-near-disc.tsv",
         "class:gins",
         "position:exact",
-        "expected:NC_000007.14:g.149779574_149779578delinsAC"
+        "expected:NC_000007.14:g.149779574_149779578delinsAC",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_198455.2:n.1115_1116="
@@ -9758,7 +9789,8 @@
         "file:proj-near-disc.tsv",
         "class:gins",
         "position:partial",
-        "expected:NC_000007.14:g.149779575_149779577delinsCA"
+        "expected:NC_000007.14:g.149779575_149779577delinsCA",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_198455.2:n.1115_1116insCA"
@@ -9769,7 +9801,8 @@
         "file:proj-near-disc.tsv",
         "class:gins",
         "position:exact",
-        "expected:NC_000007.14:g.149779575_149779577="
+        "expected:NC_000007.14:g.149779575_149779577=",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_198455.2:n.1115_1116insCAG"
@@ -9780,7 +9813,8 @@
         "file:proj-near-disc.tsv",
         "class:gins",
         "position:within",
-        "expected:NC_000007.14:g.149779575_149779577delinsT"
+        "expected:NC_000007.14:g.149779575_149779577delinsT",
+        "dormant:pending-#925-hgvs-rs-projection-burndown"
       ],
       "to_test": false,
       "input": "NM_198455.2:n.1115_1116insT"

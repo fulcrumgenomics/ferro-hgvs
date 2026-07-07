@@ -2900,7 +2900,9 @@
       "to_test": true
     },
     {
-      "keywords": [],
+      "keywords": [
+        "dormant: parked from the original mutalyzer test-suite import (#323); mutalyzer emits no normalized form (only a genomic value is recorded), so the row is kept to_test:false for its genomic reference value; review/dispose under the #326 parity tracker."
+      ],
       "input": "NG_009113.2(NR2E3_v002):c.948delC",
       "normalized": "",
       "genomic": "NG_009113.2:g.8038del",
