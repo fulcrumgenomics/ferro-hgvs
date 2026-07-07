@@ -906,8 +906,21 @@ fn resolve_cds_to_tx<P: ReferenceProvider + ?Sized>(
         .map_err(|e| ConversionError::MissingReferenceData {
             description: format!("could not resolve {} to transcript position: {}", end, e),
         })?;
-    let s_u = ensure_positive_tx(s.base, "c", start)?;
-    let e_u = ensure_positive_tx(e.base, "c", end)?;
+    // A `c.*N` (3'UTR) position must also be bounded above: reject one that maps
+    // past the transcript 3' end, not just below base 1 (#962). Non-3'UTR c.
+    // positions keep the lower-bound-only guard — their (rarer) overflow is a
+    // separate, broader concern, and this keeps `c.N`/`r.N` symmetric.
+    let tx_len = transcript.sequence_length();
+    let s_u = if start.is_3utr() {
+        ensure_tx_in_bounds(s.base, tx_len, "c", start)
+    } else {
+        ensure_positive_tx(s.base, "c", start)
+    }?;
+    let e_u = if end.is_3utr() {
+        ensure_tx_in_bounds(e.base, tx_len, "c", end)
+    } else {
+        ensure_positive_tx(e.base, "c", end)
+    }?;
     Ok((s_u, e_u))
 }
 
@@ -1028,7 +1041,7 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
                 ),
             }
         })?;
-        return ensure_positive_tx(tx.base, "r", pos);
+        return ensure_tx_in_bounds(tx.base, transcript.sequence_length(), "r", pos);
     }
     if pos.is_5utr() {
         // r.-N is the Nth base of the 5' UTR — numbered upstream from the start
@@ -1078,6 +1091,37 @@ fn ensure_positive_tx<P: std::fmt::Display>(
         });
     }
     Ok(base as u64)
+}
+
+/// Like [`ensure_positive_tx`], but also rejects a resolved 1-based transcript
+/// position that falls *past the transcript's 3' end* (`base > tx_len`).
+///
+/// A `*N` position numbered beyond the last transcript base — e.g. `r.*99999` /
+/// `c.*99999` on a short transcript — maps to a coordinate that does not exist on
+/// the accession. `ensure_positive_tx` guards only the lower bound, so without
+/// this the resolver would emit an off-sequence SPDI position (#962). `tx_len` is
+/// the transcript length in mRNA bases ([`Transcript::sequence_length`]). Applied
+/// at the `*N` (3'UTR) resolution sites — `r.*N` in `resolve_rna_pos` and `c.*N`
+/// in `resolve_cds_to_tx` — where a position can be numbered past the last
+/// transcript base; the upper bound never fires for a position that lands on the
+/// sequence.
+fn ensure_tx_in_bounds<P: std::fmt::Display + Copy>(
+    base: i64,
+    tx_len: u64,
+    coord: &str,
+    pos: P,
+) -> Result<u64, ConversionError> {
+    let one_based = ensure_positive_tx(base, coord, pos)?;
+    if one_based > tx_len {
+        return Err(ConversionError::InvalidPosition {
+            description: format!(
+                "transcript position from {}. coordinate {} resolves to base {} past the \
+                 transcript 3' end (length {})",
+                coord, pos, one_based, tx_len
+            ),
+        });
+    }
+    Ok(one_based)
 }
 
 /// Apply edit-specific position arithmetic and emit the SPDI variant.
@@ -3006,6 +3050,51 @@ mod tests {
         provider.add_transcript(tx);
         let r = parse_hgvs("NR_TEST5.1:r.-3del").unwrap();
         assert!(hgvs_to_spdi(&r, &provider).is_err());
+    }
+
+    // ----- r.*N / c.*N 3' upper bound (#962) ---------------------------------
+
+    /// #962 boundary: the last 3'UTR base still resolves. NM_TEST.1 has tx length
+    /// 40 with the 3'UTR at tx 36-40, so `*5` = tx 40 (the final base) — c.*5 and
+    /// r.*5 must both succeed and agree at SPDI 0-based 39. Guards the upper-bound
+    /// check against off-by-one over-rejection of the last valid position.
+    #[test]
+    fn r_star_and_c_star_at_last_base_resolve() {
+        let provider = make_test_provider();
+        let c = parse_hgvs("NM_TEST.1:c.*5del").unwrap();
+        let r = parse_hgvs("NM_TEST.1:r.*5del").unwrap();
+        let c_spdi = hgvs_to_spdi(&c, &provider).unwrap();
+        let r_spdi = hgvs_to_spdi(&r, &provider).unwrap();
+        assert_eq!(
+            c_spdi.position, r_spdi.position,
+            "c.*5 and r.*5 (last transcript base) must resolve to the same SPDI position"
+        );
+        assert_eq!(c_spdi.position, 39);
+    }
+
+    /// #962: a `*N` position past the transcript 3' end is declined (not emitted
+    /// as an off-sequence SPDI coordinate), for both c.*N and r.*N, and they
+    /// agree in declining. On NM_TEST.1 (tx length 40, 3'UTR ends at *5 = tx 40),
+    /// `*6` = tx 41 is one base past the end. Before #962 the resolver only guarded
+    /// the lower bound, so `*6` mapped to a nonexistent tx 41 → SPDI 40.
+    #[test]
+    fn r_star_and_c_star_past_end_both_decline() {
+        let provider = make_test_provider();
+        let c = parse_hgvs("NM_TEST.1:c.*6del").unwrap();
+        let r = parse_hgvs("NM_TEST.1:r.*6del").unwrap();
+        assert!(
+            hgvs_to_spdi(&c, &provider).is_err(),
+            "c.*6 is one base past the transcript 3' end and must decline"
+        );
+        assert!(
+            hgvs_to_spdi(&r, &provider).is_err(),
+            "r.*6 is one base past the transcript 3' end and must decline"
+        );
+        // Far past the end declines just as cleanly.
+        let c_far = parse_hgvs("NM_TEST.1:c.*99999del").unwrap();
+        let r_far = parse_hgvs("NM_TEST.1:r.*99999del").unwrap();
+        assert!(hgvs_to_spdi(&c_far, &provider).is_err());
+        assert!(hgvs_to_spdi(&r_far, &provider).is_err());
     }
 
     // ----- m. (mitochondrial) ------------------------------------------------
