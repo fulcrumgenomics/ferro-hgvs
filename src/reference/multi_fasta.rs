@@ -433,44 +433,39 @@ impl MultiFastaProvider {
         mapper.defer_secondary_build("GRCh37", grch37_path);
     }
 
-    /// Merge Ensembl cdot metadata (GRCh38 primary, plus an optional GRCh37
-    /// secondary build) into an already-loaded RefSeq `mapper`. Ensembl
-    /// transcripts (`ENST`/`ENSG`/`ENSP`) are distinct accessions on the same
-    /// primary build, so they merge into the primary lookup path via
-    /// [`CdotMapper::merge_primary_build`] (not as an alt build). Best-effort:
-    /// warns but does not fail, like the LRG/GRCh37 loads. Returns the number of
-    /// Ensembl transcripts merged into the primary build.
-    fn load_ensembl_cdot(
+    /// Wire Ensembl cdot metadata into an already-loaded RefSeq `mapper`,
+    /// **deferring** the GRCh38 primary merge (#964). Ensembl transcripts
+    /// (`ENST`/`ENSG`/`ENSP`) share the primary genome build, but merging their
+    /// ~198k records eagerly at construction made every startup — including a
+    /// pure-RefSeq `ferro normalize` — pay for transcripts it may never touch.
+    /// Instead the primary Ensembl cdot is registered as a *deferred* source
+    /// ([`CdotMapper::defer_ensembl_primary_merge`]) that materializes lazily on
+    /// the first `ENS*`-accession lookup; a RefSeq workload never triggers it
+    /// (genomic enumeration is RefSeq-scoped and does not consult it). An
+    /// optional Ensembl GRCh37 cdot is still
+    /// layered eagerly as a secondary build (present only when the manifest wires
+    /// it, which the GRCh38 primary reference does not). Best-effort: warns but
+    /// does not fail, like the LRG/GRCh37 loads.
+    fn defer_ensembl_cdot(
         mapper: &mut CdotMapper,
         manifest: &serde_json::Value,
         resolve_path: &impl Fn(&str) -> PathBuf,
-    ) -> usize {
-        let Some(ensembl_path_str) = manifest.get("ensembl_cdot_json").and_then(|v| v.as_str())
-        else {
-            return 0;
-        };
-        let ensembl_path = resolve_path(ensembl_path_str);
-        if !ensembl_path.exists() {
-            eprintln!(
-                "Warning: ensembl_cdot_json path does not exist: {}",
-                ensembl_path.display()
-            );
-            return 0;
+    ) {
+        if let Some(ensembl_path_str) = manifest.get("ensembl_cdot_json").and_then(|v| v.as_str()) {
+            let ensembl_path = resolve_path(ensembl_path_str);
+            if ensembl_path.exists() {
+                eprintln!(
+                    "Deferring Ensembl cdot primary merge (loads on first Ensembl use): {}",
+                    ensembl_path.display()
+                );
+                mapper.defer_ensembl_primary_merge(ensembl_path);
+            } else {
+                eprintln!(
+                    "Warning: ensembl_cdot_json path does not exist: {}",
+                    ensembl_path.display()
+                );
+            }
         }
-        eprintln!(
-            "Loading Ensembl cdot transcript metadata from {}...",
-            ensembl_path.display()
-        );
-        let merged = match mapper.merge_primary_build(&ensembl_path) {
-            Ok(count) => {
-                eprintln!("Merged {} Ensembl transcripts (primary build)", count);
-                count
-            }
-            Err(e) => {
-                eprintln!("Warning: Failed to load Ensembl cdot: {}", e);
-                0
-            }
-        };
 
         // Layer the Ensembl GRCh37 cdot as a secondary build, if provided.
         if let Some(grch37_str) = manifest
@@ -492,8 +487,6 @@ impl MultiFastaProvider {
                 }
             }
         }
-
-        merged
     }
 
     /// Create a provider from a manifest file.
@@ -932,11 +925,12 @@ impl MultiFastaProvider {
                         // Best-effort: a missing key/file is a no-op.
                         Self::defer_grch37_secondary_cdot(&mut mapper, &manifest, &resolve_path);
 
-                        // Merge Ensembl cdot (ENST/ENSG/ENSP) into the primary
-                        // build alongside RefSeq, if the manifest provides it
-                        // (`ferro prepare --ensembl`). Best-effort, like the
+                        // Defer the Ensembl cdot (ENST/ENSG/ENSP) primary merge,
+                        // if the manifest provides it (`ferro prepare --ensembl`):
+                        // it materializes lazily on first Ensembl use, so a RefSeq
+                        // workload never pays for it (#964). Best-effort, like the
                         // LRG/GRCh37 loads above.
-                        Self::load_ensembl_cdot(&mut mapper, &manifest, &resolve_path);
+                        Self::defer_ensembl_cdot(&mut mapper, &manifest, &resolve_path);
 
                         provider.cdot_mapper = Some(mapper);
                     }
