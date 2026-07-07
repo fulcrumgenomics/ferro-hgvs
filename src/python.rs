@@ -145,6 +145,35 @@ impl ReferenceProvider for PyProvider {
             PyProvider::MultiFasta(p) => p.genomic_placement_on_build(parent, build),
         }
     }
+
+    fn resolve_legacy_gene_selector(
+        &self,
+        selector: &str,
+        ng_parent: Option<&crate::hgvs::variant::Accession>,
+    ) -> Option<String> {
+        // Forward to the inner provider so legacy gene-symbol selector
+        // resolution (#500/#792) reaches the Python path; the trait default
+        // `None` would otherwise leave `NG_(GENE):c.` selectors unresolved for
+        // Python consumers even when the wrapped provider can resolve them.
+        match self {
+            PyProvider::Mock(p) => p.resolve_legacy_gene_selector(selector, ng_parent),
+            PyProvider::MultiFasta(p) => p.resolve_legacy_gene_selector(selector, ng_parent),
+        }
+    }
+
+    fn sole_hosted_transcript(
+        &self,
+        ng_parent: &crate::hgvs::variant::Accession,
+    ) -> Option<String> {
+        // Forward to the inner provider so bare-`NG_` selector synthesis (#923)
+        // reaches the Python path; the trait default `None` would otherwise
+        // disable it for Python consumers even when the wrapped provider hosts
+        // an unambiguous transcript for the parent.
+        match self {
+            PyProvider::Mock(p) => p.sole_hosted_transcript(ng_parent),
+            PyProvider::MultiFasta(p) => p.sole_hosted_transcript(ng_parent),
+        }
+    }
 }
 
 impl PyProvider {
