@@ -49,7 +49,7 @@ For a C-terminal stop-loss extension, ferro canonicalizes to the three-letter fo
 
 Spec: `recommendations/protein/deletion.md`
 
-For a deletion spanning the entire coding sequence (including the initiation codon), the corpus emits p.0? (no protein produced) while ferro emits p.(Met1?) (uncertain start-loss). Both are spec-allowed predicted forms for a variant removing the start codon; ferro reports the start-loss form it derives from the normalized variant. Terminal convention difference (accepted_divergence, policy ferro-policy-whole-cds-del-met1), not a bug; p.0? is arguably preferable as a future refinement.
+For a deletion spanning the entire coding sequence (including the initiation codon), the corpus emits p.0? (no protein produced, deletion.md L62-65) while ferro emits p.(Met1?) (initiation-codon effect uncertain, substitution.md translation-initiation-codon section). Both are spec-accepted predicted forms for a variant removing the start codon, and neither is uniquely preferred by the spec; ferro reports the start-loss form it derives from the normalized variant. Terminal convention difference (accepted_divergence, policy ferro-policy-whole-cds-del-met1) — ferro's form is spec-valid, not a pending fix.
 
 | input | axis | disposition | ferro output | tracking |
 |---|---|---|---|---|
