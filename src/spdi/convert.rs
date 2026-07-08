@@ -768,6 +768,10 @@ fn tx_end_for_simple_path(
     }
 }
 
+// No-provider path: with no transcript there is no length to bound against,
+// so an exonic position past the 3' end cannot be rejected here (#971). The
+// provider-backed path (`hgvs_to_spdi`) does bound; `hgvs_to_spdi_simple`
+// callers accept unbounded exonic positions by construction.
 fn require_simple_tx_pos(pos: &TxPos, coord: &str) -> Result<u64, ConversionError> {
     if pos.is_intronic() {
         return Err(ConversionError::MissingReferenceData {
@@ -823,6 +827,10 @@ fn rna_end_for_simple_path(
     }
 }
 
+// No-provider path: with no transcript there is no length to bound against,
+// so an exonic position past the 3' end cannot be rejected here (#971). The
+// provider-backed path (`hgvs_to_spdi`) does bound; `hgvs_to_spdi_simple`
+// callers accept unbounded exonic positions by construction.
 fn require_simple_rna_pos(pos: &RnaPos, coord: &str) -> Result<u64, ConversionError> {
     if pos.is_intronic() {
         return Err(ConversionError::MissingReferenceData {
@@ -1012,7 +1020,8 @@ fn resolve_rna_to_provider_tx<P: ReferenceProvider + ?Sized>(
 
 /// Resolve a single `TxPos` to a 1-based transcript position. Intronic and
 /// downstream (`n.*N`) positions are rejected because they have no valid
-/// SPDI representation on the transcript accession.
+/// SPDI representation on the transcript accession; an exonic position past
+/// the transcript's 3' end is also rejected (#971).
 fn resolve_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<u64, ConversionError> {
     // SPDI is positional and has no offset notation, so intronic n. positions
     // cannot be expressed without genomic projection. Match the sibling
@@ -1159,8 +1168,10 @@ fn ensure_positive_tx<P: std::fmt::Display>(
 /// the transcript length in mRNA bases ([`Transcript::sequence_length`]). Applied
 /// at the `*N` (3'UTR) resolution sites — `r.*N` in `resolve_rna_pos` and `c.*N`
 /// in `resolve_cds_to_tx` — where a position can be numbered past the last
-/// transcript base; the upper bound never fires for a position that lands on the
-/// sequence.
+/// transcript base, and at the exonic resolution sites — `n.N` in
+/// `resolve_tx_pos`, the exonic tail of `r.N` in `resolve_rna_pos`, and both
+/// arms of `c.N` in `resolve_cds_to_tx` — where an over-length position (e.g.
+/// `c.99999` on a short transcript) can likewise map past the 3' end (#971).
 fn ensure_tx_in_bounds<P: std::fmt::Display + Copy>(
     base: i64,
     tx_len: u64,
