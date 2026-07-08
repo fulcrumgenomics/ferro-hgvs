@@ -4,7 +4,7 @@
 
 use crate::hgvs::edit::{
     AminoAcidSeq, Base, ExtDirection, FrameshiftTer, InsertedPart, InsertedSequence,
-    MethylationStatus, NaEdit, ProteinEdit, RepeatCount, RepeatUnit, Sequence,
+    MethylationStatus, NaEdit, ProteinEdit, ProteinInsSeq, RepeatCount, RepeatUnit, Sequence,
 };
 use crate::hgvs::location::AminoAcid;
 use crate::hgvs::parser::position::{
@@ -1937,12 +1937,71 @@ fn parse_amino_acid_seq(input: &str) -> IResult<&str, AminoAcidSeq> {
     map(many1(parse_amino_acid), AminoAcidSeq::new).parse(input)
 }
 
-/// Parse protein insertion (e.g., insGln, insGlnProArg)
+/// Parse protein insertion (e.g., insGln, insGlnProArg, insXaa[5], insTer12, ins*63)
 fn parse_protein_insertion(input: &str) -> IResult<&str, ProteinEdit> {
-    map(preceded(tag("ins"), parse_amino_acid_seq), |sequence| {
+    map(preceded(tag("ins"), parse_protein_ins_seq), |sequence| {
         ProteinEdit::Insertion { sequence }
     })
     .parse(input)
+}
+
+/// Parse the inserted-sequence payload of a protein `ins` edit.
+///
+/// Ordering matters: the stop form (`Ter<n>` / `*<n>`) must be tried before the
+/// literal form, because `parse_amino_acid` greedily reads a leading `Ter`/`*`
+/// as a stop *residue* and would otherwise swallow it and leave the digits
+/// dangling. The repeat form (`Xaa[n]`) is tried before a multi-residue literal.
+fn parse_protein_ins_seq(input: &str) -> IResult<&str, ProteinInsSeq> {
+    alt((
+        parse_protein_ins_stop,
+        parse_protein_ins_repeat,
+        map(parse_amino_acid_seq, ProteinInsSeq::Literal),
+    ))
+    .parse(input)
+}
+
+/// Parse `Ter<n>` / `*<n>` — an inserted sequence ending in a stop at 1-based
+/// position `n`. `n == 0` is rejected (like frameshift/extension positions), so
+/// a bare `insTer` / `ins*` falls through to the literal parser instead.
+fn parse_protein_ins_stop(input: &str) -> IResult<&str, ProteinInsSeq> {
+    let (rest, _) = alt((tag("Ter"), tag("*"))).parse(input)?;
+    let (rest, position) = map_res(digit1, |s: &str| {
+        let n = s
+            .parse::<u64>()
+            .map_err(|_| "inserted-stop position overflow")?;
+        if n == 0 {
+            return Err("inserted-stop position must be >= 1");
+        }
+        Ok::<u64, &'static str>(n)
+    })
+    .parse(rest)?;
+    Ok((rest, ProteinInsSeq::Stop { position }))
+}
+
+/// Parse `Xaa[n]` — an unknown residue (`Xaa`) repeated an exact positive number
+/// of times. The spec sanctions only this form (`insertion.md` L21, examples
+/// `Xaa[23]`/`Xaa[5]`): the residue must be the unknown `Xaa` and the count an
+/// exact `n >= 1`. So a known residue (`insGln[5]`), a stop (`insTer[5]` — that
+/// is the `insTer<n>` stop form, not a repeat), and non-exact/zero counts
+/// (`[0]`, `[?]`, `[2_5]`) are rejected here; they fall through to the literal
+/// parser, which then rejects the trailing `[...]` as unconsumed input. A
+/// multi-residue literal (e.g. `insGlnProArg`) has no `[` and also falls through.
+fn parse_protein_ins_repeat(input: &str) -> IResult<&str, ProteinInsSeq> {
+    let (rest, aa) = parse_amino_acid(input)?;
+    if aa != AminoAcid::Xaa {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+    let (rest, count) = parse_repeat_count(rest)?;
+    match &count {
+        RepeatCount::Exact(n) if *n >= 1 => Ok((rest, ProteinInsSeq::Repeat { aa, count })),
+        _ => Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        ))),
+    }
 }
 
 /// Parse protein delins (e.g., delinsGlu, delinsTrpVal)
@@ -2787,20 +2846,80 @@ mod tests {
         // Single amino acid
         let (remaining, edit) = parse_protein_edit("insGln").unwrap();
         assert_eq!(remaining, "");
-        if let ProteinEdit::Insertion { sequence } = edit {
-            assert_eq!(sequence.len(), 1);
+        if let ProteinEdit::Insertion {
+            sequence: ProteinInsSeq::Literal(seq),
+        } = edit
+        {
+            assert_eq!(seq.len(), 1);
         } else {
-            panic!("Expected insertion");
+            panic!("Expected literal insertion, got {edit:?}");
         }
 
         // Multiple amino acids
         let (remaining, edit) = parse_protein_edit("insGlyPro").unwrap();
         assert_eq!(remaining, "");
-        if let ProteinEdit::Insertion { sequence } = edit {
-            assert_eq!(sequence.len(), 2);
+        if let ProteinEdit::Insertion {
+            sequence: ProteinInsSeq::Literal(seq),
+        } = edit
+        {
+            assert_eq!(seq.len(), 2);
         } else {
-            panic!("Expected insertion");
+            panic!("Expected literal insertion, got {edit:?}");
         }
+    }
+
+    #[test]
+    fn test_parse_protein_insertion_special_sequences() {
+        use crate::hgvs::edit::RepeatCount;
+
+        // insXaa[n] — repeated unknown residue.
+        let (remaining, edit) = parse_protein_edit("insXaa[5]").unwrap();
+        assert_eq!(remaining, "");
+        assert!(
+            matches!(
+                edit,
+                ProteinEdit::Insertion {
+                    sequence: ProteinInsSeq::Repeat {
+                        aa: AminoAcid::Xaa,
+                        count: RepeatCount::Exact(5)
+                    }
+                }
+            ),
+            "got {edit:?}"
+        );
+
+        // insTer<n> and ins*<n> — inserted stop at 1-based position n.
+        for s in ["insTer12", "ins*12"] {
+            let (remaining, edit) = parse_protein_edit(s).unwrap();
+            assert_eq!(remaining, "");
+            assert!(
+                matches!(
+                    edit,
+                    ProteinEdit::Insertion {
+                        sequence: ProteinInsSeq::Stop { position: 12 }
+                    }
+                ),
+                "{s} -> {edit:?}"
+            );
+        }
+
+        // Bare `insTer` (no digits) stays a literal Ter residue, not a Stop.
+        let (_, edit) = parse_protein_edit("insTer").unwrap();
+        assert!(
+            matches!(
+                edit,
+                ProteinEdit::Insertion {
+                    sequence: ProteinInsSeq::Literal(_)
+                }
+            ),
+            "bare insTer should be literal, got {edit:?}"
+        );
+
+        // `insTer0` has no valid Stop reading (0 rejected); `Ter` parses as a
+        // literal residue and the `0` is left unconsumed, so the enclosing
+        // variant parser rejects the trailing `0` rather than accepting `Ter0`.
+        let (remaining, _) = parse_protein_edit("insTer0").unwrap();
+        assert_eq!(remaining, "0");
     }
 
     #[test]

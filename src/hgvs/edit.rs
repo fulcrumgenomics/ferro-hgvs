@@ -1010,6 +1010,14 @@ impl AminoAcidSeq {
         Self(aas)
     }
 
+    /// True when the sequence ends in a translation stop (`Ter`). An
+    /// inserted/delins sequence ending in `Ter` introduces a premature stop
+    /// (nonsense), not a plain in-frame edit — e.g. the spec's
+    /// `p.(Pro578_Lys579delinsLeuTer)`.
+    pub fn ends_with_stop(&self) -> bool {
+        matches!(self.0.last(), Some(AminoAcid::Ter))
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -1025,6 +1033,54 @@ impl fmt::Display for AminoAcidSeq {
             write!(f, "{}", aa)?;
         }
         Ok(())
+    }
+}
+
+/// How an inserted protein sequence is specified in an `ins`/`delins` edit.
+///
+/// Beyond a literal residue string, the spec (`protein/insertion.md:21,45-61`)
+/// allows two length-based shorthands used when the exact inserted residues are
+/// deducible from the DNA/RNA level but too long or unknown to spell out:
+///   - `insXaa[n]` — `n` unknown residues (open reading frame insertion),
+///   - `ins*<n>` / `insTer<n>` — an inserted sequence ending in a translation
+///     stop at 1-based position `n` within the insertion (`n - 1` residues,
+///     then the stop).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ProteinInsSeq {
+    /// Literal inserted residues, including a single `Xaa`/`Ter` (e.g. `insGln`,
+    /// `insGlnSerLys`, `insXaa`, `insGlyTer`).
+    Literal(AminoAcidSeq),
+    /// `insXaa[n]` — a single residue (in practice `Xaa`) repeated `count` times.
+    Repeat { aa: AminoAcid, count: RepeatCount },
+    /// `ins*<n>` / `insTer<n>` — inserted sequence ending in a stop at 1-based
+    /// position `n` within the insertion.
+    Stop { position: u64 },
+}
+
+impl ProteinInsSeq {
+    /// True when the inserted sequence introduces a translation stop — either an
+    /// explicit `Stop { .. }` length form or a literal whose last residue is
+    /// `Ter`. Such an insertion gains a premature stop rather than being a plain
+    /// in-frame insertion (`protein/delins.md:28`).
+    pub fn introduces_stop(&self) -> bool {
+        match self {
+            ProteinInsSeq::Stop { .. } => true,
+            ProteinInsSeq::Literal(seq) => seq.ends_with_stop(),
+            ProteinInsSeq::Repeat { .. } => false,
+        }
+    }
+}
+
+impl fmt::Display for ProteinInsSeq {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProteinInsSeq::Literal(seq) => write!(f, "{}", seq),
+            // `RepeatCount` Display already emits the `[n]` brackets.
+            ProteinInsSeq::Repeat { aa, count } => write!(f, "{}{}", aa, count),
+            // Canonicalize the stop to three-letter `Ter`, matching
+            // frameshift/extension Display (`*` is accepted on input).
+            ProteinInsSeq::Stop { position } => write!(f, "Ter{}", position),
+        }
     }
 }
 
@@ -1083,8 +1139,9 @@ pub enum ProteinEdit {
         count: Option<u64>,
     },
 
-    /// Insertion: addition of amino acids (e.g., p.Lys23_Leu24insGln)
-    Insertion { sequence: AminoAcidSeq },
+    /// Insertion: addition of amino acids (e.g., p.Lys23_Leu24insGln,
+    /// p.Lys2_Leu3insXaa[34], p.Lys2_Leu3insTer12). See [`ProteinInsSeq`].
+    Insertion { sequence: ProteinInsSeq },
 
     /// Deletion-insertion: replacement of amino acids
     Delins { sequence: AminoAcidSeq },
@@ -2083,7 +2140,7 @@ mod tests {
     #[test]
     fn test_protein_edit_insertion() {
         let edit = ProteinEdit::Insertion {
-            sequence: AminoAcidSeq(vec![AminoAcid::Ala, AminoAcid::Gly]),
+            sequence: ProteinInsSeq::Literal(AminoAcidSeq(vec![AminoAcid::Ala, AminoAcid::Gly])),
         };
         assert_eq!(format!("{}", edit), "insAlaGly");
     }

@@ -105,6 +105,10 @@
     "p.Met1extMet-5": {
       "spec_expected": null,
       "note": "The spec's deprecated *before* form: extension.md:24 writes it inside \"modified from `p.Met1ext`<code class=\"spot1\">Met</code>`-5`\", where the highlighted `Met` marks the residue removed to reach the correct `p.Met1ext-5`. The harvester's spot-span reassembly faithfully rebuilds the pre-modification string; ferro correctly rejects it. Force spec-rejects so it reads as `correctly-rejected`, not `parse-error` (#955)."
+    },
+    "NP_060250.2:p.Gln746_Lys747ins*63": {
+      "spec_expected": "NP_060250.2:p.Gln746_Lys747insTer63",
+      "note": "Spec writes the inserted stop as `*63` (insertion.md:49); ferro parses it and Display canonicalizes `*` to three-letter `Ter`, matching frameshift/extension stop rendering (background/standards.md). Pin the canonical `insTer63` output so this reads as `preserved` rather than a spurious `diverges`. (#955)"
     }
   }
 }

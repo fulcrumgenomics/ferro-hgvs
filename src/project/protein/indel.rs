@@ -2,7 +2,7 @@
 //! deletion-insertion, inversion) in the CDS.
 
 use crate::error::FerroError;
-use crate::hgvs::edit::{AminoAcidSeq, FrameshiftTer, NaEdit, ProteinEdit};
+use crate::hgvs::edit::{AminoAcidSeq, FrameshiftTer, NaEdit, ProteinEdit, ProteinInsSeq};
 use crate::hgvs::interval::ProtInterval;
 use crate::hgvs::location::{AminoAcid, ProtPos};
 use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
@@ -443,7 +443,7 @@ fn build_inframe_insertion(
     }
 
     let protein_edit = ProteinEdit::Insertion {
-        sequence: AminoAcidSeq::new(inserted_aas),
+        sequence: ProteinInsSeq::Literal(AminoAcidSeq::new(inserted_aas)),
     };
 
     let loc = ProtInterval::new(
@@ -699,7 +699,7 @@ fn build_inframe_delins(
             loc_edit: LocEdit::new_predicted(
                 loc,
                 ProteinEdit::Insertion {
-                    sequence: AminoAcidSeq::new(inserted),
+                    sequence: ProteinInsSeq::Literal(AminoAcidSeq::new(inserted)),
                 },
             ),
         };

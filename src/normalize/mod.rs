@@ -33,7 +33,9 @@ pub mod validate;
 
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
-use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, ProteinEdit, RepeatCount, Sequence};
+use crate::hgvs::edit::{
+    Base, InsertedSequence, NaEdit, ProteinEdit, ProteinInsSeq, RepeatCount, Sequence,
+};
 use crate::hgvs::interval::{CdsInterval, Interval, ProtInterval};
 use crate::hgvs::location::{
     AminoAcid, CdsPos, GenomePos, ProtPos, RnaPos, SpecialPosition, TxPos,
@@ -3295,8 +3297,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // (anchored at p.X) is canonicalized to `<a>_<b>dup` over
             // that upstream range. The 3'-shift pass that follows will
             // then walk the dup to its canonical anchor. (#92)
-            ProteinEdit::Insertion { sequence } => self
-                .try_protein_ins_to_dup(variant, sequence)
+            // Only a literal inserted sequence can duplicate upstream residues.
+            // `insXaa[n]` / `insTer<n>` have no concrete residues to compare, so
+            // they pass through unchanged via the catch-all arm below.
+            ProteinEdit::Insertion {
+                sequence: ProteinInsSeq::Literal(seq),
+            } => self
+                .try_protein_ins_to_dup(variant, seq)
                 .unwrap_or_else(|| (edit.clone(), variant.loc_edit.location.clone())),
             // HGVS Prioritization: delins is the last-resort form. A
             // delins whose inserted residues share an affix with the
@@ -3828,7 +3835,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     loc_edit: crate::hgvs::variant::LocEdit::with_uncertainty(
                         Interval::new(synth_start, synth_end),
                         variant.loc_edit.edit.map_ref(|_| ProteinEdit::Insertion {
-                            sequence: residual_seq.clone(),
+                            sequence: ProteinInsSeq::Literal(residual_seq.clone()),
                         }),
                     ),
                 };
@@ -3855,7 +3862,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             let ins_end = ProtPos::new(flank_aas[1], new_start);
             return Some((
                 ProteinEdit::Insertion {
-                    sequence: residual_seq,
+                    sequence: ProteinInsSeq::Literal(residual_seq),
                 },
                 Interval::new(ins_start, ins_end),
             ));
