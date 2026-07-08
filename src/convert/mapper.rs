@@ -104,24 +104,13 @@ impl<'a> CoordinateMapper<'a> {
         // Most real transcripts from cdot are contiguous
         let has_gaps = sorted_exons.windows(2).any(|w| w[0].end + 1 != w[1].start);
         if !has_gaps {
-            // No gaps - use simple calculation, adjusted for CIGAR insertions.
-            // CDS numbering follows the genome alignment (skips CIGAR insertion bases),
-            // so we need to add the net CIGAR insertion offset between start and target.
-            let raw_tx = start_tx + offset;
-            if !self.transcript.exon_cigars.is_empty() && offset >= 0 {
-                // Only apply CIGAR adjustment when offset is non-negative (within
-                // or after CDS). Negative offsets point into the 5' UTR before the
-                // CDS start, where CIGAR insertions within exons don't apply.
-                if let (Ok(start_u64), Ok(raw_u64)) =
-                    (u64::try_from(start_tx), u64::try_from(raw_tx))
-                {
-                    let adj_start = self.transcript.cigar_insertion_adjustment(start_u64);
-                    let adj_target = self.transcript.cigar_insertion_adjustment(raw_u64);
-                    let net_adj = adj_target as i64 - adj_start as i64;
-                    return Ok(raw_tx + net_adj);
-                }
-            }
-            return Ok(raw_tx);
+            // No tx-coordinate gaps: c./n. numbering and the transcript sequence
+            // both count every base — including bases inserted relative to the
+            // genome via a CIGAR `I` — so CDS<->tx on this pure-transcript axis is
+            // naive `start_tx + offset`, with NO CIGAR adjustment. Adjusting here
+            // was a genome-centric error that shifted every position 3' of an
+            // intra-exon insertion (#944; NM_015120.4 c.87 -> n.198, not n.201).
+            return Ok(start_tx + offset);
         }
 
         // Exons have gaps - use exon-aware mapping
@@ -772,6 +761,7 @@ pub struct GenomicLocation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::CigarOp;
     use crate::reference::transcript::{Exon, ManeStatus, Strand};
     use std::sync::OnceLock;
 
@@ -1290,6 +1280,45 @@ mod tests {
                 cds_pos, tx_pos.base, back.base
             );
         }
+    }
+
+    fn make_cigar_insertion_transcript() -> Transcript {
+        Transcript {
+            id: "NM_INS.1".to_string(),
+            gene_symbol: Some("INS".to_string()),
+            strand: Strand::Plus,
+            sequence: Some("A".repeat(40)),
+            cds_start: Some(1),
+            cds_end: Some(40),
+            exons: vec![Exon::new(1, 1, 40)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            // M5 I3 M32: 3 inserted transcript bases at tx 6,7,8.
+            exon_cigars: vec![Some(vec![
+                CigarOp::Match(5),
+                CigarOp::Insertion(3),
+                CigarOp::Match(32),
+            ])],
+            cached_introns: OnceLock::new(),
+        }
+    }
+
+    #[test]
+    fn cds_to_tx_is_transcript_native_across_cigar_insertion() {
+        // #944: c./n. numbering counts inserted transcript bases, so CDS->tx is
+        // naive with NO CIGAR adjustment. cds_start=1 => c.N -> tx N (1-based).
+        let tx = make_cigar_insertion_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        // Before the insertion — unaffected.
+        assert_eq!(mapper.cds_to_tx(&CdsPos::new(3)).unwrap().base, 3);
+        // After the 3bp insertion — must NOT shift by +3 (bug produced 13).
+        assert_eq!(mapper.cds_to_tx(&CdsPos::new(10)).unwrap().base, 10);
     }
 }
 

@@ -153,12 +153,13 @@ mod tests {
     }
 
     #[test]
-    fn cigar_insertion_shifts_n_coordinate_vs_flat() {
-        // M1 regression: the n. derivation must route through the exon/CIGAR-aware
-        // `cds_to_tx`, not a flat CDS-offset shift. With a CIGAR insertion of 2
-        // bases before the variant, c.6 maps to n.8 — a flat `cds_start + base -
-        // 1` (= 6) would be wrong and would disagree with the c. form's true
-        // transcript position.
+    fn cigar_insertion_n_coordinate_is_transcript_native() {
+        // #944: HGVS c./n. numbering is transcript-native — a CIGAR insertion adds
+        // transcript bases that BOTH the CDS and n. coordinate already count, so
+        // c.6 maps to n.6 with NO shift (the 2 inserted bases are c.4/c.5). The n.
+        // derivation must still route through the same CIGAR-aware `cds_to_tx` as
+        // the c. form (c/n consistency — this test's original #592 intent); after
+        // the #944 fix both agree at n.6.
         let tx = Transcript {
             id: "NM_CIGAR.1".to_string(),
             gene_symbol: None,
@@ -183,13 +184,13 @@ mod tests {
             ])],
             cached_introns: OnceLock::new(),
         };
-        // Exon/CIGAR-aware: c.6 → n.8 (the 2 inserted bases shift it up by 2).
+        // Transcript-native: c.6 -> n.6.
         assert_eq!(
             n_string(CdsPos::new(6), &tx, "NM_CIGAR.1"),
-            "NM_CIGAR.1:n.8A>G"
+            "NM_CIGAR.1:n.6A>G"
         );
-        // Consistency: matches the authoritative mapper exactly.
+        // Consistency: the mapper agrees.
         let mapper = CoordinateMapper::new(&tx);
-        assert_eq!(mapper.cds_to_tx(&CdsPos::new(6)).unwrap().base, 8);
+        assert_eq!(mapper.cds_to_tx(&CdsPos::new(6)).unwrap().base, 6);
     }
 }
