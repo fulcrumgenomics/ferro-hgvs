@@ -13,10 +13,48 @@ use nom::{
     IResult, Parser,
 };
 
-/// Parse an accession (e.g., "NM_000088.3" or "ENST00000012345.1" or "GRCh37(chr23)" or "P54802")
-/// Optimized with byte-based dispatch to avoid trying all 5 alternatives
+/// Parse an accession (e.g., "NM_000088.3" or "ENST00000012345.1" or "GRCh37(chr23)" or "P54802").
+///
+/// For a compound reference `outer(inner)` (e.g. `NC_000013.11(NM_004119.3)`) the outer must be a
+/// genomic/gene reference; backwards pairings such as `NM_x(NG_y)`, `ENSP…(ENST…)`, or
+/// `ENST…(ENSG…)` are rejected here. See `is_valid_compound_outer` (#963).
 #[inline]
 pub fn parse_accession(input: &str) -> IResult<&str, Accession> {
+    let (rest, acc) = parse_accession_dispatch(input)?;
+    // A compound reference stores the inner as the primary accession and the outer in
+    // `genomic_context`. Validate the pairing: the outer must be a genomic/gene reference,
+    // otherwise the parenthetical form is backwards (transcript/protein outer) and rejected.
+    if let Some(outer) = acc.genomic_context.as_deref() {
+        if !is_valid_compound_outer(outer) {
+            return Err(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Verify,
+            )));
+        }
+    }
+    Ok((rest, acc))
+}
+
+/// Whether `outer` may serve as the outer reference of a compound `outer(inner)` reference —
+/// i.e. it is a genomic or gene reference. In a compound reference the parenthetical inner names
+/// the annotated transcript/feature whose coordinates are used, so the outer must be genomic or
+/// gene: RefSeq `NC_`/`NG_`/`NT_`/`NW_`, Ensembl `ENSG`, or a bare LRG record `LRG_<N>`. This is
+/// keyed off the accession's inferred coordinate class (`g`), so RefSeq, Ensembl, and LRG are
+/// treated consistently, and transcript/protein outers (`NM_`, `NR_`, `XM_`, `XR_`, `ENST`,
+/// `ENSP`, `NP_`, `LRG_<N>t<M>`, …) are rejected. The inner is intentionally not constrained:
+/// non-standard but real forms such as mutalyzer's `NG_x(NP_y)` protein wrapper must still parse.
+fn is_valid_compound_outer(outer: &Accession) -> bool {
+    // The shared coordinate-class oracle already classifies `NC_`/`NG_`/`NT_`/`NW_`/`ENSG`/
+    // bare `LRG_<N>` as genomic (`g`). Also accept the RefSeq genomic prefixes it does not
+    // classify — `AC_` (alternate-assembly) and `NZ_` (WGS) — so a valid genomic outer is
+    // never falsely rejected.
+    outer.inferred_variant_type() == Some("g") || matches!(&*outer.prefix, "AC" | "NZ")
+}
+
+/// Dispatch an accession parse on the first byte(s), avoiding trying all alternatives.
+/// Compound-reference pairing validation lives in [`parse_accession`].
+#[inline]
+fn parse_accession_dispatch(input: &str) -> IResult<&str, Accession> {
     let bytes = input.as_bytes();
     if bytes.is_empty() {
         return Err(nom::Err::Error(nom::error::Error::new(
@@ -1070,6 +1108,58 @@ mod tests {
         );
         assert_eq!(&*acc.prefix, "NC");
         assert!(remaining.starts_with('('));
+    }
+
+    // =========================================================================
+    // Compound reference pairing validation (#963): outer must be genomic/gene.
+    // =========================================================================
+
+    #[test]
+    fn test_parse_compound_ref_rejects_transcript_outer() {
+        // NM_ (transcript) wrapping NG_ (gene) — the backwards RefSeq form.
+        assert!(parse_accession("NM_004119.3(NG_012232.1):c.100A>G").is_err());
+    }
+
+    #[test]
+    fn test_parse_compound_ref_rejects_noncoding_outer() {
+        // NR_ (non-coding RNA transcript) as outer.
+        assert!(parse_accession("NR_046018.2(NM_000088.3):n.100A>G").is_err());
+    }
+
+    #[test]
+    fn test_parse_compound_ref_rejects_protein_outer() {
+        // NP_ (protein) as outer.
+        assert!(parse_accession("NP_004110.2(NM_000088.3):p.Val600Glu").is_err());
+    }
+
+    #[test]
+    fn test_parse_ensembl_compound_rejects_transcript_outer() {
+        // ENST (transcript) wrapping ENSG (gene) — the backwards Ensembl form.
+        assert!(parse_accession("ENST00000375549.8(ENSG00000204370.13):c.100A>G").is_err());
+    }
+
+    #[test]
+    fn test_parse_ensembl_compound_rejects_protein_outer() {
+        // ENSP (protein) wrapping ENST (transcript).
+        assert!(parse_accession("ENSP00000012345.1(ENST00000375549.8):c.100A>G").is_err());
+    }
+
+    #[test]
+    fn test_parse_compound_ref_accepts_alt_assembly_genomic_outer() {
+        // AC_ (alternate-assembly genomic) and NZ_ (WGS) are valid genomic outers even
+        // though the shared coordinate-class oracle does not classify them — they must
+        // not be falsely rejected.
+        assert!(parse_accession("AC_000001.1(NM_000088.3):c.100A>G").is_ok());
+        assert!(parse_accession("NZ_CP000001.1(NM_000088.3):c.100A>G").is_ok());
+    }
+
+    #[test]
+    fn test_parse_compound_ref_keeps_lenient_inner() {
+        // The inner is intentionally not constrained: genomic/gene outers with a
+        // protein or bare-genomic inner still parse (mutalyzer emits these, and
+        // ferro must parse them to re-express as the spec-correct bare form).
+        assert!(parse_accession("NC_000013.11(NP_004110.2):p.Val600Glu").is_ok());
+        assert!(parse_accession("NC_000023.11(LRG_199):g.1A>G").is_ok());
     }
 
     // =========================================================================
