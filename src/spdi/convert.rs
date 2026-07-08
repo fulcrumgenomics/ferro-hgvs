@@ -906,21 +906,13 @@ fn resolve_cds_to_tx<P: ReferenceProvider + ?Sized>(
         .map_err(|e| ConversionError::MissingReferenceData {
             description: format!("could not resolve {} to transcript position: {}", end, e),
         })?;
-    // A `c.*N` (3'UTR) position must also be bounded above: reject one that maps
-    // past the transcript 3' end, not just below base 1 (#962). Non-3'UTR c.
-    // positions keep the lower-bound-only guard — their (rarer) overflow is a
-    // separate, broader concern, and this keeps `c.N`/`r.N` symmetric.
+    // Bound both endpoints against the transcript length: reject a position that
+    // maps past the 3' end, not just below base 1. #962 did this for c.*N (3'UTR);
+    // #971 extends it to plain exonic c.N, which cds_to_tx can also map off-sequence
+    // (e.g. c.99999 -> tx cds_start-1+99999). Keeps c.N / r.N / n.N symmetric.
     let tx_len = transcript.sequence_length();
-    let s_u = if start.is_3utr() {
-        ensure_tx_in_bounds(s.base, tx_len, "c", start)
-    } else {
-        ensure_positive_tx(s.base, "c", start)
-    }?;
-    let e_u = if end.is_3utr() {
-        ensure_tx_in_bounds(e.base, tx_len, "c", end)
-    } else {
-        ensure_positive_tx(e.base, "c", end)
-    }?;
+    let s_u = ensure_tx_in_bounds(s.base, tx_len, "c", start)?;
+    let e_u = ensure_tx_in_bounds(e.base, tx_len, "c", end)?;
     Ok((s_u, e_u))
 }
 
@@ -3496,6 +3488,40 @@ mod tests {
         assert_eq!(spdi.position, 36);
         assert_eq!(spdi.deletion, "A");
         assert_eq!(spdi.insertion, "G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_exonic_past_3prime_end_declines() {
+        // NM_TEST.1 is 40 bases (cds 6-35). c.99999 -> tx 100004, off-sequence.
+        // #971: must decline, not emit an off-sequence SPDI coordinate.
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:c.99999A>G").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic c.N must decline with InvalidPosition, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_exonic_range_past_3prime_end_declines() {
+        // In a range, an over-length end must also decline (#971 acceptance: "in a range").
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:c.20_99999del").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic c. range must decline, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_exonic_last_base_ok() {
+        // c.30 -> tx 35 (last CDS base, in bounds) must still resolve unchanged.
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:c.30A>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 34, "c.30 -> tx 35 -> SPDI 34");
     }
 
     /// r.*N anchors at `cds_end`, not `sequence_length()` — closes
