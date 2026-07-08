@@ -13,7 +13,7 @@
 //!
 //! For type-safe coordinate handling, see [`crate::coords`].
 
-use crate::data::{cumulative_insertion_offset, CigarOp};
+use crate::data::CigarOp;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::sync::OnceLock;
@@ -553,56 +553,6 @@ impl Transcript {
     /// Check if this is any type of MANE transcript
     pub fn is_mane(&self) -> bool {
         self.mane_status.is_mane()
-    }
-
-    /// Compute the cumulative CIGAR insertion offset at a raw transcript position.
-    ///
-    /// When CDS positions are mapped to transcript positions using simple arithmetic
-    /// (`cds_start + offset`), the result doesn't account for CIGAR insertion bases.
-    /// This method computes the number of insertion bases across all exons up to the
-    /// given raw position, which should be added to get the correct transcript position.
-    ///
-    /// The `raw_tx_pos` is in "mixed" coordinates: the CDS start (in tx coords) plus
-    /// a genome-aligned offset. Insertions before this position need to be counted.
-    pub fn cigar_insertion_adjustment(&self, raw_tx_pos: u64) -> u64 {
-        if self.exon_cigars.is_empty() {
-            return 0;
-        }
-
-        let mut adjustment: u64 = 0;
-        let mut sorted_indices: Vec<usize> = (0..self.exons.len()).collect();
-        sorted_indices.sort_by_key(|&i| self.exons[i].start);
-
-        for &idx in &sorted_indices {
-            let exon = &self.exons[idx];
-            let cigar = match self.exon_cigars.get(idx) {
-                Some(Some(ops)) if !ops.is_empty() => ops,
-                _ => continue,
-            };
-
-            // If the exon starts past our adjusted target, stop
-            if exon.start > raw_tx_pos + adjustment {
-                break;
-            }
-
-            // Compute position within this exon for the cumulative_insertion_offset function
-            let exon_tx_len = exon.end - exon.start + 1;
-            let adjusted_target = raw_tx_pos + adjustment;
-
-            let pos_in_exon = if adjusted_target >= exon.end {
-                // Past this exon — count all insertions
-                exon_tx_len
-            } else if adjusted_target >= exon.start {
-                // Within this exon
-                adjusted_target - exon.start + 1
-            } else {
-                continue;
-            };
-
-            adjustment += cumulative_insertion_offset(cigar, pos_in_exon);
-        }
-
-        adjustment
     }
 
     /// Get cached introns, computing them lazily if not already cached

@@ -1265,42 +1265,6 @@ pub fn parse_cigar(cigar_str: &str) -> Result<Vec<CigarOp>, FerroError> {
         .collect()
 }
 
-/// Compute the cumulative insertion offset at a given 1-based transcript position.
-///
-/// Walks through the CIGAR operations and counts insertion bases that occur
-/// before `tx_pos`. Insertions add bases to the transcript that do not exist
-/// in the genome, so CDS numbering (which follows the genome) must account
-/// for them.
-///
-/// Returns the total number of insertion bases encountered before `tx_pos`.
-pub fn cumulative_insertion_offset(ops: &[CigarOp], tx_pos: u64) -> u64 {
-    let mut current_tx: u64 = 0;
-    let mut cumulative: u64 = 0;
-
-    for op in ops {
-        match op {
-            CigarOp::Match(len) => {
-                current_tx += len;
-            }
-            CigarOp::Insertion(len) => {
-                // If the entire insertion is before tx_pos, count it all
-                if current_tx + len <= tx_pos {
-                    cumulative += len;
-                }
-                current_tx += len;
-            }
-            CigarOp::Deletion(_) => {
-                // Deletions don't advance the transcript position
-            }
-        }
-        if current_tx >= tx_pos {
-            break;
-        }
-    }
-
-    cumulative
-}
-
 /// Raw cdot JSON file structure (as it appears on disk).
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)] // Fields used for serde deserialization
@@ -5182,80 +5146,6 @@ mod tests {
     fn test_parse_cigar_too_short_token() {
         let result = parse_cigar("M");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_cumulative_insertion_offset_before_insertion() {
-        // CIGAR: M185 I3 M250 — 3bp insertion at tx position 186-188
-        // At tx position 100 (before insertion): offset = 0
-        let cigar = vec![
-            CigarOp::Match(185),
-            CigarOp::Insertion(3),
-            CigarOp::Match(250),
-        ];
-        assert_eq!(cumulative_insertion_offset(&cigar, 100), 0);
-    }
-
-    #[test]
-    fn test_cumulative_insertion_offset_after_insertion() {
-        // At tx position 200 (after insertion): offset = 3
-        let cigar = vec![
-            CigarOp::Match(185),
-            CigarOp::Insertion(3),
-            CigarOp::Match(250),
-        ];
-        assert_eq!(cumulative_insertion_offset(&cigar, 200), 3);
-    }
-
-    #[test]
-    fn test_cumulative_insertion_offset_at_end() {
-        // At tx position 437 (end of exon, 185+3+250-1): offset = 3
-        let cigar = vec![
-            CigarOp::Match(185),
-            CigarOp::Insertion(3),
-            CigarOp::Match(250),
-        ];
-        assert_eq!(cumulative_insertion_offset(&cigar, 437), 3);
-    }
-
-    #[test]
-    fn test_cumulative_insertion_offset_no_insertions() {
-        let cigar = vec![CigarOp::Match(500)];
-        assert_eq!(cumulative_insertion_offset(&cigar, 250), 0);
-    }
-
-    #[test]
-    fn test_cumulative_insertion_offset_multiple_insertions() {
-        // M100 I2 M100 I5 M100 — two insertions
-        let cigar = vec![
-            CigarOp::Match(100),
-            CigarOp::Insertion(2),
-            CigarOp::Match(100),
-            CigarOp::Insertion(5),
-            CigarOp::Match(100),
-        ];
-        // Before first insertion
-        assert_eq!(cumulative_insertion_offset(&cigar, 50), 0);
-        // After first insertion, before second
-        assert_eq!(cumulative_insertion_offset(&cigar, 150), 2);
-        // After both insertions
-        assert_eq!(cumulative_insertion_offset(&cigar, 300), 7);
-    }
-
-    #[test]
-    fn test_cumulative_insertion_offset_with_deletion() {
-        // M100 D5 M100 I3 M100 — deletion doesn't affect insertion offset
-        let cigar = vec![
-            CigarOp::Match(100),
-            CigarOp::Deletion(5),
-            CigarOp::Match(100),
-            CigarOp::Insertion(3),
-            CigarOp::Match(100),
-        ];
-        // Before insertion (deletions don't advance tx position)
-        assert_eq!(cumulative_insertion_offset(&cigar, 150), 0);
-        // After insertion
-        assert_eq!(cumulative_insertion_offset(&cigar, 250), 3);
     }
 
     // -------------------------------------------------------------------------
