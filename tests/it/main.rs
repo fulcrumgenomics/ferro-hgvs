@@ -205,6 +205,7 @@ mod issue_951_circular_normalize_passthrough;
 mod issue_952_protein_consequence_decline;
 mod issue_953_multirepeat_normalization;
 mod issue_963_compound_pairing;
+mod issue_972_cds_start_nf_decline;
 mod issue_97_utr_del_position;
 mod issue_98_minus_strand_intronic_orientation;
 mod issue_l2_w4001_swapped_positions;

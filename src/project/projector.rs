@@ -3204,11 +3204,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
 
         // Coding/protein/gene metadata: prefer cdot, fall back to the
-        // sequence provider's transcript record.
-        let (is_coding, cdot_protein, gene_symbol) =
+        // sequence provider's transcript record. `cds_start_incomplete` (#972)
+        // rides along the same cdot-first/provider-fallback resolution as
+        // `is_coding` so a bare `c.` input on a `cds_start_NF` transcript is
+        // gated the same way the genome-pivot path is.
+        let (is_coding, cds_start_incomplete, cdot_protein, gene_symbol) =
             match self.projector.mapper().cdot().get_transcript(transcript_id) {
                 Some(t) => (
                     t.cds_start.is_some(),
+                    t.cds_start_incomplete,
                     t.protein.clone(),
                     t.gene_name.clone(),
                 ),
@@ -3216,6 +3220,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     let tx = self.cached_get_transcript_for_variant(normalized, transcript_id)?;
                     (
                         tx.cds_start.is_some(),
+                        tx.cds_start_incomplete,
                         tx.protein_id.clone(),
                         tx.gene_symbol.clone(),
                     )
@@ -3326,9 +3331,21 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             None
         };
 
+        // #972: decline coding/protein on a `cds_start_NF` transcript — see the
+        // genome-pivot path's identical guard for the rationale. `.noncoding`
+        // (derived above from the resolved CDS positions) is unaffected. `rna`
+        // numbering is CDS-relative for a coding transcript (identical to
+        // `c.`, per `project::rna`'s module doc), so it inherits the same
+        // "no confirmed ATG" problem and is gated alongside `coding`/`protein`.
+        let (coding, protein, rna) = if is_coding && cds_start_incomplete {
+            (None, None, None)
+        } else {
+            (Some(normalized.clone()), protein, rna)
+        };
+
         Ok(VariantProjection {
             genomic,
-            coding: Some(normalized.clone()),
+            coding,
             noncoding,
             protein,
             rna,
@@ -3461,15 +3478,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // two transcript stores can disagree (cdot lists a CDS, the provider
         // record doesn't), and reading `is_coding` from a different source than
         // the sibling would silently drop protein where the sibling predicts it.
-        let (is_coding, cdot_protein, gene_symbol_meta) =
+        // `cds_start_incomplete` (#972) rides along the same cdot-first/
+        // provider-fallback resolution as `is_coding`, mirroring `project_coding_direct`.
+        let (is_coding, cds_start_incomplete, cdot_protein, gene_symbol_meta) =
             match self.projector.mapper().cdot().get_transcript(transcript_id) {
                 Some(t) => (
                     t.cds_start.is_some(),
+                    t.cds_start_incomplete,
                     t.protein.clone(),
                     t.gene_name.clone(),
                 ),
                 None => (
                     tx.cds_start.is_some() && tx.cds_end.is_some(),
+                    tx.cds_start_incomplete,
                     tx.protein_id.clone(),
                     tx.gene_symbol.clone(),
                 ),
@@ -3568,9 +3589,25 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // input did not have; re-frame the predicted `r.` from the input so it
         // renders bare (or under the input's parent for an `NG_(NM_)` input).
         let rna = Self::reframe_rna_from_input(rna, normalized);
+
+        // #972: decline coding/protein on a `cds_start_NF` transcript — see the
+        // genome-pivot path's identical guard for the rationale. The `n.`/`r.`
+        // axis reported on `.noncoding` is the *input itself* (transcript-native
+        // numbering, no ATG required) and is unaffected. `.rna`, however, is the
+        // *derived* `r.` prediction built from the synthesized `coding` value a
+        // few lines up — RNA numbering is CDS-relative for a coding transcript
+        // (identical to `c.`, per `project::rna`'s module doc), so that
+        // derived-from-`c.` prediction inherits the same "no confirmed ATG"
+        // problem and is gated alongside `coding`/`protein`.
+        let (coding, protein, rna) = if cds_start_incomplete {
+            (None, None, None)
+        } else {
+            (Some(coding), protein, rna)
+        };
+
         Ok(VariantProjection {
             genomic,
-            coding: Some(coding),
+            coding,
             // The non-coding axis is the input itself.
             noncoding: Some(normalized.clone()),
             protein,
@@ -4047,6 +4084,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     transcript_id,
                     &projected_genome,
                     gene_symbol.clone(),
+                    // #972: gate the poly-A fallback's `coding` echo the same
+                    // way the normal path gates `coding`/`protein`/`rna` below —
+                    // `cdot_tx` is already resolved above, so reuse it rather
+                    // than re-fetching inside the callee.
+                    is_coding && cdot_tx.cds_start_incomplete,
                 ) {
                     return Ok(projection);
                 }
@@ -4257,9 +4299,27 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // rather than dropping the parent and substituting a gene symbol (#693).
         let rna = Self::reframe_rna_from_input(rna, normalized);
 
+        // #972: a transcript with an incomplete 5' CDS (Ensembl `cds_start_NF`)
+        // has no confirmed ATG initiation codon, so `c.1`/`p.1` are undefined —
+        // HGVS does not recommend describing a variant on the coding/protein
+        // axis for such a transcript (only genomic/`n.` positions are
+        // well-defined). `rna` numbering is CDS-relative for a coding
+        // transcript (identical to `c.`, per `project::rna`'s module doc), so
+        // the `r.` prediction derived from `coding` a few lines up inherits the
+        // same problem and is gated alongside `coding`/`protein`. Decline all
+        // three here, after every other axis (including the `noncoding`
+        // derivation above, which legitimately still needs the
+        // internally-computed `coding` value) has already been derived —
+        // `.genomic`/`.noncoding` are untouched.
+        let (coding, protein, rna) = if is_coding && cdot_tx.cds_start_incomplete {
+            (None, None, None)
+        } else {
+            (Some(coding), protein, rna)
+        };
+
         Ok(VariantProjection {
             genomic,
-            coding: Some(coding),
+            coding,
             noncoding,
             protein,
             rna,
@@ -4290,12 +4350,25 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// variant or when the genomic axis cannot be re-anchored into the
     /// parent frame — never stamping a chromosome coordinate under a parent
     /// accession (invalid HGVS).
+    ///
+    /// `cds_start_incomplete` (#972): the caller already knows whether this
+    /// transcript has an incomplete 5' CDS (Ensembl `cds_start_NF`) from the
+    /// `cdot_tx` it resolved before reaching the poly-A short-circuit, so it
+    /// is passed in rather than re-derived here. A `c.*` position is (by
+    /// definition) downstream of the CDS, but the "no confirmed ATG" problem
+    /// is a property of the transcript's coding frame as a whole, not of
+    /// where in it a given position falls — so `coding` (the input's own `c.`
+    /// form, echoed below) is gated to `None` exactly like the three other
+    /// "build coding" sites in this file. `protein`/`rna`/`noncoding` are
+    /// already `None` on this path regardless (a poly-A position has no
+    /// protein consequence and no genomic exon context to predict `r.` from).
     fn polya_multiaxis_projection(
         &self,
         normalized: &HgvsVariant,
         transcript_id: &str,
         projected_genome: &HgvsVariant,
         gene_symbol: Option<String>,
+        cds_start_incomplete: bool,
     ) -> Option<VariantProjection> {
         // The coding axis is the input's own form, rendered bare (no NC_ wrapper),
         // matching how `coding` is reported on the normal path. Only `c.*` (CDS)
@@ -4303,11 +4376,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // `HgvsVariant::Cds`); `n.`/`r.` inputs have no poly-A 3'UTR endpoint and
         // must fall through to the canonical `TranscriptNotOverlapping` decline.
         let coding = match normalized {
-            HgvsVariant::Cds(c) => {
+            HgvsVariant::Cds(c) if !cds_start_incomplete => {
                 let mut c = c.clone();
                 c.accession.genomic_context = None;
-                HgvsVariant::Cds(c)
+                Some(HgvsVariant::Cds(c))
             }
+            HgvsVariant::Cds(_) => None,
             _ => return None,
         };
 
@@ -4324,7 +4398,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         Some(VariantProjection {
             genomic,
-            coding: Some(coding),
+            coding,
             noncoding: None,
             protein: None,
             rna: None,
@@ -4345,28 +4419,55 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// no protein/noncoding/rna axis (a whole-arm marker does not round-trip
     /// through cdot). `genomic` is the already-normalized parent-frame
     /// (NG_/LRG_) coordinate.
+    ///
+    /// #972: this site is reached from the top of `project_single_inner`,
+    /// *before* that function resolves its own `cdot_tx` (the special-terminus
+    /// branch runs ahead of the normal cdot fetch), so — unlike
+    /// `polya_multiaxis_projection`, whose caller already has a `cdot_tx` to
+    /// hand — `cds_start_incomplete` is looked up here directly, cdot-first
+    /// with a provider fallback (the same two-tier lookup
+    /// `project_coding_direct`/`project_noncoding_direct` use). A whole-arm
+    /// terminus is a `c.` (CDS) input, so the same "no confirmed ATG" gate
+    /// applies: `coding` is declined for a `cds_start_NF` transcript exactly
+    /// like the other three "build coding" sites. `gene_symbol` is read
+    /// straight from the input regardless of the gate (mirrors the other
+    /// sites, which report gene metadata independent of whether `coding` is
+    /// declined).
     fn terminus_multiaxis_projection(
         &self,
         normalized: &HgvsVariant,
         transcript_id: &str,
         genomic: HgvsVariant,
     ) -> VariantProjection {
+        let cds_start_incomplete =
+            match self.projector.mapper().cdot().get_transcript(transcript_id) {
+                Some(t) => t.cds_start_incomplete,
+                None => self
+                    .cached_get_transcript_for_variant(normalized, transcript_id)
+                    .map(|tx| tx.cds_start_incomplete)
+                    .unwrap_or(false),
+            };
+
+        let gene_symbol = match normalized {
+            HgvsVariant::Cds(c) => c.gene_symbol.clone(),
+            _ => None,
+        };
         let coding = match normalized {
-            HgvsVariant::Cds(c) => {
+            HgvsVariant::Cds(c) if !cds_start_incomplete => {
                 let mut c = c.clone();
                 c.accession.genomic_context = None;
-                (Some(HgvsVariant::Cds(c.clone())), c.gene_symbol.clone())
+                Some(HgvsVariant::Cds(c))
             }
-            _ => (None, None),
+            _ => None,
         };
         VariantProjection {
             genomic: Some(genomic),
-            coding: coding.0,
+            coding,
             noncoding: None,
             protein: None,
             rna: None,
             transcript_id: transcript_id.to_string(),
-            gene_symbol: coding.1,
+            gene_symbol,
             is_frameshift: false,
             is_intronic: false,
             // A whole-arm terminus is not a canonical UTR position.

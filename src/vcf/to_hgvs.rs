@@ -169,8 +169,15 @@ impl<'a> VcfToHgvsConverter<'a> {
             None
         };
 
-        // If we have a coding transcript, use CDS coordinates
-        if self.transcript.is_coding() {
+        // If we have a coding transcript, use CDS coordinates — UNLESS its CDS
+        // start is incomplete (`cds_start_NF`). Coding `c.` numbering is
+        // CDS-relative and ill-defined without a confirmed start codon, so ferro
+        // declines it (see `ferro project` / `ferro normalize`, #972). Here on
+        // the annotation surface — which has no error-mode plumbing — declining
+        // means falling back to the transcript-native `n.` annotation, which is
+        // always well-defined, rather than emitting a c./p. under a
+        // non-recommended reference (background/refseq.md §RefSeq).
+        if self.transcript.is_coding() && !self.transcript.cds_start_incomplete {
             self.create_cds_annotation(
                 genomic_start,
                 genomic_end,
@@ -1135,6 +1142,39 @@ mod tests {
         assert_eq!(annotations.len(), 1);
         let ann = &annotations[0];
         assert!(ann.is_coding);
+    }
+
+    #[test]
+    fn test_converter_cds_start_nf_declines_c_falls_back_to_n() {
+        // A coding transcript flagged cds_start_NF must NOT emit a c. annotation
+        // (CDS-relative numbering is ill-defined without a confirmed start
+        // codon); `ferro annotate` falls back to the transcript-native n. form,
+        // consistent with `ferro project`/`ferro normalize` declining c./p./r.
+        // on such transcripts (#972).
+        let transcript = Transcript {
+            cds_start_incomplete: true,
+            ..create_test_transcript()
+        };
+        let converter = VcfToHgvsConverter::new(&transcript);
+        let vcf = VcfRecord::snv("chr1", 1050, 'A', 'G');
+        let ann = &converter.convert(&vcf).unwrap()[0];
+        assert!(
+            !ann.is_coding,
+            "cds_start_NF coding transcript must not emit a c. annotation"
+        );
+        assert!(
+            ann.hgvs_string().contains(":n."),
+            "must fall back to the n. form, got {:?}",
+            ann.hgvs_string()
+        );
+
+        // Guardrail: the identical transcript with the flag OFF still emits c.
+        let complete = create_test_transcript();
+        let ann_c = &VcfToHgvsConverter::new(&complete).convert(&vcf).unwrap()[0];
+        assert!(
+            ann_c.is_coding,
+            "flag off must still emit the c. annotation — decline is flag-specific"
+        );
     }
 
     #[test]
