@@ -396,7 +396,10 @@ mod rkyv_cache {
 const CDOT_BINCODE_MAGIC: [u8; 4] = *b"FCDT";
 // v2 (#742): exon coordinates now stored in the HGVS convention (genome
 // 1-based, tx 0-based half-open); a v1 cache holds the old raw cdot convention.
-const CDOT_BINCODE_VERSION: u32 = 2;
+// v3 (#972): `CdotTranscriptSnapshot` gained `cds_start_incomplete`; a v2
+// cache has no such field and bincode's positional layout would otherwise
+// misread the following bytes.
+const CDOT_BINCODE_VERSION: u32 = 3;
 
 /// Parse the integer version suffix of an accession (`"NM_003002.4"` -> `Some(4)`),
 /// or `None` when there is no trailing numeric `.<n>`. Used to pick the highest
@@ -1424,6 +1427,9 @@ struct CdotTranscriptSnapshot {
     exon_cigars: Vec<Option<Vec<CigarOp>>>,
     gene_id: Option<String>,
     protein: Option<String>,
+    /// Added in v3 (#972); trailing field so bincode's positional layout
+    /// keeps all pre-existing fields at their original offsets.
+    cds_start_incomplete: bool,
 }
 
 /// Borrowed view of CdotTranscript for zero-copy serialization to bincode.
@@ -1438,6 +1444,8 @@ struct CdotTranscriptSnapshotRef<'a> {
     exon_cigars: &'a Vec<Option<Vec<CigarOp>>>,
     gene_id: &'a Option<String>,
     protein: &'a Option<String>,
+    /// Added in v3 (#972); mirrors `CdotTranscriptSnapshot::cds_start_incomplete`.
+    cds_start_incomplete: bool,
 }
 
 impl<'a> From<&'a CdotTranscript> for CdotTranscriptSnapshotRef<'a> {
@@ -1452,6 +1460,7 @@ impl<'a> From<&'a CdotTranscript> for CdotTranscriptSnapshotRef<'a> {
             exon_cigars: &tx.exon_cigars,
             gene_id: &tx.gene_id,
             protein: &tx.protein,
+            cds_start_incomplete: tx.cds_start_incomplete,
         }
     }
 }
@@ -1468,8 +1477,7 @@ impl From<CdotTranscriptSnapshot> for CdotTranscript {
             exon_cigars: snap.exon_cigars,
             gene_id: snap.gene_id,
             protein: snap.protein,
-            // Snapshots predate this field (#972); a follow-up can persist it.
-            cds_start_incomplete: false,
+            cds_start_incomplete: snap.cds_start_incomplete,
         }
     }
 }
@@ -5221,6 +5229,28 @@ mod tests {
         std::fs::write(&p, &wrong_version).unwrap();
         assert!(!CdotMapper::bincode_is_current(&p));
         assert!(CdotMapper::from_bincode_file(&p).is_err());
+    }
+
+    /// #972 round-trip: `cds_start_incomplete = true` must survive the legacy
+    /// bincode snapshot (`CdotTranscriptSnapshotRef` write -> `CdotTranscriptSnapshot`
+    /// read -> `From`). Without this the flag is silently dropped by the `.bin`
+    /// cache and every transcript loaded from it rehydrates as "complete"
+    /// regardless of the source JSON.
+    #[test]
+    fn test_bincode_cds_start_incomplete_round_trips() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let p = temp.path().join("cdot.bin");
+
+        let mut tx = sample_transcript();
+        tx.cds_start_incomplete = true;
+
+        let mut m = CdotMapper::new();
+        m.add_transcript("NM_000001.1".to_string(), tx);
+        m.to_bincode_file(&p).unwrap();
+
+        let loaded = CdotMapper::from_bincode_file(&p).unwrap();
+        let loaded_tx = loaded.get_transcript("NM_000001.1").unwrap();
+        assert!(loaded_tx.cds_start_incomplete);
     }
 
     // =========================================================================
