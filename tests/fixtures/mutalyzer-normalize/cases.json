@@ -3349,16 +3349,18 @@
       "normalized": "NG_012337.1(NM_003002.2):c.[274;*120]",
       "genomic": "NG_012337.1:g.[7125;13244]",
       "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 920,
-        "note": "ferro renders the bare-position allele members with explicit identity and an absolute past-CDS coordinate (c.[274=;600=]); mutalyzer uses the 3'UTR form and drops the identity (c.[274;*120]). Past-CDS coordinate rendering + allele identity tracked in #920."
-      },
-      "accepted_divergence": {
-        "axis": "genomic",
-        "policy": "ferro-policy-654-explicit-identity-rendering",
-        "note": "bare-position allele members (no edit operator) are coerced to the spec no-change form: ferro projects g.[7125=;13244=]; mutalyzer echoes bare positions g.[7125;13244]. A bare member is non-spec (syntax.yaml:8/135 — every allele member is a position_edit; substitution.md:19 — no-change is c.123=), so ferro's explicit identity is at least as spec-faithful; same divergence as the standalone NG_012337.1:274 case (#851)."
-      }
+      "accepted_divergence": [
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-654-explicit-identity-rendering",
+          "note": "the normalized (c.) axis divergence is now purely the explicit-identity rendering (policy-654), identical to the genomic axis below and the standalone NG_012337.1:274 case: ferro renders the bare-position allele members in the spec no-change form c.[274=;*120=]; mutalyzer drops the identity to c.[274;*120]. The past-CDS coordinate is now canonical on both sides -- ferro renders c.*120 (the 3'UTR form), not the out-of-scheme plain c.600 it previously echoed (fixed in this PR: a plain past-CDS coordinate that maps into the 3'UTR is rendered as c.*N while still emitting the W4004 PositionPastEnd warning; strict mode still rejects, #336). A bare allele member is non-spec (syntax.yaml:8/135 -- every allele member is a position_edit; substitution.md:19 -- no-change is c.123=), so ferro's explicit = is at least as spec-faithful. Reclassified from known_bug (#920)."
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-654-explicit-identity-rendering",
+          "note": "bare-position allele members (no edit operator) are coerced to the spec no-change form: ferro projects g.[7125=;13244=]; mutalyzer echoes bare positions g.[7125;13244]. A bare member is non-spec (syntax.yaml:8/135 — every allele member is a position_edit; substitution.md:19 — no-change is c.123=), so ferro's explicit identity is at least as spec-faithful; same divergence as the standalone NG_012337.1:274 case (#851)."
+        }
+      ]
     },
     {
       "keywords": [

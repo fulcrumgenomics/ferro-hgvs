@@ -34,7 +34,7 @@ pub mod validate;
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
 use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, ProteinEdit, RepeatCount, Sequence};
-use crate::hgvs::interval::{Interval, ProtInterval};
+use crate::hgvs::interval::{CdsInterval, Interval, ProtInterval};
 use crate::hgvs::location::{
     AminoAcid, CdsPos, GenomePos, ProtPos, RnaPos, SpecialPosition, TxPos,
 };
@@ -233,6 +233,43 @@ fn check_cds_pos_past_end(
         });
     }
     None
+}
+
+/// Canonicalize a plain past-CDS coordinate to its 3'UTR `*N` form for output.
+///
+/// A plain `c.<N>` with `N > cds_len` is out-of-scheme HGVS: coding-DNA
+/// numbering ends at the last base of the stop codon, and 3'UTR positions use
+/// the `*` prefix (`background/numbering.md` L21/L30) — so the nucleotide `N -
+/// cds_len` bases past the stop is *named* `c.*(N - cds_len)`, not `c.<N>`.
+/// When `N` maps into the 3'UTR (`1 <= N - cds_len <= utr3_len`) this returns
+/// that canonical `*N` position.
+///
+/// This is a rendering canonicalization only — the same nucleotide, in valid
+/// syntax — so callers still emit the `PositionPastEnd` (W4004) warning to flag
+/// that the input used out-of-scheme numbering, and strict mode still rejects.
+/// A position past the whole transcript (`N - cds_len > utr3_len`) has no valid
+/// `*N` form and is returned unchanged, as are 3'UTR (`*N`), 5'UTR (`-N`),
+/// intronic-offset, special, and unknown positions. See #920/#336.
+fn canonicalize_pastcds_pos_to_utr3(
+    pos: &CdsPos,
+    transcript: &crate::reference::transcript::Transcript,
+) -> CdsPos {
+    if pos.is_unknown() || pos.utr3 || pos.special.is_some() || pos.offset.is_some() || pos.base < 1
+    {
+        return *pos;
+    }
+    let (Some(cds_len), Some(utr3_len)) = (transcript.cds_length(), transcript.utr3_length())
+    else {
+        return *pos;
+    };
+    let base = pos.base as u64;
+    if base > cds_len {
+        let utr3_base = base - cds_len;
+        if utr3_base >= 1 && utr3_base <= utr3_len {
+            return CdsPos::utr3(utr3_base as i64);
+        }
+    }
+    *pos
 }
 
 /// If `pos` (an `n.<N>` transcript position) lies past the transcript's
@@ -2143,8 +2180,86 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         }
                     }
                     if !bounds_warnings.is_empty() {
+                        // Render any plain past-CDS coordinate in canonical
+                        // `c.*N` form (the input used out-of-scheme numbering;
+                        // the W4004 warning above still flags it, and strict
+                        // mode still rejects). Only a simple certain
+                        // single/point interval is rewritten; a
+                        // genuinely-past-transcript position is left untouched
+                        // by the helper. See #920/#336.
+                        let new_start = canonicalize_pastcds_pos_to_utr3(start_pos, transcript);
+                        let new_end = canonicalize_pastcds_pos_to_utr3(end_pos, transcript);
+                        let both_certain = variant
+                            .loc_edit
+                            .location
+                            .start
+                            .as_single()
+                            .is_some_and(|m| m.is_certain())
+                            && variant
+                                .loc_edit
+                                .location
+                                .end
+                                .as_single()
+                                .is_some_and(|m| m.is_certain());
+                        // Only pure positional shuffle edits get the idempotent
+                        // full-normalization treatment. These never carry an
+                        // `ins[...]`/`con` cross-reference payload, so rewriting
+                        // to `c.*N` and recursing cannot re-enter (and fail) the
+                        // `try_expand_cds_ins` expansion the bounds gate is
+                        // ordered to precede. Substitutions don't shuffle;
+                        // ins/delins/dupins/con keep the plain early-return so a
+                        // past-end input still rejects on the coordinate (strict
+                        // mode -> InvalidCoordinates).
+                        let is_shuffle_only_edit = matches!(
+                            edit,
+                            NaEdit::Deletion { .. }
+                                | NaEdit::NPaddedDeletion { .. }
+                                | NaEdit::Duplication { .. }
+                                | NaEdit::Inversion { .. }
+                        );
+                        if both_certain
+                            && is_shuffle_only_edit
+                            && (new_start != *start_pos || new_end != *end_pos)
+                        {
+                            // The plain past-CDS coordinate maps into the 3'UTR:
+                            // rewrite it to the in-bounds `c.*N` form and run
+                            // FULL normalization on the result. Running the
+                            // shuffle here (rather than returning the merely
+                            // position-canonicalized variant) keeps the output
+                            // idempotent — a shufflable `del`/`dup` in a 3'UTR
+                            // repeat would otherwise render `c.*Ndel` on the
+                            // first pass and then 3'-shift again on a second
+                            // normalize pass. The rewritten position is in
+                            // bounds, so this recursion does not re-enter the
+                            // past-end gate. Re-attach the W4004 warning that
+                            // flags the out-of-scheme input. See #920/#336.
+                            let mut v = variant.clone();
+                            v.loc_edit.location = CdsInterval::new(new_start, new_end);
+                            let (normalized, mut warns) = self.normalize_cds(&v)?;
+                            let mut merged = bounds_warnings;
+                            merged.append(&mut warns);
+                            return Ok((normalized, merged));
+                        }
+                        // Non-shuffle edit (substitution, `=`, or an
+                        // ins/delins/dupins/con that must not be expanded on a
+                        // `*N` marker): still render the plain past-CDS
+                        // coordinate in its canonical `c.*N` form when one exists
+                        // (the PR's core feature), canonicalizing only the edit
+                        // body. These edits do not 3'-shift, so no recursion is
+                        // needed for idempotency. A genuinely-past-transcript or
+                        // uncertain position leaves `out_variant == variant`.
+                        let rewritten;
+                        let out_variant =
+                            if both_certain && (new_start != *start_pos || new_end != *end_pos) {
+                                let mut v = variant.clone();
+                                v.loc_edit.location = CdsInterval::new(new_start, new_end);
+                                rewritten = v;
+                                &rewritten
+                            } else {
+                                variant
+                            };
                         return Ok((
-                            HV::Cds(self.canonicalize_cds_variant(variant)),
+                            HV::Cds(self.canonicalize_cds_variant(out_variant)),
                             bounds_warnings,
                         ));
                     }
