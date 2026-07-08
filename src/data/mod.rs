@@ -30,8 +30,7 @@ pub mod mapping;
 pub mod projection;
 
 pub use cdot::{
-    cumulative_insertion_offset, parse_cigar, CdotFile, CdotLoadSource, CdotMapper, CdotTranscript,
-    CdsPosition, CigarOp, Exon,
+    parse_cigar, CdotFile, CdotLoadSource, CdotMapper, CdotTranscript, CdsPosition, CigarOp, Exon,
 };
 pub use mapping::{CoordinateMapper, MappingInfo, MappingResult};
 pub use projection::{ManeStatus, ProjectionResult, Projector, TranscriptProjection};

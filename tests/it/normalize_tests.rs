@@ -4366,7 +4366,7 @@ mod cigar_aware_normalization {
     // =========================================================================
 
     #[rstest]
-    // NM_015120.4 (ABHD12): CIGAR has I3 in exon 0 — 3bp insertion shifts CDS
+    // NM_015120.4 (ABHD12): has I3 in exon 0 (CIGAR-complex transcript)
     #[case("NM_015120.4:c.1433-12_1433-10dup", "NM_015120.4:c.1433-12_1433-10dup")]
     #[case("NM_015120.4:c.450+22_450+25del", "NM_015120.4:c.450+22_450+25del")]
     #[case("NM_015120.4:c.9540-7dup", "NM_015120.4:c.9540-7dup")]
@@ -4630,18 +4630,18 @@ mod lrg_intronic_normalization {
 #[cfg(test)]
 mod cigar_cds_mapping {
     // =========================================================================
-    // Unit tests for CIGAR-aware CDS→transcript mapping.
-    // These verify that CDS positions are correctly adjusted when CIGAR
-    // insertions/deletions exist in the alignment.
+    // Unit tests for transcript-native CDS↔tx mapping. Inserted transcript
+    // bases (CIGAR `I`) ARE numbered by c./n., so `CdotTranscript::cds_to_tx`
+    // applies NO CIGAR adjustment.
     // =========================================================================
 
-    use ferro_hgvs::data::{CdotTranscript, CigarOp};
+    use ferro_hgvs::data::CdotTranscript;
     use ferro_hgvs::reference::Strand;
 
     /// Create a transcript that models NM_015120.4's exon 0:
     /// CIGAR = M185 I3 M250, start_codon=111
-    /// The 3bp insertion at tx pos 186-188 means CDS numbering (which follows
-    /// the genome) should account for these extra transcript bases.
+    /// The 3 inserted bases are themselves numbered by c./n. (transcript-native);
+    /// CDS↔tx does not shift across them.
     fn transcript_with_cigar_insertion() -> CdotTranscript {
         // Exon 0: 438bp on transcript (185+3+250), 435bp on genome (185+250)
         // Exon 1: next exon starting after intron
@@ -4684,59 +4684,28 @@ mod cigar_cds_mapping {
     }
 
     #[test]
-    #[ignore] // Until CIGAR-aware CDS mapping is implemented
     fn test_cds_to_tx_with_cigar_insertion() {
+        // #944: CDS numbering is transcript-native. `CdotTranscript::cds_to_tx`
+        // is pure arithmetic `cds_start + (cds_pos - 1)` and is already correct;
+        // an intra-exon insertion does NOT shift it (the inserted bases are part
+        // of the transcript and are themselves numbered). This documents the
+        // convention; the mapper-level guard lives in the #944 mapper tests.
         let tx = transcript_with_cigar_insertion();
-        let _cigar = [
-            CigarOp::Match(185),
-            CigarOp::Insertion(3),
-            CigarOp::Match(250),
-        ];
-
-        // Without CIGAR awareness: c.1 maps to tx 111, c.100 maps to tx 210
-        // These are before the insertion point (tx 185), so should be unchanged
+        // cds_start = 111 (0-based). c.1 -> 111, c.75 -> 185, c.76 -> 186.
         assert_eq!(tx.cds_to_tx(1), Some(111));
         assert_eq!(tx.cds_to_tx(75), Some(185));
-
-        // With CIGAR awareness: positions past the insertion should shift by +3
-        // c.76 should map to tx 189 (not 186), because insertion adds 3 bases
-        // Currently: cds_to_tx(76) = 111 + 75 = 186 (WRONG — in insertion)
-        // Expected: cds_to_tx(76) = 111 + 75 + 3 = 189 (after insertion)
-
-        // This test documents the desired behavior for CIGAR-aware mapping.
-        // The simple cds_to_tx doesn't account for CIGAR, so positions after
-        // the insertion are off by the cumulative insertion count.
-        //
-        // A CIGAR-aware version would need to:
-        // 1. Convert CDS pos to raw tx pos: tx_raw = cds_start + (cds_pos - 1)
-        // 2. Walk CIGAR ops, adjusting for insertions before tx_raw
-        // 3. Return adjusted tx pos
-
-        // For now, verify basic mapping works for pre-insertion positions
-        assert_eq!(tx.cds_to_tx(1), Some(111));
+        assert_eq!(tx.cds_to_tx(76), Some(186)); // NOT 189 — no +3 for the insertion.
     }
 
     #[test]
-    #[ignore] // Until CIGAR-aware CDS mapping is implemented
     fn test_cds_to_tx_with_cigar_deletion() {
+        // #944: a CIGAR deletion removes GENOME bases the transcript lacks, so it
+        // adds no transcript bases — CDS->tx is naive and unshifted across the D.
         let tx = transcript_with_cigar_deletion();
-        let _cigar = [
-            CigarOp::Match(504),
-            CigarOp::Deletion(2),
-            CigarOp::Match(123),
-        ];
-
-        // Without CIGAR awareness: c.1 maps to tx 100
+        // cds_start = 100 (0-based).
         assert_eq!(tx.cds_to_tx(1), Some(100));
-
-        // D2 means genome has 2 extra bases that aren't in the transcript.
-        // Positions before the deletion boundary (tx 504) are unaffected.
-        // Positions after should NOT shift (deletion doesn't add tx bases).
-        //
-        // However, CDS numbering follows genome numbering, so CDS positions
-        // spanning the deletion may reference genome positions that have no
-        // transcript counterpart. The CDS→tx conversion needs to account
-        // for this gap.
+        assert_eq!(tx.cds_to_tx(405), Some(504)); // last CDS base before the D boundary
+        assert_eq!(tx.cds_to_tx(406), Some(505)); // just after — no shift
     }
 
     #[test]
