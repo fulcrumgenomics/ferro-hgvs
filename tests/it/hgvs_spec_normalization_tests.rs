@@ -68,6 +68,78 @@ fn observe(normalizer: &Normalizer<MockProvider>, input: &str) -> (String, Vec<S
     }
 }
 
+/// True when `s` is a bare coordinate reference (coord prefix + only position
+/// characters, no edit) — mirrors the harvester's drop predicate so this test
+/// pins the *outcome* (a clean fixture) independent of the generator internals.
+fn is_bare_coordinate(s: &str) -> bool {
+    let core = s.rsplit(':').next().unwrap_or(s);
+    match core.get(0..2) {
+        Some("c." | "g." | "m." | "n." | "o." | "p." | "r.") => core[2..]
+            .chars()
+            .all(|ch| matches!(ch, '0'..='9' | '_' | '+' | '-' | '*' | '?')),
+        _ => false,
+    }
+}
+
+/// #955 harvester cleanup. The generated fixture must contain only real variant
+/// strings: spec-prose position references (`c.5690`), `<code class="invalid">`
+/// HTML remnants, and syntax-template fragments are dropped, while variants the
+/// spec split across `<code class="spotN">` highlights are reassembled intact.
+#[test]
+fn harvester_yields_only_real_variants() {
+    crate::common::spec_fixture::ensure_spec_fixture();
+    let text = std::fs::read_to_string(fixture_path()).expect("read fixture");
+    let fx: Fixture = serde_json::from_str(&text).expect("parse fixture");
+
+    // No HTML remnant leaks through — no real HGVS string contains `<` or `"`.
+    for row in &fx.rows {
+        assert!(
+            !row.input.contains('<') && !row.input.contains('"'),
+            "HTML remnant leaked into fixture: {:?}",
+            row.input
+        );
+    }
+
+    // Outcome check over *every* parse-error row: an edit-less coordinate ferro
+    // rejects is spec prose, not a variant, and is dropped. This must scan all
+    // rows, not fixed examples — whether a bare-shaped coordinate is dropped
+    // depends on ferro's parse result (`!parse_ok`), not shape alone: e.g.
+    // `g.12345678` is bare-shaped but PARSES, so it legitimately survives. The
+    // predicate below only pins the outcome; the predicate's char-set is
+    // unit-tested independently in the generator (`is_edit_less_coordinate`
+    // tests). The generator's drop is also gated on `ov.is_none()` — an explicit
+    // override deliberately keeps its row; no current override is a bare
+    // coordinate, so this asserts over every parse-error row; if one is ever
+    // added, exempt overridden inputs here.
+    for row in &fx.rows {
+        if row.status == "parse-error" {
+            assert!(
+                !is_bare_coordinate(&row.input),
+                "bare coordinate reference should have been dropped, not left as parse-error: {:?}",
+                row.input
+            );
+        }
+    }
+
+    // Variants the spec split across a `<code class="spotN">` highlight are
+    // reassembled and parse cleanly (previously lost as severed fragments).
+    let by_input: std::collections::HashMap<&str, &Row> =
+        fx.rows.iter().map(|r| (r.input.as_str(), r)).collect();
+    for recovered in [
+        "LRG_199t1:c.11T>G",
+        "LRG_199p1:p.(Val25Gly)",
+        "g.123_456dup",
+    ] {
+        let row = by_input
+            .get(recovered)
+            .unwrap_or_else(|| panic!("reassembled variant missing from fixture: {recovered}"));
+        assert_eq!(
+            row.status, "preserved",
+            "reassembled {recovered} should round-trip (preserved)"
+        );
+    }
+}
+
 #[test]
 fn pinned_v21_normalization_behavior() {
     crate::common::spec_fixture::ensure_spec_fixture();

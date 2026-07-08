@@ -222,30 +222,71 @@ mod sources {
     }
 
     /// Return every code span (inline `…` and fenced ``` …``` block) text in the markdown.
+    ///
+    /// Directly-adjacent inline-code spans are glued back together, including the
+    /// inner text of any `<code class="spotN">…</code>` highlight wedged between
+    /// them. The spec typesets a single variant across multiple code spans when it
+    /// wants to highlight a fragment — an edit (`` `g.123_456`<code…>dup</code> ``),
+    /// an LRG transcript/protein suffix
+    /// (`` `LRG_199`<code…>t1</code>`:c.11T>G` ``) — so without reassembly the
+    /// harvester would see severed pieces (`LRG_199`, `:c.11T>G`) instead of the
+    /// intact variant. A plain-text run, line break, or block boundary ends a run.
     fn extract_codespans(md: &str) -> Vec<String> {
         use pulldown_cmark::{Event, Parser, Tag, TagEnd};
         let mut out = Vec::new();
         let mut in_code_block = false;
-        let mut buf = String::new();
+        let mut block_buf = String::new();
+        // Current run of adjacent inline-code + spot-highlight text.
+        let mut run = String::new();
+        let mut in_spot = false;
+
+        macro_rules! flush_run {
+            () => {{
+                if !run.is_empty() {
+                    out.push(std::mem::take(&mut run));
+                }
+                in_spot = false;
+            }};
+        }
+
         for ev in Parser::new(md) {
             match ev {
                 Event::Start(Tag::CodeBlock(_)) => {
+                    flush_run!();
                     in_code_block = true;
-                    buf.clear();
+                    block_buf.clear();
                 }
                 Event::End(TagEnd::CodeBlock) => {
-                    if !buf.is_empty() {
-                        for tok in buf.split_whitespace() {
+                    if !block_buf.is_empty() {
+                        for tok in block_buf.split_whitespace() {
                             out.push(tok.to_string());
                         }
                     }
                     in_code_block = false;
-                    buf.clear();
+                    block_buf.clear();
                 }
-                Event::Text(t) if in_code_block => buf.push_str(&t),
-                Event::Code(c) => out.push(c.into_string()),
-                _ => {}
+                Event::Text(t) if in_code_block => block_buf.push_str(&t),
+                // Highlighted fragment inside a `<code class="spotN">…</code>` span
+                // continues the current variant run.
+                Event::Text(t) if in_spot => run.push_str(&t),
+                // Adjacent inline-code spans accumulate into one run.
+                Event::Code(c) => run.push_str(&c),
+                Event::InlineHtml(h) => {
+                    let h = h.as_ref();
+                    if h.starts_with("<code") && h.contains("class=\"spot") {
+                        in_spot = true; // continue the run through the highlight
+                    } else if in_spot && h.trim() == "</code>" {
+                        in_spot = false; // highlight closed; run continues
+                    } else {
+                        flush_run!(); // any other inline HTML ends the run
+                    }
+                }
+                // Plain prose text, line breaks, and structural events end a run.
+                _ => flush_run!(),
             }
+        }
+        if !run.is_empty() {
+            out.push(run);
         }
         out
     }
@@ -278,9 +319,23 @@ mod sources {
         if s.contains('\\') || s.contains('`') {
             return None;
         }
+        // HTML remnants leaked from the spec's `<code class="invalid">…</code>`
+        // negative examples inside indented (code-block) prose: no real HGVS
+        // string contains `<` or `"`. (`>` is legitimate — substitutions.)
+        if s.contains('<') || s.contains('"') {
+            return None;
+        }
         // Drop placeholder template fragments the spec uses in prose
         // (e.g. `g.[variant1;variant2]`, `p.[`, etc.).
         if s.contains("variant1") || s.contains("variant2") || s.contains("variantN") {
+            return None;
+        }
+        // Drop the spec's syntax-template diagrams: a `#` count placeholder
+        // (`delN[#]`) or an English placeholder word joined by a hyphen
+        // (`fragment-start`, `last-normal`). Real HGVS never contains `#`, and
+        // its hyphens are digit-flanked intronic offsets (`c.1210-33`), never a
+        // lowercase-word-hyphen-word run.
+        if s.contains('#') || contains_word_hyphen_word(s) {
             return None;
         }
         // Drop tokens with unbalanced brackets or parens — these are always
@@ -293,6 +348,26 @@ mod sources {
             return None;
         }
         Some(s.to_string())
+    }
+
+    /// True if `s` contains a `<lowercase-word>-<lowercase-word>` run — the
+    /// spec's placeholder-word convention (`fragment-start`, `last-normal`).
+    /// HGVS hyphens are always digit-flanked intronic offsets, so this only
+    /// fires on syntax-template diagrams, never on real variants.
+    fn contains_word_hyphen_word(s: &str) -> bool {
+        let b = s.as_bytes();
+        for i in 0..b.len() {
+            if b[i] == b'-' {
+                let left = i >= 2 && b[i - 1].is_ascii_lowercase() && b[i - 2].is_ascii_lowercase();
+                let right = i + 2 < b.len()
+                    && b[i + 1].is_ascii_lowercase()
+                    && b[i + 2].is_ascii_lowercase();
+                if left && right {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn extract_from_syntax_yaml(spec_dir: &Path) -> anyhow::Result<Vec<Candidate>> {
@@ -394,6 +469,95 @@ mod sources {
                 intent: SpanIntent::Plain,
             })
             .collect()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{canonicalize, extract_codespans};
+
+        /// The spec highlights part of a variant with `<code class="spotN">…</code>`
+        /// wedged between adjacent inline-code spans, e.g.
+        /// `` `LRG_199`<code class="spot1">t1</code>`:c.11T>G` ``. The harvester must
+        /// reassemble the intact variant, not emit the severed `:c.11T>G` tail.
+        #[test]
+        fn reassembles_lrg_spot_split_variant() {
+            let md = "- e.g., `LRG_199`<code class=\"spot1\">t1</code>`:c.11T>G`.\n";
+            let spans = extract_codespans(md);
+            assert!(
+                spans.iter().any(|s| s == "LRG_199t1:c.11T>G"),
+                "expected reassembled `LRG_199t1:c.11T>G`, got {spans:?}"
+            );
+            assert!(
+                !spans.iter().any(|s| s == ":c.11T>G"),
+                "severed orphan tail `:c.11T>G` must not be emitted, got {spans:?}"
+            );
+        }
+
+        /// A spot-highlighted *edit* (e.g. `dup`) trailing an inline-code position
+        /// span must fold back into the position to form the whole variant.
+        #[test]
+        fn reassembles_spot_highlighted_edit() {
+            let md = "text `g.123_456`<code class=\"spot1\">dup</code> more\n";
+            let spans = extract_codespans(md);
+            assert!(
+                spans.iter().any(|s| s == "g.123_456dup"),
+                "expected reassembled `g.123_456dup`, got {spans:?}"
+            );
+        }
+
+        /// Plain prose text between two inline-code spans is a boundary: the spans
+        /// must NOT be glued across it.
+        #[test]
+        fn does_not_join_across_prose() {
+            let md = "the `g.123del` and `g.456dup` variants\n";
+            let spans = extract_codespans(md);
+            assert!(spans.iter().any(|s| s == "g.123del"), "got {spans:?}");
+            assert!(spans.iter().any(|s| s == "g.456dup"), "got {spans:?}");
+            assert!(
+                !spans.iter().any(|s| s.contains("g.123delg.456dup")),
+                "adjacent-but-prose-separated spans must not glue, got {spans:?}"
+            );
+        }
+
+        /// HTML remnants leaked from indented (code-block) `<code class="invalid">`
+        /// examples must be rejected by `canonicalize` — no real HGVS string
+        /// contains `<` or `"`.
+        #[test]
+        fn canonicalize_rejects_html_remnants() {
+            assert_eq!(
+                canonicalize("class=\"invalid\">NM_000109.3:c.-401C>T</code>"),
+                None
+            );
+            assert_eq!(canonicalize("NM_004006.1:c.5690</code>"), None);
+        }
+
+        /// The spec's syntax-template diagrams use hyphenated English placeholder
+        /// words (`fragment-start`, `last-normal`) and a `#` count placeholder —
+        /// these are typeset examples of *syntax*, not variants, and must be
+        /// dropped. Real HGVS never contains a lowercase-word-hyphen-word run
+        /// (intronic offsets are digit-hyphenated) nor `#`.
+        #[test]
+        fn canonicalize_rejects_syntax_templates() {
+            assert_eq!(canonicalize("g.(fragment-start_fragment-end)delN[#]"), None);
+            assert_eq!(
+                canonicalize("g.(last-normal_first-duplicated)_(last-duplicated_first-normal)dup"),
+                None
+            );
+        }
+
+        /// The template guards must NOT reject legitimate variants: lowercase RNA
+        /// bases and digit-hyphenated intronic offsets are fine.
+        #[test]
+        fn canonicalize_keeps_legit_rna_and_intronic() {
+            assert_eq!(
+                canonicalize("r.-125_-123cug[4]"),
+                Some("r.-125_-123cug[4]".to_string())
+            );
+            assert_eq!(
+                canonicalize("NM_004006.2:c.1210-33del"),
+                Some("NM_004006.2:c.1210-33del".to_string())
+            );
+        }
     }
 }
 
@@ -643,6 +807,28 @@ mod runner {
         "?".to_string()
     }
 
+    /// True when `input` is a bare coordinate reference: a coordinate-system
+    /// prefix (`c.`/`g.`/`m.`/`n.`/`o.`/`p.`/`r.`) followed only by position
+    /// characters (digits, `_ + - * ?`) with no edit operator.
+    ///
+    /// The spec formats position references in prose (e.g. "the A-stretch
+    /// running from position `c.5690` to `c.5697`") with the same inline-code
+    /// markup as variant examples, so the harvester scrapes them; a bare
+    /// coordinate is not a describable variant. The spec's edit-less
+    /// whole-variant markers (`p.?`, `p.0`, `r.?`, …) share this shape but parse
+    /// successfully, so the caller gates the drop on a *parse failure* and never
+    /// removes them.
+    fn is_edit_less_coordinate(input: &str) -> bool {
+        // Strip any leading accession: the coordinate lives after the last colon.
+        let core = input.rsplit(':').next().unwrap_or(input);
+        let rest = match core.get(0..2) {
+            Some("c." | "g." | "m." | "n." | "o." | "p." | "r.") => &core[2..],
+            _ => return false,
+        };
+        rest.chars()
+            .all(|ch| matches!(ch, '0'..='9' | '_' | '+' | '-' | '*' | '?'))
+    }
+
     pub fn build_rows(
         candidates: &[sources::Candidate],
         overrides: &overrides::Overrides,
@@ -699,6 +885,22 @@ mod runner {
             let target = input_prefixed.as_deref().unwrap_or(&input);
             let (current, parse_ok, normalize_ok, expected_warnings) =
                 run_ferro(&normalizer, target);
+
+            // Drop bare coordinate references harvested from spec prose (e.g.
+            // "position `c.5690`"): an edit-less coordinate that ferro also
+            // rejects is not a describable variant, just a position cited in a
+            // sentence. Edit-less whole-variant markers (`p.?`, `p.0`) share the
+            // shape but parse, so they survive. An explicit override keeps the
+            // row regardless (the auditor deliberately classified it).
+            //
+            // `parse_ok` is from `target` (the prefixed form) but the shape test
+            // reads the raw `input`. These are equivalent here: prefixing only
+            // prepends an accession, and `is_edit_less_coordinate` strips any
+            // accession (`rsplit(':')`) before testing, so the bare/prefixed
+            // forms have the same edit-less shape.
+            if ov.is_none() && !parse_ok && is_edit_less_coordinate(&input) {
+                continue;
+            }
 
             // spec_expected resolution. Source order: override > structural
             // extraction > default-to-target.
@@ -804,6 +1006,49 @@ mod runner {
                     (format!("{}", n.result), true, true, codes)
                 }
             },
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::is_edit_less_coordinate;
+
+        #[test]
+        fn flags_bare_position_references() {
+            for bare in [
+                "c.5690",
+                "c.147",
+                "c.1210-33",
+                "NM_004006.1:c.5690",
+                "AB053210.2:r.1289-365_1289-73",
+                "c.", // bare prefix
+                "c.*",
+                "g.12345678",
+                "p.?", // edit-less marker — shape matches; caller's parse gate keeps it
+            ] {
+                assert!(
+                    is_edit_less_coordinate(bare),
+                    "{bare:?} should be an edit-less coordinate"
+                );
+            }
+        }
+
+        #[test]
+        fn does_not_flag_real_variants() {
+            for variant in [
+                "c.5697del",
+                "c.76A>T",
+                "NM_004006.2:c.1210-33del",
+                "g.123_456dup",
+                "LRG_199t1:c.11T>G",
+                "p.Met1ext-5", // has an edit token (`ext`), not bare
+                "g.1234=",
+            ] {
+                assert!(
+                    !is_edit_less_coordinate(variant),
+                    "{variant:?} is a real variant, not a bare coordinate"
+                );
+            }
         }
     }
 }
