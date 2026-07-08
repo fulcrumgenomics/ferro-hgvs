@@ -1163,6 +1163,18 @@ pub enum SpecSection {
     /// allele. ferro's coding-frame expansion is the spec-correct one (#922).
     #[serde(rename = "HGVS §Copy-range delins (coding-frame reference)")]
     CopyRangeCodingFrame,
+    /// delins one-amino-acid exception (`delins.md` L18-19). Two changes
+    /// separated by a single unchanged nucleotide that together affect one
+    /// amino acid MUST be described as a single `delins`, not decomposed into
+    /// per-position substitutions — the spec's own worked example is
+    /// `c.235_237delinsTAT` (codon 79, `p.Lys79Tyr`), and it explicitly marks
+    /// the decomposed `c.[235A>T;237G>T]` incorrect because it makes tools
+    /// predict conflicting per-position consequences (`p.[Lys79*;Lys79Asn]`).
+    /// The exception is reading-frame-specific: ferro keeps the block delins on
+    /// the coding axis (spec-correct) but decomposes on the genomic axis (no
+    /// reading frame), where it matches mutalyzer (#920).
+    #[serde(rename = "HGVS §delins (one-amino-acid exception)")]
+    DelinsOneAminoAcidException,
 }
 
 impl SpecSection {
@@ -1193,6 +1205,7 @@ impl SpecSection {
                 "HGVS §3'-rule (exon/exon-junction exception)"
             }
             SpecSection::CopyRangeCodingFrame => "HGVS §Copy-range delins (coding-frame reference)",
+            SpecSection::DelinsOneAminoAcidException => "HGVS §delins (one-amino-acid exception)",
         }
     }
 }
