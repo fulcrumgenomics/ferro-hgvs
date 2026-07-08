@@ -2446,10 +2446,10 @@
       "normalized": "LRG_199t1:c.[235A>T;237G>T]",
       "protein_description": "LRG_199p1:p.(Lys79Tyr)",
       "to_test": true,
-      "known_bug": {
+      "spec_citation": {
         "axis": "normalized",
-        "tracking_issue": 920,
-        "note": "ferro keeps the block delins c.235_237delinsTAT; mutalyzer trims the unchanged interior base and decomposes to per-position substitutions c.[235A>T;237G>T]. Canonical edit-form convergence tracked in #920."
+        "section": "HGVS §delins (one-amino-acid exception)",
+        "note": "ferro keeps the block delins c.235_237delinsTAT on the coding axis; mutalyzer decomposes it to per-position substitutions c.[235A>T;237G>T]. delins.md:18-19 uses THIS EXACT variant as its worked example of the exception: two changes separated by one unchanged nucleotide that together affect one amino acid (here codon 79, c.235_237, p.Lys79Tyr) MUST be described as a delins -- the decomposed c.[235A>T;237G>T] is the form the spec explicitly marks incorrect, because it makes tools predict conflicting per-position consequences (p.[Lys79*;Lys79Asn]) instead of the correct p.Lys79Tyr. ferro's coding-axis delins is therefore the spec-correct form (more spec-faithful than mutalyzer). The exception is codon-frame-specific: on the genomic axis (no reading frame) ferro decomposes to g.[499798A>T;499800G>T], matching mutalyzer, so this divergence is coding-axis-only. Reclassified from known_bug (#920)."
       }
     },
     {
