@@ -101,6 +101,10 @@
     "chr22:g.[pter_10000000del::40000000_qterdel]add": {
       "spec_expected": null,
       "note": "Harvested from the superseded SVD-WG004 proposal; `add` is the deprecated ISCN2016 marker, replaced by `sup` in ISCN2020 (DNA/complex.md:33-34). ferro does not parse `add`; force spec-rejects so the rejection reads as `correctly-rejected` not `parse-error` (#546)."
+    },
+    "p.Met1extMet-5": {
+      "spec_expected": null,
+      "note": "The spec's deprecated *before* form: extension.md:24 writes it inside \"modified from `p.Met1ext`<code class=\"spot1\">Met</code>`-5`\", where the highlighted `Met` marks the residue removed to reach the correct `p.Met1ext-5`. The harvester's spot-span reassembly faithfully rebuilds the pre-modification string; ferro correctly rejects it. Force spec-rejects so it reads as `correctly-rejected`, not `parse-error` (#955)."
     }
   }
 }
