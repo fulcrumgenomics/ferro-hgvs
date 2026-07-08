@@ -3012,12 +3012,7 @@
       ],
       "input": "LRG_303:g.6932_6933insAGCAACGTGATCGCCTCCCTCACCT[2]",
       "normalized": "LRG_303:g.6908_6932AGCAACGTGATCGCCTCCCTCACCT[3]",
-      "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 920,
-        "note": "two inserted copies plus the existing copy form a 3-copy repeat; mutalyzer renders the repeat. ferro keeps ins[2]. Repeat canonicalization tracked in #920."
-      }
+      "to_test": true
     },
     {
       "keywords": [
@@ -3033,12 +3028,7 @@
       ],
       "input": "LRG_303:g.4_5insGT[5]",
       "normalized": "LRG_303:g.1_4GT[7]",
-      "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 920,
-        "note": "ferro keeps the inserted repeat as ins GT[5]; mutalyzer merges it with the adjacent existing GT tract into g.1_4GT[7]. Tandem-repeat canonicalization tracked in #920."
-      }
+      "to_test": true
     },
     {
       "keywords": [

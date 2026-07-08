@@ -104,6 +104,67 @@ mod genomic {
         let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}_{1}insAC[0]", &[4, 5]));
         assert_eq!(result, "NC_TEST.1:g.=");
     }
+
+    // `ins<seq>[N]` with N >= 2 is N tandem copies of the unit — equivalent to
+    // the plain `ins<unit*N>` literal, which merges with the adjacent reference
+    // tract into `[N]` repeat notation. The bracketed shorthand must
+    // canonicalize identically to that literal form (mutalyzer merges too).
+
+    #[rstest]
+    fn double_copy_bracketed_single_base_ins_repeat_emits_repeat() {
+        // insA[2] = insAA. Must match the plain insAA case above → A[6].
+        let p = provider("ACAAAACG");
+        let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}_{1}insA[2]", &[2, 3]));
+        assert_eq!(result, hgvs("NC_TEST.1:g.{0}_{1}A[6]", &[3, 6]));
+    }
+
+    #[rstest]
+    fn double_copy_bracketed_dinucleotide_ins_repeat_emits_repeat() {
+        // insAT[2] = insATAT. Must match the plain insATAT case above → AT[5].
+        let p = provider("CATATATC");
+        let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}_{1}insAT[2]", &[1, 2]));
+        assert_eq!(result, hgvs("NC_TEST.1:g.{0}_{1}AT[5]", &[2, 7]));
+    }
+
+    #[rstest]
+    fn double_copy_bracketed_codon_ins_repeat_emits_repeat() {
+        // insCAG[2] = insCAGCAG. Must match the plain insCAGCAG case above → CAG[5].
+        let p = provider("CCAGCAGCAGT");
+        let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}_{1}insCAG[2]", &[1, 2]));
+        assert_eq!(result, hgvs("NC_TEST.1:g.{0}_{1}CAG[5]", &[2, 10]));
+    }
+
+    #[rstest]
+    fn higher_copy_bracketed_ins_repeat_counts_added_copies() {
+        // insCAG[3] = 3 inserted copies + 3 existing tract copies = CAG[6],
+        // over the same reference tract span (2_10). Locks the count arithmetic.
+        let p = provider("CCAGCAGCAGT");
+        let result = normalize_to_string(p, &hgvs("NC_TEST.1:g.{0}_{1}insCAG[3]", &[1, 2]));
+        assert_eq!(result, hgvs("NC_TEST.1:g.{0}_{1}CAG[6]", &[2, 10]));
+    }
+
+    // Expanding N copies to a literal must not materialize unbounded memory: a
+    // pathologically large bracketed count is left verbatim (valid HGVS) rather
+    // than OOM/overflow-panic. No real or conformance repeat approaches this.
+
+    #[rstest]
+    fn cap_exceeding_bracketed_count_is_left_verbatim() {
+        // AT * 6_000_000 = 12 MB > the expansion cap → not materialized.
+        let p = provider("CATATATC");
+        let input = hgvs("NC_TEST.1:g.{0}_{1}insAT[6000000]", &[1, 2]);
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, input);
+    }
+
+    #[rstest]
+    fn near_u64_max_bracketed_count_does_not_overflow() {
+        // count near u64::MAX overflows `unit.len() * count`; the checked
+        // multiply guards it → verbatim, no panic.
+        let p = provider("CATATATC");
+        let input = hgvs("NC_TEST.1:g.{0}_{1}insAT[18000000000000000000]", &[1, 2]);
+        let result = normalize_to_string(p, &input);
+        assert_eq!(result, input);
+    }
 }
 
 mod cds_plus {
