@@ -3359,16 +3359,18 @@
       "normalized": "NG_012337.1(NM_003002.2):c.[274;*120]",
       "genomic": "NG_012337.1:g.[7125;13244]",
       "to_test": true,
-      "known_bug": {
-        "axis": "normalized",
-        "tracking_issue": 920,
-        "note": "ferro renders the bare-position allele members with explicit identity and an absolute past-CDS coordinate (c.[274=;600=]); mutalyzer uses the 3'UTR form and drops the identity (c.[274;*120]). Past-CDS coordinate rendering + allele identity tracked in #920."
-      },
-      "accepted_divergence": {
-        "axis": "genomic",
-        "policy": "ferro-policy-654-explicit-identity-rendering",
-        "note": "bare-position allele members (no edit operator) are coerced to the spec no-change form: ferro projects g.[7125=;13244=]; mutalyzer echoes bare positions g.[7125;13244]. A bare member is non-spec (syntax.yaml:8/135 — every allele member is a position_edit; substitution.md:19 — no-change is c.123=), so ferro's explicit identity is at least as spec-faithful; same divergence as the standalone NG_012337.1:274 case (#851)."
-      }
+      "accepted_divergence": [
+        {
+          "axis": "normalized",
+          "policy": "ferro-policy-654-explicit-identity-rendering",
+          "note": "the normalized (c.) axis diverges from mutalyzer in two ways, both deliberate ferro policy. (1) Explicit identity: the bare-position allele members (no edit operator) are coerced to the spec no-change form -- ferro renders c.[274=;600=], mutalyzer drops the identity (c.[274;*120]). A bare member is non-spec (syntax.yaml:8/135 -- every allele member is a position_edit; substitution.md:19 -- no-change is c.123=), so ferro's explicit = is at least as spec-faithful (same as the genomic axis and the standalone NG_012337.1:274 case, #851). (2) Past-CDS coordinate: c.600 lies past the 480-nt CDS end, so ferro flags it as PositionPastEnd (#336 -- plain c. numbering stops at the stop codon; positions beyond the CDS require the 3'UTR * form) and preserves the input coordinate rather than silently reinterpreting it as mutalyzer's c.*120. Surfacing an out-of-CDS-bounds coordinate as a likely input error, instead of coercing it, is the conservative ferro stance; both forms denote the same locus (c.480+120). Reclassified from known_bug (#920); this aligns the normalized axis with the genomic-axis accepted_divergence below (resolving the #912 axis-inconsistency note for this row)."
+        },
+        {
+          "axis": "genomic",
+          "policy": "ferro-policy-654-explicit-identity-rendering",
+          "note": "bare-position allele members (no edit operator) are coerced to the spec no-change form: ferro projects g.[7125=;13244=]; mutalyzer echoes bare positions g.[7125;13244]. A bare member is non-spec (syntax.yaml:8/135 — every allele member is a position_edit; substitution.md:19 — no-change is c.123=), so ferro's explicit identity is at least as spec-faithful; same divergence as the standalone NG_012337.1:274 case (#851)."
+        }
+      ]
     },
     {
       "keywords": [
