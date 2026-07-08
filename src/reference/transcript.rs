@@ -267,6 +267,16 @@ impl std::fmt::Display for ManeStatus {
 /// syntax `..Default::default()`. The Rust pattern avoids the 14-arg
 /// constructor and keeps fixtures stable when new optional fields are
 /// added.
+/// True when a comma-joined GENCODE/Ensembl status-tag string marks the
+/// transcript as 5′-CDS-incomplete (`cds_start_NF`). Matches the exact
+/// comma-separated token, never a bare substring — a longer tag that merely
+/// contains this string must not false-positive. Shared by the cdot loader
+/// (`RawCdotTranscript::from_genome_build`) and the GFF/GTF annotation builder
+/// so the two detection sites cannot drift apart (#972).
+pub(crate) fn tags_mark_cds_start_nf(tags: &str) -> bool {
+    tags.split(',').any(|t| t.trim() == "cds_start_NF")
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Transcript {
     /// Transcript accession (e.g., "NM_000088.3")

@@ -56,7 +56,9 @@ mod rkyv_cache {
     // v2 (#742): exon coordinates are now stored in the HGVS convention
     // (genome 1-based, tx 0-based half-open); a v1 cache holds the old raw
     // cdot convention and must be regenerated.
-    pub(super) const RKYV_FORMAT_VERSION: u32 = 2;
+    // v3 (#972): `RkyvTx` gained `cds_start_incomplete`; a v2 cache has no such
+    // field and would silently rehydrate every transcript as "complete".
+    pub(super) const RKYV_FORMAT_VERSION: u32 = 3;
 
     #[derive(Archive, Serialize, Deserialize)]
     pub(super) struct RkyvCigar {
@@ -77,6 +79,7 @@ mod rkyv_cache {
         exon_cigars: Vec<Option<Vec<RkyvCigar>>>,
         gene_id: Option<String>,
         protein: Option<String>,
+        cds_start_incomplete: bool,
     }
 
     #[derive(Archive, Serialize, Deserialize)]
@@ -135,6 +138,7 @@ mod rkyv_cache {
                 .collect(),
             gene_id: t.gene_id.clone(),
             protein: t.protein.clone(),
+            cds_start_incomplete: t.cds_start_incomplete,
         }
     }
 
@@ -190,11 +194,8 @@ mod rkyv_cache {
                 .collect::<Result<Vec<_>, _>>()?,
             gene_id: a.gene_id.as_ref().map(|s| s.as_str().to_string()),
             protein: a.protein.as_ref().map(|s| s.as_str().to_string()),
-            // Snapshots predate this field (#972); a follow-up can persist it
-            // in the rkyv cache. Until then, cached archives round-trip as
-            // "complete", which is always safe (the false default never
-            // over-declines).
-            cds_start_incomplete: false,
+            // Plain `bool` in the archived form — no `.to_native()` needed.
+            cds_start_incomplete: a.cds_start_incomplete,
         })
     }
 
@@ -328,6 +329,7 @@ mod rkyv_cache {
             }])],
             gene_id: None,
             protein: None,
+            cds_start_incomplete: false,
         };
         let mut transcripts = HashMap::new();
         transcripts.insert("NM_000088.3".to_string(), tx);
@@ -344,6 +346,40 @@ mod rkyv_cache {
         rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot)
             .expect("serialize test archive")
             .to_vec()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::reference::Strand as DomainStrand;
+
+        /// #972 round-trip: `cds_start_incomplete = true` must survive
+        /// `tx_to_rkyv` -> (serialize/archive) -> `tx_from_archived`. Without
+        /// this the field is silently dropped by the rkyv cache and every
+        /// transcript rehydrates as "complete" regardless of the source JSON.
+        #[test]
+        fn cds_start_incomplete_round_trips_through_rkyv() {
+            let cdot_tx = CdotTranscript {
+                gene_name: Some("TEST".to_string()),
+                contig: "NC_000001.11".to_string(),
+                strand: DomainStrand::Plus,
+                exons: vec![[1, 100, 0, 99]],
+                cds_start: Some(0),
+                cds_end: Some(99),
+                exon_cigars: vec![None],
+                gene_id: None,
+                protein: None,
+                cds_start_incomplete: true,
+            };
+
+            let rkyv_tx = tx_to_rkyv(&cdot_tx);
+            let bytes = rkyv::to_bytes::<rkyv::rancor::Error>(&rkyv_tx).expect("serialize RkyvTx");
+            let archived = rkyv::access::<ArchivedRkyvTx, rkyv::rancor::Error>(&bytes)
+                .expect("access archived RkyvTx");
+
+            let round_tripped = tx_from_archived(archived).expect("deserialize RkyvTx");
+            assert!(round_tripped.cds_start_incomplete);
+        }
     }
 }
 
@@ -481,6 +517,10 @@ struct RawGenomeBuild {
     /// `+ 1` this to match the 1-based exon table before mapping it to tx.
     #[serde(default)]
     cds_end: Option<u64>,
+    /// GENCODE/Ensembl completeness + status tags (e.g. `cds_start_NF`,
+    /// `mRNA_start_NF`, `MANE_Select`), comma-joined in cdot. Absent for RefSeq.
+    #[serde(default)]
+    tag: Option<String>,
 }
 
 impl RawCdotTranscript {
@@ -501,6 +541,17 @@ impl RawCdotTranscript {
     #[allow(clippy::wrong_self_convention)]
     fn from_genome_build(&self, build: &RawGenomeBuild) -> Option<CdotTranscript> {
         let strand = parse_strand(build.strand.as_deref().unwrap_or("+"))?;
+
+        // Ensembl marks a transcript whose 5′ CDS lacks a confirmed ATG start
+        // (no start codon in the annotation) with the `cds_start_NF` tag,
+        // comma-joined alongside other status tags (e.g. `mRNA_start_NF`,
+        // `MANE_Select`). Detection is tag-only — never key off `start_codon
+        // == 0`/`None`, which also holds for legitimately-complete transcripts
+        // (e.g. MANE Select) and would false-positive (#972).
+        let cds_start_incomplete = build
+            .tag
+            .as_deref()
+            .is_some_and(crate::reference::transcript::tags_mark_cds_start_nf);
 
         // Parse exons: [genomic_start, genomic_end, exon_num, tx_start, tx_end, gap_info]
         let mut exon_pairs: Vec<([u64; 4], Option<Vec<CigarOp>>)> = build
@@ -595,9 +646,7 @@ impl RawCdotTranscript {
             cds_end,
             gene_id: None,
             protein: self.protein.clone(),
-            // Task 2 wires this from the cdot tag data; defaulting false here
-            // changes no behavior in this task.
-            cds_start_incomplete: false,
+            cds_start_incomplete,
         })
     }
 
@@ -3471,6 +3520,64 @@ mod tests {
         assert_eq!(g(128), 112086641, "c.128 (interior)");
         assert_eq!(g(129), 112086640, "c.129 (last cdna base of exon B)"); // was off-by-one
         assert_eq!(g(130), 112085462, "c.130 (first cdna base of exon A)"); // was a decline
+    }
+
+    /// Builds a minimal `RawGenomeBuild` carrying the given cdot `tag` string
+    /// (or none), with no exons — sufficient to exercise
+    /// `from_genome_build`'s tag parsing without needing real alignment data.
+    fn raw_genome_build_with_tag(tag: Option<&str>) -> RawGenomeBuild {
+        RawGenomeBuild {
+            contig: "NC_000001.11".to_string(),
+            strand: Some("+".to_string()),
+            exons: Vec::new(),
+            cds_start: None,
+            cds_end: None,
+            tag: tag.map(str::to_string),
+        }
+    }
+
+    /// Minimal `RawCdotTranscript` with no transcript-level start/stop codon,
+    /// so `from_genome_build` never touches `start_codon`/`stop_codon` and the
+    /// only thing under test is `RawGenomeBuild::tag` -> `cds_start_incomplete`.
+    fn raw_cdot_transcript_for_tag_test() -> RawCdotTranscript {
+        RawCdotTranscript {
+            gene_name: None,
+            gene_version: None,
+            biotype: None,
+            protein: None,
+            genome_builds: None,
+            start_codon: None,
+            stop_codon: None,
+            contig: None,
+            strand: None,
+            exons: None,
+            cds_start: None,
+            cds_end: None,
+        }
+    }
+
+    #[test]
+    fn cds_start_nf_tag_sets_flag_true() {
+        let build = raw_genome_build_with_tag(Some("cds_start_NF,mRNA_start_NF"));
+        let raw = raw_cdot_transcript_for_tag_test();
+        let tx = raw.from_genome_build(&build).expect("builds transcript");
+        assert!(tx.cds_start_incomplete);
+    }
+
+    #[test]
+    fn cds_start_nf_tag_absent_leaves_flag_false() {
+        let build = raw_genome_build_with_tag(None);
+        let raw = raw_cdot_transcript_for_tag_test();
+        let tx = raw.from_genome_build(&build).expect("builds transcript");
+        assert!(!tx.cds_start_incomplete);
+    }
+
+    #[test]
+    fn cds_start_nf_tag_other_value_leaves_flag_false() {
+        let build = raw_genome_build_with_tag(Some("MANE_Select"));
+        let raw = raw_cdot_transcript_for_tag_test();
+        let tx = raw.from_genome_build(&build).expect("builds transcript");
+        assert!(!tx.cds_start_incomplete);
     }
 
     fn sample_transcript() -> CdotTranscript {
