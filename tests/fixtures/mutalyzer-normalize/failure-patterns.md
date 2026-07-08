@@ -335,6 +335,6 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | genomic | 19 | 0 | 0 | 0 | 5 |
 | infos | 8 | 0 | 0 | 0 | 1 |
 | noncoding | 0 | 0 | 0 | 0 | 8 |
-| normalized | 27 | 1 | 1 | 0 | 16 |
+| normalized | 28 | 0 | 1 | 0 | 16 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |
