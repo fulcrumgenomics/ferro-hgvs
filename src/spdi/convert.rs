@@ -674,9 +674,7 @@ fn tx_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
             .unwrap_or(*start);
         resolve_tx_to_provider_tx(&variant.accession, start, &end, provider)?
     } else {
-        let s = tx_pos_for_simple_path(&variant.loc_edit.location, "n")?;
-        let e = tx_end_for_simple_path(&variant.loc_edit.location, s, "n")?;
-        (s, e)
+        resolve_tx_exonic_bounded(&variant.accession, &variant.loc_edit.location, provider)?
     };
     emit_spdi_for_edit(
         variant.accession.to_string(),
@@ -936,6 +934,38 @@ fn resolve_tx_to_provider_tx<P: ReferenceProvider + ?Sized>(
     Ok((s, e))
 }
 
+/// Best-effort upper-bounding of a plain exonic `n.` interval (positive base,
+/// non-intronic, non-downstream). When the provider supplies the transcript,
+/// each endpoint is bounded against its length via [`resolve_tx_pos`] (#971);
+/// if the transcript cannot be loaded, fall back to the unbounded simple-path
+/// value so a provider that lacks it still resolves (no regression).
+///
+/// Only a `MissingReferenceData` error (transcript unavailable) triggers the
+/// fallback; an over-length position surfaces as `InvalidPosition` from the
+/// bound and is propagated, not swallowed.
+fn resolve_tx_exonic_bounded<P: ReferenceProvider + ?Sized>(
+    accession: &Accession,
+    interval: &Interval<TxPos>,
+    provider: &P,
+) -> Result<(u64, u64), ConversionError> {
+    let start = interval
+        .start
+        .inner()
+        .ok_or_else(|| ConversionError::InvalidPosition {
+            description: "cannot convert n. variant with unknown start position".to_string(),
+        })?;
+    let end = interval.end.inner().copied().unwrap_or(*start);
+    match resolve_tx_to_provider_tx(accession, start, &end, provider) {
+        Ok(pair) => Ok(pair),
+        Err(ConversionError::MissingReferenceData { .. }) => {
+            let s = tx_pos_for_simple_path(interval, "n")?;
+            let e = tx_end_for_simple_path(interval, s, "n")?;
+            Ok((s, e))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 fn resolve_rna_to_provider_tx<P: ReferenceProvider + ?Sized>(
     accession: &Accession,
     start: &RnaPos,
@@ -957,7 +987,7 @@ fn resolve_rna_to_provider_tx<P: ReferenceProvider + ?Sized>(
 /// Resolve a single `TxPos` to a 1-based transcript position. Intronic and
 /// downstream (`n.*N`) positions are rejected because they have no valid
 /// SPDI representation on the transcript accession.
-fn resolve_tx_pos(pos: &TxPos, _transcript: &Transcript) -> Result<u64, ConversionError> {
+fn resolve_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<u64, ConversionError> {
     // SPDI is positional and has no offset notation, so intronic n. positions
     // cannot be expressed without genomic projection. Match the sibling
     // `resolve_rna_pos` (and the simple-path helpers) by emitting
@@ -984,7 +1014,10 @@ fn resolve_tx_pos(pos: &TxPos, _transcript: &Transcript) -> Result<u64, Conversi
             ),
         });
     }
-    ensure_positive_tx(pos.base, "n", pos)
+    // Exonic n.N: bound against the transcript length so an over-length position
+    // (n.99999 on a 40-base transcript) declines instead of emitting an
+    // off-sequence SPDI coordinate (#971), mirroring the c.*N / r.*N bound (#962).
+    ensure_tx_in_bounds(pos.base, transcript.sequence_length(), "n", pos)
 }
 
 fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, ConversionError> {
@@ -3594,6 +3627,40 @@ mod tests {
         let hgvs = parse_hgvs("NR_046018.2:n.5C>G").unwrap();
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.to_string(), "NR_046018.2:4:C:G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_tx_exonic_past_3prime_end_declines() {
+        // n. treats the base as a direct transcript position; NM_TEST.1 is 40 bases.
+        // n.99999 is off-sequence and must decline (#971).
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:n.99999C>G").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic n.N must decline with InvalidPosition, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_tx_exonic_range_past_3prime_end_declines() {
+        // Over-length end in an n. range must also decline (#971 acceptance: "in a range").
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:n.10_99999del").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic n. range must decline, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_tx_exonic_last_base_ok() {
+        // n.40 -> tx 40 (last base, in bounds) still resolves.
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:n.40C>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 39, "n.40 -> tx 40 -> SPDI 39");
     }
 
     #[test]
