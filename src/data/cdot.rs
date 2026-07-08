@@ -3089,7 +3089,22 @@ impl CdotMapper {
         let spans = self
             .transcript_genome_spans
             .get_or_init(|| self.build_transcript_genome_spans());
-        spans.get(transcript_id).copied()
+        if let Some(span) = spans.get(transcript_id).copied() {
+            return Some(span);
+        }
+        // Ensembl transcripts live in the deferred Ensembl sub-mapper's own
+        // primary build (not `self.transcripts`), so they are absent from the
+        // side-table built above. Mirror `ensembl_fallback`/`get_transcript`
+        // with a DIRECT lookup on the Ensembl mapper's own span table (this is
+        // not the RefSeq-scoped genomic *enumeration* of #933). Without this,
+        // genome-pivot projection onto any `ENS*` transcript fails with
+        // `ReferenceNotFound`.
+        if transcript_id.starts_with("ENS") {
+            return self
+                .deferred_ensembl_mapper()?
+                .transcript_genome_span(transcript_id);
+        }
+        None
     }
 
     /// Build-aware variant of [`transcript_genome_span`]: when `build`
@@ -5431,6 +5446,33 @@ mod tests {
         assert!(
             !mapper.deferred_ensembl_loaded(),
             "genomic enumeration must not materialize the deferred Ensembl mapper"
+        );
+    }
+
+    #[test]
+    fn transcript_genome_span_resolves_deferred_ensembl() {
+        let (mapper, _dir) = deferred_ensembl_fixture();
+        // A DIRECT span lookup for a known Ensembl transcript must consult the
+        // deferred Ensembl mapper, mirroring `get_transcript` (this is not the
+        // RefSeq-scoped genomic *enumeration* of #933). Before the fix the span
+        // side-table was built only from the primary RefSeq map, so every ENST
+        // returned `None` — which made genome-pivot projection onto any Ensembl
+        // transcript fail with `ReferenceNotFound`.
+        // Value reflects ferro's stored 1-based exon coordinates (the raw 0-based
+        // cdot `[2000, 2200]` is `+1`-converted on ingestion) — the SAME builder
+        // and convention RefSeq spans use, so Ensembl is consistent with RefSeq.
+        assert_eq!(
+            mapper.transcript_genome_span("ENST00000375549.8"),
+            Some((2001, 2201)),
+            "Ensembl transcript genome span must resolve via the deferred mapper"
+        );
+        // The primary RefSeq span still resolves, and a non-Ensembl miss stays None.
+        assert!(mapper.transcript_genome_span("NM_000088.3").is_some());
+        assert_eq!(mapper.transcript_genome_span("NM_999999.9"), None);
+        // The build-aware variant on the primary build agrees.
+        assert_eq!(
+            mapper.transcript_genome_span_on_build("ENST00000375549.8", "GRCh38"),
+            Some((2001, 2201)),
         );
     }
 
