@@ -674,9 +674,7 @@ fn tx_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
             .unwrap_or(*start);
         resolve_tx_to_provider_tx(&variant.accession, start, &end, provider)?
     } else {
-        let s = tx_pos_for_simple_path(&variant.loc_edit.location, "n")?;
-        let e = tx_end_for_simple_path(&variant.loc_edit.location, s, "n")?;
-        (s, e)
+        resolve_tx_exonic_bounded(&variant.accession, &variant.loc_edit.location, provider)?
     };
     emit_spdi_for_edit(
         variant.accession.to_string(),
@@ -711,9 +709,7 @@ fn rna_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
             .unwrap_or(*start);
         resolve_rna_to_provider_tx(&variant.accession, start, &end, provider)?
     } else {
-        let s = rna_pos_for_simple_path(&variant.loc_edit.location, "r")?;
-        let e = rna_end_for_simple_path(&variant.loc_edit.location, s, "r")?;
-        (s, e)
+        resolve_rna_exonic_bounded(&variant.accession, &variant.loc_edit.location, provider)?
     };
     emit_spdi_for_edit(
         variant.accession.to_string(),
@@ -772,6 +768,10 @@ fn tx_end_for_simple_path(
     }
 }
 
+// No-provider path: with no transcript there is no length to bound against,
+// so an exonic position past the 3' end cannot be rejected here (#971). The
+// provider-backed path (`hgvs_to_spdi`) does bound; `hgvs_to_spdi_simple`
+// callers accept unbounded exonic positions by construction.
 fn require_simple_tx_pos(pos: &TxPos, coord: &str) -> Result<u64, ConversionError> {
     if pos.is_intronic() {
         return Err(ConversionError::MissingReferenceData {
@@ -827,6 +827,10 @@ fn rna_end_for_simple_path(
     }
 }
 
+// No-provider path: with no transcript there is no length to bound against,
+// so an exonic position past the 3' end cannot be rejected here (#971). The
+// provider-backed path (`hgvs_to_spdi`) does bound; `hgvs_to_spdi_simple`
+// callers accept unbounded exonic positions by construction.
 fn require_simple_rna_pos(pos: &RnaPos, coord: &str) -> Result<u64, ConversionError> {
     if pos.is_intronic() {
         return Err(ConversionError::MissingReferenceData {
@@ -906,21 +910,13 @@ fn resolve_cds_to_tx<P: ReferenceProvider + ?Sized>(
         .map_err(|e| ConversionError::MissingReferenceData {
             description: format!("could not resolve {} to transcript position: {}", end, e),
         })?;
-    // A `c.*N` (3'UTR) position must also be bounded above: reject one that maps
-    // past the transcript 3' end, not just below base 1 (#962). Non-3'UTR c.
-    // positions keep the lower-bound-only guard — their (rarer) overflow is a
-    // separate, broader concern, and this keeps `c.N`/`r.N` symmetric.
+    // Bound both endpoints against the transcript length: reject a position that
+    // maps past the 3' end, not just below base 1. #962 did this for c.*N (3'UTR);
+    // #971 extends it to plain exonic c.N, which cds_to_tx can also map off-sequence
+    // (e.g. c.99999 -> tx cds_start-1+99999). Keeps c.N / r.N / n.N symmetric.
     let tx_len = transcript.sequence_length();
-    let s_u = if start.is_3utr() {
-        ensure_tx_in_bounds(s.base, tx_len, "c", start)
-    } else {
-        ensure_positive_tx(s.base, "c", start)
-    }?;
-    let e_u = if end.is_3utr() {
-        ensure_tx_in_bounds(e.base, tx_len, "c", end)
-    } else {
-        ensure_positive_tx(e.base, "c", end)
-    }?;
+    let s_u = ensure_tx_in_bounds(s.base, tx_len, "c", start)?;
+    let e_u = ensure_tx_in_bounds(e.base, tx_len, "c", end)?;
     Ok((s_u, e_u))
 }
 
@@ -944,6 +940,66 @@ fn resolve_tx_to_provider_tx<P: ReferenceProvider + ?Sized>(
     Ok((s, e))
 }
 
+/// Best-effort upper-bounding of a plain exonic `n.` interval (positive base,
+/// non-intronic, non-downstream). When the provider supplies the transcript,
+/// each endpoint is bounded against its length via [`resolve_tx_pos`] (#971);
+/// if the transcript cannot be loaded, fall back to the unbounded simple-path
+/// value so a provider that lacks it still resolves (no regression).
+///
+/// Only a `MissingReferenceData` error (transcript unavailable) triggers the
+/// fallback; an over-length position surfaces as `InvalidPosition` from the
+/// bound and is propagated, not swallowed.
+fn resolve_tx_exonic_bounded<P: ReferenceProvider + ?Sized>(
+    accession: &Accession,
+    interval: &Interval<TxPos>,
+    provider: &P,
+) -> Result<(u64, u64), ConversionError> {
+    let start = interval
+        .start
+        .inner()
+        .ok_or_else(|| ConversionError::InvalidPosition {
+            description: "cannot convert n. variant with unknown start position".to_string(),
+        })?;
+    let end = interval.end.inner().copied().unwrap_or(*start);
+    match resolve_tx_to_provider_tx(accession, start, &end, provider) {
+        Ok(pair) => Ok(pair),
+        Err(ConversionError::MissingReferenceData { .. }) => {
+            let s = tx_pos_for_simple_path(interval, "n")?;
+            let e = tx_end_for_simple_path(interval, s, "n")?;
+            Ok((s, e))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Best-effort upper-bounding of a plain exonic `r.` interval, mirroring
+/// [`resolve_tx_exonic_bounded`]: bound against the transcript length when the
+/// provider supplies it (#971), else fall back to the unbounded simple-path
+/// value. Only `MissingReferenceData` (transcript unavailable) triggers the
+/// fallback; an over-length position propagates as `InvalidPosition`.
+fn resolve_rna_exonic_bounded<P: ReferenceProvider + ?Sized>(
+    accession: &Accession,
+    interval: &Interval<RnaPos>,
+    provider: &P,
+) -> Result<(u64, u64), ConversionError> {
+    let start = interval
+        .start
+        .inner()
+        .ok_or_else(|| ConversionError::InvalidPosition {
+            description: "cannot convert r. variant with unknown start position".to_string(),
+        })?;
+    let end = interval.end.inner().copied().unwrap_or(*start);
+    match resolve_rna_to_provider_tx(accession, start, &end, provider) {
+        Ok(pair) => Ok(pair),
+        Err(ConversionError::MissingReferenceData { .. }) => {
+            let s = rna_pos_for_simple_path(interval, "r")?;
+            let e = rna_end_for_simple_path(interval, s, "r")?;
+            Ok((s, e))
+        }
+        Err(e) => Err(e),
+    }
+}
+
 fn resolve_rna_to_provider_tx<P: ReferenceProvider + ?Sized>(
     accession: &Accession,
     start: &RnaPos,
@@ -964,8 +1020,9 @@ fn resolve_rna_to_provider_tx<P: ReferenceProvider + ?Sized>(
 
 /// Resolve a single `TxPos` to a 1-based transcript position. Intronic and
 /// downstream (`n.*N`) positions are rejected because they have no valid
-/// SPDI representation on the transcript accession.
-fn resolve_tx_pos(pos: &TxPos, _transcript: &Transcript) -> Result<u64, ConversionError> {
+/// SPDI representation on the transcript accession; an exonic position past
+/// the transcript's 3' end is also rejected (#971).
+fn resolve_tx_pos(pos: &TxPos, transcript: &Transcript) -> Result<u64, ConversionError> {
     // SPDI is positional and has no offset notation, so intronic n. positions
     // cannot be expressed without genomic projection. Match the sibling
     // `resolve_rna_pos` (and the simple-path helpers) by emitting
@@ -992,7 +1049,10 @@ fn resolve_tx_pos(pos: &TxPos, _transcript: &Transcript) -> Result<u64, Conversi
             ),
         });
     }
-    ensure_positive_tx(pos.base, "n", pos)
+    // Exonic n.N: bound against the transcript length so an over-length position
+    // (n.99999 on a 40-base transcript) declines instead of emitting an
+    // off-sequence SPDI coordinate (#971), mirroring the c.*N / r.*N bound (#962).
+    ensure_tx_in_bounds(pos.base, transcript.sequence_length(), "n", pos)
 }
 
 fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, ConversionError> {
@@ -1074,7 +1134,43 @@ fn resolve_rna_pos(pos: &RnaPos, transcript: &Transcript) -> Result<u64, Convers
         })?;
         return ensure_positive_tx(tx.base, "r", pos);
     }
-    ensure_positive_tx(pos.base, "r", pos)
+    // Exonic r.N. On a CODING transcript r. numbering is CDS-relative (#469):
+    // r.N denotes the same base as c.N (see `cds_pos_to_rna` in project/rna.rs),
+    // so resolve it through the exon-aware `CoordinateMapper::cds_to_tx` exactly
+    // like c.N and like the r.-N / r.*N branches above — otherwise r.N would be
+    // treated as transcript-absolute and disagree with c.N by (cds_start - 1).
+    // A NON-coding (NR_) transcript has no CDS anchor, so r.N IS the transcript
+    // position directly. Either way, bound against the transcript length (#971).
+    if transcript.cds_start.is_some() {
+        // Resolving a coding r.N CDS-relative needs a CDS end (the exon-aware
+        // `cds_to_tx` requires both anchors). A coding transcript missing its
+        // CDS end is malformed/partial annotation: decline with
+        // `InvalidPosition` (which propagates past the
+        // `resolve_rna_exonic_bounded` `MissingReferenceData` fallback) rather
+        // than silently resolving r.N transcript-absolute and unbounded — the
+        // same "loaded but inexpressible" treatment `resolve_tx_pos` gives a
+        // downstream n.*N. Mirrors the cds_end guard on the r.*N branch above.
+        if transcript.cds_end.is_none() {
+            return Err(ConversionError::InvalidPosition {
+                description: format!(
+                    "r.{} on a coding transcript requires a CDS end to resolve \
+                     CDS-relative; the transcript has a CDS start but no CDS end",
+                    pos.base
+                ),
+            });
+        }
+        let mapper = CoordinateMapper::new(transcript);
+        let tx = mapper.cds_to_tx(&CdsPos::new(pos.base)).map_err(|e| {
+            ConversionError::MissingReferenceData {
+                description: format!(
+                    "could not resolve r.{} to transcript position: {}",
+                    pos.base, e
+                ),
+            }
+        })?;
+        return ensure_tx_in_bounds(tx.base, transcript.sequence_length(), "r", pos);
+    }
+    ensure_tx_in_bounds(pos.base, transcript.sequence_length(), "r", pos)
 }
 
 fn ensure_positive_tx<P: std::fmt::Display>(
@@ -1103,8 +1199,10 @@ fn ensure_positive_tx<P: std::fmt::Display>(
 /// the transcript length in mRNA bases ([`Transcript::sequence_length`]). Applied
 /// at the `*N` (3'UTR) resolution sites — `r.*N` in `resolve_rna_pos` and `c.*N`
 /// in `resolve_cds_to_tx` — where a position can be numbered past the last
-/// transcript base; the upper bound never fires for a position that lands on the
-/// sequence.
+/// transcript base, and at the exonic resolution sites — `n.N` in
+/// `resolve_tx_pos`, the exonic tail of `r.N` in `resolve_rna_pos`, and both
+/// arms of `c.N` in `resolve_cds_to_tx` — where an over-length position (e.g.
+/// `c.99999` on a short transcript) can likewise map past the 3' end (#971).
 fn ensure_tx_in_bounds<P: std::fmt::Display + Copy>(
     base: i64,
     tx_len: u64,
@@ -3498,6 +3596,40 @@ mod tests {
         assert_eq!(spdi.insertion, "G");
     }
 
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_exonic_past_3prime_end_declines() {
+        // NM_TEST.1 is 40 bases (cds 6-35). c.99999 -> tx 100004, off-sequence.
+        // #971: must decline, not emit an off-sequence SPDI coordinate.
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:c.99999A>G").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic c.N must decline with InvalidPosition, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_exonic_range_past_3prime_end_declines() {
+        // In a range, an over-length end must also decline (#971 acceptance: "in a range").
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:c.20_99999del").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic c. range must decline, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_cds_exonic_last_base_ok() {
+        // c.30 -> tx 35 (last CDS base, in bounds) must still resolve unchanged.
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:c.30A>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 34, "c.30 -> tx 35 -> SPDI 34");
+    }
+
     /// r.*N anchors at `cds_end`, not `sequence_length()` — closes
     /// #390 item 2. With the test fixture (cds_end=35, tx_len=40),
     /// r.*2 must resolve to tx position 37 (SPDI 36), matching the
@@ -3516,6 +3648,98 @@ mod tests {
         );
         assert_eq!(spdi.deletion, "A");
         assert_eq!(spdi.insertion, "G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_exonic_coding_matches_cds() {
+        // On a CODING transcript r.N is CDS-relative (#469): r.N and c.N denote the
+        // same base, so they must resolve to the same SPDI position. NM_TEST.1
+        // cds_start=6, so r.1 == c.1 -> tx 6 -> SPDI 5; r.30 == c.30 -> tx 35 -> SPDI 34.
+        let provider = make_test_provider();
+        for (r_str, c_str) in [
+            ("NM_TEST.1:r.1a>g", "NM_TEST.1:c.1A>G"),
+            ("NM_TEST.1:r.30a>g", "NM_TEST.1:c.30A>G"),
+        ] {
+            let r = hgvs_to_spdi(&parse_hgvs(r_str).unwrap(), &provider).unwrap();
+            let c = hgvs_to_spdi(&parse_hgvs(c_str).unwrap(), &provider).unwrap();
+            assert_eq!(r.position, c.position, "{r_str} must match {c_str}");
+        }
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_exonic_coding_first_base() {
+        // Regression on the exact confirmed values: r.1a>g -> SPDI 5 (was 0).
+        let provider = make_test_provider();
+        let spdi = hgvs_to_spdi(&parse_hgvs("NM_TEST.1:r.1a>g").unwrap(), &provider).unwrap();
+        assert_eq!(spdi.position, 5, "coding r.1 -> tx 6 (cds_start) -> SPDI 5");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_exonic_coding_past_3prime_end_declines() {
+        // Now that coding r.N routes through cds_to_tx (#469/#971), an over-length
+        // coding r.N must still decline rather than emit an off-sequence SPDI
+        // position: cds_to_tx returns an out-of-range base, which
+        // ensure_tx_in_bounds then rejects — same as over-length coding c.N.
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:r.99999a>g").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic coding r.N must decline with InvalidPosition, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_exonic_coding_range_matches_cds() {
+        // The coding r.N == c.N CDS-relative identity must hold across BOTH
+        // endpoints of a range, not just single bases: r.1_30del and c.1_30del
+        // must produce the same SPDI (position and deleted span).
+        let provider = make_test_provider();
+        let r = hgvs_to_spdi(&parse_hgvs("NM_TEST.1:r.1_30del").unwrap(), &provider).unwrap();
+        let c = hgvs_to_spdi(&parse_hgvs("NM_TEST.1:c.1_30del").unwrap(), &provider).unwrap();
+        assert_eq!(
+            r.position, c.position,
+            "r.1_30del must match c.1_30del position"
+        );
+        assert_eq!(
+            r.deletion.len(),
+            c.deletion.len(),
+            "r.1_30del must delete the same span as c.1_30del"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_exonic_coding_missing_cds_end_declines() {
+        // A coding transcript (cds_start set) with NO cds_end is malformed. A
+        // coding r.N cannot be resolved CDS-relative without a CDS end, so it
+        // must DECLINE — not silently fall back to an unbounded,
+        // transcript-absolute r.N (off by cds_start-1). The decline surfaces as
+        // InvalidPosition, which propagates past the resolve_rna_exonic_bounded
+        // MissingReferenceData fallback.
+        let tx = Transcript::new(
+            "NM_NOCDSEND.1".to_string(),
+            Some("TEST".to_string()),
+            Strand::Plus,
+            "AAAAATGCCCAAAGGGTTTAGGCCCAAAGGGTTATAAA".to_string() + "AA",
+            Some(6),
+            None,
+            vec![Exon::new(1, 1, 40)],
+            None,
+            None,
+            None,
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        let mut provider = MockProvider::new();
+        provider.add_transcript(tx);
+        let result = hgvs_to_spdi(&parse_hgvs("NM_NOCDSEND.1:r.5a>g").unwrap(), &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "coding r.N on a transcript missing cds_end must decline with \
+             InvalidPosition, got {result:?}"
+        );
     }
 
     #[test]
@@ -3566,6 +3790,107 @@ mod tests {
         // provider-aware path delegates to the simple path.
         let provider = MockProvider::new();
         let hgvs = parse_hgvs("NR_046018.2:n.5C>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.to_string(), "NR_046018.2:4:C:G");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_tx_exonic_past_3prime_end_declines() {
+        // n. treats the base as a direct transcript position; NM_TEST.1 is 40 bases.
+        // n.99999 is off-sequence and must decline (#971).
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:n.99999C>G").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic n.N must decline with InvalidPosition, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_tx_exonic_range_past_3prime_end_declines() {
+        // Over-length end in an n. range must also decline (#971 acceptance: "in a range").
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:n.10_99999del").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic n. range must decline, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_tx_exonic_last_base_ok() {
+        // n.40 -> tx 40 (last base, in bounds) still resolves.
+        let provider = make_test_provider();
+        let hgvs = parse_hgvs("NM_TEST.1:n.40C>G").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 39, "n.40 -> tx 40 -> SPDI 39");
+    }
+
+    /// Single-exon non-coding transcript: 40 bases, no CDS. Exonic r.N maps the
+    /// base directly to the transcript position (NR_ has no CDS anchor), so it is
+    /// the clean fixture for r.N 3'-bound tests (avoids the coding-r.N #469 case).
+    fn make_noncoding_provider() -> MockProvider {
+        let tx = Transcript::new(
+            "NR_TEST.1".to_string(),
+            Some("NCTEST".to_string()),
+            Strand::Plus,
+            "A".repeat(40),
+            None,
+            None,
+            vec![Exon::new(1, 1, 40)],
+            None,
+            None,
+            None,
+            GenomeBuild::default(),
+            ManeStatus::default(),
+            None,
+            None,
+        );
+        let mut provider = MockProvider::new();
+        provider.add_transcript(tx);
+        provider
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_exonic_past_3prime_end_declines() {
+        let provider = make_noncoding_provider();
+        let hgvs = parse_hgvs("NR_TEST.1:r.99999a>g").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic r.N must decline with InvalidPosition, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_exonic_range_past_3prime_end_declines() {
+        let provider = make_noncoding_provider();
+        let hgvs = parse_hgvs("NR_TEST.1:r.10_99999del").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &provider);
+        assert!(
+            matches!(result, Err(ConversionError::InvalidPosition { .. })),
+            "over-length exonic r. range must decline, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_rna_exonic_last_base_ok() {
+        // r.40 -> tx 40 (last base, in bounds) still resolves.
+        let provider = make_noncoding_provider();
+        let hgvs = parse_hgvs("NR_TEST.1:r.40a>g").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
+        assert_eq!(spdi.position, 39, "r.40 -> tx 40 -> SPDI 39");
+    }
+
+    #[test]
+    fn test_hgvs_to_spdi_with_provider_falls_through_to_simple_for_exonic_r() {
+        // Best-effort (#971): provider lacks the transcript, so the exonic r.
+        // conversion falls back to the unbounded simple-path value rather than
+        // erroring — mirrors the n. sibling test.
+        let provider = MockProvider::new();
+        let hgvs = parse_hgvs("NR_046018.2:r.5c>g").unwrap();
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.to_string(), "NR_046018.2:4:C:G");
     }
