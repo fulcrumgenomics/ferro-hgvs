@@ -1363,6 +1363,13 @@ fn is_whole_entity_identity_rhs(variant: &HgvsVariant) -> bool {
     }
 }
 
+/// True iff `variant` is a whole-entity NA identity (`r.=`, `c.=`, …) — the LHS
+/// shape of a whole-entity-reference mosaic (`r.=/6_8del`). Same predicate as
+/// [`is_whole_entity_identity_rhs`]; named for its role as the mosaic LHS.
+fn is_whole_entity_identity_lhs(variant: &HgvsVariant) -> bool {
+    is_whole_entity_identity_rhs(variant)
+}
+
 /// True iff `a` and `b` carry the same coord-system arm AND their
 /// `loc_edit.location` values compare equal. Used to decide whether
 /// the spec compact mosaic Display form applies to a 2-variant Allele.
@@ -1385,51 +1392,74 @@ fn intervals_match_for_compact_mosaic(a: &HgvsVariant, b: &HgvsVariant) -> bool 
     }
 }
 
+/// How the RHS of a compact mosaic / chimeric form is rendered.
+enum CompactMosaicRhs {
+    /// Spec compact: RHS inherits accession/type/position from a position-identity LHS; emit its edit alone (`Cys`, `del`, `dup`).
+    BareEdit,
+    /// Whole-entity-`=` LHS: the RHS carries its own position; emit its position+edit (`6_8del`), no accession/type prefix.
+    LocEdit,
+    /// `var/=` cleanup: the RHS is a whole-entity identity; emit a bare `=`.
+    Identity,
+}
+
+/// Classify a 2-member compact mosaic / chimeric form, or `None` when it must
+/// fall back to the long-form join.
+fn compact_mosaic_rhs_kind(lhs: &HgvsVariant, rhs: &HgvsVariant) -> Option<CompactMosaicRhs> {
+    if is_position_identity_lhs(lhs) && intervals_match_for_compact_mosaic(lhs, rhs) {
+        Some(CompactMosaicRhs::BareEdit)
+    } else if is_whole_entity_identity_lhs(lhs) && !is_whole_entity_identity_rhs(rhs) {
+        Some(CompactMosaicRhs::LocEdit)
+    } else if !is_position_identity_lhs(lhs) && is_whole_entity_identity_rhs(rhs) {
+        Some(CompactMosaicRhs::Identity)
+    } else {
+        None
+    }
+}
+
 /// Shared Display path for `Mosaic` (`/`) and `Chimeric` (`//`) phases.
 ///
-/// Three branches in priority order (mutually exclusive on each input):
-///
-/// 1. **Spec compact mosaic / chimeric** — LHS is a position-bound `=`
-///    identity edit, RHS shares accession + coord type + interval.
-///    Emits `<lhs-full>=/<rhs-bare-edit>`. Per
-///    `recommendations/DNA/{substitution,deletion,duplication}.md`.
-///
-/// 2. **`var/=` shorthand cleanup** — LHS is a non-identity variant,
-///    RHS is a whole-entity identity edit (the synthetic shape
-///    produced by `create_identity_variant_from`), and the two share
-///    accession + coord type. Emits `<lhs-full>/=` instead of
-///    expanding the synthetic identity to its `<acc>:<type>.1=` form.
-///
-/// 3. **Long form** — fallback per-variant join.
+/// A 2-member allele is rendered compactly when `compact_mosaic_rhs_kind`
+/// classifies it (spec compact `<lhs>=/<rhs-edit>`, whole-entity-`=` LHS
+/// `<lhs>=/<rhs-loc-edit>`, or `var/=` cleanup); otherwise it falls back to the
+/// long-form per-variant join. When `uncertain` is set (a predicted `(...)`
+/// wrapper), the compact body is bracketed after the shared coord-type prefix,
+/// e.g. `LRG_199t1:p.(Trp24=/Cys)`.
 fn write_mosaic_or_chimeric(
     f: &mut fmt::Formatter<'_>,
     variants: &[HgvsVariant],
     sep: &str,
+    uncertain: bool,
 ) -> fmt::Result {
     if variants.len() == 2 && use_compact_form(variants) {
         let lhs = &variants[0];
         let rhs = &variants[1];
 
-        // Branch 1: spec compact (LHS pos-identity, intervals match).
-        if is_position_identity_lhs(lhs) && intervals_match_for_compact_mosaic(lhs, rhs) {
-            write!(f, "{}", lhs)?;
-            write!(f, "{}", sep)?;
-            // Emit the RHS edit alone (no accession, no type prefix, no
-            // position) — that is the spec compact RHS shape.
-            return write_bare_edit(f, rhs);
-        }
-
-        // Branch 2: var/= cleanup. LHS must NOT be position-identity
-        // (otherwise branch 1 owns it); RHS must be whole-entity Identity.
-        if !is_position_identity_lhs(lhs) && is_whole_entity_identity_rhs(rhs) {
-            write!(f, "{}", lhs)?;
-            write!(f, "{}", sep)?;
-            write!(f, "=")?;
-            return Ok(());
+        if let Some(kind) = compact_mosaic_rhs_kind(lhs, rhs) {
+            if uncertain {
+                // Predicted wrapper: `<prefix>(<lhs-bare><sep><rhs-part>)`, e.g.
+                // `LRG_199t1:p.(Trp24=/Cys)` / `LRG_199t1:r.(=/6_8del)`.
+                write_compact_prefix(f, lhs)?;
+                write!(f, "(")?;
+                lhs.fmt_loc_edit(f)?;
+                write!(f, "{}", sep)?;
+                match kind {
+                    CompactMosaicRhs::BareEdit => write_bare_edit(f, rhs)?,
+                    CompactMosaicRhs::LocEdit => rhs.fmt_loc_edit(f)?,
+                    CompactMosaicRhs::Identity => write!(f, "=")?,
+                }
+                return write!(f, ")");
+            }
+            // Non-predicted compact form.
+            write!(f, "{}{}", lhs, sep)?;
+            return match kind {
+                CompactMosaicRhs::BareEdit => write_bare_edit(f, rhs),
+                CompactMosaicRhs::LocEdit => rhs.fmt_loc_edit(f),
+                CompactMosaicRhs::Identity => write!(f, "="),
+            };
         }
     }
 
-    // Branch 3: long-form join.
+    // Long-form join (predicted wrappers only arise for the compact forms above).
     for (i, v) in variants.iter().enumerate() {
         if i > 0 {
             write!(f, "{}", sep)?;
@@ -1644,8 +1674,10 @@ impl fmt::Display for AlleleVariant {
                     write!(f, "]")
                 }
             }
-            AllelePhase::Mosaic => write_mosaic_or_chimeric(f, &self.variants, "/"),
-            AllelePhase::Chimeric => write_mosaic_or_chimeric(f, &self.variants, "//"),
+            AllelePhase::Mosaic => write_mosaic_or_chimeric(f, &self.variants, "/", self.uncertain),
+            AllelePhase::Chimeric => {
+                write_mosaic_or_chimeric(f, &self.variants, "//", self.uncertain)
+            }
             AllelePhase::AndOr => {
                 if self.uncertain && use_compact_form(&self.variants) {
                     // Uncertainty-wrapped, shared accession + coord type:

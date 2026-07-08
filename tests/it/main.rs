@@ -216,6 +216,7 @@ mod merge_consecutive_edits_tests;
 mod mito_circular_audit;
 mod mito_heteroplasmy_audit;
 mod mosaic_chimeric_compact;
+mod mosaic_predicted_eqslash;
 mod mutalyzer_grammar_tests;
 mod mutalyzer_normalize_tests;
 mod mutalyzer_tests;

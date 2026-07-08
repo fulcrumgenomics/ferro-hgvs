@@ -1974,6 +1974,54 @@ fn inner_is_protein_residue_alternatives(prefix: &str, inner: &str) -> bool {
     })
 }
 
+/// Detect a predicted (`(...)`-wrapped) mosaic / chimeric group, e.g.
+/// `LRG_199t1:p.(Trp24=/Cys)` or `LRG_199t1:r.(=/6_8del)`, returning
+/// `(prefix, inner)` where `prefix` ends in the coord-type stem (`p.`, `r.`, …)
+/// and `inner` is the un-wrapped mosaic body (`Trp24=/Cys`).
+///
+/// This is the slash counterpart of [`find_uncertain_and_or_group`]. It is
+/// needed because the top-level slash scanners are `[]`-aware but not
+/// `()`-aware, so a `/` inside the predicted wrapper would otherwise be
+/// mis-routed to the plain (non-predicted) mosaic path and split the wrapper
+/// into unbalanced-paren chunks.
+pub(crate) fn find_uncertain_mosaic_group(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim();
+    let bytes = input.as_bytes();
+    if bytes.last() != Some(&b')') {
+        return None;
+    }
+    // Find the `(` matching the final `)` by reverse depth scan.
+    let mut depth: i32 = 0;
+    let mut open: Option<usize> = None;
+    for i in (0..bytes.len()).rev() {
+        match bytes[i] {
+            b')' => depth += 1,
+            b'(' => {
+                depth -= 1;
+                if depth == 0 {
+                    open = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let open = open?;
+    let prefix = &input[..open];
+    // The uncertainty wrapper opens immediately after the coordinate-type stem
+    // (`p.`, `r.`, …), so the char before `(` is `.`.
+    if !prefix.ends_with('.') {
+        return None;
+    }
+    let inner = &input[open + 1..input.len() - 1];
+    // The wrapper must contain a top-level (mosaic `/` or chimeric `//`) slash.
+    if find_top_level_slash(inner, false).is_some() || find_top_level_slash(inner, true).is_some() {
+        Some((prefix, inner))
+    } else {
+        None
+    }
+}
+
 /// Result of `scan_allele_separators`: top-level depth-0 allele-separator
 /// flags plus the depth-aware members.
 #[derive(Debug)]
@@ -5415,6 +5463,31 @@ fn is_lhs_position_identity(variant: &HgvsVariant) -> bool {
     }
 }
 
+/// True iff `variant` carries a whole-entity `=` identity (`r.=`, `c.=`, …) —
+/// the LHS shape of a whole-entity-reference mosaic (`r.=/6_8del`), where the
+/// RHS carries its own position rather than inheriting the LHS's.
+fn is_lhs_whole_entity_identity(variant: &HgvsVariant) -> bool {
+    use crate::hgvs::edit::NaEdit;
+    let edit_is_whole = |edit: &Mu<NaEdit>| {
+        matches!(
+            edit.inner(),
+            Some(NaEdit::Identity {
+                whole_entity: true,
+                ..
+            })
+        )
+    };
+    match variant {
+        HgvsVariant::Genome(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Cds(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Tx(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Rna(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Mt(v) => edit_is_whole(&v.loc_edit.edit),
+        HgvsVariant::Circular(v) => edit_is_whole(&v.loc_edit.edit),
+        _ => false,
+    }
+}
+
 /// Create an identity variant based on the type of the reference variant.
 /// Used for mosaic/chimeric notation where "=" means reference allele.
 fn create_identity_variant_from(reference: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
@@ -6230,6 +6303,47 @@ fn parse_uncertain_and_or_allele(input: &str) -> Result<HgvsVariant, FerroError>
     )))
 }
 
+/// Parse a predicted (`(...)`-wrapped) mosaic / chimeric allele
+/// (`p.(Trp24=/Cys)`, `r.(=/6_8del)`). Strip the wrapper, parse the inner
+/// non-predicted mosaic — reusing the full compact-mosaic machinery — and mark
+/// the result `uncertain` so the wrapper round-trips on Display.
+fn parse_uncertain_mosaic_allele(input: &str) -> Result<HgvsVariant, FerroError> {
+    let (prefix, inner) = find_uncertain_mosaic_group(input).ok_or_else(|| FerroError::Parse {
+        pos: 0,
+        msg: "Not an uncertain mosaic group".to_string(),
+        diagnostic: None,
+    })?;
+    let reconstructed = format!("{}{}", prefix, inner);
+    match parse_variant(&reconstructed)? {
+        HgvsVariant::Allele(mut allele)
+            if matches!(allele.phase, AllelePhase::Mosaic | AllelePhase::Chimeric) =>
+        {
+            // The predicted `(...)` wrapper is only defined for a 2-member
+            // mosaic/chimeric — the sole shape the spec documents and the only
+            // one the compact Display renders with its parens. A >2-member
+            // predicted wrapper would round-trip WITHOUT the parens (the
+            // long-form Display join ignores `uncertain`), silently changing
+            // observed-vs-predicted meaning, so reject it here rather than emit a
+            // lossy form.
+            if allele.variants.len() != 2 {
+                return Err(FerroError::Parse {
+                    pos: 0,
+                    msg: "predicted mosaic/chimeric wrapper supports exactly two members"
+                        .to_string(),
+                    diagnostic: None,
+                });
+            }
+            allele.uncertain = true;
+            Ok(HgvsVariant::Allele(allele))
+        }
+        _ => Err(FerroError::Parse {
+            pos: 0,
+            msg: "Predicted wrapper does not enclose a mosaic/chimeric allele".to_string(),
+            diagnostic: None,
+        }),
+    }
+}
+
 /// Whether a chunk-level `parse_variant` error carries a structured
 /// `Diagnostic.code` — i.e. it's a semantic violation that
 /// `parse_phase_allele`'s syntactic-recovery fallback chain should
@@ -6440,6 +6554,20 @@ fn parse_phase_allele(input: &str, phase: AllelePhase) -> Result<HgvsVariant, Fe
                     match parse_variant_with_inherited_accession(chunk, acc, gs.as_ref()) {
                         Ok(v) => v,
                         Err(prefix_err) => {
+                            // Fallback 1b: whole-entity `=` LHS (`r.=/6_8del`).
+                            // The RHS carries its own position but no coord-type
+                            // prefix, so inherit accession AND coord type from the
+                            // LHS and re-parse (`6_8del` -> `LRG_199t1:r.6_8del`).
+                            if is_lhs_whole_entity_identity(lhs) {
+                                let stem = format!("{}:{}.", acc, lhs.variant_type());
+                                if let Ok(v) = parse_variant(&format!("{}{}", stem, chunk)) {
+                                    variants.push(v.clone());
+                                    if first_variant.is_none() {
+                                        first_variant = Some(v);
+                                    }
+                                    continue;
+                                }
+                            }
                             // Fallback 2: HGVS spec compact form — bare
                             // NaEdit RHS inheriting accession + coord
                             // type + position from `<pos>=` LHS.
@@ -6656,6 +6784,15 @@ fn detect_allele_type(input: &str) -> Option<&'static str> {
     // transcript-product form `[(a,b)]`.
     if find_predicted_cis_bracket(input).is_some() {
         return Some("predicted_cis");
+    }
+
+    // Predicted (`(...)`-wrapped) mosaic / chimeric group, e.g.
+    // `p.(Trp24=/Cys)` / `r.(=/6_8del)`. Checked BEFORE the plain slash checks:
+    // the slash scanners are `[]`-aware but not `()`-aware, so the wrapped `/`
+    // would otherwise route to the non-predicted mosaic path and split the
+    // wrapper into unbalanced-paren chunks.
+    if find_uncertain_mosaic_group(input).is_some() {
+        return Some("uncertain_mosaic");
     }
 
     // Top-level slash check happens BEFORE the bracket-wrapping checks
@@ -7038,6 +7175,7 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
             "and_or" => parse_and_or_allele(input)?,
             "products" => parse_products_allele(input)?,
             "uncertain_and_or" => parse_uncertain_and_or_allele(input)?,
+            "uncertain_mosaic" => parse_uncertain_mosaic_allele(input)?,
             "predicted_cis" => parse_predicted_cis_allele(input)?,
             _ => unreachable!(),
         }
