@@ -599,6 +599,22 @@ pub enum Policy {
     /// ferro is wrong to withhold. Accepted divergence (#938).
     #[serde(rename = "ferro-policy-938-ensembl-version-required")]
     EnsemblVersionRequired938,
+    /// On the `normalized` axis, ferro normalizes a `c.`/`n.` variant against the
+    /// authoritative RefSeq transcript sequence, whereas mutalyzer reads the
+    /// transcript bases through a mis-placed/partial NG_ genomic annotation. For
+    /// `NG_009299.1(NM_017668.3)` (the same partial-coverage defect that makes the
+    /// genomic axis `accepted_rejection` under `ferro-policy-853-...-declined`),
+    /// the authoritative RefSeq NM_017668.3 sequence at c.33-45 is
+    /// `GGAGGAAGAAGCT` — it contains no `CAA`/`AAC` tandem tract — so ferro
+    /// cannot 3'-shift the input `c.33_35CAA[5]` and correctly leaves it
+    /// unchanged. mutalyzer resolves the transcript bases through NG_009299.1's
+    /// mis-placed partial annotation (~60 kb off, minus strand), where a CAA/AAC
+    /// tract does appear, and 3'-shifts it to `c.34_39AAC[6]`. ferro's use of the
+    /// authoritative transcript sequence is correct; the divergence is a
+    /// reference-basis artifact, not a repeat-normalization defect. Accepted
+    /// divergence (#853/#920).
+    #[serde(rename = "ferro-policy-853-refseq-transcript-sequence-authoritative")]
+    RefseqTranscriptSequenceAuthoritative853,
 }
 
 impl Policy {
@@ -619,6 +635,9 @@ impl Policy {
             }
             Policy::BareNpNoParentContext923 => "ferro-policy-923-bare-np-no-parent-context",
             Policy::EnsemblVersionRequired938 => "ferro-policy-938-ensembl-version-required",
+            Policy::RefseqTranscriptSequenceAuthoritative853 => {
+                "ferro-policy-853-refseq-transcript-sequence-authoritative"
+            }
             Policy::WholeCdsDeletionMet1 => "ferro-policy-whole-cds-del-met1",
             Policy::HomopolymerRepeatContraction745 => {
                 "ferro-policy-745-homopolymer-repeat-contraction"
