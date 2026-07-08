@@ -224,6 +224,7 @@ mod normalize_property_tests;
 mod normalize_tests;
 mod paraphase_exhaustive_tests;
 mod parser_tests;
+mod pastcds_star_canonicalization;
 mod perf_table;
 mod predicted_cis_allele;
 mod projection;

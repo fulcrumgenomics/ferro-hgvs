@@ -295,7 +295,7 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | `NG_012337.1(NM_003002.2):c.1_4delinsTTGA` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.276C>T` | protein_description | spec_citation | — | — |
 | `NG_012337.1(NM_003002.2):c.[274;600]` | genomic | accepted_divergence | — | — |
-| `NG_012337.1(NM_003002.2):c.[274;600]` | normalized | known_bug | — | #920 |
+| `NG_012337.1(NM_003002.2):c.[274;600]` | normalized | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.[274=;275del]` | genomic | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.[274=;275del]` | normalized | accepted_divergence | — | — |
 | `NG_012337.1(NM_003002.2):c.[274del;275=]` | genomic | accepted_divergence | — | — |
