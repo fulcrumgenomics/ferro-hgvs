@@ -233,6 +233,7 @@ mod property_tests;
 mod protein_construct_boundaries;
 mod protein_frameshift_alternatives;
 mod protein_frameshift_legacy_stop_modes;
+mod protein_insertion_special;
 mod protein_no_protein_roundtrip;
 mod protein_predicted_trans;
 mod protein_silent_eq;

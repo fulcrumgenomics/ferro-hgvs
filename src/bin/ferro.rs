@@ -2377,8 +2377,33 @@ fn run_effect(
                             ferro_hgvs::hgvs::edit::ProteinEdit::Deletion { .. } => {
                                 predictor.classify_indel(3, 0)
                             }
+                            ferro_hgvs::hgvs::edit::ProteinEdit::Insertion { sequence }
+                                if sequence.introduces_stop() =>
+                            {
+                                // `insTer<n>` / `ins*<n>` (or a literal ending in
+                                // `Ter`) introduces a premature stop.
+                                ProteinEffect {
+                                    consequences: vec![Consequence::StopGained],
+                                    impact: Consequence::StopGained.impact(),
+                                    amino_acid_change: None,
+                                    intronic_offset: None,
+                                }
+                            }
                             ferro_hgvs::hgvs::edit::ProteinEdit::Insertion { .. } => {
                                 predictor.classify_indel(0, 3)
+                            }
+                            ferro_hgvs::hgvs::edit::ProteinEdit::Delins { sequence }
+                                if sequence.ends_with_stop() =>
+                            {
+                                // A delins whose inserted sequence ends in `Ter`
+                                // (`delinsLeuTer`) truncates the protein — a
+                                // premature stop, mirroring the insertion arm.
+                                ProteinEffect {
+                                    consequences: vec![Consequence::StopGained],
+                                    impact: Consequence::StopGained.impact(),
+                                    amino_acid_change: None,
+                                    intronic_offset: None,
+                                }
                             }
                             _ => ProteinEffect {
                                 consequences: vec![Consequence::ProteinAlteringVariant],

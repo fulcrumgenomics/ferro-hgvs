@@ -292,7 +292,19 @@ pub fn determine_consequence(ann: &HgvsAnnotation) -> Consequence {
                     Consequence::Nonsense
                 }
                 Some(ProteinEdit::Substitution { .. }) => Consequence::Missense,
+                // An insertion that carries a translation stop (`insTer<n>` /
+                // `ins*<n>`, or a literal ending in `Ter`) introduces a
+                // premature stop — nonsense, not a plain in-frame insertion.
+                Some(ProteinEdit::Insertion { sequence }) if sequence.introduces_stop() => {
+                    Consequence::Nonsense
+                }
                 Some(ProteinEdit::Insertion { .. }) => Consequence::InframeInsertion,
+                // A delins whose inserted sequence ends in a stop
+                // (`delinsLeuTer`) truncates the protein — nonsense, mirroring
+                // the stop-carrying insertion arm above.
+                Some(ProteinEdit::Delins { sequence }) if sequence.ends_with_stop() => {
+                    Consequence::Nonsense
+                }
                 Some(ProteinEdit::Deletion { .. }) | Some(ProteinEdit::Delins { .. }) => {
                     Consequence::InframeDeletion
                 }
@@ -985,6 +997,32 @@ mod tests {
 
         let consequence = determine_consequence(&ann);
         assert_eq!(consequence, Consequence::InframeInsertion);
+    }
+
+    #[test]
+    fn test_determine_consequence_protein_insertion_with_stop() {
+        use crate::hgvs::parser::parse_hgvs;
+
+        // An insertion that carries a translation stop (`insTer<n>` / `ins*<n>`)
+        // introduces a premature stop → nonsense, not an in-frame insertion.
+        for hgvs in [
+            "NP_000079.2:p.Lys2_Leu3insTer12",
+            "NP_000079.2:p.Lys2_Leu3ins*63",
+        ] {
+            let variant = parse_hgvs(hgvs).unwrap();
+            let ann = HgvsAnnotation {
+                variant,
+                gene_symbol: Some("COL1A1".to_string()),
+                transcript_accession: Some("NP_000079.2".to_string()),
+                is_coding: true,
+                is_intronic: false,
+                mane_status: ManeStatus::None,
+                intron_number: None,
+                intron_position: None,
+                intronic_consequence: None,
+            };
+            assert_eq!(determine_consequence(&ann), Consequence::Nonsense, "{hgvs}");
+        }
     }
 
     #[test]

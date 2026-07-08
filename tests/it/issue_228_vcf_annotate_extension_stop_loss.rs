@@ -121,6 +121,24 @@ mod nonsense_classification {
         let ann = protein_annotation("NP_003997.1:p.(Tyr4Ter)");
         assert_eq!(determine_consequence(&ann), Consequence::Nonsense);
     }
+
+    /// A delins whose inserted sequence ends in `Ter` truncates the protein —
+    /// nonsense, not an in-frame deletion (spec `p.(Pro578_Lys579delinsLeuTer)`).
+    /// Mirrors the stop-carrying insertion classification.
+    #[test]
+    fn delins_ending_in_ter_classifies_as_nonsense() {
+        let ann = protein_annotation("NP_003997.1:p.Pro578_Lys579delinsLeuTer");
+        assert_eq!(determine_consequence(&ann), Consequence::Nonsense);
+        let predicted = protein_annotation("NP_003997.1:p.(Asn47delinsSerSerTer)");
+        assert_eq!(determine_consequence(&predicted), Consequence::Nonsense);
+    }
+
+    /// Guardrail: a delins with NO trailing stop stays an in-frame deletion.
+    #[test]
+    fn delins_without_stop_stays_inframe_deletion() {
+        let ann = protein_annotation("NP_003997.1:p.Pro578_Lys579delinsLeu");
+        assert_eq!(determine_consequence(&ann), Consequence::InframeDeletion);
+    }
 }
 
 // =============================================================================
