@@ -594,11 +594,19 @@ mod prefix {
         if input.starts_with('[') {
             return None;
         }
-        let coord = coord_system_char(input)?;
-        // Already prefixed: any colon before the coord-system letter implies
-        // a `<accession>:<sys>.` form already in place.
+        // Only the top-level head (before any `[...]` inserted-sequence
+        // reference) determines the coordinate system and whether an accession
+        // is already present. An inner reference like `ins[L37425.1:r.23_361]`
+        // carries its own `:r.` that must not be mistaken for the variant's own
+        // accession — otherwise a bare `r.123_124ins[…:r.…]` is wrongly judged
+        // already-prefixed and never gets a default accession, so it fails to
+        // parse and lands in `parse-error`. (#955)
+        let head = &input[..input.find('[').unwrap_or(input.len())];
+        let coord = coord_system_char(head)?;
+        // Already prefixed: any colon before the coord-system letter in the
+        // head implies a `<accession>:<sys>.` form already in place.
         let needle = format!(":{coord}.");
-        if input.contains(&needle) {
+        if head.contains(&needle) {
             return None;
         }
         // Bare form: must start with `<sys>.`.
@@ -622,6 +630,31 @@ mod prefix {
             }
         }
         None
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::default_prefixed;
+
+        #[test]
+        fn prefixes_bare_fragment_with_inner_reference() {
+            // The inner `[…:r.…]` reference must NOT be read as the variant's own
+            // accession; the bare `r.` fragment still gets a default accession.
+            assert_eq!(
+                default_prefixed("r.123_124ins[L37425.1:r.23_361]").as_deref(),
+                Some("NM_004006.3:r.123_124ins[L37425.1:r.23_361]")
+            );
+            assert_eq!(
+                default_prefixed("g.?_?ins[NC_000023.10:g.(12345_23456)_(34567_45678)]").as_deref(),
+                Some("NC_000023.11:g.?_?ins[NC_000023.10:g.(12345_23456)_(34567_45678)]")
+            );
+        }
+
+        #[test]
+        fn leaves_already_prefixed_input_untouched() {
+            // A genuine top-level accession still short-circuits (no double prefix).
+            assert_eq!(default_prefixed("NM_004006.3:r.123_124insauc"), None);
+        }
     }
 }
 

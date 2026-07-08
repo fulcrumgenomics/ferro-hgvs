@@ -109,6 +109,38 @@
     "NP_060250.2:p.Gln746_Lys747ins*63": {
       "spec_expected": "NP_060250.2:p.Gln746_Lys747insTer63",
       "note": "Spec writes the inserted stop as `*63` (insertion.md:49); ferro parses it and Display canonicalizes `*` to three-letter `Ter`, matching frameshift/extension stop rendering (background/standards.md). Pin the canonical `insTer63` output so this reads as `preserved` rather than a spurious `diverges`. (#955)"
+    },
+    "p.Gln[21]": {
+      "spec_expected": null,
+      "note": "Not a variant: a prose-note shorthand from RNA/repeated.md:52 (\"on protein level, the reference allele contains 21 Gln s, described as `p.Gln[21]` (alternatively `p.Q[21]`)\"), immediately explained (line 53) as a lossy summary of an interrupted repeat. Every canonical protein-STR example carries a start residue+position (`p.Gln18[23]`, protein/repeated.md:28), which ferro parses; a position-less protein repeat is not valid HGVS. Force spec-rejects. (#955)"
+    },
+    "p.Q[21]": {
+      "spec_expected": null,
+      "note": "The single-letter alternative of `p.Gln[21]` from the same RNA/repeated.md:52 prose note; position-less, not a real variant. Force spec-rejects. (#955)"
+    },
+    "g.[chr4:134850793_134850794inschrX:89555676_100352080]": {
+      "spec_expected": null,
+      "note": "Superseded SVD-WG004 consultation proposal (banner-flagged 'not updated'; DNA/complex.md). ISCN-flavored `chrN:` chromosome-name reference with reference-after-`g.` ordering, both abandoned; ISCN2020/HGVS uses `NC_` accessions with the `delins[ACC:g....]` form (complex.md). ferro rejects the ISCN form; force spec-rejects so it reads as `correctly-rejected`, matching the `::` siblings from the same doc (#546). (#955)"
+    },
+    "g.[chr4:134850793_134850794inschrX:89555676_100352080inv]": {
+      "spec_expected": null,
+      "note": "Superseded SVD-WG004 ISCN proposal (chrN:, reference-after-`g.`), abandoned by ISCN2020/HGVS in favor of `NC_` accession `delins[ACC:g....]` forms. ferro rejects it; force spec-rejects (see #546). (#955)"
+    },
+    "g.chr4:134850793_134850794inschrX:89555676_100352080inv": {
+      "spec_expected": null,
+      "note": "Superseded SVD-WG004 ISCN proposal (chrN:, reference-after-`g.`), abandoned by ISCN2020/HGVS. ferro rejects it; force spec-rejects (see #546). (#955)"
+    },
+    "g.chr2:pter_8247756delinschr11:pter_15825266": {
+      "spec_expected": null,
+      "note": "Superseded SVD-WG004 ISCN proposal (chrN:, reference-after-`g.`), abandoned by ISCN2020/HGVS. ferro rejects it; force spec-rejects (see #546). (#955)"
+    },
+    "g.chr3:158573187_qterdelinschr8:(128534000_128546000)_qter": {
+      "spec_expected": null,
+      "note": "Superseded SVD-WG004 ISCN proposal (chrN:, reference-after-`g.`), abandoned by ISCN2020/HGVS. ferro rejects it; force spec-rejects (see #546). (#955)"
+    },
+    "g.chr5:pter_29658442delinschr10:67539995_qterinv": {
+      "spec_expected": null,
+      "note": "Superseded SVD-WG004 ISCN proposal (chrN:, reference-after-`g.`), abandoned by ISCN2020/HGVS. ferro rejects it; force spec-rejects (see #546). (#955)"
     }
   }
 }
