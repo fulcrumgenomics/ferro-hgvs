@@ -2056,7 +2056,7 @@ impl MultiFastaProvider {
                     exon_cigars: vec![None; s.exons.len()],
                     gene_id: None,
                     protein: s.protein.clone(),
-                    cds_start_incomplete: false,
+                    cds_start_incomplete: s.cds_start_incomplete,
                 },
             );
         }
@@ -6903,6 +6903,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 cds_end: Some(18),
                 gene_name: Some("T".to_string()),
                 protein: Some("NP_TEST.1".to_string()),
+                cds_start_incomplete: false,
                 anchored_by: "NM_TEST.3".to_string(),
                 mismatch_fraction: 0.0,
             }],
@@ -6916,6 +6917,41 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         assert_eq!(t.cds_start, Some(2));
         assert_eq!(t.cds_end, Some(18));
         assert_eq!(t.protein.as_deref(), Some("NP_TEST.1"));
+    }
+
+    /// #972: the derived struct's `cds_start_incomplete` must propagate through
+    /// injection rather than being hardcoded `false` — the sole gap left after
+    /// the rkyv/bincode/`get_transcript_on_build_inner` propagation sites were
+    /// already covered.
+    #[test]
+    fn injects_derived_tx_structure_cds_start_incomplete_true() {
+        use crate::data::cdot::CdotMapper;
+        use crate::reference::derived_tx_structure::{DerivedTxStructure, DerivedTxStructures};
+        let (mut provider, _kept) = build_provider_with_transcripts(&[("DUMMY.1", "A")]);
+        provider.cdot_mapper = Some(CdotMapper::new());
+        let derived = DerivedTxStructures {
+            description: String::new(),
+            structures: vec![DerivedTxStructure {
+                accession: "NM_TEST.2".to_string(),
+                contig: "NC_000011.10".to_string(),
+                strand: "+".to_string(),
+                exons: vec![[100, 110, 0, 10], [200, 210, 10, 20]],
+                cds_start: Some(2),
+                cds_end: Some(18),
+                gene_name: Some("T".to_string()),
+                protein: Some("NP_TEST.1".to_string()),
+                cds_start_incomplete: true,
+                anchored_by: "NM_TEST.3".to_string(),
+                mismatch_fraction: 0.0,
+            }],
+        };
+        provider.inject_derived_tx_structures(&derived);
+        let cdot = provider.cdot_mapper().expect("cdot mapper present");
+        let t = cdot.get_transcript("NM_TEST.2").unwrap();
+        assert!(
+            t.cds_start_incomplete,
+            "derived cds_start_incomplete=true must propagate through injection, not be forced false"
+        );
     }
 
     #[test]
@@ -6935,6 +6971,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 cds_end: None,
                 gene_name: None,
                 protein: None,
+                cds_start_incomplete: false,
                 anchored_by: "NM_BAD.2".to_string(),
                 mismatch_fraction: 0.0,
             }],
@@ -6979,6 +7016,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 cds_end: Some(8),
                 gene_name: Some("DERIVED".to_string()),
                 protein: Some("NP_DERIVED.1".to_string()),
+                cds_start_incomplete: false,
                 anchored_by: "NM_REAL.2".to_string(),
                 mismatch_fraction: 0.0,
             }],
