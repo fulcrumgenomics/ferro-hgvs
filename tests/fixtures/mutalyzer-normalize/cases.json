@@ -3082,10 +3082,10 @@
       "normalized": "NG_009299.1(NM_017668.3):c.34_39AAC[6]",
       "genomic": "NG_009299.1:g.137803_137808TTG[6]",
       "to_test": true,
-      "known_bug": {
+      "accepted_divergence": {
         "axis": "normalized",
-        "tracking_issue": 920,
-        "note": "ferro keeps the input repeat anchor (c.33_35CAA[5]); mutalyzer 3'-shifts the repeat unit to c.34_39AAC[6]. Repeat 3' normalization tracked in #920."
+        "policy": "ferro-policy-853-refseq-transcript-sequence-authoritative",
+        "note": "NOT a repeat-3'-normalization gap: the CAA/AAC tract does not exist in ferro's authoritative RefSeq NM_017668.3 sequence. The RefSeq mRNA at c.33-45 is GGAGGAAGAAGCT (CDS start c.1 = ATG at RefSeq tx offset 93), so there is no CAA tract at c.33_35 (GGA) nor an AAC tract at c.34_39 (GAGGAA) to 3'-shift; ferro correctly leaves c.33_35CAA[5] unchanged (normalize_repeat finds no matching tract at the anchor and returns Unchanged). mutalyzer resolves the transcript bases through NG_009299.1's mis-placed partial annotation -- the same defect that makes the genomic axis accepted_rejection below (cdot places NM_017668.3 ~60 kb outside the NG_'s span, minus strand) -- where a CAA/AAC tract does appear, and 3'-shifts it to c.34_39AAC[6]. ferro's use of the authoritative RefSeq transcript sequence is correct; the divergence is a reference-basis artifact, not a normalization defect. Reclassified from known_bug (#920); shares the #853 root cause with the genomic-axis accepted_rejection."
       },
       "accepted_rejection": {
         "axis": "genomic",
