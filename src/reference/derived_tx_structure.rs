@@ -282,6 +282,7 @@ pub fn derive_transcript_structure(
         exon_cigars: vec![None; exons.len()],
         gene_id: None,
         protein: sibling.protein.clone(),
+        cds_start_incomplete: false,
     };
     let frac = readback_mismatch_fraction(&probe, old_core, genome)?;
     if frac > MAX_MISMATCH_FRACTION {
@@ -368,6 +369,7 @@ mod derivation_tests {
             seq: "AAACCCGGGT".to_string() + "TTGG" + "ACGTACGTAC",
         };
         let cdot = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("T".to_string()),
             contig: "NC_TEST.1".to_string(),
             strand: Strand::Plus,
@@ -448,6 +450,7 @@ mod derivation_tests {
             seq: "AAACCCGGGT".to_string() + "TTGG" + "ACGTACGTAC",
         };
         let cdot = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("M".to_string()),
             contig: "NC_TEST.1".to_string(),
             strand: Strand::Minus,
@@ -556,6 +559,7 @@ mod derivation_tests {
             seq: "ACGTACGTACGT".to_string() + "TTGG" + "ACGTACGTACGT",
         };
         let cdot = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("R".to_string()),
             contig: "NC_REP.1".to_string(),
             strand: Strand::Plus,
@@ -587,6 +591,7 @@ mod derivation_tests {
         // Whatever period-aligned offset wins, readback gates it: the derived
         // exons must reconstruct old_core exactly.
         let probe = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: cdot.gene_name.clone(),
             contig: cdot.contig.clone(),
             strand: cdot.strand,

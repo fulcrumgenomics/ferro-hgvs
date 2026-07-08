@@ -29,6 +29,7 @@ fn fixture() -> (Projector, MockProvider) {
     cdot.add_transcript(
         "NM_TEST.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TESTGENE".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Plus,
@@ -114,6 +115,7 @@ fn intronic_fixture() -> (Projector, MockProvider) {
     cdot.add_transcript(
         "NM_TEST.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TESTGENE".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Plus,

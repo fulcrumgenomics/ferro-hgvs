@@ -8170,6 +8170,7 @@ mod tests {
         use crate::reference::transcript::{Exon, ManeStatus, Strand};
         let mut provider = MockProvider::new();
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST918.1".to_string(),
             gene_symbol: Some("BND918".to_string()),
             strand: Strand::Plus,
@@ -8253,6 +8254,7 @@ mod tests {
         use crate::reference::transcript::{Exon, ManeStatus, Strand};
         let mut provider = MockProvider::new();
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_TESTCDS.1".to_string(),
             gene_symbol: Some("SPAN918".to_string()),
             strand: Strand::Plus,
@@ -9455,6 +9457,7 @@ mod tests {
 
         // Create transcript with exons that have genomic coordinates (1-based)
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_BOUNDARY.1".to_string(),
             gene_symbol: Some("BOUNDARY".to_string()),
             strand: Strand::Plus,
@@ -9524,6 +9527,7 @@ mod tests {
         provider.add_genomic_sequence("chr1", genomic_seq);
 
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_BOUNDARYM.1".to_string(),
             gene_symbol: Some("BOUNDARY_M".to_string()),
             strand: Strand::Minus,
@@ -9812,6 +9816,7 @@ mod tests {
         provider.add_genomic_sequence("chr1", genomic_seq);
 
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_EXEX.1".to_string(),
             gene_symbol: Some("EXEX".to_string()),
             strand: Strand::Plus,
@@ -9950,6 +9955,7 @@ mod tests {
         }
         provider.add_genomic_sequence("chr1", g);
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_MI.1".to_string(),
             gene_symbol: Some("MI".to_string()),
             strand: Strand::Plus,
@@ -10165,6 +10171,7 @@ mod tests {
         }
 
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_777777.1".to_string(),
             gene_symbol: Some("SHIFTTEST".to_string()),
             strand: Strand::Plus,
@@ -10270,6 +10277,7 @@ mod tests {
         );
 
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_666666.1".to_string(),
             gene_symbol: Some("UTRTEST".to_string()),
             strand: Strand::Plus,
@@ -10336,6 +10344,7 @@ mod tests {
         let seq = "GGGGGGGGGGAATTCCGGGGGGGGGG".to_string(); // c.10=A, c.11=A, c.12=T, c.13=T
 
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_555555.1".to_string(),
             gene_symbol: Some("DELINSTEST".to_string()),
             strand: Strand::Plus,
@@ -10476,6 +10485,7 @@ mod tests {
         let mut provider = MockProvider::new();
         use crate::reference::transcript::{Exon, Transcript};
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_001566.1".to_string(),
             gene_symbol: Some("NCRNA".to_string()),
             strand: crate::reference::transcript::Strand::Plus,
@@ -10522,6 +10532,7 @@ mod tests {
         let tx_sequence = "A".repeat(200);
 
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NR_038982.1".to_string(),
             gene_symbol: Some("NCRNA_TEST".to_string()),
             strand: Strand::Plus,

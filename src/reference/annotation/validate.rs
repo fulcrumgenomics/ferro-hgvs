@@ -202,6 +202,7 @@ mod tests {
     /// (i.e., genomic_start = tx.start = 1, genomic_end = tx.end = 100).
     fn tx_with_cds(cds_start: u64, cds_end: u64) -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "tx1".into(),
             gene_symbol: None,
             strand: Strand::Plus,
@@ -269,6 +270,7 @@ mod tests {
         cds_end: u64,
     ) -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "tx_split".into(),
             gene_symbol: None,
             strand,

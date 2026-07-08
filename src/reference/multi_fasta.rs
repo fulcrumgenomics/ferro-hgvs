@@ -1667,6 +1667,7 @@ impl MultiFastaProvider {
             refseq_match: None,
             ensembl_match: None,
             protein_id: tx.protein.clone(),
+            cds_start_incomplete: tx.cds_start_incomplete,
             exon_cigars: tx.exon_cigars.clone(),
             cached_introns: OnceLock::new(),
         })
@@ -2046,6 +2047,7 @@ impl MultiFastaProvider {
                     exon_cigars: vec![None; s.exons.len()],
                     gene_id: None,
                     protein: s.protein.clone(),
+                    cds_start_incomplete: false,
                 },
             );
         }
@@ -2258,6 +2260,7 @@ impl MultiFastaProvider {
                     refseq_match: None,
                     ensembl_match: None,
                     protein_id: meta.protein_id,
+                    cds_start_incomplete: false,
                     exon_cigars: meta.exon_cigars,
                     cached_introns: OnceLock::new(),
                 });
@@ -3727,6 +3730,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         use crate::data::cdot::CdotTranscript;
         use crate::reference::Strand;
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: None,
             contig: "NC_TEST.1".to_string(),
             strand: Strand::Plus,
@@ -4613,6 +4617,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Transcript};
         use std::sync::OnceLock;
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand,
@@ -4697,6 +4702,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         //   exon2: tx 5..12  genome 15..22  bases at 1-based HGVS [15..=22] = "TTAAAACC"
         // Expected concatenated transcript sequence: "AAAA" + "TTAAAACC" = "AAAATTAAAACC".
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_MULTI.1".to_string(),
             gene_symbol: Some("MULTI".to_string()),
             strand: Strand::Plus,
@@ -4753,6 +4759,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         // which inverts the per-exon order — this test locks the per-exon
         // revcomp behavior in place.
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_MINUS_MULTI.1".to_string(),
             gene_symbol: Some("MINUS_MULTI".to_string()),
             strand: Strand::Minus,
@@ -4804,6 +4811,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         let mut provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
 
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_ORPHAN.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
@@ -4846,6 +4854,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_EMPTY.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "NC_TEST.1".to_string(),
                 strand: Strand::Plus,
@@ -4910,6 +4919,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_CIG.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("CIG".to_string()),
                 contig: "NC_TEST.1".to_string(),
                 // cdot exon layout: [genome_start (1-based incl),
@@ -5031,6 +5041,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_CIG.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("CIG".to_string()),
                 contig: "NC_TEST.1".to_string(),
                 // Deliberately inconsistent: tx span 20 but the CIGAR yields 17.
@@ -5104,6 +5115,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_MIX.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("MIX".to_string()),
                 contig: "NC_TEST.1".to_string(),
                 exons: vec![[11, 21, 0, 8], [21, 31, 8, 18]],
@@ -5455,6 +5467,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_DEGEN.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "NC_TEST.1".to_string(),
                 strand: Strand::Plus,
@@ -5817,6 +5830,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_OV.2".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "chr1".to_string(),
                 strand: Strand::Plus,
@@ -5866,6 +5880,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_OV.2".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "chr1".to_string(),
                 strand: Strand::Plus,
@@ -5914,6 +5929,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_OV.4".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "chrSIBLING".to_string(),
                 strand: Strand::Plus,
@@ -6111,6 +6127,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_OV.2".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "chr1".to_string(),
                 strand: Strand::Plus,
@@ -6259,6 +6276,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_T.4".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "NC_X.1".to_string(),
                 strand: Strand::Plus,
@@ -6299,6 +6317,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_SYNTH.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "NC_TEST.1".to_string(),
                 strand: Strand::Plus,
@@ -6360,6 +6379,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             acc.to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "NC_TEST.1".to_string(),
                 strand: Strand::Plus,
@@ -6924,6 +6944,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         cdot.add_transcript(
             "NM_REAL.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("REAL".to_string()),
                 contig: "NC_000001.1".to_string(),
                 strand: Strand::Minus,

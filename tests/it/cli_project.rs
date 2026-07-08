@@ -83,6 +83,7 @@ fn fixture() -> VariantProjector<MockProvider> {
     cdot.add_transcript(
         "NM_TEST.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TESTGENE".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,

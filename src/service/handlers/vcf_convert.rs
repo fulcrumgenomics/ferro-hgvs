@@ -902,6 +902,7 @@ mod tests {
         mapper.add_transcript(
             tx_id.to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("TESTGENE".to_string()),
                 contig: contig.to_string(),
                 strand: Strand::Plus,
@@ -928,6 +929,7 @@ mod tests {
         mapper.add_transcript(
             tx_id.to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("TESTGENE".to_string()),
                 contig: contig.to_string(),
                 strand: Strand::Plus,

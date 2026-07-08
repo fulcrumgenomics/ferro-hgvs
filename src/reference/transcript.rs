@@ -333,6 +333,12 @@ pub struct Transcript {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protein_id: Option<String>,
 
+    /// True when the transcript's 5′ CDS is annotated incomplete (Ensembl
+    /// `cds_start_NF`): the ATG start codon is not present, so `c.1`/`p.1` are
+    /// undefined and the coding axis must not be described (HGVS #972).
+    #[serde(default)]
+    pub cds_start_incomplete: bool,
+
     /// Per-exon CIGAR alignment data (from cdot gap info).
     /// Indexed in the same order as `exons`. Used for CIGAR-aware CDS→tx mapping.
     #[serde(skip)]
@@ -362,6 +368,7 @@ impl Clone for Transcript {
             refseq_match: self.refseq_match.clone(),
             ensembl_match: self.ensembl_match.clone(),
             protein_id: self.protein_id.clone(),
+            cds_start_incomplete: self.cds_start_incomplete,
             exon_cigars: self.exon_cigars.clone(),
             // Cache is reset on clone - will be lazily re-initialized
             cached_introns: OnceLock::new(),
@@ -387,6 +394,7 @@ impl PartialEq for Transcript {
             && self.refseq_match == other.refseq_match
             && self.ensembl_match == other.ensembl_match
             && self.protein_id == other.protein_id
+            && self.cds_start_incomplete == other.cds_start_incomplete
             && self.exon_cigars == other.exon_cigars
     }
 }
@@ -432,6 +440,7 @@ impl Transcript {
             refseq_match,
             ensembl_match,
             protein_id: None,
+            cds_start_incomplete: false,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
@@ -988,6 +997,7 @@ mod tests {
 
     fn make_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1014,6 +1024,7 @@ mod tests {
 
     fn make_test_transcript_with_genomic() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.4".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1414,6 +1425,7 @@ mod tests {
 
         // Single exon transcript should have 0 introns
         let single_exon = Transcript {
+            cds_start_incomplete: false,
             id: "NR_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,

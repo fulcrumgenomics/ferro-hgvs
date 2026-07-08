@@ -657,6 +657,7 @@ mod tests {
         let mut db = TranscriptDb::new();
 
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -685,6 +686,7 @@ mod tests {
     /// Build a minimal transcript spanning `[start, end]` on `chrom`.
     fn region_tx(id: &str, chrom: &str, start: u64, end: u64) -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: id.to_string(),
             gene_symbol: Some(id.to_string()),
             strand: Strand::Plus,
@@ -755,6 +757,7 @@ mod tests {
     fn test_transcript_db_cache_roundtrip() {
         let mut db = TranscriptDb::with_build(GenomeBuild::GRCh37);
         db.add(Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Minus,
@@ -839,6 +842,7 @@ mod tests {
         let mut db = TranscriptDb::new();
 
         let tx1 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -859,6 +863,7 @@ mod tests {
         };
 
         let tx2 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000089.4".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -890,6 +895,7 @@ mod tests {
         let mut db = TranscriptDb::new();
 
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -929,6 +935,7 @@ mod tests {
         let mut db = TranscriptDb::new();
 
         let tx_mane = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -949,6 +956,7 @@ mod tests {
         };
 
         let tx_other = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000089.4".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -988,6 +996,7 @@ mod tests {
         let mut db = TranscriptDb::new();
 
         let tx1 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1008,6 +1017,7 @@ mod tests {
         };
 
         let tx2 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000099.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
@@ -1077,6 +1087,7 @@ mod tests {
         let mut db = TranscriptDb::new();
 
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1120,6 +1131,7 @@ mod tests {
         let mut db = TranscriptDb::new();
 
         let tx_plus1 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000100.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
@@ -1140,6 +1152,7 @@ mod tests {
         };
 
         let tx_plus2 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000101.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
@@ -1179,6 +1192,7 @@ mod tests {
 
         // Non-MANE, non-coding transcript
         let tx_noncoding = Transcript {
+            cds_start_incomplete: false,
             id: "NR_000001.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -1200,6 +1214,7 @@ mod tests {
 
         // Coding transcript (preferred over non-coding)
         let tx_coding = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000001.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -1233,6 +1248,7 @@ mod tests {
         let mut db = TranscriptDb::new();
 
         let tx1 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000001.1".to_string(),
             gene_symbol: Some("GENE1".to_string()),
             strand: Strand::Plus,
@@ -1253,6 +1269,7 @@ mod tests {
         };
 
         let tx2 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000002.1".to_string(),
             gene_symbol: Some("GENE2".to_string()),
             strand: Strand::Plus,
@@ -1302,6 +1319,7 @@ mod tests {
 
         // Transcript without gene symbol
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000001.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
@@ -1335,6 +1353,7 @@ mod tests {
         let mut db = TranscriptDb::new();
 
         let tx1 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000001.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
@@ -1355,6 +1374,7 @@ mod tests {
         };
 
         let tx2 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000002.1".to_string(),
             gene_symbol: Some("BRCA1".to_string()),
             strand: Strand::Plus,
@@ -1387,6 +1407,7 @@ mod tests {
 
         // Add transcripts in reverse priority order
         let tx_none = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000003.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -1414,6 +1435,7 @@ mod tests {
 
         // Add MANE Plus Clinical
         let tx_plus = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000002.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -1440,6 +1462,7 @@ mod tests {
 
         // Add MANE Select
         let tx_select = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000001.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,

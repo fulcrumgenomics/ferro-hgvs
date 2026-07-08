@@ -4646,6 +4646,7 @@ mod cigar_cds_mapping {
         // Exon 0: 438bp on transcript (185+3+250), 435bp on genome (185+250)
         // Exon 1: next exon starting after intron
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TEST_CIGAR".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,
@@ -4668,6 +4669,7 @@ mod cigar_cds_mapping {
     /// longer on genome (504+2+123=629) than transcript (504+123=627).
     fn transcript_with_cigar_deletion() -> CdotTranscript {
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TEST_CIGAR_DEL".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,

@@ -367,6 +367,7 @@ fn build_single(
         genome_build,
         mane_status,
         refseq_match,
+        cds_start_incomplete: false,
         ensembl_match,
         protein_id,
         exon_cigars: Vec::new(),

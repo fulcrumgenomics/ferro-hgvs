@@ -107,6 +107,7 @@ mod tests {
 
     fn make_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
@@ -178,6 +179,7 @@ mod tests {
         // Defensive: cds_start == 0 must not underflow. saturating_sub
         // pins the result at 0 instead of wrapping to u64::MAX.
         let tx_zero_cds = Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST_ZERO.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,

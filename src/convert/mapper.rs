@@ -749,6 +749,7 @@ mod tests {
 
     fn make_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -984,6 +985,7 @@ mod tests {
         // Exon 2: tx 11-20, genomic 2000-2009
         // Exon 3: tx 21-30, genomic 3000-3009
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_GENOMIC.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -1014,6 +1016,7 @@ mod tests {
         // Exon 2: tx 11-20, genomic 2009-2000 (reversed)
         // Exon 3: tx 21-30, genomic 1009-1000 (reversed)
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_GENOMIC_MINUS.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Minus,
@@ -1136,6 +1139,7 @@ mod tests {
         // Gap at tx 194
         // Exon 3: tx 195-247 (53 bases)
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_GAPS.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -1266,6 +1270,7 @@ mod tests {
 
     fn make_cigar_insertion_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_INS.1".to_string(),
             gene_symbol: Some("INS".to_string()),
             strand: Strand::Plus,
@@ -1434,6 +1439,7 @@ mod intronic_debug_tests {
         ];
 
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_003742.4".to_string(),
             gene_symbol: Some("ABCB11".to_string()),
             strand: Strand::Minus,

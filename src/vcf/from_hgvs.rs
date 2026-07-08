@@ -1110,6 +1110,7 @@ mod tests {
 
     fn create_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,

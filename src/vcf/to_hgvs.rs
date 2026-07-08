@@ -641,6 +641,7 @@ mod tests {
 
     fn create_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1140,6 +1141,7 @@ mod tests {
     fn test_converter_noncoding_transcript() {
         // Create a non-coding transcript
         let transcript = Transcript {
+            cds_start_incomplete: false,
             id: "NR_000001.1".to_string(),
             gene_symbol: Some("NCRNA".to_string()),
             strand: Strand::Plus,
@@ -1176,6 +1178,7 @@ mod tests {
     fn test_converter_no_genomic_coords() {
         // Create transcript without genomic coordinates
         let transcript = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,

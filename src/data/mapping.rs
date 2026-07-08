@@ -709,6 +709,7 @@ mod tests {
 
         // Simple transcript with 3 exons
         let tx = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TEST".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,
@@ -727,6 +728,7 @@ mod tests {
 
         // Minus strand transcript
         let tx_minus = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("MINUS".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Minus,
@@ -948,6 +950,7 @@ mod tests {
     fn create_cigar_deletion_mapper(strand: Strand) -> CoordinateMapper {
         let mut cdot = CdotMapper::new();
         let tx = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("GAP".to_string()),
             contig: "NC_000001.11".to_string(),
             strand,
@@ -1029,6 +1032,7 @@ mod tests {
     fn create_cigar_insertion_mapper() -> CoordinateMapper {
         let mut cdot = CdotMapper::new();
         let tx = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("INS".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,
@@ -1193,6 +1197,7 @@ mod tests {
         cdot.add_transcript(
             "NM_FIRST.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "NC_000001.11".to_string(),
                 strand: Strand::Plus,
@@ -1218,6 +1223,7 @@ mod tests {
         cdot2.add_transcript(
             "NM_SECOND.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: None,
                 contig: "NC_000001.11".to_string(),
                 strand: Strand::Plus,

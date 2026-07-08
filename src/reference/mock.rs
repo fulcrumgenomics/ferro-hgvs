@@ -241,6 +241,7 @@ impl MockProvider {
             refseq_match: None,
             ensembl_match: None,
             protein_id: None,
+            cds_start_incomplete: false,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
@@ -266,6 +267,7 @@ impl MockProvider {
             refseq_match: None,
             ensembl_match: None,
             protein_id: None,
+            cds_start_incomplete: false,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
@@ -287,6 +289,7 @@ impl MockProvider {
             refseq_match: None,
             ensembl_match: None,
             protein_id: None,
+            cds_start_incomplete: false,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
@@ -314,6 +317,7 @@ impl MockProvider {
             refseq_match: None,
             ensembl_match: None,
             protein_id: None,
+            cds_start_incomplete: false,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
@@ -337,6 +341,7 @@ impl MockProvider {
             refseq_match: None,
             ensembl_match: None,
             protein_id: None,
+            cds_start_incomplete: false,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         });
@@ -829,6 +834,7 @@ mod tests {
             refseq_match: None,
             ensembl_match: None,
             protein_id: None,
+            cds_start_incomplete: false,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         };
