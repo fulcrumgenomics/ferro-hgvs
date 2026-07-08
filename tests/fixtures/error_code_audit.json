@@ -542,6 +542,14 @@
       "spec_section_notes": "Emitted as NormalizationWarning::CanonicalSplitSkipped from apply_canonical_split in src/normalize/mod.rs when ref_bytes.len() != expected_span. Strict mode promotes to FerroError::VariantExceedsReference via Normalizer::normalize; lenient mode emits the warning and preserves input; silent mode preserves without warning. Matches biocommons hgvs which raises HGVSInvalidVariantError. Closes #355."
     },
     {
+      "code": "W5004",
+      "description": "IncompleteCdsStartReference — transcript has a 5′-incomplete CDS (Ensembl cds_start_NF); not an HGVS-recommended reference for c./p. description.",
+      "spec_section": "background/refseq.md (reference sequence requirements for coding/protein description)",
+      "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
+      "status": "registered",
+      "spec_section_notes": "Registered in src/error_handling/registry.rs with ModeBehavior::warn_accept() (#972). No emission site yet — a later task wires c./p. parsing against a cds_start_incomplete transcript (see Transcript::cds_start_incomplete in src/reference/transcript.rs) to reject in strict mode and emit this warning in lenient/silent modes."
+    },
+    {
       "code": "E-LOAD-001",
       "description": "MalformedRecord — a required GFF/GTF column failed to parse; the offending row is dropped.",
       "spec_section": null,
