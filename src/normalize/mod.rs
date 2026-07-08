@@ -5927,14 +5927,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // returns the edit verbatim. Rewrite the degenerate counts, matching
         // mutalyzer:
         //   [0] — zero copies inserted is a no-op → whole-entity identity (`g.=`).
-        //   [1] — a single inserted copy is equivalent to the plain
-        //         `ins<seq>`, which flows through insertion→duplication
-        //         detection below, so rewrite to `Literal` and recurse (a
-        //         single copy of the adjacent reference then becomes `dup`,
-        //         `duplication.md` L17).
-        // Counts >= 2 are a genuine multi-copy repeat, left for the
-        // repeat-tract machinery (out of scope). The rewrite is purely
-        // syntactic on the stated sequence, so it runs before shuffling. See #920.
+        //   [N>=1] — N inserted copies of the unit are equivalent to the plain
+        //         `ins<unit repeated N times>` literal, which the insertion
+        //         path below canonicalizes: 1 copy of the adjacent reference
+        //         becomes `dup` (`insertion_to_duplication`, `duplication.md`
+        //         L17), and >= 2 copies become `[N]` repeat notation merged
+        //         with any abutting reference tract (`insertion_to_repeat`,
+        //         `repeated.md`; e.g. `g.4_5insGT[5]` against an adjacent
+        //         `GT` tract → `g.1_4GT[7]`). Rewrite to the literal and recurse.
+        // The rewrite is purely syntactic on the stated sequence, so it runs
+        // before shuffling; `Literal::bases()` is `Some`, so the recursion
+        // reaches the alt-extraction below without re-entering this
+        // bracketed-count intercept. See #920.
         if let NaEdit::Insertion { sequence } = edit {
             let degenerate = match sequence {
                 InsertedSequence::SequenceRepeat {
@@ -5948,11 +5952,24 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 _ => None,
             };
             if let Some((count, unit)) = degenerate {
-                match count {
-                    0 => return Ok((start, end, NaEdit::whole_entity_identity(), warnings)),
-                    1 => {
+                if count == 0 {
+                    return Ok((start, end, NaEdit::whole_entity_identity(), warnings));
+                }
+                // Materializing the expansion bounds memory: a pathologically
+                // large count (`insGT[1e12]`, or a `u64` that overflows the
+                // capacity product) is left to fall through to the verbatim
+                // pass-through below — the pre-#920 behavior — rather than
+                // allocating gigabytes or panicking. No real or conformance
+                // repeat approaches this cap.
+                const MAX_INS_REPEAT_EXPANSION: usize = 1 << 20; // 1 MiB of bases
+                if let Some(expanded_len) = unit.len().checked_mul(count as usize) {
+                    if expanded_len <= MAX_INS_REPEAT_EXPANSION {
+                        let mut expanded = Vec::with_capacity(expanded_len);
+                        for _ in 0..count {
+                            expanded.extend_from_slice(unit.bases());
+                        }
                         let literal = NaEdit::Insertion {
-                            sequence: InsertedSequence::Literal(unit),
+                            sequence: InsertedSequence::Literal(Sequence::new(expanded)),
                         };
                         let (new_start, new_end, new_edit, mut child_warnings) = self
                             .normalize_na_edit(
@@ -5961,7 +5978,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         warnings.append(&mut child_warnings);
                         return Ok((new_start, new_end, new_edit, warnings));
                     }
-                    _ => {}
                 }
             }
         }
