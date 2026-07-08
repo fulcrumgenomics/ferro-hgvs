@@ -543,11 +543,11 @@
     },
     {
       "code": "W5004",
-      "description": "IncompleteCdsStartReference — transcript has a 5′-incomplete CDS (Ensembl cds_start_NF); not an HGVS-recommended reference for c./p. description.",
+      "description": "IncompleteCdsStartReference — transcript has a 5′-incomplete CDS (Ensembl cds_start_NF); not an HGVS-recommended reference for c./p./r. description.",
       "spec_section": "background/refseq.md (reference sequence requirements for coding/protein description)",
       "spec_url": "https://hgvs-nomenclature.org/stable/background/refseq/",
-      "status": "registered",
-      "spec_section_notes": "Registered in src/error_handling/registry.rs with ModeBehavior::warn_accept() (#972). No emission site yet — a later task wires c./p. parsing against a cds_start_incomplete transcript (see Transcript::cds_start_incomplete in src/reference/transcript.rs) to reject in strict mode and emit this warning in lenient/silent modes."
+      "status": "enforced",
+      "spec_section_notes": "Detected at the top of normalize_cds / normalize_protein / normalize_rna (src/normalize/mod.rs) via a get_transcript lookup on the variant's own transcript accession: when Transcript::cds_start_incomplete is true, the coordinate is passed through UNCHANGED (no re-numbering) in every mode — only whether the NormalizationWarning::IncompleteCdsStartReference warning is pushed is mode-gated (should_warn_incomplete_cds_start() / should_reject_incomplete_cds_start()). Strict mode's should_reject_incomplete_cds_start() promotes the warning to FerroError::InvalidCoordinates in the normalize() wrapper; lenient warns and preserves; silent preserves without a warning. n. is unaffected (normalize_tx never consults this flag). Input-side counterpart to Task 4's projection-side c./p./r. decline (#972)."
     },
     {
       "code": "E-LOAD-001",

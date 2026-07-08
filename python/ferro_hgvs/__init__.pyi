@@ -992,6 +992,7 @@ class ErrorType(IntEnum):
     UnresolvableCentromere = 41
     TranscriptFlankNotDescribable = 42
     IntronicOnBareTranscript = 43
+    IncompleteCdsStartReference = 44
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""

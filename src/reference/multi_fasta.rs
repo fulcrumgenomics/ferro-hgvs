@@ -1380,6 +1380,9 @@ impl MultiFastaProvider {
                 genomic_end: None,
                 protein_id: None,
                 exon_cigars: Vec::new(),
+                // Supplemental CDS metadata (curated GenBank-derived) carries no
+                // cds_start_NF-equivalent annotation.
+                cds_start_incomplete: false,
             }
         } else {
             TranscriptMetadata::default()
@@ -1902,6 +1905,12 @@ struct TranscriptMetadata {
     genomic_end: Option<u64>,
     protein_id: Option<String>,
     exon_cigars: Vec<Option<Vec<crate::data::cdot::CigarOp>>>,
+    /// Mirrors `CdotTranscript::cds_start_incomplete` / `Transcript::
+    /// cds_start_incomplete` (Ensembl `cds_start_NF`, #972). Defaults to
+    /// `false` via `#[derive(Default)]`, which is correct for the
+    /// supplemental-CDS and no-cdot-mapper fallbacks — neither source
+    /// carries this annotation.
+    cds_start_incomplete: bool,
 }
 
 impl MultiFastaProvider {
@@ -2190,6 +2199,7 @@ impl MultiFastaProvider {
                                 genomic_end,
                                 protein_id: tx.protein.clone(),
                                 exon_cigars: tx.exon_cigars.clone(),
+                                cds_start_incomplete: tx.cds_start_incomplete,
                             }
                         }
                     } else if let Some(tx) = (build_hint.is_none())
@@ -2222,6 +2232,7 @@ impl MultiFastaProvider {
                             genomic_end: None,
                             protein_id: None,
                             exon_cigars: Vec::new(),
+                            cds_start_incomplete: tx.cds_start_incomplete,
                         }
                     } else {
                         // Check supplemental CDS for old/superseded transcripts
@@ -2260,7 +2271,7 @@ impl MultiFastaProvider {
                     refseq_match: None,
                     ensembl_match: None,
                     protein_id: meta.protein_id,
-                    cds_start_incomplete: false,
+                    cds_start_incomplete: meta.cds_start_incomplete,
                     exon_cigars: meta.exon_cigars,
                     cached_introns: OnceLock::new(),
                 });

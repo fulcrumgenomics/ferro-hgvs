@@ -650,3 +650,245 @@ fn terminus_input_reports_coding_when_cds_start_is_complete() {
         .to_string();
     assert!(c.contains(":c.pter"), "got c. = {c}");
 }
+
+// =============================================================================
+// Task 5 — INPUT-side c./p./r. over a `cds_start_incomplete` transcript,
+// mode-gated `W5004` (`IncompleteCdsStartReference`).
+//
+// Everything above this section is Task 4: OUTPUT-side, i.e. *projecting*
+// onto c./p./r. is declined regardless of which axis the input arrived on.
+// This section is the complementary INPUT side: the user's OWN `c.`/`p.`/`r.`
+// variant is described directly against a `cds_start_incomplete` transcript
+// (e.g. `ferro normalize 'ENST00000011700.10:c.50A>G'`) — no projection
+// involved at all. `Normalizer::normalize`/`normalize_with_diagnostics` must
+// decline to re-number the coordinate (it cannot be trusted without a
+// confirmed ATG) and gate acceptance by the active error mode:
+//
+// - strict:  reject with a `FerroError` carrying W5004.
+// - lenient: warn (W5004) and pass the coordinate through UNCHANGED.
+// - silent:  pass the coordinate through UNCHANGED, no warning.
+//
+// `n.` over the identical transcript is untouched in every mode — `n.`
+// numbering is transcript-native and does not depend on the CDS start.
+// =============================================================================
+
+const CDS_NF_TX: &str = "NM_CDSNF972.1";
+
+/// A minimal coding transcript for the input-side gate: 9-base CDS
+/// `"ATGCGCTAA"` (Met-Arg-Stop, cds_start=1, cds_end=9, one exon spanning the
+/// whole transcript), `cds_start_incomplete` set per `incomplete`. No genomic
+/// sequence is registered — the gate fires (or, for the `incomplete: false`
+/// guardrail, a plain substitution needs no reference window) before any
+/// genomic bases would be consulted.
+fn cds_start_nf_provider(incomplete: bool) -> MockProvider {
+    let mut provider = MockProvider::new();
+    let mut transcript = Transcript::new(
+        CDS_NF_TX.to_string(),
+        Some("CDSNFGENE972".to_string()),
+        TxStrand::Plus,
+        "ATGCGCTAA".to_string(),
+        Some(1),
+        Some(9),
+        vec![Exon::new(1, 1, 9)],
+        Some("chr1".to_string()),
+        Some(1000),
+        Some(1008),
+        Default::default(),
+        ManeStatus::default(),
+        None,
+        None,
+    );
+    transcript.cds_start_incomplete = incomplete;
+    provider.add_transcript(transcript);
+    provider
+}
+
+/// RED→GREEN, mode 1/3: strict mode rejects a `c.` input against a
+/// `cds_start_NF` transcript with a hard error carrying W5004. Before the
+/// fix this normalized/renumbered naively instead.
+#[test]
+fn strict_mode_rejects_c_input_over_cds_start_nf_transcript() {
+    use ferro_hgvs::{FerroError, NormalizeConfig, Normalizer};
+
+    let normalizer =
+        Normalizer::with_config(cds_start_nf_provider(true), NormalizeConfig::strict());
+    let variant = parse_hgvs(&format!("{CDS_NF_TX}:c.5G>A")).expect("parse");
+    let err = normalizer
+        .normalize(&variant)
+        .expect_err("strict mode must reject c. input over a cds_start_NF transcript");
+    match err {
+        FerroError::InvalidCoordinates { msg } => {
+            assert!(
+                msg.contains("W5004"),
+                "expected the W5004 code in the rejection message, got {msg:?}"
+            );
+        }
+        other => panic!("expected FerroError::InvalidCoordinates (W5004), got {other:?}"),
+    }
+}
+
+/// RED→GREEN, mode 2/3: lenient mode warns (W5004) and returns the `c.`
+/// coordinate UNCHANGED — no re-numbering, since the transcript cannot
+/// support it without a confirmed ATG.
+#[test]
+fn lenient_mode_warns_and_preserves_c_input_over_cds_start_nf_transcript() {
+    use ferro_hgvs::{NormalizeConfig, Normalizer};
+
+    let normalizer =
+        Normalizer::with_config(cds_start_nf_provider(true), NormalizeConfig::lenient());
+    let variant = parse_hgvs(&format!("{CDS_NF_TX}:c.5G>A")).expect("parse");
+    let result = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("lenient mode must accept (only warn), not reject");
+    assert_eq!(
+        format!("{}", result.result),
+        format!("{CDS_NF_TX}:c.5G>A"),
+        "lenient mode must pass the coordinate through UNCHANGED — no re-numbering"
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "INCOMPLETE_CDS_START_REFERENCE"),
+        "expected a W5004 (IncompleteCdsStartReference) warning in lenient mode, got {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>()
+    );
+}
+
+/// RED→GREEN, mode 3/3: silent mode passes the `c.` coordinate through
+/// UNCHANGED with no warning surfaced at all.
+#[test]
+fn silent_mode_accepts_c_input_over_cds_start_nf_transcript_without_warning() {
+    use ferro_hgvs::{NormalizeConfig, Normalizer};
+
+    let normalizer =
+        Normalizer::with_config(cds_start_nf_provider(true), NormalizeConfig::silent());
+    let variant = parse_hgvs(&format!("{CDS_NF_TX}:c.5G>A")).expect("parse");
+    let result = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("silent mode must accept");
+    assert_eq!(
+        format!("{}", result.result),
+        format!("{CDS_NF_TX}:c.5G>A"),
+        "silent mode must pass the coordinate through UNCHANGED"
+    );
+    assert!(
+        !result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "INCOMPLETE_CDS_START_REFERENCE"),
+        "silent mode must not surface a W5004 warning, got {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>()
+    );
+}
+
+/// `n.` over the identical `cds_start_NF` transcript is unaffected in every
+/// mode: `n.` numbering is transcript-native and does not depend on a
+/// confirmed CDS start, unlike `c.`/`p.`/`r.`.
+#[test]
+fn n_input_over_cds_start_nf_transcript_is_unaffected_in_all_modes() {
+    use ferro_hgvs::{NormalizeConfig, Normalizer};
+
+    for config in [
+        NormalizeConfig::strict(),
+        NormalizeConfig::lenient(),
+        NormalizeConfig::silent(),
+    ] {
+        let normalizer = Normalizer::with_config(cds_start_nf_provider(true), config);
+        let variant = parse_hgvs(&format!("{CDS_NF_TX}:n.5G>A")).expect("parse");
+        let normalized = normalizer
+            .normalize(&variant)
+            .expect("n. must not be gated by cds_start_incomplete in any mode");
+        assert_eq!(format!("{}", normalized), format!("{CDS_NF_TX}:n.5G>A"));
+    }
+}
+
+/// `r.` shares `c.`'s CDS-relative numbering, so the normalize surface must
+/// gate it the same way. Strict rejects with W5004; lenient warns and passes
+/// the coordinate through unchanged (mirrors the `c.` gate above, exercising
+/// the `normalize_rna` gate directly rather than only via projection).
+#[test]
+fn strict_and_lenient_gate_r_input_over_cds_start_nf_transcript() {
+    use ferro_hgvs::{FerroError, NormalizeConfig, Normalizer};
+
+    // Strict: hard error carrying W5004.
+    let strict = Normalizer::with_config(cds_start_nf_provider(true), NormalizeConfig::strict());
+    let variant = parse_hgvs(&format!("{CDS_NF_TX}:r.5g>a")).expect("parse");
+    match strict
+        .normalize(&variant)
+        .expect_err("strict mode must reject r. input over a cds_start_NF transcript")
+    {
+        FerroError::InvalidCoordinates { msg } => assert!(
+            msg.contains("W5004"),
+            "expected W5004 in the rejection message, got {msg:?}"
+        ),
+        other => panic!("expected FerroError::InvalidCoordinates (W5004), got {other:?}"),
+    }
+
+    // Lenient: warn (W5004) and pass through unchanged.
+    let lenient = Normalizer::with_config(cds_start_nf_provider(true), NormalizeConfig::lenient());
+    let result = lenient
+        .normalize_with_diagnostics(&variant)
+        .expect("lenient mode must accept (only warn)");
+    assert_eq!(
+        format!("{}", result.result),
+        format!("{CDS_NF_TX}:r.5g>a"),
+        "lenient mode must pass the r. coordinate through UNCHANGED"
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code() == "INCOMPLETE_CDS_START_REFERENCE"),
+        "expected a W5004 warning in lenient mode, got {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>()
+    );
+}
+
+/// Guardrail: the identical fixture with `cds_start_incomplete: false`
+/// normalizes `c.` normally even in strict mode — proves the rejection
+/// above is specific to the flag, not a broken/overly-aggressive normalizer.
+#[test]
+fn strict_mode_accepts_c_input_when_cds_start_is_complete() {
+    use ferro_hgvs::{NormalizeConfig, Normalizer};
+
+    let normalizer =
+        Normalizer::with_config(cds_start_nf_provider(false), NormalizeConfig::strict());
+    let variant = parse_hgvs(&format!("{CDS_NF_TX}:c.5G>A")).expect("parse");
+    let normalized = normalizer
+        .normalize(&variant)
+        .expect("must not reject when cds_start is complete");
+    assert_eq!(format!("{}", normalized), format!("{CDS_NF_TX}:c.5G>A"));
+}
+
+// =============================================================================
+// Real-reference test — ENST00000011700.10 (VPS13D), genuinely `cds_start_NF`
+// (mirrors the `provider()`/`vps13d_coding_variant` helpers above, which back
+// the Task 4 projection-side real-transcript tests).
+// =============================================================================
+
+/// A bare `c.` input against the real, genuinely-`cds_start_NF` VPS13D
+/// transcript must be rejected in strict mode, carrying W5004.
+#[test]
+fn vps13d_strict_mode_rejects_bare_coding_input() {
+    use ferro_hgvs::{FerroError, NormalizeConfig, Normalizer};
+
+    let Some(raw_provider) = provider() else {
+        eprintln!("vps13d_strict_mode_rejects_bare_coding_input: skipping — no manifest");
+        return;
+    };
+    let variant = vps13d_coding_variant(&raw_provider);
+    let normalizer = Normalizer::with_config(ArcProvider(raw_provider), NormalizeConfig::strict());
+    let err = normalizer
+        .normalize(&variant)
+        .expect_err("strict mode must reject c. input over VPS13D (cds_start_NF)");
+    match err {
+        FerroError::InvalidCoordinates { msg } => {
+            assert!(
+                msg.contains("W5004"),
+                "expected the W5004 code in the rejection message, got {msg:?}"
+            );
+        }
+        other => panic!("expected FerroError::InvalidCoordinates (W5004), got {other:?}"),
+    }
+}
