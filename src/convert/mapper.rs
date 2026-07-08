@@ -251,31 +251,13 @@ impl<'a> CoordinateMapper<'a> {
         // Most real transcripts from cdot are contiguous
         let has_gaps = sorted_exons.windows(2).any(|w| w[0].end + 1 != w[1].start);
         if !has_gaps {
-            // No gaps - use simple calculation, adjusted for CIGAR insertions.
-            // This is the inverse of cds_to_tx_exon_aware: subtract the net
-            // CIGAR insertion offset to convert transcript positions back to
-            // CDS positions (which follow genome alignment).
-            let (adj_target, adj_start) = if !self.transcript.exon_cigars.is_empty() {
-                if let (Ok(target_u64), Ok(start_u64)) =
-                    (u64::try_from(target_tx), u64::try_from(start_tx))
-                {
-                    (
-                        self.transcript.cigar_insertion_adjustment(target_u64),
-                        self.transcript.cigar_insertion_adjustment(start_u64),
-                    )
-                } else {
-                    (0, 0)
-                }
-            } else {
-                (0, 0)
-            };
-            let net_adj = adj_target as i64 - adj_start as i64;
-            // For CDS (target >= start), formula is target - start + 1 - net_adj
-            // For 5' UTR (target < start), formula is target - start - net_adj
+            // Inverse of cds_to_tx_exon_aware on the pure-transcript axis: no CIGAR
+            // adjustment (#944 — CDS positions do NOT "follow genome alignment").
+            // target >= start => CDS; target < start => 5' UTR.
             if target_tx >= start_tx {
-                return Ok(target_tx - start_tx + 1 - net_adj);
+                return Ok(target_tx - start_tx + 1);
             } else {
-                return Ok(target_tx - start_tx - net_adj);
+                return Ok(target_tx - start_tx);
             }
         }
 
@@ -1319,6 +1301,19 @@ mod tests {
         assert_eq!(mapper.cds_to_tx(&CdsPos::new(3)).unwrap().base, 3);
         // After the 3bp insertion — must NOT shift by +3 (bug produced 13).
         assert_eq!(mapper.cds_to_tx(&CdsPos::new(10)).unwrap().base, 10);
+    }
+
+    #[test]
+    fn cds_tx_round_trip_across_cigar_insertion() {
+        // tx_to_cds must invert cds_to_tx with no CIGAR adjustment (#944).
+        let tx = make_cigar_insertion_transcript();
+        let mapper = CoordinateMapper::new(&tx);
+        // Round-trip a post-insertion position: c.10 -> tx 10 -> c.10.
+        let tx_pos = mapper.cds_to_tx(&CdsPos::new(10)).unwrap();
+        assert_eq!(tx_pos.base, 10);
+        assert_eq!(mapper.tx_to_cds(&tx_pos).unwrap().base, 10);
+        // Direct n->c: tx 10 -> c.10 (bug produced c.7).
+        assert_eq!(mapper.tx_to_cds(&TxPos::new(10)).unwrap().base, 10);
     }
 }
 
