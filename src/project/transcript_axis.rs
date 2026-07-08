@@ -58,6 +58,7 @@ mod tests {
     /// `n.` coordinates equal plain transcript offsets and are hand-checkable.
     fn make_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,
@@ -161,6 +162,7 @@ mod tests {
         // the c. form (c/n consistency — this test's original #592 intent); after
         // the #944 fix both agree at n.6.
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_CIGAR.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,

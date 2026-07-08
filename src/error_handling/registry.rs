@@ -1528,6 +1528,35 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W5004",
+        CodeInfo {
+            code: "W5004",
+            name: "IncompleteCdsStartReference",
+            summary: "Transcript has a 5\u{2032}-incomplete CDS (cds_start_NF); not an \
+                HGVS-recommended reference for c./p. description.",
+            explanation: "The transcript's 5\u{2032} CDS is annotated incomplete (Ensembl \
+                `cds_start_NF`): the ATG start codon is not present in the transcript record, \
+                so `c.1`/`p.1` are undefined relative to it. Per HGVS recommendations, a \
+                reference sequence used for coding (`c.`) or protein (`p.`) description must \
+                have a complete, defined CDS; a 5\u{2032}-incomplete transcript is not an \
+                HGVS-recommended reference for that purpose. Strict mode rejects `c.`/`p.` \
+                variants against such a transcript; lenient mode emits this warning and \
+                accepts the input unchanged; silent mode accepts without warning. Use the \
+                genomic (`g.`) or non-coding (`n.`) representation instead, which do not \
+                depend on a defined CDS start.",
+            category: CodeCategory::Semantic,
+            bad_examples: &["ENST00000381176.3:c.10A>G (transcript is cds_start_NF)"],
+            good_examples: &[
+                "NC_000001.11:g.94129A>G (genomic representation)",
+                "ENST00000381176.3:n.100A>G (non-coding representation)",
+            ],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/refseq/"),
+            related_codes: &[],
+        },
+    );
+
     // =========================================================================
     // LOADER WARNINGS / ERRORS (E-LOAD-* / W-LOAD-*)
     // =========================================================================
@@ -1881,6 +1910,7 @@ pub fn list_codes_by_category(category: CodeCategory) -> Vec<&'static CodeInfo> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error_handling::codes::ModeAction;
 
     #[test]
     fn test_registry_has_codes() {
@@ -2013,6 +2043,21 @@ mod tests {
         let info = get_code_info("E2005").expect("E2005 registered");
         assert_eq!(info.name, "TranscriptSequenceUnreconstructable");
         assert_eq!(info.category, CodeCategory::Reference);
+    }
+
+    #[test]
+    fn incomplete_cds_start_reference_is_registered() {
+        // #972: W5004 must resolve so `ferro explain W5004` works and Task 5's
+        // c./p.-over-cds_start_NF gating can look up the mode behavior.
+        let info = get_code_info("W5004").expect("W5004 registered");
+        assert_eq!(info.name, "IncompleteCdsStartReference");
+        assert_eq!(info.category, CodeCategory::Semantic);
+
+        let behavior = info.mode_behavior.expect("W5004 has mode_behavior");
+        assert_eq!(behavior, ModeBehavior::warn_accept());
+        assert_eq!(behavior.strict, ModeAction::Reject);
+        assert_eq!(behavior.lenient, ModeAction::WarnAndAccept);
+        assert_eq!(behavior.silent, ModeAction::Accept);
     }
 
     #[test]

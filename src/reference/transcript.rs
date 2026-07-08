@@ -267,6 +267,16 @@ impl std::fmt::Display for ManeStatus {
 /// syntax `..Default::default()`. The Rust pattern avoids the 14-arg
 /// constructor and keeps fixtures stable when new optional fields are
 /// added.
+/// True when a comma-joined GENCODE/Ensembl status-tag string marks the
+/// transcript as 5′-CDS-incomplete (`cds_start_NF`). Matches the exact
+/// comma-separated token, never a bare substring — a longer tag that merely
+/// contains this string must not false-positive. Shared by the cdot loader
+/// (`RawCdotTranscript::from_genome_build`) and the GFF/GTF annotation builder
+/// so the two detection sites cannot drift apart (#972).
+pub(crate) fn tags_mark_cds_start_nf(tags: &str) -> bool {
+    tags.split(',').any(|t| t.trim() == "cds_start_NF")
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Transcript {
     /// Transcript accession (e.g., "NM_000088.3")
@@ -333,6 +343,12 @@ pub struct Transcript {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protein_id: Option<String>,
 
+    /// True when the transcript's 5′ CDS is annotated incomplete (Ensembl
+    /// `cds_start_NF`): the ATG start codon is not present, so `c.1`/`p.1` are
+    /// undefined and the coding axis must not be described (HGVS #972).
+    #[serde(default)]
+    pub cds_start_incomplete: bool,
+
     /// Per-exon CIGAR alignment data (from cdot gap info).
     /// Indexed in the same order as `exons`. Used for CIGAR-aware CDS→tx mapping.
     #[serde(skip)]
@@ -362,6 +378,7 @@ impl Clone for Transcript {
             refseq_match: self.refseq_match.clone(),
             ensembl_match: self.ensembl_match.clone(),
             protein_id: self.protein_id.clone(),
+            cds_start_incomplete: self.cds_start_incomplete,
             exon_cigars: self.exon_cigars.clone(),
             // Cache is reset on clone - will be lazily re-initialized
             cached_introns: OnceLock::new(),
@@ -387,6 +404,7 @@ impl PartialEq for Transcript {
             && self.refseq_match == other.refseq_match
             && self.ensembl_match == other.ensembl_match
             && self.protein_id == other.protein_id
+            && self.cds_start_incomplete == other.cds_start_incomplete
             && self.exon_cigars == other.exon_cigars
     }
 }
@@ -432,6 +450,7 @@ impl Transcript {
             refseq_match,
             ensembl_match,
             protein_id: None,
+            cds_start_incomplete: false,
             exon_cigars: Vec::new(),
             cached_introns: OnceLock::new(),
         }
@@ -988,6 +1007,7 @@ mod tests {
 
     fn make_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1014,6 +1034,7 @@ mod tests {
 
     fn make_test_transcript_with_genomic() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.4".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1414,6 +1435,7 @@ mod tests {
 
         // Single exon transcript should have 0 introns
         let single_exon = Transcript {
+            cds_start_incomplete: false,
             id: "NR_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,

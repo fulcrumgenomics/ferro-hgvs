@@ -73,6 +73,12 @@ pub struct DerivedTxStructure {
     pub gene_name: Option<String>,
     #[serde(default)]
     pub protein: Option<String>,
+    /// Ensembl `cds_start_NF` flag, carried over from the sibling that anchored
+    /// this derivation (#972). `#[serde(default)]` so pre-existing
+    /// `derived_transcript_placements.json` files without this field deserialize
+    /// as `false` — correct for the RefSeq-only derivations produced so far.
+    #[serde(default)]
+    pub cds_start_incomplete: bool,
     /// The sibling accession whose cdot exons anchored the transfer (provenance).
     pub anchored_by: String,
     /// Genome-readback mismatch fraction (~0 for a clean derivation; provenance).
@@ -282,6 +288,7 @@ pub fn derive_transcript_structure(
         exon_cigars: vec![None; exons.len()],
         gene_id: None,
         protein: sibling.protein.clone(),
+        cds_start_incomplete: false,
     };
     let frac = readback_mismatch_fraction(&probe, old_core, genome)?;
     if frac > MAX_MISMATCH_FRACTION {
@@ -302,6 +309,7 @@ pub fn derive_transcript_structure(
         cds_end: old_cds.1,
         gene_name: sibling.gene_name.clone(),
         protein: sibling.protein.clone(),
+        cds_start_incomplete: sibling.cds_start_incomplete,
         anchored_by: sibling_id.to_string(),
         mismatch_fraction: frac,
     })
@@ -327,6 +335,7 @@ mod tests {
                 cds_end: Some(542),
                 gene_name: Some("SDHD".to_string()),
                 protein: Some("NP_002993.1".to_string()),
+                cds_start_incomplete: false,
                 anchored_by: "NM_003002.3".to_string(),
                 mismatch_fraction: 0.0,
             }],
@@ -368,6 +377,7 @@ mod derivation_tests {
             seq: "AAACCCGGGT".to_string() + "TTGG" + "ACGTACGTAC",
         };
         let cdot = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("T".to_string()),
             contig: "NC_TEST.1".to_string(),
             strand: Strand::Plus,
@@ -405,6 +415,21 @@ mod derivation_tests {
         assert_eq!(d.anchored_by, "NM_T.2");
         assert_eq!(d.cds_start, Some(0));
         assert_eq!(d.cds_end, Some(16));
+    }
+
+    /// #972: `cds_start_incomplete` must be carried over from the sibling that
+    /// anchors the derivation, not silently dropped/forced `false`.
+    #[test]
+    fn derives_propagates_cds_start_incomplete_from_sibling() {
+        let (mut cdot, genome, sib_mrna) = sibling_fixture();
+        cdot.cds_start_incomplete = true;
+        let old_mrna = sib_mrna[2..].to_string();
+        let d = derive_transcript_structure("NM_T.1", &old_mrna, "NM_T.2", &cdot, &genome)
+            .expect("clean 5'UTR trim must derive");
+        assert!(
+            d.cds_start_incomplete,
+            "sibling's cds_start_incomplete=true must propagate to the derived structure"
+        );
     }
 
     #[test]
@@ -448,6 +473,7 @@ mod derivation_tests {
             seq: "AAACCCGGGT".to_string() + "TTGG" + "ACGTACGTAC",
         };
         let cdot = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("M".to_string()),
             contig: "NC_TEST.1".to_string(),
             strand: Strand::Minus,
@@ -556,6 +582,7 @@ mod derivation_tests {
             seq: "ACGTACGTACGT".to_string() + "TTGG" + "ACGTACGTACGT",
         };
         let cdot = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("R".to_string()),
             contig: "NC_REP.1".to_string(),
             strand: Strand::Plus,
@@ -587,6 +614,7 @@ mod derivation_tests {
         // Whatever period-aligned offset wins, readback gates it: the derived
         // exons must reconstruct old_core exactly.
         let probe = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: cdot.gene_name.clone(),
             contig: cdot.contig.clone(),
             strand: cdot.strand,

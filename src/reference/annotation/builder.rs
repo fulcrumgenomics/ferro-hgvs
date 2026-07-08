@@ -268,8 +268,9 @@ fn build_single(
         }
     };
 
+    let tag = crate::reference::annotation::feature::attr_get(attrs, "tag").unwrap_or("");
+
     let mane_status = {
-        let tag = crate::reference::annotation::feature::attr_get(attrs, "tag").unwrap_or("");
         let mane = crate::reference::annotation::feature::attr_get(attrs, "MANE")
             .or_else(|| crate::reference::annotation::feature::attr_get(attrs, "mane_status"))
             .unwrap_or("");
@@ -288,6 +289,16 @@ fn build_single(
             ManeStatus::None
         }
     };
+
+    // Ensembl marks a transcript whose 5′ CDS lacks a confirmed ATG start
+    // (no start codon in the annotation) with the `cds_start_NF` tag,
+    // comma-joined alongside other status tags (e.g. `mRNA_start_NF`,
+    // `MANE_Select`). Mirror the cdot detection in
+    // `src/data/cdot.rs::RawCdotTranscript::from_genome_build`: match the
+    // exact comma-separated token, not a bare substring — a substring check
+    // would also match unrelated tags that merely contain this token as part
+    // of a longer string (#972).
+    let cds_start_incomplete = crate::reference::transcript::tags_mark_cds_start_nf(tag);
 
     let refseq_match = crate::reference::annotation::feature::attr_get(attrs, "RefSeq")
         .or_else(|| crate::reference::annotation::feature::attr_get(attrs, "refseq_id"))
@@ -367,6 +378,7 @@ fn build_single(
         genome_build,
         mane_status,
         refseq_match,
+        cds_start_incomplete,
         ensembl_match,
         protein_id,
         exon_cigars: Vec::new(),
@@ -988,6 +1000,58 @@ mod tests {
             txs[0].mane_status,
             crate::reference::transcript::ManeStatus::PlusClinical
         ));
+    }
+
+    /// #972: the `cds_start_NF` tag (Ensembl/GENCODE convention: comma-joined
+    /// alongside other status tags in the GFF3/GTF `tag` attribute, mirroring
+    /// cdot's `tag` field) must set `cds_start_incomplete` so a reference
+    /// built from a GTF/GFF3 via `ferro convert-gff` declines naive `c.`
+    /// arithmetic the same way a cdot-sourced reference does.
+    #[test]
+    fn cds_start_nf_tag_sets_cds_start_incomplete_true() {
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t500\t.\t+\t.\tID=tx1;tag=cds_start_NF,mRNA_start_NF",
+            "chr1\t.\texon\t100\t500\t.\t+\t.\tParent=tx1",
+        ];
+        let (txs, _) = build_db(lines, AnnotationFormat::Gff3);
+        assert!(txs[0].cds_start_incomplete);
+    }
+
+    #[test]
+    fn absent_tag_leaves_cds_start_incomplete_false() {
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t500\t.\t+\t.\tID=tx1",
+            "chr1\t.\texon\t100\t500\t.\t+\t.\tParent=tx1",
+        ];
+        let (txs, _) = build_db(lines, AnnotationFormat::Gff3);
+        assert!(!txs[0].cds_start_incomplete);
+    }
+
+    /// A non-NF tag (here `MANE_Select`, which sets `mane_status`) must not
+    /// also flip `cds_start_incomplete` — the two fields are derived from the
+    /// same `tag` attribute but by independent, token-exact checks.
+    #[test]
+    fn mane_select_tag_leaves_cds_start_incomplete_false() {
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t500\t.\t+\t.\tID=tx1;tag=MANE_Select",
+            "chr1\t.\texon\t100\t500\t.\t+\t.\tParent=tx1",
+        ];
+        let (txs, _) = build_db(lines, AnnotationFormat::Gff3);
+        assert!(!txs[0].cds_start_incomplete);
+    }
+
+    /// Detection must be token-exact (split on `,` then compare the whole
+    /// trimmed token), not a bare substring match — a tag value that merely
+    /// contains `cds_start_NF` as part of a longer token must not match, the
+    /// same contract cdot's `from_genome_build` enforces.
+    #[test]
+    fn cds_start_nf_substring_without_exact_token_leaves_flag_false() {
+        let lines = &[
+            "chr1\t.\tmRNA\t100\t500\t.\t+\t.\tID=tx1;tag=xcds_start_NFx",
+            "chr1\t.\texon\t100\t500\t.\t+\t.\tParent=tx1",
+        ];
+        let (txs, _) = build_db(lines, AnnotationFormat::Gff3);
+        assert!(!txs[0].cds_start_incomplete);
     }
 
     #[test]

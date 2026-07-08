@@ -1472,6 +1472,7 @@ mod tests {
             .collect();
         let tx_len = exon_tx_spans.last().map(|&(_, te)| te).unwrap_or(0);
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: None,
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,

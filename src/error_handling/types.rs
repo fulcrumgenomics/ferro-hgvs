@@ -431,6 +431,26 @@ pub enum ErrorType {
     /// lenient emits W4007 and returns the existing value unchanged; silent
     /// accepts. See #486.
     IntronicOnBareTranscript,
+
+    /// A `c.`, `p.`, or `r.` variant is described against a transcript whose
+    /// 5' CDS is annotated incomplete (Ensembl `cds_start_NF`): no confirmed
+    /// `ATG` initiation codon means `c.1`/`p.1` are undefined relative to it,
+    /// so it is not an HGVS-recommended reference for a coding-axis
+    /// description (`background/refseq.md`). `r.` inherits the same problem
+    /// on a coding transcript because its numbering is CDS-relative,
+    /// identical to `c.` (`project::rna` module doc). Strict mode rejects
+    /// with `FerroError::InvalidCoordinates`; lenient mode emits this
+    /// warning and passes the coordinate through UNCHANGED (no
+    /// re-numbering — the transcript cannot support it); silent mode
+    /// accepts unchanged without a warning. Use the genomic (`g.`) or
+    /// non-coding (`n.`) representation instead. Unlike its `warn_accept()`
+    /// siblings (`VariantExceedsReference`, `UnresolvableCentromere`,
+    /// `TranscriptFlankNotDescribable`), whose warning is emitted
+    /// unconditionally and only the strict-mode promotion is mode-gated,
+    /// this check's warning emission itself is mode-gated so silent mode
+    /// genuinely surfaces nothing. Input-side counterpart to Task 4's
+    /// projection-side decline (#972).
+    IncompleteCdsStartReference,
 }
 
 impl ErrorType {
@@ -480,6 +500,7 @@ impl ErrorType {
             ErrorType::TranscriptFlankNotDescribable => "W4006",
             ErrorType::NonConformantBracketCardinality => "W3026",
             ErrorType::IntronicOnBareTranscript => "W4007",
+            ErrorType::IncompleteCdsStartReference => "W5004",
         }
     }
 
@@ -535,6 +556,7 @@ impl ErrorType {
         ErrorType::UnresolvableCentromere,
         ErrorType::TranscriptFlankNotDescribable,
         ErrorType::IntronicOnBareTranscript,
+        ErrorType::IncompleteCdsStartReference,
     ];
 
     /// Parse a warning code (e.g. `"W3007"`) into its `ErrorType`.
@@ -629,6 +651,9 @@ impl ErrorType {
             ErrorType::IntronicOnBareTranscript => {
                 "intronic position requires a genomic reference sequence (e.g. NG_(NM_))"
             }
+            ErrorType::IncompleteCdsStartReference => {
+                "transcript has an incomplete (unconfirmed ATG) CDS start (cds_start_NF)"
+            }
         }
     }
 
@@ -719,6 +744,10 @@ impl ErrorType {
             // The fix is to supply a genomic reference (NG_(NM_)/NC_(NM_));
             // ferro cannot synthesize one, so this is never auto-corrected.
             ErrorType::IntronicOnBareTranscript => false,
+            // No confirmed ATG means c.1/p.1/r.1 are undefined against this
+            // transcript; there is no coordinate to re-number to. The fix is
+            // to use the genomic (g.) or non-coding (n.) representation.
+            ErrorType::IncompleteCdsStartReference => false,
         }
     }
 
@@ -805,6 +834,10 @@ impl ErrorType {
             ErrorType::IntronicOnBareTranscript => (
                 "NM_004006.2:c.357+1G>A",
                 "NG_012337.1(NM_004006.2):c.357+1G>A",
+            ),
+            ErrorType::IncompleteCdsStartReference => (
+                "ENST00000381176.3:c.10A>G (transcript is cds_start_NF)",
+                "(no auto-correct; use the genomic g. or non-coding n. representation)",
             ),
         }
     }
@@ -1229,6 +1262,7 @@ mod tests {
             ErrorType::TranscriptFlankNotDescribable,
             ErrorType::NonConformantBracketCardinality,
             ErrorType::IntronicOnBareTranscript,
+            ErrorType::IncompleteCdsStartReference,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
         // this match fails to compile until `every_variant` is extended.
@@ -1278,7 +1312,8 @@ mod tests {
                 | ErrorType::UnresolvableCentromere
                 | ErrorType::TranscriptFlankNotDescribable
                 | ErrorType::NonConformantBracketCardinality
-                | ErrorType::IntronicOnBareTranscript => {}
+                | ErrorType::IntronicOnBareTranscript
+                | ErrorType::IncompleteCdsStartReference => {}
             }
             assert!(
                 ErrorType::ALL.contains(&v),

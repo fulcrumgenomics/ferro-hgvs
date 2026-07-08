@@ -29,6 +29,7 @@ fn plus_fixture() -> VariantProjector<MockProvider> {
     cdot.add_transcript(
         "NM_P.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("PGENE".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,
@@ -138,6 +139,7 @@ fn minus_fixture() -> VariantProjector<MockProvider> {
     cdot.add_transcript(
         "NM_M.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("MGENE".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Minus,

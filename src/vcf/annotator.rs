@@ -291,6 +291,7 @@ mod tests {
 
         // Add test transcript - MANE Select
         let tx1 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -315,6 +316,7 @@ mod tests {
 
         // Add test transcript - not MANE
         let tx2 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000089.4".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -565,6 +567,7 @@ mod tests {
         let mut db = TranscriptDb::with_build(GenomeBuild::GRCh38);
 
         let tx1 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000090.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -585,6 +588,7 @@ mod tests {
         };
 
         let tx2 = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000091.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -637,6 +641,7 @@ mod tests {
         let mut db = TranscriptDb::with_build(GenomeBuild::GRCh38);
 
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000090.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -672,6 +677,7 @@ mod tests {
         let mut db = TranscriptDb::with_build(GenomeBuild::GRCh38);
 
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000090.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,

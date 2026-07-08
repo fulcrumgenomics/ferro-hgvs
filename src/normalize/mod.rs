@@ -617,6 +617,20 @@ pub enum NormalizationWarning {
         /// Coordinate system: `"c"` (NM_ coding) or `"n"` (NR_/XR_ non-coding).
         coordinate_system: String,
     },
+
+    /// A `c.`/`p.`/`r.` variant is described against a transcript whose 5'
+    /// CDS is annotated incomplete (`cds_start_NF`): no confirmed `ATG`
+    /// initiation codon means `c.1`/`p.1` are undefined relative to it, so
+    /// it is not an HGVS-recommended reference for a coding-axis
+    /// description. The coordinate is preserved verbatim (no re-numbering).
+    /// Input-side counterpart to Task 4's projection-side decline. Code:
+    /// `INCOMPLETE_CDS_START_REFERENCE` (W5004). See #972.
+    IncompleteCdsStartReference {
+        /// Transcript accession (e.g. `ENST00000011700.10`).
+        accession: String,
+        /// Coordinate system of the input variant: `"c"`, `"p"`, or `"r"`.
+        coordinate_system: String,
+    },
 }
 
 /// True iff any concrete position reachable from `boundary` is intronic —
@@ -710,6 +724,7 @@ impl NormalizationWarning {
             Self::InsertedSequenceExpanded { .. } => "INSERTED_SEQUENCE_EXPANDED",
             Self::PositionPastEnd { .. } => "POSITION_PAST_END",
             Self::IntronicOnBareTranscript { .. } => "INTRONIC_ON_BARE_TRANSCRIPT",
+            Self::IncompleteCdsStartReference { .. } => "INCOMPLETE_CDS_START_REFERENCE",
         }
     }
 
@@ -836,6 +851,16 @@ impl std::fmt::Display for NormalizationWarning {
                      (IntronicOnBareTranscript / W4007 / EINTRONIC)",
                 )
             }
+            Self::IncompleteCdsStartReference {
+                accession,
+                coordinate_system,
+            } => write!(
+                f,
+                "{accession}: transcript has an incomplete (unconfirmed ATG) CDS start \
+                 (cds_start_NF); not an HGVS-recommended reference for {coordinate_system}. \
+                 description — use the genomic (g.) or non-coding (n.) representation instead \
+                 (IncompleteCdsStartReference / W5004)",
+            ),
         }
     }
 }
@@ -1100,6 +1125,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
                              IntronicOnBareTranscript / W4007 / EINTRONIC"
                         )
                     }),
+                }),
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
+        // Strict mode also rejects W5004 IncompleteCdsStartReference: a
+        // `c.`/`p.`/`r.` variant described against a transcript whose 5' CDS
+        // is annotated incomplete (`cds_start_NF`) has no confirmed ATG, so
+        // `c.1`/`p.1`/`r.1` are undefined against it — not an
+        // HGVS-recommended reference for that axis. `normalize_cds` /
+        // `normalize_protein` / `normalize_rna` already decline to
+        // re-number the coordinate (verbatim pass-through) in every mode;
+        // this only promotes the warning to a hard reject in strict mode.
+        // Input-side counterpart to Task 4's projection-side decline (#972).
+        if self.config.should_reject_incomplete_cds_start() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::IncompleteCdsStartReference {
+                    accession,
+                    coordinate_system,
+                } => Some(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "{accession}: transcript has an incomplete (unconfirmed ATG) CDS start \
+                         (cds_start_NF); not an HGVS-recommended reference for \
+                         {coordinate_system}. description — use the genomic (g.) or non-coding \
+                         (n.) representation instead (IncompleteCdsStartReference / W5004)"
+                    ),
                 }),
                 _ => None,
             }) {
@@ -2005,6 +2058,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &CdsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // #972 Task 5: a transcript whose 5' CDS is annotated incomplete
+        // (`cds_start_NF`) has no confirmed ATG, so `c.1` is undefined
+        // against it and it is not an HGVS-recommended `c.` reference
+        // (W5004). Decline to re-number/normalize — pass the input through
+        // verbatim — in EVERY mode; only whether the warning surfaces (and
+        // so whether `normalize()` promotes it to a hard reject) is
+        // mode-gated below. Must run before every other check (bounds,
+        // telomere resolution, `ins[...]` expansion, 3' shuffle, canonical
+        // split) since none of those can be trusted without a confirmed CDS
+        // start. Input-side counterpart to Task 4's projection-side decline.
+        if let Ok(transcript) = self
+            .provider
+            .get_transcript(&variant.accession.transcript_accession())
+        {
+            if transcript.cds_start_incomplete {
+                let mut warnings = Vec::new();
+                if self.config.should_warn_incomplete_cds_start()
+                    || self.config.should_reject_incomplete_cds_start()
+                {
+                    warnings.push(NormalizationWarning::IncompleteCdsStartReference {
+                        accession: variant.accession.transcript_accession(),
+                        coordinate_system: "c".to_string(),
+                    });
+                }
+                return Ok((HV::Cds(variant.clone()), warnings));
+            }
+        }
+
         // Can't normalize variants with unknown edits or positions
         let edit = match variant.loc_edit.edit.inner() {
             Some(e) => e,
@@ -3259,6 +3340,36 @@ impl<P: ReferenceProvider> Normalizer<P> {
         use crate::hgvs::edit::ProteinEdit;
         use crate::hgvs::variant::{LocEdit, ProteinVariant};
 
+        // #972 Task 5: mirrors the `normalize_cds` gate. A `p.` variant
+        // whose underlying transcript has an incomplete (unconfirmed ATG)
+        // 5' CDS start (`cds_start_NF`) has no defined `p.1`, so decline to
+        // validate/re-number — pass through verbatim in every mode — before
+        // even attempting the reference-amino-acid check below (that check
+        // itself assumes a trustworthy p.-numbering). Best-effort: this
+        // resolves the transcript via `accession.transcript_accession()`,
+        // which succeeds for a genomic-context-wrapped coding selector
+        // (`NG_(NM_):p.…`) but not for a bare NP_/XP_ protein accession with
+        // no nucleotide counterpart in the reference data — that shape
+        // simply falls through unchecked, same as other reference-dependent
+        // checks in this module when the transcript can't be resolved.
+        if let Ok(transcript) = self
+            .provider
+            .get_transcript(&variant.accession.transcript_accession())
+        {
+            if transcript.cds_start_incomplete {
+                let mut warnings = Vec::new();
+                if self.config.should_warn_incomplete_cds_start()
+                    || self.config.should_reject_incomplete_cds_start()
+                {
+                    warnings.push(NormalizationWarning::IncompleteCdsStartReference {
+                        accession: variant.accession.transcript_accession(),
+                        coordinate_system: "p".to_string(),
+                    });
+                }
+                return Ok((HV::Protein(variant.clone()), warnings));
+            }
+        }
+
         // Validate reference amino acids if provider has protein data
         if self.provider.has_protein_data() {
             self.validate_protein_reference(variant)?;
@@ -4221,6 +4332,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         use crate::hgvs::interval::RnaInterval;
         use crate::hgvs::variant::{LocEdit, RnaVariant};
+
+        // #972 Task 5: mirrors the `normalize_cds` gate. On a coding
+        // transcript, `r.` numbering is CDS-relative — identical to `c.`
+        // (see `project::rna` module doc) — so it inherits the same
+        // "no confirmed ATG" problem when the transcript's 5' CDS is
+        // annotated incomplete (`cds_start_NF`). A non-coding transcript
+        // never sets `cds_start_incomplete`, so this check is a no-op for
+        // the `n.`-equivalent `r.` case and only fires on a genuinely
+        // CDS-relative `r.` input. Decline to re-number — pass through
+        // verbatim in every mode — before any of the u/T rewrite, con→delins
+        // rewrite, or intronic dispatch below.
+        if let Ok(transcript) = self
+            .provider
+            .get_transcript(&variant.accession.transcript_accession())
+        {
+            if transcript.cds_start_incomplete {
+                let mut warnings = Vec::new();
+                if self.config.should_warn_incomplete_cds_start()
+                    || self.config.should_reject_incomplete_cds_start()
+                {
+                    warnings.push(NormalizationWarning::IncompleteCdsStartReference {
+                        accession: variant.accession.transcript_accession(),
+                        coordinate_system: "r".to_string(),
+                    });
+                }
+                return Ok((HV::Rna(variant.clone()), warnings));
+            }
+        }
 
         // Can't normalize variants with unknown edits or positions
         let edit = match variant.loc_edit.edit.inner() {
@@ -8170,6 +8309,7 @@ mod tests {
         use crate::reference::transcript::{Exon, ManeStatus, Strand};
         let mut provider = MockProvider::new();
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST918.1".to_string(),
             gene_symbol: Some("BND918".to_string()),
             strand: Strand::Plus,
@@ -8253,6 +8393,7 @@ mod tests {
         use crate::reference::transcript::{Exon, ManeStatus, Strand};
         let mut provider = MockProvider::new();
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_TESTCDS.1".to_string(),
             gene_symbol: Some("SPAN918".to_string()),
             strand: Strand::Plus,
@@ -9455,6 +9596,7 @@ mod tests {
 
         // Create transcript with exons that have genomic coordinates (1-based)
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_BOUNDARY.1".to_string(),
             gene_symbol: Some("BOUNDARY".to_string()),
             strand: Strand::Plus,
@@ -9524,6 +9666,7 @@ mod tests {
         provider.add_genomic_sequence("chr1", genomic_seq);
 
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_BOUNDARYM.1".to_string(),
             gene_symbol: Some("BOUNDARY_M".to_string()),
             strand: Strand::Minus,
@@ -9812,6 +9955,7 @@ mod tests {
         provider.add_genomic_sequence("chr1", genomic_seq);
 
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_EXEX.1".to_string(),
             gene_symbol: Some("EXEX".to_string()),
             strand: Strand::Plus,
@@ -9950,6 +10094,7 @@ mod tests {
         }
         provider.add_genomic_sequence("chr1", g);
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_MI.1".to_string(),
             gene_symbol: Some("MI".to_string()),
             strand: Strand::Plus,
@@ -10165,6 +10310,7 @@ mod tests {
         }
 
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_777777.1".to_string(),
             gene_symbol: Some("SHIFTTEST".to_string()),
             strand: Strand::Plus,
@@ -10270,6 +10416,7 @@ mod tests {
         );
 
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_666666.1".to_string(),
             gene_symbol: Some("UTRTEST".to_string()),
             strand: Strand::Plus,
@@ -10336,6 +10483,7 @@ mod tests {
         let seq = "GGGGGGGGGGAATTCCGGGGGGGGGG".to_string(); // c.10=A, c.11=A, c.12=T, c.13=T
 
         provider.add_transcript(crate::reference::transcript::Transcript {
+            cds_start_incomplete: false,
             id: "NM_555555.1".to_string(),
             gene_symbol: Some("DELINSTEST".to_string()),
             strand: Strand::Plus,
@@ -10476,6 +10624,7 @@ mod tests {
         let mut provider = MockProvider::new();
         use crate::reference::transcript::{Exon, Transcript};
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_001566.1".to_string(),
             gene_symbol: Some("NCRNA".to_string()),
             strand: crate::reference::transcript::Strand::Plus,
@@ -10522,6 +10671,7 @@ mod tests {
         let tx_sequence = "A".repeat(200);
 
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NR_038982.1".to_string(),
             gene_symbol: Some("NCRNA_TEST".to_string()),
             strand: Strand::Plus,

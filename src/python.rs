@@ -2512,6 +2512,11 @@ pub enum PyErrorType {
     // transcript reference (NM_ c. / NR_ n., no NG_(…)/NC_(…) context); strict
     // mode rejects, lenient warns (#486).
     IntronicOnBareTranscript = 43,
+    // 44 is W5004 IncompleteCdsStartReference — a c./p./r. variant against a
+    // transcript with an incomplete (unconfirmed ATG) 5' CDS start
+    // (cds_start_NF); strict mode rejects, lenient warns + preserves the
+    // input unchanged, silent preserves without warning (#972).
+    IncompleteCdsStartReference = 44,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -2562,6 +2567,7 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::UnresolvableCentromere => PyErrorType::UnresolvableCentromere,
             ErrorType::TranscriptFlankNotDescribable => PyErrorType::TranscriptFlankNotDescribable,
             ErrorType::IntronicOnBareTranscript => PyErrorType::IntronicOnBareTranscript,
+            ErrorType::IncompleteCdsStartReference => PyErrorType::IncompleteCdsStartReference,
         }
     }
 }
@@ -2614,6 +2620,7 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::UnresolvableCentromere => ErrorType::UnresolvableCentromere,
             PyErrorType::TranscriptFlankNotDescribable => ErrorType::TranscriptFlankNotDescribable,
             PyErrorType::IntronicOnBareTranscript => ErrorType::IntronicOnBareTranscript,
+            PyErrorType::IncompleteCdsStartReference => ErrorType::IncompleteCdsStartReference,
         }
     }
 }

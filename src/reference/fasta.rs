@@ -1119,6 +1119,7 @@ mod tests {
         };
 
         let transcript = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1155,6 +1156,7 @@ mod tests {
         };
 
         let transcript = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1197,6 +1199,7 @@ mod tests {
         };
 
         let transcript = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1238,6 +1241,7 @@ mod tests {
             transcripts: HashMap::new(),
         };
         let transcript = Transcript {
+            cds_start_incomplete: false,
             id: "NM_INV.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,

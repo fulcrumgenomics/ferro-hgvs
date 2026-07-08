@@ -32,6 +32,7 @@ fn fixture() -> (Projector, MockProvider) {
     cdot.add_transcript(
         "NM_TEST.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TESTGENE".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Plus,
@@ -206,6 +207,7 @@ fn projector_noncoding_input_currently_errors_through_existing_path() {
     cdot.add_transcript(
         "NR_NCRNA.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("NCRNA".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Plus,
@@ -308,6 +310,7 @@ fn projector_rejects_transcript_id_mismatch_for_cds_input() {
     cdot.add_transcript(
         "NM_TEST.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TESTGENE".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Plus,
@@ -322,6 +325,7 @@ fn projector_rejects_transcript_id_mismatch_for_cds_input() {
     cdot.add_transcript(
         "NM_OTHER.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("OTHER".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Plus,
@@ -364,6 +368,7 @@ fn projector_accepts_minus_strand_cds_input() {
     cdot.add_transcript(
         "NM_MINUS.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("MINUSGENE".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Minus,

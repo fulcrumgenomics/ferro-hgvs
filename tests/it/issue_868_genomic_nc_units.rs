@@ -43,6 +43,7 @@ fn version_gate_fixture() -> VariantProjector<MockProvider> {
     cdot.add_transcript(
         "NM_000123.2".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("GENE123".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,
@@ -118,6 +119,7 @@ fn polya_fixture() -> VariantProjector<MockProvider> {
     cdot.add_transcript(
         "NM_POLYA.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("POLYAGENE".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,
@@ -213,6 +215,7 @@ fn noncoding_n_position_projects_via_tx_to_genome() {
     cdot.add_transcript(
         "NR_000200.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("NCGENE".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,

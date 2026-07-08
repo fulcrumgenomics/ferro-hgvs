@@ -546,6 +546,7 @@ mod tests {
         let mut db = TranscriptDb::with_build(GenomeBuild::GRCh38);
 
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,

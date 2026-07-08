@@ -70,6 +70,7 @@ mod tests {
 
     fn make_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,

@@ -169,8 +169,15 @@ impl<'a> VcfToHgvsConverter<'a> {
             None
         };
 
-        // If we have a coding transcript, use CDS coordinates
-        if self.transcript.is_coding() {
+        // If we have a coding transcript, use CDS coordinates — UNLESS its CDS
+        // start is incomplete (`cds_start_NF`). Coding `c.` numbering is
+        // CDS-relative and ill-defined without a confirmed start codon, so ferro
+        // declines it (see `ferro project` / `ferro normalize`, #972). Here on
+        // the annotation surface — which has no error-mode plumbing — declining
+        // means falling back to the transcript-native `n.` annotation, which is
+        // always well-defined, rather than emitting a c./p. under a
+        // non-recommended reference (background/refseq.md §RefSeq).
+        if self.transcript.is_coding() && !self.transcript.cds_start_incomplete {
             self.create_cds_annotation(
                 genomic_start,
                 genomic_end,
@@ -641,6 +648,7 @@ mod tests {
 
     fn create_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,
@@ -1137,9 +1145,43 @@ mod tests {
     }
 
     #[test]
+    fn test_converter_cds_start_nf_declines_c_falls_back_to_n() {
+        // A coding transcript flagged cds_start_NF must NOT emit a c. annotation
+        // (CDS-relative numbering is ill-defined without a confirmed start
+        // codon); `ferro annotate` falls back to the transcript-native n. form,
+        // consistent with `ferro project`/`ferro normalize` declining c./p./r.
+        // on such transcripts (#972).
+        let transcript = Transcript {
+            cds_start_incomplete: true,
+            ..create_test_transcript()
+        };
+        let converter = VcfToHgvsConverter::new(&transcript);
+        let vcf = VcfRecord::snv("chr1", 1050, 'A', 'G');
+        let ann = &converter.convert(&vcf).unwrap()[0];
+        assert!(
+            !ann.is_coding,
+            "cds_start_NF coding transcript must not emit a c. annotation"
+        );
+        assert!(
+            ann.hgvs_string().contains(":n."),
+            "must fall back to the n. form, got {:?}",
+            ann.hgvs_string()
+        );
+
+        // Guardrail: the identical transcript with the flag OFF still emits c.
+        let complete = create_test_transcript();
+        let ann_c = &VcfToHgvsConverter::new(&complete).convert(&vcf).unwrap()[0];
+        assert!(
+            ann_c.is_coding,
+            "flag off must still emit the c. annotation — decline is flag-specific"
+        );
+    }
+
+    #[test]
     fn test_converter_noncoding_transcript() {
         // Create a non-coding transcript
         let transcript = Transcript {
+            cds_start_incomplete: false,
             id: "NR_000001.1".to_string(),
             gene_symbol: Some("NCRNA".to_string()),
             strand: Strand::Plus,
@@ -1176,6 +1218,7 @@ mod tests {
     fn test_converter_no_genomic_coords() {
         // Create transcript without genomic coordinates
         let transcript = Transcript {
+            cds_start_incomplete: false,
             id: "NM_000088.3".to_string(),
             gene_symbol: Some("COL1A1".to_string()),
             strand: Strand::Plus,

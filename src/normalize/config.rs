@@ -279,6 +279,27 @@ impl NormalizeConfig {
     pub fn should_reject_transcript_flank(&self) -> bool {
         self.transcript_flank_action().should_reject()
     }
+
+    /// Get the resolved action for `IncompleteCdsStartReference` (W5004) —
+    /// fires when a `c.`/`p.`/`r.` variant is described against a transcript
+    /// whose 5' CDS is annotated incomplete (`cds_start_NF`). See #972 Task 5.
+    pub fn incomplete_cds_start_action(&self) -> ResolvedAction {
+        self.error_config
+            .action_for(ErrorType::IncompleteCdsStartReference)
+    }
+
+    /// Returns true if a `c.`/`p.`/`r.` variant against a `cds_start_NF`
+    /// transcript should be rejected (strict mode default).
+    pub fn should_reject_incomplete_cds_start(&self) -> bool {
+        self.incomplete_cds_start_action().should_reject()
+    }
+
+    /// Returns true if a `c.`/`p.`/`r.` variant against a `cds_start_NF`
+    /// transcript should emit a warning (lenient mode default; silent
+    /// suppresses).
+    pub fn should_warn_incomplete_cds_start(&self) -> bool {
+        self.incomplete_cds_start_action().should_warn()
+    }
 }
 
 #[cfg(test)]

@@ -35,6 +35,7 @@ fn plus_single_exon() -> (Projector, MockProvider) {
     cdot.add_transcript(
         "NM_PLUS1.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("PLUSGENE".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Plus,
@@ -82,6 +83,7 @@ fn minus_single_exon() -> (Projector, MockProvider) {
     cdot.add_transcript(
         "NM_MINUS1.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("MINUSGENE".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Minus,
@@ -131,6 +133,7 @@ fn plus_two_exon() -> (Projector, MockProvider) {
     cdot.add_transcript(
         "NM_PLUS2.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("PLUS2GENE".to_string()),
             contig: "chr2".to_string(),
             strand: Strand::Plus,

@@ -19,6 +19,7 @@ fn poly_a_fixture() -> VariantProjector<MockProvider> {
     cdot.add_transcript(
         "NM_POLY.1".to_string(),
         CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("POLYGENE".to_string()),
             contig: "NC_000001.11".to_string(),
             strand: Strand::Plus,

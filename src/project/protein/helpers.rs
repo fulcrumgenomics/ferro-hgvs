@@ -820,6 +820,7 @@ mod tests {
 
     fn tx(seq: &str, cds_start: u64, cds_end: u64) -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST.1".to_string(),
             gene_symbol: None,
             strand: Strand::Plus,

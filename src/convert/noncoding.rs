@@ -296,6 +296,7 @@ mod tests {
 
     fn make_test_transcript() -> Transcript {
         Transcript {
+            cds_start_incomplete: false,
             id: "NR_TEST.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,
@@ -785,6 +786,7 @@ mod tests {
     fn test_get_intron_number_for_genomic() {
         // Create transcript with genomic coords
         let tx = Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST.1".to_string(),
             gene_symbol: Some("TEST".to_string()),
             strand: Strand::Plus,

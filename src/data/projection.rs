@@ -283,6 +283,7 @@ mod tests {
 
         // Transcript 1 - "MANE Select"
         let tx1 = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TESTGENE".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Plus,
@@ -301,6 +302,7 @@ mod tests {
 
         // Transcript 2 - different isoform
         let tx2 = CdotTranscript {
+            cds_start_incomplete: false,
             gene_name: Some("TESTGENE".to_string()),
             contig: "chr1".to_string(),
             strand: Strand::Plus,

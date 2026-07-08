@@ -3204,11 +3204,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
 
         // Coding/protein/gene metadata: prefer cdot, fall back to the
-        // sequence provider's transcript record.
-        let (is_coding, cdot_protein, gene_symbol) =
+        // sequence provider's transcript record. `cds_start_incomplete` (#972)
+        // rides along the same cdot-first/provider-fallback resolution as
+        // `is_coding` so a bare `c.` input on a `cds_start_NF` transcript is
+        // gated the same way the genome-pivot path is.
+        let (is_coding, cds_start_incomplete, cdot_protein, gene_symbol) =
             match self.projector.mapper().cdot().get_transcript(transcript_id) {
                 Some(t) => (
                     t.cds_start.is_some(),
+                    t.cds_start_incomplete,
                     t.protein.clone(),
                     t.gene_name.clone(),
                 ),
@@ -3216,6 +3220,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     let tx = self.cached_get_transcript_for_variant(normalized, transcript_id)?;
                     (
                         tx.cds_start.is_some(),
+                        tx.cds_start_incomplete,
                         tx.protein_id.clone(),
                         tx.gene_symbol.clone(),
                     )
@@ -3326,9 +3331,21 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             None
         };
 
+        // #972: decline coding/protein on a `cds_start_NF` transcript — see the
+        // genome-pivot path's identical guard for the rationale. `.noncoding`
+        // (derived above from the resolved CDS positions) is unaffected. `rna`
+        // numbering is CDS-relative for a coding transcript (identical to
+        // `c.`, per `project::rna`'s module doc), so it inherits the same
+        // "no confirmed ATG" problem and is gated alongside `coding`/`protein`.
+        let (coding, protein, rna) = if is_coding && cds_start_incomplete {
+            (None, None, None)
+        } else {
+            (Some(normalized.clone()), protein, rna)
+        };
+
         Ok(VariantProjection {
             genomic,
-            coding: Some(normalized.clone()),
+            coding,
             noncoding,
             protein,
             rna,
@@ -3461,15 +3478,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // two transcript stores can disagree (cdot lists a CDS, the provider
         // record doesn't), and reading `is_coding` from a different source than
         // the sibling would silently drop protein where the sibling predicts it.
-        let (is_coding, cdot_protein, gene_symbol_meta) =
+        // `cds_start_incomplete` (#972) rides along the same cdot-first/
+        // provider-fallback resolution as `is_coding`, mirroring `project_coding_direct`.
+        let (is_coding, cds_start_incomplete, cdot_protein, gene_symbol_meta) =
             match self.projector.mapper().cdot().get_transcript(transcript_id) {
                 Some(t) => (
                     t.cds_start.is_some(),
+                    t.cds_start_incomplete,
                     t.protein.clone(),
                     t.gene_name.clone(),
                 ),
                 None => (
                     tx.cds_start.is_some() && tx.cds_end.is_some(),
+                    tx.cds_start_incomplete,
                     tx.protein_id.clone(),
                     tx.gene_symbol.clone(),
                 ),
@@ -3568,9 +3589,25 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // input did not have; re-frame the predicted `r.` from the input so it
         // renders bare (or under the input's parent for an `NG_(NM_)` input).
         let rna = Self::reframe_rna_from_input(rna, normalized);
+
+        // #972: decline coding/protein on a `cds_start_NF` transcript — see the
+        // genome-pivot path's identical guard for the rationale. The `n.`/`r.`
+        // axis reported on `.noncoding` is the *input itself* (transcript-native
+        // numbering, no ATG required) and is unaffected. `.rna`, however, is the
+        // *derived* `r.` prediction built from the synthesized `coding` value a
+        // few lines up — RNA numbering is CDS-relative for a coding transcript
+        // (identical to `c.`, per `project::rna`'s module doc), so that
+        // derived-from-`c.` prediction inherits the same "no confirmed ATG"
+        // problem and is gated alongside `coding`/`protein`.
+        let (coding, protein, rna) = if cds_start_incomplete {
+            (None, None, None)
+        } else {
+            (Some(coding), protein, rna)
+        };
+
         Ok(VariantProjection {
             genomic,
-            coding: Some(coding),
+            coding,
             // The non-coding axis is the input itself.
             noncoding: Some(normalized.clone()),
             protein,
@@ -4047,6 +4084,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     transcript_id,
                     &projected_genome,
                     gene_symbol.clone(),
+                    // #972: gate the poly-A fallback's `coding` echo the same
+                    // way the normal path gates `coding`/`protein`/`rna` below —
+                    // `cdot_tx` is already resolved above, so reuse it rather
+                    // than re-fetching inside the callee.
+                    is_coding && cdot_tx.cds_start_incomplete,
                 ) {
                     return Ok(projection);
                 }
@@ -4257,9 +4299,27 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // rather than dropping the parent and substituting a gene symbol (#693).
         let rna = Self::reframe_rna_from_input(rna, normalized);
 
+        // #972: a transcript with an incomplete 5' CDS (Ensembl `cds_start_NF`)
+        // has no confirmed ATG initiation codon, so `c.1`/`p.1` are undefined —
+        // HGVS does not recommend describing a variant on the coding/protein
+        // axis for such a transcript (only genomic/`n.` positions are
+        // well-defined). `rna` numbering is CDS-relative for a coding
+        // transcript (identical to `c.`, per `project::rna`'s module doc), so
+        // the `r.` prediction derived from `coding` a few lines up inherits the
+        // same problem and is gated alongside `coding`/`protein`. Decline all
+        // three here, after every other axis (including the `noncoding`
+        // derivation above, which legitimately still needs the
+        // internally-computed `coding` value) has already been derived —
+        // `.genomic`/`.noncoding` are untouched.
+        let (coding, protein, rna) = if is_coding && cdot_tx.cds_start_incomplete {
+            (None, None, None)
+        } else {
+            (Some(coding), protein, rna)
+        };
+
         Ok(VariantProjection {
             genomic,
-            coding: Some(coding),
+            coding,
             noncoding,
             protein,
             rna,
@@ -4290,12 +4350,25 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// variant or when the genomic axis cannot be re-anchored into the
     /// parent frame — never stamping a chromosome coordinate under a parent
     /// accession (invalid HGVS).
+    ///
+    /// `cds_start_incomplete` (#972): the caller already knows whether this
+    /// transcript has an incomplete 5' CDS (Ensembl `cds_start_NF`) from the
+    /// `cdot_tx` it resolved before reaching the poly-A short-circuit, so it
+    /// is passed in rather than re-derived here. A `c.*` position is (by
+    /// definition) downstream of the CDS, but the "no confirmed ATG" problem
+    /// is a property of the transcript's coding frame as a whole, not of
+    /// where in it a given position falls — so `coding` (the input's own `c.`
+    /// form, echoed below) is gated to `None` exactly like the three other
+    /// "build coding" sites in this file. `protein`/`rna`/`noncoding` are
+    /// already `None` on this path regardless (a poly-A position has no
+    /// protein consequence and no genomic exon context to predict `r.` from).
     fn polya_multiaxis_projection(
         &self,
         normalized: &HgvsVariant,
         transcript_id: &str,
         projected_genome: &HgvsVariant,
         gene_symbol: Option<String>,
+        cds_start_incomplete: bool,
     ) -> Option<VariantProjection> {
         // The coding axis is the input's own form, rendered bare (no NC_ wrapper),
         // matching how `coding` is reported on the normal path. Only `c.*` (CDS)
@@ -4303,11 +4376,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // `HgvsVariant::Cds`); `n.`/`r.` inputs have no poly-A 3'UTR endpoint and
         // must fall through to the canonical `TranscriptNotOverlapping` decline.
         let coding = match normalized {
-            HgvsVariant::Cds(c) => {
+            HgvsVariant::Cds(c) if !cds_start_incomplete => {
                 let mut c = c.clone();
                 c.accession.genomic_context = None;
-                HgvsVariant::Cds(c)
+                Some(HgvsVariant::Cds(c))
             }
+            HgvsVariant::Cds(_) => None,
             _ => return None,
         };
 
@@ -4324,7 +4398,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         Some(VariantProjection {
             genomic,
-            coding: Some(coding),
+            coding,
             noncoding: None,
             protein: None,
             rna: None,
@@ -4345,28 +4419,55 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// no protein/noncoding/rna axis (a whole-arm marker does not round-trip
     /// through cdot). `genomic` is the already-normalized parent-frame
     /// (NG_/LRG_) coordinate.
+    ///
+    /// #972: this site is reached from the top of `project_single_inner`,
+    /// *before* that function resolves its own `cdot_tx` (the special-terminus
+    /// branch runs ahead of the normal cdot fetch), so — unlike
+    /// `polya_multiaxis_projection`, whose caller already has a `cdot_tx` to
+    /// hand — `cds_start_incomplete` is looked up here directly, cdot-first
+    /// with a provider fallback (the same two-tier lookup
+    /// `project_coding_direct`/`project_noncoding_direct` use). A whole-arm
+    /// terminus is a `c.` (CDS) input, so the same "no confirmed ATG" gate
+    /// applies: `coding` is declined for a `cds_start_NF` transcript exactly
+    /// like the other three "build coding" sites. `gene_symbol` is read
+    /// straight from the input regardless of the gate (mirrors the other
+    /// sites, which report gene metadata independent of whether `coding` is
+    /// declined).
     fn terminus_multiaxis_projection(
         &self,
         normalized: &HgvsVariant,
         transcript_id: &str,
         genomic: HgvsVariant,
     ) -> VariantProjection {
+        let cds_start_incomplete =
+            match self.projector.mapper().cdot().get_transcript(transcript_id) {
+                Some(t) => t.cds_start_incomplete,
+                None => self
+                    .cached_get_transcript_for_variant(normalized, transcript_id)
+                    .map(|tx| tx.cds_start_incomplete)
+                    .unwrap_or(false),
+            };
+
+        let gene_symbol = match normalized {
+            HgvsVariant::Cds(c) => c.gene_symbol.clone(),
+            _ => None,
+        };
         let coding = match normalized {
-            HgvsVariant::Cds(c) => {
+            HgvsVariant::Cds(c) if !cds_start_incomplete => {
                 let mut c = c.clone();
                 c.accession.genomic_context = None;
-                (Some(HgvsVariant::Cds(c.clone())), c.gene_symbol.clone())
+                Some(HgvsVariant::Cds(c))
             }
-            _ => (None, None),
+            _ => None,
         };
         VariantProjection {
             genomic: Some(genomic),
-            coding: coding.0,
+            coding,
             noncoding: None,
             protein: None,
             rna: None,
             transcript_id: transcript_id.to_string(),
-            gene_symbol: coding.1,
+            gene_symbol,
             is_frameshift: false,
             is_intronic: false,
             // A whole-arm terminus is not a canonical UTR position.
@@ -4718,6 +4819,7 @@ mod tests {
         cdot.add_transcript(
             "NM_TEST.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("TESTGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -4736,6 +4838,7 @@ mod tests {
         cdot.add_transcript(
             "NM_NOATG.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("NOATGGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -4753,6 +4856,7 @@ mod tests {
         cdot.add_transcript(
             "NM_DRIFT.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("DRIFTGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -4772,6 +4876,7 @@ mod tests {
         cdot.add_transcript(
             "NM_NOSEQ.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("NOSEQGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -4791,6 +4896,7 @@ mod tests {
         // `ProteinSequenceUnavailable` and the start codon cannot be observed.
         // The CDS coords are otherwise well-formed (matching the cdot copy).
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_NOSEQ.1".to_string(),
             gene_symbol: Some("NOSEQGENE".to_string()),
             strand: TxStrand::Plus,
@@ -4811,6 +4917,7 @@ mod tests {
         });
         // Non-ATG transcript: "CTGCGCTAA" (CTG start), cds_start=1.
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_NOATG.1".to_string(),
             gene_symbol: Some("NOATGGENE".to_string()),
             strand: TxStrand::Plus,
@@ -4833,6 +4940,7 @@ mod tests {
         // recognized near-cognate initiator), cds_start=1. A downstream variant
         // on this must still decline under #780 (the #625 protection).
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_DRIFT.1".to_string(),
             gene_symbol: Some("DRIFTGENE".to_string()),
             strand: TxStrand::Plus,
@@ -4853,6 +4961,7 @@ mod tests {
         });
         // Transcript: sequence "ATGCGCTAA", cds_start=1 (1-based, first base).
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST.1".to_string(),
             gene_symbol: Some("TESTGENE".to_string()),
             strand: TxStrand::Plus,
@@ -4889,6 +4998,7 @@ mod tests {
         cdot.add_transcript(
             "NM_DELINS.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("DELINSGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -4903,6 +5013,7 @@ mod tests {
         cdot.add_transcript(
             "NM_SEP.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("SEPGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -4918,6 +5029,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_DELINS.1".to_string(),
             gene_symbol: Some("DELINSGENE".to_string()),
             strand: TxStrand::Plus,
@@ -4937,6 +5049,7 @@ mod tests {
             cached_introns: OnceLock::new(),
         });
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_SEP.1".to_string(),
             gene_symbol: Some("SEPGENE".to_string()),
             strand: TxStrand::Plus,
@@ -4974,6 +5087,7 @@ mod tests {
         cdot.add_transcript(
             "NM_TEST_MINUS.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("TESTGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Minus,
@@ -4989,6 +5103,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_TEST_MINUS.1".to_string(),
             gene_symbol: Some("TESTGENE".to_string()),
             strand: TxStrand::Minus,
@@ -5023,6 +5138,7 @@ mod tests {
         cdot.add_transcript(
             "NM_TX1.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("GENE1".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -5037,6 +5153,7 @@ mod tests {
         cdot.add_transcript(
             "NM_TX2.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("GENE1".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -5055,6 +5172,7 @@ mod tests {
         let mut provider = MockProvider::new();
         for id in ["NM_TX1.1", "NM_TX2.1"] {
             provider.add_transcript(Transcript {
+                cds_start_incomplete: false,
                 id: id.to_string(),
                 gene_symbol: Some("GENE1".to_string()),
                 strand: TxStrand::Plus,
@@ -5097,6 +5215,7 @@ mod tests {
             cdot.add_transcript(
                 id.to_string(),
                 CdotTranscript {
+                    cds_start_incomplete: false,
                     gene_name: Some("GENE1".to_string()),
                     contig: "chr1".to_string(),
                     strand: ProvStrand::Plus,
@@ -5114,6 +5233,7 @@ mod tests {
         let mut provider = MockProvider::new();
         for id in ["NM_TX1.1", "NM_TX1.2", "XM_TX9.1"] {
             provider.add_transcript(Transcript {
+                cds_start_incomplete: false,
                 id: id.to_string(),
                 gene_symbol: Some("GENE1".to_string()),
                 strand: TxStrand::Plus,
@@ -5151,6 +5271,7 @@ mod tests {
             cdot.add_transcript(
                 id.to_string(),
                 CdotTranscript {
+                    cds_start_incomplete: false,
                     gene_name: Some("GENE1".to_string()),
                     contig: "NC_000001.11".to_string(),
                     strand: ProvStrand::Plus,
@@ -5168,6 +5289,7 @@ mod tests {
         let mut provider = MockProvider::new();
         for id in ["NM_TX1.1", "NM_TX2.1"] {
             provider.add_transcript(Transcript {
+                cds_start_incomplete: false,
                 id: id.to_string(),
                 gene_symbol: Some("GENE1".to_string()),
                 strand: TxStrand::Plus,
@@ -5789,6 +5911,7 @@ mod tests {
         cdot.add_transcript(
             "NM_INTR.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("INTRGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -5804,6 +5927,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_INTR.1".to_string(),
             gene_symbol: Some("INTRGENE".to_string()),
             strand: TxStrand::Plus,
@@ -5888,6 +6012,7 @@ mod tests {
         cdot.add_transcript(
             "NM_GAP644.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("GAPGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -5905,6 +6030,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_GAP644.1".to_string(),
             gene_symbol: Some("GAPGENE".to_string()),
             strand: TxStrand::Plus,
@@ -5978,6 +6104,7 @@ mod tests {
         cdot.add_transcript(
             "NR_GAP644.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("GAPGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -5994,6 +6121,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NR_GAP644.1".to_string(),
             gene_symbol: Some("GAPGENE".to_string()),
             strand: TxStrand::Plus,
@@ -6133,6 +6261,7 @@ mod tests {
         cdot.add_transcript(
             "NM_GAP644M.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("GAPGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Minus,
@@ -6149,6 +6278,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_GAP644M.1".to_string(),
             gene_symbol: Some("GAPGENE".to_string()),
             strand: TxStrand::Minus,
@@ -6305,6 +6435,7 @@ mod tests {
         cdot.add_transcript(
             "NM_CUSTOM.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("CUSTOMGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -6321,6 +6452,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_CUSTOM.1".to_string(),
             gene_symbol: Some("CUSTOMGENE".to_string()),
             strand: TxStrand::Plus,
@@ -6581,6 +6713,7 @@ mod tests {
         cdot.add_transcript(
             "ENST00000000001.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("TESTGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -6596,6 +6729,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "ENST00000000001.1".to_string(),
             gene_symbol: Some("TESTGENE".to_string()),
             strand: TxStrand::Plus,
@@ -6655,6 +6789,7 @@ mod tests {
         cdot.add_transcript(
             tx_id.to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("TESTGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -6670,6 +6805,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: tx_id.to_string(),
             gene_symbol: Some("TESTGENE".to_string()),
             strand: TxStrand::Plus,
@@ -7334,6 +7470,7 @@ mod tests {
             cdot.add_transcript(
                 "NR_TEST.1".to_string(),
                 CdotTranscript {
+                    cds_start_incomplete: false,
                     gene_name: Some("TESTGENE".to_string()),
                     contig: "chr1".to_string(),
                     strand: ProvStrand::Plus,
@@ -7350,6 +7487,7 @@ mod tests {
 
             let mut provider = MockProvider::new();
             provider.add_transcript(Transcript {
+                cds_start_incomplete: false,
                 id: "NR_TEST.1".to_string(),
                 gene_symbol: Some("TESTGENE".to_string()),
                 strand: TxStrand::Plus,
@@ -7596,6 +7734,7 @@ mod tests {
             cdot.add_transcript(
                 "NM_HOMO_MINUS.1".to_string(),
                 CdotTranscript {
+                    cds_start_incomplete: false,
                     gene_name: Some("HOMOGENE".to_string()),
                     contig: "NC_000001.11".to_string(),
                     strand: ProvStrand::Minus,
@@ -7611,6 +7750,7 @@ mod tests {
 
             let mut provider = MockProvider::new();
             provider.add_transcript(Transcript {
+                cds_start_incomplete: false,
                 id: "NM_HOMO_MINUS.1".to_string(),
                 gene_symbol: Some("HOMOGENE".to_string()),
                 strand: TxStrand::Minus,
@@ -8645,6 +8785,7 @@ mod tests {
             cdot.add_transcript(
                 "NM_UTR.1".to_string(),
                 CdotTranscript {
+                    cds_start_incomplete: false,
                     gene_name: Some("UTRGENE".to_string()),
                     contig: "chr1".to_string(),
                     strand: ProvStrand::Plus,
@@ -8660,6 +8801,7 @@ mod tests {
 
             let mut provider = MockProvider::new();
             provider.add_transcript(Transcript {
+                cds_start_incomplete: false,
                 id: "NM_UTR.1".to_string(),
                 gene_symbol: Some("UTRGENE".to_string()),
                 strand: TxStrand::Plus,
@@ -8743,6 +8885,7 @@ mod tests {
             cdot.add_transcript(
                 "NM_POLYA.1".to_string(),
                 CdotTranscript {
+                    cds_start_incomplete: false,
                     gene_name: Some("POLYAGENE".to_string()),
                     contig: "chr1".to_string(),
                     strand: ProvStrand::Plus,
@@ -8762,6 +8905,7 @@ mod tests {
             // tail ("AAA"); cds is c.1..c.6 (tx 3..9), 3'UTR core c.*1..c.*3
             // (tx 9..12), poly-A c.*4..c.*6 (tx 12..15).
             provider.add_transcript(Transcript {
+                cds_start_incomplete: false,
                 id: "NM_POLYA.1".to_string(),
                 gene_symbol: Some("POLYAGENE".to_string()),
                 strand: TxStrand::Plus,
@@ -9443,6 +9587,7 @@ mod tests {
             cdot.add_transcript(
                 "NM_MPOLYA.1".to_string(),
                 CdotTranscript {
+                    cds_start_incomplete: false,
                     gene_name: Some("MPOLYAGENE".to_string()),
                     contig: "chr1".to_string(),
                     strand: ProvStrand::Minus,
@@ -9459,6 +9604,7 @@ mod tests {
             let mut provider = MockProvider::new();
             // 15-base transcript incl. 3-base poly-A tail (tx 12..15).
             provider.add_transcript(Transcript {
+                cds_start_incomplete: false,
                 id: "NM_MPOLYA.1".to_string(),
                 gene_symbol: Some("MPOLYAGENE".to_string()),
                 strand: TxStrand::Minus,
@@ -9811,6 +9957,7 @@ mod tests {
             let projector = Projector::new(cdot);
             let mut provider = MockProvider::new();
             provider.add_transcript(RefTranscript {
+                cds_start_incomplete: false,
                 id: "NM_MB_TEST.1".to_string(),
                 gene_symbol: Some("MBTEST".to_string()),
                 strand: TxStrand::Plus,
@@ -10316,6 +10463,7 @@ mod tests {
             let projector = Projector::new(cdot);
             let mut provider = MockProvider::new();
             let mk = |build: RefGenomeBuild, seq: &str, chrom: &str, gstart: u64| RefTranscript {
+                cds_start_incomplete: false,
                 id: "NM_RNA_DIV.1".to_string(),
                 gene_symbol: Some("RNADIV".to_string()),
                 strand: TxStrand::Plus,
@@ -10547,6 +10695,7 @@ mod tests {
             let projector = Projector::new(cdot);
             let mut provider = MockProvider::new();
             provider.add_transcript(RefTranscript {
+                cds_start_incomplete: false,
                 id: "NM_MB_TEST.1".to_string(),
                 gene_symbol: Some("MBTEST".to_string()),
                 strand: TxStrand::Plus,
@@ -10742,6 +10891,7 @@ mod tests {
             let projector = Projector::new(cdot);
             let mut provider = MockProvider::new();
             provider.add_transcript(RefTranscript {
+                cds_start_incomplete: false,
                 id: "NM_UR_TEST.1".to_string(),
                 gene_symbol: Some("URTEST".to_string()),
                 strand: TxStrand::Plus,
@@ -11716,6 +11866,7 @@ mod tests {
         cdot.add_transcript(
             "NM_UTR5.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("TESTGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -11732,6 +11883,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NM_UTR5.1".to_string(),
             gene_symbol: Some("TESTGENE".to_string()),
             strand: TxStrand::Plus,
@@ -11906,6 +12058,7 @@ mod tests {
         cdot.add_transcript(
             "NR_TEST.1".to_string(),
             CdotTranscript {
+                cds_start_incomplete: false,
                 gene_name: Some("NCGENE".to_string()),
                 contig: "chr1".to_string(),
                 strand: ProvStrand::Plus,
@@ -11921,6 +12074,7 @@ mod tests {
 
         let mut provider = MockProvider::new();
         provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
             id: "NR_TEST.1".to_string(),
             gene_symbol: Some("NCGENE".to_string()),
             strand: TxStrand::Plus,
