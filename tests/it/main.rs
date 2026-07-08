@@ -200,6 +200,7 @@ mod issue_91_protein_three_prime_shift;
 mod issue_920_allele_sub_collapse;
 mod issue_92_protein_delins_to_dup;
 mod issue_92_protein_ins_to_dup;
+mod issue_944_cds_to_tx_transcript_native;
 mod issue_951_circular_normalize_passthrough;
 mod issue_952_protein_consequence_decline;
 mod issue_953_multirepeat_normalization;
