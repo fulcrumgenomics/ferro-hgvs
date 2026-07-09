@@ -14,33 +14,7 @@ use std::path::Path;
 
 use crate::error::FerroError;
 
-/// Category of an arbitration decision
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ArbitrationCategory {
-    /// Ferro output is correct, mutalyzer is wrong
-    FerroCorrect,
-    /// Mutalyzer output is correct, ferro is wrong
-    MutalyzerCorrect,
-    /// Both outputs are equivalent (valid alternative representations)
-    Equivalent,
-    /// Both outputs are incorrect
-    BothIncorrect,
-    /// Unable to determine which is correct
-    Unknown,
-}
-
-impl std::fmt::Display for ArbitrationCategory {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ArbitrationCategory::FerroCorrect => write!(f, "ferro_correct"),
-            ArbitrationCategory::MutalyzerCorrect => write!(f, "mutalyzer_correct"),
-            ArbitrationCategory::Equivalent => write!(f, "equivalent"),
-            ArbitrationCategory::BothIncorrect => write!(f, "both_incorrect"),
-            ArbitrationCategory::Unknown => write!(f, "unknown"),
-        }
-    }
-}
+pub use crate::arbitrate::category::ArbitrationCategory;
 
 /// An arbitration decision for a single variant
 #[derive(Debug, Clone, Serialize, Deserialize)]
