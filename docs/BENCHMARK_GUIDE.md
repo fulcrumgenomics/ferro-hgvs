@@ -29,10 +29,12 @@ This guide walks through running a complete benchmark comparing ferro-hgvs again
 
 | Tool | Type | Language | Speed (local) | Speed (network) | ferro Speedup |
 |------|------|----------|---------------|-----------------|---------------|
-| **ferro-hgvs** | Parser + Normalizer | Rust | ~4M patterns/sec | N/A | N/A |
+| **ferro-hgvs** | Parser + Normalizer | Rust | ~5M patterns/sec | N/A | N/A |
 | **mutalyzer** | Parser + Normalizer | Python | ~20 patterns/sec | ~1 pattern/sec | **20x** |
 | **biocommons/hgvs** | Parser + Normalizer | Python | ~20 patterns/sec | ~0.2 patterns/sec | **100x** |
 | **hgvs-rs** | Parser + Normalizer | Rust | ~2 patterns/sec | ~0.2 patterns/sec | **10x** |
+
+_These are rough order-of-magnitude figures for orientation only. The authoritative, methodology-controlled measured tables — regenerated per release from `data/benchmark/perf_results.json` — live in the [README Performance Comparison](../README.md#performance-comparison)._
 
 ### Versions Used in This Guide
 
