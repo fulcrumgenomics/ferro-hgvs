@@ -3,12 +3,13 @@
 //! This module provides Python bindings for the HGVS parser and normalizer.
 //! Enable with the `python` feature flag.
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyUserWarning, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::backtranslate::{Backtranslator, CodonChange, CodonTable};
@@ -588,11 +589,42 @@ impl PyHgvsVariant {
     }
 }
 
+/// Which reference backend a [`PyNormalizer`] was built from.
+///
+/// Surfaced to Python via `reference_summary()["provider_kind"]` so callers can
+/// tell a limited, no-genomic build (`test_data` / `transcripts_json`) apart
+/// from a full manifest-backed build.
+#[derive(Clone, Copy)]
+enum ProviderKind {
+    /// Built-in test data (`Normalizer()` with no arguments).
+    TestData,
+    /// A `transcripts.json` file (`Normalizer(reference_json=...)`).
+    TranscriptsJson,
+    /// A `ferro prepare` manifest (`Normalizer.from_manifest(...)`).
+    Manifest,
+}
+
+impl ProviderKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            ProviderKind::TestData => "test_data",
+            ProviderKind::TranscriptsJson => "transcripts_json",
+            ProviderKind::Manifest => "manifest",
+        }
+    }
+}
+
+/// Set once the reduced-capability `UserWarning` has been emitted, so it fires
+/// at most once per process regardless of how many limited normalizers are
+/// constructed (#1012 item 1).
+static REDUCED_CAPABILITY_WARNED: AtomicBool = AtomicBool::new(false);
+
 /// HGVS variant normalizer using a reference provider
 #[pyclass(name = "Normalizer")]
 pub struct PyNormalizer {
     provider: PyProvider,
     config: NormalizeConfig,
+    kind: ProviderKind,
 }
 
 #[pymethods]
@@ -606,15 +638,24 @@ impl PyNormalizer {
     ///     direction: Shuffle direction - "3prime" (default) or "5prime"
     #[new]
     #[pyo3(signature = (reference_json=None, direction="3prime"))]
-    fn new(reference_json: Option<&str>, direction: &str) -> PyResult<Self> {
-        let provider = match reference_json {
-            Some(path) => PyProvider::from_json(Path::new(path))?,
-            None => PyProvider::test_data(),
+    fn new(py: Python<'_>, reference_json: Option<&str>, direction: &str) -> PyResult<Self> {
+        let (provider, kind) = match reference_json {
+            Some(path) => (
+                PyProvider::from_json(Path::new(path))?,
+                ProviderKind::TranscriptsJson,
+            ),
+            None => (PyProvider::test_data(), ProviderKind::TestData),
         };
 
         let config = NormalizeConfig::default().with_direction(parse_direction(direction));
 
-        Ok(Self { provider, config })
+        let normalizer = Self {
+            provider,
+            config,
+            kind,
+        };
+        normalizer.warn_if_reduced_capability(py)?;
+        Ok(normalizer)
     }
 
     /// Create a normalizer from a reference manifest written by `ferro prepare`.
@@ -628,10 +669,44 @@ impl PyNormalizer {
     ///     A Normalizer backed by a MultiFastaProvider.
     #[staticmethod]
     #[pyo3(signature = (manifest_path, direction="3prime"))]
-    fn from_manifest(manifest_path: &str, direction: &str) -> PyResult<Self> {
+    fn from_manifest(py: Python<'_>, manifest_path: &str, direction: &str) -> PyResult<Self> {
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
         let config = NormalizeConfig::default().with_direction(parse_direction(direction));
-        Ok(Self { provider, config })
+        let normalizer = Self {
+            provider,
+            config,
+            kind: ProviderKind::Manifest,
+        };
+        normalizer.warn_if_reduced_capability(py)?;
+        Ok(normalizer)
+    }
+
+    /// Return `True` if the backing reference provides genomic sequence data.
+    ///
+    /// A build with no genomic data (`Normalizer()` test data or
+    /// `Normalizer(reference_json=...)`) cannot perform genome-dependent
+    /// normalization; use `Normalizer.from_manifest(...)` for full capability.
+    fn has_genomic_data(&self) -> bool {
+        self.provider.has_genomic_data()
+    }
+
+    /// Return `True` if the backing reference provides protein sequence data.
+    fn has_protein_data(&self) -> bool {
+        self.provider.has_protein_data()
+    }
+
+    /// Summarize the reference backend's capabilities as a dict.
+    ///
+    /// Keys:
+    ///     provider_kind: One of "test_data", "transcripts_json", or "manifest".
+    ///     has_genomic_data: Whether genomic sequences are available.
+    ///     has_protein_data: Whether protein sequences are available.
+    fn reference_summary<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("provider_kind", self.kind.as_str())?;
+        dict.set_item("has_genomic_data", self.provider.has_genomic_data())?;
+        dict.set_item("has_protein_data", self.provider.has_protein_data())?;
+        Ok(dict)
     }
 
     /// Parse an HGVS string
@@ -694,6 +769,43 @@ impl PyNormalizer {
                 .map(PyNormalizationWarning::from)
                 .collect(),
         })
+    }
+}
+
+impl PyNormalizer {
+    /// Emit a one-time `UserWarning` when the backing provider has no genomic
+    /// data, so users silently landing on a reduced-capability build get a
+    /// runtime signal (#1012 item 1). Fires at most once per process; the
+    /// `MockProvider` test-data and `transcripts.json` paths both lack genomic
+    /// data, so both trigger it.
+    fn warn_if_reduced_capability(&self, py: Python<'_>) -> PyResult<()> {
+        if self.provider.has_genomic_data() {
+            return Ok(());
+        }
+        // Only the first limited normalizer in the process warns.
+        if REDUCED_CAPABILITY_WARNED.swap(true, Ordering::Relaxed) {
+            return Ok(());
+        }
+        // Tailor the guidance to how the reference was built. Pointing a
+        // `from_manifest(...)` caller back at `from_manifest(...)` is nonsense,
+        // so a genome-less manifest gets a manifest-specific message; the
+        // test-data and transcripts.json paths point at `from_manifest`.
+        let message = match self.kind {
+            ProviderKind::Manifest => {
+                "Normalizer manifest reference provides no genomic data: \
+                 genome-dependent normalization will be limited. Ensure the \
+                 prepared reference includes a genome FASTA."
+            }
+            ProviderKind::TestData | ProviderKind::TranscriptsJson => {
+                "Normalizer reference lacks genomic data: genome-dependent \
+                 normalization will be limited (built-in test data and \
+                 transcripts.json references carry no genome). Use \
+                 Normalizer.from_manifest(...) for full reference capability."
+            }
+        };
+        let message = std::ffi::CString::new(message)
+            .map_err(|e| PyRuntimeError::new_err(format!("invalid warning message: {e}")))?;
+        PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)
     }
 }
 

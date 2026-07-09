@@ -441,6 +441,28 @@ class Normalizer:
         """
         ...
 
+    def has_genomic_data(self) -> bool:
+        """Return True if the backing reference provides genomic sequence data.
+
+        A build with no genomic data (built-in test data or a transcripts.json
+        reference) cannot perform genome-dependent normalization; use
+        ``Normalizer.from_manifest(...)`` for full capability.
+        """
+        ...
+
+    def has_protein_data(self) -> bool:
+        """Return True if the backing reference provides protein sequence data."""
+        ...
+
+    def reference_summary(self) -> dict[str, Any]:
+        """Summarize the reference backend's capabilities.
+
+        Returns a dict with keys ``provider_kind`` (one of ``"test_data"``,
+        ``"transcripts_json"``, or ``"manifest"``), ``has_genomic_data``, and
+        ``has_protein_data``.
+        """
+        ...
+
     def parse(self, hgvs_string: str) -> HgvsVariant:
         """Parse an HGVS string."""
         ...
