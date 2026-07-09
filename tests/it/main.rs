@@ -208,6 +208,7 @@ mod issue_963_compound_pairing;
 mod issue_972_cds_start_nf_decline;
 mod issue_97_utr_del_position;
 mod issue_98_minus_strand_intronic_orientation;
+mod issue_999_shift_created_adjacency_collapse;
 mod issue_l2_w4001_swapped_positions;
 mod legacy_integration;
 mod lrg_inference_tests;
