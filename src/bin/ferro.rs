@@ -25,7 +25,7 @@ use flate2::read::MultiGzDecoder;
 use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
@@ -292,6 +292,65 @@ enum Commands {
         /// Reference directory (with manifest.json from 'ferro prepare')
         #[arg(long, required = true)]
         reference: PathBuf,
+    },
+
+    /// Arbitrate an HGVS parse/normalize/projection disagreement between
+    /// ferro and another tool (default: Mutalyzer). Reports who is
+    /// spec-compliant.
+    Arbitrate {
+        /// HGVS variant to arbitrate.
+        variant: Option<String>,
+
+        /// Prepared reference directory (required for normalize/projection).
+        #[arg(long, required = true)]
+        reference: PathBuf,
+
+        /// The other tool's output to compare against (skip auto-fetch).
+        #[arg(long)]
+        other_output: Option<String>,
+
+        /// Label for the other tool when --other-output is given.
+        #[arg(long, default_value = "provided")]
+        other_tool: String,
+
+        /// Mutalyzer base URL for auto-fetch.
+        #[arg(long, default_value = "https://mutalyzer.nl")]
+        mutalyzer_url: String,
+
+        /// Output format.
+        #[arg(short = 'f', long, default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+    },
+
+    /// File a GitHub bug report from a completed `ferro arbitrate --format
+    /// json` bundle where ferro was judged wrong. Shows the full issue body
+    /// and requires confirmation before opening a browser.
+    BugReport {
+        /// Path to a `ferro arbitrate --format json` bundle, or `-` to read
+        /// it from stdin. Required in v1 (no standalone fallback).
+        #[arg(long)]
+        from_arbitration: Option<PathBuf>,
+
+        /// Informational category hint (e.g. from the driving skill). The
+        /// bundle's own `category` field is authoritative for the rendered
+        /// report; a mismatch only produces a warning.
+        #[arg(long)]
+        category: Option<String>,
+
+        /// Free-text notes from the reporter, included verbatim in the body.
+        #[arg(long)]
+        notes: Option<String>,
+
+        /// Never open a browser — always print the prefilled URL instead.
+        /// This is also the automatic behavior when `$BROWSER` is unset or
+        /// stdin is not an interactive terminal.
+        #[arg(long)]
+        no_open: bool,
+
+        /// Include ferro version and OS/arch details in the issue body.
+        /// Omitted by default to avoid leaking machine details.
+        #[arg(long)]
+        include_environment: bool,
     },
 
     /// Parse HGVS variants (validation only)
@@ -771,6 +830,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output.as_ref(),
             &format,
             &reference,
+        ),
+        Commands::Arbitrate {
+            variant,
+            reference,
+            other_output,
+            other_tool,
+            mutalyzer_url,
+            format,
+        } => run_arbitrate(
+            variant.as_deref(),
+            &reference,
+            other_output.as_deref(),
+            &other_tool,
+            &mutalyzer_url,
+            &format,
+        ),
+        Commands::BugReport {
+            from_arbitration,
+            category,
+            notes,
+            no_open,
+            include_environment,
+        } => run_bug_report(
+            from_arbitration.as_deref(),
+            category.as_deref(),
+            notes.as_deref(),
+            no_open,
+            include_environment,
         ),
         Commands::Parse {
             variant,
@@ -1720,6 +1807,489 @@ fn run_project(
     } else {
         Ok(())
     }
+}
+
+/// Provider type shared by the arbitrate command's normalizer and projector:
+/// `Arc<MultiFastaProvider>` so both can own a cheap clone of the same
+/// underlying reference (mirrors `run_project`'s provider idiom).
+type ArbitrateProvider = std::sync::Arc<ferro_hgvs::reference::multi_fasta::MultiFastaProvider>;
+
+/// Thin wrapper around a `VariantProjector` so `ferro arbitrate` can implement
+/// `ferro_hgvs::arbitrate::FrameResolver` for it. The orphan rule blocks
+/// implementing that trait directly for `VariantProjector<ArbitrateProvider>`
+/// here: both the trait and the type are defined in the `ferro_hgvs` library
+/// crate, and `src/bin/ferro.rs` is a separate (binary) crate — neither is
+/// local to it. Wrapping the projector in a local newtype makes the impl
+/// legal.
+struct CliFrameResolver(ferro_hgvs::project::VariantProjector<ArbitrateProvider>);
+
+impl ferro_hgvs::arbitrate::FrameResolver for CliFrameResolver {
+    fn resolve(&self, v: &ferro_hgvs::HgvsVariant) -> Result<ferro_hgvs::HgvsVariant, FerroError> {
+        ferro_hgvs::arbitrate::oracle::resolve_frame(v, &self.0)
+    }
+}
+
+/// Obtain the "other tool's" result for `variant`: either the caller-supplied
+/// `--other-output` verbatim, or an auto-fetch against a live Mutalyzer
+/// instance. See the `MutalyzerResult` -> `OtherResult` mapping in the design
+/// spec: a clean normalization maps straight through; an `EINTRONIC` genomic
+/// redirect picks the option whose assembly matches the reference build (or
+/// the first option when the build can't be determined), since that is the
+/// option arbitration should actually compare against; a redirect with no
+/// options, or a parse/network failure, reports `status: "unavailable"` with
+/// no output so the caller falls back to `--other-output`.
+fn fetch_other_result(
+    variant: &str,
+    other_output: Option<&str>,
+    other_tool: &str,
+    mutalyzer_url: &str,
+    parsed: &ferro_hgvs::HgvsVariant,
+    provider: &ArbitrateProvider,
+) -> Result<ferro_hgvs::arbitrate::OtherResult, Box<dyn std::error::Error>> {
+    use ferro_hgvs::arbitrate::OtherResult;
+    use ferro_hgvs::mutalyzer::{MutalyzerClient, MutalyzerStatus};
+
+    if let Some(output) = other_output {
+        return Ok(OtherResult {
+            tool: other_tool.to_string(),
+            status: "ok".to_string(),
+            output: Some(output.to_string()),
+        });
+    }
+
+    let client = MutalyzerClient::new(mutalyzer_url)?;
+    let result = client.normalize(variant)?;
+    Ok(match result.status {
+        MutalyzerStatus::Ok => OtherResult {
+            tool: "mutalyzer".to_string(),
+            status: "ok".to_string(),
+            output: result.normalized,
+        },
+        MutalyzerStatus::GenomicRedirect => {
+            // Prefer the option whose assembly matches the reference build the
+            // input's own accession resolves to; fall back to the first option
+            // when the build can't be determined (e.g. an accession the
+            // reference has no alias data for).
+            let build = parsed
+                .accession()
+                .and_then(|acc| provider.infer_genome_build(acc));
+            let chosen = build
+                .and_then(|b| {
+                    result
+                        .genomic_options
+                        .iter()
+                        .find(|o| o.assembly_id.eq_ignore_ascii_case(b))
+                })
+                .or_else(|| result.genomic_options.first());
+            match chosen {
+                Some(opt) => OtherResult {
+                    tool: "mutalyzer".to_string(),
+                    status: "ok".to_string(),
+                    output: Some(opt.description.clone()),
+                },
+                None => OtherResult {
+                    tool: "mutalyzer".to_string(),
+                    status: "unavailable".to_string(),
+                    output: None,
+                },
+            }
+        }
+        MutalyzerStatus::Unavailable | MutalyzerStatus::ParseError => OtherResult {
+            tool: "mutalyzer".to_string(),
+            status: "unavailable".to_string(),
+            output: None,
+        },
+    })
+}
+
+/// Split the leading accession off an SPDI string (`accession:position:del:ins`).
+fn spdi_accession(spdi: &str) -> Option<&str> {
+    spdi.split(':').next()
+}
+
+/// The unversioned root of an accession (`NM_003002.4` -> `NM_003002`).
+fn accession_root(accession: &str) -> &str {
+    accession.split('.').next().unwrap_or(accession)
+}
+
+/// Render the verdict line: the first line of `--format text` output, and the
+/// only part that branches on `(verdict, compliance, category)` rather than
+/// `verdict` alone. Compliance is meaningful even when `verdict` is
+/// `Equivalent` (see module-level design note in the task brief): a dup-vs-ins
+/// disagreement where the other tool used the spec-forbidden spelling still
+/// reduces to the same edit (`Equivalent`), but ferro's spelling is the one
+/// the spec actually mandates and the other tool's is not (or vice versa).
+fn render_verdict_line(a: &ferro_hgvs::arbitrate::Arbitration) -> String {
+    use ferro_hgvs::arbitrate::{ArbitrationCategory, Compliance, Verdict};
+
+    // Read the tool label from the arbitration result itself (`a.other.tool`)
+    // rather than the raw `--other-tool` CLI flag: on an auto-fetch path the
+    // flag still holds its "provided" default (it only applies to
+    // `--other-output`), while `a.other.tool` is always the tool that
+    // actually produced `a.other.output` (e.g. "mutalyzer").
+    let other_tool = a.other.tool.as_str();
+
+    match (a.verdict, a.compliance, a.category) {
+        (Verdict::Equivalent, Compliance::NotApplicable, _) => {
+            "VERDICT: Equivalent — same variant, both forms are valid spellings.".to_string()
+        }
+        (Verdict::Equivalent, Compliance::Ferro, ArbitrationCategory::FerroCorrect) => format!(
+            "VERDICT: Equivalent — same variant; ferro's form is spec-compliant, {other_tool}'s is not."
+        ),
+        (Verdict::Equivalent, Compliance::Other, ArbitrationCategory::MutalyzerCorrect) => format!(
+            "VERDICT: Equivalent — same variant, but ferro's spelling is NOT spec-compliant — \
+             the spec mandates {other_tool}'s form (ferro notation bug)."
+        ),
+        (Verdict::Equivalent, ..) => {
+            "VERDICT: Equivalent — same variant.".to_string()
+        }
+        (Verdict::Different, ..) => {
+            "VERDICT: Different — these are different edits to the reference; the governing \
+             rule below needs interpretation to say which (if either) is correct."
+                .to_string()
+        }
+        (Verdict::BasisMismatch, ..) => {
+            let ferro_acc = a.ferro_spdi.as_deref().and_then(spdi_accession);
+            let other_acc = a.other_spdi.as_deref().and_then(spdi_accession);
+            match (ferro_acc, other_acc) {
+                (Some(fa), Some(oa))
+                    if fa != oa && accession_root(fa) == accession_root(oa) =>
+                {
+                    format!(
+                        "VERDICT: BasisMismatch — {other_tool} normalized on {oa}, your input \
+                         is {fa} — align versions."
+                    )
+                }
+                (Some(fa), Some(oa)) => format!(
+                    "VERDICT: BasisMismatch — ferro reduced to {fa}, {other_tool} reduced to \
+                     {oa}: no shared reference basis to compare on."
+                ),
+                _ => format!(
+                    "VERDICT: BasisMismatch — ferro and {other_tool} normalized on different \
+                     reference bases."
+                ),
+            }
+        }
+        (Verdict::OtherUnparseable, ..) => format!(
+            "VERDICT: OtherUnparseable — {other_tool}'s output could not be parsed as HGVS."
+        ),
+        (Verdict::FerroParseError, ..) => {
+            "VERDICT: FerroParseError — ferro's own output could not be parsed as HGVS."
+                .to_string()
+        }
+    }
+}
+
+/// Render the full `--format text` body: verdict line, then the governing
+/// spec excerpt (if any), then the supporting facts.
+fn render_arbitration_text(a: &ferro_hgvs::arbitrate::Arbitration) -> String {
+    let mut out = render_verdict_line(a);
+    out.push('\n');
+
+    if !a.spec_citations.is_empty() {
+        out.push_str("\nGoverning spec passage:\n");
+        for c in &a.spec_citations {
+            out.push_str(&format!(
+                "  [{} — {}] {}\n    \"{}\"\n",
+                c.file,
+                c.heading,
+                c.spec_version,
+                c.excerpt.trim()
+            ));
+        }
+    }
+
+    out.push_str("\nFacts:\n");
+    out.push_str(&format!("  input:            {}\n", a.input));
+    if let Some(ferro_output) = &a.ferro_output {
+        out.push_str(&format!("  ferro:            {ferro_output}\n"));
+    }
+    out.push_str(&format!(
+        "  {} [{}]: {}\n",
+        a.other.tool,
+        a.other.status,
+        a.other.output.as_deref().unwrap_or("<none>")
+    ));
+    if a.other.output.is_none() {
+        out.push_str(&format!(
+            "  (no {} output to compare — re-run with \
+             `--other-output '<paste the tool's normalized description>'`)\n",
+            a.other.tool
+        ));
+    }
+    out.push_str(&format!("  category:         {}\n", a.category));
+    out.push_str(&format!("  compliance:       {}\n", a.compliance));
+    if let Some(spdi) = &a.ferro_spdi {
+        out.push_str(&format!("  ferro spdi:       {spdi}\n"));
+    }
+    if let Some(spdi) = &a.other_spdi {
+        out.push_str(&format!("  other spdi:       {spdi}\n"));
+    }
+    out
+}
+
+/// `ferro arbitrate`: adjudicate a parse/normalize/projection disagreement
+/// between ferro and another tool (Mutalyzer by default) for a single HGVS
+/// input. Builds the same provider+projector as `run_project`, computes
+/// ferro's own normalized output, obtains the other tool's output
+/// (`--other-output` or a live Mutalyzer fetch), and calls
+/// `ferro_hgvs::arbitrate::arbitrate` to produce the verdict.
+fn run_arbitrate(
+    variant: Option<&str>,
+    reference: &Path,
+    other_output: Option<&str>,
+    other_tool: &str,
+    mutalyzer_url: &str,
+    format: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ferro_hgvs::arbitrate::arbitrate;
+    use ferro_hgvs::data::cdot::CdotMapper;
+    use ferro_hgvs::data::projection::Projector;
+    use ferro_hgvs::project::VariantProjector;
+    use ferro_hgvs::reference::multi_fasta::MultiFastaProvider;
+    use std::sync::Arc;
+
+    let variant = match variant {
+        Some(v) => v.to_string(),
+        None => {
+            let mut line = String::new();
+            io::stdin().read_line(&mut line)?;
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                return Err(
+                    "no variant provided: pass it as an argument or pipe one line on stdin".into(),
+                );
+            }
+            line
+        }
+    };
+
+    // Build the provider + projector (mirrors run_project's idiom): a
+    // `Box<dyn ReferenceProvider>` isn't `Clone`, and `VariantProjector`
+    // requires `P: Clone`, so build the concrete `MultiFastaProvider`,
+    // extract its owned cdot map, then share it through an `Arc`.
+    let manifest_path = reference.join("manifest.json");
+    let provider = MultiFastaProvider::from_manifest(&manifest_path)?;
+    let cdot = provider
+        .cdot_mapper()
+        .cloned()
+        .unwrap_or_else(CdotMapper::new);
+    let provider: ArbitrateProvider = Arc::new(provider);
+    let projector = VariantProjector::new(Projector::new(cdot), provider.clone());
+    let resolver = CliFrameResolver(projector);
+
+    let parsed = parse_hgvs(&variant)?;
+
+    // Ferro's own normalized output for the input variant.
+    let config = NormalizeConfig::default().with_direction(parse_shuffle_direction("3prime"));
+    let normalizer = Normalizer::with_config(provider.clone(), config);
+    let ferro_output = normalizer.normalize(&parsed).map_err(|e| {
+        format!("ferro failed to normalize {variant}: {e} (arbitration needs ferro's own output)")
+    })?;
+    let ferro_output = ferro_output.to_string();
+
+    let other = fetch_other_result(
+        &variant,
+        other_output,
+        other_tool,
+        mutalyzer_url,
+        &parsed,
+        &provider,
+    )?;
+
+    let arbitration = arbitrate(&variant, &ferro_output, other, &provider, Some(&resolver))?;
+
+    match format {
+        "json" => {
+            println!("{}", serde_json::to_string_pretty(&arbitration)?);
+        }
+        _ => {
+            print!("{}", render_arbitration_text(&arbitration));
+        }
+    }
+
+    Ok(())
+}
+
+/// Drive [`ferro_hgvs::arbitrate::bug_report::BugReport`] from a completed
+/// `ferro arbitrate --format json` bundle to file a GitHub bug report.
+///
+/// Reads the `Arbitration` from `from_arbitration` (`-` = stdin), prints the
+/// full rendered issue body so the user sees exactly what will be
+/// submitted, then either opens a browser (after an explicit `y`/`yes`
+/// confirmation) or prints the prefilled URL. Opening is attempted only when
+/// `--no-open` was not given, `$BROWSER` is set, and stdin is an
+/// interactive terminal — a headless/piped invocation always degrades to
+/// print-only, per the design's "no `$BROWSER` -> print, never error" rule.
+/// An over-length rendered body (`BugReportUrl::OverLength`) is written to a
+/// `bug-report-<slug>.md` file in the system temp dir (never the cwd, to
+/// avoid leaking cwd context) instead of being prefilled.
+fn run_bug_report(
+    from_arbitration: Option<&Path>,
+    category: Option<&str>,
+    notes: Option<&str>,
+    no_open: bool,
+    include_environment: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ferro_hgvs::arbitrate::bug_report::BugReport;
+    use ferro_hgvs::arbitrate::Arbitration;
+
+    let from_arbitration = from_arbitration.ok_or(
+        "ferro bug-report requires --from-arbitration <path|-> in this version \
+         (pipe in `ferro arbitrate --format json` output; there is no standalone fallback yet)",
+    )?;
+
+    let json = if from_arbitration == Path::new("-") {
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf)?;
+        buf
+    } else {
+        std::fs::read_to_string(from_arbitration).map_err(|e| {
+            format!(
+                "failed to read arbitration bundle {}: {e}",
+                from_arbitration.display()
+            )
+        })?
+    };
+    let arbitration: Arbitration = serde_json::from_str(&json).map_err(|e| {
+        format!(
+            "failed to parse arbitration bundle {} as JSON: {e}",
+            from_arbitration.display()
+        )
+    })?;
+
+    // `category` is an informational hint (e.g. from the driving skill); the
+    // bundle's own category is authoritative for the report, so a mismatch
+    // is only a warning, never a hard error.
+    if let Some(cat) = category {
+        let bundle_cat = arbitration.category.to_string();
+        if cat != bundle_cat {
+            eprintln!(
+                "warning: --category {cat} does not match the arbitration bundle's category \
+                 `{bundle_cat}`; the bundle's category is what gets reported"
+            );
+        }
+    }
+
+    let report = BugReport {
+        arbitration: &arbitration,
+        notes,
+        include_environment,
+        ferro_version: env!("CARGO_PKG_VERSION"),
+    };
+
+    println!("{}", report.issue_title());
+    println!();
+    println!("{}", report.issue_body());
+    println!();
+
+    if !should_offer_to_open_browser(no_open) {
+        return emit_bug_report_url(&report, false);
+    }
+
+    print!("Open a browser to file this issue? [y/N] ");
+    io::stdout().flush()?;
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    let answer = answer.trim().to_ascii_lowercase();
+    let confirmed = answer == "y" || answer == "yes";
+    if !confirmed {
+        println!("Not opening a browser.");
+    }
+    emit_bug_report_url(&report, confirmed)
+}
+
+/// Resolve the report's prefilled new-issue URL — writing the over-length
+/// fallback body to a temp-dir file first when the report doesn't fit in a
+/// URL — then either open it in a browser (`try_open`) or just print it.
+/// The URL (and, for the over-length case, the file path) is always
+/// printed, whether or not opening was attempted or succeeded, so the user
+/// has it either way.
+fn emit_bug_report_url(
+    report: &ferro_hgvs::arbitrate::bug_report::BugReport,
+    try_open: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ferro_hgvs::arbitrate::bug_report::BugReportUrl;
+
+    let url = match report.new_issue_url() {
+        BugReportUrl::Url(url) => url,
+        BugReportUrl::OverLength { url, body } => {
+            let path = write_overlength_bug_report(report.arbitration, &body)?;
+            println!(
+                "The full report is too long to prefill in a URL; the full body was written to: {}",
+                path.display()
+            );
+            url
+        }
+    };
+
+    if try_open && try_open_browser(&url) {
+        return Ok(());
+    }
+    if try_open {
+        println!("Could not open a browser automatically; open this URL yourself:");
+    }
+    println!("{url}");
+    Ok(())
+}
+
+/// Whether `run_bug_report` should attempt to open a browser at all: only
+/// when the caller didn't pass `--no-open`, `$BROWSER` is set, and stdin is
+/// an interactive terminal (so a `y`/`yes` confirmation can actually be
+/// answered — a script piping `--from-arbitration -` has already redirected
+/// stdin, so this naturally also skips confirmation in that case).
+fn should_offer_to_open_browser(no_open: bool) -> bool {
+    !no_open && std::env::var_os("BROWSER").is_some() && atty::is(atty::Stream::Stdin)
+}
+
+/// Best-effort browser launch via the platform opener (`open` on macOS,
+/// `xdg-open` elsewhere). Any failure — missing binary, spawn error,
+/// nonzero exit — degrades to `false` rather than propagating an error,
+/// since opening a browser is a convenience, not the primary deliverable
+/// (the caller always also prints the URL).
+fn try_open_browser(url: &str) -> bool {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    matches!(
+        std::process::Command::new(opener).arg(url).status(),
+        Ok(status) if status.success()
+    )
+}
+
+/// Write an over-length bug-report body to `bug-report-<slug>.md` in the
+/// system temp dir (never the cwd, to avoid leaking cwd context), returning
+/// the path written.
+fn write_overlength_bug_report(
+    arbitration: &ferro_hgvs::arbitrate::Arbitration,
+    body: &str,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let slug = slugify(&arbitration.input);
+    let path = std::env::temp_dir().join(format!("bug-report-{slug}.md"));
+    std::fs::write(&path, body)?;
+    Ok(path)
+}
+
+/// Lowercase, filesystem-safe slug: runs of non-alphanumeric characters
+/// collapse to a single `-`, with no leading/trailing `-`.
+fn slugify(s: &str) -> String {
+    let mut slug = String::with_capacity(s.len());
+    let mut last_was_sep = true; // avoid a leading '-'
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+            last_was_sep = false;
+        } else if !last_was_sep {
+            slug.push('-');
+            last_was_sep = true;
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    slug
 }
 
 #[allow(clippy::too_many_arguments)]
