@@ -27,18 +27,12 @@ pub fn translate_cds_to_protein(cds_sequence: &str) -> Option<String> {
     for i in 0..codon_count {
         let start = i * 3;
         let codon_str = &cds_sequence[start..start + 3];
-        if let Some(codon) = Codon::parse(codon_str) {
-            if table.is_stop(&codon) {
-                break; // Stop at stop codon
-            }
-            if let Some(aa) = table.amino_acid_for(&codon) {
-                protein.push(aa.to_one_letter());
-            } else {
-                return None; // Unknown codon
-            }
-        } else {
-            return None; // Invalid nucleotide (e.g., N)
+        let codon = Codon::parse(codon_str)?; // None => invalid nucleotide (e.g., N)
+        if table.is_stop(&codon) {
+            break; // Stop at stop codon
         }
+        let aa = table.amino_acid_for(&codon)?; // None => unknown codon
+        protein.push(aa.to_one_letter());
     }
 
     Some(protein)
