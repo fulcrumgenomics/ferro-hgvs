@@ -2,6 +2,7 @@
 //! disagreements between ferro and another tool. See the design spec
 //! `specs/2026-07-09-hgvs-arbitration-skill-design.md`.
 
+pub mod bug_report;
 pub mod category;
 pub mod oracle;
 pub mod predicates;
@@ -15,14 +16,14 @@ use crate::error::FerroError;
 use crate::hgvs::parser::parse_hgvs;
 use crate::hgvs::variant::HgvsVariant;
 use crate::reference::provider::ReferenceProvider;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// The full arbitration verdict for one input, produced by [`arbitrate`]:
 /// ferro's and the other tool's outputs reduced to a same/different verdict,
 /// a spec-compliance judgment on genuine disagreements, and the SPDI forms of
 /// both outputs for a bug report. See Task 10 (CLI) and Task 11/12
 /// (bug-report) for consumers.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Arbitration {
     /// The original query input (as given to the arbitration, not necessarily
     /// identical to `ferro_output`/`other.output`).
@@ -48,7 +49,7 @@ pub struct Arbitration {
 
 /// Same/different/mismatch verdict from the normalizer-independent oracle,
 /// or a reason the oracle could not even be run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Verdict {
     /// Both outputs denote the same edit to the reference (`SameVariant::Same`).
@@ -68,7 +69,7 @@ pub enum Verdict {
 }
 
 /// Which tool (if either) is spec-compliant for a genuine disagreement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Compliance {
     /// Ferro's output is the spec-compliant one.
@@ -105,7 +106,7 @@ impl std::fmt::Display for Compliance {
 
 /// The other tool's result, as supplied by the caller (e.g. a mutalyzer
 /// invocation recorded by the CLI or a bug-report harness).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OtherResult {
     /// The tool's name (e.g. `"mutalyzer"`).
     pub tool: String,
