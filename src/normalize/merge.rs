@@ -205,6 +205,59 @@ enum GEdit {
     Sub { pos: i64, alt: Base },
     /// `delins` of the inclusive span `[s, e]` with replacement `alt`.
     Delins { s: i64, e: i64, alt: Vec<Base> },
+    /// Tandem duplication of the inclusive span `[s, e]`. Semantically an
+    /// insertion of `ref[s..=e]` at gap `e` (the 3' copy); its alt bases are
+    /// read from the reference window once fetched, so it participates in the
+    /// collapse exactly like an `Ins { gap: e, .. }`.
+    Dup { s: i64, e: i64 },
+}
+
+/// Report whether `variants` contains two or more insertion-like cis members
+/// (`ins` or tandem `dup`) that attach at the **same** reference gap.
+///
+/// Such a pair is order-ambiguous (`[g insA; g insC]` describes `...AC...` or
+/// `...CA...`), so the collapse deliberately refuses it (see the
+/// `seen_insertion_gaps` guard below, issue #487). That refusal keys off the
+/// members' *current* positions, but an independent per-member 3'-shift can
+/// move two originally-same-gap insertions apart — after which a re-collapse
+/// would no longer see the collision and would silently pick an order. Callers
+/// that iterate collapse across shifts (see `normalize_allele`) use this to
+/// detect the ambiguity on the **pre-shift** input and decline the extra
+/// passes, preserving both the #487 refusal and the #180 merge-first invariant.
+///
+/// Conservative: only the head member's axis kind is considered, and any member
+/// that isn't a simple certain `ins`/`dup` on that axis is ignored (it cannot be
+/// half of a same-gap insertion pair).
+pub(crate) fn has_same_gap_insertions(variants: &[HgvsVariant], phase: AllelePhase) -> bool {
+    if phase != AllelePhase::Cis || variants.len() < 2 {
+        return false;
+    }
+    let kind = match &variants[0] {
+        HgvsVariant::Genome(_) => CisKind::Genome,
+        HgvsVariant::Mt(_) => CisKind::Mt,
+        HgvsVariant::Cds(_) => CisKind::Cds,
+        HgvsVariant::Tx(_) => CisKind::Tx,
+        HgvsVariant::Rna(_) => CisKind::Rna,
+        _ => return false,
+    };
+    let mut seen = std::collections::HashSet::new();
+    for v in variants {
+        let Some((_, _, s, e, edit)) = cis_axis_parts(v, kind) else {
+            continue;
+        };
+        let gap = match edit {
+            NaEdit::Insertion { .. } if e == s + 1 => s,
+            NaEdit::Duplication {
+                uncertain_extent: None,
+                ..
+            } => e,
+            _ => continue,
+        };
+        if !seen.insert(gap) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Collapse a contiguous run of *overlapping* cis genomic edits — insertions
@@ -313,7 +366,16 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
                     alt: bases.to_vec(),
                 });
             }
-            // dup / repeat / inversion / identity etc. — not handled here.
+            // A certain, simple tandem duplication is an insertion of its own
+            // reference span at gap `e` (#999/#1000: a per-member 3'-shift can
+            // canonicalise an insertion to a `dup` that lands flush against an
+            // adjacent substitution/deletion). Refuse the uncertain-extent form
+            // (`dup?`, `dup(731_741)`) — its span is not pinned down.
+            NaEdit::Duplication {
+                uncertain_extent: None,
+                ..
+            } => edits.push(GEdit::Dup { s, e }),
+            // repeat / inversion / identity / uncertain dup etc. — not handled.
             _ => return variants,
         }
     }
@@ -322,8 +384,9 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     // replacement (del/sub/delins). This excludes pure-insertion groups (which
     // must stay separate when separated by unchanged bases) and pure-deletion /
     // pure-substitution groups (owned by `merge_consecutive_edits`).
-    let has_ins = edits.iter().any(|e| matches!(e, GEdit::Ins { .. }));
-    let has_repl = edits.iter().any(|e| !matches!(e, GEdit::Ins { .. }));
+    let is_insertion_like = |e: &GEdit| matches!(e, GEdit::Ins { .. } | GEdit::Dup { .. });
+    let has_ins = edits.iter().any(&is_insertion_like);
+    let has_repl = edits.iter().any(|e| !is_insertion_like(e));
     if !has_ins || !has_repl {
         return variants;
     }
@@ -334,7 +397,7 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
         .filter_map(|e| match e {
             GEdit::Del { s, e } | GEdit::Delins { s, e, .. } => Some((*s, *e)),
             GEdit::Sub { pos, .. } => Some((*pos, *pos)),
-            GEdit::Ins { .. } => None,
+            GEdit::Ins { .. } | GEdit::Dup { .. } => None,
         })
         .collect();
     let c_lo = covered.iter().map(|(s, _)| *s).min().unwrap();
@@ -350,26 +413,38 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     // making the collapsed result order-dependent (e.g. `[gap insA; gap insB]`
     // vs the reverse yields `...AB...` vs `...BA...`). Refuse such a group —
     // matches the conservative all-or-nothing philosophy and preserves the
-    // member-order invariance the collapse otherwise guarantees.
+    // member-order invariance the collapse otherwise guarantees. A `Dup { s, e }`
+    // attaches at gap `e` (the 3' copy) and reads its source span `[s, e]`.
     let mut seen_insertion_gaps = std::collections::HashSet::new();
     for e in &edits {
-        if let GEdit::Ins { gap, .. } = e {
-            if *gap < c_lo - 1 || *gap > c_hi {
-                return variants;
-            }
-            if !seen_insertion_gaps.insert(*gap) {
-                return variants;
-            }
+        let gap = match e {
+            GEdit::Ins { gap, .. } => *gap,
+            GEdit::Dup { e, .. } => *e,
+            _ => continue,
+        };
+        if gap < c_lo - 1 || gap > c_hi {
+            return variants;
+        }
+        if !seen_insertion_gaps.insert(gap) {
+            return variants;
         }
     }
 
-    // Window covers the changed interval plus all insertion flanks.
+    // Window covers the changed interval plus all insertion flanks (and, for a
+    // dup, its full duplicated source span so its alt bases can be read).
     let mut w_lo = c_lo;
     let mut w_hi = c_hi;
     for e in &edits {
-        if let GEdit::Ins { gap, .. } = e {
-            w_lo = w_lo.min(*gap);
-            w_hi = w_hi.max(*gap + 1);
+        match e {
+            GEdit::Ins { gap, .. } => {
+                w_lo = w_lo.min(*gap);
+                w_hi = w_hi.max(*gap + 1);
+            }
+            GEdit::Dup { s, e } => {
+                w_lo = w_lo.min(*s);
+                w_hi = w_hi.max(*e + 1);
+            }
+            _ => {}
         }
     }
     if w_lo < 1 {
@@ -451,6 +526,11 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
                 } else {
                     before.extend(bytes);
                 }
+            }
+            GEdit::Dup { s, e } => {
+                // Tandem copy of ref[s..=e] inserted immediately 3' of `e`.
+                let bytes: Vec<u8> = (*s..=*e).map(|p| ref_bytes[idx(p)]).collect();
+                after[idx(*e)].extend(bytes);
             }
         }
     }

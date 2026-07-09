@@ -1557,28 +1557,59 @@ impl<P: ReferenceProvider> Normalizer<P> {
             &allele.variants,
             allele.phase,
         ));
-        // Collapse overlapping cis edits (insertions flanking a deletion/sub at
-        // one locus) into a single delins first; `merge_consecutive_edits` only
-        // handles strictly-consecutive non-overlapping edits (#487).
-        let pre_collapsed = merge::collapse_overlapping_cis_edits(
-            allele.variants.clone(),
-            allele.phase,
-            &self.provider,
-        );
-        let merged_raw =
-            merge::merge_consecutive_edits(pre_collapsed, allele.phase, &self.provider);
-
-        // Issue #160 + #165: any merged delins (or pre-existing delins
-        // that survived merge unchanged) may decompose into a sequence of
-        // higher-priority forms per `general.md:56` — `[..., inv, ...]`
-        // when an inv-eligible sub-span is present (#160) and/or into
-        // separate substitutions when interior positions match the
-        // reference (#165). Run the split per merged variant; the helper
-        // is a no-op for non-Delins variants and for Delins with nothing
-        // to split out. Only applies in cis phase — trans alleles aren't
-        // collapsible in the first place.
-        let merged_split: Vec<HgvsVariant> =
-            if allele.phase == crate::hgvs::variant::AllelePhase::Cis {
+        // Collapse → merge → split → per-member normalize, iterated to a fixed
+        // point. The per-member 3'-shift (inside `normalize_core`) can move an
+        // insertion — or the `dup` it canonicalises to — flush against an
+        // adjacent substitution/deletion. That *shift-created* adjacency is only
+        // visible to `collapse_overlapping_cis_edits`, which runs on its input
+        // members, on the *next* iteration; running a single pass left the two
+        // as separate members (#999) and made `normalize` non-idempotent (#1000).
+        //
+        // Termination: each iteration's collapse/merge either strictly reduces
+        // the member count or the per-member results already equal the input, so
+        // the loop settles in at most a few passes. `max_passes` is a defensive
+        // backstop against pathological oscillation, never the normal exit.
+        //   - collapse: insertions flanking a deletion/sub at one locus → one
+        //     delins; `merge_consecutive_edits` only handles strictly-consecutive
+        //     non-overlapping edits (#487).
+        //   - split (#160 + #165, cis only): a merged/pre-existing delins may
+        //     decompose into higher-priority forms per `general.md:56` —
+        //     `[..., inv, ...]` for an inv-eligible sub-span (#160) and/or into
+        //     separate substitutions where interior positions match the
+        //     reference (#165). The helper is a no-op otherwise.
+        //   - per-member pipeline: the single canonical place where the 3' rule,
+        //     ins→dup canonicalization, ref validation, etc. apply — a merged
+        //     variant is semantically a new variant and goes through the same
+        //     pipeline as any direct input. `normalize()` discards the diagnostic
+        //     `infos` axis, so members use `normalize_core` (skipping the
+        //     per-member `detect_shuffle_infos` cost).
+        let is_cis = allele.phase == crate::hgvs::variant::AllelePhase::Cis;
+        // Iterating collapse across per-member shifts is only sound when the
+        // input has no two insertion-like members at the same gap: those are
+        // order-ambiguous and must not collapse (#487), but a shift can move
+        // them apart and hide the collision from a later collapse. When present,
+        // fall back to the single-pass behavior (collapse-on-raw only), which
+        // still refuses them. This preserves the #180 merge-first invariant.
+        let allow_refixpoint =
+            is_cis && !merge::has_same_gap_insertions(&allele.variants, allele.phase);
+        let max_passes = if allow_refixpoint {
+            allele.variants.len().max(1) + 2
+        } else {
+            1
+        };
+        let mut current = allele.variants.clone();
+        let mut normalized: Vec<HgvsVariant>;
+        let settled_warnings: Vec<NormalizationWarning>;
+        let mut pass = 0;
+        loop {
+            let pre_collapsed = merge::collapse_overlapping_cis_edits(
+                current.clone(),
+                allele.phase,
+                &self.provider,
+            );
+            let merged_raw =
+                merge::merge_consecutive_edits(pre_collapsed, allele.phase, &self.provider);
+            let merged_split: Vec<HgvsVariant> = if is_cis {
                 merged_raw
                     .into_iter()
                     .flat_map(|v| self.canonical_split_for_variant(v))
@@ -1587,19 +1618,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 merged_raw
             };
 
-        // Per-variant pipeline on every merged result. This is the single
-        // canonical place where the 3' rule, ins→dup canonicalization, ref
-        // validation, etc. apply — a merged variant is semantically a new
-        // variant and goes through the same pipeline as any direct input.
-        let mut normalized: Vec<HgvsVariant> = Vec::with_capacity(merged_split.len());
-        for v in merged_split {
-            // `normalize()` discards the diagnostic `infos` axis, so allele
-            // members go through `normalize_core` (skipping the per-member
-            // `detect_shuffle_infos` cost) rather than `normalize_with_diagnostics`.
-            let (result, warnings) = self.normalize_core(&v)?;
-            all_warnings.extend(warnings);
-            normalized.push(result);
+            let mut result: Vec<HgvsVariant> = Vec::with_capacity(merged_split.len());
+            let mut pass_warnings: Vec<NormalizationWarning> = Vec::new();
+            for v in merged_split {
+                let (r, warnings) = self.normalize_core(&v)?;
+                pass_warnings.extend(warnings);
+                result.push(r);
+            }
+
+            pass += 1;
+            // Stable once a full pass leaves the member set unchanged.
+            // `max_passes == 1` (non-cis, or same-gap-ambiguous input) forces the
+            // original single-pass behavior; otherwise iterate until the fixed
+            // point, with `max_passes` as a defensive backstop.
+            if result == current || pass >= max_passes {
+                normalized = result;
+                settled_warnings = pass_warnings;
+                break;
+            }
+            current = result;
         }
+        all_warnings.extend(settled_warnings);
 
         // Overlap detection runs post-shift so collisions caused by the
         // 3' shift surface alongside input-time ones. Overlap *prevention*
