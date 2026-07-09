@@ -83,11 +83,14 @@ pub fn na_edit_type_str(edit: &NaEdit) -> &'static str {
     }
 }
 
-/// Parse a direction string into ShuffleDirection
+/// Parse a direction string into a [`ShuffleDirection`].
 ///
-/// Accepts various common formats:
-/// - 3prime, 3', 3 -> ThreePrime (default)
-/// - 5prime, 5', 5 -> FivePrime
+/// Recognizes only the documented aliases (case-insensitively). Returns `None`
+/// for anything else so callers can reject unrecognized input loudly rather than
+/// silently defaulting (#1016):
+/// - `3prime`, `3'`, `3` -> `Some(ThreePrime)`
+/// - `5prime`, `5'`, `5` -> `Some(FivePrime)`
+/// - anything else -> `None`
 ///
 /// # Examples
 ///
@@ -95,13 +98,15 @@ pub fn na_edit_type_str(edit: &NaEdit) -> &'static str {
 /// use ferro_hgvs::python_helpers::parse_direction;
 /// use ferro_hgvs::ShuffleDirection;
 ///
-/// assert!(matches!(parse_direction("3prime"), ShuffleDirection::ThreePrime));
-/// assert!(matches!(parse_direction("5'"), ShuffleDirection::FivePrime));
+/// assert!(matches!(parse_direction("3prime"), Some(ShuffleDirection::ThreePrime)));
+/// assert!(matches!(parse_direction("5'"), Some(ShuffleDirection::FivePrime)));
+/// assert!(parse_direction("5prim").is_none());
 /// ```
-pub fn parse_direction(direction: &str) -> ShuffleDirection {
+pub fn parse_direction(direction: &str) -> Option<ShuffleDirection> {
     match direction.to_lowercase().as_str() {
-        "5prime" | "5'" | "5" => ShuffleDirection::FivePrime,
-        _ => ShuffleDirection::ThreePrime,
+        "3prime" | "3'" | "3" => Some(ShuffleDirection::ThreePrime),
+        "5prime" | "5'" | "5" => Some(ShuffleDirection::FivePrime),
+        _ => None,
     }
 }
 
@@ -655,43 +660,58 @@ mod tests {
     fn test_parse_direction_three_prime() {
         assert!(matches!(
             parse_direction("3prime"),
-            ShuffleDirection::ThreePrime
+            Some(ShuffleDirection::ThreePrime)
         ));
         assert!(matches!(
             parse_direction("3'"),
-            ShuffleDirection::ThreePrime
+            Some(ShuffleDirection::ThreePrime)
         ));
-        assert!(matches!(parse_direction("3"), ShuffleDirection::ThreePrime));
+        assert!(matches!(
+            parse_direction("3"),
+            Some(ShuffleDirection::ThreePrime)
+        ));
     }
 
     #[test]
     fn test_parse_direction_five_prime() {
         assert!(matches!(
             parse_direction("5prime"),
-            ShuffleDirection::FivePrime
+            Some(ShuffleDirection::FivePrime)
         ));
-        assert!(matches!(parse_direction("5'"), ShuffleDirection::FivePrime));
-        assert!(matches!(parse_direction("5"), ShuffleDirection::FivePrime));
+        assert!(matches!(
+            parse_direction("5'"),
+            Some(ShuffleDirection::FivePrime)
+        ));
+        assert!(matches!(
+            parse_direction("5"),
+            Some(ShuffleDirection::FivePrime)
+        ));
     }
 
     #[test]
-    fn test_parse_direction_default() {
-        assert!(matches!(
-            parse_direction("unknown"),
-            ShuffleDirection::ThreePrime
-        ));
-        assert!(matches!(parse_direction(""), ShuffleDirection::ThreePrime));
+    fn test_parse_direction_unrecognized_is_none() {
+        // Unrecognized spellings must return None so the Python boundary can
+        // reject them rather than silently defaulting to 3' (#1016).
+        assert!(parse_direction("unknown").is_none());
+        assert!(parse_direction("").is_none());
+        assert!(parse_direction("5prim").is_none());
+        assert!(parse_direction("3prine").is_none());
+        assert!(parse_direction("five").is_none());
     }
 
     #[test]
     fn test_parse_direction_case_insensitive() {
         assert!(matches!(
             parse_direction("5PRIME"),
-            ShuffleDirection::FivePrime
+            Some(ShuffleDirection::FivePrime)
         ));
         assert!(matches!(
             parse_direction("5Prime"),
-            ShuffleDirection::FivePrime
+            Some(ShuffleDirection::FivePrime)
+        ));
+        assert!(matches!(
+            parse_direction("3PRIME"),
+            Some(ShuffleDirection::ThreePrime)
         ));
     }
 

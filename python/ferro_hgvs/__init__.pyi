@@ -39,7 +39,8 @@ def normalize(hgvs_string: str, direction: str = "3prime") -> str:
         The normalized HGVS string
 
     Raises:
-        ValueError: If the HGVS string cannot be parsed
+        ValueError: If the HGVS string cannot be parsed, or if ``direction`` is
+            not one of "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive)
         RuntimeError: If normalization fails
 
     Example:
@@ -352,7 +353,15 @@ class HgvsVariant:
         ...
 
     def normalize(self, direction: str = "3prime") -> HgvsVariant:
-        """Normalize this variant."""
+        """Normalize this variant.
+
+        Args:
+            direction: Shuffle direction - "3prime" (default) or "5prime".
+
+        Raises:
+            ValueError: If ``direction`` is not one of
+                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
+        """
         ...
 
     def to_dict(self) -> dict[str, Any]:
@@ -421,6 +430,10 @@ class Normalizer:
         Args:
             reference_json: Optional path to a transcripts.json file
             direction: Shuffle direction - "3prime" (default) or "5prime"
+
+        Raises:
+            ValueError: If ``direction`` is not one of
+                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
         """
         ...
 
@@ -437,6 +450,8 @@ class Normalizer:
             A Normalizer backed by a MultiFastaProvider.
 
         Raises:
+            ValueError: If ``direction`` is not one of
+                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
             RuntimeError: If the manifest cannot be loaded.
         """
         ...
@@ -1645,6 +1660,10 @@ class VariantProjector:
                 aliases "hg19"/"hg38") for build-agnostic inputs. A bare NG_/LRG_
                 input carries no build; this fills one in. An input whose
                 accession already encodes a build (NC_*.10/.11) keeps it.
+
+        Raises:
+            ValueError: If ``direction`` is not one of
+                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
         """
         ...
 
@@ -1664,6 +1683,11 @@ class VariantProjector:
 
         Returns:
             A VariantProjector backed by MultiFastaProvider with cdot data.
+
+        Raises:
+            ValueError: If ``direction`` is not one of
+                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
+            RuntimeError: If the manifest cannot be loaded.
         """
         ...
 
