@@ -74,6 +74,10 @@ pub enum ErrorCode {
     UnsupportedVariant = 4002,
     /// Unsupported projection between coordinate systems
     UnsupportedProjection = 4003,
+    /// A genome-requiring normalization step could not run because the
+    /// reference carries no genomic data, and strict mode rejects the
+    /// resulting reduced-capability (degraded) result.
+    ReducedReferenceCapability = 4004,
 
     // Conversion errors (E5xxx)
     /// Coordinate conversion failed
@@ -150,6 +154,9 @@ impl ErrorCode {
             ErrorCode::IntronicVariant => "intronic variant not supported",
             ErrorCode::UnsupportedVariant => "unsupported variant type",
             ErrorCode::UnsupportedProjection => "unsupported projection between coordinate systems",
+            ErrorCode::ReducedReferenceCapability => {
+                "reference lacks genomic data for full normalization (strict mode)"
+            }
             ErrorCode::ConversionFailed => "coordinate conversion failed",
             ErrorCode::NoOverlappingTranscript => "no overlapping transcript",
             ErrorCode::IoError => "file I/O error",
@@ -418,6 +425,19 @@ pub enum FerroError {
         detail: Option<String>,
     },
 
+    /// A genome-requiring normalization step (intronic / boundary-spanning /
+    /// exon-junction 3'-shuffle) could not run because the reference provider
+    /// carries no genomic data. In lenient/silent mode this surfaces as the
+    /// `ReducedCapabilityNoGenome` warning with a best-effort result; strict
+    /// mode promotes it to this error rather than return a degraded result.
+    /// `capability` names the step that was skipped (e.g. "intronic
+    /// normalization"). #1012 item 2.
+    #[error(
+        "Cannot fully normalize {variant} without genomic reference data \
+         ({capability}); strict mode rejects a reduced-capability result"
+    )]
+    ReducedReferenceCapability { variant: String, capability: String },
+
     /// Genomic reference data is not available
     #[error("Genomic reference not available for {contig}:{start}-{end}")]
     GenomicReferenceNotAvailable {
@@ -538,6 +558,9 @@ impl FerroError {
             FerroError::AlignmentGap { .. } => Some(ErrorCode::AlignmentGap),
             FerroError::UnsupportedVariant { .. } => Some(ErrorCode::UnsupportedVariant),
             FerroError::IntronicVariant { .. } => Some(ErrorCode::IntronicVariant),
+            FerroError::ReducedReferenceCapability { .. } => {
+                Some(ErrorCode::ReducedReferenceCapability)
+            }
             FerroError::ReferenceMismatch { .. } => Some(ErrorCode::ReferenceMismatch),
             FerroError::VariantExceedsReference { .. } => Some(ErrorCode::PositionOutOfBounds),
             FerroError::ConversionError { .. } => Some(ErrorCode::ConversionFailed),

@@ -212,6 +212,16 @@ impl NormalizeConfig {
         self.position_past_end_action().should_reject()
     }
 
+    /// Returns true if a reduced-capability (no-genomic-data) degradation
+    /// should be rejected — i.e. strict mode. Unlike the registry-backed
+    /// spec warnings, `ReducedCapabilityNoGenome` is an *environmental*
+    /// limitation rather than an input defect, so it is not user-overridable
+    /// per errors-axis; it is simply promoted to an error in strict mode and
+    /// surfaced as a warning-plus-best-effort otherwise (#1012 item 2).
+    pub fn should_reject_reduced_capability(&self) -> bool {
+        self.error_config.mode == ErrorMode::Strict
+    }
+
     /// Returns true if past-end positions should emit warnings (lenient mode).
     pub fn should_warn_position_past_end(&self) -> bool {
         self.position_past_end_action().should_warn()

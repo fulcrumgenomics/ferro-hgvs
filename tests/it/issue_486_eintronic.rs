@@ -300,33 +300,45 @@ fn silent_accepts_bare_nm_intronic_substitution_without_warning() {
 }
 
 #[test]
-fn silent_propagates_error_when_intronic_indel_cannot_resolve() {
+fn silent_warns_and_degrades_when_intronic_indel_cannot_resolve() {
     // Silent-mode counterpart to `lenient_warns_and_keeps_value_when_intronic_indel_cannot_resolve`.
-    // Silent mode produces no EINTRONIC warning, so the `None => return Err(e)` arm in
-    // `normalize_core` must still propagate the capability error for an intronic *indel* that
-    // reaches the genomic-sequence-dependent resolution pass — no echo, no W4007 (#682).
+    // Pre-#1012 the capability error propagated in silent mode (the `None => return Err(e)` arm in
+    // `normalize_core`, no EINTRONIC warning to recover with). Under #1012 the intronic /
+    // boundary-spanning genomic paths no longer error when the provider lacks genomic data — they
+    // warn-and-degrade in EVERY mode, so silent mode now returns the best-effort (unchanged)
+    // variant with a `ReducedCapabilityNoGenome` warning (an environmental limitation, always
+    // surfaced — like the sibling `CrossAxisVariantNotShuffled`/`AxisClampApplied` advisories).
     //
     // `provider_intronic_nr` has the transcript but no genomic sequence, so the intronic
-    // deletion cannot resolve.
+    // deletion cannot resolve without a genome.
     let normalizer = Normalizer::with_config(provider_intronic_nr(), NormalizeConfig::silent());
     let variant = parse_hgvs("NR_INT.1:n.10+2_10+3del").expect("parse");
 
-    // Silent mode has no EINTRONIC warning to recover with, so the capability error propagates.
-    assert!(
-        normalizer.normalize(&variant).is_err(),
-        "silent mode must propagate the resolve-failure error for an intronic indel (#682)"
-    );
+    // Warn-and-degrade: no error, best-effort input echoed unchanged. Compare
+    // against the parsed input's own Display (an independent oracle), not a literal.
+    let out = normalizer
+        .normalize(&variant)
+        .expect("silent mode must warn-and-degrade, not propagate a capability error (#1012)");
+    assert_eq!(out.to_string(), variant.to_string());
 
-    // And it must not emit the INTRONIC_ON_BARE_TRANSCRIPT warning (no echo path taken).
-    let diag = normalizer.normalize_with_diagnostics(&variant);
-    if let Ok(diag) = diag {
-        assert!(
-            !diag
-                .warnings
-                .iter()
-                .any(|w| w.code() == "INTRONIC_ON_BARE_TRANSCRIPT"),
-            "silent mode must not emit INTRONIC_ON_BARE_TRANSCRIPT, got {:?}",
-            diag.warnings
-        );
-    }
+    let diag = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("silent diagnostics");
+    // The reduced-capability signal is surfaced even in silent mode.
+    assert!(
+        diag.warnings
+            .iter()
+            .any(|w| w.code() == "REDUCED_CAPABILITY_NO_GENOME"),
+        "expected REDUCED_CAPABILITY_NO_GENOME warning, got {:?}",
+        diag.warnings
+    );
+    // But silent mode still emits no EINTRONIC (bare-transcript) warning.
+    assert!(
+        !diag
+            .warnings
+            .iter()
+            .any(|w| w.code() == "INTRONIC_ON_BARE_TRANSCRIPT"),
+        "silent mode must not emit INTRONIC_ON_BARE_TRANSCRIPT, got {:?}",
+        diag.warnings
+    );
 }
