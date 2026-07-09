@@ -486,6 +486,12 @@ name = "measure_spdi_key_grouping"
 required-features = ["dev"]
 test = true
 
+# Carries `#[cfg(test)]` unit tests for its record validation, so it opts in.
+[[example]]
+name = "generate_spec_citations"
+required-features = ["dev"]
+test = true
+
 # Imports `ferro_hgvs::conformance`, so it needs that feature. `required-features`
 # makes cargo skip the target without it, rather than build an empty binary that
 # reads as a pass.

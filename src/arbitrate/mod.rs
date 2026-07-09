@@ -3,5 +3,6 @@
 //! `specs/2026-07-09-hgvs-arbitration-skill-design.md`.
 
 pub mod category;
+pub mod spec_citations;
 
 pub use category::ArbitrationCategory;
