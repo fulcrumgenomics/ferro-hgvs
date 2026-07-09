@@ -21,7 +21,11 @@ pub(crate) use helpers::{
     read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
 };
 pub(crate) use indel::{predict_indel_protein, predict_stop_region_extension};
+pub(crate) use substitution::predict_substitution_protein;
 // `read_ref_codon` / `translate` are the position-level CDS primitives reused by
 // the service effect handler to resolve real amino-acid residues (issue #806);
-// `read_ref_codon` is also the seam #498 (full c.→p.) inherits.
-pub(crate) use substitution::{predict_substitution_protein, read_ref_codon, translate};
+// `read_ref_codon` is also the seam #498 (full c.→p.) inherits. They are only
+// consumed by the `web-service` handlers today, so gate the re-export to that
+// feature to keep non-service builds (e.g. `--features python`) warning-clean.
+#[cfg(feature = "web-service")]
+pub(crate) use substitution::{read_ref_codon, translate};
