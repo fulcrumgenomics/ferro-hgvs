@@ -1557,6 +1557,32 @@ impl<P: ReferenceProvider> Normalizer<P> {
             &allele.variants,
             allele.phase,
         ));
+
+        // Two separate insertions at the *same* junction (`g.[4_5insT;4_5insA]`)
+        // are an order-ambiguous overlap conflict, not a normalizable form:
+        // there is no canonical order for the two inserted sequences, so the
+        // HGVS spec expresses "insert both" as a single ordered compound payload
+        // (`ins[T;A]`), not two members (general.md:79). Every reference agrees —
+        // mutalyzer rejects it (`EOVERLAP`), VariantValidator rejects it
+        // (`AlleleSyntaxError: … ranges overlap`), and ferro's own strict mode
+        // rejects it via the W5002 warning emitted just above (#486).
+        //
+        // In the non-strict modes the strict reject is not applied, so *preserve*
+        // the allele as authored here rather than falling through to the
+        // collapse/merge/shift pipeline below. That pipeline fabricated an
+        // order-dependent merged insertion (`insAC`) which no other tool
+        // produces and which then 3'-shifted flush against a neighbour and
+        // collapsed to a `delins` only on re-normalization — leaving
+        // `normalize` non-idempotent (#1004). Declining to canonicalize an
+        // unresolvable overlap is both spec-consistent and idempotent, and it
+        // still carries the W5002 warning so strict mode rejects unchanged.
+        if merge::has_same_gap_insertions(&allele.variants, allele.phase) {
+            let mut preserved =
+                crate::hgvs::variant::AlleleVariant::new(allele.variants.clone(), allele.phase);
+            preserved.uncertain = allele.uncertain;
+            return Ok((HgvsVariant::Allele(preserved), all_warnings));
+        }
+
         // Collapse → merge → split → per-member normalize, iterated to a fixed
         // point. The per-member 3'-shift (inside `normalize_core`) can move an
         // insertion — or the `dup` it canonicalises to — flush against an
@@ -1584,15 +1610,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //     `infos` axis, so members use `normalize_core` (skipping the
         //     per-member `detect_shuffle_infos` cost).
         let is_cis = allele.phase == crate::hgvs::variant::AllelePhase::Cis;
-        // Iterating collapse across per-member shifts is only sound when the
-        // input has no two insertion-like members at the same gap: those are
-        // order-ambiguous and must not collapse (#487), but a shift can move
-        // them apart and hide the collision from a later collapse. When present,
-        // fall back to the single-pass behavior (collapse-on-raw only), which
-        // still refuses them. This preserves the #180 merge-first invariant.
-        let allow_refixpoint =
-            is_cis && !merge::has_same_gap_insertions(&allele.variants, allele.phase);
-        let max_passes = if allow_refixpoint {
+        // Iterate the pipeline to a fixed point in cis; non-cis alleles are never
+        // collapsible, so a single pass suffices. Iterating is sound here because
+        // the one input that made it unsound — two insertion-like members at the
+        // same gap, which are order-ambiguous and must not collapse (#487) and
+        // whose per-member shift could move them apart to hide the collision — is
+        // preserved-and-returned above as an overlap conflict (#1004) and so never
+        // reaches this loop. `max_passes` is a defensive backstop.
+        let max_passes = if is_cis {
             allele.variants.len().max(1) + 2
         } else {
             1
@@ -1628,9 +1653,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
             pass += 1;
             // Stable once a full pass leaves the member set unchanged.
-            // `max_passes == 1` (non-cis, or same-gap-ambiguous input) forces the
-            // original single-pass behavior; otherwise iterate until the fixed
-            // point, with `max_passes` as a defensive backstop.
+            // `max_passes == 1` (non-cis) forces the original single-pass
+            // behavior; otherwise iterate until the fixed point, with
+            // `max_passes` as a defensive backstop.
             if result == current || pass >= max_passes {
                 normalized = result;
                 settled_warnings = pass_warnings;
