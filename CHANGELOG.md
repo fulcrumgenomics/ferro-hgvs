@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.7.0...v0.7.1) - 2026-07-09
+
+### Fixed
+
+- *(ci)* publish wheels directly to PyPI and drop the TestPyPI gate that had failed on every prior release, so Python wheels are published to PyPI for the first time ([#1008](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1008))
+
 ## [0.7.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.6.0...v0.7.0) - 2026-07-09
 
 ### Added
