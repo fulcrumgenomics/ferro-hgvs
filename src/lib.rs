@@ -22,6 +22,7 @@
 //! println!("Normalized: {}", normalized);
 //! ```
 
+pub mod arbitrate;
 pub mod backtranslate;
 pub mod batch;
 #[cfg(feature = "benchmark")]
