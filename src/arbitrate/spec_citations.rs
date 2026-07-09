@@ -2,12 +2,12 @@
 //! `assets/hgvs-nomenclature` submodule) still get quoted rules offline.
 //! Generated/verified by `examples/generate_spec_citations.rs` (Task 4).
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// A quoted, versioned spec passage.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct SpecCitation {
     #[serde(default)]
     pub spec_version: String,
