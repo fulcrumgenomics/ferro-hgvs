@@ -73,7 +73,10 @@ class TestReferenceSummary:
     def test_transcripts_json_reports_kind(self, tmp_path: Path) -> None:
         norm = ferro_hgvs.Normalizer(reference_json=_transcript_ref(tmp_path))
         summary = norm.reference_summary()
-        assert summary["provider_kind"] == "transcripts_json"
+        # A reference_json build is labeled "json": such a file may carry
+        # genomic-only data, so has_genomic_data (not the label) is the source
+        # of truth for capability.
+        assert summary["provider_kind"] == "json"
         assert summary["has_genomic_data"] is False
 
     def test_manifest_reports_kind(self) -> None:
@@ -136,6 +139,56 @@ class TestReducedCapabilityWarning:
             ferro_hgvs.Normalizer()  # a second reduced-capability build
         user = [w for w in caught if issubclass(w.category, UserWarning)]
         assert len(user) == 1, f"expected exactly one UserWarning, got {len(user)}"
+        """
+        result = _run_child(code)
+        assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+
+    def test_manifest_warning_not_masked_by_earlier_generic_warning(self) -> None:
+        # The generic (test-data / reference_json) and manifest reduced-capability
+        # warnings carry different guidance and are keyed on SEPARATE once-flags:
+        # a throwaway test-data Normalizer warning first must NOT suppress a
+        # genuinely genome-less manifest warning later in the same process — a
+        # real production misconfiguration that would otherwise go unwarned.
+        code = f"""
+        import warnings
+        import ferro_hgvs
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ferro_hgvs.Normalizer()                                     # generic variant warns
+            ferro_hgvs.Normalizer.from_manifest({str(MANIFEST_TINY)!r})  # manifest variant must ALSO warn
+        msgs = [str(w.message) for w in caught if issubclass(w.category, UserWarning)]
+        generic = [m for m in msgs if "reference lacks genomic data" in m]
+        manifest = [m for m in msgs if "manifest reference provides no genomic data" in m]
+        assert len(generic) == 1, f"expected one generic warning, got {{msgs}}"
+        assert len(manifest) == 1, f"expected one manifest warning, got {{msgs}}"
+        """
+        result = _run_child(code)
+        assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+
+    def test_failed_warning_emission_does_not_consume_the_once_flag(self) -> None:
+        # Under warnings.simplefilter("error") the reduced-capability warning is
+        # raised as an exception. That must NOT consume the once-per-process flag:
+        # a later construction under a normal filter must still warn. (Regression:
+        # the flag was set before emitting, so a raised warning permanently
+        # suppressed all future ones.)
+        code = """
+        import warnings
+        import ferro_hgvs
+        # First build with warnings-as-errors: construction raises, flag must reset.
+        raised = False
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            try:
+                ferro_hgvs.Normalizer()
+            except UserWarning:
+                raised = True
+        assert raised, "expected the reduced-capability warning to raise under simplefilter('error')"
+        # Now a normal build must still emit the warning (flag was not consumed).
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            ferro_hgvs.Normalizer()
+        user = [w for w in caught if issubclass(w.category, UserWarning)]
+        assert len(user) == 1, f"expected the warning to still fire, got {len(user)}"
         """
         result = _run_child(code)
         assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
