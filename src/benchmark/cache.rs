@@ -3119,7 +3119,7 @@ pub fn enhance_lrg_annotations(
 
     for i in 1..=LRG_MAX_ID {
         let lrg_id = format!("LRG_{}", i);
-        let seq_path = cache_dir.join(format!("{}.sequence", &lrg_id));
+        let seq_path = cache_dir.join(format!("{}.sequence", lrg_id));
 
         // Skip if no sequence file exists (LRG doesn't exist)
         if !seq_path.exists() {
@@ -3127,7 +3127,7 @@ pub fn enhance_lrg_annotations(
         }
 
         // Check if already has enhanced annotations (has "features" with transcript selectors)
-        let ann_path = cache_dir.join(format!("{}.annotations", &lrg_id));
+        let ann_path = cache_dir.join(format!("{}.annotations", lrg_id));
         if ann_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&ann_path) {
                 // Check if it has proper exon structure (more than just gene features)
