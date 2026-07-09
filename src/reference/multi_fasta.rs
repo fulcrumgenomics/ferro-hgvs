@@ -559,6 +559,11 @@ impl MultiFastaProvider {
                 msg: format!("Failed to parse manifest: {}", e),
             })?;
 
+        // Fail loud on an incompatible/misread reference before the permissive
+        // field reads below, which would otherwise silently treat a renamed,
+        // removed, or wrong-typed field as absent (#1001).
+        crate::prepare::manifest::validate_loaded_manifest(&manifest)?;
+
         let mut dirs = Vec::new();
 
         // Get transcript directory (paths in manifest are relative to manifest location)
@@ -3213,6 +3218,45 @@ mod tests {
     /// Tests pass it so their per-build expectations stay pinned to the heuristic.
     fn heuristic_infer(acc: &crate::hgvs::variant::Accession) -> Option<&'static str> {
         crate::liftover::aliases::infer_genome_build_from_accession(acc)
+    }
+
+    // ----------------------------------------------------------------------
+    // Reference schema/version validation at load (#1001)
+    // ----------------------------------------------------------------------
+
+    /// A manifest prepared by a newer, forward-incompatible ferro must be refused
+    /// at load, not silently misread.
+    #[test]
+    fn from_manifest_rejects_newer_schema_version() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            format!(
+                r#"{{"prepared_at":"","transcript_fastas":[],"genome_fasta":null,"cdot_json":null,"transcript_count":0,"available_prefixes":[],"manifest_schema_version":{}}}"#,
+                crate::prepare::manifest::CURRENT_MANIFEST_SCHEMA_VERSION + 1
+            ),
+        )
+        .unwrap();
+        let Err(err) = MultiFastaProvider::from_manifest(dir.path().join("manifest.json")) else {
+            panic!("a newer-schema manifest must be refused at load");
+        };
+        assert!(format!("{err}").contains("newer than this build"));
+    }
+
+    /// A wrong-typed manifest field (the class the untyped loader would silently
+    /// read as `None`) must fail the load with a clear error.
+    #[test]
+    fn from_manifest_rejects_wrong_typed_field() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            r#"{"prepared_at":"","transcript_fastas":"not-an-array","genome_fasta":null,"cdot_json":null,"transcript_count":0,"available_prefixes":[]}"#,
+        )
+        .unwrap();
+        let Err(err) = MultiFastaProvider::from_manifest(dir.path().join("manifest.json")) else {
+            panic!("a wrong-typed manifest field must be rejected at load");
+        };
+        assert!(format!("{err}").contains("does not match the expected schema"));
     }
 
     // ----------------------------------------------------------------------
