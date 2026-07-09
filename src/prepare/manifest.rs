@@ -7,6 +7,15 @@ use crate::FerroError;
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 
+/// Current reference-manifest schema version, written into every manifest by
+/// [`ReferenceManifest::save`]. Bump this on any breaking change to the manifest
+/// or derived-artifact format so an older build refuses a newer, incompatible
+/// reference at load rather than silently misreading it. A manifest whose
+/// `manifest_schema_version` exceeds this value is rejected (see
+/// [`check_schema_version`]); an absent value means the reference predates schema
+/// versioning and is accepted (its structure is still validated on load).
+pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 1;
+
 /// Manifest of prepared reference data.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ReferenceManifest {
@@ -127,6 +136,12 @@ pub struct ReferenceManifest {
     pub transcript_count: usize,
     /// List of available accession prefixes
     pub available_prefixes: Vec<String>,
+    /// Schema version of this manifest, written by [`ReferenceManifest::save`].
+    /// Absent on references prepared before schema versioning; a value greater
+    /// than [`CURRENT_MANIFEST_SCHEMA_VERSION`] means the reference was prepared
+    /// by a newer, forward-incompatible `ferro` and is refused at load.
+    #[serde(default)]
+    pub manifest_schema_version: Option<u32>,
     /// Directory containing this manifest (runtime property, not serialized)
     #[serde(skip)]
     pub reference_dir: PathBuf,
@@ -167,6 +182,7 @@ impl Default for ReferenceManifest {
             backfill_transcripts_fasta: None,
             transcript_count: 0,
             available_prefixes: Vec::new(),
+            manifest_schema_version: None,
             reference_dir: PathBuf::new(),
         }
     }
@@ -189,6 +205,7 @@ impl ReferenceManifest {
             Self::default()
         };
 
+        check_schema_version(manifest.manifest_schema_version)?;
         manifest.reference_dir = reference_dir.to_path_buf();
         manifest.make_paths_absolute();
         Ok(manifest)
@@ -262,6 +279,7 @@ impl ReferenceManifest {
         self.validate_reference_root_invariant()?;
 
         self.prepared_at = chrono::Utc::now().to_rfc3339();
+        self.manifest_schema_version = Some(CURRENT_MANIFEST_SCHEMA_VERSION);
         self.deduplicate_paths();
 
         // Serialize a relative-path view without mutating the in-memory absolute paths.
@@ -424,6 +442,58 @@ pub fn check_references(reference_dir: &Path) -> Result<ReferenceManifest, Ferro
     }
 
     ReferenceManifest::load_or_default(reference_dir)
+}
+
+/// Reject a manifest prepared by a newer, forward-incompatible `ferro`.
+///
+/// An absent version (`None`) predates schema versioning and is accepted; a
+/// version at or below [`CURRENT_MANIFEST_SCHEMA_VERSION`] is accepted; a higher
+/// version is refused, because an older build cannot be trusted to read a newer
+/// format correctly (it would otherwise silently misread it).
+pub fn check_schema_version(version: Option<u32>) -> Result<(), FerroError> {
+    if let Some(v) = version {
+        if v > CURRENT_MANIFEST_SCHEMA_VERSION {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "reference manifest schema version {v} is newer than this build of ferro \
+                     supports (maximum {CURRENT_MANIFEST_SCHEMA_VERSION}). Upgrade ferro, or \
+                     re-run `ferro prepare` to regenerate the reference."
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Validate a raw manifest JSON value before the permissive field reads in the
+/// runtime loader ([`crate::reference::multi_fasta::MultiFastaProvider::from_manifest`]).
+///
+/// The runtime loader reads the manifest as an untyped `serde_json::Value` and
+/// accesses each field with `.get(...).and_then(...)`, so a renamed, removed, or
+/// wrong-typed field would otherwise degrade to `None` and be silently treated as
+/// absent — producing wrong output across a run instead of failing. This gate:
+///
+/// 1. refuses a manifest from a newer, forward-incompatible `ferro`
+///    ([`check_schema_version`]); and
+/// 2. validates the value against the [`ReferenceManifest`] schema, catching a
+///    missing required field or a wrong-typed field. Unknown/extra fields are
+///    tolerated (no `deny_unknown_fields`), so a real reference carrying
+///    additional metadata (e.g. a content fingerprint) still loads.
+pub fn validate_loaded_manifest(value: &serde_json::Value) -> Result<(), FerroError> {
+    let version = value
+        .get("manifest_schema_version")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+    check_schema_version(version)?;
+
+    serde_json::from_value::<ReferenceManifest>(value.clone()).map_err(|e| FerroError::Io {
+        msg: format!(
+            "reference manifest does not match the expected schema: {e}. The reference may have \
+             been prepared by an incompatible version of ferro — re-run `ferro prepare` to \
+             regenerate it."
+        ),
+    })?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -597,6 +667,7 @@ mod tests {
             backfill_transcripts_fasta: Some(ref_dir.join("backfill/backfill_transcripts.fna")),
             transcript_count: 100,
             available_prefixes: vec!["NM".to_string()],
+            manifest_schema_version: None,
             reference_dir: ref_dir.to_path_buf(),
         };
 
@@ -947,5 +1018,104 @@ mod tests {
             manifest.prepared_at, saved_prepared_at,
             "save() should refresh in-memory prepared_at to match what was persisted"
         );
+    }
+
+    /// A realistic minimal manifest as `save()` writes it, plus an extra unknown
+    /// field (a content fingerprint) that real prepared references carry.
+    fn minimal_manifest_json() -> serde_json::Value {
+        serde_json::json!({
+            "prepared_at": "2024-01-01T00:00:00Z",
+            "transcript_fastas": ["transcripts.fa"],
+            "genome_fasta": null,
+            "cdot_json": null,
+            "transcript_count": 0,
+            "available_prefixes": [],
+            "manifest_schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
+            "reference_identity": "deadbeefdeadbeef"
+        })
+    }
+
+    #[test]
+    fn save_stamps_current_schema_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = ReferenceManifest {
+            reference_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        m.save().unwrap();
+
+        let raw = std::fs::read_to_string(dir.path().join("manifest.json")).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            json["manifest_schema_version"].as_u64(),
+            Some(CURRENT_MANIFEST_SCHEMA_VERSION as u64),
+            "save() must stamp the current schema version into the manifest"
+        );
+        assert_eq!(
+            m.manifest_schema_version,
+            Some(CURRENT_MANIFEST_SCHEMA_VERSION),
+            "save() must also update the in-memory schema version"
+        );
+    }
+
+    #[test]
+    fn check_schema_version_accepts_absent_and_current_but_rejects_newer() {
+        assert!(
+            check_schema_version(None).is_ok(),
+            "a pre-versioning reference (absent version) is accepted"
+        );
+        assert!(check_schema_version(Some(CURRENT_MANIFEST_SCHEMA_VERSION)).is_ok());
+        let err = check_schema_version(Some(CURRENT_MANIFEST_SCHEMA_VERSION + 1))
+            .expect_err("a newer schema version must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("newer than this build"),
+            "actionable message: {msg}"
+        );
+        assert!(
+            msg.contains("ferro prepare"),
+            "message points to the remedy: {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_loaded_manifest_accepts_valid_manifest_with_unknown_fields() {
+        validate_loaded_manifest(&minimal_manifest_json())
+            .expect("a valid manifest carrying an unknown extra field must load");
+    }
+
+    #[test]
+    fn validate_loaded_manifest_accepts_pre_versioning_manifest() {
+        let mut v = minimal_manifest_json();
+        v.as_object_mut().unwrap().remove("manifest_schema_version");
+        validate_loaded_manifest(&v).expect("a manifest without a schema version must load");
+    }
+
+    #[test]
+    fn validate_loaded_manifest_rejects_newer_schema_version() {
+        let mut v = minimal_manifest_json();
+        v["manifest_schema_version"] =
+            serde_json::json!(CURRENT_MANIFEST_SCHEMA_VERSION as u64 + 1);
+        let err = validate_loaded_manifest(&v).expect_err("a newer schema must be refused");
+        assert!(format!("{err}").contains("newer than this build"));
+    }
+
+    #[test]
+    fn validate_loaded_manifest_rejects_missing_required_field() {
+        let mut v = minimal_manifest_json();
+        v.as_object_mut().unwrap().remove("transcript_count");
+        let err = validate_loaded_manifest(&v)
+            .expect_err("a missing required field must be a hard error, not a silent None");
+        assert!(format!("{err}").contains("does not match the expected schema"));
+    }
+
+    #[test]
+    fn validate_loaded_manifest_rejects_wrong_typed_field() {
+        let mut v = minimal_manifest_json();
+        // transcript_fastas as a string instead of an array — the exact class the
+        // untyped runtime loader would otherwise silently read as `None`.
+        v["transcript_fastas"] = serde_json::json!("not-an-array");
+        let err = validate_loaded_manifest(&v).expect_err("a wrong-typed field must be rejected");
+        assert!(format!("{err}").contains("does not match the expected schema"));
     }
 }
