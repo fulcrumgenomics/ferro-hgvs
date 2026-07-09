@@ -77,6 +77,7 @@ mod ins_shift_matrix;
 mod inserted_range_special_positions;
 mod integration_tests;
 mod inverted_uncertain_range_insertion;
+mod issue_1004_samegap_insertion_idempotency;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;

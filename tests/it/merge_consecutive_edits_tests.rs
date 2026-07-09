@@ -161,12 +161,18 @@ fn test_merge_ins_then_del() {
 }
 
 #[test]
-fn test_merge_two_ins_same_boundary_preserves_input_order() {
-    // Two ins at the same boundary p|p+1 collapse into a single ins; bases
-    // are concatenated in input order (T then A -> TA).
+fn test_two_ins_same_boundary_preserved_as_overlap() {
+    // Two separate insertions at the same boundary p|p+1 are an order-ambiguous
+    // overlap conflict, not a merge: there is no canonical order for the two
+    // inserted sequences (HGVS expresses "insert both" as a single ordered
+    // compound payload `ins[T;A]`, not two members — general.md:79). mutalyzer
+    // rejects this as `EOVERLAP` and VariantValidator as `AlleleSyntaxError`;
+    // ferro's strict mode rejects it (W5002, #486) and the non-strict path
+    // warn-and-preserves it as authored rather than fabricating an
+    // order-dependent, non-idempotent `insTA` (#1004).
     assert_eq!(
         normalize_to_string("NC_000001.11:g.[100_101insT;100_101insA]"),
-        "NC_000001.11:g.100_101insTA",
+        "NC_000001.11:g.[100_101insT;100_101insA]",
     );
 }
 
