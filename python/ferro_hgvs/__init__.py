@@ -146,6 +146,7 @@ __all__ = [
     "CorrectionWarning",
     "ErrorConfig",
     "ParseResultWithWarnings",
+    "NormalizationWarning",
     # Backtranslation classes
     "CodonChange",
     "CodonTable",

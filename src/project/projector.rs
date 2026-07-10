@@ -868,9 +868,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             // transform that leaves the variant non-canonical, and even the
             // `project_normalized` caller cannot pre-normalize it in the `NC_`
             // frame because it does not know the placement (review M2).
-            let normalized = self.normalizer.normalize(&deanchored)?;
+            let (normalized, warnings) = self.normalizer.normalize_core_checked(&deanchored)?;
             let target = Self::reconcile_self_projection_target(&normalized, transcript_id);
-            let result = self.project_variant_inner(&normalized, &target)?;
+            let mut result = self.project_variant_inner(&normalized, &target)?;
+            result.normalization_warnings = warnings;
             let placement = self
                 .provider
                 .genomic_placement_on_build(&parent, input_build);
@@ -898,8 +899,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         }
         // 1. Normalize the genomic variant. The normalizer is built once at
         // construction time so we don't clone the (potentially heavy) provider
-        // on every call.
-        let normalized = self.normalizer.normalize(variant)?;
+        // on every call. Use `normalize_core_checked` (not `normalize`) to keep
+        // the warnings it emits so they can ride out on the projection (#1018 C2)
+        // while still honoring the same strict-mode rejections `normalize` applies.
+        let (normalized, warnings) = self.normalizer.normalize_core_checked(variant)?;
         // 2. Reconcile the requested target against any selector resolution that
         // normalization performed (#783). A legacy LOVD gene-model selector
         // `NG_(GENE_v001):c.` keeps the genomic ref as its accession, so a
@@ -909,7 +912,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // so the requested target now names the variant's genomic-context wrapper
         // rather than its transcript — re-point it at the resolved transcript.
         let target = Self::reconcile_self_projection_target(&normalized, transcript_id);
-        self.project_variant_inner(&normalized, &target)
+        let mut projection = self.project_variant_inner(&normalized, &target)?;
+        projection.normalization_warnings = warnings;
+        Ok(projection)
     }
 
     /// Reconcile a self-projection target with a selector/context that
@@ -1012,11 +1017,22 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let input_build = self.build_hint_for_variant(variant);
         let (variant, parent) = self.deanchor_genomic_parent_input(variant);
         // 1. Normalize once in the genome frame, then fan out across the
-        //    overlapping transcripts.
-        let normalized = self.normalizer.normalize(&variant)?;
+        //    overlapping transcripts. Use `normalize_core_checked` to keep the
+        //    input's normalization warnings (while still honoring strict-mode
+        //    rejections); they are hung on every final result below —
+        //    on BOTH paths — so a caller sees the same signal it would on a
+        //    single projection (#1018 C2). The warning describes normalizing the
+        //    caller's input, so it is attached uniformly even on the parent path
+        //    (whose per-transcript re-projection re-normalizes a different, coding
+        //    form) rather than being replaced by that re-normalize's warnings.
+        let (normalized, warnings) = self.normalizer.normalize_core_checked(&variant)?;
         let results = self.project_normalized_all_inner(&normalized)?;
-        // 2. The plain (non-parent) path returns the genome-frame result directly.
+        // 2. The plain (non-parent) path returns the genome-frame results directly.
         let Some(parent) = parent else {
+            let mut results = results;
+            for projection in &mut results {
+                projection.normalization_warnings = warnings.clone();
+            }
             return Ok(results);
         };
         // 3. Parent path: the fan-out 3'-shifts the variant in the *genome*
@@ -1052,7 +1068,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 },
                 None => r,
             };
-            framed.push(self.frame_projection_owned(r, &parent, placement.as_ref()));
+            let mut framed_projection = self.frame_projection_owned(r, &parent, placement.as_ref());
+            framed_projection.normalization_warnings = warnings.clone();
+            framed.push(framed_projection);
         }
         Ok(framed)
     }
@@ -2635,6 +2653,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .gene_name
             .clone();
             return Ok(VariantProjection {
+                normalization_warnings: Vec::new(),
                 // No inner variant to derive a genomic form from; report `None`
                 // rather than wrapping the (possibly non-genomic) input allele
                 // into `.genomic`. Consistent with `coding`/`protein`, which are
@@ -2802,6 +2821,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let rna = Self::reframe_rna_from_input(rna, original);
 
         Ok(VariantProjection {
+            normalization_warnings: Vec::new(),
             genomic,
             coding,
             noncoding,
@@ -3344,6 +3364,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         };
 
         Ok(VariantProjection {
+            normalization_warnings: Vec::new(),
             genomic,
             coding,
             noncoding,
@@ -3529,6 +3550,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // itself; report it on the non-coding axis and stop.
         if !is_coding {
             return Ok(VariantProjection {
+                normalization_warnings: Vec::new(),
                 genomic,
                 coding: None,
                 noncoding: Some(normalized.clone()),
@@ -3606,6 +3628,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         };
 
         Ok(VariantProjection {
+            normalization_warnings: Vec::new(),
             genomic,
             coding,
             // The non-coding axis is the input itself.
@@ -4318,6 +4341,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         };
 
         Ok(VariantProjection {
+            normalization_warnings: Vec::new(),
             genomic,
             coding,
             noncoding,
@@ -4397,6 +4421,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         };
 
         Some(VariantProjection {
+            normalization_warnings: Vec::new(),
             genomic,
             coding,
             noncoding: None,
@@ -4461,6 +4486,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             _ => None,
         };
         VariantProjection {
+            normalization_warnings: Vec::new(),
             genomic: Some(genomic),
             coding,
             noncoding: None,
@@ -6931,6 +6957,44 @@ mod tests {
     }
 
     #[test]
+    fn strict_projector_rejects_what_lenient_projects_with_a_warning() {
+        // Regression pin for #1018: the projector normalizes its input through
+        // `normalize_core_checked`, which applies the SAME strict-mode rejection
+        // ladder as `Normalizer::normalize`. So a strict-configured projector
+        // must REJECT an input a lenient one projects-and-warns. Guards against a
+        // future swap back to the raw `normalize_core`, which would silently
+        // bypass strict rejection (projecting where `normalize` would `Err`).
+        //
+        // The trigger is a coincident cis-allele (two edits at g.1003):
+        // OverlapConflictingEdits / W5002, which `should_reject_overlap_conflict`
+        // promotes to a hard error in strict mode.
+        let overlap = "chr1:g.[1003C>A;1003C>G]";
+
+        // Lenient (default): projects, and the OverlapConflict warning rides out.
+        let (projector, provider) = make_test_provider_and_projector();
+        let lenient = VariantProjector::new(projector, provider);
+        let results = lenient
+            .project_all(overlap)
+            .expect("lenient projector should project the cis-allele");
+        assert!(
+            results.iter().any(|p| p
+                .normalization_warnings
+                .iter()
+                .any(|w| w.code() == "OVERLAP_CONFLICTING_EDITS")),
+            "lenient projection must surface the OverlapConflict warning"
+        );
+
+        // Strict: the same input is rejected, exactly as `normalize()` would.
+        let (projector, provider) = make_test_provider_and_projector();
+        let strict = VariantProjector::new(projector, provider)
+            .with_normalize_config(NormalizeConfig::strict());
+        assert!(
+            strict.project_all(overlap).is_err(),
+            "strict projector must reject the OverlapConflict cis-allele, not project it"
+        );
+    }
+
+    #[test]
     fn project_all_mane_select_sorts_first() {
         let (projector, provider) = make_two_transcript_setup();
         let vp = VariantProjector::new(projector, provider);
@@ -8303,6 +8367,7 @@ mod tests {
                 ),
             });
             let proj = VariantProjection {
+                normalization_warnings: Vec::new(),
                 genomic: Some(genomic),
                 coding: Some(coding),
                 noncoding: None,
@@ -8372,6 +8437,7 @@ mod tests {
                 ),
             });
             let proj = VariantProjection {
+                normalization_warnings: Vec::new(),
                 genomic: None,
                 coding: Some(coding),
                 noncoding: None,
