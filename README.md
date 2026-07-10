@@ -37,6 +37,19 @@ correctness or stability.
 - **High Performance**: ~5M variants/sec single-threaded parsing (>12M/s parallel), zero-copy with nom
 - **Type-Safe**: Leverages Rust's type system for correctness
 
+## Reporting bugs
+
+ferro-hgvs is alpha software — if you get a wrong or surprising result, please tell us. Open an issue at [github.com/fulcrumgenomics/ferro-hgvs/issues](https://github.com/fulcrumgenomics/ferro-hgvs/issues).
+
+If ferro and another HGVS tool (Mutalyzer, VariantValidator, …) disagree on a variant, `ferro arbitrate` will tell you *who is spec-compliant*, and — when ferro is the one at fault — file a prefilled bug for you in one step (no GitHub login needed; you review and submit):
+
+```bash
+ferro arbitrate "NM_000255.4:c.445_446insA" --reference ferro-reference/ \
+  --other-output "NM_000255.4:c.445dup" --bug-report
+```
+
+See [Why do ferro and another tool disagree?](#why-do-ferro-and-another-tool-disagree) for the full workflow.
+
 ## Installation
 
 ### Python
@@ -188,6 +201,36 @@ The `ferro` CLI provides commands beyond parsing and normalization:
 | `convert-gff` | Convert GFF3/GTF to transcripts.json |
 | `generate` | Generate HGVS descriptions from components |
 | `extract-hgvs` | Extract HGVS from VEP-annotated VCFs |
+| `arbitrate` | Explain why ferro and another tool disagree, and who is spec-compliant |
+| `bug-report` | Open a prefilled GitHub issue from an arbitration result |
+
+## Why do ferro and another tool disagree?
+
+When ferro and another HGVS tool (Mutalyzer, VariantValidator, biocommons `hgvs`, …) give different answers for the same variant, `ferro arbitrate` explains *why* and says who is spec-compliant — grounded in the HGVS specification, not in ferro's own opinion of itself.
+
+```bash
+# Auto-fetch Mutalyzer's answer and compare:
+ferro arbitrate "NM_000255.4:c.445_446insA" --reference ferro-reference/
+
+# Or paste any other tool's output (works offline, for any tool):
+ferro arbitrate "NM_000255.4:c.445_446insA" --reference ferro-reference/ \
+  --other-output "NM_000255.4:c.445dup"
+```
+
+It reports one of: **Equivalent** (same variant, both spellings valid — or one spelling the spec mandates), **Different** (genuinely different edits, with the governing spec rule quoted), **BasisMismatch** (the two are on different transcript versions/axes — align them first), or **Inconclusive** (could not adjudicate, with the reason). The verdict comes from an oracle that reduces both answers to reference-anchored edits and shares no code with ferro's normalizer — so it can, and will, find ferro at fault.
+
+If arbitration shows **ferro** is the one that's wrong, file a bug in one step — this opens a prefilled GitHub issue you review and submit (no GitHub login or token required):
+
+```bash
+# One command (only files when ferro is actually implicated):
+ferro arbitrate "<variant>" --reference ferro-reference/ --other-output "<other>" --bug-report
+
+# Or from a saved JSON result:
+ferro arbitrate "<variant>" --reference ferro-reference/ --other-output "<other>" --format json \
+  | ferro bug-report --from-arbitration -
+```
+
+> Requires a prepared reference (`ferro prepare`) — the same one normalization uses. Claude Code users can also ask conversationally ("why do ferro and Mutalyzer disagree on …?") via the bundled `arbitrate-hgvs` skill, which drives these commands and applies the spec rule for you on the cases that need interpretation.
 
 ## Error Handling
 
