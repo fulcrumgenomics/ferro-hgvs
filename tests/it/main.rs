@@ -79,6 +79,7 @@ mod annotation_real_format_slices;
 mod annotation_tool_conformance;
 mod api_comparison_tests;
 mod arbitrate_cli;
+mod arbitration_corpus;
 mod axis_frame_disagreement;
 mod benchmark_invocation_forms;
 mod biocommons_local_tests;
