@@ -45,6 +45,13 @@ pub struct Arbitration {
     pub ferro_spdi: Option<String>,
     /// The other tool's output rendered as SPDI, for the bug report.
     pub other_spdi: Option<String>,
+    /// Why the arbitration could not be completed, populated only for
+    /// [`Verdict::Inconclusive`] (`None` for every other verdict). Carries
+    /// the [`FerroError`] message from whichever step failed (frame
+    /// resolution or the oracle comparison) so a human/CLI consumer can see
+    /// why, without turning a caught error into a hard crash (#886).
+    #[serde(default)]
+    pub reason: Option<String>,
 }
 
 /// Same/different/mismatch verdict from the normalizer-independent oracle,
@@ -66,6 +73,12 @@ pub enum Verdict {
     OtherUnparseable,
     /// Ferro's own output could not be parsed as HGVS.
     FerroParseError,
+    /// Frame resolution or the oracle comparison itself returned an error
+    /// (e.g. an intronic variant that cannot be pivoted to a genomic frame,
+    /// or a repeat-span edit the oracle cannot reduce to SPDI) — the
+    /// arbitration could not be completed, but this is not a crash. See
+    /// [`Arbitration::reason`] for the underlying error message.
+    Inconclusive,
 }
 
 /// Which tool (if either) is spec-compliant for a genuine disagreement.
@@ -146,7 +159,30 @@ fn shell(
         spec_citations: Vec::new(),
         ferro_spdi: None,
         other_spdi: None,
+        reason: None,
     }
+}
+
+/// Build the `Arbitration` returned when frame resolution or the oracle
+/// comparison itself errors (rather than parsing declining or the two sides
+/// landing on different SPDI bases, which already have their own shell
+/// branches). Never propagated as `Err` — see [`arbitrate`]'s doc comment.
+fn inconclusive(
+    input: &str,
+    ferro_output: Option<&str>,
+    other: OtherResult,
+    e: &FerroError,
+) -> Arbitration {
+    let mut a = shell(
+        input,
+        ferro_output,
+        other,
+        Verdict::Inconclusive,
+        ArbitrationCategory::Unknown,
+        Compliance::NotApplicable,
+    );
+    a.reason = Some(e.to_string());
+    a
 }
 
 /// Classify a [`SameVariant::Same`] verdict: the two outputs edit the
@@ -198,13 +234,15 @@ fn classify_same(
 ///
 /// # Errors
 ///
-/// Returns [`FerroError`] if frame resolution fails (when a projector is
-/// given and either variant is intronic and unplaceable) or if the oracle
-/// cannot reduce a variant to SPDI (e.g. an unsupported edit, or the
-/// provider lacks the requested reference data). Parse failures on either
-/// side are NOT propagated as `Err` — they are reported as
-/// [`Verdict::FerroParseError`]/[`Verdict::OtherUnparseable`] in the returned
-/// `Arbitration`, since a failure to parse is itself part of the verdict.
+/// Never returns `Err` (the `Result` is kept for API stability/future use).
+/// Every failure mode is instead reported as a verdict on the returned
+/// `Arbitration`: parse failures on either side as
+/// [`Verdict::FerroParseError`]/[`Verdict::OtherUnparseable`], and a frame-
+/// resolution or oracle-comparison error (e.g. an intronic variant that
+/// cannot be pivoted to a genomic frame, or a repeat-span edit the oracle
+/// cannot reduce to SPDI) as [`Verdict::Inconclusive`] with [`Arbitration::reason`]
+/// set to the underlying error's message (#886) — arbitration never hard-crashes
+/// on an oracle/projection error.
 pub fn arbitrate(
     input: &str,
     ferro_output: &str,
@@ -254,11 +292,25 @@ pub fn arbitrate(
     };
 
     let (vf, vo) = match projector {
-        Some(pr) => (pr.resolve(&vf)?, pr.resolve(&vo)?),
+        Some(pr) => {
+            let rf = pr.resolve(&vf);
+            let ro = pr.resolve(&vo);
+            match (rf, ro) {
+                (Ok(a), Ok(b)) => (a, b),
+                (Err(e), _) | (_, Err(e)) => {
+                    return Ok(inconclusive(input, Some(ferro_output), other, &e))
+                }
+            }
+        }
         None => (vf, vo),
     };
 
-    let mut out = match compare_variants(&vf, &vo, provider)? {
+    let compared = match compare_variants(&vf, &vo, provider) {
+        Ok(c) => c,
+        Err(e) => return Ok(inconclusive(input, Some(ferro_output), other, &e)),
+    };
+
+    let mut out = match compared {
         SameVariant::Same => {
             let (category, compliance, op) = classify_same(&vf, &vo, provider);
             let mut a = shell(
@@ -452,5 +504,72 @@ mod tests {
         .unwrap();
         assert_eq!(a.verdict, Verdict::BasisMismatch);
         assert_eq!(a.compliance, Compliance::NotApplicable);
+    }
+
+    /// A [`FrameResolver`] that always declines, standing in for a real
+    /// projector's frame-resolution failure (e.g. an intronic bare-`NM_`
+    /// variant whose transcript is absent from cdot).
+    struct AlwaysErrResolver;
+
+    impl FrameResolver for AlwaysErrResolver {
+        fn resolve(&self, _v: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
+            Err(FerroError::UnsupportedProjection {
+                reason: "stub: frame resolution always declines".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn frame_resolution_error_yields_inconclusive_not_a_crash() {
+        // #886: a projector/oracle error must never propagate as `Err` out of
+        // `arbitrate` — it degrades to `Verdict::Inconclusive` with the
+        // underlying error message preserved on `reason`.
+        let p = provider();
+        let other = OtherResult {
+            tool: "mutalyzer".into(),
+            status: "ok".into(),
+            output: Some("NC_000001.11:g.51dup".into()),
+        };
+        let resolver = AlwaysErrResolver;
+        let a = arbitrate(
+            "NC_000001.11:g.51dup",
+            "NC_000001.11:g.51dup",
+            other,
+            &p,
+            Some(&resolver),
+        )
+        .expect("arbitrate must never return Err");
+        assert_eq!(a.verdict, Verdict::Inconclusive);
+        assert_eq!(a.category, ArbitrationCategory::Unknown);
+        assert_eq!(a.compliance, Compliance::NotApplicable);
+        assert_eq!(
+            a.reason.as_deref(),
+            Some("unsupported projection: stub: frame resolution always declines")
+        );
+    }
+
+    #[test]
+    fn oracle_comparison_error_yields_inconclusive_not_a_crash() {
+        // #886: with no projector, a `compare_variants` error (here, an
+        // accession the provider has no data for) must likewise degrade to
+        // `Inconclusive` rather than propagate as `Err`.
+        let p = MockProvider::new();
+        let other = OtherResult {
+            tool: "mutalyzer".into(),
+            status: "ok".into(),
+            output: Some("NC_999999.1:g.10del".into()),
+        };
+        let a = arbitrate(
+            "NC_999999.1:g.10del",
+            "NC_999999.1:g.10del",
+            other,
+            &p,
+            None,
+        )
+        .expect("arbitrate must never return Err");
+        assert_eq!(a.verdict, Verdict::Inconclusive);
+        assert_eq!(a.category, ArbitrationCategory::Unknown);
+        assert_eq!(a.compliance, Compliance::NotApplicable);
+        assert!(a.reason.is_some());
     }
 }
