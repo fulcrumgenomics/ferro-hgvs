@@ -22,6 +22,7 @@ mod annotation_real_format_slices;
 mod annotation_tool_conformance;
 mod api_comparison_tests;
 mod arbitrate_cli;
+mod arbitration_corpus;
 mod biocommons_local_tests;
 mod biocommons_normalize_tests;
 mod biocommons_tests;
