@@ -179,6 +179,7 @@ Full guides live in **[the documentation site](https://ferro-hgvs.readthedocs.io
 - [Error handling](docs/src/guide/error-handling.md) — strict / lenient / silent modes and warning codes
 - [Comparing normalization rules (`FERRO_PARTITION`)](docs/src/guide/comparing-rules.md)
 - [Benchmarking](docs/src/guide/benchmarking.md)
+- [Why do ferro and another tool disagree?](docs/src/guide/arbitrate-disagreements.md) — `ferro arbitrate` explains a disagreement with another HGVS tool and, when ferro is at fault, prefills a bug report
 - [CLI reference](docs/src/cli/overview.md) · [Supported HGVS syntax](docs/src/reference/hgvs-syntax.md)
 - [Why ferro-hgvs? — tool comparison](docs/src/reference/comparison.md) — capability matrix, cross-tool benchmarks, and what `ferro prepare` builds
 - [Interpreting the HGVS recommendations](docs/src/shadow-spec/index.md) — how ferro reads each clause
@@ -233,6 +234,10 @@ ferro-benchmark compare results normalize ferro.json mutalyzer.json -o compariso
 > **Note**: The `pixi.toml` and `pixi.lock` files in this repository define a [pixi](https://pixi.sh) environment for the Python-based external tools (mutalyzer, biocommons/hgvs, seqrepo) used in benchmarking. Run `pixi shell` to activate it.
 
 See [docs/BENCHMARK_GUIDE.md](docs/BENCHMARK_GUIDE.md) for detailed usage.
+
+## Reporting bugs
+
+ferro-hgvs is alpha software — if you get a wrong or surprising result, please open an issue at [github.com/fulcrumgenomics/ferro-hgvs/issues](https://github.com/fulcrumgenomics/ferro-hgvs/issues). If ferro and another HGVS tool disagree on a variant, `ferro arbitrate ... --bug-report` checks both answers against the spec and, when it finds ferro at fault, prints (and can open) a prefilled issue form for you to review and submit (GitHub may ask you to sign in first). See [Why do ferro and another tool disagree?](docs/src/guide/arbitrate-disagreements.md).
 
 ## Development
 
