@@ -320,6 +320,32 @@ enum Commands {
         /// Output format.
         #[arg(short = 'f', long, default_value = "text", value_parser = ["text", "json"])]
         format: String,
+
+        /// After arbitrating, and only when the verdict/category/compliance
+        /// implicates ferro (ferro wrong or possibly wrong), build and show
+        /// the same GitHub bug report as `ferro bug-report` (equivalent to
+        /// piping `--format json | ferro bug-report --from-arbitration -`).
+        /// When ferro is not implicated (e.g. an equivalent or ferro-correct
+        /// verdict), prints a note instead and does not file.
+        #[arg(long)]
+        bug_report: bool,
+
+        /// Never open a browser — always print the prefilled URL instead.
+        /// Only meaningful together with `--bug-report`. See `ferro
+        /// bug-report --no-open` for the exact semantics.
+        #[arg(long)]
+        no_open: bool,
+
+        /// Include ferro version and OS/arch details in the bug-report issue
+        /// body. Only meaningful together with `--bug-report`. Omitted by
+        /// default to avoid leaking machine details.
+        #[arg(long)]
+        include_environment: bool,
+
+        /// Free-text notes from the reporter, included verbatim in the
+        /// bug-report body. Only meaningful together with `--bug-report`.
+        #[arg(long)]
+        notes: Option<String>,
     },
 
     /// File a GitHub bug report from a completed `ferro arbitrate --format
@@ -838,6 +864,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             other_tool,
             mutalyzer_url,
             format,
+            bug_report,
+            no_open,
+            include_environment,
+            notes,
         } => run_arbitrate(
             variant.as_deref(),
             &reference,
@@ -845,6 +875,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &other_tool,
             &mutalyzer_url,
             &format,
+            bug_report,
+            no_open,
+            include_environment,
+            notes.as_deref(),
         ),
         Commands::BugReport {
             from_arbitration,
@@ -2038,12 +2072,71 @@ fn render_arbitration_text(a: &ferro_hgvs::arbitrate::Arbitration) -> String {
     out
 }
 
+/// True when the arbitration indicates ferro itself is (or may be) wrong —
+/// the only cases where filing a ferro bug is warranted. Mirrors the
+/// judgment a caller would otherwise have to make by eye from `--format
+/// json` output before deciding to pipe it into `ferro bug-report`:
+///
+/// - `compliance` names the other tool (or both tools) as correct rather
+///   than ferro (`Other`/`BothWrong`);
+/// - `category` says the other tool is right or both are wrong
+///   (`MutalyzerCorrect`/`BothIncorrect`) — kept alongside `compliance`
+///   since the two are meant to mirror each other (see [`Arbitration`]'s
+///   doc comment) but are separate fields, so a future divergence between
+///   them shouldn't silently drop a ferro-implicated case;
+/// - `verdict` is [`Verdict::FerroParseError`] — ferro's own output didn't
+///   even parse, which is always a ferro bug regardless of `compliance`
+///   (parse failures short-circuit to `Compliance::NotApplicable`, so
+///   `compliance`/`category` alone would miss this case).
+///
+/// Deliberately excludes `Verdict::Inconclusive`: the oracle/projection step
+/// itself errored, so there is no completed verdict to accuse ferro of (see
+/// `run_bug_report`'s own Inconclusive guard, #886) — filing on it would
+/// misreport a projection limitation as a normalization bug.
+fn ferro_is_implicated(a: &ferro_hgvs::arbitrate::Arbitration) -> bool {
+    use ferro_hgvs::arbitrate::{ArbitrationCategory, Compliance, Verdict};
+
+    matches!(a.compliance, Compliance::Other | Compliance::BothWrong)
+        || matches!(
+            a.category,
+            ArbitrationCategory::MutalyzerCorrect | ArbitrationCategory::BothIncorrect
+        )
+        || matches!(a.verdict, Verdict::FerroParseError)
+}
+
+/// Snake_case label for a [`Verdict`](ferro_hgvs::arbitrate::Verdict), for
+/// the `--bug-report` "not implicated" note. `Verdict` has no `Display` impl
+/// (unlike `Compliance`/`ArbitrationCategory`); this mirrors their
+/// snake_case convention rather than falling back to the PascalCase `{:?}`
+/// form.
+fn verdict_label(v: ferro_hgvs::arbitrate::Verdict) -> &'static str {
+    use ferro_hgvs::arbitrate::Verdict;
+    match v {
+        Verdict::Equivalent => "equivalent",
+        Verdict::Different => "different",
+        Verdict::BasisMismatch => "basis_mismatch",
+        Verdict::OtherUnparseable => "other_unparseable",
+        Verdict::FerroParseError => "ferro_parse_error",
+        Verdict::Inconclusive => "inconclusive",
+    }
+}
+
 /// `ferro arbitrate`: adjudicate a parse/normalize/projection disagreement
 /// between ferro and another tool (Mutalyzer by default) for a single HGVS
 /// input. Builds the same provider+projector as `run_project`, computes
 /// ferro's own normalized output, obtains the other tool's output
 /// (`--other-output` or a live Mutalyzer fetch), and calls
 /// `ferro_hgvs::arbitrate::arbitrate` to produce the verdict.
+///
+/// When `bug_report` is set, also drives the `ferro bug-report` side effect
+/// (same rendering/open-browser behavior) — but only when
+/// [`ferro_is_implicated`] says the arbitration actually accuses ferro of
+/// something; otherwise prints a "not filing" note to stderr. In `--format
+/// json` mode the arbitration JSON is always the only thing written to
+/// stdout (so `ferro arbitrate --format json --bug-report` stays pipeable);
+/// the bug-report body/prompt/URL go to stderr instead. In `--format text`
+/// mode both go to stdout, after the verdict text.
+#[allow(clippy::too_many_arguments)]
 fn run_arbitrate(
     variant: Option<&str>,
     reference: &Path,
@@ -2051,6 +2144,10 @@ fn run_arbitrate(
     other_tool: &str,
     mutalyzer_url: &str,
     format: &str,
+    bug_report: bool,
+    no_open: bool,
+    include_environment: bool,
+    notes: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::arbitrate::arbitrate;
     use ferro_hgvs::data::cdot::CdotMapper;
@@ -2109,12 +2206,48 @@ fn run_arbitrate(
 
     let arbitration = arbitrate(&variant, &ferro_output, other, &provider, Some(&resolver))?;
 
+    let is_json = format == "json";
     match format {
         "json" => {
             println!("{}", serde_json::to_string_pretty(&arbitration)?);
         }
         _ => {
             print!("{}", render_arbitration_text(&arbitration));
+        }
+    }
+
+    if bug_report {
+        if ferro_is_implicated(&arbitration) {
+            // json mode: keep stdout = the arbitration JSON only, so a
+            // `--format json | ...` pipe stays clean; the bug-report body
+            // and URL go to stderr instead. text mode: both go to stdout,
+            // continuing straight on from the verdict text already printed.
+            if is_json {
+                let mut stderr = io::stderr();
+                emit_bug_report(
+                    &arbitration,
+                    notes,
+                    include_environment,
+                    no_open,
+                    &mut stderr,
+                )?;
+            } else {
+                let mut stdout = io::stdout();
+                emit_bug_report(
+                    &arbitration,
+                    notes,
+                    include_environment,
+                    no_open,
+                    &mut stdout,
+                )?;
+            }
+        } else {
+            eprintln!(
+                "No ferro bug indicated (verdict: {}, compliance: {}). Not filing. \
+                 To file anyway: rerun with --format json | ferro bug-report --from-arbitration -",
+                verdict_label(arbitration.verdict),
+                arbitration.compliance
+            );
         }
     }
 
@@ -2141,7 +2274,6 @@ fn run_bug_report(
     no_open: bool,
     include_environment: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use ferro_hgvs::arbitrate::bug_report::BugReport;
     use ferro_hgvs::arbitrate::{Arbitration, Verdict};
 
     let from_arbitration = from_arbitration.ok_or(
@@ -2194,43 +2326,72 @@ fn run_bug_report(
         }
     }
 
+    let mut stdout = io::stdout();
+    emit_bug_report(
+        &arbitration,
+        notes,
+        include_environment,
+        no_open,
+        &mut stdout,
+    )
+}
+
+/// Build a [`BugReport`] from `arbitration` and drive the shared "show the
+/// issue title/body, then either open a browser or print the prefilled URL"
+/// side effect used by both `ferro bug-report` and `ferro arbitrate
+/// --bug-report`. Everything (title, body, the open-browser confirmation
+/// prompt, and the resulting URL) is written to `out` rather than hardcoded
+/// to stdout, so a caller that needs the arbitration JSON to stay clean on
+/// stdout (`ferro arbitrate --format json --bug-report`) can pass stderr
+/// instead. `ferro bug-report` passes stdout, preserving its existing
+/// observable behavior exactly.
+fn emit_bug_report(
+    arbitration: &ferro_hgvs::arbitrate::Arbitration,
+    notes: Option<&str>,
+    include_environment: bool,
+    no_open: bool,
+    out: &mut dyn Write,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use ferro_hgvs::arbitrate::bug_report::BugReport;
+
     let report = BugReport {
-        arbitration: &arbitration,
+        arbitration,
         notes,
         include_environment,
         ferro_version: env!("CARGO_PKG_VERSION"),
     };
 
-    println!("{}", report.issue_title());
-    println!();
-    println!("{}", report.issue_body());
-    println!();
+    writeln!(out, "{}", report.issue_title())?;
+    writeln!(out)?;
+    writeln!(out, "{}", report.issue_body())?;
+    writeln!(out)?;
 
     if !should_offer_to_open_browser(no_open) {
-        return emit_bug_report_url(&report, false);
+        return emit_bug_report_url(&report, false, out);
     }
 
-    print!("Open a browser to file this issue? [y/N] ");
-    io::stdout().flush()?;
+    write!(out, "Open a browser to file this issue? [y/N] ")?;
+    out.flush()?;
     let mut answer = String::new();
     io::stdin().read_line(&mut answer)?;
     let answer = answer.trim().to_ascii_lowercase();
     let confirmed = answer == "y" || answer == "yes";
     if !confirmed {
-        println!("Not opening a browser.");
+        writeln!(out, "Not opening a browser.")?;
     }
-    emit_bug_report_url(&report, confirmed)
+    emit_bug_report_url(&report, confirmed, out)
 }
 
 /// Resolve the report's prefilled new-issue URL — writing the over-length
 /// fallback body to a temp-dir file first when the report doesn't fit in a
 /// URL — then either open it in a browser (`try_open`) or just print it.
-/// The URL (and, for the over-length case, the file path) is always
-/// printed, whether or not opening was attempted or succeeded, so the user
+/// The URL (and, for the over-length case, the file path) is always written
+/// to `out`, whether or not opening was attempted or succeeded, so the user
 /// has it either way.
 fn emit_bug_report_url(
     report: &ferro_hgvs::arbitrate::bug_report::BugReport,
     try_open: bool,
+    out: &mut dyn Write,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::arbitrate::bug_report::BugReportUrl;
 
@@ -2238,10 +2399,11 @@ fn emit_bug_report_url(
         BugReportUrl::Url(url) => url,
         BugReportUrl::OverLength { url, body } => {
             let path = write_overlength_bug_report(report.arbitration, &body)?;
-            println!(
+            writeln!(
+                out,
                 "The full report is too long to prefill in a URL; the full body was written to: {}",
                 path.display()
-            );
+            )?;
             url
         }
     };
@@ -2250,9 +2412,12 @@ fn emit_bug_report_url(
         return Ok(());
     }
     if try_open {
-        println!("Could not open a browser automatically; open this URL yourself:");
+        writeln!(
+            out,
+            "Could not open a browser automatically; open this URL yourself:"
+        )?;
     }
-    println!("{url}");
+    writeln!(out, "{url}")?;
     Ok(())
 }
 
@@ -4189,4 +4354,171 @@ fn run_build_transcript(
     eprintln!("Wrote 1 transcript ({}) to {}", tx_id, output.display());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod arbitrate_bug_report_gate_tests {
+    use super::ferro_is_implicated;
+    use ferro_hgvs::arbitrate::{
+        Arbitration, ArbitrationCategory, Compliance, OtherResult, Verdict,
+    };
+
+    /// A hand-built `Arbitration` with the three fields `ferro_is_implicated`
+    /// reads set explicitly and every other field a fixed, arbitrary-but-valid
+    /// placeholder — this is a pure gating-logic test, not an end-to-end
+    /// arbitration, so the placeholders never need to be internally
+    /// consistent with each other.
+    fn arbitration(
+        verdict: Verdict,
+        compliance: Compliance,
+        category: ArbitrationCategory,
+    ) -> Arbitration {
+        Arbitration {
+            input: "NC_000001.11:g.51dup".to_string(),
+            verdict,
+            compliance,
+            category,
+            ferro_output: Some("NC_000001.11:g.51dup".to_string()),
+            other: OtherResult {
+                tool: "mutalyzer".to_string(),
+                status: "ok".to_string(),
+                output: Some("NC_000001.11:g.51dup".to_string()),
+            },
+            spec_citations: Vec::new(),
+            ferro_spdi: None,
+            other_spdi: None,
+            reason: None,
+        }
+    }
+
+    // ===== true: ferro is implicated =====
+
+    #[test]
+    fn other_compliance_implicates_ferro() {
+        let a = arbitration(
+            Verdict::Different,
+            Compliance::Other,
+            ArbitrationCategory::MutalyzerCorrect,
+        );
+        assert!(ferro_is_implicated(&a));
+    }
+
+    #[test]
+    fn both_wrong_compliance_implicates_ferro() {
+        let a = arbitration(
+            Verdict::Different,
+            Compliance::BothWrong,
+            ArbitrationCategory::BothIncorrect,
+        );
+        assert!(ferro_is_implicated(&a));
+    }
+
+    #[test]
+    fn mutalyzer_correct_category_implicates_ferro_even_if_compliance_disagrees() {
+        // category and compliance are meant to mirror each other, but the
+        // predicate checks both independently (see its doc comment) so a
+        // future divergence between the two fields can't silently drop a
+        // ferro-implicated case.
+        let a = arbitration(
+            Verdict::Equivalent,
+            Compliance::NotApplicable,
+            ArbitrationCategory::MutalyzerCorrect,
+        );
+        assert!(ferro_is_implicated(&a));
+    }
+
+    #[test]
+    fn both_incorrect_category_implicates_ferro() {
+        let a = arbitration(
+            Verdict::Different,
+            Compliance::NotApplicable,
+            ArbitrationCategory::BothIncorrect,
+        );
+        assert!(ferro_is_implicated(&a));
+    }
+
+    #[test]
+    fn ferro_parse_error_verdict_implicates_ferro_even_with_not_applicable_compliance() {
+        // A parse failure short-circuits to Compliance::NotApplicable /
+        // ArbitrationCategory::Unknown, so the verdict check is the only one
+        // that catches this case.
+        let a = arbitration(
+            Verdict::FerroParseError,
+            Compliance::NotApplicable,
+            ArbitrationCategory::Unknown,
+        );
+        assert!(ferro_is_implicated(&a));
+    }
+
+    // ===== false: ferro is not implicated =====
+
+    #[test]
+    fn ferro_compliance_with_equivalent_verdict_is_not_implicated() {
+        let a = arbitration(
+            Verdict::Equivalent,
+            Compliance::Ferro,
+            ArbitrationCategory::FerroCorrect,
+        );
+        assert!(!ferro_is_implicated(&a));
+    }
+
+    #[test]
+    fn not_applicable_compliance_with_equivalent_verdict_is_not_implicated() {
+        let a = arbitration(
+            Verdict::Equivalent,
+            Compliance::NotApplicable,
+            ArbitrationCategory::Equivalent,
+        );
+        assert!(!ferro_is_implicated(&a));
+    }
+
+    #[test]
+    fn different_verdict_needing_interpretation_is_not_implicated() {
+        // A genuine edit disagreement with no deterministic predicate is
+        // flagged for human review, not filed as a ferro bug automatically.
+        let a = arbitration(
+            Verdict::Different,
+            Compliance::NeedsInterpretation,
+            ArbitrationCategory::Unknown,
+        );
+        assert!(!ferro_is_implicated(&a));
+    }
+
+    #[test]
+    fn basis_mismatch_is_not_implicated() {
+        let a = arbitration(
+            Verdict::BasisMismatch,
+            Compliance::NotApplicable,
+            ArbitrationCategory::Unknown,
+        );
+        assert!(!ferro_is_implicated(&a));
+    }
+
+    #[test]
+    fn inconclusive_is_not_implicated() {
+        // Deliberately excluded: the oracle/projection step errored, so
+        // there is no completed verdict to accuse ferro of (mirrors
+        // run_bug_report's own Inconclusive guard, #886).
+        let a = arbitration(
+            Verdict::Inconclusive,
+            Compliance::NotApplicable,
+            ArbitrationCategory::Unknown,
+        );
+        assert!(!ferro_is_implicated(&a));
+    }
+
+    #[test]
+    fn other_unparseable_is_not_implicated() {
+        // The OTHER tool's output failed to parse — that's the other tool's
+        // problem, not ferro's, so it must never file a ferro bug. Today this
+        // verdict is only ever paired with NotApplicable/Unknown; this test
+        // pins that a future divergence can't silently start filing bugs when
+        // the other tool emits garbage.
+        let a = arbitration(
+            Verdict::OtherUnparseable,
+            Compliance::NotApplicable,
+            ArbitrationCategory::Unknown,
+        );
+        assert!(!ferro_is_implicated(&a));
+    }
 }
