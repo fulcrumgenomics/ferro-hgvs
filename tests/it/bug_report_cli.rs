@@ -43,6 +43,7 @@ fn sample_arbitration() -> Arbitration {
         }],
         ferro_spdi: Some("NC_000001.11:50:A:AA".to_string()),
         other_spdi: Some("NC_000001.11:51:A:AA".to_string()),
+        reason: None,
     }
 }
 

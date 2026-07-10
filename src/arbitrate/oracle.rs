@@ -159,22 +159,26 @@ pub fn compare_variants(
 /// Return `v` in a frame the oracle can apply-to-reference.
 ///
 /// Exonic transcript (`c.`/`n.`) and genomic variants pass through
-/// unchanged. Intronic `c.`/`n.` variants are projected onto the genomic
-/// (`NC_`) frame via [`VariantProjector::project_to_genomic`], because
+/// unchanged. Intronic `c.`/`n.` variants are projected onto the chromosome
+/// (`NC_`) frame via [`VariantProjector::project_to_nc_frame`], because
 /// intronic bases are absent from the mature transcript and
-/// [`hgvs_to_spdi`] hard-errors on them (§5.1.1a).
+/// [`hgvs_to_spdi`] hard-errors on them (§5.1.1a). The oracle only needs the
+/// `NC_` pivot, not a re-anchored `NG_`/`LRG_` parent frame — it compares
+/// edited sequences over a window (roll-invariant), so a raw, non-parent
+/// pivot suffices and works even on a bare `NM_:c.` input that carries no
+/// explicit `genomic_context`.
 ///
 /// # Errors
 ///
-/// Propagates [`VariantProjector::project_to_genomic`]'s error contract when
-/// an intronic variant cannot be projected (e.g. no genomic parent context
-/// on the accession, or an unplaceable `NG_`/`LRG_` parent).
+/// Propagates [`VariantProjector::project_to_nc_frame`]'s error contract when
+/// an intronic variant cannot be pivoted to the `NC_` frame (e.g. the
+/// transcript is absent from cdot).
 pub fn resolve_frame<P: ReferenceProvider + Clone>(
     v: &HgvsVariant,
     projector: &VariantProjector<P>,
 ) -> Result<HgvsVariant, FerroError> {
     if variant_is_intronic(v) {
-        projector.project_to_genomic(v)
+        projector.project_to_nc_frame(v)
     } else {
         Ok(v.clone())
     }
@@ -238,7 +242,10 @@ pub(crate) mod frame_tests_support {
             CdotTranscript {
                 cds_start_incomplete: false,
                 gene_name: Some("INTRGENE".to_string()),
-                contig: "chr1".to_string(),
+                // A real versioned `NC_` chromosome accession (not a `chr`-style
+                // alias), so the arbitration NC pivot in `nc_pivot_context` can
+                // anchor bare-`NM_`/`NG_`/`LRG_`-parent inputs to it.
+                contig: "NC_000001.11".to_string(),
                 strand: ProvStrand::Plus,
                 exons: vec![[1000, 1010, 0, 10], [2000, 2010, 10, 20]],
                 cds_start: Some(0),
@@ -260,7 +267,11 @@ pub(crate) mod frame_tests_support {
             cds_start: Some(1),
             cds_end: Some(18),
             exons: vec![Exon::new(1, 1, 10), Exon::new(2, 11, 20)],
-            chromosome: Some("chr1".to_string()),
+            // Keep chromosome, cdot `contig` (NC_000001.11 above), and the
+            // add_genomic_sequence key below all aligned to the same versioned
+            // NC_ accession so an apply-to-reference through this projector
+            // resolves the sequence (no chr-alias vs NC_ split).
+            chromosome: Some("NC_000001.11".to_string()),
             genomic_start: Some(1000),
             genomic_end: Some(2009),
             genome_build: Default::default(),
@@ -276,7 +287,10 @@ pub(crate) mod frame_tests_support {
         let exon2 = "GGTAACCCNN";
         let prefix = "N".repeat(999);
         let suffix = "N".repeat(100);
-        provider.add_genomic_sequence("chr1", format!("{prefix}{exon1}{intron}{exon2}{suffix}"));
+        provider.add_genomic_sequence(
+            "NC_000001.11",
+            format!("{prefix}{exon1}{intron}{exon2}{suffix}"),
+        );
 
         let vp = VariantProjector::new(projector, provider.clone());
         (vp, provider)
@@ -397,6 +411,104 @@ mod frame_tests {
                     .inner()
                     .expect("resolved genomic start should be concrete");
                 assert_eq!(start.base, 1014, "expected g.1014 for c.10+5");
+            }
+            other => panic!("expected a Genome variant, got {other:?}"),
+        }
+    }
+
+    // -- resolve_frame: intronic under a non-NC_ parent (REGRESSION #7e9220f) --
+    //
+    // The bare-`NM_` intronic fix (`project_to_nc_frame`) originally only
+    // *filled in* a missing `genomic_context` from cdot's contig, leaving an
+    // already-present `NG_`/`LRG_` parent untouched — so `project_to_genomic_nc`
+    // stamped the short `NG_`/`LRG_` accession onto NC-scale chromosome
+    // coordinates, overflowed the parent sequence, and dropped the whole
+    // arbitration to `Verdict::Inconclusive`. The pivot must instead REPLACE the
+    // parent with the transcript's true chromosome (`NC_`) accession for *every*
+    // parent class. The existing `resolve_frame_projects_intronic_variant_to_genomic`
+    // above uses an `NC_` parent (the one class that was never broken) and so
+    // cannot catch this; these two do.
+
+    /// Shared assertion: `c.10+5del` under `context_parent` must pivot to the
+    /// chromosome (`NC_000001.11`) frame at `g.1014`, never staying on the
+    /// non-`NC_` parent accession.
+    fn assert_pivots_to_nc_g1014(context_parent: &str) {
+        let (projector, _provider) = intronic_fixture();
+        let cds = CdsVariant {
+            accession: parse_accession("NM_INTR.1")
+                .with_genomic_context(parse_accession(context_parent)),
+            gene_symbol: Some("INTRGENE".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::with_offset(10, 5)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        };
+        let intronic = HgvsVariant::Cds(cds);
+        assert!(
+            variant_is_intronic(&intronic),
+            "c.10+5 must route through the intronic branch"
+        );
+        match resolve_frame(&intronic, &projector).unwrap() {
+            HgvsVariant::Genome(g) => {
+                assert_eq!(
+                    g.accession.to_string(),
+                    "NC_000001.11",
+                    "pivot must re-anchor a {context_parent} parent to the chromosome (NC_) \
+                     accession, not stamp NC coordinates under {context_parent}"
+                );
+                let start = g
+                    .loc_edit
+                    .location
+                    .start
+                    .inner()
+                    .expect("resolved genomic start should be concrete");
+                assert_eq!(start.base, 1014, "expected g.1014 for c.10+5");
+            }
+            other => panic!("expected a Genome variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resolve_frame_projects_ng_parent_intronic_variant_to_nc() {
+        // `NG_007107.2(NM_004992.3):c.378-17del`-shaped input (the notation
+        // Mutalyzer emits). The `NG_` parent must be replaced by the NC frame.
+        assert_pivots_to_nc_g1014("NG_048011.1");
+    }
+
+    #[test]
+    fn resolve_frame_projects_lrg_parent_intronic_variant_to_nc() {
+        // `LRG_<n>(NM_...):c.…` — an `LRG_` genomic parent must likewise pivot
+        // onto the chromosome (`NC_`) frame rather than the short `LRG_` record.
+        assert_pivots_to_nc_g1014("LRG_1");
+    }
+
+    #[test]
+    fn resolve_frame_projects_bare_nm_intronic_variant_to_nc() {
+        // A bare `NM_:c.` intronic input (no `genomic_context`) still pivots to
+        // the chromosome frame via cdot's contig — the case #7e9220f first fixed.
+        let (projector, _provider) = intronic_fixture();
+        let cds = CdsVariant {
+            accession: parse_accession("NM_INTR.1"),
+            gene_symbol: Some("INTRGENE".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::with_offset(10, 5)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        };
+        match resolve_frame(&HgvsVariant::Cds(cds), &projector).unwrap() {
+            HgvsVariant::Genome(g) => {
+                assert_eq!(g.accession.to_string(), "NC_000001.11");
+                assert_eq!(
+                    g.loc_edit.location.start.inner().unwrap().base,
+                    1014,
+                    "expected g.1014 for c.10+5"
+                );
             }
             other => panic!("expected a Genome variant, got {other:?}"),
         }
