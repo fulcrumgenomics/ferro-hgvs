@@ -1,5 +1,6 @@
 """Type stubs for ferro-hgvs Python bindings."""
 
+from collections.abc import Iterable
 from enum import IntEnum
 from typing import Any, Callable
 
@@ -1913,3 +1914,51 @@ class VariantProjector:
         ``has_protein_data``.
         """
         ...
+
+# ============================================================================
+# Exception hierarchy
+# ============================================================================
+
+class FerroError(Exception):
+    """Base class for all ferro-hgvs variant-processing errors.
+
+    Every ferro failure that stems from parsing, normalizing, projecting, or
+    resolving reference data is an instance of ``FerroError`` (or one of its
+    subclasses). Catch ``FerroError`` to handle any of them; catch a specific
+    subclass to discriminate.
+
+    Pure argument-validation failures (an empty string, an out-of-range index,
+    an unrecognized enum spelling) are raised as plain ``ValueError`` — they are
+    programming errors, not variant-processing failures, and are not part of
+    this hierarchy.
+
+    Attributes:
+        code: The structured ``E####`` / ``W####`` error-code string, or
+            ``None`` when the underlying failure carries no code.
+        mutalyzer_codes: Equivalent mutalyzer diagnostic codes (e.g.
+            ``"EINTRONIC"``); empty when there is no mutalyzer equivalent.
+    """
+
+    code: str | None
+    mutalyzer_codes: tuple[str, ...]
+    def __init__(
+        self,
+        message: str,
+        code: str | None = ...,
+        mutalyzer_codes: Iterable[str] = ...,
+    ) -> None: ...
+
+class ParseError(FerroError, ValueError):
+    """Raised when an HGVS or SPDI string cannot be parsed."""
+
+class NormalizationError(FerroError, RuntimeError):
+    """Raised when normalizing a variant fails."""
+
+class ReferenceDataError(FerroError, ValueError, RuntimeError):
+    """Raised when reference data is unavailable or a reference lookup fails."""
+
+class ProjectionError(FerroError, ValueError, RuntimeError):
+    """Raised when projecting or converting a variant between coordinate systems fails."""
+
+class EquivalenceError(FerroError, RuntimeError):
+    """Raised when an equivalence check between variants fails."""
