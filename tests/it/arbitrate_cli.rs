@@ -45,12 +45,48 @@ fn arbitrate_help_documents_its_flags() {
         "--other-tool",
         "--mutalyzer-url",
         "--format",
+        "--bug-report",
+        "--no-open",
+        "--include-environment",
+        "--notes",
     ] {
         assert!(
             stdout.contains(flag),
             "arbitrate --help missing {flag}: {stdout}"
         );
     }
+}
+
+#[test]
+fn arbitrate_accepts_bug_report_flags_at_clap_level() {
+    // Clap-level acceptance only (no reference data needed): --bug-report,
+    // --no-open, --include-environment, and --notes must parse without
+    // clap rejecting them, even though this specific invocation fails later
+    // for an unrelated reason (bad --reference dir). If clap didn't know
+    // these flags it would fail immediately with an "unexpected argument"
+    // error instead.
+    let out = ferro()
+        .args([
+            "arbitrate",
+            "NM_003002.4:c.274G>T",
+            "--reference",
+            "/nonexistent-xyz-ferro-arbitrate-bug-report",
+            "--other-output",
+            "NM_003002.4:c.274G>T",
+            "--bug-report",
+            "--no-open",
+            "--include-environment",
+            "--notes",
+            "seen while triaging",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument") && !stderr.contains("unrecognized"),
+        "clap should accept the bug-report flags: stderr={stderr}"
+    );
 }
 
 #[test]
@@ -197,5 +233,94 @@ fn arbitrate_basis_mismatch_on_version_difference_suggests_aligning_versions() {
     assert!(
         stdout.contains("VERDICT: BasisMismatch") && stdout.contains("align versions"),
         "expected a version-alignment hint, got: {stdout}"
+    );
+}
+
+// ===== --bug-report gating (manifest-gated) =====
+//
+// A reliably ferro-implicated case (compliance/category naming the other
+// tool, or a ferro parse error) requires a live disagreement against the
+// real prepared reference; the committed `baseline-failures/*.txt` live-FAIL
+// snapshot is currently empty (see its README — the snapshot only exists
+// when a manifest run has found one), so there is no fixed input known to
+// reproduce one deterministically here. `ferro_is_implicated`'s full
+// true/false matrix is covered directly (and reference-free) by the unit
+// tests in `src/bin/ferro.rs`'s `arbitrate_bug_report_gate_tests` module;
+// this file sticks to what a real reference run can assert reliably: the
+// not-implicated path, end to end through the CLI.
+
+#[test]
+fn arbitrate_bug_report_on_equivalent_case_declines_to_file() {
+    let Some(reference) = reference_dir() else {
+        println!(
+            "arbitrate_cli: skipping — no manifest at FERRO_MANIFEST or benchmark-output/manifest.json"
+        );
+        return;
+    };
+
+    // Same case as arbitrate_json_reports_equivalent_for_identical_other_output:
+    // feeding a variant back as its own --other-output always yields
+    // Verdict::Equivalent / Compliance::NotApplicable, which
+    // ferro_is_implicated must treat as not-implicated.
+    let variant = "NM_000255.4:c.446dup";
+    let out = ferro()
+        .args(["arbitrate", variant, "--reference"])
+        .arg(&reference)
+        .args(["--other-output", variant, "--bug-report", "--no-open"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "arbitrate --bug-report should still succeed on a not-implicated verdict: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("No ferro bug indicated"),
+        "expected the not-implicated note on stderr: stderr={stderr}"
+    );
+    assert!(
+        !stdout.contains("github.com/fulcrumgenomics/ferro-hgvs/issues/new")
+            && !stderr.contains("github.com/fulcrumgenomics/ferro-hgvs/issues/new"),
+        "not-implicated case must not file: stdout={stdout} stderr={stderr}"
+    );
+}
+
+#[test]
+fn arbitrate_bug_report_json_mode_keeps_stdout_pipeable() {
+    let Some(reference) = reference_dir() else {
+        println!(
+            "arbitrate_cli: skipping — no manifest at FERRO_MANIFEST or benchmark-output/manifest.json"
+        );
+        return;
+    };
+
+    let variant = "NM_000255.4:c.446dup";
+    let out = ferro()
+        .args(["arbitrate", variant, "--reference"])
+        .arg(&reference)
+        .args([
+            "--other-output",
+            variant,
+            "--format",
+            "json",
+            "--bug-report",
+            "--no-open",
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // stdout must be exactly the arbitration JSON — nothing else — so a
+    // `--format json | ferro bug-report --from-arbitration -` pipe still
+    // works when combined with --bug-report.
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("not valid JSON: {e}\n{stdout}"));
+    assert_eq!(json["verdict"], "equivalent", "full output: {json}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("No ferro bug indicated"),
+        "expected the not-implicated note on stderr: stderr={stderr}"
     );
 }
