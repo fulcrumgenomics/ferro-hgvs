@@ -19,7 +19,7 @@
 //! logic against the documented pair, decoupled from whatever the current
 //! normalizer happens to produce today.
 
-use ferro_hgvs::arbitrate::{arbitrate, ArbitrationCategory, FrameResolver, OtherResult};
+use ferro_hgvs::arbitrate::{arbitrate, ArbitrationCategory, FrameResolver, OtherResult, Verdict};
 use ferro_hgvs::data::cdot::CdotMapper;
 use ferro_hgvs::data::projection::Projector;
 use ferro_hgvs::{FerroError, HgvsVariant, MultiFastaProvider, VariantProjector};
@@ -208,5 +208,84 @@ fn arbitration_corpus_never_falsely_blames_ferro() {
         "arbitration_corpus: every row was Inconclusive ({asserted} asserted, {skipped} \
          skipped) — the reference is too degraded for the oracle to complete on any row, \
          so the honesty invariant would pass vacuously"
+    );
+}
+
+/// Regression guard (#7e9220f): an intronic variant carrying an `NG_`/`LRG_`
+/// genomic parent — the notation Mutalyzer emits — must pivot to the chromosome
+/// (`NC_`) frame and reduce to a *real* verdict, not `Verdict::Inconclusive`.
+///
+/// Before the fix, `project_to_nc_frame` only *filled in* a missing
+/// `genomic_context`; an already-present `NG_`/`LRG_` parent was left in place,
+/// so the NC-scale coordinates were stamped onto the short parent accession,
+/// overflowed its sequence, and dropped arbitration to `Inconclusive`. Feeding
+/// two identical inputs makes the expected verdict unambiguous: the same edit
+/// on the same reference is `Equivalent`, so any `Inconclusive`/`BasisMismatch`
+/// here is the regression re-appearing. FERRO_MANIFEST-gated like the corpus
+/// test above (needs a prepared reference with the `NG_`/`LRG_` placements).
+#[test]
+fn arbitration_non_nc_parent_intronic_reduces_to_real_verdict() {
+    let Some(reference) = reference_dir() else {
+        println!(
+            "arbitration_non_nc_parent_intronic: skipping — no manifest at FERRO_MANIFEST or \
+             benchmark-output/manifest.json"
+        );
+        return;
+    };
+
+    let manifest_path = reference.join("manifest.json");
+    let provider = MultiFastaProvider::from_manifest(&manifest_path)
+        .unwrap_or_else(|e| panic!("failed to load reference at {}: {e}", reference.display()));
+    let cdot = provider
+        .cdot_mapper()
+        .cloned()
+        .unwrap_or_else(CdotMapper::new);
+    let provider: CorpusProvider = Arc::new(provider);
+    let projector = VariantProjector::new(Projector::new(cdot), provider.clone());
+    let resolver = CorpusFrameResolver(projector);
+
+    // (label, NG_/LRG_-parent intronic input). Identical inputs → Equivalent.
+    let cases = [
+        ("NG-parent", "NG_007107.2(NM_004992.3):c.378-17del"),
+        ("LRG-parent", "LRG_293t1:c.68-7del"),
+    ];
+
+    let mut asserted = 0usize;
+    for (label, input) in cases {
+        let other = OtherResult {
+            tool: "mutalyzer".into(),
+            status: "ok".into(),
+            output: Some(input.to_string()),
+        };
+        let arb = match arbitrate(input, input, other, provider.as_ref(), Some(&resolver)) {
+            Ok(arb) => arb,
+            Err(e) => {
+                // A reference-coverage gap (the accession isn't carried by this
+                // particular prepared reference) is a skip, not a failure —
+                // same tolerance as the corpus test.
+                eprintln!("arbitration_non_nc_parent_intronic: skipping {label} ({input}): {e}");
+                continue;
+            }
+        };
+        asserted += 1;
+        assert_ne!(
+            arb.verdict,
+            Verdict::Inconclusive,
+            "{label} ({input}): identical inputs must not be Inconclusive — the \
+             NG_/LRG_-parent intronic pivot regressed (reason: {:?})",
+            arb.reason
+        );
+        assert_eq!(
+            arb.verdict,
+            Verdict::Equivalent,
+            "{label} ({input}): identical inputs must be Equivalent, got {:?}",
+            arb.verdict
+        );
+    }
+
+    assert!(
+        asserted > 0,
+        "arbitration_non_nc_parent_intronic: every case skipped — reference lacks the \
+         NG_/LRG_ accessions, so the regression guard could not run"
     );
 }

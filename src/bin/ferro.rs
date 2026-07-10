@@ -1977,6 +1977,16 @@ fn render_verdict_line(a: &ferro_hgvs::arbitrate::Arbitration) -> String {
             "VERDICT: FerroParseError — ferro's own output could not be parsed as HGVS."
                 .to_string()
         }
+        (Verdict::Inconclusive, ..) => {
+            let reason = a.reason.as_deref().unwrap_or("unknown error");
+            let mut line = format!("INCONCLUSIVE: could not adjudicate — {reason}");
+            if reason.contains("NG/NC parent") {
+                line.push_str(
+                    "\n  (a bare NM_ transcript variant may need an explicit NC_(NM_) parent form)",
+                );
+            }
+            line
+        }
     }
 }
 
@@ -2132,7 +2142,7 @@ fn run_bug_report(
     include_environment: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::arbitrate::bug_report::BugReport;
-    use ferro_hgvs::arbitrate::Arbitration;
+    use ferro_hgvs::arbitrate::{Arbitration, Verdict};
 
     let from_arbitration = from_arbitration.ok_or(
         "ferro bug-report requires --from-arbitration <path|-> in this version \
@@ -2157,6 +2167,19 @@ fn run_bug_report(
             from_arbitration.display()
         )
     })?;
+
+    // An inconclusive arbitration never reached a compliance judgment (the
+    // oracle/projection step itself errored, e.g. an unplaceable variant) —
+    // there is nothing to accuse ferro or the other tool of, so refuse to
+    // file a bug report rather than offer one for a non-verdict (#886).
+    if arbitration.verdict == Verdict::Inconclusive {
+        return Err(format!(
+            "ferro bug-report: the arbitration bundle is Inconclusive (reason: {}); \
+             nothing to report — a bug report requires a completed verdict",
+            arbitration.reason.as_deref().unwrap_or("unknown")
+        )
+        .into());
+    }
 
     // `category` is an informational hint (e.g. from the driving skill); the
     // bundle's own category is authoritative for the report, so a mismatch
