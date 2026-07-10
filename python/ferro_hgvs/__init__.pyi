@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 from enum import IntEnum
-from typing import Any, Callable
+from typing import Any, Callable, Literal, overload
 
 __version__: str
 
@@ -1812,7 +1812,10 @@ class VariantProjector:
         """
         ...
 
-    def project_many(self, hgvs_strings: list[str]) -> list[list[VariantProjection]]:
+    @overload
+    def project_many(
+        self, hgvs_strings: list[str], return_exceptions: Literal[False] = False
+    ) -> list[list[VariantProjection]]:
         """Batched parse + normalize + project_all over a list of g. HGVS strings.
 
         Equivalent to ``[self.project_all(s) for s in hgvs_strings]``, but takes a
@@ -1822,18 +1825,28 @@ class VariantProjector:
 
         Args:
             hgvs_strings: List of g. HGVS variant strings.
+            return_exceptions: When False (default) the first failing input aborts
+                the batch by raising ``ProjectionError``. When True nothing is
+                raised: each output element is either that input's list of
+                projections or the ``ProjectionError`` for its failure, so one bad
+                input does not discard the rest.
 
         Returns:
             List of result lists — one inner list per input, in the same order.
             Each inner list holds the per-transcript projections for that variant
-            in clinical priority order.
+            in clinical priority order. With ``return_exceptions=True`` an element
+            may instead be the ``ProjectionError`` for that input.
 
         Raises:
-            RuntimeError: On the first parse / normalization error. Subsequent
-                inputs are not processed.
+            ProjectionError: On the first parse / projection error, unless
+                ``return_exceptions=True`` (then failures are returned in place).
         """
         ...
 
+    @overload
+    def project_many(
+        self, hgvs_strings: list[str], return_exceptions: Literal[True]
+    ) -> list[list[VariantProjection] | ProjectionError]: ...
     def project_to_genomic(self, variant: HgvsVariant, normalize: bool = True) -> HgvsVariant:
         """Project a transcript-coordinate variant (c./n./r.) onto its parent
         genomic reference and return a Genome-kind HgvsVariant.
@@ -1875,7 +1888,10 @@ class VariantProjector:
         """
         ...
 
-    def project_normalized_many(self, variants: list[HgvsVariant]) -> list[list[VariantProjection]]:
+    @overload
+    def project_normalized_many(
+        self, variants: list[HgvsVariant], return_exceptions: Literal[False] = False
+    ) -> list[list[VariantProjection]]:
         """Batched ``project_normalized_all`` over a list of already-normalized
         g. variants.
 
@@ -1884,15 +1900,25 @@ class VariantProjector:
 
         Args:
             variants: List of HgvsVariant objects (must already be normalized).
+            return_exceptions: When False (default) the first failing input aborts
+                the batch by raising ``ProjectionError``. When True nothing is
+                raised: each output element is either that input's list of
+                projections or the ``ProjectionError`` for its failure.
 
         Returns:
-            List of result lists, one per input.
+            List of result lists, one per input. With ``return_exceptions=True`` an
+            element may instead be the ``ProjectionError`` for that input.
 
         Raises:
-            RuntimeError: On the first projection error.
+            ProjectionError: On the first projection error, unless
+                ``return_exceptions=True`` (then failures are returned in place).
         """
         ...
 
+    @overload
+    def project_normalized_many(
+        self, variants: list[HgvsVariant], return_exceptions: Literal[True]
+    ) -> list[list[VariantProjection] | ProjectionError]: ...
     def has_genomic_data(self) -> bool:
         """Return True if the backing reference provides genomic sequence data.
 

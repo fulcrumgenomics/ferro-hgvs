@@ -107,6 +107,57 @@ fn ferro_typed(class: &str, message: String, err: &crate::error::FerroError) -> 
     )
 }
 
+/// Wrap the projector's raw projections for one input into the Python-facing
+/// `PyVariantProjection` newtypes. Shared by both batch entry points.
+fn wrap_projections(
+    projections: Vec<crate::project::VariantProjection>,
+) -> Vec<PyVariantProjection> {
+    projections
+        .into_iter()
+        .map(|inner| PyVariantProjection { inner })
+        .collect()
+}
+
+/// Turn a `(input_index, error)` pair into the batch's `ProjectionError`, whose
+/// message pinpoints the failing entry via an `input[i]:` prefix.
+fn projection_error_at(i: usize, e: &crate::error::FerroError) -> PyErr {
+    ferro_typed(
+        "ProjectionError",
+        format!("Projection error at input[{i}]: {e}"),
+        e,
+    )
+}
+
+/// Convert a list of per-input projection lists into the Python return value —
+/// a `list[list[VariantProjection]]`.
+fn projections_to_pylist(
+    py: Python<'_>,
+    outer: Vec<Vec<PyVariantProjection>>,
+) -> PyResult<Vec<Py<PyAny>>> {
+    outer
+        .into_iter()
+        .map(|projections| Ok(projections.into_pyobject(py)?.into_any().unbind()))
+        .collect()
+}
+
+/// Assemble the output for isolation mode (`return_exceptions == true`): never
+/// raises. Each element is, per input and in order, either that input's
+/// `list[VariantProjection]` or the `ProjectionError` instance describing its
+/// failure, so one bad input can no longer discard results for the rest.
+fn build_isolated_batch(
+    py: Python<'_>,
+    raw: Vec<Result<Vec<PyVariantProjection>, (usize, crate::error::FerroError)>>,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let mut out = Vec::with_capacity(raw.len());
+    for item in raw {
+        match item {
+            Ok(projections) => out.push(projections.into_pyobject(py)?.into_any().unbind()),
+            Err((i, e)) => out.push(projection_error_at(i, &e).into_value(py).into_any()),
+        }
+    }
+    Ok(out)
+}
+
 /// Validate a shuffle-direction argument at the Python boundary.
 ///
 /// Mirrors the `assembly` argument's validate-and-raise pattern: an unrecognized
@@ -1505,49 +1556,48 @@ impl PyVariantProjector {
     ///
     /// Args:
     ///     hgvs_strings: List of g. HGVS variant strings.
+    ///     return_exceptions: When ``False`` (default) the first failing input
+    ///         aborts the batch by raising ``ProjectionError``. When ``True``
+    ///         nothing is raised: each output element is either that input's
+    ///         list of projections or the ``ProjectionError`` for its failure,
+    ///         so one bad input does not discard the rest.
     ///
     /// Returns:
     ///     List of result lists — one inner list per input, in the same order.
     ///     Each inner list contains the projections for that variant in
-    ///     clinical priority order.
+    ///     clinical priority order. With ``return_exceptions=True`` an element
+    ///     may instead be the ``ProjectionError`` for that input.
     ///
     /// Raises:
-    ///     RuntimeError: On the first parse / normalization error. Subsequent
-    ///         inputs are not processed.
+    ///     ProjectionError: On the first parse / projection error, unless
+    ///         ``return_exceptions=True`` (then failures are returned in place).
+    #[pyo3(signature = (hgvs_strings, return_exceptions=false))]
     fn project_many(
         &self,
         py: Python<'_>,
         hgvs_strings: Vec<String>,
-    ) -> PyResult<Vec<Vec<PyVariantProjection>>> {
-        // Capture the input index alongside the error so callers can isolate
-        // which entry in the batch failed; the underlying error is preserved
-        // unchanged after the `input[i]:` prefix.
-        let result: Result<Vec<Vec<_>>, (usize, crate::error::FerroError)> = py.detach(|| {
-            hgvs_strings
-                .iter()
-                .enumerate()
-                .map(|(i, s)| self.inner.project_all(s).map_err(|e| (i, e)))
-                .collect()
-        });
-        result
-            .map(|outer| {
-                outer
-                    .into_iter()
-                    .map(|projections| {
-                        projections
-                            .into_iter()
-                            .map(|inner| PyVariantProjection { inner })
-                            .collect()
-                    })
-                    .collect()
-            })
-            .map_err(|(i, e)| {
-                ferro_typed(
-                    "ProjectionError",
-                    format!("Projection error at input[{i}]: {e}"),
-                    &e,
-                )
-            })
+        return_exceptions: bool,
+    ) -> PyResult<Vec<Py<PyAny>>> {
+        // Project one input, wrapping its results and carrying the index on
+        // error so the `input[i]:` prefix can pinpoint the failing entry.
+        let project = |(i, s): (usize, &String)| {
+            self.inner
+                .project_all(s)
+                .map(wrap_projections)
+                .map_err(|e| (i, e))
+        };
+        if return_exceptions {
+            // Isolation mode: compute EVERY input (no short-circuit) so each
+            // failure can be surfaced in place.
+            let raw = py.detach(|| hgvs_strings.iter().enumerate().map(project).collect());
+            build_isolated_batch(py, raw)
+        } else {
+            // Fail-fast default: collect into a `Result`, which short-circuits
+            // at the first failing input — later inputs are never projected.
+            let outer: Result<Vec<_>, _> =
+                py.detach(|| hgvs_strings.iter().enumerate().map(project).collect());
+            projections_to_pylist(py, outer.map_err(|(i, e)| projection_error_at(i, &e))?)
+        }
     }
 
     /// Batched `project_normalized_all` over a list of already-normalized g.
@@ -1556,47 +1606,43 @@ impl PyVariantProjector {
     ///
     /// Args:
     ///     variants: List of HgvsVariant objects (must already be normalized).
+    ///     return_exceptions: When ``False`` (default) the first failing input
+    ///         aborts the batch by raising ``ProjectionError``. When ``True``
+    ///         nothing is raised: each output element is either that input's
+    ///         list of projections or the ``ProjectionError`` for its failure.
     ///
     /// Returns:
-    ///     List of result lists, one per input.
+    ///     List of result lists, one per input. With ``return_exceptions=True``
+    ///     an element may instead be the ``ProjectionError`` for that input.
     ///
     /// Raises:
-    ///     RuntimeError: On the first projection error.
+    ///     ProjectionError: On the first projection error, unless
+    ///         ``return_exceptions=True`` (then failures are returned in place).
+    #[pyo3(signature = (variants, return_exceptions=false))]
     fn project_normalized_many(
         &self,
         py: Python<'_>,
         variants: Vec<PyHgvsVariant>,
-    ) -> PyResult<Vec<Vec<PyVariantProjection>>> {
+        return_exceptions: bool,
+    ) -> PyResult<Vec<Py<PyAny>>> {
         let inner_variants: Vec<HgvsVariant> = variants.into_iter().map(|v| v.inner).collect();
-        // Capture the input index alongside the error so callers can isolate
-        // which entry in the batch failed; the underlying error is preserved
-        // unchanged after the `input[i]:` prefix.
-        let result: Result<Vec<Vec<_>>, (usize, crate::error::FerroError)> = py.detach(|| {
-            inner_variants
-                .iter()
-                .enumerate()
-                .map(|(i, v)| self.inner.project_normalized_all(v).map_err(|e| (i, e)))
-                .collect()
-        });
-        result
-            .map(|outer| {
-                outer
-                    .into_iter()
-                    .map(|projections| {
-                        projections
-                            .into_iter()
-                            .map(|inner| PyVariantProjection { inner })
-                            .collect()
-                    })
-                    .collect()
-            })
-            .map_err(|(i, e)| {
-                ferro_typed(
-                    "ProjectionError",
-                    format!("Projection error at input[{i}]: {e}"),
-                    &e,
-                )
-            })
+        // Project one already-normalized input, carrying the index on error.
+        let project = |(i, v): (usize, &HgvsVariant)| {
+            self.inner
+                .project_normalized_all(v)
+                .map(wrap_projections)
+                .map_err(|e| (i, e))
+        };
+        if return_exceptions {
+            // Isolation mode: compute EVERY input so failures surface in place.
+            let raw = py.detach(|| inner_variants.iter().enumerate().map(project).collect());
+            build_isolated_batch(py, raw)
+        } else {
+            // Fail-fast default: short-circuit at the first failing input.
+            let outer: Result<Vec<_>, _> =
+                py.detach(|| inner_variants.iter().enumerate().map(project).collect());
+            projections_to_pylist(py, outer.map_err(|(i, e)| projection_error_at(i, &e))?)
+        }
     }
 }
 
