@@ -49,7 +49,7 @@ summary.
 
 The JSON `Arbitration` bundle has the fields you branch on:
 
-- `verdict`: `equivalent` | `different` | `basis_mismatch` | `other_unparseable` | `ferro_parse_error`
+- `verdict`: `equivalent` | `different` | `basis_mismatch` | `other_unparseable` | `ferro_parse_error` | `inconclusive`
 - `compliance`: `ferro` | `other` | `both_wrong` | `needs_interpretation` | `not_applicable`
 - `category`: `ferro_correct` | `mutalyzer_correct` | `equivalent` | `both_incorrect` | `unknown`
 - `ferro_output`, `other` (`{tool, status, output}`), `ferro_spdi`, `other_spdi`
@@ -78,6 +78,7 @@ compliance winner. Do not stop reading at `verdict` — always check
 | `basis_mismatch` | `not_applicable` | `unknown` | The two outputs are not on a shared basis — different accession, version, or coordinate axis (e.g. ferro on `NM_000059.4`, the other tool resolved `.3`, or one is `c.` and the other `g.`). | **Not a bug.** Explain the mismatch concretely (name the accessions/versions/axes involved) and help the user re-run both tools on the same basis before drawing any conclusion. Never file a bug report from a `basis_mismatch`. |
 | `other_unparseable` | `not_applicable` | `unknown` | The other tool's output didn't parse as HGVS (or none was supplied). | State plainly which side failed. If the other tool's string looks like valid HGVS to you, ask the user to re-paste it via `--other-output`; this is not evidence ferro is wrong. |
 | `ferro_parse_error` | `not_applicable` | `unknown` | Ferro itself failed to parse its own output — should not normally happen. | If the *original input* variant is valid HGVS, this is itself a ferro bug worth reporting (a parse failure on valid input is never correct behavior) — offer `ferro bug-report`. |
+| `inconclusive` | `not_applicable` | `unknown` | The oracle/projection could not complete, so there is no verdict to draw — the `reason` field says why (e.g. the transcript is absent from the reference, or a bare `NM_:c.` intronic variant needs an explicit genomic parent). | **Not a bug.** Read out the `reason`, explain arbitration could not be completed, and stop. If the reason mentions needing an `NG/NC` parent, suggest re-running with the `NC_(NM_):c.…` form. Never file a bug report from `inconclusive`. |
 
 ## Step 3: offer to file, only when ferro is actually wrong
 
