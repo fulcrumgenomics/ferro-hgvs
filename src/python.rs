@@ -1240,6 +1240,28 @@ impl PyVariantProjection {
             self.transcript_id()
         )
     }
+
+    /// Value equality over the full projection contents (all projected axes,
+    /// flags, and normalization warnings), so projections compare by value
+    /// rather than identity.
+    ///
+    /// The canonical key is the inner value's `Debug` rendering: it is complete
+    /// and deterministic within a build, and avoids deriving `Eq`/`Hash` on the
+    /// whole `VariantProjection` — which would cascade onto types that do not
+    /// currently need them (`NormalizationWarning`). The same `Debug`-key
+    /// approach is used for `ProteinEffect`, whose `AminoAcidChange` field is
+    /// likewise not `Eq`.
+    fn __eq__(&self, other: &Self) -> bool {
+        format!("{:?}", self.inner) == format!("{:?}", other.inner)
+    }
+
+    /// Hash consistent with `__eq__`, making projections usable as dict keys and
+    /// set members.
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        format!("{:?}", self.inner).hash(&mut hasher);
+        hasher.finish()
+    }
 }
 
 #[pyclass(name = "VariantProjector")]
@@ -2506,6 +2528,25 @@ impl PyProteinEffect {
                 .map(|c| c.so_term())
                 .collect::<Vec<_>>()
         )
+    }
+
+    /// Value equality over the full effect (consequences, impact, amino-acid
+    /// change, and intronic offset), so effects compare by value.
+    ///
+    /// Uses the inner value's `Debug` rendering as the canonical key (see
+    /// `VariantProjection.__eq__`): the `AminoAcidChange` field is not `Eq`, so
+    /// a `Debug`-key avoids cascading `Eq`/`Hash` derives while staying
+    /// deterministic within a build.
+    fn __eq__(&self, other: &Self) -> bool {
+        format!("{:?}", self.inner) == format!("{:?}", other.inner)
+    }
+
+    /// Hash consistent with `__eq__`, making effects usable as dict keys and set
+    /// members.
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        format!("{:?}", self.inner).hash(&mut hasher);
+        hasher.finish()
     }
 }
 
