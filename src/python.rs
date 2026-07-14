@@ -33,7 +33,7 @@ use crate::python_helpers::{
 };
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::{GenomeBuild, Strand};
-use crate::reference::{MockProvider, MultiFastaProvider};
+use crate::reference::{JsonProvider, MultiFastaProvider};
 use crate::rsid::{format_rsid, parse_rsid as rust_parse_rsid, InMemoryRsIdLookup, RsIdResult};
 use crate::spdi::{hgvs_to_spdi_simple, parse_spdi as rust_parse_spdi, spdi_to_hgvs, SpdiVariant};
 use crate::vcf::{vcf_to_genomic_hgvs as rust_vcf_to_hgvs, VcfRecord};
@@ -177,12 +177,12 @@ fn parse_direction_or_raise(direction: &str) -> PyResult<ShuffleDirection> {
 /// `MultiFasta` is wrapped in `Arc` because `MultiFastaProvider` is large and
 /// is cloned on every Python call to construct a fresh `Normalizer<P>`.
 ///
-/// `Mock` is boxed because `MockProvider` is itself large (it owns the test
+/// `Mock` is boxed because `JsonProvider` is itself large (it owns the test
 /// reference maps); without the box this variant dwarfs the 8-byte `Arc`
 /// `MultiFasta` variant and trips `clippy::large_enum_variant`.
 #[derive(Clone)]
 enum PyProvider {
-    Mock(Box<MockProvider>),
+    Mock(Box<JsonProvider>),
     MultiFasta(Arc<MultiFastaProvider>),
 }
 
@@ -369,9 +369,9 @@ impl ReferenceProvider for PyProvider {
 }
 
 impl PyProvider {
-    /// Load from a JSON file (delegates to MockProvider::from_json).
+    /// Load from a JSON file (delegates to JsonProvider::from_json).
     fn from_json(path: &Path) -> PyResult<Self> {
-        MockProvider::from_json(path)
+        JsonProvider::from_json(path)
             .map(|p| PyProvider::Mock(Box::new(p)))
             .map_err(|e| {
                 ferro_typed(
@@ -397,7 +397,7 @@ impl PyProvider {
 
     /// Default: built-in test data.
     fn test_data() -> Self {
-        PyProvider::Mock(Box::new(MockProvider::with_test_data()))
+        PyProvider::Mock(Box::new(JsonProvider::with_test_data()))
     }
 
     /// Build / extract a CdotMapper for this provider.
@@ -455,7 +455,7 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
 
     let config = NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
     // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
-    let provider = MockProvider::with_test_data();
+    let provider = JsonProvider::with_test_data();
     // This free function always uses genome-less test data; surface the
     // reduced-capability signal once per process (#1012), pointing callers at a
     // full manifest-backed Normalizer.
@@ -703,7 +703,7 @@ impl PyHgvsVariant {
         let config =
             NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
         // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
-        let provider = MockProvider::with_test_data();
+        let provider = JsonProvider::with_test_data();
         // Genome-less test data; surface the reduced-capability signal once per
         // process (#1012), pointing callers at a full manifest-backed Normalizer.
         emit_reduced_capability_warning(
@@ -1061,7 +1061,7 @@ impl PyNormalizer {
     /// Emit a one-time `UserWarning` when the backing provider has no genomic
     /// data, so users silently landing on a reduced-capability build get a
     /// runtime signal (#1012 item 1). Fires at most once per process; the
-    /// `MockProvider` test-data and `transcripts.json` paths both lack genomic
+    /// `JsonProvider` test-data and `transcripts.json` paths both lack genomic
     /// data, so both trigger it.
     fn warn_if_reduced_capability(&self, py: Python<'_>) -> PyResult<()> {
         emit_reduced_capability_warning(

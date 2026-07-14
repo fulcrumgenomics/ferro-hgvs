@@ -100,7 +100,7 @@ Never commit machine-specific absolute paths (e.g. `/Volumes/...`, `/Users/...`,
 - **`reference/`** - Reference sequence providers
   - `provider.rs` - ReferenceProvider trait
   - `fasta.rs` - FASTA file provider
-  - `mock.rs` - MockProvider for testing
+  - `mock.rs` - `JsonProvider` (JSON/`transcripts.json`-backed; also backs `Normalizer(reference_json=...)`). Former name `MockProvider` retained as a compatibility alias.
 
 - **`convert/`** - Coordinate system conversions (c. ↔ g. ↔ n. ↔ p.)
 

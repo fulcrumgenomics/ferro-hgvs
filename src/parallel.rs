@@ -9,7 +9,7 @@
 //! # #[cfg(feature = "parallel")]
 //! # fn main() {
 //! use ferro_hgvs::parallel::{parse_hgvs_parallel, normalize_parallel};
-//! use ferro_hgvs::{MockProvider, Normalizer};
+//! use ferro_hgvs::{JsonProvider, Normalizer};
 //!
 //! let variants = vec![
 //!     "NM_000088.3:c.459A>G",
@@ -24,7 +24,7 @@
 //!     .collect();
 //!
 //! // Normalize in parallel (requires a provider)
-//! let provider = MockProvider::with_test_data();
+//! let provider = JsonProvider::with_test_data();
 //! let normalizer = Normalizer::new(provider);
 //! let _normalized = normalize_parallel(&normalizer, &parsed);
 //! # }

@@ -334,7 +334,7 @@ use crate::hgvs::parser::parse_hgvs_lenient;
 use crate::normalize::NormalizationWarning;
 use crate::normalize::NormalizeConfig;
 use crate::reference::ReferenceProvider;
-use crate::{FerroError, MockProvider, MultiFastaProvider, Normalizer};
+use crate::{FerroError, JsonProvider, MultiFastaProvider, Normalizer};
 use chrono::{DateTime, Utc};
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -1442,13 +1442,13 @@ fn run_ferro_normalize(
                 Normalizer::with_config(Box::new(provider) as Box<dyn ReferenceProvider>, config)
             } else {
                 Normalizer::with_config(
-                    Box::new(MockProvider::with_test_data()) as Box<dyn ReferenceProvider>,
+                    Box::new(JsonProvider::with_test_data()) as Box<dyn ReferenceProvider>,
                     config,
                 )
             }
         }
         None => Normalizer::with_config(
-            Box::new(MockProvider::with_test_data()) as Box<dyn ReferenceProvider>,
+            Box::new(JsonProvider::with_test_data()) as Box<dyn ReferenceProvider>,
             config,
         ),
     };

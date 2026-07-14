@@ -8,13 +8,13 @@
 //! # Example
 //!
 //! ```
-//! use ferro_hgvs::{parse_hgvs, Normalizer, MockProvider};
+//! use ferro_hgvs::{parse_hgvs, Normalizer, JsonProvider};
 //!
 //! // Parse an HGVS variant string
 //! let variant = parse_hgvs("NM_000088.3:c.10A>G").unwrap();
 //!
 //! // Create a normalizer with test data
-//! let provider = MockProvider::with_test_data();
+//! let provider = JsonProvider::with_test_data();
 //! let normalizer = Normalizer::new(provider);
 //!
 //! // Normalize the variant
@@ -76,7 +76,7 @@ pub use hgvs::parser::{parse_hgvs, parse_hgvs_fast};
 pub use hgvs::variant::HgvsVariant;
 pub use normalize::{NormalizeConfig, Normalizer, ShuffleDirection};
 pub use project::{VariantProjection, VariantProjector};
-pub use reference::{MockProvider, MultiFastaProvider, ReferenceProvider};
+pub use reference::{JsonProvider, MockProvider, MultiFastaProvider, ReferenceProvider};
 pub use spdi::{
     hgvs_to_spdi_simple, parse_spdi, spdi_to_hgvs, spdi_to_hgvs_with_ref, ConversionError,
     SpdiVariant,

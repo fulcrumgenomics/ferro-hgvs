@@ -1,4 +1,15 @@
-//! Mock reference provider for testing
+//! In-memory, JSON-backed reference provider.
+//!
+//! [`JsonProvider`] loads transcripts (and optional protein and genomic
+//! sequences) from a `transcripts.json` document — the output of
+//! `ferro convert-gff` / `ferro build-transcript`, or a hand-authored file — and
+//! serves them for normalization and projection. It also backs the Python
+//! `Normalizer(reference_json=...)` path, so despite living in the historically
+//! `mock`-named module it is a real, production-facing provider (transcript-level
+//! normalization is genuine and correct; add a `genomic_sequences` map to make it
+//! genome-capable — see `docs/transcripts_json_schema.md`). Its
+//! [`JsonProvider::with_test_data`] constructor is the only genuinely test-only
+//! part. The former name `MockProvider` remains as a compatibility alias.
 
 use crate::error::FerroError;
 use crate::hgvs::variant::Accession;
@@ -8,9 +19,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-/// Mock reference provider that loads transcripts from JSON
+/// In-memory reference provider that loads transcripts, proteins, and optional
+/// genomic sequences from a `transcripts.json` document. Backs
+/// `Normalizer(reference_json=...)`. See the module documentation.
 #[derive(Clone)]
-pub struct MockProvider {
+pub struct JsonProvider {
     transcripts: HashMap<String, Arc<Transcript>>,
     proteins: HashMap<String, String>,
     /// Genomic sequences keyed by contig name
@@ -37,7 +50,7 @@ pub struct MockProvider {
     /// `"NM_002001.2"`) → the *different*-version accession the provider should
     /// actually serve for it (e.g. `"NM_002001.4"`). Lets tests model the #785
     /// silent version-strip substitution that a real `MultiFastaProvider`
-    /// performs via `resolve_name`'s base→latest fallback, which `MockProvider`
+    /// performs via `resolve_name`'s base→latest fallback, which `JsonProvider`
     /// otherwise refuses by design. Empty by default, so an unconfigured mock
     /// never substitutes a version.
     version_substitutions: HashMap<String, String>,
@@ -52,6 +65,15 @@ pub struct MockProvider {
     /// Empty by default, so an unconfigured mock is build-agnostic as before.
     build_transcripts: HashMap<(String, &'static str), Arc<Transcript>>,
 }
+
+/// Backwards-compatible alias for the former name of [`JsonProvider`].
+///
+/// The provider was renamed from `MockProvider` because it is not a test mock — it
+/// backs the production `Normalizer(reference_json=...)` path. This alias keeps
+/// existing code compiling; prefer [`JsonProvider`] in new code. (Not marked
+/// `#[deprecated]` yet, to avoid warning-storming the many existing call sites; a
+/// follow-up can migrate them and then deprecate.)
+pub type MockProvider = JsonProvider;
 
 /// Validate that a JSON reference declaring genomic capability actually backs
 /// every placed transcript with genomic sequence bytes that are the *right length*
@@ -187,7 +209,7 @@ fn validate_reconstructed_transcript_sequence(
     Ok(())
 }
 
-impl MockProvider {
+impl JsonProvider {
     /// Create an empty mock provider
     pub fn new() -> Self {
         Self {
@@ -304,7 +326,7 @@ impl MockProvider {
             }
             _ => {
                 return Err(FerroError::Json {
-                    msg: "MockProvider JSON root must be an array or object".to_string(),
+                    msg: "JsonProvider JSON root must be an array or object".to_string(),
                 })
             }
         };
@@ -584,13 +606,13 @@ impl MockProvider {
     }
 }
 
-impl Default for MockProvider {
+impl Default for JsonProvider {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl ReferenceProvider for MockProvider {
+impl ReferenceProvider for JsonProvider {
     fn genomic_placement(&self, parent: &Accession) -> Option<GenomicPlacement> {
         self.genomic_placement_on_build(parent, None)
     }
@@ -911,9 +933,18 @@ mod tests {
 
     #[test]
     fn test_mock_provider_with_test_data() {
-        let provider = MockProvider::with_test_data();
+        let provider = JsonProvider::with_test_data();
         assert!(!provider.is_empty());
         assert!(provider.len() >= 2);
+    }
+
+    /// The former name `MockProvider` remains a working alias for [`JsonProvider`]
+    /// so existing code keeps compiling after the rename.
+    #[test]
+    fn mock_provider_alias_is_json_provider() {
+        let via_alias: MockProvider = MockProvider::with_test_data();
+        let via_new: JsonProvider = via_alias; // same type — assignment compiles
+        assert!(!via_new.is_empty());
     }
 
     /// #653: an NG_ parent with both a GRCh37 and a GRCh38 RefSeqGene placement
@@ -930,7 +961,7 @@ mod tests {
             nc_end: 1008,
             strand: Strand::Plus,
         };
-        let mut provider = MockProvider::new();
+        let mut provider = JsonProvider::new();
         provider.add_genomic_placement("NG_900.1", mk(11)); // GRCh38
         provider.add_genomic_placement("NG_900.1", mk(10)); // GRCh37
         let ng = Accession::new("NG", "900", Some(1));
@@ -958,7 +989,7 @@ mod tests {
         );
 
         // An NG_ with only a GRCh37 placement declines a GRCh38 request (guard).
-        let mut grch37_only = MockProvider::new();
+        let mut grch37_only = JsonProvider::new();
         grch37_only.add_genomic_placement("NG_901.1", mk(10));
         let ng2 = Accession::new("NG", "901", Some(1));
         assert!(grch37_only
@@ -972,7 +1003,7 @@ mod tests {
     }
 
     /// #843: the build-keyed transcript lookup must honor the same unversioned
-    /// → versioned base-accession rule that [`MockProvider::get_transcript`]
+    /// → versioned base-accession rule that [`JsonProvider::get_transcript`]
     /// applies (`NM_123` resolves to a stored `NM_123.1`). Without it, a bare
     /// `g.` allele whose transcript accession is unversioned would miss the
     /// build-specific record and silently fall back to the build-agnostic
@@ -1005,7 +1036,7 @@ mod tests {
             cached_introns: OnceLock::new(),
         };
 
-        let mut provider = MockProvider::new();
+        let mut provider = JsonProvider::new();
         // Build-keyed records (versioned ids) with build-divergent bases.
         provider.add_transcript_on_build("GRCh37", mk(GenomeBuild::GRCh37, "AAAA"));
         provider.add_transcript_on_build("GRCh38", mk(GenomeBuild::GRCh38, "CCCC"));
@@ -1037,21 +1068,21 @@ mod tests {
 
     #[test]
     fn test_get_transcript() {
-        let provider = MockProvider::with_test_data();
+        let provider = JsonProvider::with_test_data();
         let tx = provider.get_transcript("NM_000088.3").unwrap();
         assert_eq!(tx.gene_symbol, Some("COL1A1".to_string()));
     }
 
     #[test]
     fn test_get_transcript_not_found() {
-        let provider = MockProvider::with_test_data();
+        let provider = JsonProvider::with_test_data();
         let result = provider.get_transcript("NM_NONEXISTENT.1");
         assert!(result.is_err());
     }
 
     #[test]
     fn with_test_data_includes_a_noncoding_transcript() {
-        let provider = MockProvider::with_test_data();
+        let provider = JsonProvider::with_test_data();
         let tx = provider
             .get_transcript("NR_000123.1")
             .expect("NR_000123.1 should be present in test data");
@@ -1061,7 +1092,7 @@ mod tests {
 
     #[test]
     fn test_get_sequence() {
-        let provider = MockProvider::with_test_data();
+        let provider = JsonProvider::with_test_data();
         let seq = provider.get_sequence("NM_000088.3", 0, 3).unwrap();
         assert_eq!(seq, "ATG");
     }
@@ -1070,7 +1101,7 @@ mod tests {
     fn test_get_sequence_falls_through_to_contig() {
         // Regression: get_sequence should fall through to contig lookup
         // when the id is not a transcript, matching FastaProvider behavior.
-        let mut provider = MockProvider::new();
+        let mut provider = JsonProvider::new();
         provider.add_genomic_sequence("chr1", "ACGTACGT");
         let seq = provider.get_sequence("chr1", 0, 4).unwrap();
         assert_eq!(seq, "ACGT");
@@ -1078,7 +1109,7 @@ mod tests {
 
     #[test]
     fn test_has_transcript() {
-        let provider = MockProvider::with_test_data();
+        let provider = JsonProvider::with_test_data();
         assert!(provider.has_transcript("NM_000088.3"));
         assert!(!provider.has_transcript("NONEXISTENT"));
     }
@@ -1090,7 +1121,7 @@ mod tests {
         // the blanket boxed impl does not forward `has_transcript_version_exact`,
         // it silently falls through to the trait default `true` and the gate is
         // inert in production. Pin the forwarding here.
-        let mut inner = MockProvider::new();
+        let mut inner = JsonProvider::new();
         inner.mark_non_version_exact("NM_TEST.1");
         let boxed: Box<dyn ReferenceProvider> = Box::new(inner);
         assert!(
@@ -1127,7 +1158,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(json.as_bytes()).unwrap();
 
-        let provider = MockProvider::from_json(file.path()).unwrap();
+        let provider = JsonProvider::from_json(file.path()).unwrap();
 
         assert!(provider.has_transcript("NM_TEST.1"));
         assert!(provider.has_protein_data());
@@ -1163,7 +1194,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(json.as_bytes()).unwrap();
 
-        let provider = MockProvider::from_json(file.path()).expect("consistent reference loads");
+        let provider = JsonProvider::from_json(file.path()).expect("consistent reference loads");
         assert!(provider.has_genomic_data());
     }
 
@@ -1194,7 +1225,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(json.as_bytes()).unwrap();
 
-        let err = match MockProvider::from_json(file.path()) {
+        let err = match JsonProvider::from_json(file.path()) {
             Ok(_) => panic!("expected rejection of genomic bytes that don't match the transcript"),
             Err(e) => e,
         };
@@ -1229,7 +1260,7 @@ mod tests {
         file.write_all(json.as_bytes()).unwrap();
 
         let provider =
-            MockProvider::from_json(file.path()).expect("consistent minus-strand reference loads");
+            JsonProvider::from_json(file.path()).expect("consistent minus-strand reference loads");
         assert!(provider.has_genomic_data());
     }
 
@@ -1257,7 +1288,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(json.as_bytes()).unwrap();
 
-        let err = match MockProvider::from_json(file.path()) {
+        let err = match JsonProvider::from_json(file.path()) {
             Ok(_) => panic!("expected an error for an unbacked placement"),
             Err(e) => e,
         };
@@ -1289,7 +1320,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(json.as_bytes()).unwrap();
 
-        let err = match MockProvider::from_json(file.path()) {
+        let err = match JsonProvider::from_json(file.path()) {
             Ok(_) => panic!("expected an error for a too-short contig"),
             Err(e) => e,
         };
@@ -1321,13 +1352,13 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(json.as_bytes()).unwrap();
 
-        let provider = MockProvider::from_json(file.path()).expect("transcripts-only loads");
+        let provider = JsonProvider::from_json(file.path()).expect("transcripts-only loads");
         assert!(!provider.has_genomic_data());
     }
 
     #[test]
     fn test_get_protein_length_resolves_and_falls_back() {
-        let mut provider = MockProvider::new();
+        let mut provider = JsonProvider::new();
         provider.add_protein("NP_TEST.1", "MAPLE");
 
         // Exact (versioned) match returns the stored length.
@@ -1342,7 +1373,7 @@ mod tests {
         // length of `0` (matching the trait's default probe semantics),
         // NOT an error — otherwise `normalize()` is not behavior-preserving
         // when a provider switches from the probe loop to this API.
-        let provider = MockProvider::with_test_data();
+        let provider = JsonProvider::with_test_data();
         assert_eq!(provider.get_protein_length("NP_NONEXISTENT.1").unwrap(), 0);
     }
 
@@ -1364,7 +1395,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(json.as_bytes()).unwrap();
 
-        let provider = MockProvider::from_json(file.path()).unwrap();
+        let provider = JsonProvider::from_json(file.path()).unwrap();
 
         assert!(provider.has_transcript("NM_TEST.1"));
         assert!(!provider.has_protein_data());
@@ -1381,7 +1412,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"{}").unwrap();
 
-        match MockProvider::from_json(file.path()) {
+        match JsonProvider::from_json(file.path()) {
             Err(FerroError::Json { msg }) => assert!(
                 msg.contains("no usable reference data"),
                 "expected error to mention no usable reference data, got: {msg}",
@@ -1401,7 +1432,7 @@ mod tests {
         for body in [&b"[]"[..], br#"{"transcripts": []}"#] {
             let mut file = NamedTempFile::new().unwrap();
             file.write_all(body).unwrap();
-            match MockProvider::from_json(file.path()) {
+            match JsonProvider::from_json(file.path()) {
                 Err(FerroError::Json { msg }) => assert!(
                     msg.contains("no usable reference data"),
                     "expected error to mention no usable reference data, got: {msg}",
@@ -1429,7 +1460,7 @@ mod tests {
         file.write_all(json.as_bytes()).unwrap();
 
         let provider =
-            MockProvider::from_json(file.path()).expect("a genomic-only reference should load");
+            JsonProvider::from_json(file.path()).expect("a genomic-only reference should load");
         assert!(provider.is_empty()); // no transcripts
         assert!(provider.has_genomic_data());
         assert_eq!(
@@ -1469,7 +1500,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"42").unwrap();
 
-        match MockProvider::from_json(file.path()) {
+        match JsonProvider::from_json(file.path()) {
             Err(FerroError::Json { msg }) => {
                 assert!(
                     msg.contains("array or object"),
@@ -1491,7 +1522,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(br#"{"transripts": []}"#).unwrap();
 
-        match MockProvider::from_json(file.path()) {
+        match JsonProvider::from_json(file.path()) {
             Err(e) => assert!(
                 format!("{e}").contains("transripts"),
                 "expected error to mention the unknown field, got {e}",
@@ -1524,21 +1555,21 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(json.as_bytes()).unwrap();
 
-        let provider = MockProvider::from_json(file.path())
+        let provider = JsonProvider::from_json(file.path())
             .expect("convert-gff JSON with version/genome_build metadata should load");
         assert!(provider.has_transcript("NM_000001.1"));
     }
 
     #[test]
     fn test_mock_provider_returns_sequence_length_for_added_sequence() {
-        let mut provider = MockProvider::new();
+        let mut provider = JsonProvider::new();
         provider.add_genomic_sequence("NC_012920.1", "A".repeat(16569));
         assert_eq!(provider.get_sequence_length("NC_012920.1").unwrap(), 16569);
     }
 
     #[test]
     fn test_mock_provider_sequence_length_errors_for_unknown_id() {
-        let provider = MockProvider::new();
+        let provider = JsonProvider::new();
         let err = provider.get_sequence_length("missing").unwrap_err();
         assert!(matches!(err, FerroError::ReferenceNotFound { .. }));
     }
@@ -1564,7 +1595,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(json.as_bytes()).unwrap();
 
-        let provider = MockProvider::from_json(file.path())
+        let provider = JsonProvider::from_json(file.path())
             .expect("convert-gff JSON with transcript should load");
         let tx = provider
             .get_transcript("NM_000001.1")
