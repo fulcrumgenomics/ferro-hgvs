@@ -3,8 +3,11 @@
 //! This module provides functionality to verify that reference data
 //! is properly configured and available for normalization.
 
+use crate::error::FerroError;
 use crate::prepare::ReferenceManifest;
-use std::path::Path;
+use crate::reference::mock::MockProvider;
+use crate::reference::provider::ReferenceProvider;
+use std::path::{Path, PathBuf};
 
 /// Result of checking reference data.
 #[derive(Debug, Clone)]
@@ -45,6 +48,87 @@ impl CheckResult {
         self.warnings.push(warning);
         self
     }
+}
+
+/// Summary of a standalone `transcripts.json` reference (the
+/// `convert-gff`/`build-transcript` → `MockProvider` path), as opposed to a
+/// prepared manifest directory.
+#[derive(Debug, Clone)]
+pub struct TranscriptsJsonSummary {
+    /// Path to the checked JSON file.
+    pub path: PathBuf,
+    /// Number of transcripts loaded.
+    pub transcript_count: usize,
+    /// Whether the reference carries **usable** genomic sequence (at least one
+    /// non-empty contig), so the genome-dependent normalization rules can run — see
+    /// the capability boundary in `docs/transcripts_json_schema.md`. An empty
+    /// contig string does not count.
+    pub genome_capable: bool,
+    /// Whether the reference carries protein sequences.
+    pub has_protein_data: bool,
+}
+
+/// Check a standalone `transcripts.json` file (rather than a prepared reference
+/// directory). Loads it through [`MockProvider::from_json`], so it enforces the
+/// same schema and version validation the runtime load does, and reports what
+/// capability the reference has (#1012 comment 2).
+///
+/// Fails if the reference resolves nothing (no transcripts, no genomic bases, no
+/// proteins) rather than green-lighting a dead reference.
+pub fn check_transcripts_json(path: &Path) -> Result<TranscriptsJsonSummary, FerroError> {
+    let provider = MockProvider::from_json(path)?;
+    let transcript_count = provider.len();
+    let genome_capable = provider.total_genomic_bases() > 0;
+    let has_protein_data = provider.has_protein_data();
+
+    if transcript_count == 0 && !genome_capable && !has_protein_data {
+        return Err(FerroError::Json {
+            msg: "reference has no usable data: no transcripts, genomic sequence, or proteins"
+                .to_string(),
+        });
+    }
+
+    Ok(TranscriptsJsonSummary {
+        path: path.to_path_buf(),
+        transcript_count,
+        genome_capable,
+        has_protein_data,
+    })
+}
+
+/// Print a summary of a successful standalone `transcripts.json` check.
+pub fn print_transcripts_json_summary(summary: &TranscriptsJsonSummary) {
+    eprintln!("=== transcripts.json Check ===");
+    eprintln!("  File: {}", summary.path.display());
+    eprintln!("  Status: OK");
+    eprintln!();
+    eprintln!("=== Contents ===");
+    eprintln!("  Transcripts: {}", summary.transcript_count);
+    eprintln!(
+        "  Genome-capable: {}",
+        if summary.genome_capable {
+            "yes"
+        } else {
+            "no (transcript-level normalization only)"
+        }
+    );
+    eprintln!(
+        "  Protein data: {}",
+        if summary.has_protein_data {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+}
+
+/// Print a clean failure block for a standalone `transcripts.json` check, mirroring
+/// the prepared-directory path's presentation instead of a raw error dump.
+pub fn print_transcripts_json_failure(path: &Path, error: &FerroError) {
+    eprintln!("=== transcripts.json Check ===");
+    eprintln!("  File: {}", path.display());
+    eprintln!("  Status: FAILED");
+    eprintln!("  ERROR: {}", error);
 }
 
 /// Check reference data and return detailed result.
@@ -351,6 +435,116 @@ mod tests {
         let result = check_reference(dir.path());
         assert!(!result.valid);
         assert!(!result.errors.is_empty());
+    }
+
+    #[test]
+    fn check_transcripts_json_reports_transcript_only_reference() {
+        use std::io::Write;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("transcripts.json");
+        let json = r#"{
+            "version": "1.0",
+            "genome_build": "GRCh38",
+            "transcripts": [
+                {"id": "NM_1.1", "strand": "+", "sequence": "ACGTACGT",
+                 "exons": [{"number": 1, "start": 1, "end": 8}]}
+            ]
+        }"#;
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+
+        let summary = check_transcripts_json(&path).expect("loads");
+        assert_eq!(summary.transcript_count, 1);
+        assert!(
+            !summary.genome_capable,
+            "no genomic_sequences → not genome-capable"
+        );
+        assert!(!summary.has_protein_data);
+    }
+
+    #[test]
+    fn check_transcripts_json_reports_genome_capable_reference() {
+        use std::io::Write;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("transcripts.json");
+        let json = r#"{
+            "version": "1.0",
+            "transcripts": [
+                {"id": "NM_1.1", "strand": "+", "sequence": "ACGT",
+                 "chromosome": "chr1", "genomic_start": 1, "genomic_end": 4,
+                 "exons": [{"number": 1, "start": 1, "end": 4,
+                            "genomic_start": 1, "genomic_end": 4}]}
+            ],
+            "genomic_sequences": {"chr1": "ACGTACGT"}
+        }"#;
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+
+        let summary = check_transcripts_json(&path).expect("loads");
+        assert_eq!(summary.transcript_count, 1);
+        assert!(
+            summary.genome_capable,
+            "genomic_sequences present → genome-capable"
+        );
+    }
+
+    #[test]
+    fn check_transcripts_json_rejects_empty_reference() {
+        use std::io::Write;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("transcripts.json");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(br#"{"transcripts": []}"#)
+            .unwrap();
+        assert!(
+            check_transcripts_json(&path).is_err(),
+            "a reference with no usable data must fail the check, not be green-lit"
+        );
+    }
+
+    #[test]
+    fn check_transcripts_json_empty_contig_is_not_genome_capable() {
+        use std::io::Write;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("transcripts.json");
+        // An empty contig string keeps a transcript present but carries no bases.
+        let json = r#"{
+            "transcripts": [
+                {"id": "NM_1.1", "strand": "+", "sequence": "ACGT",
+                 "exons": [{"number": 1, "start": 1, "end": 4}]}
+            ],
+            "genomic_sequences": {"chr1": ""}
+        }"#;
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+        let summary = check_transcripts_json(&path).expect("loads (has a transcript)");
+        assert!(
+            !summary.genome_capable,
+            "an empty genomic contig must not be reported as genome-capable"
+        );
+    }
+
+    #[test]
+    fn check_transcripts_json_propagates_incompatible_version_error() {
+        use std::io::Write;
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("transcripts.json");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(br#"{"version": "2.0", "transcripts": []}"#)
+            .unwrap();
+
+        assert!(
+            check_transcripts_json(&path).is_err(),
+            "an incompatible schema version must surface as a check failure"
+        );
     }
 
     #[test]

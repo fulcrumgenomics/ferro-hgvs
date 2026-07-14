@@ -571,7 +571,9 @@ enum Commands {
 
     /// Check reference data setup
     Check {
-        /// Reference directory to check
+        /// Reference to check: a prepared reference directory (containing
+        /// `manifest.json`), or a standalone `transcripts.json` file produced by
+        /// `convert-gff`/`build-transcript`.
         #[arg(long, default_value = "ferro-reference")]
         reference: PathBuf,
 
@@ -3431,17 +3433,83 @@ fn run_check(
     validate_cds: bool,
     cds_allowlist: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use ferro_hgvs::check::{check_reference, print_check_summary};
+    use ferro_hgvs::check::{
+        check_reference, check_transcripts_json, print_check_summary,
+        print_transcripts_json_failure, print_transcripts_json_summary,
+    };
+    use std::ffi::OsStr;
 
-    let result = check_reference(reference);
-    print_check_summary(&result, reference);
+    // A path that doesn't exist is a user error (typically a typo) — say so, rather
+    // than telling the user to run `ferro prepare` for a missing directory.
+    if !reference.exists() {
+        return Err(format!(
+            "reference path does not exist: {} (pass a prepared reference directory or a \
+             standalone transcripts.json file)",
+            reference.display()
+        )
+        .into());
+    }
+
+    // A standalone `transcripts.json` file (the convert-gff/build-transcript output)
+    // has no manifest; check it directly instead of reporting it as missing
+    // reference data (#1012 comment 2). A `manifest.json` file is really the
+    // prepared-reference directory case, so route it to its parent — users
+    // naturally point at either. The manifest-only options (`--validate-cds`,
+    // `--build-cache`, cdot cache source) do not apply to a standalone file.
+    let is_manifest_file =
+        reference.is_file() && reference.file_name() == Some(OsStr::new("manifest.json"));
+    if reference.is_file() && !is_manifest_file {
+        let ignored: Vec<&str> = [
+            ("--validate-cds", validate_cds),
+            ("--build-cache", build_cache),
+            ("--cds-allowlist", cds_allowlist.is_some()),
+        ]
+        .iter()
+        .filter(|(_, set)| *set)
+        .map(|(name, _)| *name)
+        .collect();
+        if !ignored.is_empty() {
+            eprintln!(
+                "warning: {} do{} not apply to a standalone transcripts.json file and {} ignored",
+                ignored.join(" / "),
+                if ignored.len() == 1 { "es" } else { "" },
+                if ignored.len() == 1 { "is" } else { "are" },
+            );
+        }
+        return match check_transcripts_json(reference) {
+            Ok(summary) => {
+                print_transcripts_json_summary(&summary);
+                Ok(())
+            }
+            Err(e) => {
+                print_transcripts_json_failure(reference, &e);
+                Err("Reference data check failed".into())
+            }
+        };
+    }
+
+    // Directory path (or a `manifest.json` file → its parent directory).
+    let reference_dir: &Path = if is_manifest_file {
+        // `Path::new("manifest.json").parent()` is `Some("")` (an empty path),
+        // NOT `None` — so a bare relative `manifest.json` would otherwise resolve
+        // the directory to "" and print an empty dir name. Map empty → ".".
+        reference
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."))
+    } else {
+        reference
+    };
+
+    let result = check_reference(reference_dir);
+    print_check_summary(&result, reference_dir);
 
     if !result.valid {
         return Err("Reference data check failed".into());
     }
 
     if validate_cds {
-        run_cds_consistency_check(reference, cds_allowlist)?;
+        run_cds_consistency_check(reference_dir, cds_allowlist)?;
     }
 
     if build_cache {
@@ -3451,7 +3519,7 @@ fn run_check(
         use ferro_hgvs::commands::create_reference_provider;
         eprintln!("Building/refreshing reference cache (one-time)...");
         let started = std::time::Instant::now();
-        let _provider = create_reference_provider(Some(reference))?;
+        let _provider = create_reference_provider(Some(reference_dir))?;
         eprintln!("Reference cache ready in {:.1?}.", started.elapsed());
     }
 
@@ -3460,7 +3528,7 @@ fn run_check(
     // showing up as a slow startup. The nightly perf gate parses this line as a
     // timing-free co-assertion that the prepared cache is on the fast path.
     // Printed after `--build-cache` so it reflects the freshly built cache.
-    match ferro_hgvs::commands::cdot_cache_load_source(reference) {
+    match ferro_hgvs::commands::cdot_cache_load_source(reference_dir) {
         Ok(Some(ferro_hgvs::data::CdotLoadSource::Archive)) => {
             println!("cdot cache: archive");
         }

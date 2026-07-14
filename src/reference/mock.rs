@@ -209,6 +209,72 @@ fn validate_reconstructed_transcript_sequence(
     Ok(())
 }
 
+/// Highest `transcripts.json` container **major** schema version this build can
+/// interpret. The container `version` is `"MAJOR.MINOR"` (e.g. `"1.0"`). A newer
+/// **major** is rejected because it may reinterpret existing fields. A newer
+/// *minor* is only accepted if it adds no fields: the object form uses
+/// `deny_unknown_fields`, so a minor that introduces a new key is still rejected
+/// (with an "unknown field" error) by an older build — minor-forward-compatibility
+/// is therefore limited to value-only changes, not new fields.
+const SUPPORTED_TRANSCRIPTS_JSON_MAJOR: u32 = 1;
+
+/// Validate the container `version` from a `transcripts.json` object.
+///
+/// Accepts a JSON string (`"1.0"`) or number (`1`) — both are natural hand-written
+/// forms. `None` (a bare-array reference, or an object with no `version`) is
+/// accepted for backward compatibility. A present version must be `MAJOR[.MINOR…]`
+/// with every dot-separated component numeric, and its major must not exceed
+/// [`SUPPORTED_TRANSCRIPTS_JSON_MAJOR`]; anything else is a clear load-time error.
+///
+/// This is validated against the **raw** JSON value before the `deny_unknown_fields`
+/// deserialize, so a newer-major file gets this friendly "upgrade" message even when
+/// it also carries fields this build does not recognize.
+fn validate_transcripts_json_version(
+    version: Option<&serde_json::Value>,
+) -> Result<(), FerroError> {
+    let Some(version) = version else {
+        return Ok(());
+    };
+
+    let unrecognized = || FerroError::Json {
+        msg: format!(
+            "unrecognized transcripts.json schema version {} (expected e.g. \"1.0\")",
+            version
+        ),
+    };
+
+    // Accept a string ("1.0") or a bare number (1 / 1.0).
+    let version_str = match version {
+        serde_json::Value::String(s) => s.trim().to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => return Err(unrecognized()),
+    };
+
+    // Every dot-separated component must be a non-empty run of ASCII digits, so
+    // suffixes like "1.0-draft", "v1", "1a" are rejected consistently.
+    let mut components = version_str.split('.');
+    let major_str = components.next().unwrap_or("");
+    let all_numeric = std::iter::once(major_str)
+        .chain(components)
+        .all(|c| !c.is_empty() && c.bytes().all(|b| b.is_ascii_digit()));
+    if !all_numeric {
+        return Err(unrecognized());
+    }
+    let major: u32 = major_str.parse().map_err(|_| unrecognized())?;
+
+    if major > SUPPORTED_TRANSCRIPTS_JSON_MAJOR {
+        return Err(FerroError::Json {
+            msg: format!(
+                "transcripts.json schema version {} is newer than this build supports \
+                 (max major version {}); upgrade ferro-hgvs",
+                version_str, SUPPORTED_TRANSCRIPTS_JSON_MAJOR
+            ),
+        });
+    }
+
+    Ok(())
+}
+
 impl JsonProvider {
     /// Create an empty mock provider
     pub fn new() -> Self {
@@ -291,6 +357,10 @@ impl JsonProvider {
     /// contig is rejected here rather than producing a silently-degraded
     /// genome-aware normalization (#1012 comment 1). See
     /// [`validate_genomic_placement_backing`].
+    ///
+    /// For the object form, an incompatible container `version` (a major newer
+    /// than this build supports) is rejected at load — see
+    /// [`validate_transcripts_json_version`].
     pub fn from_json(path: &Path) -> Result<Self, FerroError> {
         // `deny_unknown_fields` so a typo'd key (e.g. `transripts`) produces
         // a clear error rather than silently defaulting to an empty provider.
@@ -303,17 +373,34 @@ impl JsonProvider {
             proteins: HashMap<String, String>,
             #[serde(default)]
             genomic_sequences: HashMap<String, String>,
-            /// Container metadata emitted by `ferro convert-gff`; accepted but ignored.
+            /// Container metadata emitted by `ferro convert-gff`; accepted but
+            /// ignored here (validated from the raw value before this deserialize).
+            /// Typed as `Value` so a string ("1.0") or number (1) both parse.
             #[serde(default, rename = "version")]
-            _version: Option<String>,
+            _version: Option<serde_json::Value>,
             /// Container metadata emitted by `ferro convert-gff`; per-transcript
             /// `genome_build` on each `Transcript` is authoritative.
             #[serde(default, rename = "genome_build")]
-            _genome_build: Option<String>,
+            _genome_build: Option<serde_json::Value>,
         }
 
-        let content = std::fs::read_to_string(path)?;
-        let value: serde_json::Value = serde_json::from_str(&content)?;
+        // Parse straight from a buffered reader rather than reading the whole
+        // file into a `String` first: a genome-capable transcripts.json can carry
+        // whole-chromosome sequences, and `read_to_string` + `from_str` would hold
+        // the raw text, the `Value` DOM, AND the final typed structures alive
+        // simultaneously (~3x the file size at peak).
+        let file = std::fs::File::open(path)?;
+        let value: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(file))?;
+
+        // Fail loud on an incompatible container schema version rather than silently
+        // loading a file this build cannot correctly interpret (#1012 comment 2).
+        // The `MockProvider`/`reference_json` path previously did only
+        // `deny_unknown_fields` and never checked the version, unlike the manifest
+        // path (`validate_loaded_manifest`). Validated against the RAW value (before
+        // the `deny_unknown_fields` deserialize) so a newer-major file gets the
+        // friendly "upgrade" message even if it also carries unknown fields.
+        // `Value::get` returns `None` for a bare array, which is accepted.
+        validate_transcripts_json_version(value.get("version"))?;
 
         let (transcripts, proteins, genomic_sequences) = match value {
             serde_json::Value::Array(_) => {
@@ -574,6 +661,17 @@ impl JsonProvider {
     /// Get the number of transcripts
     pub fn len(&self) -> usize {
         self.transcripts.len()
+    }
+
+    /// Total number of genomic sequence bases across all contigs. Zero when the
+    /// reference carries no genomic sequence, or only empty contig strings — so a
+    /// caller can distinguish real genomic capability from a merely-present but
+    /// empty `genomic_sequences` map (which `has_genomic_data()` still reports true).
+    pub fn total_genomic_bases(&self) -> u64 {
+        self.genomic_sequences
+            .values()
+            .map(|s| s.len() as u64)
+            .sum()
     }
 
     /// Check if provider is empty
@@ -1558,6 +1656,111 @@ mod tests {
         let provider = JsonProvider::from_json(file.path())
             .expect("convert-gff JSON with version/genome_build metadata should load");
         assert!(provider.has_transcript("NM_000001.1"));
+    }
+
+    #[test]
+    fn validate_transcripts_json_version_accepts_supported_and_missing() {
+        use serde_json::json;
+        // Missing (bare array or object without `version`) is accepted.
+        validate_transcripts_json_version(None).expect("missing version accepted");
+        // Current major, any (value-only) minor. String or number form.
+        validate_transcripts_json_version(Some(&json!("1.0"))).expect("1.0 accepted");
+        validate_transcripts_json_version(Some(&json!("1.5"))).expect("newer minor accepted");
+        validate_transcripts_json_version(Some(&json!("1"))).expect("bare major accepted");
+        validate_transcripts_json_version(Some(&json!(1))).expect("numeric 1 accepted");
+        validate_transcripts_json_version(Some(&json!(1.0))).expect("numeric 1.0 accepted");
+    }
+
+    #[test]
+    fn validate_transcripts_json_version_rejects_newer_major_and_garbage() {
+        use serde_json::json;
+        let newer = validate_transcripts_json_version(Some(&json!("2.0"))).unwrap_err();
+        assert!(
+            format!("{newer}").contains("newer than this build supports"),
+            "got: {newer}"
+        );
+        // A newer major as a number is caught too.
+        let newer_num = validate_transcripts_json_version(Some(&json!(2))).unwrap_err();
+        assert!(format!("{newer_num}").contains("newer than this build supports"));
+        // Non-numeric components / suffixes are rejected consistently.
+        for bad in [
+            json!("banana"),
+            json!("v1"),
+            json!("1.0-draft"),
+            json!("1a"),
+            json!(""),
+        ] {
+            let err = validate_transcripts_json_version(Some(&bad)).unwrap_err();
+            assert!(
+                format!("{err}").contains("unrecognized transcripts.json schema version"),
+                "expected unrecognized for {bad}, got: {err}"
+            );
+        }
+        // A non-string, non-number version is rejected.
+        let wrong_type = validate_transcripts_json_version(Some(&json!(["1.0"]))).unwrap_err();
+        assert!(format!("{wrong_type}").contains("unrecognized"));
+    }
+
+    #[test]
+    fn from_json_rejects_incompatible_container_version() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"{
+            "version": "2.0",
+            "genome_build": "GRCh38",
+            "transcripts": []
+        }"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let err = match MockProvider::from_json(file.path()) {
+            Ok(_) => panic!("expected an error for an incompatible schema version"),
+            Err(e) => e,
+        };
+        assert!(
+            format!("{err}").contains("newer than this build supports"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn from_json_reports_version_before_unknown_field_for_newer_major() {
+        // A newer-major file that ALSO carries a field this build doesn't know must
+        // surface the friendly "upgrade" message (version validated on the raw value
+        // before `deny_unknown_fields`), not a cryptic "unknown field" error.
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"{ "version": "2.0", "brand_new_v2_field": 42, "transcripts": [] }"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let err = match MockProvider::from_json(file.path()) {
+            Ok(_) => panic!("expected rejection of a newer-major schema"),
+            Err(e) => e,
+        };
+        assert!(
+            format!("{err}").contains("newer than this build supports"),
+            "newer-major must report the version error, not unknown-field: {err}"
+        );
+    }
+
+    #[test]
+    fn from_json_accepts_numeric_version() {
+        // `"version": 1` (a JSON number, the natural hand-written form) is accepted.
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"{ "version": 1, "transcripts": [
+            {"id": "NM_1.1", "strand": "+", "sequence": "ACGT",
+             "exons": [{"number": 1, "start": 1, "end": 4}]}
+        ] }"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider = MockProvider::from_json(file.path()).expect("numeric version 1 loads");
+        assert!(provider.has_transcript("NM_1.1"));
     }
 
     #[test]
