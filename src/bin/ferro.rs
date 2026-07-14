@@ -396,6 +396,15 @@ enum Commands {
         #[arg(long)]
         no_validate_fasta: bool,
 
+        /// Also emit a top-level `genomic_sequences` map (the referenced contig bytes
+        /// from --fasta, keyed by chromosome) so the resulting transcripts.json is
+        /// genome-capable: `Normalizer(reference_json=...)` can then run the
+        /// genome-aware normalization rules that need genomic sequence (#1026).
+        /// Requires --fasta. Emits full contig sequences, so it can be large for a
+        /// whole-genome FASTA — intended for small/synthetic references.
+        #[arg(long, requires = "fasta")]
+        emit_genomic_sequences: bool,
+
         /// Write the bounded sample of loader diagnostics as JSON to this path.
         #[arg(long, value_name = "PATH")]
         diagnostics_json: Option<PathBuf>,
@@ -635,6 +644,13 @@ enum Commands {
         /// Genome build name embedded in the output (default: GRCh38).
         #[arg(long, default_value = "GRCh38")]
         genome_build: String,
+
+        /// Also emit a top-level `genomic_sequences` map (the contig's forward bytes,
+        /// keyed by chromosome) so the resulting transcripts.json is genome-capable:
+        /// `Normalizer(reference_json=...)` can then run the genome-aware
+        /// normalization rules that need genomic sequence (#1026).
+        #[arg(long)]
+        emit_genomic_sequences: bool,
     },
 }
 
@@ -812,6 +828,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             strict,
             silent,
             no_validate_fasta,
+            emit_genomic_sequences,
             diagnostics_json,
         } => run_convert_gff(
             &gff,
@@ -824,6 +841,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             strict,
             silent,
             no_validate_fasta,
+            emit_genomic_sequences,
             diagnostics_json.as_ref(),
         ),
         Commands::Generate {
@@ -924,6 +942,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             contig,
             gene,
             genome_build,
+            emit_genomic_sequences,
         } => run_build_transcript(
             &fasta,
             cds_start,
@@ -934,6 +953,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             contig.as_deref(),
             gene.as_deref(),
             &genome_build,
+            emit_genomic_sequences,
         ),
     }
 }
@@ -1885,6 +1905,25 @@ fn run_parse(
     }
 }
 
+/// Byte threshold above which embedding genomic sequence into a `transcripts.json`
+/// is flagged as heavy — the file becomes large to store and parse, and a
+/// genome-scale reference is better served by `ferro prepare` + `from_manifest`.
+const LARGE_GENOMIC_SEQUENCES_WARN_BYTES: u64 = 50_000_000; // 50 MB
+
+/// Warn on stderr when `--emit-genomic-sequences` embeds a large amount of
+/// genomic sequence, so a user does not silently produce a multi-hundred-MB
+/// `transcripts.json` from whole-chromosome (or whole-genome) coordinates.
+fn warn_if_genomic_sequences_large(total_bytes: u64) {
+    if total_bytes > LARGE_GENOMIC_SEQUENCES_WARN_BYTES {
+        eprintln!(
+            "warning: --emit-genomic-sequences embedded {:.1} MB of genomic sequence; the \
+             transcripts.json will be large to store and slow to parse. For a genome-scale \
+             reference prefer `ferro prepare` + `Normalizer.from_manifest(...)`.",
+            total_bytes as f64 / 1_000_000.0
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_convert_gff(
     gff: &PathBuf,
@@ -1897,11 +1936,12 @@ fn run_convert_gff(
     strict: bool,
     silent: bool,
     no_validate_fasta: bool,
+    emit_genomic_sequences: bool,
     diagnostics_json: Option<&PathBuf>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::reference::annotation::{load_annotations, LoaderConfig};
     use ferro_hgvs::reference::transcript::ManeStatus;
-    use std::collections::HashSet;
+    use std::collections::{BTreeMap, HashSet};
 
     // Parse genome build
     let genome_build = parse_genome_build(build);
@@ -1950,6 +1990,16 @@ fn run_convert_gff(
 
     // Collect transcripts to output
     let mut output_transcripts: Vec<serde_json::Value> = Vec::new();
+
+    // For each contig an emitted transcript is placed on, the highest 1-based
+    // genomic coordinate its placement references (max over exon `genomic_end` and
+    // the transcript's own `genomic_end`). Used to emit `genomic_sequences` when
+    // --emit-genomic-sequences is set, and — crucially — to fail fast at emit time
+    // if the FASTA contig cannot cover the placement, using the SAME invariant
+    // `MockProvider::from_json` enforces at load, so convert-gff can never emit a
+    // file its own loader would reject (#1026). BTreeMap keeps the output
+    // deterministic.
+    let mut contig_required_len: BTreeMap<String, u64> = BTreeMap::new();
 
     for (id, tx) in db.iter() {
         // Apply filters
@@ -2042,6 +2092,18 @@ fn run_convert_gff(
         }
         if let Some(ref chrom) = tx.chromosome {
             tx_obj["chromosome"] = serde_json::json!(chrom);
+            // Track the highest genomic coordinate this transcript's placement
+            // needs on its contig, mirroring the loader's `required_len`.
+            let required = tx
+                .exons
+                .iter()
+                .filter_map(|e| e.genomic_end)
+                .chain(tx.genomic_end)
+                .max();
+            if let Some(required) = required {
+                let entry = contig_required_len.entry(chrom.clone()).or_insert(0);
+                *entry = (*entry).max(required);
+            }
         }
         if let Some(start) = tx.genomic_start {
             tx_obj["genomic_start"] = serde_json::json!(start);
@@ -2081,7 +2143,7 @@ fn run_convert_gff(
     }
 
     // Create output JSON
-    let output_json = serde_json::json!({
+    let mut output_json = serde_json::json!({
         "version": "1.0",
         "genome_build": match genome_build {
             GenomeBuild::GRCh37 => "GRCh37",
@@ -2090,6 +2152,60 @@ fn run_convert_gff(
         },
         "transcripts": output_transcripts,
     });
+
+    // Optionally emit the referenced contig sequences so the transcripts.json is
+    // genome-capable. The exon `genomic_start`/`genomic_end` coordinates are
+    // absolute contig positions, so we emit each referenced contig's full forward
+    // sequence keyed by chromosome name — this is exactly what `MockProvider`
+    // slices by genomic coordinate when running the genome-aware rules (#1026).
+    if emit_genomic_sequences {
+        let fasta = fasta_provider
+            .as_ref()
+            .ok_or("--emit-genomic-sequences requires --fasta to read the contig sequences")?;
+        if contig_required_len.is_empty() {
+            // The flag was requested but no emitted transcript carries a genomic
+            // placement, so there is nothing to back a genome with. Warn rather than
+            // write an empty `genomic_sequences` map that would look genome-capable
+            // but report `has_genomic_data() == false`.
+            eprintln!(
+                "warning: --emit-genomic-sequences was set but no emitted transcript has a \
+                 genomic placement; genomic_sequences not written (reference stays \
+                 transcript-only)"
+            );
+        } else {
+            let mut genomic_sequences = serde_json::Map::new();
+            let mut total_bytes: u64 = 0;
+            for (contig, required_len) in &contig_required_len {
+                let length = fasta.sequence_length(contig).ok_or_else(|| {
+                    format!(
+                        "--emit-genomic-sequences: a transcript is placed on contig '{}', \
+                         but it is not present in the FASTA",
+                        contig
+                    )
+                })?;
+                // Fail fast, with the SAME invariant the loader enforces, so the
+                // emitted file always loads. A shorter contig means the FASTA does
+                // not cover the annotation's coordinates — typically a sub-region
+                // FASTA paired with whole-genome coordinates, or a mismatched
+                // assembly.
+                if length < *required_len {
+                    return Err(format!(
+                        "--emit-genomic-sequences: contig '{}' is {} bases in the FASTA, but a \
+                         transcript placement needs genomic coordinate {}. The FASTA does not \
+                         cover the annotation's coordinates (a sub-region FASTA with whole-genome \
+                         coordinates, or a different assembly?).",
+                        contig, length, required_len
+                    )
+                    .into());
+                }
+                let sequence = fasta.get_sequence(contig, 0, length)?;
+                total_bytes += sequence.len() as u64;
+                genomic_sequences.insert(contig.clone(), serde_json::json!(sequence));
+            }
+            warn_if_genomic_sequences_large(total_bytes);
+            output_json["genomic_sequences"] = serde_json::Value::Object(genomic_sequences);
+        }
+    }
 
     // Write output
     let mut writer: Box<dyn Write> = if let Some(out_path) = output {
@@ -3495,6 +3611,7 @@ fn run_build_transcript(
     contig: Option<&str>,
     gene: Option<&str>,
     genome_build: &str,
+    emit_genomic_sequences: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fasta = FastaProvider::new(fasta_path)?;
 
@@ -3544,15 +3661,22 @@ fn run_build_transcript(
         return Err(format!("Invalid strand '{}'; expected + or -", strand).into());
     }
 
-    // Read the full contig sequence (0-based half-open for get_sequence)
+    // Read the full contig sequence (0-based half-open for get_sequence). This is
+    // the forward genomic sequence; the exon `genomic_start`/`genomic_end`
+    // coordinates index into it, so it is what we emit under `genomic_sequences`.
     use ferro_hgvs::reference::provider::ReferenceProvider;
-    let sequence = fasta.get_sequence(&contig_name, 0, contig_length)?;
+    let mut genomic_forward = fasta.get_sequence(&contig_name, 0, contig_length)?;
 
-    // Reverse-complement for minus-strand transcripts
+    // Reverse-complement for minus-strand transcripts (transcript-space `sequence`).
+    // On the plus strand the transcript sequence equals the forward contig: clone it
+    // only when we still need `genomic_forward` for `genomic_sequences`, otherwise
+    // move it out to avoid duplicating the whole contig.
     let final_sequence = if strand == "-" {
-        reverse_complement(&sequence)
+        reverse_complement(&genomic_forward)
+    } else if emit_genomic_sequences {
+        genomic_forward.clone()
     } else {
-        sequence
+        std::mem::take(&mut genomic_forward)
     };
 
     let tx_id = id.unwrap_or(&contig_name).to_string();
@@ -3586,11 +3710,23 @@ fn run_build_transcript(
         tx_obj["gene_symbol"] = serde_json::json!(g);
     }
 
-    let output_json = serde_json::json!({
+    let mut output_json = serde_json::json!({
         "version": "1.0",
         "genome_build": genome_build,
         "transcripts": [tx_obj],
     });
+
+    // Optionally emit the contig's forward sequence so the transcripts.json is
+    // genome-capable (#1026): the single exon's genomic coordinates index into it.
+    // Note this repeats the contig bytes already carried in the transcript
+    // `sequence` (identical on plus strand; reverse-complemented there on minus),
+    // which is the price of a self-contained genome-capable reference.
+    if emit_genomic_sequences {
+        warn_if_genomic_sequences_large(genomic_forward.len() as u64);
+        let mut genomic_sequences = serde_json::Map::new();
+        genomic_sequences.insert(contig_name.clone(), serde_json::json!(genomic_forward));
+        output_json["genomic_sequences"] = serde_json::Value::Object(genomic_sequences);
+    }
 
     std::fs::write(output, serde_json::to_string_pretty(&output_json)?)?;
     eprintln!("Wrote 1 transcript ({}) to {}", tx_id, output.display());
