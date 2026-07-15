@@ -248,6 +248,29 @@ def check_reference_data(directory: str) -> ReferenceManifest:
     """
     ...
 
+def convert_gff(config: ConvertGffConfig) -> ConvertGffReport:
+    """Convert a GFF3/GTF annotation into the ``transcripts.json`` format.
+
+    In-process equivalent of ``ferro convert-gff``; both call the same library
+    serializer, so the output is byte-identical for the same inputs and flags.
+    Use it to build a reference for ``Normalizer(reference_json=...)`` without
+    shelling out to the CLI.
+
+    Args:
+        config: A ConvertGffConfig describing the inputs and options.
+
+    Returns:
+        ConvertGffReport with the loader summary, the written output path (or the
+        JSON text when ``output`` is ``None``), and any warnings.
+
+    Raises:
+        ValueError: If ``error_mode`` is not recognized, or
+            ``emit_genomic_sequences`` is set without a ``fasta``.
+        ReferenceDataError: If the annotation or FASTA cannot be read/parsed, or
+            (in strict mode) an error diagnostic is recorded.
+    """
+    ...
+
 # ============================================================================
 # Core Classes
 # ============================================================================
@@ -1396,6 +1419,85 @@ class ReferenceManifest:
     def cdot_grch37_json(self) -> str | None: ...
     @property
     def available_prefixes(self) -> list[str]: ...
+
+# ============================================================================
+# Convert-GFF Classes
+# ============================================================================
+
+class ConvertGffConfig:
+    """Configuration for :func:`convert_gff`, mirroring the ``ferro convert-gff``
+    CLI flags."""
+
+    def __init__(
+        self,
+        gff: str,
+        fasta: str | None = None,
+        output: str | None = None,
+        build: str = "GRCh38",
+        mane_only: bool = False,
+        transcripts: list[str] | str | None = None,
+        genes: list[str] | str | None = None,
+        error_mode: str = "lenient",
+        validate_fasta: bool = True,
+        emit_genomic_sequences: bool = False,
+        diagnostics_json: str | None = None,
+    ) -> None:
+        """Create a convert-gff configuration.
+
+        Args:
+            gff: Path to the input GFF3/GTF annotation file.
+            fasta: Optional reference FASTA, used to extract exonic sequences and
+                (with ``emit_genomic_sequences``) the embedded contig sequences.
+            output: Optional output path for the ``transcripts.json``. If ``None``
+                (default), the JSON is returned in
+                ``ConvertGffReport.transcripts_json`` instead of written to disk.
+            build: Genome build recorded in the output ("GRCh38" or "GRCh37").
+            mane_only: Emit only MANE Select / MANE Plus Clinical transcripts.
+            transcripts: Optional transcript-ID filter — a list of IDs or a single
+                comma-separated string.
+            genes: Optional gene-symbol filter — a list of symbols or a single
+                comma-separated string.
+            error_mode: "lenient" (default), "strict", or "silent".
+            validate_fasta: Run CDS-length / start-codon FASTA validation when a
+                FASTA is supplied (default True; inverse of ``--no-validate-fasta``).
+            emit_genomic_sequences: Embed referenced contig sequences so the output
+                is genome-capable. Requires ``fasta``.
+            diagnostics_json: Optional path to write the sampled loader diagnostics.
+        """
+        ...
+
+class ConvertGffReport:
+    """Result of a :func:`convert_gff` run."""
+
+    @property
+    def summary(self) -> str:
+        """One-line loader summary (records read, transcripts built, diagnostics)."""
+        ...
+    @property
+    def transcripts_json(self) -> str | None:
+        """The serialized ``transcripts.json`` text, present only when the config's
+        ``output`` was ``None`` (otherwise the JSON was written to that path and
+        this is ``None``)."""
+        ...
+    @property
+    def output_path(self) -> str | None:
+        """The path the ``transcripts.json`` was written to, or ``None`` if it was
+        returned in ``transcripts_json`` instead."""
+        ...
+    @property
+    def transcript_count(self) -> int:
+        """Number of transcripts emitted."""
+        ...
+    @property
+    def emitted_genomic_bytes(self) -> int:
+        """Total bytes of genomic sequence embedded under ``genomic_sequences``
+        (0 when ``emit_genomic_sequences`` was off or nothing was placed)."""
+        ...
+    @property
+    def warnings(self) -> list[str]:
+        """Non-fatal warnings raised during conversion (also emitted as
+        ``UserWarning``)."""
+        ...
 
 # ============================================================================
 # Reference Classes

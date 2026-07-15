@@ -11,7 +11,7 @@ harness) before trusting a genome-aware result.
 | You have… | Use | Genome-aware rules run? |
 |---|---|---|
 | A downloaded RefSeq/Ensembl reference + genome | `ferro prepare` → `Normalizer.from_manifest("manifest.json")` | ✅ full |
-| A **synthetic / local** construct (your own FASTA + annotation) and you need intronic / `g.` / exon-junction rules | `ferro convert-gff --emit-genomic-sequences` (or `ferro build-transcript --emit-genomic-sequences`) → `Normalizer(reference_json="transcripts.json")` | ✅ yes |
+| A **synthetic / local** construct (your own FASTA + annotation) and you need intronic / `g.` / exon-junction rules | `ferro_hgvs.convert_gff(...)` in-process (or `ferro convert-gff` / `ferro build-transcript`, all with `emit_genomic_sequences=True` / `--emit-genomic-sequences`) → `Normalizer(reference_json="transcripts.json")` | ✅ yes |
 | Transcript-level normalization only (exonic SNV/indel shuffle; no introns, no `g.` axis) | a `transcripts.json` **without** `genomic_sequences` → `Normalizer(reference_json=...)` | ❌ by design (see the boundary below) |
 | Just trying the API | `Normalizer()` (built-in toy data) | ❌ toy data |
 
@@ -79,8 +79,25 @@ in particular needs a genome.
 ## Example 1 — genome-aware normalization of a synthetic construct
 
 Build a **genome-capable** `transcripts.json` from your own FASTA — the
-`--emit-genomic-sequences` flag embeds the contig bytes so the genome-dependent
-rules can run:
+`emit_genomic_sequences` option embeds the contig bytes so the genome-dependent
+rules can run. You can do this entirely in-process (no `ferro` CLI required):
+
+```python
+import ferro_hgvs
+
+# Many transcripts from an annotation + FASTA, without shelling out to the CLI:
+ferro_hgvs.convert_gff(
+    ferro_hgvs.ConvertGffConfig(
+        gff="constructs.gff3",
+        fasta="constructs.fa",
+        output="constructs.json",
+        emit_genomic_sequences=True,
+    )
+)
+# Pass output=None instead to get the JSON back as report.transcripts_json.
+```
+
+or via the CLI:
 
 ```bash
 # Single synthetic construct (one contig):

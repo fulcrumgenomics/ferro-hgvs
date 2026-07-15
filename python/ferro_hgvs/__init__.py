@@ -116,6 +116,8 @@ __all__ = [
     # Prepare functions
     "prepare_reference_data",
     "check_reference_data",
+    # Convert-GFF functions
+    "convert_gff",
     # Core classes
     "HgvsVariant",
     "Normalizer",
@@ -159,6 +161,9 @@ __all__ = [
     # Prepare classes
     "PrepareConfig",
     "ReferenceManifest",
+    # Convert-GFF classes
+    "ConvertGffConfig",
+    "ConvertGffReport",
     # Reference classes
     "GenomeBuild",
     "Strand",
