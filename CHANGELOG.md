@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.7.1...v0.8.0) - 2026-07-15
+
+### Added
+
+- *(reference,cli)* validate transcripts.json version and check it standalone ([#1031](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1031))
+- *(normalize)* warn-and-degrade when genomic data is unavailable ([#1015](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1015))
+- *(cli)* genome-capable transcripts.json via --emit-genomic-sequences ([#1029](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1029))
+- *(python)* value equality on projections/effects, idempotency tests, typed-Raises docs ([#1022](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1022))
+- *(python)* surface normalization warnings on projections ([#1021](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1021))
+- *(python)* batch error-isolation on the projector (return_exceptions) ([#1020](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1020))
+- *(python)* typed exception hierarchy, py.typed, and structured error codes ([#1019](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1019))
+- *(python)* surface reference capability and warn on reduced-capability build ([#1014](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1014))
+
+### Fixed
+
+- *(python)* reject an unrecognized direction argument instead of defaulting to 3' ([#1017](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1017))
+
+### Other
+
+- make public error/projection API robust to additive changes ([#1033](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1033))
+- *(pre-commit)* fix the broken mypy hook (bump to v2.2.0, check by directory) ([#1023](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1023))
+- *(reference)* rename MockProvider to JsonProvider ([#1030](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1030))
+- *(readme)* add PyPI version and Python-versions badges ([#1010](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1010))
+
 ## [0.7.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.7.0...v0.7.1) - 2026-07-09
 
 ### Fixed
