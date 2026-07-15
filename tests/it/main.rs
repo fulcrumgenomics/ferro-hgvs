@@ -27,6 +27,7 @@ mod biocommons_tests;
 mod boundary_tests;
 mod bracket_cardinality_conformance;
 mod breakpoint_insertion;
+mod build_transcript_library_parity;
 mod bulk_fixture_tests;
 mod civic_validation;
 mod cli_build_transcript;

@@ -15,9 +15,7 @@ use ferro_hgvs::error_handling::{
     get_code_info, list_all_codes, list_error_codes, list_warning_codes, ErrorConfig, ErrorMode,
     ErrorType,
 };
-use ferro_hgvs::reference::FastaProvider;
 use ferro_hgvs::reference::TranscriptDb;
-use ferro_hgvs::sequence::reverse_complement;
 use ferro_hgvs::vcf::{generate_info_header_lines, open_vcf, VcfAnnotator, VcfRecord};
 use ferro_hgvs::{parse_hgvs, FerroError, NormalizeConfig, Normalizer};
 use flate2::read::MultiGzDecoder;
@@ -3446,7 +3444,7 @@ fn run_cds_consistency_check(
 /// against the reverse-complemented (transcript) sequence.
 #[allow(clippy::too_many_arguments)]
 fn run_build_transcript(
-    fasta_path: &PathBuf,
+    fasta_path: &Path,
     cds_start: u64,
     cds_end: u64,
     output: &PathBuf,
@@ -3457,123 +3455,33 @@ fn run_build_transcript(
     genome_build: &str,
     emit_genomic_sequences: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let fasta = FastaProvider::new(fasta_path)?;
+    use ferro_hgvs::reference::annotation::{build_transcript, BuildTranscriptConfig};
 
-    // Collect contig names; HashMap iteration order is non-deterministic but we
-    // only need the names to detect single vs. multi-contig.
-    let contig_names: Vec<String> = fasta.sequence_names().cloned().collect();
-
-    let contig_name: String = match (contig, contig_names.as_slice()) {
-        (Some(c), _) => {
-            if !fasta.has_sequence(c) {
-                return Err(format!(
-                    "Contig '{}' not found in FASTA; available: {}",
-                    c,
-                    contig_names.join(", ")
-                )
-                .into());
-            }
-            c.to_string()
-        }
-        (None, [single]) => single.clone(),
-        (None, []) => return Err("FASTA contains no contigs".into()),
-        (None, _) => {
-            return Err(format!(
-                "FASTA has {} contigs; pass --contig to select one (available: {})",
-                contig_names.len(),
-                contig_names.join(", ")
-            )
-            .into())
-        }
+    // Build the config, mirroring the CLI flags. The construction and
+    // serialization live in `ferro_hgvs::reference::annotation::build_transcript`
+    // so this command and the Python binding produce byte-identical output.
+    let config = BuildTranscriptConfig {
+        cds_start,
+        cds_end,
+        id: id.map(str::to_string),
+        strand: strand.to_string(),
+        contig: contig.map(str::to_string),
+        gene: gene.map(str::to_string),
+        genome_build: genome_build.to_string(),
+        emit_genomic_sequences,
     };
 
-    let contig_length = fasta
-        .sequence_length(&contig_name)
-        .ok_or_else(|| format!("Could not determine length of contig '{}'", contig_name))?;
+    let outcome = build_transcript(fasta_path, &config)?;
 
-    // Validate CDS bounds (1-based inclusive)
-    if cds_start < 1 || cds_end < cds_start || cds_end > contig_length {
-        return Err(format!(
-            "Invalid CDS bounds: cds_start={}, cds_end={}, contig length={}",
-            cds_start, cds_end, contig_length
-        )
-        .into());
-    }
+    // Warn if a large genome was embedded (a no-op when nothing was emitted).
+    warn_if_genomic_sequences_large(outcome.emitted_genomic_bytes);
 
-    // Parse and validate strand
-    if strand != "+" && strand != "-" {
-        return Err(format!("Invalid strand '{}'; expected + or -", strand).into());
-    }
-
-    // Read the full contig sequence (0-based half-open for get_sequence). This is
-    // the forward genomic sequence; the exon `genomic_start`/`genomic_end`
-    // coordinates index into it, so it is what we emit under `genomic_sequences`.
-    use ferro_hgvs::reference::provider::ReferenceProvider;
-    let mut genomic_forward = fasta.get_sequence(&contig_name, 0, contig_length)?;
-
-    // Reverse-complement for minus-strand transcripts (transcript-space `sequence`).
-    // On the plus strand the transcript sequence equals the forward contig: clone it
-    // only when we still need `genomic_forward` for `genomic_sequences`, otherwise
-    // move it out to avoid duplicating the whole contig.
-    let final_sequence = if strand == "-" {
-        reverse_complement(&genomic_forward)
-    } else if emit_genomic_sequences {
-        genomic_forward.clone()
-    } else {
-        std::mem::take(&mut genomic_forward)
-    };
-
-    let tx_id = id.unwrap_or(&contig_name).to_string();
-
-    // Build the exon object: single exon spanning the full contig. For a
-    // single-exon synthetic construct, plus-strand transcript coordinates equal
-    // genomic coordinates; for minus-strand the emitted `sequence` is
-    // reverse-complemented and CDS positions are in transcript space.
-    let exon = serde_json::json!({
-        "number": 1,
-        "start": 1_u64,
-        "end": contig_length,
-        "genomic_start": 1_u64,
-        "genomic_end": contig_length,
-    });
-
-    let mut tx_obj = serde_json::json!({
-        "id": tx_id,
-        "strand": strand,
-        "sequence": final_sequence,
-        "cds_start": cds_start,
-        "cds_end": cds_end,
-        "exons": [exon],
-        "chromosome": contig_name,
-        "genomic_start": 1_u64,
-        "genomic_end": contig_length,
-        "genome_build": genome_build,
-    });
-
-    if let Some(g) = gene {
-        tx_obj["gene_symbol"] = serde_json::json!(g);
-    }
-
-    let mut output_json = serde_json::json!({
-        "version": "1.0",
-        "genome_build": genome_build,
-        "transcripts": [tx_obj],
-    });
-
-    // Optionally emit the contig's forward sequence so the transcripts.json is
-    // genome-capable (#1026): the single exon's genomic coordinates index into it.
-    // Note this repeats the contig bytes already carried in the transcript
-    // `sequence` (identical on plus strand; reverse-complemented there on minus),
-    // which is the price of a self-contained genome-capable reference.
-    if emit_genomic_sequences {
-        warn_if_genomic_sequences_large(genomic_forward.len() as u64);
-        let mut genomic_sequences = serde_json::Map::new();
-        genomic_sequences.insert(contig_name.clone(), serde_json::json!(genomic_forward));
-        output_json["genomic_sequences"] = serde_json::Value::Object(genomic_sequences);
-    }
-
-    std::fs::write(output, serde_json::to_string_pretty(&output_json)?)?;
-    eprintln!("Wrote 1 transcript ({}) to {}", tx_id, output.display());
+    std::fs::write(output, serde_json::to_string_pretty(&outcome.json)?)?;
+    eprintln!(
+        "Wrote 1 transcript ({}) to {}",
+        outcome.transcript_id,
+        output.display()
+    );
 
     Ok(())
 }
