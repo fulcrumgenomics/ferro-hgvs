@@ -167,6 +167,19 @@ impl MockProvider {
             }
         };
 
+        // A reference with no transcripts, proteins, or genomic sequences can
+        // resolve nothing; fail loud rather than silently construct an empty,
+        // useless provider (#1012 item 5). A genomic-only reference (zero
+        // transcripts but populated `genomic_sequences`) is still valid for
+        // `g.` normalization, so only a wholly-empty file is rejected.
+        if transcripts.is_empty() && proteins.is_empty() && genomic_sequences.is_empty() {
+            return Err(FerroError::Json {
+                msg: "reference JSON has no usable reference data: it defines no \
+                      transcripts, proteins, or genomic sequences"
+                    .to_string(),
+            });
+        }
+
         let map: HashMap<String, Arc<Transcript>> = transcripts
             .into_iter()
             .map(|tx| (tx.id.clone(), Arc::new(tx)))
@@ -1020,18 +1033,93 @@ mod tests {
     }
 
     #[test]
-    fn test_from_json_empty_object_form() {
+    fn test_from_json_empty_object_is_rejected() {
+        // An empty object has no usable reference data, so it must be rejected
+        // rather than loaded as a useless empty provider (#1012 item 5).
         use std::io::Write;
         use tempfile::NamedTempFile;
 
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(b"{}").unwrap();
 
-        let provider = MockProvider::from_json(file.path()).unwrap();
+        match MockProvider::from_json(file.path()) {
+            Err(FerroError::Json { msg }) => assert!(
+                msg.contains("no usable reference data"),
+                "expected error to mention no usable reference data, got: {msg}",
+            ),
+            Err(e) => panic!("expected FerroError::Json, got {e}"),
+            Ok(_) => panic!("expected a wholly-empty reference file to be rejected"),
+        }
+    }
 
-        assert!(provider.is_empty());
-        assert!(!provider.has_protein_data());
+    #[test]
+    fn from_json_rejects_wholly_empty_forms() {
+        // A bare empty array and an explicit `"transcripts": []` with no other
+        // data are equally unusable and must be rejected (#1012 item 5).
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        for body in [&b"[]"[..], br#"{"transcripts": []}"#] {
+            let mut file = NamedTempFile::new().unwrap();
+            file.write_all(body).unwrap();
+            match MockProvider::from_json(file.path()) {
+                Err(FerroError::Json { msg }) => assert!(
+                    msg.contains("no usable reference data"),
+                    "expected error to mention no usable reference data, got: {msg}",
+                ),
+                Err(e) => panic!("expected FerroError::Json, got {e}"),
+                Ok(_) => panic!("expected a wholly-empty reference file to be rejected"),
+            }
+        }
+    }
+
+    #[test]
+    fn from_json_accepts_genomic_only_reference() {
+        // A reference with zero transcripts but populated `genomic_sequences` is
+        // still valid for `g.` normalization and must load (#1012 item 5): the
+        // empty-file guard only rejects a wholly-empty reference.
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"{
+            "transcripts": [],
+            "genomic_sequences": {"NC_000001.11": "ACGTACGTACGT"}
+        }"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider =
+            MockProvider::from_json(file.path()).expect("a genomic-only reference should load");
+        assert!(provider.is_empty()); // no transcripts
+        assert!(provider.has_genomic_data());
+        assert_eq!(
+            provider.get_genomic_sequence("NC_000001.11", 0, 4).unwrap(),
+            "ACGT"
+        );
+    }
+
+    #[test]
+    fn from_json_accepts_protein_only_reference() {
+        // A reference with zero transcripts and no genomic sequence but populated
+        // `proteins` is still usable (protein queries) and must load — the
+        // empty-file guard only rejects a wholly-empty reference (#1012 item 5).
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"{
+            "transcripts": [],
+            "proteins": {"NP_000001.1": "MAPLE"}
+        }"#;
+
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider =
+            MockProvider::from_json(file.path()).expect("a protein-only reference should load");
+        assert!(provider.is_empty()); // no transcripts
         assert!(!provider.has_genomic_data());
+        assert!(provider.has_protein_data());
     }
 
     #[test]
@@ -1075,14 +1163,23 @@ mod tests {
 
     #[test]
     fn from_json_accepts_convert_gff_output_with_metadata_keys() {
-        // The container shape produced by `ferro convert-gff`.
+        // The container shape produced by `ferro convert-gff`: the `version` and
+        // `genome_build` container-metadata keys must be accepted (not rejected
+        // by `deny_unknown_fields`) alongside transcript records.
         use std::io::Write;
         use tempfile::NamedTempFile;
 
         let json = r#"{
             "version": "1.0",
             "genome_build": "GRCh38",
-            "transcripts": []
+            "transcripts": [
+                {
+                    "id": "NM_000001.1",
+                    "strand": "+",
+                    "sequence": "ATGC",
+                    "exons": [{"number": 1, "start": 1, "end": 4}]
+                }
+            ]
         }"#;
 
         let mut file = NamedTempFile::new().unwrap();
@@ -1090,7 +1187,7 @@ mod tests {
 
         let provider = MockProvider::from_json(file.path())
             .expect("convert-gff JSON with version/genome_build metadata should load");
-        assert!(provider.is_empty());
+        assert!(provider.has_transcript("NM_000001.1"));
     }
 
     #[test]

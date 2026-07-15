@@ -441,6 +441,28 @@ class Normalizer:
         """
         ...
 
+    def has_genomic_data(self) -> bool:
+        """Return True if the backing reference provides genomic sequence data.
+
+        A build with no genomic data (built-in test data or a transcripts.json
+        reference) cannot perform genome-dependent normalization; use
+        ``Normalizer.from_manifest(...)`` for full capability.
+        """
+        ...
+
+    def has_protein_data(self) -> bool:
+        """Return True if the backing reference provides protein sequence data."""
+        ...
+
+    def reference_summary(self) -> dict[str, Any]:
+        """Summarize the reference backend's capabilities.
+
+        Returns a dict with keys ``provider_kind`` (one of ``"test_data"``,
+        ``"json"``, or ``"manifest"``), ``has_genomic_data``, and
+        ``has_protein_data``.
+        """
+        ...
+
     def parse(self, hgvs_string: str) -> HgvsVariant:
         """Parse an HGVS string."""
         ...
@@ -664,6 +686,28 @@ class EquivalenceChecker:
 
         Raises:
             RuntimeError: If the manifest cannot be loaded.
+        """
+        ...
+
+    def has_genomic_data(self) -> bool:
+        """Return True if the backing reference provides genomic sequence data.
+
+        A checker with no genomic data (built-in test data or a transcript-only
+        ``reference_json``) has limited genome-dependent capability; use
+        ``EquivalenceChecker.from_manifest(...)`` for full capability.
+        """
+        ...
+
+    def has_protein_data(self) -> bool:
+        """Return True if the backing reference provides protein sequence data."""
+        ...
+
+    def reference_summary(self) -> dict[str, Any]:
+        """Summarize the reference backend's capabilities.
+
+        Returns a dict with keys ``provider_kind`` (one of ``"test_data"``,
+        ``"json"``, or ``"manifest"``), ``has_genomic_data``, and
+        ``has_protein_data``.
         """
         ...
 
@@ -901,6 +945,28 @@ class BatchProcessor:
 
         Raises:
             RuntimeError: If the manifest cannot be loaded.
+        """
+        ...
+
+    def has_genomic_data(self) -> bool:
+        """Return True if the backing reference provides genomic sequence data.
+
+        A processor with no genomic data (built-in test data or a transcript-only
+        ``reference_json``) has limited genome-dependent capability; use
+        ``BatchProcessor.from_manifest(...)`` for full capability.
+        """
+        ...
+
+    def has_protein_data(self) -> bool:
+        """Return True if the backing reference provides protein sequence data."""
+        ...
+
+    def reference_summary(self) -> dict[str, Any]:
+        """Summarize the reference backend's capabilities.
+
+        Returns a dict with keys ``provider_kind`` (one of ``"test_data"``,
+        ``"json"``, or ``"manifest"``), ``has_genomic_data``, and
+        ``has_protein_data``.
         """
         ...
 
@@ -1337,6 +1403,28 @@ class CoordinateMapper:
 
         Raises:
             RuntimeError: If the manifest cannot be loaded.
+        """
+        ...
+
+    def has_genomic_data(self) -> bool:
+        """Return True if the backing reference provides genomic sequence data.
+
+        A mapper with no genomic data (built-in test data or a transcript-only
+        ``reference_json``) cannot resolve genomic coordinates; use
+        ``CoordinateMapper.from_manifest(...)`` for full capability.
+        """
+        ...
+
+    def has_protein_data(self) -> bool:
+        """Return True if the backing reference provides protein sequence data."""
+        ...
+
+    def reference_summary(self) -> dict[str, Any]:
+        """Summarize the reference backend's capabilities.
+
+        Returns a dict with keys ``provider_kind`` (one of ``"test_data"``,
+        ``"json"``, or ``"manifest"``), ``has_genomic_data``, and
+        ``has_protein_data``.
         """
         ...
 
@@ -1777,5 +1865,27 @@ class VariantProjector:
 
         Raises:
             RuntimeError: On the first projection error.
+        """
+        ...
+
+    def has_genomic_data(self) -> bool:
+        """Return True if the backing reference provides genomic sequence data.
+
+        A projector with no genomic data (built-in test data or a transcript-only
+        ``reference_json``) cannot ``project_to_genomic``; use
+        ``VariantProjector.from_manifest(...)`` for full capability.
+        """
+        ...
+
+    def has_protein_data(self) -> bool:
+        """Return True if the backing reference provides protein sequence data."""
+        ...
+
+    def reference_summary(self) -> dict[str, Any]:
+        """Summarize the reference backend's capabilities.
+
+        Returns a dict with keys ``provider_kind`` (one of ``"test_data"``,
+        ``"json"``, or ``"manifest"``), ``has_genomic_data``, and
+        ``has_protein_data``.
         """
         ...

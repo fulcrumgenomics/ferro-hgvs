@@ -3,12 +3,13 @@
 //! This module provides Python bindings for the HGVS parser and normalizer.
 //! Enable with the `python` feature flag.
 
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyUserWarning, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::backtranslate::{Backtranslator, CodonChange, CodonTable};
@@ -300,13 +301,23 @@ fn parse(hgvs_string: &str) -> PyResult<PyHgvsVariant> {
 ///     RuntimeError: If normalization fails
 #[pyfunction]
 #[pyo3(signature = (hgvs_string, direction="3prime"))]
-fn normalize(hgvs_string: &str, direction: &str) -> PyResult<String> {
+fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<String> {
     let variant = parse_hgvs(hgvs_string)
         .map_err(|e| PyValueError::new_err(format!("Parse error: {}", e)))?;
 
     let config = NormalizeConfig::default().with_direction(parse_direction(direction));
     // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
     let provider = MockProvider::with_test_data();
+    // This free function always uses genome-less test data; surface the
+    // reduced-capability signal once per process (#1012), pointing callers at a
+    // full manifest-backed Normalizer.
+    emit_reduced_capability_warning(
+        py,
+        provider.has_genomic_data(),
+        ProviderKind::TestData,
+        "normalize()",
+        "Normalizer.from_manifest(...)",
+    )?;
     let normalizer = Normalizer::with_config(provider, config);
 
     let normalized = normalizer
@@ -532,10 +543,19 @@ impl PyHgvsVariant {
     /// Returns:
     ///     A new PyHgvsVariant representing the normalized variant
     #[pyo3(signature = (direction="3prime"))]
-    fn normalize(&self, direction: &str) -> PyResult<PyHgvsVariant> {
+    fn normalize(&self, py: Python<'_>, direction: &str) -> PyResult<PyHgvsVariant> {
         let config = NormalizeConfig::default().with_direction(parse_direction(direction));
         // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
         let provider = MockProvider::with_test_data();
+        // Genome-less test data; surface the reduced-capability signal once per
+        // process (#1012), pointing callers at a full manifest-backed Normalizer.
+        emit_reduced_capability_warning(
+            py,
+            provider.has_genomic_data(),
+            ProviderKind::TestData,
+            "HgvsVariant.normalize()",
+            "Normalizer.from_manifest(...)",
+        )?;
         let normalizer = Normalizer::with_config(provider, config);
 
         let normalized = normalizer
@@ -588,11 +608,119 @@ impl PyHgvsVariant {
     }
 }
 
+/// Which reference backend a capability-surfacing pyclass was built from.
+///
+/// Surfaced to Python via `reference_summary()["provider_kind"]` so callers can
+/// tell a limited build (`test_data` / `json`) apart from a full manifest-backed
+/// build. Shared by every reference-backed surface: `Normalizer`,
+/// `VariantProjector`, `EquivalenceChecker`, `BatchProcessor`, and
+/// `CoordinateMapper`.
+#[derive(Clone, Copy)]
+enum ProviderKind {
+    /// Built-in test data (constructed with no arguments).
+    TestData,
+    /// A `reference_json` file (`reference_json=...`). Labeled `"json"` because
+    /// such a file may carry genomic-only data as well as transcripts;
+    /// `has_genomic_data` remains the source of truth for capability.
+    TranscriptsJson,
+    /// A `ferro prepare` manifest (`from_manifest(...)`).
+    Manifest,
+}
+
+impl ProviderKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            ProviderKind::TestData => "test_data",
+            ProviderKind::TranscriptsJson => "json",
+            ProviderKind::Manifest => "manifest",
+        }
+    }
+}
+
+/// Set once the reduced-capability `UserWarning` has been emitted for each
+/// distinct message *variant*, so each variant fires at most once per process
+/// regardless of how many limited reference-backed surfaces are constructed
+/// (#1012 item 1). Keyed by variant — a throwaway test-data / `reference_json`
+/// surface warning first must NOT suppress a genome-less *manifest* (a real
+/// production misconfiguration) later in the same process, or vice versa: the
+/// two carry different guidance and are independently actionable.
+static REDUCED_CAPABILITY_WARNED_GENERIC: AtomicBool = AtomicBool::new(false);
+static REDUCED_CAPABILITY_WARNED_MANIFEST: AtomicBool = AtomicBool::new(false);
+
+/// Emit the shared one-time reduced-capability `UserWarning` used by every
+/// Python entry point that can silently fall back to a genome-less reference
+/// (#1012). Mirrors [`PyNormalizer::warn_if_reduced_capability`] but is reused
+/// by the sibling surfaces (`VariantProjector`, `EquivalenceChecker`,
+/// `BatchProcessor`, `CoordinateMapper`) and the free `normalize` functions.
+///
+/// `subject` names the surface in the message (e.g. `"VariantProjector"`);
+/// `manifest_ctor` is the fully-qualified constructor to point callers at for
+/// full capability (e.g. `"VariantProjector.from_manifest(...)"`). Each message
+/// variant fires at most once per process, keyed by the per-variant flags
+/// ([`REDUCED_CAPABILITY_WARNED_GENERIC`] / [`REDUCED_CAPABILITY_WARNED_MANIFEST`]),
+/// so a limited test-data surface cannot mask a later genome-less manifest.
+fn emit_reduced_capability_warning(
+    py: Python<'_>,
+    has_genomic_data: bool,
+    kind: ProviderKind,
+    subject: &str,
+    manifest_ctor: &str,
+) -> PyResult<()> {
+    if has_genomic_data {
+        return Ok(());
+    }
+    // Each message variant warns at most once — keyed on the same partition as
+    // the message below (manifest vs test-data/reference_json), so a limited
+    // test-data / reference_json surface does not consume the manifest variant's
+    // one-shot slot (and vice versa).
+    let warned_flag = match kind {
+        ProviderKind::Manifest => &REDUCED_CAPABILITY_WARNED_MANIFEST,
+        ProviderKind::TestData | ProviderKind::TranscriptsJson => {
+            &REDUCED_CAPABILITY_WARNED_GENERIC
+        }
+    };
+    if warned_flag.swap(true, Ordering::Relaxed) {
+        return Ok(());
+    }
+    // Tailor the guidance to how the reference was built. Pointing a
+    // `from_manifest(...)` caller back at `from_manifest(...)` is nonsense, so a
+    // genome-less manifest gets a manifest-specific message; the test-data and
+    // reference_json paths point at `from_manifest`.
+    let message = match kind {
+        ProviderKind::Manifest => format!(
+            "{subject} manifest reference provides no genomic data: \
+             genome-dependent operations will be limited. Ensure the prepared \
+             reference includes a genome FASTA."
+        ),
+        ProviderKind::TestData | ProviderKind::TranscriptsJson => format!(
+            "{subject} reference lacks genomic data: genome-dependent operations \
+             will be limited (built-in test data and transcript-only reference_json \
+             files carry no genome). Use {manifest_ctor} for full reference capability."
+        ),
+    };
+    // If emitting the warning fails — most importantly when the process runs
+    // under `warnings.simplefilter("error")`, so the warning is raised as an
+    // exception — reset the once-per-process flag. Otherwise `swap(true, …)` above
+    // would leave the flag set for a warning that never actually surfaced, and the
+    // configured warning policy could be silently bypassed on a later attempt.
+    let emit = || -> PyResult<()> {
+        let message = std::ffi::CString::new(message)
+            .map_err(|e| PyRuntimeError::new_err(format!("invalid warning message: {e}")))?;
+        PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)
+    };
+    let result = emit();
+    if result.is_err() {
+        warned_flag.store(false, Ordering::Relaxed);
+    }
+    result
+}
+
 /// HGVS variant normalizer using a reference provider
 #[pyclass(name = "Normalizer")]
 pub struct PyNormalizer {
     provider: PyProvider,
     config: NormalizeConfig,
+    kind: ProviderKind,
 }
 
 #[pymethods]
@@ -606,15 +734,24 @@ impl PyNormalizer {
     ///     direction: Shuffle direction - "3prime" (default) or "5prime"
     #[new]
     #[pyo3(signature = (reference_json=None, direction="3prime"))]
-    fn new(reference_json: Option<&str>, direction: &str) -> PyResult<Self> {
-        let provider = match reference_json {
-            Some(path) => PyProvider::from_json(Path::new(path))?,
-            None => PyProvider::test_data(),
+    fn new(py: Python<'_>, reference_json: Option<&str>, direction: &str) -> PyResult<Self> {
+        let (provider, kind) = match reference_json {
+            Some(path) => (
+                PyProvider::from_json(Path::new(path))?,
+                ProviderKind::TranscriptsJson,
+            ),
+            None => (PyProvider::test_data(), ProviderKind::TestData),
         };
 
         let config = NormalizeConfig::default().with_direction(parse_direction(direction));
 
-        Ok(Self { provider, config })
+        let normalizer = Self {
+            provider,
+            config,
+            kind,
+        };
+        normalizer.warn_if_reduced_capability(py)?;
+        Ok(normalizer)
     }
 
     /// Create a normalizer from a reference manifest written by `ferro prepare`.
@@ -628,10 +765,44 @@ impl PyNormalizer {
     ///     A Normalizer backed by a MultiFastaProvider.
     #[staticmethod]
     #[pyo3(signature = (manifest_path, direction="3prime"))]
-    fn from_manifest(manifest_path: &str, direction: &str) -> PyResult<Self> {
+    fn from_manifest(py: Python<'_>, manifest_path: &str, direction: &str) -> PyResult<Self> {
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
         let config = NormalizeConfig::default().with_direction(parse_direction(direction));
-        Ok(Self { provider, config })
+        let normalizer = Self {
+            provider,
+            config,
+            kind: ProviderKind::Manifest,
+        };
+        normalizer.warn_if_reduced_capability(py)?;
+        Ok(normalizer)
+    }
+
+    /// Return `True` if the backing reference provides genomic sequence data.
+    ///
+    /// A build with no genomic data (`Normalizer()` test data or
+    /// `Normalizer(reference_json=...)`) cannot perform genome-dependent
+    /// normalization; use `Normalizer.from_manifest(...)` for full capability.
+    fn has_genomic_data(&self) -> bool {
+        self.provider.has_genomic_data()
+    }
+
+    /// Return `True` if the backing reference provides protein sequence data.
+    fn has_protein_data(&self) -> bool {
+        self.provider.has_protein_data()
+    }
+
+    /// Summarize the reference backend's capabilities as a dict.
+    ///
+    /// Keys:
+    ///     provider_kind: One of "test_data", "json", or "manifest".
+    ///     has_genomic_data: Whether genomic sequences are available.
+    ///     has_protein_data: Whether protein sequences are available.
+    fn reference_summary<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("provider_kind", self.kind.as_str())?;
+        dict.set_item("has_genomic_data", self.provider.has_genomic_data())?;
+        dict.set_item("has_protein_data", self.provider.has_protein_data())?;
+        Ok(dict)
     }
 
     /// Parse an HGVS string
@@ -694,6 +865,23 @@ impl PyNormalizer {
                 .map(PyNormalizationWarning::from)
                 .collect(),
         })
+    }
+}
+
+impl PyNormalizer {
+    /// Emit a one-time `UserWarning` when the backing provider has no genomic
+    /// data, so users silently landing on a reduced-capability build get a
+    /// runtime signal (#1012 item 1). Fires at most once per process; the
+    /// `MockProvider` test-data and `transcripts.json` paths both lack genomic
+    /// data, so both trigger it.
+    fn warn_if_reduced_capability(&self, py: Python<'_>) -> PyResult<()> {
+        emit_reduced_capability_warning(
+            py,
+            self.provider.has_genomic_data(),
+            self.kind,
+            "Normalizer",
+            "Normalizer.from_manifest(...)",
+        )
     }
 }
 
@@ -850,6 +1038,14 @@ impl PyVariantProjection {
 #[pyclass(name = "VariantProjector")]
 pub struct PyVariantProjector {
     inner: crate::project::VariantProjector<PyProvider>,
+    /// How the backing reference was built (#1012). Captured at construction
+    /// because the provider is moved into `inner`.
+    kind: ProviderKind,
+    /// Whether the backing reference carries genomic sequence data. Captured at
+    /// construction so `reference_summary()` need not reach into `inner`.
+    has_genomic_data: bool,
+    /// Whether the backing reference carries protein sequence data.
+    has_protein_data: bool,
 }
 
 #[pymethods]
@@ -868,15 +1064,19 @@ impl PyVariantProjector {
     #[new]
     #[pyo3(signature = (reference_json=None, direction="3prime", assembly=None))]
     fn new(
+        py: Python<'_>,
         reference_json: Option<&str>,
         direction: &str,
         assembly: Option<&str>,
     ) -> PyResult<Self> {
-        let provider = match reference_json {
-            Some(path) => PyProvider::from_json(Path::new(path))?,
-            None => PyProvider::test_data(),
+        let (provider, kind) = match reference_json {
+            Some(path) => (
+                PyProvider::from_json(Path::new(path))?,
+                ProviderKind::TranscriptsJson,
+            ),
+            None => (PyProvider::test_data(), ProviderKind::TestData),
         };
-        Self::from_provider(provider, direction, assembly)
+        Self::from_provider(py, provider, direction, assembly, kind)
     }
 
     /// Create a projector from a ferro-prepare manifest (preferred for
@@ -884,12 +1084,41 @@ impl PyVariantProjector {
     #[staticmethod]
     #[pyo3(signature = (manifest_path, direction="3prime", assembly=None))]
     fn from_manifest(
+        py: Python<'_>,
         manifest_path: &str,
         direction: &str,
         assembly: Option<&str>,
     ) -> PyResult<Self> {
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
-        Self::from_provider(provider, direction, assembly)
+        Self::from_provider(py, provider, direction, assembly, ProviderKind::Manifest)
+    }
+
+    /// Return `True` if the backing reference provides genomic sequence data.
+    ///
+    /// A projector without genomic data (built-in test data or a transcript-only
+    /// `reference_json`) cannot `project_to_genomic`; use
+    /// `VariantProjector.from_manifest(...)` for full capability.
+    fn has_genomic_data(&self) -> bool {
+        self.has_genomic_data
+    }
+
+    /// Return `True` if the backing reference provides protein sequence data.
+    fn has_protein_data(&self) -> bool {
+        self.has_protein_data
+    }
+
+    /// Summarize the reference backend's capabilities as a dict.
+    ///
+    /// Keys:
+    ///     provider_kind: One of "test_data", "json", or "manifest".
+    ///     has_genomic_data: Whether genomic sequences are available.
+    ///     has_protein_data: Whether protein sequences are available.
+    fn reference_summary<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("provider_kind", self.kind.as_str())?;
+        dict.set_item("has_genomic_data", self.has_genomic_data)?;
+        dict.set_item("has_protein_data", self.has_protein_data)?;
+        Ok(dict)
     }
 
     /// Project a g. HGVS string onto a target transcript.
@@ -1222,10 +1451,15 @@ impl PyVariantProjector {
 
 impl PyVariantProjector {
     fn from_provider(
+        py: Python<'_>,
         provider: PyProvider,
         direction: &str,
         assembly: Option<&str>,
+        kind: ProviderKind,
     ) -> PyResult<Self> {
+        // Capture capability before the provider is moved into the projector.
+        let has_genomic_data = provider.has_genomic_data();
+        let has_protein_data = provider.has_protein_data();
         let cdot = provider.cdot_mapper();
         let projector = crate::data::projection::Projector::new(cdot);
         let config = NormalizeConfig::default().with_direction(parse_direction(direction));
@@ -1242,11 +1476,24 @@ impl PyVariantProjector {
             ),
             None => None,
         };
-        Ok(Self {
+        let projector = Self {
             inner: crate::project::VariantProjector::new(projector, provider)
                 .with_normalize_config(config)
                 .with_assembly(assembly_build),
-        })
+            kind,
+            has_genomic_data,
+            has_protein_data,
+        };
+        // project_to_genomic needs a genome a transcripts-only reference lacks,
+        // so surface the reduced-capability signal once per process (#1012).
+        emit_reduced_capability_warning(
+            py,
+            has_genomic_data,
+            kind,
+            "VariantProjector",
+            "VariantProjector.from_manifest(...)",
+        )?;
+        Ok(projector)
     }
 }
 
@@ -1695,6 +1942,13 @@ impl From<EquivalenceResult> for PyEquivalenceResult {
 #[pyclass(name = "EquivalenceChecker")]
 pub struct PyEquivalenceChecker {
     checker: EquivalenceChecker<PyProvider>,
+    /// How the backing reference was built (#1012). Captured at construction
+    /// because the provider is moved into `checker`.
+    kind: ProviderKind,
+    /// Whether the backing reference carries genomic sequence data.
+    has_genomic_data: bool,
+    /// Whether the backing reference carries protein sequence data.
+    has_protein_data: bool,
 }
 
 #[pymethods]
@@ -1706,15 +1960,15 @@ impl PyEquivalenceChecker {
     ///         If not provided, uses built-in test data.
     #[new]
     #[pyo3(signature = (reference_json=None))]
-    fn new(reference_json: Option<&str>) -> PyResult<Self> {
-        let provider = match reference_json {
-            Some(path) => PyProvider::from_json(Path::new(path))?,
-            None => PyProvider::test_data(),
+    fn new(py: Python<'_>, reference_json: Option<&str>) -> PyResult<Self> {
+        let (provider, kind) = match reference_json {
+            Some(path) => (
+                PyProvider::from_json(Path::new(path))?,
+                ProviderKind::TranscriptsJson,
+            ),
+            None => (PyProvider::test_data(), ProviderKind::TestData),
         };
-
-        Ok(Self {
-            checker: EquivalenceChecker::new(provider),
-        })
+        Self::from_provider(py, provider, kind)
     }
 
     /// Create an equivalence checker from a reference manifest.
@@ -1725,11 +1979,37 @@ impl PyEquivalenceChecker {
     /// Returns:
     ///     An EquivalenceChecker backed by a MultiFastaProvider.
     #[staticmethod]
-    fn from_manifest(manifest_path: &str) -> PyResult<Self> {
+    fn from_manifest(py: Python<'_>, manifest_path: &str) -> PyResult<Self> {
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
-        Ok(Self {
-            checker: EquivalenceChecker::new(provider),
-        })
+        Self::from_provider(py, provider, ProviderKind::Manifest)
+    }
+
+    /// Return `True` if the backing reference provides genomic sequence data.
+    ///
+    /// A checker without genomic data (built-in test data or a transcript-only
+    /// `reference_json`) has limited genome-dependent capability; use
+    /// `EquivalenceChecker.from_manifest(...)` for full capability.
+    fn has_genomic_data(&self) -> bool {
+        self.has_genomic_data
+    }
+
+    /// Return `True` if the backing reference provides protein sequence data.
+    fn has_protein_data(&self) -> bool {
+        self.has_protein_data
+    }
+
+    /// Summarize the reference backend's capabilities as a dict.
+    ///
+    /// Keys:
+    ///     provider_kind: One of "test_data", "json", or "manifest".
+    ///     has_genomic_data: Whether genomic sequences are available.
+    ///     has_protein_data: Whether protein sequences are available.
+    fn reference_summary<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("provider_kind", self.kind.as_str())?;
+        dict.set_item("has_genomic_data", self.has_genomic_data)?;
+        dict.set_item("has_protein_data", self.has_protein_data)?;
+        Ok(dict)
     }
 
     /// Check if two variants are equivalent
@@ -1759,6 +2039,30 @@ impl PyEquivalenceChecker {
         self.checker
             .all_equivalent(&rust_variants)
             .map_err(|e| PyRuntimeError::new_err(format!("Equivalence check failed: {}", e)))
+    }
+}
+
+impl PyEquivalenceChecker {
+    /// Build a checker from a provider, capturing capability before the provider
+    /// is moved into the inner checker, and emit the one-time reduced-capability
+    /// warning (#1012).
+    fn from_provider(py: Python<'_>, provider: PyProvider, kind: ProviderKind) -> PyResult<Self> {
+        let has_genomic_data = provider.has_genomic_data();
+        let has_protein_data = provider.has_protein_data();
+        let checker = Self {
+            checker: EquivalenceChecker::new(provider),
+            kind,
+            has_genomic_data,
+            has_protein_data,
+        };
+        emit_reduced_capability_warning(
+            py,
+            has_genomic_data,
+            kind,
+            "EquivalenceChecker",
+            "EquivalenceChecker.from_manifest(...)",
+        )?;
+        Ok(checker)
     }
 }
 
@@ -2302,6 +2606,13 @@ impl PyBatchResult {
 #[pyclass(name = "BatchProcessor")]
 pub struct PyBatchProcessor {
     processor: BatchProcessor<PyProvider>,
+    /// How the backing reference was built (#1012). Captured at construction
+    /// because the provider is moved into `processor`.
+    kind: ProviderKind,
+    /// Whether the backing reference carries genomic sequence data.
+    has_genomic_data: bool,
+    /// Whether the backing reference carries protein sequence data.
+    has_protein_data: bool,
 }
 
 #[pymethods]
@@ -2313,15 +2624,15 @@ impl PyBatchProcessor {
     ///         If not provided, uses built-in test data.
     #[new]
     #[pyo3(signature = (reference_json=None))]
-    fn new(reference_json: Option<&str>) -> PyResult<Self> {
-        let provider = match reference_json {
-            Some(path) => PyProvider::from_json(Path::new(path))?,
-            None => PyProvider::test_data(),
+    fn new(py: Python<'_>, reference_json: Option<&str>) -> PyResult<Self> {
+        let (provider, kind) = match reference_json {
+            Some(path) => (
+                PyProvider::from_json(Path::new(path))?,
+                ProviderKind::TranscriptsJson,
+            ),
+            None => (PyProvider::test_data(), ProviderKind::TestData),
         };
-
-        Ok(Self {
-            processor: BatchProcessor::new(provider),
-        })
+        Self::from_provider(py, provider, kind)
     }
 
     /// Create a batch processor from a reference manifest.
@@ -2332,11 +2643,37 @@ impl PyBatchProcessor {
     /// Returns:
     ///     A BatchProcessor backed by a MultiFastaProvider.
     #[staticmethod]
-    fn from_manifest(manifest_path: &str) -> PyResult<Self> {
+    fn from_manifest(py: Python<'_>, manifest_path: &str) -> PyResult<Self> {
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
-        Ok(Self {
-            processor: BatchProcessor::new(provider),
-        })
+        Self::from_provider(py, provider, ProviderKind::Manifest)
+    }
+
+    /// Return `True` if the backing reference provides genomic sequence data.
+    ///
+    /// A processor without genomic data (built-in test data or a transcript-only
+    /// `reference_json`) has limited genome-dependent capability; use
+    /// `BatchProcessor.from_manifest(...)` for full capability.
+    fn has_genomic_data(&self) -> bool {
+        self.has_genomic_data
+    }
+
+    /// Return `True` if the backing reference provides protein sequence data.
+    fn has_protein_data(&self) -> bool {
+        self.has_protein_data
+    }
+
+    /// Summarize the reference backend's capabilities as a dict.
+    ///
+    /// Keys:
+    ///     provider_kind: One of "test_data", "json", or "manifest".
+    ///     has_genomic_data: Whether genomic sequences are available.
+    ///     has_protein_data: Whether protein sequences are available.
+    fn reference_summary<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("provider_kind", self.kind.as_str())?;
+        dict.set_item("has_genomic_data", self.has_genomic_data)?;
+        dict.set_item("has_protein_data", self.has_protein_data)?;
+        Ok(dict)
     }
 
     /// Parse multiple HGVS strings.
@@ -2404,6 +2741,30 @@ impl PyBatchProcessor {
             let _ = callback.call1((py_progress,));
         });
         Ok(PyBatchResult { inner: result })
+    }
+}
+
+impl PyBatchProcessor {
+    /// Build a processor from a provider, capturing capability before the
+    /// provider is moved into the inner processor, and emit the one-time
+    /// reduced-capability warning (#1012).
+    fn from_provider(py: Python<'_>, provider: PyProvider, kind: ProviderKind) -> PyResult<Self> {
+        let has_genomic_data = provider.has_genomic_data();
+        let has_protein_data = provider.has_protein_data();
+        let processor = Self {
+            processor: BatchProcessor::new(provider),
+            kind,
+            has_genomic_data,
+            has_protein_data,
+        };
+        emit_reduced_capability_warning(
+            py,
+            has_genomic_data,
+            kind,
+            "BatchProcessor",
+            "BatchProcessor.from_manifest(...)",
+        )?;
+        Ok(processor)
     }
 }
 
@@ -3556,6 +3917,8 @@ impl PyStrand {
 #[pyclass(name = "CoordinateMapper")]
 pub struct PyCoordinateMapper {
     provider: PyProvider,
+    /// How the backing reference was built (#1012).
+    kind: ProviderKind,
 }
 
 #[pymethods]
@@ -3567,13 +3930,18 @@ impl PyCoordinateMapper {
     ///         If not provided, uses built-in test data.
     #[new]
     #[pyo3(signature = (reference_json=None))]
-    fn new(reference_json: Option<&str>) -> PyResult<Self> {
-        let provider = match reference_json {
-            Some(path) => PyProvider::from_json(Path::new(path))?,
-            None => PyProvider::test_data(),
+    fn new(py: Python<'_>, reference_json: Option<&str>) -> PyResult<Self> {
+        let (provider, kind) = match reference_json {
+            Some(path) => (
+                PyProvider::from_json(Path::new(path))?,
+                ProviderKind::TranscriptsJson,
+            ),
+            None => (PyProvider::test_data(), ProviderKind::TestData),
         };
 
-        Ok(Self { provider })
+        let mapper = Self { provider, kind };
+        mapper.warn_if_reduced_capability(py)?;
+        Ok(mapper)
     }
 
     /// Create a coordinate mapper from a reference manifest.
@@ -3584,9 +3952,42 @@ impl PyCoordinateMapper {
     /// Returns:
     ///     A CoordinateMapper backed by a MultiFastaProvider.
     #[staticmethod]
-    fn from_manifest(manifest_path: &str) -> PyResult<Self> {
+    fn from_manifest(py: Python<'_>, manifest_path: &str) -> PyResult<Self> {
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
-        Ok(Self { provider })
+        let mapper = Self {
+            provider,
+            kind: ProviderKind::Manifest,
+        };
+        mapper.warn_if_reduced_capability(py)?;
+        Ok(mapper)
+    }
+
+    /// Return `True` if the backing reference provides genomic sequence data.
+    ///
+    /// A mapper without genomic data (built-in test data or a transcript-only
+    /// `reference_json`) cannot resolve genomic coordinates; use
+    /// `CoordinateMapper.from_manifest(...)` for full capability.
+    fn has_genomic_data(&self) -> bool {
+        self.provider.has_genomic_data()
+    }
+
+    /// Return `True` if the backing reference provides protein sequence data.
+    fn has_protein_data(&self) -> bool {
+        self.provider.has_protein_data()
+    }
+
+    /// Summarize the reference backend's capabilities as a dict.
+    ///
+    /// Keys:
+    ///     provider_kind: One of "test_data", "json", or "manifest".
+    ///     has_genomic_data: Whether genomic sequences are available.
+    ///     has_protein_data: Whether protein sequences are available.
+    fn reference_summary<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        let dict = PyDict::new(py);
+        dict.set_item("provider_kind", self.kind.as_str())?;
+        dict.set_item("has_genomic_data", self.provider.has_genomic_data())?;
+        dict.set_item("has_protein_data", self.provider.has_protein_data())?;
+        Ok(dict)
     }
 
     /// Convert a CDS position to genomic position
@@ -3835,6 +4236,20 @@ impl PyCoordinateMapper {
     /// Check if a transcript exists in the reference
     fn has_transcript(&self, transcript_id: &str) -> bool {
         self.provider.get_transcript(transcript_id).is_ok()
+    }
+}
+
+impl PyCoordinateMapper {
+    /// Emit the one-time reduced-capability warning when the backing provider
+    /// has no genomic data (#1012), pointing callers at `from_manifest(...)`.
+    fn warn_if_reduced_capability(&self, py: Python<'_>) -> PyResult<()> {
+        emit_reduced_capability_warning(
+            py,
+            self.provider.has_genomic_data(),
+            self.kind,
+            "CoordinateMapper",
+            "CoordinateMapper.from_manifest(...)",
+        )
     }
 }
 
