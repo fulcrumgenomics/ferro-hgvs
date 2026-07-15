@@ -11,7 +11,7 @@
 
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::reference::provider::ReferenceProvider;
-use ferro_hgvs::{parse_hgvs, FerroError, Normalizer};
+use ferro_hgvs::{parse_hgvs, Normalizer};
 use std::io::Write;
 use tempfile::NamedTempFile;
 
@@ -62,8 +62,10 @@ fn write_reference_json(with_genomic_sequences: bool) -> NamedTempFile {
 }
 
 /// Without `genomic_sequences`, the reference is transcript-only: `has_genomic_data`
-/// is false and an intronic normalization cannot run the genome-aware path — it
-/// reports the intronic variant as unresolvable (the pre-#1015 main behavior).
+/// is false and an intronic normalization cannot run the genome-aware path. Rather
+/// than hard-error, it warns-and-degrades — echoing the input unchanged and
+/// surfacing a `REDUCED_CAPABILITY_NO_GENOME` warning (#1015). (Before #1015 this
+/// returned `Err(FerroError::IntronicVariant)`.)
 #[test]
 fn transcripts_only_reference_cannot_normalize_intronic() {
     let file = write_reference_json(false);
@@ -75,10 +77,26 @@ fn transcripts_only_reference_cannot_normalize_intronic() {
 
     let normalizer = Normalizer::new(provider);
     let variant = parse_hgvs("NM_1026TEST.1:n.20+3del").expect("parse");
-    let result = normalizer.normalize(&variant);
+    let diag = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("intronic normalization without a genome must warn-and-degrade, not error");
+
+    // Best-effort: the input is echoed unchanged (the intronic offset cannot be
+    // resolved without a genome).
+    assert_eq!(
+        diag.result.to_string(),
+        variant.to_string(),
+        "best-effort output must preserve the input exactly, got: {:?}",
+        diag.result,
+    );
+
+    // The degrade is not silent: the reduced-capability signal is surfaced.
     assert!(
-        matches!(result, Err(FerroError::IntronicVariant { .. })),
-        "transcript-only reference should report the intronic variant as unresolvable, got: {result:?}"
+        diag.warnings
+            .iter()
+            .any(|w| w.code() == "REDUCED_CAPABILITY_NO_GENOME"),
+        "expected REDUCED_CAPABILITY_NO_GENOME warning, got: {:?}",
+        diag.warnings,
     );
 }
 

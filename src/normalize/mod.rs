@@ -631,6 +631,40 @@ pub enum NormalizationWarning {
         /// Coordinate system of the input variant: `"c"`, `"p"`, or `"r"`.
         coordinate_system: String,
     },
+
+    /// A genome-requiring normalization step could not run because the
+    /// configured reference provider carries no genomic sequence data
+    /// (`ReferenceProvider::has_genomic_data() == false`, e.g. a
+    /// transcripts-only provider). The best-effort result is returned
+    /// UNCHANGED from the point the step would have refined it, and this
+    /// warning marks the output as degraded so a reduced-capability result
+    /// is never mistaken for a fully-normalized one. This is an
+    /// environmental limitation, not a defect in the variant: it means a
+    /// genome-requiring step was reached but could not be run. The same input
+    /// against a genome-backed reference *may* normalize further — the
+    /// intronic / boundary-spanning paths genuinely could; the exon-junction
+    /// 3'-shuffle landing only *might*, since whether the pattern extends into
+    /// the intron is exactly what could not be checked without a genome.
+    /// Code: `REDUCED_CAPABILITY_NO_GENOME`.
+    ///
+    /// Emitted by both the formerly-silent exon/intron junction 3'-shuffle
+    /// enhancement (`#670`/`#704`) and the formerly-erroring intronic /
+    /// boundary-spanning genomic normalization paths — item 2 of the #1012
+    /// warn-and-degrade unification.
+    ///
+    /// Mode interaction: lenient/silent return the best-effort variant with
+    /// this advisory; strict mode promotes it to
+    /// `FerroError::ReducedReferenceCapability` (via
+    /// `NormalizeConfig::should_reject_reduced_capability`) so a strict caller
+    /// never receives a knowingly-degraded result.
+    ReducedCapabilityNoGenome {
+        /// Full variant Display, e.g. `"NM_INT.1:c.10+5del"`.
+        variant: String,
+        /// Short description of the genome-requiring step that was skipped,
+        /// e.g. `"intronic normalization"` or
+        /// `"exon/intron junction 3'-shuffle"`.
+        capability: String,
+    },
 }
 
 /// True iff any concrete position reachable from `boundary` is intronic —
@@ -725,6 +759,7 @@ impl NormalizationWarning {
             Self::PositionPastEnd { .. } => "POSITION_PAST_END",
             Self::IntronicOnBareTranscript { .. } => "INTRONIC_ON_BARE_TRANSCRIPT",
             Self::IncompleteCdsStartReference { .. } => "INCOMPLETE_CDS_START_REFERENCE",
+            Self::ReducedCapabilityNoGenome { .. } => "REDUCED_CAPABILITY_NO_GENOME",
         }
     }
 
@@ -860,6 +895,15 @@ impl std::fmt::Display for NormalizationWarning {
                  (cds_start_NF); not an HGVS-recommended reference for {coordinate_system}. \
                  description — use the genomic (g.) or non-coding (n.) representation instead \
                  (IncompleteCdsStartReference / W5004)",
+            ),
+            Self::ReducedCapabilityNoGenome {
+                variant,
+                capability,
+            } => write!(
+                f,
+                "{variant}: {capability} requires genomic sequence data, which the configured \
+                 reference provider does not carry; returning the best-effort result unchanged \
+                 (ReducedCapabilityNoGenome)",
             ),
         }
     }
@@ -1113,9 +1157,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // a bare intronic-and-past-intron-end input rejects as EINTRONIC, not
         // W4004. Reuses `FerroError::IntronicVariant` because only that variant
         // carries the EINTRONIC tag in mutalyzer_map.rs (the runner
-        // substring-matches the `IntronicVariant` variant name); the
-        // capability-failure guard in normalize_intronic_cds (no genomic data)
-        // uses the same variant but is reached on a different path.
+        // substring-matches the `IntronicVariant` variant name). This is a
+        // spec-form rejection and is distinct from the reduced-capability path
+        // in `normalize_intronic_cds`/`_tx` (no genomic data), which since
+        // #1012 no longer errors — it warn-and-degrades with
+        // `ReducedCapabilityNoGenome`.
         if self.config.should_reject_intronic_bare_transcript() {
             if let Some(err) = result.warnings.iter().find_map(|w| match w {
                 NormalizationWarning::IntronicOnBareTranscript {
@@ -1326,6 +1372,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         ),
                     })
                 }
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
+        // In strict mode, reject a reduced-capability (no-genomic-data)
+        // degradation. Lenient/silent return the best-effort variant with the
+        // `ReducedCapabilityNoGenome` advisory, but strict mode must not hand
+        // back a knowingly-degraded result, so promote it to a typed error —
+        // the same reject-in-strict contract the intronic/boundary genomic
+        // paths carried before #1012 (now unified across every genome-requiring
+        // step). #1012 item 2.
+        //
+        // Ordering: this runs LAST, after every spec-validity rejection above.
+        // A variant that is both genuinely invalid (e.g. past the CDS end,
+        // W4004) *and* degraded must report the input defect first — the
+        // reduced-capability limit is environmental, so it is the lowest-
+        // priority strict rejection.
+        if self.config.should_reject_reduced_capability() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::ReducedCapabilityNoGenome {
+                    variant,
+                    capability,
+                } => Some(FerroError::ReducedReferenceCapability {
+                    variant: variant.clone(),
+                    capability: capability.clone(),
+                }),
                 _ => None,
             }) {
                 return Err(err);
@@ -2739,41 +2813,52 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // 3'-direction `c.` workload regresses, this is the place to memoize.
         if self.config.shuffle_direction == ShuffleDirection::ThreePrime
             && new_tx_end == exon_only.right
-            && self.provider.has_genomic_data()
         {
-            // Prefer the accession-aware transcript so an NG/NC-parented input
-            // resolves the build-correct chromosome; fall back to the plain
-            // transcript. Clone keeps `transcript` available for the fall-through.
-            let boundary_transcript =
-                transcript_for_intronic().unwrap_or_else(|_| transcript.clone());
-            if boundary_transcript.chromosome.is_some() {
-                // Engine errors (no following intron — e.g. last exon — no
-                // genomic alignment, …) fall through to the exon-confined
-                // result, the safe pre-#670 behavior. The exon/EXON suppression
-                // rule is preserved structurally: the genomic shuffle boundary
-                // is capped at the adjacent intron's far edge (never the next
-                // exon), so a homopolymer spanning an exon/exon junction can
-                // shift into the intron but never bridge into the downstream
-                // exon.
-                if let Ok((boundary_variant, boundary_warnings)) = self
-                    .normalize_boundary_spanning_cds(
-                        variant,
-                        &boundary_transcript,
-                        start_pos,
-                        end_pos,
-                        edit,
-                    )
-                {
-                    let crossed_into_intron = matches!(
-                        &boundary_variant,
-                        HV::Cds(cv)
-                            if cv.loc_edit.location.start.inner().is_some_and(|p| p.is_intronic())
-                                || cv.loc_edit.location.end.inner().is_some_and(|p| p.is_intronic())
-                    );
-                    if crossed_into_intron {
-                        let mut combined = warnings;
-                        combined.extend(boundary_warnings);
-                        return Ok((boundary_variant, combined));
+            if !self.provider.has_genomic_data() {
+                // #1012: the junction-crossing 3'-shuffle is a genome-requiring
+                // enhancement. With no genomic data we cannot even attempt it,
+                // so the exon-confined result flows through as before — but mark
+                // it degraded rather than silently returning a less-normalized
+                // variant.
+                warnings.push(NormalizationWarning::ReducedCapabilityNoGenome {
+                    variant: format!("{variant}"),
+                    capability: "exon/intron junction 3'-shuffle".to_string(),
+                });
+            } else {
+                // Prefer the accession-aware transcript so an NG/NC-parented input
+                // resolves the build-correct chromosome; fall back to the plain
+                // transcript. Clone keeps `transcript` available for the fall-through.
+                let boundary_transcript =
+                    transcript_for_intronic().unwrap_or_else(|_| transcript.clone());
+                if boundary_transcript.chromosome.is_some() {
+                    // Engine errors (no following intron — e.g. last exon — no
+                    // genomic alignment, …) fall through to the exon-confined
+                    // result, the safe pre-#670 behavior. The exon/EXON suppression
+                    // rule is preserved structurally: the genomic shuffle boundary
+                    // is capped at the adjacent intron's far edge (never the next
+                    // exon), so a homopolymer spanning an exon/exon junction can
+                    // shift into the intron but never bridge into the downstream
+                    // exon.
+                    if let Ok((boundary_variant, boundary_warnings)) = self
+                        .normalize_boundary_spanning_cds(
+                            variant,
+                            &boundary_transcript,
+                            start_pos,
+                            end_pos,
+                            edit,
+                        )
+                    {
+                        let crossed_into_intron = matches!(
+                            &boundary_variant,
+                            HV::Cds(cv)
+                                if cv.loc_edit.location.start.inner().is_some_and(|p| p.is_intronic())
+                                    || cv.loc_edit.location.end.inner().is_some_and(|p| p.is_intronic())
+                        );
+                        if crossed_into_intron {
+                            let mut combined = warnings;
+                            combined.extend(boundary_warnings);
+                            return Ok((boundary_variant, combined));
+                        }
                     }
                 }
             }
@@ -3347,38 +3432,47 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // stay exon-confined), exactly as the `c.` path.
         if self.config.shuffle_direction == ShuffleDirection::ThreePrime
             && new_end == boundaries.right
-            && self.provider.has_genomic_data()
         {
-            // Prefer the accession-aware transcript so an NG/NC-parented input
-            // resolves the build-correct chromosome; fall back to the plain
-            // transcript. Clone keeps `transcript` available for the fall-through.
-            let boundary_transcript =
-                transcript_for_intronic().unwrap_or_else(|_| transcript.clone());
-            if boundary_transcript.chromosome.is_some() {
-                // Engine errors (no following intron — e.g. last exon — no genomic
-                // alignment, …) fall through to the exon-confined result, the safe
-                // pre-#704 behavior. The exon/EXON suppression rule is preserved
-                // structurally: the genomic shuffle window is capped at the
-                // adjacent intron's far edge (never the next exon).
-                if let Ok((boundary_variant, boundary_warnings)) = self
-                    .normalize_boundary_spanning_tx(
-                        variant,
-                        &boundary_transcript,
-                        start_pos,
-                        end_pos,
-                        edit,
-                    )
-                {
-                    let crossed_into_intron = matches!(
-                        &boundary_variant,
-                        HV::Tx(tv)
-                            if tv.loc_edit.location.start.inner().is_some_and(|p| p.is_intronic())
-                                || tv.loc_edit.location.end.inner().is_some_and(|p| p.is_intronic())
-                    );
-                    if crossed_into_intron {
-                        let mut combined = warnings;
-                        combined.extend(boundary_warnings);
-                        return Ok((boundary_variant, combined));
+            if !self.provider.has_genomic_data() {
+                // #1012: mirror of the `normalize_cds` reduced-capability guard.
+                // The junction-crossing 3'-shuffle needs a genome; without one
+                // the exon-confined result flows through, marked degraded.
+                warnings.push(NormalizationWarning::ReducedCapabilityNoGenome {
+                    variant: format!("{variant}"),
+                    capability: "exon/intron junction 3'-shuffle".to_string(),
+                });
+            } else {
+                // Prefer the accession-aware transcript so an NG/NC-parented input
+                // resolves the build-correct chromosome; fall back to the plain
+                // transcript. Clone keeps `transcript` available for the fall-through.
+                let boundary_transcript =
+                    transcript_for_intronic().unwrap_or_else(|_| transcript.clone());
+                if boundary_transcript.chromosome.is_some() {
+                    // Engine errors (no following intron — e.g. last exon — no genomic
+                    // alignment, …) fall through to the exon-confined result, the safe
+                    // pre-#704 behavior. The exon/EXON suppression rule is preserved
+                    // structurally: the genomic shuffle window is capped at the
+                    // adjacent intron's far edge (never the next exon).
+                    if let Ok((boundary_variant, boundary_warnings)) = self
+                        .normalize_boundary_spanning_tx(
+                            variant,
+                            &boundary_transcript,
+                            start_pos,
+                            end_pos,
+                            edit,
+                        )
+                    {
+                        let crossed_into_intron = matches!(
+                            &boundary_variant,
+                            HV::Tx(tv)
+                                if tv.loc_edit.location.start.inner().is_some_and(|p| p.is_intronic())
+                                    || tv.loc_edit.location.end.inner().is_some_and(|p| p.is_intronic())
+                        );
+                        if crossed_into_intron {
+                            let mut combined = warnings;
+                            combined.extend(boundary_warnings);
+                            return Ok((boundary_variant, combined));
+                        }
                     }
                 }
             }
@@ -4674,51 +4768,63 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // (offset-less) `TxPos`. 3'-only; the hot path is untouched.
         if self.config.shuffle_direction == ShuffleDirection::ThreePrime
             && new_tx_end == boundaries.right
-            && self.provider.has_genomic_data()
         {
-            use crate::hgvs::variant::{LocEdit, TxVariant};
-            let boundary_transcript = self
-                .provider
-                .get_transcript_for_accession(&variant.accession)
-                .unwrap_or_else(|_| transcript.clone());
-            if boundary_transcript.chromosome.is_some() {
-                let bs_start = TxPos::new(tx_start as i64);
-                let bs_end = TxPos::new(tx_end as i64);
-                let bs_variant = TxVariant {
-                    accession: variant.accession.clone(),
-                    gene_symbol: variant.gene_symbol.clone(),
-                    loc_edit: LocEdit::new(Interval::new(bs_start, bs_end), edit.clone()),
-                };
-                // Engine errors (no following intron — last exon — no genomic
-                // alignment, …) fall through to the exon-confined result, the
-                // safe pre-#704 behavior.
-                if let Ok((HV::Tx(tv), boundary_warnings)) = self.normalize_boundary_spanning_tx(
-                    &bs_variant,
-                    &boundary_transcript,
-                    &bs_start,
-                    &bs_end,
-                    edit,
-                ) {
-                    let crossed_into_intron = tv
-                        .loc_edit
-                        .location
-                        .start
-                        .inner()
-                        .is_some_and(|p| p.is_intronic())
-                        || tv
+            if !self.provider.has_genomic_data() {
+                // #1012: mirror of the `normalize_cds`/`normalize_tx` reduced-
+                // capability guard for the `r.` axis. The junction-crossing
+                // 3'-shuffle needs a genome; without one the exon-confined result
+                // flows through, marked degraded.
+                warnings.push(NormalizationWarning::ReducedCapabilityNoGenome {
+                    variant: format!("{variant}"),
+                    capability: "exon/intron junction 3'-shuffle".to_string(),
+                });
+            } else {
+                use crate::hgvs::variant::{LocEdit, TxVariant};
+                let boundary_transcript = self
+                    .provider
+                    .get_transcript_for_accession(&variant.accession)
+                    .unwrap_or_else(|_| transcript.clone());
+                if boundary_transcript.chromosome.is_some() {
+                    let bs_start = TxPos::new(tx_start as i64);
+                    let bs_end = TxPos::new(tx_end as i64);
+                    let bs_variant = TxVariant {
+                        accession: variant.accession.clone(),
+                        gene_symbol: variant.gene_symbol.clone(),
+                        loc_edit: LocEdit::new(Interval::new(bs_start, bs_end), edit.clone()),
+                    };
+                    // Engine errors (no following intron — last exon — no genomic
+                    // alignment, …) fall through to the exon-confined result, the
+                    // safe pre-#704 behavior.
+                    if let Ok((HV::Tx(tv), boundary_warnings)) = self
+                        .normalize_boundary_spanning_tx(
+                            &bs_variant,
+                            &boundary_transcript,
+                            &bs_start,
+                            &bs_end,
+                            edit,
+                        )
+                    {
+                        let crossed_into_intron = tv
                             .loc_edit
                             .location
-                            .end
+                            .start
                             .inner()
-                            .is_some_and(|p| p.is_intronic());
-                    if crossed_into_intron {
-                        if let Ok(rna_variant) = self.txvariant_to_rnavariant(&tv, cds_info) {
-                            let (split, mut split_warnings) =
-                                self.apply_canonical_split(HV::Rna(rna_variant));
-                            let mut combined = warnings;
-                            combined.extend(boundary_warnings);
-                            combined.append(&mut split_warnings);
-                            return Ok((wrap_allele_if_split(split), combined));
+                            .is_some_and(|p| p.is_intronic())
+                            || tv
+                                .loc_edit
+                                .location
+                                .end
+                                .inner()
+                                .is_some_and(|p| p.is_intronic());
+                        if crossed_into_intron {
+                            if let Ok(rna_variant) = self.txvariant_to_rnavariant(&tv, cds_info) {
+                                let (split, mut split_warnings) =
+                                    self.apply_canonical_split(HV::Rna(rna_variant));
+                                let mut combined = warnings;
+                                combined.extend(boundary_warnings);
+                                combined.append(&mut split_warnings);
+                                return Ok((wrap_allele_if_split(split), combined));
+                            }
                         }
                     }
                 }
@@ -5246,12 +5352,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         use crate::convert::CoordinateMapper;
 
-        // Check if we have genomic data available
+        // #1012: warn-and-degrade when the reference carries no genomic data.
+        // Intronic normalization projects the variant into genomic space to
+        // shuffle across the intron; without a genome that step cannot run, so
+        // return the canonicalized input unchanged and mark the result degraded
+        // rather than erroring. (This is an environmental limitation, not a
+        // spec violation — the same variant against a genome-backed reference
+        // normalizes further. Distinct from the EINTRONIC spec-form rejection
+        // in `normalize_core`, which still errors on a bare transcript.)
         if !self.provider.has_genomic_data() {
-            return Err(FerroError::IntronicVariant {
-                variant: format!("{}", variant),
-                detail: None,
-            });
+            return Ok((
+                HV::Cds(self.canonicalize_cds_variant(variant)),
+                vec![NormalizationWarning::ReducedCapabilityNoGenome {
+                    variant: format!("{variant}"),
+                    capability: "intronic normalization".to_string(),
+                }],
+            ));
         }
 
         // Get the chromosome for this transcript. Issue #332: include the
@@ -5448,12 +5564,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         use crate::convert::CoordinateMapper;
 
-        // Check if we have genomic data available
+        // #1012: warn-and-degrade when the reference carries no genomic data —
+        // the `n.` mirror of the `normalize_intronic_cds` guard. Intronic
+        // normalization needs the genome to shuffle in genomic space; without
+        // one, return the canonicalized input unchanged, marked degraded.
         if !self.provider.has_genomic_data() {
-            return Err(FerroError::IntronicVariant {
-                variant: format!("{}", variant),
-                detail: None,
-            });
+            return Ok((
+                HV::Tx(self.canonicalize_tx_variant(variant)),
+                vec![NormalizationWarning::ReducedCapabilityNoGenome {
+                    variant: format!("{variant}"),
+                    capability: "intronic normalization".to_string(),
+                }],
+            ));
         }
 
         // Get the chromosome for this transcript. Issue #332: include the
@@ -5625,12 +5747,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         use crate::convert::CoordinateMapper;
 
-        // Require genomic data for boundary spanning normalization
+        // #1012: warn-and-degrade when the reference carries no genomic data.
+        // Boundary-spanning normalization shuffles the exon∪intron extent in
+        // genomic space; without a genome that cannot run, so return the
+        // canonicalized input unchanged and mark the result degraded rather
+        // than erroring with `ExonIntronBoundary`.
         if !self.provider.has_genomic_data() {
-            return Err(FerroError::ExonIntronBoundary {
-                exon: 0,
-                variant: format!("{}", variant),
-            });
+            return Ok((
+                HV::Cds(self.canonicalize_cds_variant(variant)),
+                vec![NormalizationWarning::ReducedCapabilityNoGenome {
+                    variant: format!("{variant}"),
+                    capability: "exon/intron boundary normalization".to_string(),
+                }],
+            ));
         }
 
         // Issue #332: same improved error shape as the intronic paths.
@@ -6097,11 +6226,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         use crate::convert::CoordinateMapper;
 
+        // #1012: warn-and-degrade when the reference carries no genomic data —
+        // the `n.` mirror of the `normalize_boundary_spanning_cds` guard.
         if !self.provider.has_genomic_data() {
-            return Err(FerroError::ExonIntronBoundary {
-                exon: 0,
-                variant: format!("{}", variant),
-            });
+            return Ok((
+                HV::Tx(self.canonicalize_tx_variant(variant)),
+                vec![NormalizationWarning::ReducedCapabilityNoGenome {
+                    variant: format!("{variant}"),
+                    capability: "exon/intron boundary normalization".to_string(),
+                }],
+            ));
         }
 
         let chromosome =
@@ -9242,14 +9376,26 @@ mod tests {
     }
 
     #[test]
-    fn test_normalize_rna_intronic_returns_error() {
+    fn test_normalize_rna_intronic_warns_and_degrades_without_genome() {
+        // #1012: an intronic RNA variant used to error when the provider had
+        // no genomic data (`with_test_data` registers no genomic sequences).
+        // It now warn-and-degrades — returning the best-effort (unchanged)
+        // variant plus a `ReducedCapabilityNoGenome` warning — so a degraded
+        // result is distinguishable from a genuinely-final one.
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
 
-        // Intronic RNA variants should return an error
         let variant = parse_hgvs("NM_001234.1:r.10+5del").unwrap();
-        let result = normalizer.normalize(&variant);
-        assert!(result.is_err(), "Intronic RNA variant should return error");
+        let diag = normalizer
+            .normalize_with_diagnostics(&variant)
+            .expect("intronic RNA without a genome must warn-and-degrade, not error");
+        assert!(
+            diag.warnings
+                .iter()
+                .any(|w| w.code() == "REDUCED_CAPABILITY_NO_GENOME"),
+            "expected REDUCED_CAPABILITY_NO_GENOME warning, got {:?}",
+            diag.warnings,
+        );
     }
 
     #[test]

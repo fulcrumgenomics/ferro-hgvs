@@ -411,6 +411,7 @@ pub fn ferro_to_mutalyzer(err: &FerroError) -> &'static [&'static str] {
         | FerroError::VariantExceedsReference { .. }
         | FerroError::TranscriptVersionNotExact { .. }
         | FerroError::TranscriptSequenceUnreconstructable { .. }
+        | FerroError::ReducedReferenceCapability { .. }
         | FerroError::Io { .. }
         | FerroError::Json { .. } => &[],
     }
@@ -605,6 +606,7 @@ mod tests {
             FerroError::InvalidCoordinates { .. } => "InvalidCoordinates",
             FerroError::UnsupportedVariant { .. } => "UnsupportedVariant",
             FerroError::IntronicVariant { .. } => "IntronicVariant",
+            FerroError::ReducedReferenceCapability { .. } => "ReducedReferenceCapability",
             FerroError::GenomicReferenceNotAvailable { .. } => "GenomicReferenceNotAvailable",
             FerroError::ProteinReferenceNotAvailable { .. } => "ProteinReferenceNotAvailable",
             FerroError::AminoAcidMismatch { .. } => "AminoAcidMismatch",
