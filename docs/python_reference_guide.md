@@ -11,7 +11,7 @@ harness) before trusting a genome-aware result.
 | You have… | Use | Genome-aware rules run? |
 |---|---|---|
 | A downloaded RefSeq/Ensembl reference + genome | `ferro prepare` → `Normalizer.from_manifest("manifest.json")` | ✅ full |
-| A **synthetic / local** construct (your own FASTA + annotation) and you need intronic / `g.` / exon-junction rules | `ferro_hgvs.convert_gff(...)` in-process (or `ferro convert-gff` / `ferro build-transcript`, all with `emit_genomic_sequences=True` / `--emit-genomic-sequences`) → `Normalizer(reference_json="transcripts.json")` | ✅ yes |
+| A **synthetic / local** construct (your own FASTA + annotation) and you need intronic / `g.` / exon-junction rules | `ferro_hgvs.convert_gff(...)` / `ferro_hgvs.build_transcript(...)` in-process (or the `ferro convert-gff` / `ferro build-transcript` CLIs, all with `emit_genomic_sequences=True` / `--emit-genomic-sequences`) → `Normalizer(reference_json="transcripts.json")` | ✅ yes |
 | Transcript-level normalization only (exonic SNV/indel shuffle; no introns, no `g.` axis) | a `transcripts.json` **without** `genomic_sequences` → `Normalizer(reference_json=...)` | ❌ by design (see the boundary below) |
 | Just trying the API | `Normalizer()` (built-in toy data) | ❌ toy data |
 
@@ -94,7 +94,18 @@ ferro_hgvs.convert_gff(
         emit_genomic_sequences=True,
     )
 )
-# Pass output=None instead to get the JSON back as report.transcripts_json.
+
+# Or a single construct straight from a FASTA + CDS bounds:
+ferro_hgvs.build_transcript(
+    ferro_hgvs.BuildTranscriptConfig(
+        fasta="construct.fa",
+        cds_start=1,
+        cds_end=900,
+        output="construct.json",
+        emit_genomic_sequences=True,
+    )
+)
+# Pass output=None on either to get the JSON back as report.transcripts_json.
 ```
 
 or via the CLI:

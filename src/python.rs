@@ -4447,6 +4447,243 @@ fn convert_gff(py: Python<'_>, config: &PyConvertGffConfig) -> PyResult<PyConver
 }
 
 // ============================================================================
+// Build-Transcript (single FASTA construct -> transcripts.json)
+// ============================================================================
+
+/// Configuration for [`build_transcript`], mirroring the `ferro build-transcript`
+/// CLI flags. Construct it, then pass it to `build_transcript`.
+#[pyclass(name = "BuildTranscriptConfig", from_py_object)]
+#[derive(Clone)]
+pub struct PyBuildTranscriptConfig {
+    fasta: String,
+    cds_start: u64,
+    cds_end: u64,
+    output: Option<String>,
+    id: Option<String>,
+    strand: String,
+    contig: Option<String>,
+    gene: Option<String>,
+    genome_build: String,
+    emit_genomic_sequences: bool,
+}
+
+#[pymethods]
+impl PyBuildTranscriptConfig {
+    /// Create a build-transcript configuration.
+    ///
+    /// Args:
+    ///     fasta: Path to the FASTA (indexed or plain; the index is built on the
+    ///         fly if absent).
+    ///     cds_start: CDS start position (1-based inclusive, transcript coordinates).
+    ///     cds_end: CDS end position (1-based inclusive, transcript coordinates).
+    ///     output: Optional output path for the ``transcripts.json``. If ``None``
+    ///         (the default), the JSON is returned in
+    ///         ``BuildTranscriptReport.transcripts_json`` instead of written to disk.
+    ///     id: Transcript ID; defaults to the FASTA contig name.
+    ///     strand: "+" (default) or "-". Minus-strand sequences are reverse-
+    ///         complemented, so the CDS positions are relative to that sequence.
+    ///     contig: Contig to use when the FASTA has multiple contigs.
+    ///     gene: Optional gene symbol to embed in the transcript record.
+    ///     genome_build: Genome build name embedded verbatim (default "GRCh38").
+    ///     emit_genomic_sequences: Embed the contig's forward bytes so the output
+    ///         is genome-capable.
+    #[new]
+    #[pyo3(signature = (
+        fasta,
+        cds_start,
+        cds_end,
+        output=None,
+        id=None,
+        strand="+".to_string(),
+        contig=None,
+        gene=None,
+        genome_build="GRCh38".to_string(),
+        emit_genomic_sequences=false
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        fasta: String,
+        cds_start: u64,
+        cds_end: u64,
+        output: Option<String>,
+        id: Option<String>,
+        strand: String,
+        contig: Option<String>,
+        gene: Option<String>,
+        genome_build: String,
+        emit_genomic_sequences: bool,
+    ) -> Self {
+        Self {
+            fasta,
+            cds_start,
+            cds_end,
+            output,
+            id,
+            strand,
+            contig,
+            gene,
+            genome_build,
+            emit_genomic_sequences,
+        }
+    }
+}
+
+/// Result of a [`build_transcript`] run.
+#[pyclass(name = "BuildTranscriptReport")]
+pub struct PyBuildTranscriptReport {
+    transcript_id: String,
+    transcripts_json: Option<String>,
+    output_path: Option<String>,
+    emitted_genomic_bytes: u64,
+    warnings: Vec<String>,
+}
+
+#[pymethods]
+impl PyBuildTranscriptReport {
+    /// The transcript ID that was emitted (the configured id or the contig name).
+    #[getter]
+    fn transcript_id(&self) -> &str {
+        &self.transcript_id
+    }
+
+    /// The serialized ``transcripts.json`` text, present only when the config's
+    /// ``output`` was ``None`` (otherwise the JSON was written to that path and
+    /// this is ``None``). Feed it to a normalizer by writing it to a file:
+    /// ``Normalizer(reference_json=path)`` reads a path, not inline JSON.
+    #[getter]
+    fn transcripts_json(&self) -> Option<&str> {
+        self.transcripts_json.as_deref()
+    }
+
+    /// The path the ``transcripts.json`` was written to, or ``None`` if it was
+    /// returned in ``transcripts_json`` instead.
+    #[getter]
+    fn output_path(&self) -> Option<&str> {
+        self.output_path.as_deref()
+    }
+
+    /// Total bytes of genomic sequence embedded under ``genomic_sequences``
+    /// (0 when ``emit_genomic_sequences`` was off).
+    #[getter]
+    fn emitted_genomic_bytes(&self) -> u64 {
+        self.emitted_genomic_bytes
+    }
+
+    /// Non-fatal warnings raised during the build (also emitted as ``UserWarning``),
+    /// e.g. an unusually large embedded genome.
+    #[getter]
+    fn warnings(&self) -> Vec<String> {
+        self.warnings.clone()
+    }
+}
+
+/// Build a single-construct ``transcripts.json`` from a FASTA + CDS bounds.
+///
+/// In-process equivalent of `ferro build-transcript`; both call the same library
+/// builder, so the output is byte-identical for the same inputs and flags. Use
+/// it to wrap a synthetic construct's FASTA as a reference for
+/// `Normalizer(reference_json=...)` without shelling out to the CLI.
+///
+/// Args:
+///     config: A BuildTranscriptConfig describing the inputs and options.
+///
+/// Returns:
+///     BuildTranscriptReport with the transcript id, the written path (or the
+///     JSON text when ``output`` is ``None``), and any warnings.
+///
+/// Raises:
+///     ValueError: If ``strand`` is not "+"/"-", or the CDS bounds are invalid.
+///     ReferenceDataError: If the FASTA cannot be read or the contig cannot be
+///         resolved.
+#[pyfunction]
+fn build_transcript(
+    py: Python<'_>,
+    config: &PyBuildTranscriptConfig,
+) -> PyResult<PyBuildTranscriptReport> {
+    use crate::reference::annotation::{
+        build_transcript as lib_build_transcript, convert::LARGE_GENOMIC_SEQUENCES_WARN_BYTES,
+        BuildTranscriptConfig,
+    };
+
+    // Fail fast with a clear Python error rather than deep in the library.
+    if config.strand != "+" && config.strand != "-" {
+        return Err(PyValueError::new_err(format!(
+            "invalid strand {:?}; expected '+' or '-'",
+            config.strand
+        )));
+    }
+
+    let lib_config = BuildTranscriptConfig {
+        cds_start: config.cds_start,
+        cds_end: config.cds_end,
+        id: config.id.clone(),
+        strand: config.strand.clone(),
+        contig: config.contig.clone(),
+        gene: config.gene.clone(),
+        genome_build: config.genome_build.clone(),
+        emit_genomic_sequences: config.emit_genomic_sequences,
+    };
+
+    let outcome = lib_build_transcript(Path::new(&config.fasta), &lib_config).map_err(|e| {
+        // Invalid CDS bounds are a caller error (ValueError); everything else is a
+        // reference-data failure.
+        match &e {
+            crate::error::FerroError::InvalidCoordinates { msg } => {
+                PyValueError::new_err(msg.clone())
+            }
+            _ => ferro_typed(
+                "ReferenceDataError",
+                format!("build-transcript failed: {e}"),
+                &e,
+            ),
+        }
+    })?;
+
+    // Serialize exactly as the CLI does: pretty JSON with NO trailing newline
+    // (the CLI writes via `std::fs::write`), so a written file matches byte-for-byte.
+    let json_text = serde_json::to_string_pretty(&outcome.json)
+        .map_err(|e| PyRuntimeError::new_err(format!("serialize transcripts.json: {e}")))?;
+
+    let output_path = match config.output.as_deref() {
+        Some(path) => {
+            std::fs::write(path, &json_text)
+                .map_err(|e| PyRuntimeError::new_err(format!("write {path}: {e}")))?;
+            Some(path.to_string())
+        }
+        None => None,
+    };
+
+    let mut warnings: Vec<String> = Vec::new();
+    if outcome.emitted_genomic_bytes > LARGE_GENOMIC_SEQUENCES_WARN_BYTES {
+        warnings.push(format!(
+            "emit_genomic_sequences embedded {:.1} MB of genomic sequence; the transcripts.json \
+             will be large to store and slow to parse. For a genome-scale reference prefer \
+             `prepare_reference_data(...)` + `Normalizer.from_manifest(...)`.",
+            outcome.emitted_genomic_bytes as f64 / 1_000_000.0
+        ));
+    }
+    for message in &warnings {
+        let message = std::ffi::CString::new(message.as_str())
+            .map_err(|e| PyRuntimeError::new_err(format!("invalid warning message: {e}")))?;
+        PyErr::warn(py, &py.get_type::<PyUserWarning>(), &message, 1)?;
+    }
+
+    let transcripts_json = if output_path.is_none() {
+        Some(json_text)
+    } else {
+        None
+    };
+
+    Ok(PyBuildTranscriptReport {
+        transcript_id: outcome.transcript_id,
+        transcripts_json,
+        output_path,
+        emitted_genomic_bytes: outcome.emitted_genomic_bytes,
+        warnings,
+    })
+}
+
+// ============================================================================
 // Reference Module
 // ============================================================================
 
@@ -4956,6 +5193,9 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Convert-GFF function
     m.add_function(wrap_pyfunction!(convert_gff, m)?)?;
 
+    // Build-Transcript function
+    m.add_function(wrap_pyfunction!(build_transcript, m)?)?;
+
     // Core classes
     m.add_class::<PyHgvsVariant>()?;
     m.add_class::<PyNormalizer>()?;
@@ -5015,6 +5255,10 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Convert-GFF classes
     m.add_class::<PyConvertGffConfig>()?;
     m.add_class::<PyConvertGffReport>()?;
+
+    // Build-Transcript classes
+    m.add_class::<PyBuildTranscriptConfig>()?;
+    m.add_class::<PyBuildTranscriptReport>()?;
 
     // Reference classes
     m.add_class::<PyGenomeBuild>()?;

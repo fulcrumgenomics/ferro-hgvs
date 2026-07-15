@@ -118,6 +118,8 @@ __all__ = [
     "check_reference_data",
     # Convert-GFF functions
     "convert_gff",
+    # Build-Transcript functions
+    "build_transcript",
     # Core classes
     "HgvsVariant",
     "Normalizer",
@@ -164,6 +166,9 @@ __all__ = [
     # Convert-GFF classes
     "ConvertGffConfig",
     "ConvertGffReport",
+    # Build-Transcript classes
+    "BuildTranscriptConfig",
+    "BuildTranscriptReport",
     # Reference classes
     "GenomeBuild",
     "Strand",
