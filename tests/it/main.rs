@@ -30,6 +30,7 @@ mod breakpoint_insertion;
 mod bulk_fixture_tests;
 mod civic_validation;
 mod cli_build_transcript;
+mod cli_check_transcripts_json;
 mod cli_convert_gff_flags;
 mod cli_parallel_annotate;
 mod cli_parallel_normalize;
