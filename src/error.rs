@@ -15,6 +15,7 @@ use thiserror::Error;
 /// and for documentation lookup.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
+#[non_exhaustive]
 pub enum ErrorCode {
     // Parse errors (E1xxx)
     /// Invalid accession format
@@ -335,6 +336,7 @@ fn ensembl_prepare_hint(id: &str) -> &'static str {
 
 /// Main error type for ferro-hgvs operations
 #[derive(Error, Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum FerroError {
     /// Parse error with position and message
     #[error("Parse error at position {pos}: {msg}")]
@@ -425,19 +427,6 @@ pub enum FerroError {
         detail: Option<String>,
     },
 
-    /// A genome-requiring normalization step (intronic / boundary-spanning /
-    /// exon-junction 3'-shuffle) could not run because the reference provider
-    /// carries no genomic data. In lenient/silent mode this surfaces as the
-    /// `ReducedCapabilityNoGenome` warning with a best-effort result; strict
-    /// mode promotes it to this error rather than return a degraded result.
-    /// `capability` names the step that was skipped (e.g. "intronic
-    /// normalization"). #1012 item 2.
-    #[error(
-        "Cannot fully normalize {variant} without genomic reference data \
-         ({capability}); strict mode rejects a reduced-capability result"
-    )]
-    ReducedReferenceCapability { variant: String, capability: String },
-
     /// Genomic reference data is not available
     #[error("Genomic reference not available for {contig}:{start}-{end}")]
     GenomicReferenceNotAvailable {
@@ -513,6 +502,22 @@ pub enum FerroError {
     /// JSON parsing error
     #[error("JSON error: {msg}")]
     Json { msg: String },
+
+    /// A genome-requiring normalization step (intronic / boundary-spanning /
+    /// exon-junction 3'-shuffle) could not run because the reference provider
+    /// carries no genomic data. In lenient/silent mode this surfaces as the
+    /// `ReducedCapabilityNoGenome` warning with a best-effort result; strict
+    /// mode promotes it to this error rather than return a degraded result.
+    /// `capability` names the step that was skipped (e.g. "intronic
+    /// normalization"). #1012 item 2.
+    ///
+    /// Kept last in the enum so its addition does not shift the implicit
+    /// discriminants of the variants declared before it.
+    #[error(
+        "Cannot fully normalize {variant} without genomic reference data \
+         ({capability}); strict mode rejects a reduced-capability result"
+    )]
+    ReducedReferenceCapability { variant: String, capability: String },
 }
 
 impl FerroError {
