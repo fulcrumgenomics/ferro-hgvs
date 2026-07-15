@@ -1077,11 +1077,32 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// In strict mode (default), rejects variants with reference mismatches.
     /// Use `normalize_with_diagnostics` for lenient mode that corrects mismatches.
     pub fn normalize(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
-        // `normalize()` returns only the variant and inspects warnings; it
-        // discards the diagnostic `infos` axis. Call `normalize_core`
-        // directly and wrap with empty infos, so the hot path skips the
-        // per-call `detect_shuffle_infos` work (use `normalize_with_diagnostics`
-        // when infos are actually needed). Behavior is unchanged.
+        // Thin wrapper: `normalize()` returns only the variant. Both the core
+        // normalization AND the strict-mode rejection ladder live in
+        // `normalize_core_checked`, so a strict config rejects identically
+        // whether a variant is normalized directly or through the projector.
+        Ok(self.normalize_core_checked(variant)?.0)
+    }
+
+    /// Normalize a variant, apply the strict-mode rejection ladder, and return
+    /// the normalized variant together with any warnings that were NOT promoted
+    /// to hard errors.
+    ///
+    /// This is the shared core behind both `normalize()` (which discards the
+    /// warnings) and `VariantProjector`, which surfaces them on each projection.
+    /// Routing the projector through here — rather than the raw `normalize_core`
+    /// — is what keeps a strict-configured projector rejecting the same inputs
+    /// (`EINTRONIC`, `RefSeqMismatch`, W5002/W5003/W5004/W4004/W4005/W4006, …) it
+    /// would reject via `normalize()`. In the default lenient config every
+    /// `should_reject_*` is false, so the ladder is a no-op and the warnings pass
+    /// straight through.
+    pub(crate) fn normalize_core_checked(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // Call `normalize_core` directly (skipping the per-call
+        // `detect_shuffle_infos` work `normalize_with_diagnostics` does) and wrap
+        // with empty infos; the ladder below only inspects warnings.
         let (normalized, warnings) = self.normalize_core(variant)?;
         let result = NormalizeResult::with_warnings(normalized, warnings);
 
@@ -1311,7 +1332,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
-        Ok(result.result)
+        Ok((result.result, result.warnings))
     }
 
     /// Normalize a variant with detailed warnings
@@ -1386,7 +1407,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// directly to skip the per-call `detect_shuffle_infos` cost on the
     /// hot path; `normalize_with_diagnostics` layers infos on top. The
     /// (variant, warnings) output is identical to the previous inline match.
-    fn normalize_core(
+    pub(crate) fn normalize_core(
         &self,
         variant: &HgvsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {

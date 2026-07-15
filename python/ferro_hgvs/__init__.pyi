@@ -1574,6 +1574,23 @@ class CoordinateMapper:
 # Variant Projection
 # ============================================================================
 
+class NormalizationWarning:
+    """A diagnostic emitted during normalization.
+
+    Carried by ``VariantProjection.warnings`` and
+    ``NormalizeResultWithWarnings.warnings``.
+    """
+
+    @property
+    def code(self) -> str:
+        """Stable SVA code, e.g. ``"REFSEQ_MISMATCH"`` / ``"POSITION_PAST_END"``."""
+        ...
+
+    @property
+    def message(self) -> str:
+        """Human-readable description of the warning."""
+        ...
+
 class VariantProjection:
     """The result of projecting a g. variant onto a transcript."""
 
@@ -1614,6 +1631,20 @@ class VariantProjection:
         concrete exonic RNA edit (no transcript sequence, non-c./n. input, or an
         unresolved payload).
         """
+        ...
+
+    @property
+    def warnings(self) -> list[NormalizationWarning]:
+        """Warnings emitted while normalizing the input for this projection.
+
+        For example an auto-corrected reference-sequence mismatch. Empty when the
+        input normalized cleanly. Mirrors ``Normalizer.normalize_with_warnings``,
+        making the same diagnostics reachable off a projection.
+        """
+        ...
+
+    def has_warnings(self) -> bool:
+        """True if any normalization warnings were emitted for this projection."""
         ...
 
     @property

@@ -1186,6 +1186,24 @@ impl PyVariantProjection {
         self.inner.rna.as_ref().map(|v| v.to_string())
     }
 
+    /// Warnings emitted while normalizing the input for this projection (e.g. an
+    /// auto-corrected reference-sequence mismatch). Empty when the input
+    /// normalized cleanly. Mirrors `Normalizer.normalize_with_warnings`, making
+    /// the same diagnostics reachable off a projection (#1018).
+    #[getter]
+    fn warnings(&self) -> Vec<PyNormalizationWarning> {
+        self.inner
+            .normalization_warnings
+            .iter()
+            .map(PyNormalizationWarning::from)
+            .collect()
+    }
+
+    /// True if any normalization warnings were emitted for this projection.
+    fn has_warnings(&self) -> bool {
+        !self.inner.normalization_warnings.is_empty()
+    }
+
     #[getter]
     fn transcript_id(&self) -> String {
         self.inner.transcript_id.clone()

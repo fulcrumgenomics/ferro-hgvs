@@ -260,6 +260,7 @@ mod tests {
 
     fn projection_with(genomic: Option<&str>, protein: Option<&str>) -> VariantProjection {
         VariantProjection {
+            normalization_warnings: Vec::new(),
             genomic: genomic.map(|s| crate::parse_hgvs(s).unwrap()),
             coding: None,
             noncoding: None,

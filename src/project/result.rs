@@ -1,6 +1,7 @@
 //! `VariantProjection` result type.
 
 use crate::hgvs::variant::HgvsVariant;
+use crate::normalize::NormalizationWarning;
 
 /// A variant resolved across coordinate systems.
 ///
@@ -47,4 +48,11 @@ pub struct VariantProjection {
     /// non-coding and empty-allele projections, and for any aggregate whose
     /// members all leave the start codon untouched.
     pub affects_init: bool,
+    /// Warnings emitted while normalizing the input for this projection (e.g.
+    /// an auto-corrected reference-sequence mismatch, or — once the reduced-
+    /// capability warning lands on the normalize path — a no-genome degrade).
+    /// Empty when the input normalized cleanly. Populated at the projector's
+    /// normalize entry points; deep projection-building helpers default it to
+    /// empty and the entry point attaches the captured set.
+    pub normalization_warnings: Vec<NormalizationWarning>,
 }
