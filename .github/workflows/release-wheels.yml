@@ -314,3 +314,91 @@ jobs:
           attestations: true
           print-hash: true
           verbose: true
+
+  verify-pypi:
+    # Positively confirm the just-published release is actually
+    # installable from PyPI. Every release through v0.7.0 went "green"
+    # while the wheels never reached PyPI (the real publish job sat
+    # behind an always-failing TestPyPI gate, removed in #1008 / fixed
+    # in 0.7.1). Nothing asserted the package landed, so the regression
+    # passed silently. This job polls the public index for the exact
+    # released version, then installs it from PyPI (never the local
+    # checkout) into a clean venv and runs a smoke import + parse,
+    # failing if the version never becomes installable or the smoke
+    # test breaks. #1012 item 4.
+    name: Verify PyPI install
+    needs: [publish-pypi]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release'
+    steps:
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Wait for the released version to appear on PyPI
+        shell: bash
+        env:
+          # Strip a leading `v` from the tag, matching the other jobs.
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          echo "Waiting for ferro-hgvs==${version} on PyPI"
+          # Poll the public index in a scratch venv so the check uses the
+          # real PyPI resolver, not the workflow's Python environment.
+          python -m venv /tmp/pypi-poll
+          /tmp/pypi-poll/bin/python -m pip install --upgrade pip >/dev/null
+          # PyPI's index can lag a bit after upload; retry for up to ~10
+          # minutes (30 attempts x 20s) before giving up.
+          attempts=30
+          sleep_seconds=20
+          for i in $(seq 1 "$attempts"); do
+            if /tmp/pypi-poll/bin/pip download \
+              --no-deps --no-cache-dir --dest /tmp/pypi-poll-dl \
+              "ferro-hgvs==${version}" >/dev/null 2>&1; then
+              echo "ferro-hgvs==${version} is installable from PyPI (attempt ${i})"
+              exit 0
+            fi
+            echo "Attempt ${i}/${attempts}: ferro-hgvs==${version} not yet on PyPI; sleeping ${sleep_seconds}s"
+            sleep "$sleep_seconds"
+          done
+          echo "::error::ferro-hgvs==${version} never became installable from PyPI within the timeout"
+          exit 1
+      - name: Install from PyPI and smoke test
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          # Fresh venv; force the install to come from PyPI (never the
+          # local checkout) so we exercise the published artifact.
+          python -m venv /tmp/pypi-verify
+          /tmp/pypi-verify/bin/python -m pip install --upgrade pip >/dev/null
+          # Retry the install too: a version can pass the download poll and
+          # still briefly 404 on install while PyPI's index propagates across
+          # CDN edges. Retry a few times so propagation lag doesn't red an
+          # otherwise-successful release. Keeps the force-from-PyPI semantics.
+          install_attempts=5
+          install_sleep=15
+          for i in $(seq 1 "$install_attempts"); do
+            if /tmp/pypi-verify/bin/python -m pip install --no-cache-dir "ferro-hgvs==${version}"; then
+              break
+            fi
+            if [ "$i" -eq "$install_attempts" ]; then
+              echo "::error::failed to install ferro-hgvs==${version} from PyPI after ${install_attempts} attempts"
+              exit 1
+            fi
+            echo "Install attempt ${i}/${install_attempts} failed; sleeping ${install_sleep}s"
+            sleep "$install_sleep"
+          done
+          /tmp/pypi-verify/bin/python - "$version" <<'EOF'
+          import sys
+          import ferro_hgvs
+
+          expected = sys.argv[1]
+          ferro_hgvs.parse("NM_000088.3:c.459A>G")
+          actual = ferro_hgvs.__version__
+          print(f"installed ferro_hgvs.__version__={actual!r} (expected {expected!r})")
+          assert actual == expected, f"version mismatch: {actual!r} != {expected!r}"
+          print("PyPI verify ok")
+          EOF
