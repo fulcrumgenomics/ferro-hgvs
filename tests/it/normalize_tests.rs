@@ -4732,13 +4732,19 @@ mod cigar_cds_mapping {
 }
 
 // =============================================================================
-// Issue #160: revcomp inv sub-span detection within compound variants
+// Issue #160 (as corrected by issue #1034): revcomp inv detection within
+// compound variants
 // =============================================================================
-// HGVS spec: a delins span containing an inv-eligible sub-span (length >= 2,
-// alt = revcomp(ref)) decomposes to [..., inv, ...] per the edit-priority
-// rule (sub > del > inv > dup > ins). Applies to:
+// HGVS spec: an inversion describes a *maximal contiguous run* whose alt is
+// the reverse complement of the reference (`DNA/inversion.md`,
+// `general.md:56`). A delins whose WHOLE contiguous run is a revcomp becomes
+// an `inv`; a revcomp SUB-run of a longer contiguous change is NOT carved out
+// — that change stays a single `delins` (issue #1034 regression fix). A run
+// that is a full inversion but separated from other edits by an unchanged
+// nucleotide (an identity, `general.md:34`) still decomposes independently.
+// Applies to:
 //   - Cis allele inputs that merge into a delins, then decompose.
-//   - User-typed delins inputs whose post-trim range contains an inv sub-span.
+//   - User-typed delins inputs whose contiguous run is a full-run inversion.
 // Function: rules::decompose_delins() in src/normalize/rules.rs
 // (item A10 of tracking issue #81; sub-only branch tracked in #165)
 mod issue_160_revcomp_inv_subspans {
@@ -4777,43 +4783,42 @@ mod issue_160_revcomp_inv_subspans {
     }
 
     #[test]
-    fn sub_span_revcomp_splits_into_inv_plus_sub() {
-        // g.[1150T>G;1151C>A;1152C>G] over TCC → g.[1150_1151inv;1152C>G].
-        // The headline sub-span case from issue #160.
+    fn sub_span_revcomp_stays_single_delins() {
+        // g.[1150T>G;1151C>A;1152C>G] over TCC → g.1150_1152delinsGAG.
+        // The 2-nt sub-run 1150_1151 (TC→GA) is a revcomp, but the whole
+        // contiguous run TCC→GAG is not (revcomp(TCC)=GGA != GAG), so it must
+        // NOT split into [1150_1151inv;1152C>G]. Issue #1034 regression fix;
+        // this is the exact #160 headline example, now spec-corrected.
         let provider = provider_with_genomic("NC_000001.11", 1150, "TCC");
         let result = normalize_to_string(provider, "NC_000001.11:g.[1150T>G;1151C>A;1152C>G]");
-        assert_eq!(result, "NC_000001.11:g.[1150_1151inv;1152C>G]");
+        assert_eq!(result, "NC_000001.11:g.1150_1152delinsGAG");
     }
 
     #[test]
-    fn user_typed_delins_with_inv_subspan_splits_symmetric() {
+    fn user_typed_delins_with_revcomp_subspan_stays_delins_symmetric() {
         // User-typed g.1150_1152delinsGAG over TCC produces the same
         // canonical form as the cis-allele input above. The canonical form
         // depends on (ref, position, alt), not on input shape.
         let provider = provider_with_genomic("NC_000001.11", 1150, "TCC");
         let result = normalize_to_string(provider, "NC_000001.11:g.1150_1152delinsGAG");
-        assert_eq!(result, "NC_000001.11:g.[1150_1151inv;1152C>G]");
+        assert_eq!(result, "NC_000001.11:g.1150_1152delinsGAG");
     }
 
     #[test]
-    fn three_nt_inv_run_flanked_by_subs() {
+    fn three_nt_revcomp_subrun_in_contiguous_change_stays_delins() {
         // ref bases at 1099-1103: T G C T C
-        //   1099 T>A : sub (alt[0]=A)
-        //   1100 G>A : start of inv (alt[1]=A)
-        //   1101 C>G : middle of inv (alt[2]=G)
-        //   1102 T>C : end of inv  (alt[3]=C; revcomp("GCT")="AGC")
-        //   1103 C>T : sub (alt[4]=T)
-        // Merged delins is `g.1099_1103delinsAAGCT`. revcomp("TGCTC")=
-        // "GAGCA" != "AAGCT", so the full span is NOT inv (avoiding the
-        // palindromic-full-span hazard). The inv-eligible sub-span is
-        // positions [1100..1102]; flanked subs at 1099 and 1103 stay
-        // separate.
+        //   1099 T>A ; 1100 G>A ; 1101 C>G ; 1102 T>C ; 1103 C>T
+        // The interior 3-nt sub-run 1100_1102 (GCT→AGC) is a revcomp
+        // (revcomp("GCT")="AGC"), but all five positions differ so this is ONE
+        // contiguous change. revcomp("TGCTC")="GAGCA" != "AAGCT", so the whole
+        // run is not an inversion and the revcomp sub-run may not be carved
+        // out (issue #1034). It stays a single delins.
         let provider = provider_with_genomic("NC_000001.11", 1099, "TGCTC");
         let result = normalize_to_string(
             provider,
             "NC_000001.11:g.[1099T>A;1100G>A;1101C>G;1102T>C;1103C>T]",
         );
-        assert_eq!(result, "NC_000001.11:g.[1099T>A;1100_1102inv;1103C>T]");
+        assert_eq!(result, "NC_000001.11:g.1099_1103delinsAAGCT");
     }
 
     #[test]
@@ -4869,8 +4874,9 @@ mod issue_160_revcomp_inv_subspans {
     // Positions 13-14-15 = "CTG":
     //   c.13C>A, c.14T>G, c.15G>T merges to delinsAGT;
     //   full span revcomp(CTG)=CAG != AGT → no full inv;
-    //   sub-span [13..14]: revcomp(CT)=AG ✓ → inv;
-    //   pos 15 stays as separate sub.
+    //   sub-span [13..14] (CT→AG) is a revcomp but is part of the ONE
+    //   contiguous change 13_15, so it may not be carved out (issue #1034):
+    //   the whole run stays a single delins.
     // -------------------------------------------------------------------------
 
     #[test]
@@ -4883,21 +4889,21 @@ mod issue_160_revcomp_inv_subspans {
     }
 
     #[test]
-    fn cds_sub_span_revcomp_splits_into_inv_plus_sub() {
+    fn cds_sub_span_revcomp_stays_single_delins() {
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
         let parsed = parse_hgvs("NM_000088.3:c.[13C>A;14T>G;15G>T]").unwrap();
         let normalized = normalizer.normalize(&parsed).unwrap();
-        assert_eq!(format!("{}", normalized), "NM_000088.3:c.[13_14inv;15G>T]");
+        assert_eq!(format!("{}", normalized), "NM_000088.3:c.13_15delinsAGT");
     }
 
     #[test]
-    fn cds_user_typed_delins_with_inv_subspan_splits_symmetric() {
+    fn cds_user_typed_delins_with_revcomp_subspan_stays_delins_symmetric() {
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
         let parsed = parse_hgvs("NM_000088.3:c.13_15delinsAGT").unwrap();
         let normalized = normalizer.normalize(&parsed).unwrap();
-        assert_eq!(format!("{}", normalized), "NM_000088.3:c.[13_14inv;15G>T]");
+        assert_eq!(format!("{}", normalized), "NM_000088.3:c.13_15delinsAGT");
     }
 
     #[test]
@@ -4914,28 +4920,31 @@ mod issue_160_revcomp_inv_subspans {
     }
 
     #[test]
-    fn rna_sub_span_split_preserves_u_in_substitution() {
-        // r. inputs use U; ref is in transcript T-form. The inv-split scan
-        // T/U-normalizes both sides for revcomp detection, but the emitted
-        // Substitution sub-edit must preserve the user-typed U so r. output
-        // doesn't silently coerce u→t. NM_000088.3 r.13_15 transcript is
-        // "cug"; input r.13_15delinsagu decomposes to [13_14inv; 15g>u].
+    fn rna_sub_span_revcomp_stays_single_delins() {
+        // r. inputs use U; ref is in transcript T-form. The revcomp scan
+        // T/U-normalizes both sides. NM_000088.3 r.13_15 transcript is "cug";
+        // input r.13_15delinsagu: the 2-nt sub-run 13_14 (cu→ag, revcomp) is
+        // part of the ONE contiguous change 13_15 (revcomp(CUG)=CAG != AGU),
+        // so it may not be carved out (issue #1034). The whole run stays a
+        // single delins, preserving the user-typed U alphabet.
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
         let parsed = parse_hgvs("NM_000088.3:r.13_15delinsagu").expect("r. delins parses");
         let normalized = normalizer.normalize(&parsed).unwrap();
-        assert_eq!(format!("{}", normalized), "NM_000088.3:r.[13_14inv;15g>u]");
+        assert_eq!(format!("{}", normalized), "NM_000088.3:r.13_15delinsagu");
     }
 
     #[test]
-    fn mt_user_typed_delins_with_inv_subspan_splits() {
-        // m. variants must reach apply_inv_split (issue #160). Mt has its own
-        // normalize_mt() which historically returned the variant unchanged;
-        // a user-typed Mt delins over a sub-span revcomp must still
-        // decompose to [..; inv; ..]. Mirrors the g. headline case.
-        let provider = provider_with_genomic("NC_012920.1", 1150, "TCC");
-        let result = normalize_to_string(provider, "NC_012920.1:m.1150_1152delinsGAG");
-        assert_eq!(result, "NC_012920.1:m.[1150_1151inv;1152C>G]");
+    fn mt_user_typed_full_span_revcomp_delins_becomes_inv() {
+        // m. variants must reach the delins inv-canonicalization path. Mt has
+        // its own normalize_mt() which historically returned the variant
+        // unchanged; a user-typed Mt delins whose WHOLE contiguous run is a
+        // revcomp must still canonicalize to inv. ref TC → alt GA
+        // (revcomp(TC)=GA). A sub-run revcomp of a longer change would NOT
+        // split (issue #1034); this full-run case still becomes an inv.
+        let provider = provider_with_genomic("NC_012920.1", 1150, "TC");
+        let result = normalize_to_string(provider, "NC_012920.1:m.1150_1151delinsGA");
+        assert_eq!(result, "NC_012920.1:m.1150_1151inv");
     }
 
     #[test]

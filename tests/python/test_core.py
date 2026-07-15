@@ -106,7 +106,13 @@ class TestVersion:
 
 
 class TestNormalizeIssue160RevcompInvSubspans:
-    """Issue #160: revcomp inv sub-span detection within compound variants.
+    """Issue #160 (as corrected by issue #1034): revcomp inv detection.
+
+    Per HGVS an inversion describes a *maximal contiguous run* whose alt is the
+    reverse complement of the reference (`DNA/inversion.md`, `general.md:56`).
+    A delins whose WHOLE contiguous run is a revcomp becomes an `inv`; a revcomp
+    SUB-run of a longer contiguous change is NOT carved out — that change stays
+    a single `delins` (issue #1034 regression fix).
 
     Uses a temporary JSON reference so the test can pin specific genomic bases
     at the positions referenced by the variant strings (the bundled
@@ -138,22 +144,25 @@ class TestNormalizeIssue160RevcompInvSubspans:
         result = normalizer.normalize("NC_000001.11:g.[1092G>C;1093G>C]")
         assert result == "NC_000001.11:g.1092_1093inv"
 
-    def test_sub_span_revcomp_splits_into_inv_plus_sub(self, tmp_path) -> None:
-        # Headline issue #160 case: cis allele over TCC at 1150-1152
-        # decomposes the merged delinsGAG into [1150_1151inv;1152C>G].
+    def test_sub_span_revcomp_stays_single_delins(self, tmp_path) -> None:
+        # Headline issue #160 case, spec-corrected by issue #1034: cis allele
+        # over TCC at 1150-1152 merges to delinsGAG. The 2-nt sub-run 1150_1151
+        # (TC->GA) is a revcomp, but the whole contiguous run TCC->GAG is not
+        # (revcomp(TCC)=GGA != GAG), so it must NOT split into
+        # [1150_1151inv;1152C>G] — it stays a single delins.
         ref = self._make_reference_json(tmp_path, "NC_000001.11", 1150, "TCC")
         normalizer = ferro_hgvs.Normalizer(reference_json=ref)
         result = normalizer.normalize("NC_000001.11:g.[1150T>G;1151C>A;1152C>G]")
-        assert result == "NC_000001.11:g.[1150_1151inv;1152C>G]"
+        assert result == "NC_000001.11:g.1150_1152delinsGAG"
 
-    def test_user_typed_delins_with_inv_subspan_splits_symmetric(self, tmp_path) -> None:
+    def test_user_typed_delins_with_revcomp_subspan_stays_delins_symmetric(self, tmp_path) -> None:
         # User-typed `g.1150_1152delinsGAG` produces the same canonical
         # form as the cis-allele input — the rule depends only on
-        # (ref, position, alt), not input shape.
+        # (ref, position, alt), not input shape (issue #1034).
         ref = self._make_reference_json(tmp_path, "NC_000001.11", 1150, "TCC")
         normalizer = ferro_hgvs.Normalizer(reference_json=ref)
         result = normalizer.normalize("NC_000001.11:g.1150_1152delinsGAG")
-        assert result == "NC_000001.11:g.[1150_1151inv;1152C>G]"
+        assert result == "NC_000001.11:g.1150_1152delinsGAG"
 
     def test_cds_full_span_revcomp_in_cis_merges_to_inv(self) -> None:
         # NM_000088.3 c.9-10 = "GG" (in the bundled mock); revcomp = "CC".
@@ -161,11 +170,13 @@ class TestNormalizeIssue160RevcompInvSubspans:
         result = ferro_hgvs.normalize("NM_000088.3:c.[9G>C;10G>C]")
         assert result == "NM_000088.3:c.9_10inv"
 
-    def test_cds_sub_span_revcomp_splits_into_inv_plus_sub(self) -> None:
-        # NM_000088.3 c.13-15 = "CTG"; revcomp(CT)=AG → inv at 13-14;
-        # 15G>T stays separate.
+    def test_cds_sub_span_revcomp_stays_single_delins(self) -> None:
+        # NM_000088.3 c.13-15 = "CTG"; the 2-nt sub-run c.13-14 (CT->AG) is a
+        # revcomp, but the whole contiguous run CTG->AGT is not
+        # (revcomp(CTG)=CAG != AGT), so no sub-run is carved out (issue #1034):
+        # it stays a single delins, not [13_14inv;15G>T].
         result = ferro_hgvs.normalize("NM_000088.3:c.[13C>A;14T>G;15G>T]")
-        assert result == "NM_000088.3:c.[13_14inv;15G>T]"
+        assert result == "NM_000088.3:c.13_15delinsAGT"
 
     def test_rna_full_span_revcomp_in_cis_merges_to_inv(self) -> None:
         # NM_000088.3 r.9-10 over "GG" → revcomp "CC" → r.9_10inv.

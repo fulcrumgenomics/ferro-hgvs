@@ -1695,9 +1695,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //     non-overlapping edits (#487).
         //   - split (#160 + #165, cis only): a merged/pre-existing delins may
         //     decompose into higher-priority forms per `general.md:56` —
-        //     `[..., inv, ...]` for an inv-eligible sub-span (#160) and/or into
-        //     separate substitutions where interior positions match the
-        //     reference (#165). The helper is a no-op otherwise.
+        //     `[..., inv, ...]` when a whole maximal contiguous run is a
+        //     reverse complement (#160, corrected by #1034; sub-runs are not
+        //     carved out) and/or into separate substitutions where interior
+        //     positions match the reference (#165). The helper is a no-op
+        //     otherwise.
         //   - per-member pipeline: the single canonical place where the 3' rule,
         //     ins→dup canonicalization, ref validation, etc. apply — a merged
         //     variant is semantically a new variant and goes through the same
@@ -2204,8 +2206,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Issue #160 + #165: a normalized Delins may decompose under the
         // spec's edit-priority rule (`general.md:56`) — into `[..., inv,
-        // ...]` for rev-comp sub-spans and/or into separate subs across
-        // interior identities. Returns the variant unchanged for
+        // ...]` when a whole maximal contiguous run is a reverse complement
+        // (#1034: rev-comp sub-runs are not carved out) and/or into separate
+        // subs across interior identities. Returns the variant unchanged for
         // non-Delins or no-decomposition cases.
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Genome(new_variant));
         warnings.append(&mut split_warnings);
@@ -7495,8 +7498,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///
     /// Implements two spec-priority rules from `general.md:56`
     /// (substitution > deletion > inversion > duplication > insertion):
-    /// - Inversion priority: a delins whose span contains a rev-comp
-    ///   sub-span splits into `[…; inv; …]` (issue #160).
+    /// - Inversion priority: a delins whose whole *maximal contiguous run*
+    ///   is a reverse complement splits out that run as `inv` (issue #160,
+    ///   corrected by issue #1034). A reverse-complement *sub-run* of a
+    ///   longer contiguous change is NOT carved out — that change stays a
+    ///   single `delins`.
     /// - Substitution priority: a delins whose post-trim span contains
     ///   two or more independent single-base mismatches separated by at
     ///   least one unchanged nucleotide splits into separate substitutions
@@ -8040,8 +8046,10 @@ fn unflip_intronic_positions(
 // produces a Delins variant, the resulting span may be expressible in a
 // higher-priority form under `general.md:56` (sub > del > inv > dup > ins).
 // Two cases fire here:
-// - Inversion sub-span: the delins span contains a rev-comp sub-region —
-//   split into `[…; inv; …]` (issue #160).
+// - Inversion: a whole maximal contiguous run within the delins span is a
+//   reverse complement — split that run out as `inv` (issue #160, corrected
+//   by issue #1034; a rev-comp sub-run of a longer contiguous change is not
+//   carved out).
 // - Independent substitutions: the delins span contains two or more
 //   single-base mismatches separated by at least one unchanged nucleotide
 //   — split each into its own sub variant (issue #165 / tracking issue
