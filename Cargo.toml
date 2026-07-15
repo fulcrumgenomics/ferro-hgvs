@@ -224,6 +224,10 @@ required-features = ["dev"]
 name = "generate_perf_tables"
 required-features = ["dev"]
 
+[[example]]
+name = "generate_spec_citations"
+required-features = ["dev"]
+
 [[bin]]
 name = "ferro"
 path = "src/bin/ferro.rs"

@@ -22,6 +22,7 @@
 //! println!("Normalized: {}", normalized);
 //! ```
 
+pub mod arbitrate;
 pub mod backtranslate;
 pub mod batch;
 #[cfg(feature = "benchmark")]
@@ -46,6 +47,7 @@ pub mod hgvs;
 pub mod legacy;
 pub mod liftover;
 pub mod mave;
+pub mod mutalyzer;
 pub mod normalize;
 #[cfg(feature = "parallel")]
 pub mod parallel;
