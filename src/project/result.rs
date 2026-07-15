@@ -13,6 +13,7 @@ use crate::normalize::NormalizationWarning;
 /// is still predicted directly from the transcript's CDS (#498). For a
 /// genome-anchored input `genomic` is the canonical g. representation.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct VariantProjection {
     pub genomic: Option<HgvsVariant>,
     pub coding: Option<HgvsVariant>,
