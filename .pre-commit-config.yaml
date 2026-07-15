@@ -58,11 +58,21 @@ repos:
 
   # Python type checking with mypy
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
+    # Pinned to match `mypy==1.20.2` in pyproject's dev group, so `pre-commit`
+    # and `poe check-typing` / CI type-check with the SAME mypy — a different
+    # major (e.g. 2.x) can emit different diagnostics and diverge. This version
+    # also satisfies the `exhaustive-match` error code pyproject enables (needs
+    # >= 1.16; older mypy rejects it with "Invalid error code(s)").
+    rev: v1.20.2
     hooks:
       - id: mypy
         files: ^python/ferro_hgvs/
         args: [--config-file=pyproject.toml]
+        # Check the package via `files` in pyproject (the directory) rather than
+        # the changed files passed as args: passing both `__init__.py` and
+        # `__init__.pyi` makes mypy see module `ferro_hgvs` twice ("Duplicate
+        # module"); a directory check pairs the `.pyi` as the stub correctly.
+        pass_filenames: false
 
   # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
