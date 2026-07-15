@@ -22,6 +22,7 @@ use crate::error_handling::{CorrectionWarning, ErrorConfig, ErrorMode, ErrorOver
 use crate::hgvs::location::{AminoAcid, CdsPos, TxPos};
 use crate::hgvs::variant::HgvsVariant;
 use crate::mave::{is_mave_short_form, parse_mave_hgvs, MaveContext};
+use crate::normalize::ShuffleDirection;
 use crate::prepare::{check_references, prepare_references, PrepareConfig, ReferenceManifest};
 use crate::python_helpers::{
     get_indel_length, get_num_variants, get_substitution_bases, get_variant_edit_type,
@@ -35,6 +36,20 @@ use crate::rsid::{format_rsid, parse_rsid as rust_parse_rsid, InMemoryRsIdLookup
 use crate::spdi::{hgvs_to_spdi_simple, parse_spdi as rust_parse_spdi, spdi_to_hgvs, SpdiVariant};
 use crate::vcf::{vcf_to_genomic_hgvs as rust_vcf_to_hgvs, VcfRecord};
 use crate::{parse_hgvs, NormalizeConfig, Normalizer};
+
+/// Validate a shuffle-direction argument at the Python boundary.
+///
+/// Mirrors the `assembly` argument's validate-and-raise pattern: an unrecognized
+/// spelling raises `ValueError` naming the accepted values instead of silently
+/// defaulting to 3' (#1016).
+fn parse_direction_or_raise(direction: &str) -> PyResult<ShuffleDirection> {
+    parse_direction(direction).ok_or_else(|| {
+        PyValueError::new_err(format!(
+            "unrecognized direction {direction:?}; expected one of \"3prime\", \"5prime\", \
+             \"3\", \"5\", \"3'\", \"5'\" (case-insensitive)"
+        ))
+    })
+}
 
 /// Reference provider used by the Python wrappers.
 ///
@@ -305,7 +320,7 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
     let variant = parse_hgvs(hgvs_string)
         .map_err(|e| PyValueError::new_err(format!("Parse error: {}", e)))?;
 
-    let config = NormalizeConfig::default().with_direction(parse_direction(direction));
+    let config = NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
     // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
     let provider = MockProvider::with_test_data();
     // This free function always uses genome-less test data; surface the
@@ -544,7 +559,8 @@ impl PyHgvsVariant {
     ///     A new PyHgvsVariant representing the normalized variant
     #[pyo3(signature = (direction="3prime"))]
     fn normalize(&self, py: Python<'_>, direction: &str) -> PyResult<PyHgvsVariant> {
-        let config = NormalizeConfig::default().with_direction(parse_direction(direction));
+        let config =
+            NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
         // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
         let provider = MockProvider::with_test_data();
         // Genome-less test data; surface the reduced-capability signal once per
@@ -735,6 +751,13 @@ impl PyNormalizer {
     #[new]
     #[pyo3(signature = (reference_json=None, direction="3prime"))]
     fn new(py: Python<'_>, reference_json: Option<&str>, direction: &str) -> PyResult<Self> {
+        // Validate the `direction` argument BEFORE loading any reference, so an
+        // invalid direction always raises `ValueError` regardless of whether the
+        // reference path is valid — a bad/missing path must not mask (or be
+        // masked by) the argument error.
+        let config =
+            NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
+
         let (provider, kind) = match reference_json {
             Some(path) => (
                 PyProvider::from_json(Path::new(path))?,
@@ -742,8 +765,6 @@ impl PyNormalizer {
             ),
             None => (PyProvider::test_data(), ProviderKind::TestData),
         };
-
-        let config = NormalizeConfig::default().with_direction(parse_direction(direction));
 
         let normalizer = Self {
             provider,
@@ -766,8 +787,11 @@ impl PyNormalizer {
     #[staticmethod]
     #[pyo3(signature = (manifest_path, direction="3prime"))]
     fn from_manifest(py: Python<'_>, manifest_path: &str, direction: &str) -> PyResult<Self> {
+        // Validate `direction` before loading the manifest (see `new`): a bad
+        // manifest path must not mask an invalid-direction `ValueError`.
+        let config =
+            NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
-        let config = NormalizeConfig::default().with_direction(parse_direction(direction));
         let normalizer = Self {
             provider,
             config,
@@ -1069,6 +1093,9 @@ impl PyVariantProjector {
         direction: &str,
         assembly: Option<&str>,
     ) -> PyResult<Self> {
+        // Validate boundary args BEFORE loading any reference (a bad path must
+        // not mask an invalid direction/assembly ValueError).
+        let (config, assembly_build) = parse_projector_boundary_args(direction, assembly)?;
         let (provider, kind) = match reference_json {
             Some(path) => (
                 PyProvider::from_json(Path::new(path))?,
@@ -1076,7 +1103,7 @@ impl PyVariantProjector {
             ),
             None => (PyProvider::test_data(), ProviderKind::TestData),
         };
-        Self::from_provider(py, provider, direction, assembly, kind)
+        Self::from_provider(py, provider, config, assembly_build, kind)
     }
 
     /// Create a projector from a ferro-prepare manifest (preferred for
@@ -1089,8 +1116,10 @@ impl PyVariantProjector {
         direction: &str,
         assembly: Option<&str>,
     ) -> PyResult<Self> {
+        // Validate boundary args before loading the manifest (see `new`).
+        let (config, assembly_build) = parse_projector_boundary_args(direction, assembly)?;
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
-        Self::from_provider(py, provider, direction, assembly, ProviderKind::Manifest)
+        Self::from_provider(py, provider, config, assembly_build, ProviderKind::Manifest)
     }
 
     /// Return `True` if the backing reference provides genomic sequence data.
@@ -1449,12 +1478,36 @@ impl PyVariantProjector {
     }
 }
 
+/// Parse the projector's boundary args (`direction`, `assembly`) into their
+/// validated forms. Split out so callers validate them BEFORE loading a
+/// reference — a bad/missing reference path must not mask (or be masked by) an
+/// invalid direction/assembly `ValueError`. The assembly name is normalized to a
+/// canonical "GRCh37"/"GRCh38" at the boundary so the core only sees that (#715).
+fn parse_projector_boundary_args(
+    direction: &str,
+    assembly: Option<&str>,
+) -> PyResult<(NormalizeConfig, Option<&'static str>)> {
+    let config = NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
+    let assembly_build = match assembly {
+        Some(name) => Some(
+            crate::liftover::aliases::normalize_assembly_name(name).ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "unrecognized assembly {name:?}; expected GRCh37 or GRCh38 \
+                     (aliases hg19/hg38 accepted)"
+                ))
+            })?,
+        ),
+        None => None,
+    };
+    Ok((config, assembly_build))
+}
+
 impl PyVariantProjector {
     fn from_provider(
         py: Python<'_>,
         provider: PyProvider,
-        direction: &str,
-        assembly: Option<&str>,
+        config: NormalizeConfig,
+        assembly_build: Option<&'static str>,
         kind: ProviderKind,
     ) -> PyResult<Self> {
         // Capture capability before the provider is moved into the projector.
@@ -1462,20 +1515,6 @@ impl PyVariantProjector {
         let has_protein_data = provider.has_protein_data();
         let cdot = provider.cdot_mapper();
         let projector = crate::data::projection::Projector::new(cdot);
-        let config = NormalizeConfig::default().with_direction(parse_direction(direction));
-        // Validate/normalize the assembly name at the boundary so the core only
-        // ever sees a canonical "GRCh37"/"GRCh38" (#715).
-        let assembly_build = match assembly {
-            Some(name) => Some(
-                crate::liftover::aliases::normalize_assembly_name(name).ok_or_else(|| {
-                    PyValueError::new_err(format!(
-                        "unrecognized assembly {name:?}; expected GRCh37 or GRCh38 \
-                         (aliases hg19/hg38 accepted)"
-                    ))
-                })?,
-            ),
-            None => None,
-        };
         let projector = Self {
             inner: crate::project::VariantProjector::new(projector, provider)
                 .with_normalize_config(config)
