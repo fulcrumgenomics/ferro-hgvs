@@ -3,7 +3,7 @@
 use crate::error::FerroError;
 use crate::hgvs::variant::Accession;
 use crate::reference::provider::{GenomicPlacement, ReferenceProvider};
-use crate::reference::transcript::Transcript;
+use crate::reference::transcript::{Strand, Transcript};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
@@ -51,6 +51,140 @@ pub struct MockProvider {
     /// parent); falls back to the build-agnostic `transcripts` map otherwise.
     /// Empty by default, so an unconfigured mock is build-agnostic as before.
     build_transcripts: HashMap<(String, &'static str), Arc<Transcript>>,
+}
+
+/// Validate that a JSON reference declaring genomic capability actually backs
+/// every placed transcript with genomic sequence bytes that are the *right length*
+/// **and** the *right bases*.
+///
+/// Only enforced when `genomic_sequences` is non-empty — i.e. the reference claims
+/// `has_genomic_data() == true`, which arms the genome-aware normalization rules.
+/// Note this is a **per-file** requirement: once any `genomic_sequences` are
+/// present, every placed transcript must be backed, so a partially-genomic
+/// reference is rejected rather than silently granting genome capability to only
+/// some transcripts. Two checks per placed transcript:
+///
+/// 1. **Structure** — the transcript's contig must be present in `genomic_sequences`
+///    and long enough to contain its maximal genomic coordinate. Catches a missing
+///    or too-short contig (#1012 comment 1).
+/// 2. **Content** — when every exon carries genomic coordinates and the transcript
+///    has a `sequence`, the transcript sequence is *reconstructed* from the genomic
+///    bytes at the exon placement (concatenating the forward exon slices, then
+///    reverse-complementing on the minus strand — exactly how
+///    `convert-gff`/`build-transcript` build it) and must equal the stated
+///    `sequence`. This catches genomic bytes that are the right length but the
+///    **wrong bases** — a padded junk blob, a different assembly, or shifted
+///    coordinates — which would otherwise silently corrupt genome-aware
+///    normalization of del/dup/inv/intronic edits (whose recommended forms carry no
+///    stated reference bases, so nothing downstream flags the wrong genome).
+///
+/// Two residual cases are the emitter's responsibility and cannot be caught here:
+/// bytes in the *intronic* gaps between exons (no independent copy to check
+/// against), and a coordinate frame that is *self-consistently* wrong (the
+/// transcript sequence and genomic bytes agree because both were sliced from the
+/// same mismatched FASTA). `convert-gff --emit-genomic-sequences` avoids both by
+/// construction.
+fn validate_genomic_placement_backing(
+    transcripts: &[Transcript],
+    genomic_sequences: &HashMap<String, String>,
+) -> Result<(), FerroError> {
+    if genomic_sequences.is_empty() {
+        return Ok(());
+    }
+
+    for tx in transcripts {
+        let Some(chromosome) = tx.chromosome.as_deref() else {
+            continue;
+        };
+        // Highest 1-based genomic coordinate this transcript's placement references.
+        let required_len = tx
+            .exons
+            .iter()
+            .filter_map(|exon| exon.genomic_end)
+            .chain(tx.genomic_end)
+            .max();
+        let Some(required_len) = required_len else {
+            continue;
+        };
+
+        // (1) Structure.
+        let contig = match genomic_sequences.get(chromosome) {
+            None => {
+                return Err(FerroError::Json {
+                    msg: format!(
+                        "reference declares genomic sequences but transcript '{}' is placed on \
+                         contig '{}', which has no entry in `genomic_sequences` (once any \
+                         genomic_sequences are present, every placed transcript must be backed)",
+                        tx.id, chromosome
+                    ),
+                });
+            }
+            Some(sequence) if (sequence.len() as u64) < required_len => {
+                return Err(FerroError::Json {
+                    msg: format!(
+                        "`genomic_sequences` for contig '{}' has length {}, too short for the \
+                         placement of transcript '{}' (needs at least {})",
+                        chromosome,
+                        sequence.len(),
+                        tx.id,
+                        required_len
+                    ),
+                });
+            }
+            Some(sequence) => sequence,
+        };
+
+        // (2) Content.
+        validate_reconstructed_transcript_sequence(tx, chromosome, contig)?;
+    }
+
+    Ok(())
+}
+
+/// Reconstruct a transcript's sequence from the genomic contig bytes at its exon
+/// placement and confirm it equals the stated `sequence`. See
+/// [`validate_genomic_placement_backing`] for the rationale. Skips (returns `Ok`)
+/// when the transcript has no `sequence`, or any exon lacks genomic coordinates, or
+/// an exon's coordinates are malformed or out of the contig's range — there is
+/// nothing to reconstruct against in those cases, and the structural check has
+/// already bounded the maximal coordinate.
+fn validate_reconstructed_transcript_sequence(
+    tx: &Transcript,
+    chromosome: &str,
+    contig: &str,
+) -> Result<(), FerroError> {
+    let Some(tx_sequence) = tx.sequence.as_deref() else {
+        return Ok(());
+    };
+
+    let mut reconstructed = String::with_capacity(tx_sequence.len());
+    for exon in &tx.exons {
+        let (Some(g_start), Some(g_end)) = (exon.genomic_start, exon.genomic_end) else {
+            return Ok(()); // partial placement — cannot fully reconstruct.
+        };
+        if g_start < 1 || g_end < g_start || g_end as usize > contig.len() {
+            return Ok(()); // malformed / out-of-range coords — not this check's job.
+        }
+        reconstructed.push_str(&contig[(g_start - 1) as usize..g_end as usize]);
+    }
+
+    if tx.strand == Strand::Minus {
+        reconstructed = crate::sequence::reverse_complement(&reconstructed);
+    }
+
+    if !reconstructed.eq_ignore_ascii_case(tx_sequence) {
+        return Err(FerroError::Json {
+            msg: format!(
+                "`genomic_sequences` for contig '{}' do not reconstruct transcript '{}'s \
+                 sequence from its exon placement: the genomic bytes are not the reference the \
+                 transcript sequence was built from (wrong assembly, shifted coordinates, or \
+                 placeholder/junk bytes)",
+                chromosome, tx.id
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 impl MockProvider {
@@ -127,6 +261,14 @@ impl MockProvider {
     ///
     /// Accepts either a bare array of `Transcript` records or an object
     /// of the form `{ transcripts, proteins, genomic_sequences }`.
+    ///
+    /// When `genomic_sequences` is present (the reference declares genomic
+    /// capability), the placement of every placed transcript must be backed by
+    /// bytes: its contig must appear in `genomic_sequences` and be long enough to
+    /// contain the transcript's maximal genomic coordinate. A missing or too-short
+    /// contig is rejected here rather than producing a silently-degraded
+    /// genome-aware normalization (#1012 comment 1). See
+    /// [`validate_genomic_placement_backing`].
     pub fn from_json(path: &Path) -> Result<Self, FerroError> {
         // `deny_unknown_fields` so a typo'd key (e.g. `transripts`) produces
         // a clear error rather than silently defaulting to an empty provider.
@@ -179,6 +321,17 @@ impl MockProvider {
                     .to_string(),
             });
         }
+
+        // When the reference declares genomic capability (a non-empty
+        // `genomic_sequences` map, so `has_genomic_data()` is true and the
+        // genome-aware normalization rules will run), fail loud if that capability
+        // is not actually backed by bytes for every placed transcript. Without this,
+        // a reference that claims a genome but whose `genomic_sequences` does not
+        // cover a transcript's placement produces a genome-aware result silently
+        // computed against absent/short bytes (#1012 comment 1). We can only check
+        // structure, not content, but a missing or too-short contig is a real,
+        // detectable footgun.
+        validate_genomic_placement_backing(&transcripts, &genomic_sequences)?;
 
         let map: HashMap<String, Arc<Transcript>> = transcripts
             .into_iter()
@@ -984,6 +1137,192 @@ mod tests {
         );
         assert!(provider.has_genomic_data());
         assert_eq!(provider.get_genomic_sequence("chr1", 0, 4).unwrap(), "ACGT");
+    }
+
+    /// A genomic reference whose `genomic_sequences` fully backs the placement of
+    /// every placed transcript loads and reports genomic capability (#1026).
+    #[test]
+    fn from_json_accepts_consistent_genomic_reference() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // chr1 genomic sequence of length 12; the transcript exon spans genomic 3..8,
+        // so its sequence must be the contig bytes there: "ACGTACGTACGT"[2..8] = "GTACGT".
+        let json = r#"{
+      "transcripts": [{
+        "id": "NM_TEST.1",
+        "strand": "+",
+        "sequence": "GTACGT",
+        "chromosome": "chr1",
+        "genomic_start": 3,
+        "genomic_end": 8,
+        "exons": [{"number": 1, "start": 1, "end": 6, "genomic_start": 3, "genomic_end": 8}]
+      }],
+      "genomic_sequences": { "chr1": "ACGTACGTACGT" }
+    }"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider = MockProvider::from_json(file.path()).expect("consistent reference loads");
+        assert!(provider.has_genomic_data());
+    }
+
+    /// A reference whose `genomic_sequences` are long enough but do NOT reconstruct
+    /// the transcript's stated sequence (wrong/junk bases) is rejected at load — the
+    /// wrong-content half of the #1012 comment 1 footgun. Without this, genome-aware
+    /// normalization of del/dup/inv/intronic edits (which carry no stated reference
+    /// bases) would silently run against the wrong genome.
+    #[test]
+    fn from_json_rejects_genomic_content_that_does_not_match_transcript() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // The exon at genomic 3..8 reconstructs to "GTACGT", but the transcript
+        // claims "ACGTAC" — a plausible-but-wrong (junk) genome.
+        let json = r#"{
+      "transcripts": [{
+        "id": "NM_TEST.1",
+        "strand": "+",
+        "sequence": "ACGTAC",
+        "chromosome": "chr1",
+        "genomic_start": 3,
+        "genomic_end": 8,
+        "exons": [{"number": 1, "start": 1, "end": 6, "genomic_start": 3, "genomic_end": 8}]
+      }],
+      "genomic_sequences": { "chr1": "ACGTACGTACGT" }
+    }"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let err = match MockProvider::from_json(file.path()) {
+            Ok(_) => panic!("expected rejection of genomic bytes that don't match the transcript"),
+            Err(e) => e,
+        };
+        assert!(
+            format!("{err}").contains("do not reconstruct transcript"),
+            "error should explain the content mismatch: {err}"
+        );
+    }
+
+    /// The content check reverse-complements the genomic bytes for a minus-strand
+    /// transcript, so a correctly-placed minus-strand reference loads.
+    #[test]
+    fn from_json_accepts_minus_strand_reconstruction() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // contig[0..6] = "ACGTAC"; on the minus strand the transcript sequence is its
+        // reverse-complement: revcomp("ACGTAC") = "GTACGT".
+        let json = r#"{
+      "transcripts": [{
+        "id": "NM_TEST.1",
+        "strand": "-",
+        "sequence": "GTACGT",
+        "chromosome": "chr1",
+        "genomic_start": 1,
+        "genomic_end": 6,
+        "exons": [{"number": 1, "start": 1, "end": 6, "genomic_start": 1, "genomic_end": 6}]
+      }],
+      "genomic_sequences": { "chr1": "ACGTACGTACGT" }
+    }"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider =
+            MockProvider::from_json(file.path()).expect("consistent minus-strand reference loads");
+        assert!(provider.has_genomic_data());
+    }
+
+    /// A reference that declares genomic capability but has no contig entry backing a
+    /// placed transcript is rejected at load, rather than silently normalizing against
+    /// absent bytes (#1012 comment 1).
+    #[test]
+    fn from_json_rejects_placement_without_backing_contig() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Transcript is placed on chr1, but genomic_sequences only carries chr2.
+        let json = r#"{
+      "transcripts": [{
+        "id": "NM_TEST.1",
+        "strand": "+",
+        "sequence": "ATGCAT",
+        "chromosome": "chr1",
+        "genomic_start": 3,
+        "genomic_end": 8,
+        "exons": [{"number": 1, "start": 1, "end": 6, "genomic_start": 3, "genomic_end": 8}]
+      }],
+      "genomic_sequences": { "chr2": "ACGTACGTACGT" }
+    }"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let err = match MockProvider::from_json(file.path()) {
+            Ok(_) => panic!("expected an error for an unbacked placement"),
+            Err(e) => e,
+        };
+        assert!(
+            format!("{err}").contains("chr1"),
+            "error should name the unbacked contig: {err}"
+        );
+    }
+
+    /// A contig present but too short to contain the placement is rejected.
+    #[test]
+    fn from_json_rejects_too_short_genomic_sequence() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Exon needs genomic coordinate 50 but chr1 is only 12 bases long.
+        let json = r#"{
+      "transcripts": [{
+        "id": "NM_TEST.1",
+        "strand": "+",
+        "sequence": "ATGCAT",
+        "chromosome": "chr1",
+        "genomic_start": 45,
+        "genomic_end": 50,
+        "exons": [{"number": 1, "start": 1, "end": 6, "genomic_start": 45, "genomic_end": 50}]
+      }],
+      "genomic_sequences": { "chr1": "ACGTACGTACGT" }
+    }"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let err = match MockProvider::from_json(file.path()) {
+            Ok(_) => panic!("expected an error for a too-short contig"),
+            Err(e) => e,
+        };
+        assert!(
+            format!("{err}").contains("too short"),
+            "error should explain the contig is too short: {err}"
+        );
+    }
+
+    /// A transcripts-only reference (no `genomic_sequences`) is not subject to the
+    /// placement-backing check even when transcripts carry genomic coordinates, so
+    /// the pre-#1026 transcript-only references keep loading unchanged.
+    #[test]
+    fn from_json_skips_backing_check_without_genomic_sequences() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let json = r#"{
+      "transcripts": [{
+        "id": "NM_TEST.1",
+        "strand": "+",
+        "sequence": "ATGCAT",
+        "chromosome": "chr1",
+        "genomic_start": 3,
+        "genomic_end": 8,
+        "exons": [{"number": 1, "start": 1, "end": 6, "genomic_start": 3, "genomic_end": 8}]
+      }]
+    }"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let provider = MockProvider::from_json(file.path()).expect("transcripts-only loads");
+        assert!(!provider.has_genomic_data());
     }
 
     #[test]

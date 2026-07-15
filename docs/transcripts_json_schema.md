@@ -32,6 +32,29 @@ For simple use cases, a flat array of transcript objects is also supported:
 ]
 ```
 
+### Optional `genomic_sequences` map
+
+The container form may also carry a top-level `genomic_sequences` map — the raw
+forward (plus-strand) chromosome/contig bytes, keyed by the same chromosome name
+the transcripts are placed on:
+
+```json
+{
+  "version": "1.0",
+  "genome_build": "GRCh38",
+  "transcripts": [ { /* ... */ } ],
+  "genomic_sequences": {
+    "chr17": "ACGT...ACGT"
+  }
+}
+```
+
+This is what makes a `transcripts.json` **genome-capable** — see
+[Capability boundary](#capability-boundary-transcriptsjson-vs-a-prepared-manifest)
+below. It is emitted by `convert-gff --emit-genomic-sequences` and
+`build-transcript --emit-genomic-sequences`; it may also be written by hand. A
+`proteins` map (protein accession → sequence) is accepted in the same position.
+
 ## Transcript Object
 
 Each transcript object has the following fields:
@@ -196,6 +219,110 @@ For basic HGVS normalization without genomic coordinates:
 ]
 ```
 
+## Capability boundary: transcripts.json vs a prepared manifest
+
+ferro can normalize against two kinds of reference, and they are **not**
+equivalent. Knowing which one you have determines which normalization rules run.
+
+- **A `transcripts.json`** (this schema) — loaded via
+  `Normalizer(reference_json="transcripts.json")` (Python) or
+  `MockProvider::from_json` (Rust). Built by hand, by `convert-gff`, or by
+  `build-transcript`.
+- **A prepared manifest** — a `manifest.json` produced by `ferro prepare`,
+  loaded via `Normalizer.from_manifest("manifest.json")`. It references a full
+  genome FASTA, cdot metadata, and RefSeqGene/LRG alignments.
+
+### What a `transcripts.json` can always do
+
+Transcript-**sequence**-level normalization, using each transcript's own
+`sequence` and `exons`:
+
+- reference-allele checks;
+- 3′/5′ shuffling of del/ins/dup within the transcript (e.g. rolling a deletion
+  across a homopolymer: `c.1152del → c.1158del`);
+- duplication and repeat canonicalization.
+
+For an **intron-free / single-exon** reference with no `g.` axis, this is the
+*complete* set of applicable rules — results match a full prepared manifest,
+because the genome-dependent rules below are no-ops there.
+
+### What additionally requires genomic data
+
+Rules gated on `has_genomic_data()` only run when the reference carries genomic
+sequence **and** a placement (each transcript's `chromosome` + per-exon
+`genomic_start`/`genomic_end`):
+
+- the cross-exon/intron 3′-shift (#670);
+- normalization of intronic positions (`c.10+5del`, boundary-spanning edits);
+- the genomic (`g.`) axis and `project_to_genomic`.
+
+A plain `transcripts.json` from `convert-gff`/`build-transcript` carries the
+**placement** but not the genomic **bytes**, so these rules are skipped and only
+the transcript-level rules run. To make a `transcripts.json` genome-capable, add
+the [`genomic_sequences` map](#optional-genomic_sequences-map) — most easily with
+`--emit-genomic-sequences` (below).
+
+### How to tell which mode is active
+
+The `Normalizer` exposes its reference capability. From Python:
+
+```python
+n = ferro_hgvs.Normalizer(reference_json="transcripts.json")
+n.has_genomic_data()   # False for a transcript-only reference; True once genomic_sequences is present
+n.has_protein_data()   # True if the reference carries protein sequences
+n.reference_summary()  # {"provider_kind": "json", "has_genomic_data": ..., "has_protein_data": ...}
+```
+
+A genome-capable emit (`--emit-genomic-sequences`) flips `has_genomic_data()` to
+`True`; a transcript-only reference reports `False` **and** emits a one-time
+reduced-capability `UserWarning` at construction, so a degraded mode is never
+silent. (These methods are also available on `VariantProjector`,
+`EquivalenceChecker`, `BatchProcessor`, and `CoordinateMapper`.)
+
+From the CLI, `ferro check <transcripts.json>` reports the same (transcript count
+and whether the reference is genome-capable).
+
+**What the load-time check does and does not guarantee.** When
+`genomic_sequences` is present, ferro validates the reference at load in two ways:
+
+- **Structure** — every placed transcript's contig must be present in
+  `genomic_sequences` and long enough to cover its coordinates (byte 0 = genomic
+  position 1). A missing or too-short contig is rejected. This is a **per-file**
+  rule: once *any* `genomic_sequences` are present, *every* placed transcript must
+  be backed, so a partially-genomic reference is rejected rather than silently
+  giving genome capability to only some transcripts. (If you want genome-aware
+  behavior for only some transcripts, split them into a separate reference.)
+- **Content** — for each placed transcript whose exons all carry genomic
+  coordinates, ferro reconstructs the transcript sequence from the genomic bytes at
+  that placement (concatenating the forward exon slices, reverse-complementing on
+  the minus strand) and requires it to equal the stated `sequence`. This rejects
+  genomic bytes that are the right length but the **wrong bases** — a padded junk
+  blob, a different assembly, or shifted coordinates — which would otherwise
+  silently corrupt genome-aware normalization of `del`/`dup`/`inv`/intronic edits
+  (whose recommended forms carry no stated reference bases, so nothing downstream
+  would flag the wrong genome).
+
+Two residual cases cannot be validated at load and remain the emitter's
+responsibility: bytes in the **intronic gaps** between exons (there is no
+independent copy to check them against), and a coordinate frame that is
+**self-consistently wrong** (the transcript sequence and genomic bytes agree
+because both were sliced from the same mismatched FASTA).
+`convert-gff`/`build-transcript --emit-genomic-sequences` avoid both by
+construction (they read the same FASTA the coordinates are relative to), and
+`convert-gff` additionally fails fast at emit time if the FASTA does not cover the
+annotation's coordinates — so it never writes a file its own loader rejects.
+
+### Synthetic / local references
+
+For a **synthetic** construct (plasmid, reporter, custom amplicon) there is no
+cdot or RefSeqGene alignment to prepare, so a full `ferro prepare` manifest does
+not apply. The supported path for genome-aware normalization of such references
+is a genome-capable `transcripts.json` via `--emit-genomic-sequences` — the
+placement rides on the transcript records and the contig bytes come from your
+FASTA. (This is the resolution of issue #1027: the lightweight
+`genomic_sequences` path covers synthetic local references; a
+`MultiFastaProvider`/manifest built from local files is not required for them.)
+
 ## Generating transcripts.json
 
 ### From GFF3/GTF with FASTA
@@ -216,6 +343,25 @@ ferro convert-gff \
   --genes BRCA1,BRCA2,TP53 \
   --fasta reference.fa \
   -o clinical_genes.json
+
+# Genome-capable output: also embed the referenced contig bytes so the genome-
+# dependent rules (intronic, exon/intron 3'-shift, g. axis) can run. Emits full
+# contig sequences, so it is intended for small / synthetic references.
+ferro convert-gff \
+  --gff construct.gff3 \
+  --fasta construct.fa \
+  --emit-genomic-sequences \
+  -o construct.json
+```
+
+For a single synthetic contig, `build-transcript` takes the same flag:
+
+```bash
+ferro build-transcript \
+  --fasta construct.fa \
+  --cds-start 1 --cds-end 900 \
+  --emit-genomic-sequences \
+  -o construct.json
 ```
 
 ### Programmatically
@@ -281,6 +427,8 @@ The schema is validated when loading. Common validation errors:
 | `ReferenceNotFound` | Transcript ID not in database |
 | `InvalidCoordinates` | Position exceeds sequence length |
 | `Parse error` | Malformed JSON or missing required fields |
+| `genomic_sequences … has no entry for …` / `… too short for the placement …` | The reference declares genomic capability (`genomic_sequences` present) but the bytes do not back a placed transcript's `chromosome` / genomic coordinates. Fixed by emitting with `--emit-genomic-sequences` (which is consistent by construction) or by supplying the correct contig bytes. |
+| `… do not reconstruct transcript '…'s sequence …` | `genomic_sequences` are long enough but the bytes at a transcript's exon placement do not reproduce its stated `sequence` — a wrong assembly, shifted coordinates, or placeholder/junk bytes. Supply the genome the transcript coordinates are relative to. |
 
 ## Best Practices
 

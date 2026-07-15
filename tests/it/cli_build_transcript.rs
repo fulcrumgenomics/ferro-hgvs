@@ -100,6 +100,131 @@ fn build_transcript_rejects_cds_beyond_contig() {
 }
 
 #[test]
+fn build_transcript_emit_genomic_sequences_makes_reference_genome_capable() {
+    // A synthetic construct. With --emit-genomic-sequences the output carries the
+    // forward contig bytes under `genomic_sequences`, so the resulting
+    // transcripts.json is genome-capable (#1026).
+    let seq = "ATGAAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAACCCGGGTTTAAACCCTAA";
+    let (_keep, fasta_path) = write_fasta("construct1", seq);
+    let out = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+    let out_path = out.path().to_path_buf();
+    drop(out);
+
+    let bin = env!("CARGO_BIN_EXE_ferro");
+    let status = Command::new(bin)
+        .args([
+            "build-transcript",
+            "--fasta",
+            fasta_path.to_str().unwrap(),
+            "--cds-start",
+            "1",
+            "--cds-end",
+            "60",
+            "--emit-genomic-sequences",
+            "--output",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "build-transcript failed: stderr={}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out_path).unwrap()).unwrap();
+    // The forward contig bytes are emitted keyed by chromosome name.
+    assert_eq!(json["genomic_sequences"]["construct1"], seq);
+
+    // And the emitted JSON round-trips into a genome-capable provider.
+    let provider = ferro_hgvs::reference::mock::MockProvider::from_json(&out_path).expect("loads");
+    use ferro_hgvs::reference::provider::ReferenceProvider;
+    assert!(
+        provider.has_genomic_data(),
+        "reference emitted with --emit-genomic-sequences must report genomic data"
+    );
+}
+
+#[test]
+fn build_transcript_emit_genomic_sequences_stores_forward_bytes_on_minus_strand() {
+    // For a minus-strand construct the transcript `sequence` is reverse-complemented,
+    // but `genomic_sequences` must hold the FORWARD contig bytes so the exon genomic
+    // coordinates index into it correctly.
+    let forward = "ATGAAACCCGGGTTTAAACCCGGGTTTTAA"; // 30 bp
+    let (_keep, fasta_path) = write_fasta("construct2", forward);
+    let out = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+    let out_path = out.path().to_path_buf();
+    drop(out);
+
+    let bin = env!("CARGO_BIN_EXE_ferro");
+    let status = Command::new(bin)
+        .args([
+            "build-transcript",
+            "--fasta",
+            fasta_path.to_str().unwrap(),
+            "--cds-start",
+            "1",
+            "--cds-end",
+            "30",
+            "--strand",
+            "-",
+            "--emit-genomic-sequences",
+            "--output",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        status.status.success(),
+        "build-transcript failed: stderr={}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out_path).unwrap()).unwrap();
+    // genomic_sequences holds the forward bytes...
+    assert_eq!(json["genomic_sequences"]["construct2"], forward);
+    // ...while the transcript `sequence` is the reverse-complement (transcript space).
+    assert_eq!(
+        json["transcripts"][0]["sequence"],
+        "TTAAAACCCGGGTTTAAACCCGGGTTTCAT"
+    );
+}
+
+#[test]
+fn build_transcript_without_flag_omits_genomic_sequences() {
+    let (_keep, fasta_path) = write_fasta("c3", "ATGAAACCCTAA");
+    let out = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
+    let out_path = out.path().to_path_buf();
+    drop(out);
+
+    let bin = env!("CARGO_BIN_EXE_ferro");
+    let status = Command::new(bin)
+        .args([
+            "build-transcript",
+            "--fasta",
+            fasta_path.to_str().unwrap(),
+            "--cds-start",
+            "1",
+            "--cds-end",
+            "12",
+            "--output",
+            out_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&out_path).unwrap()).unwrap();
+    assert!(
+        json.get("genomic_sequences").is_none(),
+        "genomic_sequences must not be emitted without the flag"
+    );
+}
+
+#[test]
 fn build_transcript_supports_minus_strand_and_custom_id() {
     let (_keep, fasta_path) = write_fasta("construct2", "ATGAAACCCGGGTTTAAACCCGGGTTTTAA");
     let out = tempfile::Builder::new().suffix(".json").tempfile().unwrap();
