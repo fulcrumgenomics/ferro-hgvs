@@ -20,7 +20,8 @@ def parse(hgvs_string: str) -> HgvsVariant:
         A HgvsVariant object representing the parsed variant
 
     Raises:
-        ValueError: If the HGVS string cannot be parsed
+        ParseError: If the HGVS string cannot be parsed (a subclass of
+            ValueError, so ``except ValueError`` still catches it).
 
     Example:
         >>> variant = parse("NM_000088.3:c.100A>G")
@@ -40,9 +41,11 @@ def normalize(hgvs_string: str, direction: str = "3prime") -> str:
         The normalized HGVS string
 
     Raises:
-        ValueError: If the HGVS string cannot be parsed, or if ``direction`` is
-            not one of "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive)
-        RuntimeError: If normalization fails
+        ParseError: If the HGVS string cannot be parsed (a subclass of
+            ValueError).
+        ValueError: If ``direction`` is not one of
+            "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
+        NormalizationError: If normalization fails (a subclass of RuntimeError).
 
     Example:
         >>> normalize("NM_000088.3:c.100delA")
@@ -64,7 +67,8 @@ def parse_spdi(spdi_string: str) -> SpdiVariant:
         A SpdiVariant object representing the parsed variant
 
     Raises:
-        ValueError: If the SPDI string cannot be parsed
+        ParseError: If the SPDI string cannot be parsed (a subclass of
+            ValueError).
     """
     ...
 
@@ -78,7 +82,8 @@ def hgvs_to_spdi(variant: HgvsVariant) -> SpdiVariant:
         A SpdiVariant object
 
     Raises:
-        ValueError: If the conversion fails
+        ProjectionError: If the conversion fails (a subclass of ValueError and
+            RuntimeError).
     """
     ...
 
@@ -92,7 +97,8 @@ def spdi_to_hgvs_variant(spdi: SpdiVariant) -> HgvsVariant:
         An HgvsVariant object
 
     Raises:
-        ValueError: If the conversion fails
+        ProjectionError: If the conversion fails (a subclass of ValueError and
+            RuntimeError).
     """
     ...
 
@@ -123,7 +129,8 @@ def parse_mave_hgvs_variant(hgvs_string: str, context: MaveContext) -> HgvsVaria
         A HgvsVariant object with the accession filled in from context
 
     Raises:
-        ValueError: If parsing fails or context doesn't support the coordinate type
+        ParseError: If parsing fails or the context doesn't support the
+            coordinate type (a subclass of ValueError).
     """
     ...
 
@@ -153,7 +160,8 @@ def parse_lenient(hgvs_string: str, config: ErrorConfig | None = None) -> ParseR
         ParseResultWithWarnings containing the parsed variant and any warnings
 
     Raises:
-        ValueError: If the HGVS string cannot be parsed even after corrections
+        ParseError: If the HGVS string cannot be parsed even after corrections
+            (a subclass of ValueError).
     """
     ...
 
@@ -171,7 +179,7 @@ def parse_rsid_value(rsid: str) -> int:
         Numeric rsID value
 
     Raises:
-        ValueError: If the rsID cannot be parsed
+        ParseError: If the rsID cannot be parsed (a subclass of ValueError).
     """
     ...
 
@@ -201,7 +209,8 @@ def vcf_to_genomic_hgvs(record: VcfRecord, alt_index: int = 0) -> HgvsVariant:
         HgvsVariant object
 
     Raises:
-        ValueError: If conversion fails
+        ProjectionError: If conversion fails (a subclass of ValueError and
+            RuntimeError).
     """
     ...
 
@@ -219,7 +228,8 @@ def prepare_reference_data(config: PrepareConfig) -> ReferenceManifest:
         ReferenceManifest describing the prepared data
 
     Raises:
-        RuntimeError: If preparation fails
+        ReferenceDataError: If preparation fails (a subclass of RuntimeError and
+            ValueError).
     """
     ...
 
@@ -233,7 +243,8 @@ def check_reference_data(directory: str) -> ReferenceManifest:
         ReferenceManifest if manifest.json exists
 
     Raises:
-        RuntimeError: If check fails
+        ReferenceDataError: If check fails (a subclass of RuntimeError and
+            ValueError).
     """
     ...
 
@@ -453,7 +464,8 @@ class Normalizer:
         Raises:
             ValueError: If ``direction`` is not one of
                 "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
-            RuntimeError: If the manifest cannot be loaded.
+            ReferenceDataError: If the manifest cannot be loaded (a subclass of
+                RuntimeError and ValueError).
         """
         ...
 
@@ -701,7 +713,8 @@ class EquivalenceChecker:
             An EquivalenceChecker backed by a MultiFastaProvider.
 
         Raises:
-            RuntimeError: If the manifest cannot be loaded.
+            ReferenceDataError: If the manifest cannot be loaded (a subclass of
+                RuntimeError and ValueError).
         """
         ...
 
@@ -728,11 +741,21 @@ class EquivalenceChecker:
         ...
 
     def check(self, v1: HgvsVariant, v2: HgvsVariant) -> EquivalenceResult:
-        """Check if two variants are equivalent."""
+        """Check if two variants are equivalent.
+
+        Raises:
+            EquivalenceError: If the check fails, e.g. an input cannot be
+                normalized (a subclass of RuntimeError).
+        """
         ...
 
     def all_equivalent(self, variants: list[HgvsVariant]) -> bool:
-        """Check if multiple variants are all equivalent to each other."""
+        """Check if multiple variants are all equivalent to each other.
+
+        Raises:
+            EquivalenceError: If the check fails, e.g. an input cannot be
+                normalized (a subclass of RuntimeError).
+        """
         ...
 
 # ============================================================================
@@ -806,6 +829,9 @@ class ProteinEffect:
     def is_protein_altering(self) -> bool:
         """Check if this is a protein-altering variant."""
         ...
+
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
 
 class EffectPredictor:
     """Protein effect predictor."""
@@ -960,7 +986,8 @@ class BatchProcessor:
             A BatchProcessor backed by a MultiFastaProvider.
 
         Raises:
-            RuntimeError: If the manifest cannot be loaded.
+            ReferenceDataError: If the manifest cannot be loaded (a subclass of
+                RuntimeError and ValueError).
         """
         ...
 
@@ -1418,7 +1445,8 @@ class CoordinateMapper:
             A CoordinateMapper backed by a MultiFastaProvider.
 
         Raises:
-            RuntimeError: If the manifest cannot be loaded.
+            ReferenceDataError: If the manifest cannot be loaded (a subclass of
+                RuntimeError and ValueError).
         """
         ...
 
@@ -1460,7 +1488,9 @@ class CoordinateMapper:
             without offset support
 
         Raises:
-            ValueError: If transcript not found or has no genomic coordinates
+            ReferenceDataError: If the transcript is not found.
+            ProjectionError: If it has no genomic coordinates (both subclass
+                ValueError).
         """
         ...
 
@@ -1477,8 +1507,9 @@ class CoordinateMapper:
             the distance from the nearest exon boundary.
 
         Raises:
-            ValueError: If transcript not found, position is outside transcript bounds,
-                or conversion fails
+            ReferenceDataError: If the transcript is not found.
+            ProjectionError: If the position is outside transcript bounds or
+                conversion fails (both subclass ValueError).
         """
         ...
 
@@ -1493,7 +1524,9 @@ class CoordinateMapper:
             Protein position (1-based codon number)
 
         Raises:
-            ValueError: If transcript not found or position is in UTR/intronic
+            ReferenceDataError: If the transcript is not found.
+            ProjectionError: If the position is in a UTR or intron (both
+                subclass ValueError).
         """
         ...
 
@@ -1516,7 +1549,8 @@ class CoordinateMapper:
             Tuple of (transcript_position, offset)
 
         Raises:
-            ValueError: If transcript not found
+            ReferenceDataError: If the transcript is not found (a subclass of
+                ValueError).
         """
         ...
 
@@ -1540,7 +1574,8 @@ class CoordinateMapper:
             Tuple of (cds_position, offset, is_utr3)
 
         Raises:
-            ValueError: If transcript not found or has no CDS
+            ReferenceDataError: If the transcript is not found.
+            ProjectionError: If it has no CDS (both subclass ValueError).
         """
         ...
 
@@ -1672,6 +1707,9 @@ class VariantProjection:
         """True if the variant falls in a UTR."""
         ...
 
+    def __eq__(self, other: object) -> bool: ...
+    def __hash__(self) -> int: ...
+
 class VariantProjector:
     """Projects g. HGVS variants onto transcripts to produce c./p. equivalents."""
 
@@ -1734,7 +1772,8 @@ class VariantProjector:
             VariantProjection with g./c./p. representations and flags.
 
         Raises:
-            RuntimeError: If parsing or projection fails.
+            ProjectionError: If parsing or projection fails (a subclass of
+                ValueError and RuntimeError).
         """
         ...
 
@@ -1757,7 +1796,8 @@ class VariantProjector:
             Empty list when no transcripts overlap the variant.
 
         Raises:
-            RuntimeError: If parsing or normalization fails.
+            ProjectionError: If parsing or normalization fails (a subclass of
+                ValueError and RuntimeError).
         """
         ...
 
@@ -1777,7 +1817,8 @@ class VariantProjector:
             VariantProjection with g./c./p. representations and flags.
 
         Raises:
-            RuntimeError: If normalization or projection fails.
+            ProjectionError: If normalization or projection fails (a subclass of
+                ValueError and RuntimeError).
         """
         ...
 
@@ -1795,7 +1836,8 @@ class VariantProjector:
             Empty list when no transcripts overlap the variant.
 
         Raises:
-            RuntimeError: If normalization or projection fails.
+            ProjectionError: If normalization or projection fails (a subclass of
+                ValueError and RuntimeError).
         """
         ...
 
@@ -1816,7 +1858,8 @@ class VariantProjector:
             VariantProjection with g./c./p. representations and flags.
 
         Raises:
-            RuntimeError: If projection fails.
+            ProjectionError: If projection fails (a subclass of ValueError and
+                RuntimeError).
         """
         ...
 
@@ -1839,7 +1882,8 @@ class VariantProjector:
             Empty list when no transcripts overlap the variant.
 
         Raises:
-            RuntimeError: If projection fails.
+            ProjectionError: If projection fails (a subclass of ValueError and
+                RuntimeError).
         """
         ...
 
@@ -1914,8 +1958,9 @@ class VariantProjector:
             The Genome-kind HgvsVariant for the requested projection.
 
         Raises:
-            RuntimeError: If the input lacks a parent reference, carries an
-                unknown (`?`) position, or is otherwise unsupported.
+            ProjectionError: If the input lacks a parent reference, carries an
+                unknown (`?`) position, or is otherwise unsupported (a subclass
+                of ValueError and RuntimeError).
         """
         ...
 
