@@ -18,7 +18,9 @@ use crate::convert::CoordinateMapper;
 use crate::coords::{OneBasedPos, ZeroBasedPos};
 use crate::effect::{Consequence, EffectPredictor, Impact, ProteinEffect};
 use crate::equivalence::{EquivalenceChecker, EquivalenceLevel, EquivalenceResult};
-use crate::error_handling::{CorrectionWarning, ErrorConfig, ErrorMode, ErrorOverride, ErrorType};
+use crate::error_handling::{
+    ferro_to_mutalyzer, CorrectionWarning, ErrorConfig, ErrorMode, ErrorOverride, ErrorType,
+};
 use crate::hgvs::location::{AminoAcid, CdsPos, TxPos};
 use crate::hgvs::variant::HgvsVariant;
 use crate::mave::{is_mave_short_form, parse_mave_hgvs, MaveContext};
@@ -36,6 +38,74 @@ use crate::rsid::{format_rsid, parse_rsid as rust_parse_rsid, InMemoryRsIdLookup
 use crate::spdi::{hgvs_to_spdi_simple, parse_spdi as rust_parse_spdi, spdi_to_hgvs, SpdiVariant};
 use crate::vcf::{vcf_to_genomic_hgvs as rust_vcf_to_hgvs, VcfRecord};
 use crate::{parse_hgvs, NormalizeConfig, Normalizer};
+
+// ---------------------------------------------------------------------------
+// Typed exception hierarchy
+//
+// Every ferro variant-processing failure surfaces as `ferro_hgvs.FerroError` or
+// one of its subclasses (`ParseError`, `NormalizationError`, `ReferenceDataError`,
+// `ProjectionError`) instead of a bare `ValueError`/`RuntimeError`. Each
+// instance carries a structured `code` attribute (the `E####`/`W####` string,
+// or `None`) and a `mutalyzer_codes` tuple of equivalent mutalyzer diagnostic
+// codes, both lifted from the underlying `crate::error::FerroError`.
+//
+// The classes themselves are defined in `python/ferro_hgvs/__init__.py`, not
+// here: each subclass multiply-inherits the built-in exception its call sites
+// historically raised (`ParseError(FerroError, ValueError)`,
+// `NormalizationError(FerroError, RuntimeError)`, and so on), so existing
+// `except ValueError` / `except RuntimeError` callers keep working. PyO3's
+// `create_exception!` only supports a single base and cannot express that, so
+// the helpers below look the class up on the `ferro_hgvs` module and construct
+// it, passing `(message, code, mutalyzer_codes)` to its `__init__`.
+//
+// Pure argument-validation failures (empty string, out-of-range index,
+// unrecognized enum spelling) stay `ValueError` — they are programming errors,
+// not variant-processing failures, and are intentionally outside the hierarchy.
+// ---------------------------------------------------------------------------
+
+/// Build a typed ferro exception of the named class (one of `FerroError`,
+/// `ParseError`, `NormalizationError`, `ReferenceDataError`, `ProjectionError`),
+/// carrying the structured `code` and `mutalyzer_codes`, wrapped as a `PyErr`.
+///
+/// The class is resolved on the already-imported `ferro_hgvs` module and
+/// constructed via `__init__(message, code, mutalyzer_codes)`. The GIL is
+/// acquired via [`Python::attach`] rather than threaded through every boundary
+/// function: these helpers are only ever reached from a Python call that
+/// already holds the GIL, so the attach is a cheap re-entrant no-op and keeps
+/// the ~50 error sites to a single-line closure each. Building the typed class
+/// should never fail at runtime (the `ferro_hgvs` module is always importable
+/// when Python is calling in); if it somehow does, the original diagnostic is
+/// preserved as a plain `RuntimeError` rather than being replaced by an opaque
+/// `ImportError`/`AttributeError`.
+fn ferro_exception(
+    class: &str,
+    message: String,
+    code: Option<String>,
+    mutalyzer_codes: &[&str],
+) -> PyErr {
+    Python::attach(|py| {
+        let fallback = message.clone();
+        match py
+            .import("ferro_hgvs")
+            .and_then(|module| module.getattr(class))
+            .and_then(|cls| cls.call1((message, code, mutalyzer_codes)))
+        {
+            Ok(instance) => PyErr::from_value(instance),
+            Err(_) => PyRuntimeError::new_err(fallback),
+        }
+    })
+}
+
+/// Map a [`crate::error::FerroError`] to a typed Python exception of the named
+/// class, lifting the error's structured `code` and mutalyzer codes onto it.
+fn ferro_typed(class: &str, message: String, err: &crate::error::FerroError) -> PyErr {
+    ferro_exception(
+        class,
+        message,
+        err.code().map(|c| c.as_str()),
+        ferro_to_mutalyzer(err),
+    )
+}
 
 /// Validate a shuffle-direction argument at the Python boundary.
 ///
@@ -252,14 +322,26 @@ impl PyProvider {
     fn from_json(path: &Path) -> PyResult<Self> {
         MockProvider::from_json(path)
             .map(|p| PyProvider::Mock(Box::new(p)))
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to load reference: {}", e)))
+            .map_err(|e| {
+                ferro_typed(
+                    "ReferenceDataError",
+                    format!("Failed to load reference: {e}"),
+                    &e,
+                )
+            })
     }
 
     /// Load from a manifest file (delegates to MultiFastaProvider::from_manifest).
     fn from_manifest(path: &Path) -> PyResult<Self> {
         MultiFastaProvider::from_manifest(path)
             .map(|p| PyProvider::MultiFasta(Arc::new(p)))
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to load manifest: {}", e)))
+            .map_err(|e| {
+                ferro_typed(
+                    "ReferenceDataError",
+                    format!("Failed to load manifest: {e}"),
+                    &e,
+                )
+            })
     }
 
     /// Default: built-in test data.
@@ -295,7 +377,7 @@ impl PyProvider {
 fn parse(hgvs_string: &str) -> PyResult<PyHgvsVariant> {
     match parse_hgvs(hgvs_string) {
         Ok(variant) => Ok(PyHgvsVariant { inner: variant }),
-        Err(e) => Err(PyValueError::new_err(format!("Parse error: {}", e))),
+        Err(e) => Err(ferro_typed("ParseError", format!("Parse error: {e}"), &e)),
     }
 }
 
@@ -318,7 +400,7 @@ fn parse(hgvs_string: &str) -> PyResult<PyHgvsVariant> {
 #[pyo3(signature = (hgvs_string, direction="3prime"))]
 fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<String> {
     let variant = parse_hgvs(hgvs_string)
-        .map_err(|e| PyValueError::new_err(format!("Parse error: {}", e)))?;
+        .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
 
     let config = NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
     // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
@@ -335,9 +417,13 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
     )?;
     let normalizer = Normalizer::with_config(provider, config);
 
-    let normalized = normalizer
-        .normalize(&variant)
-        .map_err(|e| PyRuntimeError::new_err(format!("Normalization error: {}", e)))?;
+    let normalized = normalizer.normalize(&variant).map_err(|e| {
+        ferro_typed(
+            "NormalizationError",
+            format!("Normalization error: {e}"),
+            &e,
+        )
+    })?;
 
     Ok(normalized.to_string())
 }
@@ -382,6 +468,10 @@ impl PyHgvsVariant {
     /// Get the reference (accession) of the variant
     #[getter]
     fn reference(&self) -> PyResult<String> {
+        // Argument-shaped failure (this variant kind exposes no accession), not a
+        // variant-processing error: `get_variant_reference` returns a static `&str`
+        // with no `FerroError`/code to lift, so this stays a plain `ValueError`
+        // outside the typed hierarchy.
         get_variant_reference(&self.inner).map_err(PyValueError::new_err)
     }
 
@@ -574,9 +664,13 @@ impl PyHgvsVariant {
         )?;
         let normalizer = Normalizer::with_config(provider, config);
 
-        let normalized = normalizer
-            .normalize(&self.inner)
-            .map_err(|e| PyRuntimeError::new_err(format!("Normalization error: {}", e)))?;
+        let normalized = normalizer.normalize(&self.inner).map_err(|e| {
+            ferro_typed(
+                "NormalizationError",
+                format!("Normalization error: {e}"),
+                &e,
+            )
+        })?;
 
         Ok(PyHgvsVariant { inner: normalized })
     }
@@ -619,6 +713,9 @@ impl PyHgvsVariant {
 
     /// Convert to JSON string
     fn to_json(&self) -> PyResult<String> {
+        // Serialization infrastructure failure, not a variant-processing error:
+        // there is no `FerroError`/code to lift, so this stays a plain
+        // `RuntimeError` and is intentionally outside the typed hierarchy.
         serde_json::to_string(&self.inner)
             .map_err(|e| PyRuntimeError::new_err(format!("JSON serialization failed: {}", e)))
     }
@@ -719,6 +816,9 @@ fn emit_reduced_capability_warning(
     // exception — reset the once-per-process flag. Otherwise `swap(true, …)` above
     // would leave the flag set for a warning that never actually surfaced, and the
     // configured warning policy could be silently bypassed on a later attempt.
+    // A NUL byte in the internally-built warning text is an internal invariant
+    // violation, not a variant-processing error, so it stays a plain `RuntimeError`
+    // outside the typed hierarchy.
     let emit = || -> PyResult<()> {
         let message = std::ffi::CString::new(message)
             .map_err(|e| PyRuntimeError::new_err(format!("invalid warning message: {e}")))?;
@@ -838,9 +938,13 @@ impl PyNormalizer {
     fn normalize_variant(&self, variant: &PyHgvsVariant) -> PyResult<PyHgvsVariant> {
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
 
-        let normalized = normalizer
-            .normalize(&variant.inner)
-            .map_err(|e| PyRuntimeError::new_err(format!("Normalization error: {}", e)))?;
+        let normalized = normalizer.normalize(&variant.inner).map_err(|e| {
+            ferro_typed(
+                "NormalizationError",
+                format!("Normalization error: {e}"),
+                &e,
+            )
+        })?;
 
         Ok(PyHgvsVariant { inner: normalized })
     }
@@ -848,13 +952,17 @@ impl PyNormalizer {
     /// Parse and normalize an HGVS string
     fn normalize(&self, hgvs_string: &str) -> PyResult<String> {
         let variant = parse_hgvs(hgvs_string)
-            .map_err(|e| PyValueError::new_err(format!("Parse error: {}", e)))?;
+            .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
 
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
 
-        let normalized = normalizer
-            .normalize(&variant)
-            .map_err(|e| PyRuntimeError::new_err(format!("Normalization error: {}", e)))?;
+        let normalized = normalizer.normalize(&variant).map_err(|e| {
+            ferro_typed(
+                "NormalizationError",
+                format!("Normalization error: {e}"),
+                &e,
+            )
+        })?;
 
         Ok(normalized.to_string())
     }
@@ -874,11 +982,17 @@ impl PyNormalizer {
         hgvs_string: &str,
     ) -> PyResult<PyNormalizeResultWithWarnings> {
         let variant = parse_hgvs(hgvs_string)
-            .map_err(|e| PyValueError::new_err(format!("Parse error: {}", e)))?;
+            .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
         let result = normalizer
             .normalize_with_diagnostics(&variant)
-            .map_err(|e| PyRuntimeError::new_err(format!("Normalization error: {}", e)))?;
+            .map_err(|e| {
+                ferro_typed(
+                    "NormalizationError",
+                    format!("Normalization error: {e}"),
+                    &e,
+                )
+            })?;
         Ok(PyNormalizeResultWithWarnings {
             result: PyHgvsVariant {
                 inner: result.result,
@@ -1162,7 +1276,7 @@ impl PyVariantProjector {
         let result = py.detach(|| self.inner.project(&hgvs_string, &transcript));
         result
             .map(|inner| PyVariantProjection { inner })
-            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
     /// Parse, normalize, and project a g. HGVS string onto ALL overlapping
@@ -1190,7 +1304,7 @@ impl PyVariantProjector {
                     .map(|inner| PyVariantProjection { inner })
                     .collect()
             })
-            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
     /// Normalize and project an already-parsed g. variant onto a transcript.
@@ -1220,7 +1334,7 @@ impl PyVariantProjector {
         let result = py.detach(|| self.inner.project_variant(&inner_variant, &transcript));
         result
             .map(|inner| PyVariantProjection { inner })
-            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
     /// Normalize and project an already-parsed g. variant onto ALL
@@ -1251,7 +1365,7 @@ impl PyVariantProjector {
                     .map(|inner| PyVariantProjection { inner })
                     .collect()
             })
-            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
     /// Project an already-normalized g. variant onto a single transcript,
@@ -1283,7 +1397,7 @@ impl PyVariantProjector {
         let result = py.detach(|| self.inner.project_normalized(&inner_variant, &transcript));
         result
             .map(|inner| PyVariantProjection { inner })
-            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
     /// Project an already-normalized g. variant onto ALL overlapping
@@ -1315,7 +1429,7 @@ impl PyVariantProjector {
                     .map(|inner| PyVariantProjection { inner })
                     .collect()
             })
-            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
     /// Project a transcript-coordinate variant (c./n./r.) onto its parent
@@ -1379,7 +1493,7 @@ impl PyVariantProjector {
         });
         result
             .map(|inner| PyHgvsVariant { inner })
-            .map_err(|e| PyRuntimeError::new_err(format!("Projection error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
     /// Batched parse + normalize + project_all over a list of g. HGVS strings.
@@ -1428,7 +1542,11 @@ impl PyVariantProjector {
                     .collect()
             })
             .map_err(|(i, e)| {
-                PyRuntimeError::new_err(format!("Projection error at input[{}]: {}", i, e))
+                ferro_typed(
+                    "ProjectionError",
+                    format!("Projection error at input[{i}]: {e}"),
+                    &e,
+                )
             })
     }
 
@@ -1473,7 +1591,11 @@ impl PyVariantProjector {
                     .collect()
             })
             .map_err(|(i, e)| {
-                PyRuntimeError::new_err(format!("Projection error at input[{}]: {}", i, e))
+                ferro_typed(
+                    "ProjectionError",
+                    format!("Projection error at input[{i}]: {e}"),
+                    &e,
+                )
             })
     }
 }
@@ -1554,7 +1676,14 @@ impl PyVariantProjector {
 fn parse_spdi(spdi_string: &str) -> PyResult<PySpdiVariant> {
     match rust_parse_spdi(spdi_string) {
         Ok(spdi) => Ok(PySpdiVariant { inner: spdi }),
-        Err(e) => Err(PyValueError::new_err(format!("Parse error: {}", e))),
+        // `rust_parse_spdi` yields a `SpdiParseError`, not a `FerroError`, so there
+        // is no structured code to lift onto the exception.
+        Err(e) => Err(ferro_exception(
+            "ParseError",
+            format!("Parse error: {e}"),
+            None,
+            &[],
+        )),
     }
 }
 
@@ -1572,7 +1701,13 @@ fn parse_spdi(spdi_string: &str) -> PyResult<PySpdiVariant> {
 fn hgvs_to_spdi(variant: &PyHgvsVariant) -> PyResult<PySpdiVariant> {
     match hgvs_to_spdi_simple(&variant.inner) {
         Ok(spdi) => Ok(PySpdiVariant { inner: spdi }),
-        Err(e) => Err(PyValueError::new_err(format!("Conversion error: {}", e))),
+        // `hgvs_to_spdi_simple` yields a `ConversionError`, not a `FerroError`.
+        Err(e) => Err(ferro_exception(
+            "ProjectionError",
+            format!("Conversion error: {e}"),
+            None,
+            &[],
+        )),
     }
 }
 
@@ -1590,7 +1725,13 @@ fn hgvs_to_spdi(variant: &PyHgvsVariant) -> PyResult<PySpdiVariant> {
 fn spdi_to_hgvs_variant(spdi: &PySpdiVariant) -> PyResult<PyHgvsVariant> {
     match spdi_to_hgvs(&spdi.inner) {
         Ok(variant) => Ok(PyHgvsVariant { inner: variant }),
-        Err(e) => Err(PyValueError::new_err(format!("Conversion error: {}", e))),
+        // `spdi_to_hgvs` yields a `ConversionError`, not a `FerroError`.
+        Err(e) => Err(ferro_exception(
+            "ProjectionError",
+            format!("Conversion error: {e}"),
+            None,
+            &[],
+        )),
     }
 }
 
@@ -2063,7 +2204,13 @@ impl PyEquivalenceChecker {
         self.checker
             .check(&v1.inner, &v2.inner)
             .map(|r| r.into())
-            .map_err(|e| PyRuntimeError::new_err(format!("Equivalence check failed: {}", e)))
+            .map_err(|e| {
+                ferro_typed(
+                    "EquivalenceError",
+                    format!("Equivalence check failed: {e}"),
+                    &e,
+                )
+            })
     }
 
     /// Check if multiple variants are all equivalent to each other
@@ -2075,9 +2222,13 @@ impl PyEquivalenceChecker {
     ///     True if all variants are equivalent
     fn all_equivalent(&self, variants: Vec<PyRef<PyHgvsVariant>>) -> PyResult<bool> {
         let rust_variants: Vec<HgvsVariant> = variants.iter().map(|v| v.inner.clone()).collect();
-        self.checker
-            .all_equivalent(&rust_variants)
-            .map_err(|e| PyRuntimeError::new_err(format!("Equivalence check failed: {}", e)))
+        self.checker.all_equivalent(&rust_variants).map_err(|e| {
+            ferro_typed(
+                "EquivalenceError",
+                format!("Equivalence check failed: {e}"),
+                &e,
+            )
+        })
     }
 }
 
@@ -2521,7 +2672,14 @@ impl PyMaveContext {
 fn parse_mave_hgvs_variant(hgvs_string: &str, context: &PyMaveContext) -> PyResult<PyHgvsVariant> {
     match parse_mave_hgvs(hgvs_string, &context.inner) {
         Ok(variant) => Ok(PyHgvsVariant { inner: variant }),
-        Err(e) => Err(PyValueError::new_err(format!("Parse error: {}", e))),
+        // `parse_mave_hgvs` yields a `MaveParseError`, not a `FerroError`, so there
+        // is no structured code to lift onto the exception.
+        Err(e) => Err(ferro_exception(
+            "ParseError",
+            format!("Parse error: {e}"),
+            None,
+            &[],
+        )),
     }
 }
 
@@ -3216,14 +3374,16 @@ fn parse_lenient(
     let preprocess_result = preprocessor.preprocess(hgvs_string);
 
     if !preprocess_result.success {
-        return Err(PyValueError::new_err(format!(
-            "Preprocessing failed: {:?}",
-            preprocess_result.warnings
-        )));
+        return Err(ferro_exception(
+            "ParseError",
+            format!("Preprocessing failed: {:?}", preprocess_result.warnings),
+            None,
+            &[],
+        ));
     }
 
     let variant = parse_hgvs(&preprocess_result.preprocessed)
-        .map_err(|e| PyValueError::new_err(format!("Parse error: {}", e)))?;
+        .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
 
     Ok(PyParseResultWithWarnings {
         variant: PyHgvsVariant { inner: variant },
@@ -3405,7 +3565,7 @@ impl PyBacktranslator {
 ///     ValueError: If the rsID cannot be parsed
 #[pyfunction]
 fn parse_rsid_value(rsid: &str) -> PyResult<u64> {
-    rust_parse_rsid(rsid).map_err(|e| PyValueError::new_err(format!("Invalid rsID: {}", e)))
+    rust_parse_rsid(rsid).map_err(|e| ferro_typed("ParseError", format!("Invalid rsID: {e}"), &e))
 }
 
 /// Format numeric rsID to string with "rs" prefix
@@ -3537,7 +3697,7 @@ impl PyInMemoryRsIdLookup {
                     .map(|r| PyRsIdResult { inner: r })
                     .collect()
             })
-            .map_err(|e| PyValueError::new_err(format!("Lookup failed: {}", e)))
+            .map_err(|e| ferro_typed("ReferenceDataError", format!("Lookup failed: {e}"), &e))
     }
 
     /// Check if rsID exists
@@ -3672,7 +3832,7 @@ fn vcf_to_genomic_hgvs(record: &PyVcfRecord, alt_index: usize) -> PyResult<PyHgv
         .map(|v| PyHgvsVariant {
             inner: HgvsVariant::Genome(v),
         })
-        .map_err(|e| PyValueError::new_err(format!("Conversion error: {}", e)))
+        .map_err(|e| ferro_typed("ProjectionError", format!("Conversion error: {e}"), &e))
 }
 
 // ============================================================================
@@ -3861,7 +4021,7 @@ impl PyReferenceManifest {
 fn prepare_reference_data(config: &PyPrepareConfig) -> PyResult<PyReferenceManifest> {
     prepare_references(&config.inner)
         .map(|m| PyReferenceManifest { inner: m })
-        .map_err(|e| PyRuntimeError::new_err(format!("Prepare failed: {}", e)))
+        .map_err(|e| ferro_typed("ReferenceDataError", format!("Prepare failed: {e}"), &e))
 }
 
 /// Check existing reference data
@@ -3878,7 +4038,7 @@ fn prepare_reference_data(config: &PyPrepareConfig) -> PyResult<PyReferenceManif
 fn check_reference_data(directory: &str) -> PyResult<PyReferenceManifest> {
     check_references(Path::new(directory))
         .map(|m| PyReferenceManifest { inner: m })
-        .map_err(|e| PyRuntimeError::new_err(format!("Check failed: {}", e)))
+        .map_err(|e| ferro_typed("ReferenceDataError", format!("Check failed: {e}"), &e))
 }
 
 // ============================================================================
@@ -4050,7 +4210,11 @@ impl PyCoordinateMapper {
         offset: Option<i64>,
     ) -> PyResult<Option<(String, u64)>> {
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
-            PyValueError::new_err(format!("Transcript not found: {}: {}", transcript_id, e))
+            ferro_typed(
+                "ReferenceDataError",
+                format!("Transcript not found: {transcript_id}: {e}"),
+                &e,
+            )
         })?;
 
         let mapper = CoordinateMapper::new(&transcript);
@@ -4071,11 +4235,22 @@ impl PyCoordinateMapper {
                 Ok(genomic_pos) => {
                     let chrom = mapper
                         .chromosome()
-                        .ok_or_else(|| PyValueError::new_err("Transcript has no chromosome"))?
+                        .ok_or_else(|| {
+                            ferro_exception(
+                                "ProjectionError",
+                                "Transcript has no chromosome".to_string(),
+                                None,
+                                &[],
+                            )
+                        })?
                         .to_string();
                     Ok(Some((chrom, genomic_pos)))
                 }
-                Err(e) => Err(PyValueError::new_err(format!("Conversion error: {}", e))),
+                Err(e) => Err(ferro_typed(
+                    "ProjectionError",
+                    format!("Conversion error: {e}"),
+                    &e,
+                )),
             }
         } else {
             // Use standard conversion
@@ -4083,12 +4258,23 @@ impl PyCoordinateMapper {
                 Ok(Some(genomic_pos)) => {
                     let chrom = mapper
                         .chromosome()
-                        .ok_or_else(|| PyValueError::new_err("Transcript has no chromosome"))?
+                        .ok_or_else(|| {
+                            ferro_exception(
+                                "ProjectionError",
+                                "Transcript has no chromosome".to_string(),
+                                None,
+                                &[],
+                            )
+                        })?
                         .to_string();
                     Ok(Some((chrom, genomic_pos)))
                 }
                 Ok(None) => Ok(None),
-                Err(e) => Err(PyValueError::new_err(format!("Conversion error: {}", e))),
+                Err(e) => Err(ferro_typed(
+                    "ProjectionError",
+                    format!("Conversion error: {e}"),
+                    &e,
+                )),
             }
         }
     }
@@ -4113,7 +4299,11 @@ impl PyCoordinateMapper {
         genomic_position: u64,
     ) -> PyResult<(i64, Option<i64>, bool)> {
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
-            PyValueError::new_err(format!("Transcript not found: {}: {}", transcript_id, e))
+            ferro_typed(
+                "ReferenceDataError",
+                format!("Transcript not found: {transcript_id}: {e}"),
+                &e,
+            )
         })?;
 
         let mapper = CoordinateMapper::new(&transcript);
@@ -4126,13 +4316,21 @@ impl PyCoordinateMapper {
                     .genomic_to_cds_intronic(genomic_position)
                     .map(|cds_pos| (cds_pos.base, cds_pos.offset, cds_pos.utr3))
                     .map_err(|e| {
-                        PyValueError::new_err(format!(
-                        "Position {} is outside transcript bounds or in an unsupported region: {}",
-                        genomic_position, e
-                    ))
+                        ferro_typed(
+                            "ProjectionError",
+                            format!(
+                                "Position {genomic_position} is outside transcript bounds or in \
+                                 an unsupported region: {e}"
+                            ),
+                            &e,
+                        )
                     })
             }
-            Err(e) => Err(PyValueError::new_err(format!("Conversion error: {}", e))),
+            Err(e) => Err(ferro_typed(
+                "ProjectionError",
+                format!("Conversion error: {e}"),
+                &e,
+            )),
         }
     }
 
@@ -4149,7 +4347,11 @@ impl PyCoordinateMapper {
     ///     ValueError: If transcript not found or position is in UTR/intronic
     fn c_to_p(&self, transcript_id: &str, cds_position: i64) -> PyResult<u64> {
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
-            PyValueError::new_err(format!("Transcript not found: {}: {}", transcript_id, e))
+            ferro_typed(
+                "ReferenceDataError",
+                format!("Transcript not found: {transcript_id}: {e}"),
+                &e,
+            )
         })?;
 
         let mapper = CoordinateMapper::new(&transcript);
@@ -4159,7 +4361,7 @@ impl PyCoordinateMapper {
         mapper
             .cds_to_protein(&cds_pos)
             .map(|prot_pos| prot_pos.number)
-            .map_err(|e| PyValueError::new_err(format!("Conversion error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Conversion error: {e}"), &e))
     }
 
     /// Convert a CDS position to transcript position
@@ -4184,7 +4386,11 @@ impl PyCoordinateMapper {
         utr3: bool,
     ) -> PyResult<(i64, Option<i64>)> {
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
-            PyValueError::new_err(format!("Transcript not found: {}: {}", transcript_id, e))
+            ferro_typed(
+                "ReferenceDataError",
+                format!("Transcript not found: {transcript_id}: {e}"),
+                &e,
+            )
         })?;
 
         let mapper = CoordinateMapper::new(&transcript);
@@ -4199,7 +4405,7 @@ impl PyCoordinateMapper {
         mapper
             .cds_to_tx(&cds_pos)
             .map(|tx_pos| (tx_pos.base, tx_pos.offset))
-            .map_err(|e| PyValueError::new_err(format!("Conversion error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Conversion error: {e}"), &e))
     }
 
     /// Convert a transcript position to CDS position
@@ -4225,7 +4431,11 @@ impl PyCoordinateMapper {
         downstream: bool,
     ) -> PyResult<(i64, Option<i64>, bool)> {
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
-            PyValueError::new_err(format!("Transcript not found: {}: {}", transcript_id, e))
+            ferro_typed(
+                "ReferenceDataError",
+                format!("Transcript not found: {transcript_id}: {e}"),
+                &e,
+            )
         })?;
 
         let mapper = CoordinateMapper::new(&transcript);
@@ -4239,7 +4449,7 @@ impl PyCoordinateMapper {
         mapper
             .tx_to_cds(&tx_pos)
             .map(|cds_pos| (cds_pos.base, cds_pos.offset, cds_pos.utr3))
-            .map_err(|e| PyValueError::new_err(format!("Conversion error: {}", e)))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Conversion error: {e}"), &e))
     }
 
     /// Get the strand of a transcript
@@ -4251,7 +4461,11 @@ impl PyCoordinateMapper {
     ///     Strand (Plus or Minus)
     fn get_strand(&self, transcript_id: &str) -> PyResult<PyStrand> {
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
-            PyValueError::new_err(format!("Transcript not found: {}: {}", transcript_id, e))
+            ferro_typed(
+                "ReferenceDataError",
+                format!("Transcript not found: {transcript_id}: {e}"),
+                &e,
+            )
         })?;
 
         Ok(transcript.strand.into())
@@ -4266,7 +4480,11 @@ impl PyCoordinateMapper {
     ///     Chromosome name or None if not set
     fn get_chromosome(&self, transcript_id: &str) -> PyResult<Option<String>> {
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
-            PyValueError::new_err(format!("Transcript not found: {}: {}", transcript_id, e))
+            ferro_typed(
+                "ReferenceDataError",
+                format!("Transcript not found: {transcript_id}: {e}"),
+                &e,
+            )
         })?;
 
         Ok(transcript.chromosome.clone())
@@ -4396,6 +4614,11 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Variant projection classes
     m.add_class::<PyVariantProjector>()?;
     m.add_class::<PyVariantProjection>()?;
+
+    // The typed exception hierarchy (FerroError + ParseError / NormalizationError
+    // / ReferenceDataError / ProjectionError) is defined in
+    // `python/ferro_hgvs/__init__.py`; the Rust raise helpers look those classes
+    // up on the module at raise time. Nothing to register here.
 
     // Add version
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
