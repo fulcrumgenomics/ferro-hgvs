@@ -21,7 +21,7 @@ pub mod validate;
 pub use annotation::{load_annotations, AnnotationFormat, LoaderConfig, LoaderReport};
 pub use fasta::FastaProvider;
 pub use loader::{detect_genome_build, TranscriptDb};
-pub use mock::MockProvider;
+pub use mock::{JsonProvider, MockProvider};
 pub use multi_fasta::MultiFastaProvider;
 pub use protein::ProteinCache;
 pub use provider::{GenomicPlacement, ReferenceProvider};
