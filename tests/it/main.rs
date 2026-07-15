@@ -47,6 +47,7 @@ mod comprehensive_edge_case_tests;
 mod comprehensive_external_tests;
 mod con_conversion_audit;
 mod conformance_summary_generated;
+mod convert_gff_library_parity;
 mod convert_tests;
 mod coordinate_boundary_tests;
 mod coverage_gap_tests;

@@ -20,6 +20,7 @@
 //! for the full design.
 
 pub(crate) mod builder;
+pub mod convert;
 pub mod diagnostics;
 pub(crate) mod feature;
 pub mod format_detect;
@@ -27,6 +28,7 @@ pub(crate) mod graph;
 pub(crate) mod record;
 pub(crate) mod validate;
 
+pub use convert::{convert_gff, ConvertGffConfig, ConvertGffOutcome};
 pub use diagnostics::{
     DiagnosticPayload, LoaderDiagnostic, LoaderReport, Severity, SourceLocation,
 };
