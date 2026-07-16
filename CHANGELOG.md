@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.8.0...v0.8.1) - 2026-07-16
+
+### Added
+
+- *(python)* expose convert_gff and build_transcript, mirroring prepare_reference_data ([#1037](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1037))
+
+### Fixed
+
+- *(normalize)* only type a maximal contiguous run as inv, not a sub-run ([#1036](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1036))
+
 ## [0.8.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.7.1...v0.8.0) - 2026-07-15
 
 ### Added
