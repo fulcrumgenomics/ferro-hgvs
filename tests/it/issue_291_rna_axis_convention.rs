@@ -158,15 +158,19 @@ fn rna_first_coding_base_maps_to_cds_start() {
 /// Pins that `fetch_ref_for_canonical_split` reads the r. ref window
 /// CDS-relative (through `cds_start`, exactly like the `c.` arm — #469).
 /// The 3-base `delins` below targets `r.10_12` = tx 109..=111 = the `GGG`
-/// at the start of the CDS-interior G-run; alt `ccu` (→ `CCT`) decomposes
-/// via the revcomp scan into `[Inv; Sub g>u]`, rendering as a cis-allele.
+/// at the start of the CDS-interior G-run; alt `ccc` (→ `CCC`) is the reverse
+/// complement of the WHOLE run (`revcomp(GGG)=CCC`), so it canonicalizes to
+/// `inv`. This still proves the fetch reads `GGG`: a wrong (non-CDS-relative)
+/// window would not be a revcomp of `ccc` and would stay a delins. A revcomp
+/// *sub-run* of a longer contiguous change would not split (issue #1034), so
+/// a full-run inversion is used here.
 #[test]
 fn rna_canonical_split_fetch_is_cds_relative() {
-    let out = normalize_to_string("NM_TESTCDS100.1:r.10_12delinsccu");
+    let out = normalize_to_string("NM_TESTCDS100.1:r.10_12delinsccc");
     assert_eq!(
-        out, "NM_TESTCDS100.1:r.[10_11inv;12g>u]",
+        out, "NM_TESTCDS100.1:r.10_12inv",
         "fetch_ref_for_canonical_split must slice tx 109..=111 (= GGG) for \
-         r.10_12 via cds_start, mirroring the c. arm"
+         r.10_12 via cds_start, mirroring the c. arm; revcomp(GGG)=CCC → inv"
     );
 }
 

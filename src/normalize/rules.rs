@@ -921,18 +921,21 @@ pub enum DelinsSubedit {
     },
 }
 
-/// Decompose a delins into a sequence of canonical sub-edits when the
-/// span has at least one inv-eligible sub-span or contains at least one
-/// position whose alt byte equals the ref byte (an interior identity).
-/// Returns `Some(edits)` only when the resulting decomposition has more
-/// than one element AND at least one element is an `Inversion` or an
+/// Decompose a delins into a sequence of canonical sub-edits when a maximal
+/// contiguous mismatch run is *entirely* an inversion, or the span contains
+/// at least one position whose alt byte equals the ref byte (an interior
+/// identity). Returns `Some(edits)` only when the resulting decomposition has
+/// more than one element AND at least one element is an `Inversion` or an
 /// `IdentityAt`.
 ///
 /// Implements:
-/// - Issue #160 (item A2 + A10 inv-branch of tracking issue #81):
-///   reverse-complement sub-spans within a delins are emitted as
-///   `Inversion` per the HGVS edit-priority rule (`general.md:56`:
-///   `inv > delins`).
+/// - Issue #160 (item A2 + A10 inv-branch of tracking issue #81), as
+///   corrected by issue #1034: an `Inversion` is emitted only when a whole
+///   maximal contiguous mismatch run is a reverse complement, per the HGVS
+///   edit-priority rule (`general.md:56`: `inv > delins`) applied to the
+///   *maximal contiguous run* (`DNA/inversion.md`). A reverse-complement
+///   sub-run of a longer contiguous change is NOT carved out — that change
+///   stays a single `delins`.
 /// - Issue #165 (item A10 sub-only branch of #81): an interior position
 ///   matching the reference (an `IdentityAt`) is the spec's signal that
 ///   the surrounding mismatches are independent variants under
@@ -960,14 +963,28 @@ pub enum DelinsSubedit {
 /// - Out-of-bounds or empty ranges (`start >= end` or
 ///   `end > ref_seq.len()`).
 ///
-/// Algorithm (left-to-right longest-greedy scan over `start..end`):
-/// - At each position `i`, find the largest `j ∈ (i+2 ..= N)` with
-///   `alt[i..j] == revcomp(ref[i..j])`. If found: emit `Inversion(i, j)`,
-///   advance `i = j`.
-/// - Else if `alt[i] != ref[i]`: emit `Substitution(i)`, advance `i += 1`.
-/// - Else (`alt[i] == ref[i]`): emit `IdentityAt(i, ref[i])`, advance
-///   `i += 1`. The byte is recorded so a downstream codon-frame
-///   preservation pass can reconstruct a 3-base delins's alt sequence.
+/// Algorithm (left-to-right scan over maximal contiguous mismatch runs):
+/// - At an identity position (`alt[i] == ref[i]`): emit `IdentityAt(i,
+///   ref[i])`, advance `i += 1`. The byte is recorded so a downstream
+///   codon-frame preservation pass can reconstruct a 3-base delins's alt
+///   sequence. An identity also bounds the maximal contiguous run — variants
+///   separated by ≥1 unchanged nt are independent (`general.md:34`).
+/// - Otherwise collect the maximal contiguous run `[rs, re)` of positions
+///   where `alt != ref`, then:
+///   - If the **whole** run is an inversion (`re - rs >= 2` and
+///     `alt[rs..re] == revcomp(ref[rs..re])`): emit `Inversion(rs, re)`.
+///   - Else: emit a `Substitution` for each position in the run.
+///
+/// A reverse-complement **sub-run** is never carved out of a longer
+/// contiguous change: only a run that is *entirely* a reverse complement is
+/// typed as `inv`, per `DNA/inversion.md` and the issue #1034 fix. The
+/// surrounding `Substitution`s re-merge into a single `delins` under the
+/// caller's adjacency rule (`substitution.md` / issue #182).
+///
+/// `shorten_inversion`'s complementary-outer-pair peeling is not applied
+/// here: within a pure mismatch run a peelable outer pair would imply
+/// `alt == ref` at the boundary (an identity, not a mismatch), so the run
+/// bounds are already minimal for a full-run inversion.
 pub fn decompose_delins(
     ref_seq: &[u8],
     start: usize,
@@ -992,51 +1009,15 @@ pub fn decompose_delins(
     let mut has_identity = false;
     let mut i = 0;
     while i < n {
-        // Longest j in (i+2 ..= n) with alt[i..j] == revcomp(ref[i..j]) AND
-        // whose ref window does not collapse to identity under
-        // shorten_inversion (which peels complementary outer pairs). A
-        // candidate that fully collapses (e.g. palindromic ATAT) is skipped
-        // so the unchanged bases fall through to the IdentityAt branch
-        // instead of being emitted as a no-op inv. Track both the raw end
-        // (for advancing `i` past the consumed window — outer-pair bases that
-        // shorten away are unchanged so they need no emit) and the shortened
-        // [s..e) absolute span (for emission).
-        let mut longest: Option<(usize, usize, usize)> = None;
-        let mut j = i + 2;
-        while j <= n {
-            if is_revcomp(&deleted[i..j], &inserted_seq[i..j]) {
-                if let Some((s, e)) = shorten_inversion(ref_seq, start + i, start + j) {
-                    longest = Some((j, s, e));
-                }
-            }
-            j += 1;
-        }
-
-        if let Some((j, s, e)) = longest {
-            emitted.push(DelinsSubedit::Inversion { start: s, end: e });
-            has_inv = true;
-            i = j;
-        } else if deleted[i] != inserted_seq[i] {
-            // Substitution at this position. Bases must be IUPAC; non-IUPAC
-            // bytes cannot be expressed as `Base`, so abandon the whole
-            // decomposition (the caller will keep the delins as-is). Mirrors
-            // the `canonicalize_delins` 1-base substitution branch.
-            let r = Base::from_char(deleted[i] as char)?;
-            let a = Base::from_char(inserted_seq[i] as char)?;
-            emitted.push(DelinsSubedit::Substitution {
-                position: start + i,
-                reference: r,
-                alternative: a,
-            });
-            i += 1;
-        } else {
-            // Record the unchanged ref byte so the caller can rebuild a
-            // codon-frame triplet's alt sequence (issue #165). Abandon
-            // the whole decomposition on non-IUPAC bytes, mirroring the
-            // substitution branch above: an identity position with a
-            // non-IUPAC byte cannot be re-rendered as a 3-base delins
-            // alt without silently coercing the unknown byte to `N`,
-            // which would diverge from the next round-trip's input.
+        if deleted[i] == inserted_seq[i] {
+            // Identity position: record the unchanged ref byte so the caller
+            // can rebuild a codon-frame triplet's alt sequence (issue #165),
+            // and let it bound the maximal contiguous run. Abandon the whole
+            // decomposition on a non-IUPAC byte, mirroring the substitution
+            // branch below: an identity at a non-IUPAC byte cannot be
+            // re-rendered as a 3-base delins alt without silently coercing the
+            // unknown byte to `N`, which would diverge from the next
+            // round-trip's input.
             let b = Base::from_char(deleted[i] as char)?;
             emitted.push(DelinsSubedit::IdentityAt {
                 position: start + i,
@@ -1044,7 +1025,48 @@ pub fn decompose_delins(
             });
             has_identity = true;
             i += 1;
+            continue;
         }
+
+        // Maximal contiguous run of mismatches `[run_start, run_end)`.
+        let run_start = i;
+        let mut run_end = i + 1;
+        while run_end < n && deleted[run_end] != inserted_seq[run_end] {
+            run_end += 1;
+        }
+
+        // Only type the run as `inv` when the ENTIRE run is a reverse
+        // complement (issue #1034). A reverse-complement sub-run is never
+        // carved out of a longer contiguous change — the surrounding
+        // substitutions re-merge into a single `delins` under the caller's
+        // adjacency rule.
+        if run_end - run_start >= 2
+            && is_revcomp(
+                &deleted[run_start..run_end],
+                &inserted_seq[run_start..run_end],
+            )
+        {
+            emitted.push(DelinsSubedit::Inversion {
+                start: start + run_start,
+                end: start + run_end,
+            });
+            has_inv = true;
+        } else {
+            // Emit a per-position substitution for each mismatch. Bases must
+            // be IUPAC; a non-IUPAC byte cannot be expressed as `Base`, so
+            // abandon the whole decomposition (the caller keeps the delins
+            // as-is). Mirrors the `canonicalize_delins` substitution branch.
+            for k in run_start..run_end {
+                let r = Base::from_char(deleted[k] as char)?;
+                let a = Base::from_char(inserted_seq[k] as char)?;
+                emitted.push(DelinsSubedit::Substitution {
+                    position: start + k,
+                    reference: r,
+                    alternative: a,
+                });
+            }
+        }
+        i = run_end;
     }
 
     // Trigger: commit only if the decomposition has > 1 element AND it
@@ -4147,19 +4169,24 @@ mod tests {
     }
 
     #[test]
-    fn decompose_inv_subspan_at_start() {
-        // ref=TCC, alt=GAG: positions 0-1 are inv (revcomp(TC)=GA), position
-        // 2 is sub C>G. Mirrors the issue #160 row-2 example.
+    fn decompose_leading_revcomp_subrun_stays_delins() {
+        // ref=TCC, alt=GAG: the 2-nt prefix TC->GA satisfies revcomp(TC)=GA,
+        // but the whole run TCC->GAG is a single contiguous change and
+        // revcomp(TCC)=GGA != GAG, so it is NOT an inversion. A reverse-
+        // complement sub-run may not be carved out (issue #1034): emit three
+        // substitutions, which the caller re-merges into one delins → None.
+        // This is the exact issue #160 row-2 example, now spec-corrected.
         let result = decompose_delins(b"TCC", 0, 3, b"GAG");
-        assert_eq!(result, Some(vec![inv_at(0, 2), sub_at(2, 'C', 'G')]));
+        assert_eq!(result, None);
     }
 
     #[test]
-    fn decompose_inv_subspan_at_end() {
-        // ref=AAG, alt=GCT: position 0 is sub A>G, positions 1-2 are inv
-        // (revcomp(AG)=CT).
+    fn decompose_trailing_revcomp_subrun_stays_delins() {
+        // ref=AAG, alt=GCT: the 2-nt suffix AG->CT satisfies revcomp(AG)=CT,
+        // but the whole contiguous run revcomp(AAG)=CTT != GCT is not an
+        // inversion. No sub-run carve-out (issue #1034) → None.
         let result = decompose_delins(b"AAG", 0, 3, b"GCT");
-        assert_eq!(result, Some(vec![sub_at(0, 'A', 'G'), inv_at(1, 3)]));
+        assert_eq!(result, None);
     }
 
     #[test]
@@ -4179,16 +4206,15 @@ mod tests {
     }
 
     #[test]
-    fn decompose_disjoint_inv_runs() {
-        // ref=AGACC, alt=CTTGG:
-        //   inv(0,2): revcomp(AG)=CT ✓
-        //   sub(2): A>T (no inv possible spanning here)
-        //   inv(3,5): revcomp(CC)=GG ✓
+    fn decompose_contiguous_run_with_multiple_revcomp_subruns_stays_delins() {
+        // ref=AGACC, alt=CTTGG: the sub-runs AG->CT (revcomp(AG)=CT) and
+        // CC->GG (revcomp(CC)=GG) each look like inversions in isolation, but
+        // they belong to ONE contiguous mismatch run (all five positions
+        // differ). revcomp(AGACC)=GGTCT != CTTGG, so the whole run is not an
+        // inversion and no sub-run may be carved out (issue #1034). Emits
+        // five substitutions → None.
         let result = decompose_delins(b"AGACC", 0, 5, b"CTTGG");
-        assert_eq!(
-            result,
-            Some(vec![inv_at(0, 2), sub_at(2, 'A', 'T'), inv_at(3, 5)])
-        );
+        assert_eq!(result, None);
     }
 
     #[test]
@@ -4235,14 +4261,22 @@ mod tests {
 
     #[test]
     fn decompose_offset_start_propagates_position() {
-        // Same TCC -> GAG pattern but at offset 100. Positions in the result
-        // are 0-indexed offsets into the input ref_seq slice.
+        // A full-run inv (AG->CT) separated by an identity from a trailing
+        // non-inv run (CC->GT), placed at offset 100. Positions in the result
+        // are 0-indexed offsets into the input ref_seq slice, so the inv and
+        // substitution positions must all carry the +100 offset.
         let mut seq = vec![b'A'; 200];
-        seq[100] = b'T';
-        seq[101] = b'C';
-        seq[102] = b'C';
-        let result = decompose_delins(&seq, 100, 103, b"GAG");
-        assert_eq!(result, Some(vec![inv_at(100, 102), sub_at(102, 'C', 'G')]));
+        seq[100..105].copy_from_slice(b"AGACC");
+        let result = decompose_delins(&seq, 100, 105, b"CTAGT");
+        assert_eq!(
+            result,
+            Some(vec![
+                inv_at(100, 102),
+                ident_at(102, 'A'),
+                sub_at(103, 'C', 'G'),
+                sub_at(104, 'C', 'T'),
+            ])
+        );
     }
 
     #[test]
@@ -4280,12 +4314,29 @@ mod tests {
     }
 
     #[test]
-    fn decompose_inv_subspan_shortened_outer_pair() {
-        // CTATGC -> CATAGG: revcomp(CTATG)=CATAG matches over [0..5], but
-        // outer C/G complement and shorten_inversion peels them off, leaving
-        // inv at [1..4] (TAT). The trailing C>G stays as a substitution.
+    fn decompose_inv_run_bounded_by_identities() {
+        // CTATGC -> CATAGG:
+        //   pos 0 C==C : identity (bounds the run on the left)
+        //   pos 1-3 TAT -> ATA : revcomp(TAT)=ATA ✓ full-run inv
+        //   pos 4 G==G : identity (bounds the run on the right)
+        //   pos 5 C -> G : substitution
+        // The inv run [1..4) is maximal — it is bounded by identities on both
+        // sides, so no complementary-outer-pair shortening is needed (a
+        // peelable outer pair would imply an identity, which is already a run
+        // boundary here). Regression note: the old greedy scan folded the
+        // flanking identities into a [0..5) revcomp window and shortened it
+        // back to [1..4); the run-based scan reaches [1..4) directly and
+        // reports the flanking identities explicitly.
         let result = decompose_delins(b"CTATGC", 0, 6, b"CATAGG");
-        assert_eq!(result, Some(vec![inv_at(1, 4), sub_at(5, 'C', 'G')]));
+        assert_eq!(
+            result,
+            Some(vec![
+                ident_at(0, 'C'),
+                inv_at(1, 4),
+                ident_at(4, 'G'),
+                sub_at(5, 'C', 'G'),
+            ])
+        );
     }
 
     #[test]
