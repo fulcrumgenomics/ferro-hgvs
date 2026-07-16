@@ -19,7 +19,9 @@
 //! See `docs/superpowers/specs/2026-05-13-gff-gtf-loader-rewrite-design.md`
 //! for the full design.
 
+pub(crate) mod build_transcript;
 pub(crate) mod builder;
+pub mod convert;
 pub mod diagnostics;
 pub(crate) mod feature;
 pub mod format_detect;
@@ -27,6 +29,8 @@ pub(crate) mod graph;
 pub(crate) mod record;
 pub(crate) mod validate;
 
+pub use build_transcript::{build_transcript, BuildTranscriptConfig, BuildTranscriptOutcome};
+pub use convert::{convert_gff, ConvertGffConfig, ConvertGffOutcome};
 pub use diagnostics::{
     DiagnosticPayload, LoaderDiagnostic, LoaderReport, Severity, SourceLocation,
 };
