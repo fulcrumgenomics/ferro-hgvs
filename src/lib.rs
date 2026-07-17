@@ -72,6 +72,7 @@ pub mod vcf;
 
 // Re-export commonly used types
 pub use error::FerroError;
+pub use hgvs::location::{AaCode, ProteinRenderStyle, TerStyle};
 pub use hgvs::parser::{parse_hgvs, parse_hgvs_fast};
 pub use hgvs::variant::HgvsVariant;
 pub use normalize::{NormalizeConfig, Normalizer, ShuffleDirection};

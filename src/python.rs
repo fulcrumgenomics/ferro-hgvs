@@ -111,10 +111,14 @@ fn ferro_typed(class: &str, message: String, err: &crate::error::FerroError) -> 
 /// `PyVariantProjection` newtypes. Shared by both batch entry points.
 fn wrap_projections(
     projections: Vec<crate::project::VariantProjection>,
+    render_style: crate::hgvs::location::ProteinRenderStyle,
 ) -> Vec<PyVariantProjection> {
     projections
         .into_iter()
-        .map(|inner| PyVariantProjection { inner })
+        .map(|inner| PyVariantProjection {
+            inner,
+            render_style,
+        })
         .collect()
 }
 
@@ -169,6 +173,39 @@ fn parse_direction_or_raise(direction: &str) -> PyResult<ShuffleDirection> {
             "unrecognized direction {direction:?}; expected one of \"3prime\", \"5prime\", \
              \"3\", \"5\", \"3'\", \"5'\" (case-insensitive)"
         ))
+    })
+}
+
+/// Validate the `protein_stop` argument at the Python boundary → `TerStyle`.
+fn parse_protein_stop_or_raise(value: &str) -> PyResult<crate::hgvs::location::TerStyle> {
+    match value {
+        "ter" => Ok(crate::hgvs::location::TerStyle::Ter),
+        "star" => Ok(crate::hgvs::location::TerStyle::Star),
+        other => Err(PyValueError::new_err(format!(
+            "unrecognized protein_stop {other:?}; expected \"ter\" or \"star\""
+        ))),
+    }
+}
+
+/// Validate the `amino_acid_code` argument at the Python boundary → `AaCode`.
+fn parse_amino_acid_code_or_raise(value: &str) -> PyResult<crate::hgvs::location::AaCode> {
+    match value {
+        "three" => Ok(crate::hgvs::location::AaCode::Three),
+        "one" => Ok(crate::hgvs::location::AaCode::One),
+        other => Err(PyValueError::new_err(format!(
+            "unrecognized amino_acid_code {other:?}; expected \"three\" or \"one\""
+        ))),
+    }
+}
+
+/// Build a `ProteinRenderStyle` from the two Python string args, validating both.
+fn parse_render_style_or_raise(
+    protein_stop: &str,
+    amino_acid_code: &str,
+) -> PyResult<crate::hgvs::location::ProteinRenderStyle> {
+    Ok(crate::hgvs::location::ProteinRenderStyle {
+        stop: parse_protein_stop_or_raise(protein_stop)?,
+        aa_code: parse_amino_acid_code_or_raise(amino_acid_code)?,
     })
 }
 
@@ -1146,6 +1183,9 @@ impl PyNormalizeResultWithWarnings {
 #[pyclass(name = "VariantProjection")]
 pub struct PyVariantProjection {
     inner: crate::project::VariantProjection,
+    /// Render style copied from the producing projector (#1050); used by
+    /// `p_name` and as the fallback for `p_name_styled`.
+    render_style: crate::hgvs::location::ProteinRenderStyle,
 }
 
 #[pymethods]
@@ -1173,11 +1213,41 @@ impl PyVariantProjection {
         self.inner.noncoding.as_ref().map(|v| v.to_string())
     }
 
-    /// The p. variant as an HGVS string (None for intronic, UTR, non-coding,
-    /// or non-substitution edits).
+    /// The p. variant as an HGVS string (None for intronic, UTR, non-coding, or
+    /// non-substitution edits). Rendered in the projector's configured style
+    /// (#1050; default `Ter` / three-letter).
     #[getter]
     fn p_name(&self) -> Option<String> {
-        self.inner.protein.as_ref().map(|v| v.to_string())
+        self.inner
+            .protein
+            .as_ref()
+            .map(|v| v.to_styled_string(self.render_style))
+    }
+
+    /// The p. variant rendered with an explicit style, overriding the
+    /// projector's default per call (#1050). `None` arguments fall back to the
+    /// stored style, so callers can override just one axis. Returns `None` in
+    /// exactly the cases `p_name` does.
+    #[pyo3(signature = (protein_stop=None, amino_acid_code=None))]
+    fn p_name_styled(
+        &self,
+        protein_stop: Option<&str>,
+        amino_acid_code: Option<&str>,
+    ) -> PyResult<Option<String>> {
+        let stop = match protein_stop {
+            Some(s) => parse_protein_stop_or_raise(s)?,
+            None => self.render_style.stop,
+        };
+        let aa_code = match amino_acid_code {
+            Some(s) => parse_amino_acid_code_or_raise(s)?,
+            None => self.render_style.aa_code,
+        };
+        let style = crate::hgvs::location::ProteinRenderStyle { stop, aa_code };
+        Ok(self
+            .inner
+            .protein
+            .as_ref()
+            .map(|v| v.to_styled_string(style)))
     }
 
     /// The predicted r. variant as an HGVS string, or `None`.
@@ -1251,6 +1321,11 @@ impl PyVariantProjection {
     /// currently need them (`NormalizationWarning`). The same `Debug`-key
     /// approach is used for `ProteinEffect`, whose `AminoAcidChange` field is
     /// likewise not `Eq`.
+    ///
+    /// `render_style` is deliberately excluded from the key (#1050): it is a
+    /// rendering preference for `p_name`/`p_name_styled`, not part of the
+    /// variant's identity, so two projections that differ only in render style
+    /// compare equal and hash the same.
     fn __eq__(&self, other: &Self) -> bool {
         format!("{:?}", self.inner) == format!("{:?}", other.inner)
     }
@@ -1275,6 +1350,9 @@ pub struct PyVariantProjector {
     has_genomic_data: bool,
     /// Whether the backing reference carries protein sequence data.
     has_protein_data: bool,
+    /// Default protein render style applied to `p_name` on projections this
+    /// projector produces (#1050).
+    render_style: crate::hgvs::location::ProteinRenderStyle,
 }
 
 #[pymethods]
@@ -1290,17 +1368,25 @@ impl PyVariantProjector {
     ///         aliases "hg19"/"hg38") for build-agnostic inputs. A bare NG_/LRG_
     ///         input carries no build; this fills one in. An input whose
     ///         accession already encodes a build (NC_*.10/.11) keeps it.
+    ///     protein_stop: Stop-codon spelling for rendered p. names — "ter"
+    ///         (default) or "star" (`*`).
+    ///     amino_acid_code: Amino-acid code width for rendered p. names —
+    ///         "three" (default) or "one".
     #[new]
-    #[pyo3(signature = (reference_json=None, direction="3prime", assembly=None))]
+    #[pyo3(signature = (reference_json=None, direction="3prime", assembly=None, protein_stop="ter", amino_acid_code="three"))]
     fn new(
         py: Python<'_>,
         reference_json: Option<&str>,
         direction: &str,
         assembly: Option<&str>,
+        protein_stop: &str,
+        amino_acid_code: &str,
     ) -> PyResult<Self> {
         // Validate boundary args BEFORE loading any reference (a bad path must
-        // not mask an invalid direction/assembly ValueError).
+        // not mask an invalid direction/assembly/protein_stop/amino_acid_code
+        // ValueError).
         let (config, assembly_build) = parse_projector_boundary_args(direction, assembly)?;
+        let render_style = parse_render_style_or_raise(protein_stop, amino_acid_code)?;
         let (provider, kind) = match reference_json {
             Some(path) => (
                 PyProvider::from_json(Path::new(path))?,
@@ -1308,23 +1394,44 @@ impl PyVariantProjector {
             ),
             None => (PyProvider::test_data(), ProviderKind::TestData),
         };
-        Self::from_provider(py, provider, config, assembly_build, kind)
+        Self::from_provider(py, provider, config, assembly_build, kind, render_style)
     }
 
     /// Create a projector from a ferro-prepare manifest (preferred for
     /// production — uses MultiFastaProvider with cdot data).
+    ///
+    /// Args:
+    ///     manifest_path: Path to a ferro-prepare manifest.json.
+    ///     direction: Shuffle direction passed to the internal normalizer
+    ///         ("3prime" or "5prime").
+    ///     assembly: Optional genome-build override ("GRCh37"/"GRCh38", or the
+    ///         aliases "hg19"/"hg38") for build-agnostic inputs.
+    ///     protein_stop: Stop-codon spelling for rendered p. names — "ter"
+    ///         (default) or "star" (`*`).
+    ///     amino_acid_code: Amino-acid code width for rendered p. names —
+    ///         "three" (default) or "one".
     #[staticmethod]
-    #[pyo3(signature = (manifest_path, direction="3prime", assembly=None))]
+    #[pyo3(signature = (manifest_path, direction="3prime", assembly=None, protein_stop="ter", amino_acid_code="three"))]
     fn from_manifest(
         py: Python<'_>,
         manifest_path: &str,
         direction: &str,
         assembly: Option<&str>,
+        protein_stop: &str,
+        amino_acid_code: &str,
     ) -> PyResult<Self> {
         // Validate boundary args before loading the manifest (see `new`).
         let (config, assembly_build) = parse_projector_boundary_args(direction, assembly)?;
+        let render_style = parse_render_style_or_raise(protein_stop, amino_acid_code)?;
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
-        Self::from_provider(py, provider, config, assembly_build, ProviderKind::Manifest)
+        Self::from_provider(
+            py,
+            provider,
+            config,
+            assembly_build,
+            ProviderKind::Manifest,
+            render_style,
+        )
     }
 
     /// Return `True` if the backing reference provides genomic sequence data.
@@ -1366,7 +1473,10 @@ impl PyVariantProjector {
         let transcript = transcript.to_string();
         let result = py.detach(|| self.inner.project(&hgvs_string, &transcript));
         result
-            .map(|inner| PyVariantProjection { inner })
+            .map(|inner| PyVariantProjection {
+                inner,
+                render_style: self.render_style,
+            })
             .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
@@ -1392,7 +1502,10 @@ impl PyVariantProjector {
             .map(|projections| {
                 projections
                     .into_iter()
-                    .map(|inner| PyVariantProjection { inner })
+                    .map(|inner| PyVariantProjection {
+                        inner,
+                        render_style: self.render_style,
+                    })
                     .collect()
             })
             .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
@@ -1424,7 +1537,10 @@ impl PyVariantProjector {
         let transcript = transcript.to_string();
         let result = py.detach(|| self.inner.project_variant(&inner_variant, &transcript));
         result
-            .map(|inner| PyVariantProjection { inner })
+            .map(|inner| PyVariantProjection {
+                inner,
+                render_style: self.render_style,
+            })
             .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
@@ -1453,7 +1569,10 @@ impl PyVariantProjector {
             .map(|projections| {
                 projections
                     .into_iter()
-                    .map(|inner| PyVariantProjection { inner })
+                    .map(|inner| PyVariantProjection {
+                        inner,
+                        render_style: self.render_style,
+                    })
                     .collect()
             })
             .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
@@ -1487,7 +1606,10 @@ impl PyVariantProjector {
         let transcript = transcript.to_string();
         let result = py.detach(|| self.inner.project_normalized(&inner_variant, &transcript));
         result
-            .map(|inner| PyVariantProjection { inner })
+            .map(|inner| PyVariantProjection {
+                inner,
+                render_style: self.render_style,
+            })
             .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
     }
 
@@ -1517,7 +1639,10 @@ impl PyVariantProjector {
             .map(|projections| {
                 projections
                     .into_iter()
-                    .map(|inner| PyVariantProjection { inner })
+                    .map(|inner| PyVariantProjection {
+                        inner,
+                        render_style: self.render_style,
+                    })
                     .collect()
             })
             .map_err(|e| ferro_typed("ProjectionError", format!("Projection error: {e}"), &e))
@@ -1623,7 +1748,7 @@ impl PyVariantProjector {
         let project = |(i, s): (usize, &String)| {
             self.inner
                 .project_all(s)
-                .map(wrap_projections)
+                .map(|p| wrap_projections(p, self.render_style))
                 .map_err(|e| (i, e))
         };
         if return_exceptions {
@@ -1670,7 +1795,7 @@ impl PyVariantProjector {
         let project = |(i, v): (usize, &HgvsVariant)| {
             self.inner
                 .project_normalized_all(v)
-                .map(wrap_projections)
+                .map(|p| wrap_projections(p, self.render_style))
                 .map_err(|e| (i, e))
         };
         if return_exceptions {
@@ -1717,6 +1842,7 @@ impl PyVariantProjector {
         config: NormalizeConfig,
         assembly_build: Option<&'static str>,
         kind: ProviderKind,
+        render_style: crate::hgvs::location::ProteinRenderStyle,
     ) -> PyResult<Self> {
         // Capture capability before the provider is moved into the projector.
         let has_genomic_data = provider.has_genomic_data();
@@ -1730,6 +1856,7 @@ impl PyVariantProjector {
             kind,
             has_genomic_data,
             has_protein_data,
+            render_style,
         };
         // project_to_genomic needs a genome a transcripts-only reference lacks,
         // so surface the reduced-capability signal once per process (#1012).

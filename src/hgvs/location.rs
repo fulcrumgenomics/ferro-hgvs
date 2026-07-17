@@ -466,6 +466,55 @@ pub enum AminoAcid {
     Xaa, // X (unknown)
 }
 
+/// How protein (`p.`) names spell the translation stop codon and amino acids.
+///
+/// HGVS sanctions both `Ter`/`*` for the stop and three-/one-letter amino-acid
+/// codes; this selects which conformant style to emit. `Default` is the
+/// spec-preferred `Ter` + three-letter form, so default rendering is unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProteinRenderStyle {
+    /// Stop-codon spelling (only distinguishable in three-letter mode).
+    pub stop: TerStyle,
+    /// Amino-acid code width.
+    pub aa_code: AaCode,
+}
+
+/// Stop-codon spelling: `Ter` (three-letter only) or `*` (both widths).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TerStyle {
+    /// `Ter` — spec-preferred, three-letter only.
+    #[default]
+    Ter,
+    /// `*` — valid in one- and three-letter descriptions.
+    Star,
+}
+
+/// Amino-acid code width: three-letter (`Ser`) or one-letter (`S`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AaCode {
+    /// Three-letter codes (`Ser`, `Leu`, …).
+    #[default]
+    Three,
+    /// One-letter codes (`S`, `L`, …).
+    One,
+}
+
+impl ProteinRenderStyle {
+    /// The spelling for the translation stop codon under this style.
+    ///
+    /// `Ter` is a three-letter-only token per the HGVS spec ("`Ter`
+    /// (three-letter code)… `*` (three- and one-letter code)"). There is no
+    /// one-letter `Ter`, so one-letter mode always yields `*`; three-letter
+    /// mode honors the `stop` toggle.
+    pub fn ter_token(&self) -> &'static str {
+        if self.aa_code == AaCode::One || self.stop == TerStyle::Star {
+            "*"
+        } else {
+            "Ter"
+        }
+    }
+}
+
 impl AminoAcid {
     /// Parse from 3-letter code
     pub fn from_three_letter(s: &str) -> Option<Self> {
@@ -558,6 +607,16 @@ impl AminoAcid {
         }
     }
 
+    /// Render this amino acid under `style` (used by all protein `p.`
+    /// rendering). The stop codon follows [`ProteinRenderStyle::ter_token`].
+    pub fn fmt_styled(&self, f: &mut fmt::Formatter<'_>, style: ProteinRenderStyle) -> fmt::Result {
+        match self {
+            Self::Ter => write!(f, "{}", style.ter_token()),
+            _ if style.aa_code == AaCode::One => write!(f, "{}", self.to_one_letter()),
+            _ => write!(f, "{}", self.to_three_letter()),
+        }
+    }
+
     /// Parse from 1-letter code (uppercase only)
     ///
     /// HGVS notation uses uppercase for 1-letter amino acid codes.
@@ -606,7 +665,7 @@ impl AminoAcid {
 
 impl fmt::Display for AminoAcid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.to_three_letter())
+        self.fmt_styled(f, ProteinRenderStyle::default())
     }
 }
 
@@ -623,11 +682,32 @@ impl ProtPos {
     pub fn new(aa: AminoAcid, number: u64) -> Self {
         Self { aa, number }
     }
+
+    /// Render this position under `style`, delegating the amino-acid spelling
+    /// (including a position-side stop) to [`AminoAcid::fmt_styled`].
+    pub fn fmt_styled(&self, f: &mut fmt::Formatter<'_>, style: ProteinRenderStyle) -> fmt::Result {
+        self.aa.fmt_styled(f, style)?;
+        write!(f, "{}", self.number)
+    }
 }
 
 impl fmt::Display for ProtPos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.aa, self.number)
+        self.fmt_styled(f, ProteinRenderStyle::default())
+    }
+}
+
+/// A [`ProtPos`] paired with a render style so it can be dropped into the
+/// generic `Interval<T>` / `Mu<T>` `Display` machinery without duplicating that
+/// structural logic. `PartialEq` compares the position AND the style; within one
+/// render both interval endpoints carry the same style, so the interval's
+/// point-collapse (`start == end`) still reduces to position equality.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct StyledProtPos(pub ProtPos, pub ProteinRenderStyle);
+
+impl fmt::Display for StyledProtPos {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_styled(f, self.1)
     }
 }
 
@@ -775,6 +855,106 @@ mod tests {
     fn test_prot_pos_display() {
         let pos = ProtPos::new(AminoAcid::Met, 1);
         assert_eq!(format!("{}", pos), "Met1");
+    }
+
+    #[test]
+    fn test_prot_pos_fmt_styled() {
+        let pos = ProtPos::new(AminoAcid::Ser, 4);
+        let one = ProteinRenderStyle {
+            stop: TerStyle::Ter,
+            aa_code: AaCode::One,
+        };
+        assert_eq!(
+            format!("{}", StyledProtPos(pos, ProteinRenderStyle::default())),
+            "Ser4"
+        );
+        assert_eq!(format!("{}", StyledProtPos(pos, one)), "S4");
+        // position-side stop styles via the same rule
+        let ter = ProtPos::new(AminoAcid::Ter, 110);
+        let three_star = ProteinRenderStyle {
+            stop: TerStyle::Star,
+            aa_code: AaCode::Three,
+        };
+        assert_eq!(format!("{}", StyledProtPos(ter, three_star)), "*110");
+        // default equals plain Display
+        assert_eq!(
+            format!("{}", StyledProtPos(pos, ProteinRenderStyle::default())),
+            format!("{}", pos)
+        );
+    }
+
+    #[test]
+    fn test_protein_render_style_ter_token() {
+        use ProteinRenderStyle as S;
+        assert_eq!(
+            S {
+                stop: TerStyle::Ter,
+                aa_code: AaCode::Three
+            }
+            .ter_token(),
+            "Ter"
+        );
+        assert_eq!(
+            S {
+                stop: TerStyle::Star,
+                aa_code: AaCode::Three
+            }
+            .ter_token(),
+            "*"
+        );
+        // one-letter forces `*` regardless of the stop toggle
+        assert_eq!(
+            S {
+                stop: TerStyle::Ter,
+                aa_code: AaCode::One
+            }
+            .ter_token(),
+            "*"
+        );
+        assert_eq!(
+            S {
+                stop: TerStyle::Star,
+                aa_code: AaCode::One
+            }
+            .ter_token(),
+            "*"
+        );
+        assert_eq!(S::default().ter_token(), "Ter");
+    }
+
+    #[test]
+    fn test_amino_acid_fmt_styled() {
+        fn render(aa: AminoAcid, style: ProteinRenderStyle) -> String {
+            struct W(AminoAcid, ProteinRenderStyle);
+            impl std::fmt::Display for W {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    self.0.fmt_styled(f, self.1)
+                }
+            }
+            format!("{}", W(aa, style))
+        }
+        let three = ProteinRenderStyle {
+            stop: TerStyle::Ter,
+            aa_code: AaCode::Three,
+        };
+        let three_star = ProteinRenderStyle {
+            stop: TerStyle::Star,
+            aa_code: AaCode::Three,
+        };
+        let one = ProteinRenderStyle {
+            stop: TerStyle::Ter,
+            aa_code: AaCode::One,
+        };
+        assert_eq!(render(AminoAcid::Ser, three), "Ser");
+        assert_eq!(render(AminoAcid::Ser, one), "S");
+        assert_eq!(render(AminoAcid::Ter, three), "Ter");
+        assert_eq!(render(AminoAcid::Ter, three_star), "*");
+        assert_eq!(render(AminoAcid::Ter, one), "*");
+        // default equals plain Display
+        assert_eq!(
+            render(AminoAcid::Gln, ProteinRenderStyle::default()),
+            format!("{}", AminoAcid::Gln)
+        );
     }
 
     #[test]

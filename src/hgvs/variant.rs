@@ -1925,6 +1925,22 @@ impl HgvsVariant {
         matches!(self, HgvsVariant::UnknownAllele)
     }
 
+    /// Render this variant under a protein render `style`. Only `p.` variants
+    /// are affected; every other coordinate system renders identically to
+    /// [`Display`](Self) (the style has no meaning there).
+    ///
+    /// Styles only a single `HgvsVariant::Protein`; compound/allele forms
+    /// fall through to `to_string()` unstyled. That is acceptable — the
+    /// projector's `.protein` field is always a single
+    /// `HgvsVariant::Protein(ProteinVariant)`, never an allele, so `p_name`
+    /// styling is unaffected.
+    pub fn to_styled_string(&self, style: crate::hgvs::location::ProteinRenderStyle) -> String {
+        match self {
+            HgvsVariant::Protein(v) => v.to_styled_string(style),
+            other => other.to_string(),
+        }
+    }
+
     /// Format just the position+edit portion (without accession and coordinate prefix).
     ///
     /// For `NM_000088.3:c.459A>G`, this writes `459A>G`. Used by `AlleleVariant::Display`
@@ -2312,25 +2328,88 @@ pub struct ProteinVariant {
 }
 
 impl ProteinVariant {
-    /// Format just the position+edit portion (without `accession:p.` prefix).
-    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // For whole-protein identity (p.= or p.(=)), no-protein (p.0), or whole-protein unknown (p.?), skip the position
+    /// Render the full `p.` HGVS string under `style`. The default style
+    /// reproduces [`Display`](Self) byte-for-byte.
+    pub fn to_styled_string(&self, style: crate::hgvs::location::ProteinRenderStyle) -> String {
+        struct StyledProtein<'a>(
+            &'a ProteinVariant,
+            crate::hgvs::location::ProteinRenderStyle,
+        );
+        impl fmt::Display for StyledProtein<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.0.fmt_styled(f, self.1)
+            }
+        }
+        format!("{}", StyledProtein(self, style))
+    }
+
+    /// Styled twin of [`Display`](Self): `accession:p.` prefix + styled loc/edit.
+    fn fmt_styled(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        style: crate::hgvs::location::ProteinRenderStyle,
+    ) -> fmt::Result {
+        write!(f, "{}:p.", self.accession)?;
+        self.fmt_loc_edit_styled(f, style)
+    }
+
+    /// The single implementation of the position+edit rendering (whole-protein
+    /// short-circuit, predicted parens, default), parameterized by style.
+    /// [`fmt_loc_edit`](Self::fmt_loc_edit) delegates here with the default
+    /// style. The location reuses the generic `Interval`/`Mu` `Display` via the
+    /// `StyledProtPos`/`StyledProteinEdit` newtypes, so no structural logic is
+    /// duplicated.
+    fn fmt_loc_edit_styled(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        style: crate::hgvs::location::ProteinRenderStyle,
+    ) -> fmt::Result {
+        use crate::hgvs::edit::StyledProteinEdit;
+        use crate::hgvs::interval::Interval;
+        use crate::hgvs::location::StyledProtPos;
+
+        // A styled copy of the location interval that reuses Interval's Display.
+        let styled_location = |loc: &crate::hgvs::interval::ProtInterval| Interval {
+            start: loc.start.map_ref(|p| StyledProtPos(*p, style)),
+            end: loc.end.map_ref(|p| StyledProtPos(*p, style)),
+        };
+        // A styled copy of the edit that reuses Mu's Display (parens / `?`).
+        let styled_edit = self.loc_edit.edit.map_ref(|e| StyledProteinEdit(e, style));
+
+        // Whole-protein identity / no-protein / whole-protein unknown: edit only.
         if let Some(edit) = self.loc_edit.edit.inner() {
             if edit.is_whole_protein_identity()
                 || edit.is_no_protein()
                 || edit.is_whole_protein_unknown()
             {
-                return write!(f, "{}", self.loc_edit.edit);
+                return write!(f, "{}", styled_edit);
             }
         }
-        // For predicted protein changes (uncertain edit), wrap position+edit in parentheses
-        // e.g., p.(Arg248Gln) instead of p.Arg248(Gln)
+        // Predicted (uncertain edit): wrap position+edit in parens.
         if self.loc_edit.edit.is_uncertain() {
             if let Some(edit) = self.loc_edit.edit.inner() {
-                return write!(f, "({}{})", self.loc_edit.location, edit);
+                return write!(
+                    f,
+                    "({}{})",
+                    styled_location(&self.loc_edit.location),
+                    StyledProteinEdit(edit, style)
+                );
             }
         }
-        write!(f, "{}", self.loc_edit)
+        write!(
+            f,
+            "{}{}",
+            styled_location(&self.loc_edit.location),
+            styled_edit
+        )
+    }
+
+    /// Format just the position+edit portion (without `accession:p.` prefix).
+    /// Delegates to [`fmt_loc_edit_styled`](Self::fmt_loc_edit_styled) with the
+    /// default style, so the default (and the compound/allele path that calls
+    /// this) renders exactly as before.
+    fn fmt_loc_edit(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_loc_edit_styled(f, crate::hgvs::location::ProteinRenderStyle::default())
     }
 }
 
@@ -2345,8 +2424,7 @@ impl fmt::Display for ProteinVariant {
         // parser (which is permissive about the legacy `NP_*(GENE):p.`
         // form) can round-trip the value; it is just not emitted here. See
         // #310.
-        write!(f, "{}:p.", self.accession)?;
-        self.fmt_loc_edit(f)
+        self.fmt_styled(f, crate::hgvs::location::ProteinRenderStyle::default())
     }
 }
 
@@ -3910,5 +3988,98 @@ mod tests {
             AlleleVariant::detect_self_cancelling_pair(&[del, dup]).is_none(),
             "g. and m. variants with matching numeric ranges must NOT collide"
         );
+    }
+
+    #[test]
+    fn test_protein_variant_to_styled_string() {
+        use crate::hgvs::location::{AaCode, ProteinRenderStyle, TerStyle};
+        use crate::parse_hgvs;
+
+        let three_star = ProteinRenderStyle {
+            stop: TerStyle::Star,
+            aa_code: AaCode::Three,
+        };
+        let one = ProteinRenderStyle {
+            stop: TerStyle::Ter,
+            aa_code: AaCode::One,
+        };
+
+        let cases = [
+            // (input, three_star expected, one expected)
+            (
+                "NP_000079.2:p.(Ser4Thr)",
+                "NP_000079.2:p.(Ser4Thr)",
+                "NP_000079.2:p.(S4T)",
+            ),
+            (
+                "NP_000079.2:p.(Ile50Ter)",
+                "NP_000079.2:p.(Ile50*)",
+                "NP_000079.2:p.(I50*)",
+            ),
+            (
+                "NP_000079.2:p.(Ser4LeufsTer76)",
+                "NP_000079.2:p.(Ser4Leufs*76)",
+                "NP_000079.2:p.(S4Lfs*76)",
+            ),
+            (
+                "NP_000079.2:p.Met1ext-5",
+                "NP_000079.2:p.Met1ext-5",
+                "NP_000079.2:p.M1ext-5",
+            ),
+        ];
+        for (input, want_star, want_one) in cases {
+            let v = parse_hgvs(input).expect("parse");
+            assert_eq!(v.to_styled_string(three_star), want_star, "star: {input}");
+            assert_eq!(v.to_styled_string(one), want_one, "one: {input}");
+            // default equals Display
+            assert_eq!(
+                v.to_styled_string(ProteinRenderStyle::default()),
+                v.to_string(),
+                "default: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_hgvs_variant_to_styled_string_non_protein_passthrough() {
+        use crate::hgvs::location::{AaCode, ProteinRenderStyle, TerStyle};
+        use crate::parse_hgvs;
+        // Non-protein variants ignore the style and equal Display.
+        let one = ProteinRenderStyle {
+            stop: TerStyle::Star,
+            aa_code: AaCode::One,
+        };
+        let v = parse_hgvs("NM_000088.3:c.459A>G").expect("parse");
+        assert_eq!(v.to_styled_string(one), v.to_string());
+    }
+
+    #[test]
+    fn test_styled_default_equals_display_corpus() {
+        use crate::hgvs::location::ProteinRenderStyle;
+        use crate::parse_hgvs;
+        let corpus = [
+            "NP_000079.2:p.(Ser4Thr)",
+            "NP_000079.2:p.Ile50Ter",
+            "NP_000079.2:p.Ser4LeufsTer76",
+            "NP_000079.2:p.Gly719(Ala^Ser)fsTer23",
+            "NP_000079.2:p.Ter110GlnextTer17",
+            "NP_000079.2:p.Met1ext-5",
+            "NP_000079.2:p.Lys23_Leu24insTer12",
+            // Same interval-deletion shape as the spec's delQRGEPG example, but
+            // parser-accepted (the explicit deleted-sequence form is rejected).
+            "NP_000079.2:p.Gln367_Gly372del",
+            "NP_000079.2:p.=",
+            "NP_000079.2:p.0",
+            "NP_000079.2:p.(=)",
+            "NP_000079.2:p.?",
+        ];
+        for input in corpus {
+            let v = parse_hgvs(input).expect("parse");
+            assert_eq!(
+                v.to_styled_string(ProteinRenderStyle::default()),
+                v.to_string(),
+                "default style must equal Display for {input}"
+            );
+        }
     }
 }
