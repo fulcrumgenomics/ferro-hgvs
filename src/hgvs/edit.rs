@@ -1025,14 +1025,23 @@ impl AminoAcidSeq {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Render the residues under `style`.
+    pub fn fmt_styled(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        style: crate::hgvs::location::ProteinRenderStyle,
+    ) -> fmt::Result {
+        for aa in &self.0 {
+            aa.fmt_styled(f, style)?;
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Display for AminoAcidSeq {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for aa in &self.0 {
-            write!(f, "{}", aa)?;
-        }
-        Ok(())
+        self.fmt_styled(f, crate::hgvs::location::ProteinRenderStyle::default())
     }
 }
 
@@ -1069,18 +1078,28 @@ impl ProteinInsSeq {
             ProteinInsSeq::Repeat { .. } => false,
         }
     }
+
+    /// Render the inserted sequence under `style`. The `Stop` length form's
+    /// terminator follows [`ProteinRenderStyle::ter_token`].
+    pub fn fmt_styled(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        style: crate::hgvs::location::ProteinRenderStyle,
+    ) -> fmt::Result {
+        match self {
+            ProteinInsSeq::Literal(seq) => seq.fmt_styled(f, style),
+            ProteinInsSeq::Repeat { aa, count } => {
+                aa.fmt_styled(f, style)?;
+                write!(f, "{}", count)
+            }
+            ProteinInsSeq::Stop { position } => write!(f, "{}{}", style.ter_token(), position),
+        }
+    }
 }
 
 impl fmt::Display for ProteinInsSeq {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ProteinInsSeq::Literal(seq) => write!(f, "{}", seq),
-            // `RepeatCount` Display already emits the `[n]` brackets.
-            ProteinInsSeq::Repeat { aa, count } => write!(f, "{}{}", aa, count),
-            // Canonicalize the stop to three-letter `Ter`, matching
-            // frameshift/extension Display (`*` is accepted on input).
-            ProteinInsSeq::Stop { position } => write!(f, "Ter{}", position),
-        }
+        self.fmt_styled(f, crate::hgvs::location::ProteinRenderStyle::default())
     }
 }
 
@@ -1303,17 +1322,19 @@ impl ProteinEdit {
             }
         )
     }
-}
 
-impl fmt::Display for ProteinEdit {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    /// Render this edit under `style` (see [`ProteinRenderStyle`]). The default
+    /// style reproduces [`Display`](Self) byte-for-byte.
+    pub fn fmt_styled(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        style: crate::hgvs::location::ProteinRenderStyle,
+    ) -> fmt::Result {
         match self {
             ProteinEdit::Substitution {
                 reference: _,
                 alternative,
-            } => {
-                write!(f, "{}", alternative)
-            }
+            } => alternative.fmt_styled(f, style),
             ProteinEdit::SubstitutionAlternatives { alternatives } => {
                 // Bare alternative residues joined by `^`; the reference +
                 // position are rendered by the location.
@@ -1321,34 +1342,40 @@ impl fmt::Display for ProteinEdit {
                     if i > 0 {
                         write!(f, "^")?;
                     }
-                    write!(f, "{}", aa)?;
+                    aa.fmt_styled(f, style)?;
                 }
                 Ok(())
             }
             ProteinEdit::Deletion { sequence, count } => {
                 write!(f, "del")?;
                 if let Some(seq) = sequence {
-                    write!(f, "{}", seq)?;
+                    seq.fmt_styled(f, style)?;
                 } else if let Some(n) = count {
                     write!(f, "{}", n)?;
                 }
                 Ok(())
             }
-            ProteinEdit::Insertion { sequence } => write!(f, "ins{}", sequence),
-            ProteinEdit::Delins { sequence } => write!(f, "delins{}", sequence),
+            ProteinEdit::Insertion { sequence } => {
+                write!(f, "ins")?;
+                sequence.fmt_styled(f, style)
+            }
+            ProteinEdit::Delins { sequence } => {
+                write!(f, "delins")?;
+                sequence.fmt_styled(f, style)
+            }
             ProteinEdit::Duplication => write!(f, "dup"),
             ProteinEdit::Frameshift { new_aa, ter } => {
                 if let Some(aa) = new_aa {
-                    write!(f, "{}", aa)?;
+                    aa.fmt_styled(f, style)?;
                 }
                 write!(f, "fs")?;
-                // Three-letter `Ter` is the spec-preferred form for the
-                // termination codon (`*` is an accepted input alternative);
-                // Display canonicalizes both to `Ter`.
+                // The termination token follows `style` (three-letter `Ter`
+                // by default, `*` under `TerStyle::Star`); `*` is also an
+                // accepted input alternative regardless of style.
                 match ter {
                     FrameshiftTer::Unspecified => {}
-                    FrameshiftTer::Unknown => write!(f, "Ter?")?,
-                    FrameshiftTer::At(pos) => write!(f, "Ter{}", pos)?,
+                    FrameshiftTer::Unknown => write!(f, "{}?", style.ter_token())?,
+                    FrameshiftTer::At(pos) => write!(f, "{}{}", style.ter_token(), pos)?,
                 }
                 Ok(())
             }
@@ -1360,13 +1387,13 @@ impl fmt::Display for ProteinEdit {
                     if i > 0 {
                         write!(f, "^")?;
                     }
-                    write!(f, "{}", aa)?;
+                    aa.fmt_styled(f, style)?;
                 }
                 write!(f, ")fs")?;
                 match ter {
                     FrameshiftTer::Unspecified => {}
-                    FrameshiftTer::Unknown => write!(f, "Ter?")?,
-                    FrameshiftTer::At(pos) => write!(f, "Ter{}", pos)?,
+                    FrameshiftTer::Unknown => write!(f, "{}?", style.ter_token())?,
+                    FrameshiftTer::At(pos) => write!(f, "{}{}", style.ter_token(), pos)?,
                 }
                 Ok(())
             }
@@ -1376,19 +1403,16 @@ impl fmt::Display for ProteinEdit {
                 count,
             } => {
                 if let Some(aa) = new_aa {
-                    write!(f, "{}", aa)?;
+                    aa.fmt_styled(f, style)?;
                 }
                 write!(f, "ext")?;
-                // Three-letter `Ter` is the spec-preferred canonical form
-                // for the translation termination codon
-                // (`background/standards.md`); `*` is an accepted
-                // alternative on input. Display emits `Ter` for both
-                // C-terminal extensions and frameshifts so the
-                // canonical Display form is uniform across edit kinds.
+                // The termination token follows `style` for C-terminal
+                // extensions, matching frameshift Display so the canonical
+                // form is uniform across edit kinds.
                 match (direction, count) {
                     (ExtDirection::NTerminal, Some(n)) => write!(f, "{}", n)?,
-                    (ExtDirection::CTerminal, Some(n)) => write!(f, "Ter{}", n)?,
-                    (ExtDirection::CTerminal, None) => write!(f, "Ter?")?,
+                    (ExtDirection::CTerminal, Some(n)) => write!(f, "{}{}", style.ter_token(), n)?,
+                    (ExtDirection::CTerminal, None) => write!(f, "{}?", style.ter_token())?,
                     (ExtDirection::NTerminal, None) => {} // No suffix for unknown N-terminal
                 }
                 Ok(())
@@ -1408,15 +1432,37 @@ impl fmt::Display for ProteinEdit {
             ProteinEdit::NoProtein { predicted: false } => write!(f, "0"),
             ProteinEdit::NoProtein { predicted: true } => write!(f, "0?"),
             ProteinEdit::Repeat { sequence, count } => {
-                write!(f, "{}{}", sequence, count)
+                sequence.fmt_styled(f, style)?;
+                write!(f, "{}", count)
             }
             ProteinEdit::MultiRepeat { units } => {
                 for (sequence, count) in units {
-                    write!(f, "{}{}", sequence, count)?;
+                    sequence.fmt_styled(f, style)?;
+                    write!(f, "{}", count)?;
                 }
                 Ok(())
             }
         }
+    }
+}
+
+impl fmt::Display for ProteinEdit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_styled(f, crate::hgvs::location::ProteinRenderStyle::default())
+    }
+}
+
+/// A `&ProteinEdit` paired with a style so it can be wrapped in the generic
+/// `Mu<T>` `Display` (uncertainty parens / `?`) without duplicating that logic.
+#[allow(dead_code)] // consumed by Task 4's ProteinVariant styled rendering
+pub(crate) struct StyledProteinEdit<'a>(
+    pub &'a ProteinEdit,
+    pub crate::hgvs::location::ProteinRenderStyle,
+);
+
+impl fmt::Display for StyledProteinEdit<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_styled(f, self.1)
     }
 }
 
@@ -2178,5 +2224,128 @@ mod tests {
             sequence: AminoAcidSeq(vec![AminoAcid::Val]),
         };
         assert_eq!(format!("{}", edit), "delinsVal");
+    }
+
+    #[test]
+    fn test_protein_edit_fmt_styled_all_ter_sites() {
+        use crate::hgvs::location::{AaCode, AminoAcid, ProteinRenderStyle, TerStyle};
+
+        fn render(edit: &ProteinEdit, style: ProteinRenderStyle) -> String {
+            struct W<'a>(&'a ProteinEdit, ProteinRenderStyle);
+            impl std::fmt::Display for W<'_> {
+                fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                    self.0.fmt_styled(f, self.1)
+                }
+            }
+            format!("{}", W(edit, style))
+        }
+
+        let three = ProteinRenderStyle::default();
+        let three_star = ProteinRenderStyle {
+            stop: TerStyle::Star,
+            aa_code: AaCode::Three,
+        };
+        let one = ProteinRenderStyle {
+            stop: TerStyle::Ter,
+            aa_code: AaCode::One,
+        };
+
+        // Substitution (missense): reference is not emitted by the edit
+        let sub = ProteinEdit::Substitution {
+            reference: AminoAcid::Ser,
+            alternative: AminoAcid::Thr,
+        };
+        assert_eq!(render(&sub, three), "Thr");
+        assert_eq!(render(&sub, one), "T");
+
+        // Substitution to stop
+        let stopgain = ProteinEdit::Substitution {
+            reference: AminoAcid::Ile,
+            alternative: AminoAcid::Ter,
+        };
+        assert_eq!(render(&stopgain, three), "Ter");
+        assert_eq!(render(&stopgain, three_star), "*");
+        assert_eq!(render(&stopgain, one), "*");
+
+        // Frameshift with a new residue and Ter position
+        let fs = ProteinEdit::Frameshift {
+            new_aa: Some(AminoAcid::Leu),
+            ter: FrameshiftTer::At(76),
+        };
+        assert_eq!(render(&fs, three), "LeufsTer76");
+        assert_eq!(render(&fs, three_star), "Leufs*76");
+        assert_eq!(render(&fs, one), "Lfs*76");
+
+        // Frameshift unknown termination
+        let fs_unk = ProteinEdit::Frameshift {
+            new_aa: None,
+            ter: FrameshiftTer::Unknown,
+        };
+        assert_eq!(render(&fs_unk, three), "fsTer?");
+        assert_eq!(render(&fs_unk, one), "fs*?");
+
+        // FrameshiftAlternatives
+        let fs_alt = ProteinEdit::FrameshiftAlternatives {
+            alternatives: vec![AminoAcid::Ala, AminoAcid::Ser],
+            ter: FrameshiftTer::At(23),
+        };
+        assert_eq!(render(&fs_alt, three), "(Ala^Ser)fsTer23");
+        assert_eq!(render(&fs_alt, three_star), "(Ala^Ser)fs*23");
+        assert_eq!(render(&fs_alt, one), "(A^S)fs*23");
+
+        // Extension, C-terminal
+        let ext = ProteinEdit::Extension {
+            new_aa: Some(AminoAcid::Gln),
+            direction: ExtDirection::CTerminal,
+            count: Some(17),
+        };
+        assert_eq!(render(&ext, three), "GlnextTer17");
+        assert_eq!(render(&ext, three_star), "Glnext*17");
+        assert_eq!(render(&ext, one), "Qext*17");
+
+        // Extension unknown C-terminal
+        let ext_unk = ProteinEdit::Extension {
+            new_aa: None,
+            direction: ExtDirection::CTerminal,
+            count: None,
+        };
+        assert_eq!(render(&ext_unk, three), "extTer?");
+        assert_eq!(render(&ext_unk, one), "ext*?");
+
+        // Insertion ending in a stop (ProteinInsSeq::Stop)
+        let ins_stop = ProteinEdit::Insertion {
+            sequence: ProteinInsSeq::Stop { position: 12 },
+        };
+        assert_eq!(render(&ins_stop, three), "insTer12");
+        assert_eq!(render(&ins_stop, three_star), "ins*12");
+        assert_eq!(render(&ins_stop, one), "ins*12");
+
+        // Delins containing a Ter residue in the sequence
+        let delins = ProteinEdit::Delins {
+            sequence: AminoAcidSeq(vec![AminoAcid::Gly, AminoAcid::Ter]),
+        };
+        assert_eq!(render(&delins, three), "delinsGlyTer");
+        assert_eq!(render(&delins, one), "delinsG*");
+
+        // SubstitutionAlternatives containing a Ter alternative
+        let sub_alt = ProteinEdit::SubstitutionAlternatives {
+            alternatives: vec![AminoAcid::Ala, AminoAcid::Ter],
+        };
+        assert_eq!(render(&sub_alt, three), "Ala^Ter");
+        assert_eq!(render(&sub_alt, three_star), "Ala^*");
+        assert_eq!(render(&sub_alt, one), "A^*");
+
+        // Insertion of a literal sequence containing a Ter residue
+        let ins_lit = ProteinEdit::Insertion {
+            sequence: ProteinInsSeq::Literal(AminoAcidSeq(vec![AminoAcid::Gly, AminoAcid::Ter])),
+        };
+        assert_eq!(render(&ins_lit, three), "insGlyTer");
+        assert_eq!(render(&ins_lit, one), "insG*");
+
+        // Default equals plain Display for a representative edit
+        assert_eq!(
+            render(&fs, ProteinRenderStyle::default()),
+            format!("{}", fs)
+        );
     }
 }
