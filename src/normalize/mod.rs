@@ -5249,13 +5249,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         // Window-based fetch around the variant. Non-origin-crossing
-        // path: identical to genomic.
+        // path: identical to genomic, including the contig-length clamp
+        // (#1044, mirroring #1042 on `normalize_genome`). Every provider
+        // ERRORS on a past-EOF read rather than clamping, so an unclamped
+        // `end + window_size` past the contig 3' end made `get_sequence`
+        // fail and dropped the variant into `mt_fallback` — skipping 3'
+        // shift AND the delins->inv/sub/dup canonicalization. Clamp
+        // `fetch_end` to the contig length, but ONLY when the variant fits
+        // within the contig (`end <= len`): a span running past the end
+        // must keep the raw window so the read errors into the safe
+        // fallback rather than feeding a truncated reference to
+        // `normalize_na_edit` and mis-normalizing. When the length is
+        // unavailable, likewise fall back to the raw window. Wraparound
+        // (`start > end`) already returned above, so `end` here is the
+        // linear span end.
         let window_start = start.saturating_sub(self.config.window_size);
-        let seq_result = self.provider.get_sequence(
-            &accession,
-            window_start,
-            end.saturating_add(self.config.window_size),
-        );
+        let raw_end = end.saturating_add(self.config.window_size);
+        let fetch_end = match self.provider.get_sequence_length(&accession) {
+            Ok(len) if end <= len => raw_end.min(len),
+            _ => raw_end,
+        };
+        let seq_result = self
+            .provider
+            .get_sequence(&accession, window_start, fetch_end);
 
         let ref_seq = match seq_result {
             Ok(s) => s,
