@@ -1850,7 +1850,33 @@ class VariantProjection:
 
     @property
     def p_name(self) -> str | None:
-        """The p. variant as an HGVS string, or None for intronic/UTR/non-coding variants."""
+        """The p. variant as an HGVS string, or None for intronic/UTR/non-coding variants.
+
+        Rendered in the projector's configured style (#1050; default `Ter` /
+        three-letter). Note that one-letter mode always spells the stop codon as
+        `*` (there is no one-letter `Ter`), overriding `protein_stop="ter"`.
+        """
+        ...
+
+    def p_name_styled(
+        self,
+        protein_stop: str | None = None,
+        amino_acid_code: str | None = None,
+    ) -> str | None:
+        """The p. variant rendered with an explicit style (#1050).
+
+        Overrides the projector's configured default per call. ``None`` for
+        either argument keeps the projector's stored value for that axis, so a
+        single axis can be overridden. Returns ``None`` in exactly the cases
+        ``p_name`` does.
+
+        Args:
+            protein_stop: "ter" or "star", or None to keep the projector default.
+            amino_acid_code: "three" or "one", or None to keep the default.
+
+        Raises:
+            ValueError: If a supplied value is not recognized.
+        """
         ...
 
     @property
@@ -1913,6 +1939,8 @@ class VariantProjector:
         reference_json: str | None = None,
         direction: str = "3prime",
         assembly: str | None = None,
+        protein_stop: str = "ter",
+        amino_acid_code: str = "three",
     ) -> None:
         """Create a variant projector.
 
@@ -1925,10 +1953,14 @@ class VariantProjector:
                 aliases "hg19"/"hg38") for build-agnostic inputs. A bare NG_/LRG_
                 input carries no build; this fills one in. An input whose
                 accession already encodes a build (NC_*.10/.11) keeps it.
+            protein_stop: Stop-codon spelling for rendered p. names — "ter"
+                (default) or "star" (`*`).
+            amino_acid_code: Amino-acid code width for rendered p. names —
+                "three" (default) or "one".
 
         Raises:
-            ValueError: If ``direction`` is not one of
-                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
+            ValueError: If ``direction``, ``assembly``, ``protein_stop``, or
+                ``amino_acid_code`` is not a recognized value.
         """
         ...
 
@@ -1937,6 +1969,8 @@ class VariantProjector:
         manifest_path: str,
         direction: str = "3prime",
         assembly: str | None = None,
+        protein_stop: str = "ter",
+        amino_acid_code: str = "three",
     ) -> "VariantProjector":
         """Create a projector from a ferro-prepare manifest.
 
@@ -1945,13 +1979,17 @@ class VariantProjector:
             direction: Shuffle direction ("3prime" or "5prime").
             assembly: Optional genome-build override ("GRCh37"/"GRCh38", or the
                 aliases "hg19"/"hg38") for build-agnostic inputs.
+            protein_stop: Stop-codon spelling for rendered p. names — "ter"
+                (default) or "star" (`*`).
+            amino_acid_code: Amino-acid code width for rendered p. names —
+                "three" (default) or "one".
 
         Returns:
             A VariantProjector backed by MultiFastaProvider with cdot data.
 
         Raises:
-            ValueError: If ``direction`` is not one of
-                "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
+            ValueError: If ``direction``, ``assembly``, ``protein_stop``, or
+                ``amino_acid_code`` is not a recognized value.
             RuntimeError: If the manifest cannot be loaded.
         """
         ...
