@@ -53,7 +53,8 @@ use boundary::Boundaries;
 pub use config::{NormalizeConfig, ShuffleDirection};
 use rules::{
     canonicalize_conversion_to_delins, canonicalize_edit, canonicalize_insertion_expand,
-    needs_normalization, rna_uracil_to_thymine, should_canonicalize, DelinsSubedit, InsCoordKind,
+    is_real_substitution, is_uncertain_real_substitution, needs_normalization,
+    rna_uracil_to_thymine, should_canonicalize, DelinsSubedit, InsCoordKind,
 };
 use shuffle::shuffle;
 
@@ -2073,6 +2074,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if !needs_normalization(edit) {
             return Ok((HV::Genome(variant.clone()), vec![]));
         }
+
+        // #1052: an uncertain/predicted-wrapped substitution must stay a
+        // silent pass-through — see `is_uncertain_real_substitution`'s doc
+        // comment.
+        if is_uncertain_real_substitution(edit, &variant.loc_edit.edit) {
+            return Ok((HV::Genome(variant.clone()), vec![]));
+        }
         let start_pos = match variant.loc_edit.location.start.inner() {
             Some(pos) => pos,
             None => {
@@ -2596,6 +2604,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((HV::Cds(variant.clone()), vec![]));
         }
 
+        // #1052: an uncertain/predicted-wrapped substitution must stay a
+        // silent pass-through — see `is_uncertain_real_substitution`'s doc
+        // comment. Must run before the intronic dispatch below too (an
+        // uncertain intronic sub must stay silent regardless of the
+        // intronic guard there).
+        if is_uncertain_real_substitution(edit, &variant.loc_edit.edit) {
+            return Ok((HV::Cds(variant.clone()), vec![]));
+        }
+
         // #760: a UTR offset with no enclosing intron — past a transcript
         // terminus (`c.*824+10`, 3' of the final exon → `c.*834`) or on a
         // transcript whose model has no intron there at all — is not intronic.
@@ -2636,6 +2653,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Handle intronic variants specially
         if start_pos.is_intronic() || end_pos.is_intronic() {
+            // #1052: real substitutions are validated on the plain exonic path
+            // only. Intronic-sub validation would require genomic projection
+            // (an explicit non-goal); routing a sub through
+            // `normalize_intronic_cds` / `normalize_boundary_spanning_cds` would
+            // emit `ReducedCapabilityNoGenome` (no genomic data) or a hard
+            // `ConversionError` (unmappable intron) on a variant that previously
+            // passed through unchanged. Preserve that silent pass-through.
+            if is_real_substitution(edit) {
+                return Ok((HV::Cds(variant.clone()), vec![]));
+            }
             // Switch to the accession-aware lookup so an NG/NC-parented input
             // gets the build-correct chromosome. If the accession-aware lookup
             // fails, fall back to the plain transcript we already fetched.
@@ -2831,6 +2858,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
         let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, is_coding)?;
+
+        // Substitutions are validated-then-returned-unchanged by
+        // `normalize_na_edit`'s `Substitution` arm; nothing downstream (axis
+        // clamps, the #670 junction-crossing shuffle continuation, canonical
+        // split, `LocEdit` reconstruction) applies to a never-shuffled edit
+        // kind, and letting a substitution fall through it anyway causes two
+        // known regressions (#1052 follow-up): spurious genome-capability
+        // rejections at exon boundaries, and silent `Mu::Uncertain` /
+        // allele-member loss in cis alleles. Return the ORIGINAL variant
+        // (not a `LocEdit::new`-reconstructed one) so uncertainty and all
+        // other input structure survive untouched. Guard on
+        // `is_real_substitution` (ref != alt) only — a `ref == alt` sub must
+        // still flow through to the identity (`=`) rewrite below.
+        if is_real_substitution(edit) {
+            return Ok((HV::Cds(variant.clone()), warnings));
+        }
 
         // #670: apply the 3' rule across the exon/intron junction. The
         // exon-confined shuffle above only sees spliced (exon) bases, so a
@@ -3374,7 +3417,24 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((HV::Tx(variant.clone()), vec![]));
         }
 
+        // #1052: an uncertain/predicted-wrapped substitution must stay a
+        // silent pass-through — see `is_uncertain_real_substitution`'s doc
+        // comment. Must run before the intronic dispatch below too.
+        if is_uncertain_real_substitution(edit, &variant.loc_edit.edit) {
+            return Ok((HV::Tx(variant.clone()), vec![]));
+        }
+
         if start_pos.is_intronic() || end_pos.is_intronic() {
+            // #1052: real substitutions are validated on the plain exonic path
+            // only. Intronic-sub validation would require genomic projection
+            // (an explicit non-goal); routing a sub through
+            // `normalize_intronic_tx` / `normalize_boundary_spanning_tx` would
+            // emit `ReducedCapabilityNoGenome` (no genomic data) or a hard
+            // `ConversionError` (unmappable intron) on a variant that previously
+            // passed through unchanged. Preserve that silent pass-through.
+            if is_real_substitution(edit) {
+                return Ok((HV::Tx(variant.clone()), vec![]));
+            }
             // Switch to the accession-aware lookup so an NG/NC-parented input
             // gets the build-correct chromosome.
             let transcript = transcript_for_intronic().unwrap_or(transcript);
@@ -3454,6 +3514,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
         let (new_start, new_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
+
+        // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
+        // substitutions are validated-then-returned-unchanged by
+        // `normalize_na_edit`; nothing downstream applies to a never-shuffled
+        // edit kind, so return the ORIGINAL variant to preserve `Mu::Uncertain`
+        // and all other input structure. `ref == alt` still flows through to
+        // the identity (`=`) rewrite below.
+        if is_real_substitution(edit) {
+            return Ok((HV::Tx(variant.clone()), warnings));
+        }
 
         // #704 sub-problem A (mirror of the `normalize_cds` block, #670): apply
         // the 3' rule across the exon/intron junction for `n.`. The exon-confined
@@ -4624,6 +4694,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((HV::Rna(variant.clone()), vec![]));
         }
 
+        // #1052: an uncertain/predicted-wrapped substitution must stay a
+        // silent pass-through — see `is_uncertain_real_substitution`'s doc
+        // comment. Must run before the intronic dispatch below too.
+        if is_uncertain_real_substitution(edit, &variant.loc_edit.edit) {
+            return Ok((HV::Rna(variant.clone()), vec![]));
+        }
+
         // Check for intronic variants or unknown positions
         let start_pos = match variant.loc_edit.location.start.inner() {
             Some(pos) => pos,
@@ -4643,6 +4720,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `normalize_boundary_spanning_tx`), then convert the result back to
         // `r.`. Pre-#704 this errored for any intronic `r.`.
         if start_pos.is_intronic() || end_pos.is_intronic() {
+            // #1052: real substitutions are validated on the plain exonic path
+            // only. Intronic-sub validation would require genomic projection
+            // (an explicit non-goal); routing a sub through the tx intronic
+            // dispatch this block delegates to would emit
+            // `ReducedCapabilityNoGenome` (no genomic data) or a hard
+            // `ConversionError` (unmappable intron) on a variant that previously
+            // passed through unchanged. Preserve that silent pass-through.
+            if is_real_substitution(edit) {
+                return Ok((HV::Rna(variant.clone()), vec![]));
+            }
             use crate::hgvs::variant::{LocEdit, TxVariant};
             // Accession-aware lookup so an NG/NC-parented input resolves the
             // build-correct chromosome; fall back to the plain transcript. A
@@ -4792,6 +4879,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
         };
         let (new_tx_start, new_tx_end, new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
+
+        // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
+        // substitutions are validated-then-returned-unchanged by
+        // `normalize_na_edit`; nothing downstream applies to a never-shuffled
+        // edit kind, so return the ORIGINAL variant to preserve `Mu::Uncertain`
+        // and all other input structure. `ref == alt` still flows through to
+        // the identity (`=`) rewrite below.
+        if is_real_substitution(edit) {
+            return Ok((HV::Rna(variant.clone()), warnings));
+        }
 
         // #704 sub-problem A (mirror of the `normalize_cds`/`normalize_tx`
         // post-check, #670): apply the 3' rule across the exon/intron junction
@@ -5172,6 +5269,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // Only normalize indels; substitutions / identity / repeat-with-
         // count pass through unchanged. Mirrors `normalize_genome`.
         if !needs_normalization(edit) {
+            return Ok((HV::Mt(variant.clone()), vec![]));
+        }
+
+        // #1052: an uncertain/predicted-wrapped substitution must stay a
+        // silent pass-through — see `is_uncertain_real_substitution`'s doc
+        // comment.
+        if is_uncertain_real_substitution(edit, &variant.loc_edit.edit) {
             return Ok((HV::Mt(variant.clone()), vec![]));
         }
 
@@ -6408,22 +6512,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // (the Inversion arm in `normalize_na_edit` emits
             // `sequence: None` when `shorten_inversion` rewrites the
             // span, and otherwise still drops the stated bases in the
-            // canonical path). `Substitution` does not reach here at
-            // all — `needs_normalization` returns `false` for real
-            // substitutions and only the degenerate `ref == alt` case
-            // routes through this function, where the validator's
-            // single-base check is satisfied by construction.
+            // canonical path).
             //
             // False for `Repeat` / `MultiRepeat` consistency mismatches
             // (issues #214 / #279): the per-unit declaration is part of
             // the user's form and the normalizer passes the description
-            // through verbatim.
+            // through verbatim. Also false for `Substitution` (#1052):
+            // real substitutions now DO reach here (routed by
+            // `needs_normalization` for validation only, see rules.rs)
+            // and are returned unchanged by the `Substitution` arm below
+            // — the canonical Display keeps the stated ref base, so
+            // reporting `corrected: true` would be dishonest.
             //
             // `delins` with a stated `deleted` sequence is validated by
             // `validate_reference`'s `NaEdit::Delins` arm (#486); the
             // canonical form drops `deleted` / `deleted_length` (see the
             // Delins arm in `canonicalize_edit`), so `corrected` is `true`.
-            let corrected = !matches!(edit, NaEdit::Repeat { .. } | NaEdit::MultiRepeat { .. });
+            let corrected = !matches!(
+                edit,
+                NaEdit::Repeat { .. } | NaEdit::MultiRepeat { .. } | NaEdit::Substitution { .. }
+            );
             warnings.push(NormalizationWarning::RefSeqMismatch {
                 stated_ref: validation.stated_ref.unwrap_or_default(),
                 actual_ref: validation.actual_ref.unwrap_or_default(),
@@ -6909,6 +7017,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // below — makes this pass-through intentional and documented, not a
             // silent contradiction of the `needs_normalization` flag (#953).
             NaEdit::MultiRepeat { .. } => return Ok((start, end, edit.clone(), warnings.clone())),
+            // A real substitution reaches here only via `needs_normalization`'s
+            // validation routing (#1052). The reference-base check already ran
+            // at the top of this function; substitutions are never shuffled, so
+            // return the (validated) edit unchanged. Explicit arm — not the
+            // generic `_` — to make the pass-through intentional and documented
+            // (mirrors the `MultiRepeat` arm, #953).
+            NaEdit::Substitution { .. } => return Ok((start, end, edit.clone(), warnings.clone())),
             _ => return Ok((start, end, edit.clone(), warnings.clone())), // Other edits don't need shuffling
         };
 

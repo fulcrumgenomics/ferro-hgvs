@@ -196,11 +196,14 @@ fn ng_nm_intronic_substitution_not_rejected_strict() {
 
 #[test]
 fn bare_nm_exonic_substitution_unaffected_strict() {
-    // An exonic position on a bare NM_ is fine — no EINTRONIC.
+    // An exonic position on a bare NM_ is fine — no EINTRONIC. c.5 = `A`
+    // (exon1 = "ATGCATGCATGCATGCATGCATGCATGCAT"); stated ref must match so
+    // strict mode's #1052 reference-base check doesn't also fire (this test
+    // isolates the EINTRONIC check).
     normalize(
         provider_intronic_nm(),
         NormalizeConfig::strict(),
-        "NM_INTRON.1:c.5C>A",
+        "NM_INTRON.1:c.5A>C",
     )
     .expect("exonic substitution on a bare NM must not be rejected as EINTRONIC");
 }

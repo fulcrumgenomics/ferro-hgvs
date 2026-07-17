@@ -28,13 +28,17 @@ use crate::reference::ReferenceProvider;
 ///
 /// "Needs normalization" gates entry into `normalize_na_edit`, which performs
 /// both reference-allele validation AND 3'-shifting. Most listed kinds need the
-/// shift; `MultiRepeat` is the exception — it is flagged `true` for the
-/// *validation* half (`validate_multirepeat_tract`), not the shift. A compound
+/// shift; `MultiRepeat` and `Substitution` are exceptions — both are flagged
+/// `true` for the *validation* half only, not the shift. A compound
 /// multi-unit tract has no canonical shuffle target, so `normalize_na_edit`'s
-/// `MultiRepeat` arm passes it through unchanged after validating (#953). If
-/// that arm ever gains a real canonicalization, this flag already routes it
-/// correctly; until then the two are reconciled and documented, not silently
-/// contradictory.
+/// `MultiRepeat` arm passes it through unchanged after validating
+/// (`validate_multirepeat_tract`, #953). Substitutions are never shuffled
+/// either way; routing them through validates the stated reference base
+/// against the loaded reference (#1052) and returns the edit unchanged (see
+/// the `Substitution` arm in `normalize_na_edit`'s `alt_seq` match). If the
+/// `MultiRepeat` arm ever gains a real canonicalization, this flag already
+/// routes it correctly; until then the two are reconciled and documented, not
+/// silently contradictory.
 pub fn needs_normalization(edit: &NaEdit) -> bool {
     if matches!(
         edit,
@@ -48,13 +52,47 @@ pub fn needs_normalization(edit: &NaEdit) -> bool {
     ) {
         return true;
     }
-    // A substitution with ref == alt is degenerate and must be rewritten to
-    // identity (`=`); route it through normalization so the rule fires.
-    // Real substitutions (ref != alt) keep the fast no-op path.
+    // Substitutions are routed through `normalize_na_edit` for the *validation*
+    // half only (reference-base check), like `MultiRepeat` — never for shuffling.
+    // A `ref == alt` sub additionally rewrites to identity (`=`); a real sub is
+    // returned unchanged after validation (see the `Substitution` arm in
+    // `normalize_na_edit`'s `alt_seq` match). Intronic subs are held OUT of this
+    // path by the per-axis guards (they cannot be validated without genomic
+    // projection and must not error) — see #1052.
+    matches!(edit, NaEdit::Substitution { .. })
+}
+
+/// A substitution whose stated reference and alternative bases differ (i.e. not
+/// the degenerate `ref == alt` identity case). Used by the per-axis intronic
+/// guards to hold real substitutions out of the genomic intronic projection.
+pub fn is_real_substitution(edit: &NaEdit) -> bool {
     matches!(
         edit,
-        NaEdit::Substitution { reference, alternative } if reference == alternative
+        NaEdit::Substitution { reference, alternative } if reference != alternative
     )
+}
+
+/// A real substitution (see [`is_real_substitution`]) whose `LocEdit` wraps
+/// it in `Mu::Uncertain` (HGVS `(...)`, e.g. `c.(10A>G)`).
+///
+/// Used by every axis normalizer (`normalize_genome`, `normalize_mt`,
+/// `normalize_cds`, `normalize_tx`, `normalize_rna`) as a single shared
+/// definition for the pre-validation carve-out: an uncertain/predicted-
+/// wrapped substitution must stay a silent pass-through in every mode,
+/// regardless of whether the stated ref matches the reference — validating
+/// it would emit a new `RefSeqMismatch` (lenient) or a hard
+/// `ReferenceMismatch` rejection (strict) on input that normalized silently
+/// before #1052. `Mu::inner()` unwraps both `Certain` and `Uncertain`, so
+/// the unwrapped `edit` alone can't distinguish them; the caller must pass
+/// the `Mu` wrapper (typically `variant.loc_edit.edit`) alongside it.
+///
+/// This also protects against a second, independent hazard: every axis's
+/// post-validation result construction (`LocEdit::new(...)`) unconditionally
+/// emits `Mu::Certain`, silently dropping an `Uncertain` wrapper on
+/// reconstruction. Short-circuiting here — before that reconstruction runs —
+/// avoids relying on a fix to that (separate, pre-existing) defect.
+pub fn is_uncertain_real_substitution(edit: &NaEdit, edit_mu: &crate::hgvs::Mu<NaEdit>) -> bool {
+    is_real_substitution(edit) && edit_mu.is_uncertain()
 }
 
 /// Check if an insertion should be represented as a duplication
@@ -3054,8 +3092,9 @@ mod tests {
             sequence: None,
             length: None,
         }));
-        // Real substitutions stay on the no-op fast path.
-        assert!(!needs_normalization(&NaEdit::Substitution {
+        // Real substitutions are now routed for validation (never shuffling)
+        // — see #1052.
+        assert!(needs_normalization(&NaEdit::Substitution {
             reference: Base::A,
             alternative: Base::G,
         }));
@@ -3065,6 +3104,56 @@ mod tests {
             reference: Base::A,
             alternative: Base::A,
         }));
+    }
+
+    #[test]
+    fn test_is_real_substitution() {
+        use crate::hgvs::edit::Base;
+
+        assert!(is_real_substitution(&NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::G,
+        }));
+        assert!(!is_real_substitution(&NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::A,
+        }));
+        assert!(!is_real_substitution(&NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        }));
+    }
+
+    #[test]
+    fn test_is_uncertain_real_substitution() {
+        use crate::hgvs::edit::Base;
+        use crate::hgvs::Mu;
+
+        let real = NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::G,
+        };
+        // Only the `Uncertain`-wrapped real substitution qualifies.
+        assert!(!is_uncertain_real_substitution(
+            &real,
+            &Mu::Certain(real.clone())
+        ));
+        assert!(is_uncertain_real_substitution(
+            &real,
+            &Mu::Uncertain(real.clone())
+        ));
+        assert!(!is_uncertain_real_substitution(&real, &Mu::Unknown));
+
+        // A degenerate (`ref == alt`) substitution is never a *real* sub, even
+        // wrapped in `Uncertain` — it must still route to the identity rewrite.
+        let identity = NaEdit::Substitution {
+            reference: Base::A,
+            alternative: Base::A,
+        };
+        assert!(!is_uncertain_real_substitution(
+            &identity,
+            &Mu::Uncertain(identity.clone())
+        ));
     }
 
     #[test]

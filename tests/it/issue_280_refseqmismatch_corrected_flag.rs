@@ -34,6 +34,8 @@
 //!   (`canonicalize_edit` strips `length`).
 //! - SECTION 7c: `del<N>ins` numeric deleted-length mismatch → `corrected: true`
 //!   (`canonicalize_edit` strips `deleted_length`).
+//! - SECTION 8: `Substitution` with mismatched stated-ref (#1052) →
+//!   `corrected: false` (canonical Display keeps the stated ref base).
 
 use ferro_hgvs::normalize::NormalizationWarning;
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
@@ -443,6 +445,40 @@ mod delins_numeric_deleted_length_mismatch {
         assert!(
             corrected_flag(&r.warnings),
             "numeric del<N>ins deleted-length mismatch must report corrected=true; output={}, warnings={:?}",
+            r.result,
+            r.warnings
+        );
+    }
+}
+
+// =============================================================================
+// SECTION 8 — Substitution with mismatched stated-ref → corrected: false (#1052)
+// =============================================================================
+//
+// `c.5G>C` against a transcript where c.5 = `A` triggers `validate_single_base`
+// → mismatch. The canonical Display KEEPS the substitution's stated ref base
+// (`c.5G>C` stays `c.5G>C`), so the flag is honest only at `false`.
+
+mod sub_mismatched_stated_ref {
+    use super::*;
+
+    #[test]
+    fn sub_mismatched_stated_ref_corrected_false() {
+        let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
+        let v = parse_hgvs("NM_TEST.1:c.5G>C").expect("parse");
+        let r = normalizer
+            .normalize_with_diagnostics(&v)
+            .expect("normalize must not reject in lenient");
+        // The canonical Display must keep the stated ref base verbatim — a
+        // rewritten base (`c.5A>C`) would make `corrected: false` a lie.
+        assert_eq!(
+            r.result.to_string(),
+            "NM_TEST.1:c.5G>C",
+            "canonical form must preserve the stated (mismatched) ref base"
+        );
+        assert!(
+            !corrected_flag(&r.warnings),
+            "sub with mismatched stated-ref must report corrected=false; output={}, warnings={:?}",
             r.result,
             r.warnings
         );
