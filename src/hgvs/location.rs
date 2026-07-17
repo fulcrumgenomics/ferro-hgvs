@@ -682,11 +682,33 @@ impl ProtPos {
     pub fn new(aa: AminoAcid, number: u64) -> Self {
         Self { aa, number }
     }
+
+    /// Render this position under `style`, delegating the amino-acid spelling
+    /// (including a position-side stop) to [`AminoAcid::fmt_styled`].
+    pub fn fmt_styled(&self, f: &mut fmt::Formatter<'_>, style: ProteinRenderStyle) -> fmt::Result {
+        self.aa.fmt_styled(f, style)?;
+        write!(f, "{}", self.number)
+    }
 }
 
 impl fmt::Display for ProtPos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}{}", self.aa, self.number)
+        self.fmt_styled(f, ProteinRenderStyle::default())
+    }
+}
+
+/// A [`ProtPos`] paired with a render style so it can be dropped into the
+/// generic `Interval<T>` / `Mu<T>` `Display` machinery without duplicating that
+/// structural logic. `PartialEq` compares the position AND the style; within one
+/// render both interval endpoints carry the same style, so the interval's
+/// point-collapse (`start == end`) still reduces to position equality.
+#[allow(dead_code)] // consumed by a later task's Interval<ProtPos> styled rendering
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct StyledProtPos(pub ProtPos, pub ProteinRenderStyle);
+
+impl fmt::Display for StyledProtPos {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt_styled(f, self.1)
     }
 }
 
@@ -834,6 +856,32 @@ mod tests {
     fn test_prot_pos_display() {
         let pos = ProtPos::new(AminoAcid::Met, 1);
         assert_eq!(format!("{}", pos), "Met1");
+    }
+
+    #[test]
+    fn test_prot_pos_fmt_styled() {
+        let pos = ProtPos::new(AminoAcid::Ser, 4);
+        let one = ProteinRenderStyle {
+            stop: TerStyle::Ter,
+            aa_code: AaCode::One,
+        };
+        assert_eq!(
+            format!("{}", StyledProtPos(pos, ProteinRenderStyle::default())),
+            "Ser4"
+        );
+        assert_eq!(format!("{}", StyledProtPos(pos, one)), "S4");
+        // position-side stop styles via the same rule
+        let ter = ProtPos::new(AminoAcid::Ter, 110);
+        let three_star = ProteinRenderStyle {
+            stop: TerStyle::Star,
+            aa_code: AaCode::Three,
+        };
+        assert_eq!(format!("{}", StyledProtPos(ter, three_star)), "*110");
+        // default equals plain Display
+        assert_eq!(
+            format!("{}", StyledProtPos(pos, ProteinRenderStyle::default())),
+            format!("{}", pos)
+        );
     }
 
     #[test]

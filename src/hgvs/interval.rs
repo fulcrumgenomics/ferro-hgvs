@@ -87,6 +87,21 @@ impl<T: Clone> UncertainBoundary<T> {
     }
 }
 
+impl<T> UncertainBoundary<T> {
+    /// Map over the inner position(s) by reference, preserving the
+    /// Single/Range shape and each `Mu`'s certainty. Used to lift a
+    /// `UncertainBoundary<ProtPos>` into a styled boundary for rendering.
+    pub fn map_ref<U, F: Fn(&T) -> U>(&self, f: F) -> UncertainBoundary<U> {
+        match self {
+            Self::Single(mu) => UncertainBoundary::Single(mu.map_ref(&f)),
+            Self::Range { start, end } => UncertainBoundary::Range {
+                start: start.map_ref(&f),
+                end: end.map_ref(&f),
+            },
+        }
+    }
+}
+
 impl<T: fmt::Display> fmt::Display for UncertainBoundary<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -288,5 +303,43 @@ mod tests {
             Mu::Uncertain(GenomePos::new(200)),
         );
         assert_eq!(format!("{}", interval), "(100)_(200)");
+    }
+}
+
+#[cfg(test)]
+mod map_tests {
+    use super::*;
+
+    #[test]
+    fn test_uncertain_boundary_map_ref() {
+        let single = UncertainBoundary::certain(5u32);
+        assert_eq!(single.map_ref(|n| n * 2), UncertainBoundary::certain(10u32));
+
+        let range = UncertainBoundary::range(Mu::Certain(1u32), Mu::Unknown);
+        match range.map_ref(|n| n + 100) {
+            UncertainBoundary::Range { start, end } => {
+                assert_eq!(start, Mu::Certain(101));
+                assert_eq!(end, Mu::Unknown);
+            }
+            _ => panic!("expected range"),
+        }
+
+        // The `Uncertain` (parenthesized-position) variant must also survive
+        // map_ref with its inner value mapped — the case above only exercised
+        // `Certain`/`Unknown`.
+        let uncertain_range = UncertainBoundary::range(Mu::Uncertain(7u32), Mu::Certain(9u32));
+        match uncertain_range.map_ref(|n| n + 1) {
+            UncertainBoundary::Range { start, end } => {
+                assert_eq!(start, Mu::Uncertain(8));
+                assert_eq!(end, Mu::Certain(10));
+            }
+            _ => panic!("expected range"),
+        }
+
+        let single_uncertain = UncertainBoundary::Single(Mu::Uncertain(3u32));
+        assert_eq!(
+            single_uncertain.map_ref(|n| n * 10),
+            UncertainBoundary::Single(Mu::Uncertain(30)),
+        );
     }
 }
