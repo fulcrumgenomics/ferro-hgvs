@@ -256,12 +256,13 @@ fn ng_context_coding_input_keeps_pivot_path_unchanged() {
         .expect("c. input with NG_ context projects via the pivot path");
 
     // Today's pivot-path output, pinned verbatim: the single-transcript c. path
-    // renders the coding axis with its gene-symbol selector (not reframed under
-    // the NG_ parent), a bare protein, and an NG_-framed genomic axis. The
+    // renders the coding axis on the bare transcript reference (the gene-symbol
+    // selector is dropped on a transcript ref, #1051; the value still lives on
+    // the struct), a bare protein, and an NG_-framed genomic axis. The
     // Genome-gate must leave every one of these unchanged.
     assert_eq!(
         r.coding.as_ref().map(ToString::to_string).as_deref(),
-        Some("NM_TEST.1(TESTGENE):c.4A>C"),
+        Some("NM_TEST.1:c.4A>C"),
     );
     assert_eq!(
         r.protein.as_ref().map(ToString::to_string).as_deref(),

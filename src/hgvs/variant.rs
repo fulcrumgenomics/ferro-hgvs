@@ -373,6 +373,37 @@ impl Accession {
         matches!(&*self.prefix, "NR" | "XR")
     }
 
+    /// Returns true if this accession is a **transcript-level** reference that
+    /// fully specifies `c.`/`n.`/`r.` coordinates on its own: RefSeq mRNA/ncRNA
+    /// (`NM`/`NR`/`XM`/`XR`), an Ensembl transcript (`ENST`), or an LRG
+    /// transcript (`LRG_<N>t<M>`).
+    ///
+    /// This is the discriminator for the gene-symbol selector's Display policy
+    /// (#1051). Per HGVS Nomenclature (`refseq.md`), the parenthetical after a
+    /// reference sequence is a *specification* whose accepted values are
+    /// transcript/protein **accessions**, not gene symbols — and a transcript
+    /// reference needs no such specification at all (bare `NM_…:c.…` is the
+    /// canonical form). So when the reference is itself a transcript, the
+    /// gene-symbol selector is disallowed and Display drops it. Genomic
+    /// (`NC`/`NG`/`NT`/`NW`/`ENSG`/bare `LRG_<N>`), mitochondrial, protein, and
+    /// unclassifiable (custom) references are **not** transcript references:
+    /// there the selector is either the spec-sanctioned exception (a gene with
+    /// no transcript, e.g. mitochondrial) or a value ferro cannot safely drop,
+    /// so Display preserves it.
+    ///
+    /// The check is on `self` only — a compound reference such as
+    /// `NC_(NM_)(GENE)` stores the transcript (`NM`) as `self` with the genomic
+    /// parent in `genomic_context`, so it is correctly classified as a
+    /// transcript reference (the redundant `(GENE)` is dropped, leaving the
+    /// spec-correct `NC_(NM_)` form).
+    pub fn is_transcript_reference(&self) -> bool {
+        match &*self.prefix {
+            "NM" | "NR" | "XM" | "XR" | "ENST" => true,
+            p if Self::is_lrg_prefix(p) => Self::lrg_inferred_variant_type(&self.number) == "c",
+            _ => false,
+        }
+    }
+
     /// Returns true if this is a known human mitochondrial reference accession.
     ///
     /// `NC_012920` is the GRCh38 rCRS mitochondrion; `NC_001807` is the older
@@ -1253,17 +1284,30 @@ fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt:
         .expect("compact form requires an accession; guarded by all_share_accession_and_type");
     write!(f, "{}", accession)?;
     if let Some(gene) = first.gene_symbol() {
-        write!(f, "({})", gene)?;
+        // Same reference-type gate as `write_accession_with_optional_gene`
+        // (#1051): a transcript reference takes no gene-symbol selector.
+        if !accession.is_transcript_reference() {
+            write!(f, "({})", gene)?;
+        }
     }
     write!(f, ":{}.", first.variant_type())
 }
 
-/// Write `accession(gene):` when `gene_symbol` is set, otherwise `accession:`.
+/// Write `accession(gene):` when a gene-symbol selector is set *and* the
+/// reference admits one, otherwise the bare `accession:`.
 ///
-/// Per HGVS Nomenclature, the gene-symbol selector is informational disambiguation.
-/// ferro's round-trip policy is "preserve when present in input; do not synthesize
-/// when absent" (#121). This helper centralizes the selector emission so all
-/// per-kind `Display` impls follow the same rule.
+/// Per HGVS Nomenclature (`refseq.md`), the gene-symbol selector is a
+/// specification whose accepted values are transcript/protein accessions, not
+/// gene symbols; a **transcript** reference is fully specified on its own and
+/// takes no selector at all. ferro therefore:
+/// - **drops** the gene symbol when the reference is a transcript
+///   ([`Accession::is_transcript_reference`]) — the `NM_…(GENE):c.…` →
+///   `NM_…:c.…` normalization of #1051, mirroring the earlier `p.` drop (#310);
+/// - **preserves** it otherwise — genomic references where the gene stands in
+///   for a transcript (resolved elsewhere), the spec-sanctioned mitochondrial
+///   exception, and unclassifiable custom references. The value always remains
+///   on the struct for programmatic access (`variant.<X>.gene_symbol`),
+///   independent of whether Display emits it.
 fn write_accession_with_optional_gene(
     f: &mut fmt::Formatter<'_>,
     accession: &Accession,
@@ -1271,7 +1315,9 @@ fn write_accession_with_optional_gene(
 ) -> fmt::Result {
     write!(f, "{}", accession)?;
     if let Some(gene) = gene_symbol {
-        write!(f, "({})", gene)?;
+        if !accession.is_transcript_reference() {
+            write!(f, "({})", gene)?;
+        }
     }
     Ok(())
 }
@@ -2392,11 +2438,11 @@ pub struct RnaFusionBreakpoint {
 
 impl fmt::Display for RnaFusionBreakpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(ref gene) = self.gene_symbol {
-            write!(f, "{}({}):r.{}", self.accession, gene, self.interval)
-        } else {
-            write!(f, "{}:r.{}", self.accession, self.interval)
-        }
+        // Route through the shared helper so a fusion breakpoint on a
+        // transcript reference drops the gene-symbol selector like every other
+        // `r.` form (#1051).
+        write_accession_with_optional_gene(f, &self.accession, self.gene_symbol.as_deref())?;
+        write!(f, ":r.{}", self.interval)
     }
 }
 
@@ -2822,12 +2868,12 @@ mod tests {
     #[test]
     fn test_allele_compact_form_requires_matching_gene_symbol() {
         // Hand-built cis allele: same accession, same coordinate type, but the
-        // sub-variants disagree on gene_symbol. The compact form
-        // (`ACC(GENE):c.[edit1;edit2]`) can only carry one selector on the
-        // prefix, so collapsing two distinct selectors would silently drop
-        // the second. Per the #121 round-trip policy ("preserve when present;
-        // do not synthesize"), we fall back to the expanded form which
-        // emits each sub-variant's selector verbatim.
+        // sub-variants disagree on gene_symbol. The compaction decision still
+        // keys off gene_symbol (a single compact prefix cannot represent two
+        // distinct selectors), so the mismatch forces the expanded bracket
+        // form. On a transcript reference (`NM_`) the selector is not itself
+        // displayed (#1051), but the expanded-vs-compact bracket structure
+        // still differs, so the fallback is observable.
         use crate::hgvs::location::CdsPos;
 
         let acc = Accession::new("NM", "000088", Some(3));
@@ -2857,24 +2903,26 @@ mod tests {
         let cis = AlleleVariant::cis(vec![v_a.clone(), v_b.clone()]);
         assert_eq!(
             format!("{}", HgvsVariant::Allele(cis)),
-            "[NM_000088.3(COL1A1):c.100A>G;NM_000088.3(COL1A2):c.200C>T]",
-            "mismatched gene symbols must use expanded form to preserve both"
+            "[NM_000088.3:c.100A>G;NM_000088.3:c.200C>T]",
+            "mismatched gene symbols must use expanded form (bracket structure \
+             still distinguishes it from the compact form)"
         );
 
         let trans = AlleleVariant::trans(vec![v_a, v_b]);
         assert_eq!(
             format!("{}", HgvsVariant::Allele(trans)),
-            "[NM_000088.3(COL1A1):c.100A>G];[NM_000088.3(COL1A2):c.200C>T]",
-            "trans expanded form already carries per-variant selectors"
+            "[NM_000088.3:c.100A>G];[NM_000088.3:c.200C>T]",
+            "trans is always expanded"
         );
     }
 
     #[test]
     fn test_allele_compact_form_requires_matching_gene_symbol_some_vs_none() {
-        // First sub-variant has Some(gene), second has None. Compact form
-        // would either lose the gene symbol (emit bare prefix) or synthesize
-        // one for the bare sub-variant (emit prefix-with-gene). Both violate
-        // the #121 policy; fall back to expanded form.
+        // First sub-variant has Some(gene), second has None. The gene_symbol
+        // Some/None disagreement forces the expanded bracket form (the
+        // compaction anchor still compares gene_symbol). On a transcript
+        // reference the selector is not displayed (#1051), but the bracket
+        // structure still distinguishes expanded from compact.
         use crate::hgvs::location::CdsPos;
 
         let acc = Accession::new("NM", "000088", Some(3));
@@ -2904,7 +2952,7 @@ mod tests {
         let cis = AlleleVariant::cis(vec![v_with, v_bare]);
         assert_eq!(
             format!("{}", HgvsVariant::Allele(cis)),
-            "[NM_000088.3(COL1A1):c.100A>G;NM_000088.3:c.200C>T]",
+            "[NM_000088.3:c.100A>G;NM_000088.3:c.200C>T]",
             "Some/None gene_symbol mismatch must use expanded form"
         );
     }
@@ -2933,8 +2981,9 @@ mod tests {
         let cis = AlleleVariant::cis(vec![mk(100, Base::G), mk(200, Base::T)]);
         assert_eq!(
             format!("{}", HgvsVariant::Allele(cis)),
-            "NM_000088.3(COL1A1):c.[100A>G;200A>T]",
-            "matching gene symbols must keep compact form"
+            "NM_000088.3:c.[100A>G;200A>T]",
+            "matching gene symbols keep compact form; the selector itself is \
+             dropped on a transcript reference (#1051)"
         );
 
         // All-None: existing compact behavior must be preserved.
@@ -3518,10 +3567,12 @@ mod tests {
             ),
         };
 
-        // Per #121: Display preserves the gene-symbol selector when set.
+        // Per #1051: on a transcript reference (`NM_`) the gene-symbol selector
+        // is disallowed by refseq.md, so Display emits the canonical bare form.
+        // The value stays on the struct for programmatic access.
         assert_eq!(variant.gene_symbol, Some("COL1A1".to_string()));
         let display = format!("{}", variant);
-        assert_eq!(display, "NM_000088.3(COL1A1):c.100A>G");
+        assert_eq!(display, "NM_000088.3:c.100A>G");
     }
 
     #[test]
