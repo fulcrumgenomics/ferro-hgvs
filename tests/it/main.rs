@@ -86,6 +86,7 @@ mod issue_1026_genome_capable_json;
 mod issue_1034_inv_subspan_delins;
 mod issue_1040_inv_overrecognition_probes;
 mod issue_1041_repro;
+mod issue_1044_mito_window_clamp;
 mod issue_1046_generator_gitdir_leak;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
