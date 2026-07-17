@@ -84,7 +84,14 @@ fn same_accession_bare_cross_reference_expands_to_literal() {
 #[test]
 fn cross_chromosome_cross_reference_expands_to_literal() {
     let mut p = MockProvider::new();
-    p.add_genomic_sequence("NC_000002.12", "A".repeat(100));
+    // Outer ref is a poly-C tract (not poly-A): the inner range at
+    // NC_000011.10:g.20_25 is `TAAAAG`, so a poly-A outer ref would make the
+    // flattened `CCCCCC`→`TAAAAG` delins share interior A-identities and
+    // canonicalize to separate substitutions (spec-correct per #165, but not
+    // what this test is checking). Poly-C differs from every inserted base, so
+    // the flattened form stays a genuine `delins` and the test stays focused on
+    // cross-reference flattening.
+    p.add_genomic_sequence("NC_000002.12", "C".repeat(100));
     p.add_genomic_sequence("NC_000011.10", "GGGGTTTTAAAA".repeat(10));
     let out = normalize("NC_000002.12:g.5_10delins[NC_000011.10:g.20_25]", p)
         .expect("must normalize cleanly with both contigs in provider");
@@ -92,7 +99,10 @@ fn cross_chromosome_cross_reference_expands_to_literal() {
         !out.contains("[NC_"),
         "cross-chromosome reference must be flattened; got {out}",
     );
-    assert!(out.contains("delins"));
+    // Inner range NC_000011.10:g.20_25 = `TAAAAG`; against the poly-C outer ref
+    // it stays a literal delins over the full span. Pin the exact flattened
+    // form, not just the `delins` keyword.
+    assert_eq!(out, "NC_000002.12:g.5_10delinsTAAAAG");
 }
 
 // =============================================================================

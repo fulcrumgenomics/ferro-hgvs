@@ -2150,16 +2150,43 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // 0-based half-open offsets into the contig even though they derive from
         // 1-based `base`; the reconciliation `rel = base - window_start` then
         // `hgvs_pos_to_index(rel) = rel - 1` is the same one the non-special
-        // path uses (do not "fix" this as a bug). On the resolved-special path
-        // clamp the upper bound to the contig length so the read is well-formed
-        // against providers that error on past-EOF reads (MockProvider); the
-        // ordinary path keeps the provider-clamped behavior byte-identical.
+        // path uses (do not "fix" this as a bug).
+        //
+        // Clamp the upper bound to the contig length so the read is well-formed:
+        // every current provider (MultiFastaProvider, FastaProvider,
+        // JsonProvider) ERRORS on a past-EOF read rather than clamping, so an
+        // unclamped `end + window_size` that runs past the contig 3' end makes
+        // `get_sequence` fail and drops the whole variant into the
+        // minimal-notation fallback below — skipping 3' shift AND the
+        // delins->inv/sub/dup canonicalization. That left an indel within
+        // `window_size` of the contig end unnormalized: e.g. a whole-span
+        // reverse-complement delins stayed `delins` instead of becoming `inv`
+        // (#1041).
+        //
+        // Special path (unchanged): it already resolved `resolved_len` and
+        // clamps unconditionally — a mixed special/plain past-end span like
+        // `g.pter_<past-end>del` fetches the whole contig and relies on
+        // `shuffle`'s per-index bounds guard to echo the input verbatim
+        // (see `genome_mixed_special_plain_past_end_matches_plain_path`).
+        //
+        // Ordinary path: fetch the length here (a cheap in-memory index lookup)
+        // and clamp ONLY when the variant itself fits within the contig
+        // (`end <= len`). If the variant *span* runs past the contig end
+        // (`end > len`), clamping would fetch a window shorter than the span and
+        // `normalize_na_edit` would read a truncated reference and mis-normalize
+        // — e.g. `g.99_103inv` on a 100 bp contig collapsing to `g.99_103=`. For
+        // those inputs keep the raw window so the read errors into the
+        // minimal-notation fallback (the pre-#1041 pass-through). When the
+        // length is unavailable, likewise fall back to the raw window.
         let window_start = start.saturating_sub(self.config.window_size);
         let raw_end = end.saturating_add(self.config.window_size);
         let fetch_end = if had_special {
             raw_end.min(resolved_len)
         } else {
-            raw_end
+            match self.provider.get_sequence_length(&accession) {
+                Ok(len) if end <= len => raw_end.min(len),
+                _ => raw_end,
+            }
         };
         let seq_result = self
             .provider
