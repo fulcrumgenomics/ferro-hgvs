@@ -14,6 +14,15 @@ use std::path::{Component, Path, PathBuf};
 /// `manifest_schema_version` exceeds this value is rejected (see
 /// [`check_schema_version`]); an absent value means the reference predates schema
 /// versioning and is accepted (its structure is still validated on load).
+///
+/// Invariant: `ReferenceManifest` uses `#[serde(deny_unknown_fields)]`, so any
+/// *new* manifest field is an unknown field to older binaries. Every field
+/// addition MUST bump this constant, so an older binary reading a newer
+/// reference reports the actionable "prepared by a newer ferro — upgrade"
+/// version message (the version gate runs before the strict deserialize) rather
+/// than an opaque serde "unknown field" error. A future `MIN_SUPPORTED` floor
+/// (currently unneeded — there is no older incompatible schema yet) would refuse
+/// references older than this build can safely read.
 pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 /// Manifest of prepared reference data.
@@ -195,18 +204,34 @@ impl ReferenceManifest {
         let manifest_path = reference_dir.join("manifest.json");
 
         let mut manifest = if manifest_path.exists() {
-            let file = File::open(&manifest_path).map_err(|e| FerroError::Io {
+            let bytes = std::fs::read(&manifest_path).map_err(|e| FerroError::Io {
                 msg: format!("Failed to open manifest: {}", e),
             })?;
-
-            serde_json::from_reader(file).map_err(|e| FerroError::Io {
+            // Parse untyped first so the load gate can check the schema VERSION
+            // before the strict typed deserialize. A newer reference then reports
+            // the actionable "upgrade ferro" message instead of an opaque serde
+            // "unknown field" error (which `deny_unknown_fields` would raise first
+            // if we deserialized straight into the struct). This mirrors the
+            // runtime provider path (`MultiFastaProvider::from_manifest`), which
+            // also validates the value before reading it.
+            let value: serde_json::Value =
+                serde_json::from_slice(&bytes).map_err(|e| FerroError::Io {
+                    msg: format!("Failed to parse manifest: {}", e),
+                })?;
+            validate_loaded_manifest(&value)?;
+            // Do the authoritative typed deserialize from the ORIGINAL BYTES, not
+            // from `value`: a `serde_json::Value` round-trip silently collapses
+            // duplicate JSON keys (last-wins), so `from_value` would lose serde's
+            // duplicate-field rejection. Reading the bytes keeps a duplicate-key
+            // manifest a hard error, consistent with this feature's "fail loud on
+            // a misread reference" intent (#1001).
+            serde_json::from_slice(&bytes).map_err(|e| FerroError::Io {
                 msg: format!("Failed to parse manifest: {}", e),
             })?
         } else {
             Self::default()
         };
 
-        check_schema_version(manifest.manifest_schema_version)?;
         manifest.reference_dir = reference_dir.to_path_buf();
         manifest.make_paths_absolute();
         Ok(manifest)
@@ -1140,5 +1165,58 @@ mod tests {
         v["transcript_fastas"] = serde_json::json!("not-an-array");
         let err = validate_loaded_manifest(&v).expect_err("a wrong-typed field must be rejected");
         assert!(format!("{err}").contains("does not match the expected schema"));
+    }
+
+    #[test]
+    fn load_or_default_reports_version_message_for_newer_schema_with_new_field() {
+        // A reference prepared by a *newer* ferro carries both a higher schema
+        // version and fields this build doesn't model. The version gate must win,
+        // so the user sees an actionable "upgrade ferro" message rather than an
+        // opaque serde "unknown field" error.
+        let dir = tempfile::tempdir().unwrap();
+        let mut v = minimal_manifest_json();
+        let obj = v.as_object_mut().unwrap();
+        obj.insert(
+            "manifest_schema_version".to_string(),
+            serde_json::json!(CURRENT_MANIFEST_SCHEMA_VERSION as u64 + 1),
+        );
+        obj.insert("a_future_field".to_string(), serde_json::json!("x"));
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            serde_json::to_string_pretty(&v).unwrap(),
+        )
+        .unwrap();
+
+        let err = ReferenceManifest::load_or_default(dir.path())
+            .expect_err("a newer-schema manifest must be refused");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("newer than this build"),
+            "version gate must win over the unknown-field error: {msg}"
+        );
+    }
+
+    #[test]
+    fn load_or_default_rejects_duplicate_json_keys() {
+        // A literal duplicate JSON key is a malformed manifest. `load_or_default`
+        // runs its authoritative typed deserialize over the ORIGINAL BYTES, so
+        // serde's duplicate-field rejection fires. (A `serde_json::Value`
+        // round-trip would instead silently collapse the duplicate, last-wins —
+        // the regression this guards against.) Fail loud on a misread reference
+        // (#1001).
+        let dir = tempfile::tempdir().unwrap();
+        // Minimal schema-valid manifest, but with `transcript_count` given twice.
+        let raw = format!(
+            r#"{{"prepared_at":"2024-01-01T00:00:00Z","transcript_fastas":[],"genome_fasta":null,"cdot_json":null,"transcript_count":0,"transcript_count":1,"available_prefixes":[],"manifest_schema_version":{}}}"#,
+            CURRENT_MANIFEST_SCHEMA_VERSION
+        );
+        std::fs::write(dir.path().join("manifest.json"), raw).unwrap();
+
+        let err = ReferenceManifest::load_or_default(dir.path())
+            .expect_err("a manifest with a duplicate JSON key must be rejected");
+        assert!(
+            format!("{err}").contains("Failed to parse manifest"),
+            "a duplicate key must surface as a parse error: {err}"
+        );
     }
 }
