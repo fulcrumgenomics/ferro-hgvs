@@ -481,12 +481,20 @@ class HgvsVariant:
 class Normalizer:
     """HGVS variant normalizer using a reference provider."""
 
-    def __init__(self, reference_json: str | None = None, direction: str = "3prime") -> None:
+    def __init__(
+        self,
+        reference_json: str | None = None,
+        direction: str = "3prime",
+        error_config: ErrorConfig | None = None,
+    ) -> None:
         """Create a new normalizer.
 
         Args:
             reference_json: Optional path to a transcripts.json file
             direction: Shuffle direction - "3prime" (default) or "5prime"
+            error_config: Optional ErrorConfig controlling reference-mismatch
+                handling (e.g. ``ErrorConfig.strict()`` to reject
+                wrong-reference variants). Defaults to lenient.
 
         Raises:
             ValueError: If ``direction`` is not one of
@@ -495,13 +503,20 @@ class Normalizer:
         ...
 
     @staticmethod
-    def from_manifest(manifest_path: str, direction: str = "3prime") -> Normalizer:
+    def from_manifest(
+        manifest_path: str,
+        direction: str = "3prime",
+        error_config: ErrorConfig | None = None,
+    ) -> Normalizer:
         """Create a normalizer from a reference manifest written by ``ferro prepare``.
 
         Args:
             manifest_path: Path to a manifest.json file (typically inside a
                 directory produced by ``ferro prepare``).
             direction: Shuffle direction - "3prime" (default) or "5prime".
+            error_config: Optional ErrorConfig controlling reference-mismatch
+                handling (e.g. ``ErrorConfig.strict()`` to reject
+                wrong-reference variants). Defaults to lenient.
 
         Returns:
             A Normalizer backed by a MultiFastaProvider.
@@ -1941,6 +1956,7 @@ class VariantProjector:
         assembly: str | None = None,
         protein_stop: str = "ter",
         amino_acid_code: str = "three",
+        error_config: ErrorConfig | None = None,
     ) -> None:
         """Create a variant projector.
 
@@ -1957,6 +1973,9 @@ class VariantProjector:
                 (default) or "star" (`*`).
             amino_acid_code: Amino-acid code width for rendered p. names —
                 "three" (default) or "one".
+            error_config: Optional ErrorConfig controlling reference-mismatch
+                handling (e.g. ``ErrorConfig.strict()`` to reject
+                wrong-reference variants). Defaults to lenient.
 
         Raises:
             ValueError: If ``direction``, ``assembly``, ``protein_stop``, or
@@ -1971,6 +1990,7 @@ class VariantProjector:
         assembly: str | None = None,
         protein_stop: str = "ter",
         amino_acid_code: str = "three",
+        error_config: ErrorConfig | None = None,
     ) -> "VariantProjector":
         """Create a projector from a ferro-prepare manifest.
 
@@ -1983,6 +2003,9 @@ class VariantProjector:
                 (default) or "star" (`*`).
             amino_acid_code: Amino-acid code width for rendered p. names —
                 "three" (default) or "one".
+            error_config: Optional ErrorConfig controlling reference-mismatch
+                handling (e.g. ``ErrorConfig.strict()`` to reject
+                wrong-reference variants). Defaults to lenient.
 
         Returns:
             A VariantProjector backed by MultiFastaProvider with cdot data.

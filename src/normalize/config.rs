@@ -136,6 +136,12 @@ impl NormalizeConfig {
         self
     }
 
+    /// Replace the entire error-handling configuration.
+    pub fn with_error_config(mut self, error_config: ErrorConfig) -> Self {
+        self.error_config = error_config;
+        self
+    }
+
     /// Set a specific error type override
     pub fn with_error_override(mut self, error_type: ErrorType, action: ErrorOverride) -> Self {
         self.error_config = self.error_config.with_override(error_type, action);

@@ -936,15 +936,28 @@ impl PyNormalizer {
     ///         If not provided, uses built-in test data (limited coverage,
     ///         **not suitable for production use**).
     ///     direction: Shuffle direction - "3prime" (default) or "5prime"
+    ///     error_config: Optional ErrorConfig controlling reference-mismatch
+    ///         handling (e.g. `ErrorConfig.strict()` to reject wrong-reference
+    ///         variants). Defaults to lenient (warn and continue; a
+    ///         wrong-reference substitution is preserved unchanged, not
+    ///         auto-corrected).
     #[new]
-    #[pyo3(signature = (reference_json=None, direction="3prime"))]
-    fn new(py: Python<'_>, reference_json: Option<&str>, direction: &str) -> PyResult<Self> {
+    #[pyo3(signature = (reference_json=None, direction="3prime", error_config=None))]
+    fn new(
+        py: Python<'_>,
+        reference_json: Option<&str>,
+        direction: &str,
+        error_config: Option<&PyErrorConfig>,
+    ) -> PyResult<Self> {
         // Validate the `direction` argument BEFORE loading any reference, so an
         // invalid direction always raises `ValueError` regardless of whether the
         // reference path is valid — a bad/missing path must not mask (or be
         // masked by) the argument error.
-        let config =
+        let mut config =
             NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
+        if let Some(ec) = error_config {
+            config = config.with_error_config(ec.inner.clone());
+        }
 
         let (provider, kind) = match reference_json {
             Some(path) => (
@@ -969,16 +982,29 @@ impl PyNormalizer {
     ///     manifest_path: Path to a manifest.json file (typically inside a
     ///         directory produced by `ferro prepare`).
     ///     direction: Shuffle direction - "3prime" (default) or "5prime"
+    ///     error_config: Optional ErrorConfig controlling reference-mismatch
+    ///         handling (e.g. `ErrorConfig.strict()` to reject wrong-reference
+    ///         variants). Defaults to lenient (warn and continue; a
+    ///         wrong-reference substitution is preserved unchanged, not
+    ///         auto-corrected).
     ///
     /// Returns:
     ///     A Normalizer backed by a MultiFastaProvider.
     #[staticmethod]
-    #[pyo3(signature = (manifest_path, direction="3prime"))]
-    fn from_manifest(py: Python<'_>, manifest_path: &str, direction: &str) -> PyResult<Self> {
+    #[pyo3(signature = (manifest_path, direction="3prime", error_config=None))]
+    fn from_manifest(
+        py: Python<'_>,
+        manifest_path: &str,
+        direction: &str,
+        error_config: Option<&PyErrorConfig>,
+    ) -> PyResult<Self> {
         // Validate `direction` before loading the manifest (see `new`): a bad
         // manifest path must not mask an invalid-direction `ValueError`.
-        let config =
+        let mut config =
             NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
+        if let Some(ec) = error_config {
+            config = config.with_error_config(ec.inner.clone());
+        }
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
         let normalizer = Self {
             provider,
@@ -1372,8 +1398,13 @@ impl PyVariantProjector {
     ///         (default) or "star" (`*`).
     ///     amino_acid_code: Amino-acid code width for rendered p. names —
     ///         "three" (default) or "one".
+    ///     error_config: Optional ErrorConfig controlling reference-mismatch
+    ///         handling (e.g. `ErrorConfig.strict()` to reject wrong-reference
+    ///         variants). Defaults to lenient (warn and continue; a
+    ///         wrong-reference substitution is preserved unchanged, not
+    ///         auto-corrected).
     #[new]
-    #[pyo3(signature = (reference_json=None, direction="3prime", assembly=None, protein_stop="ter", amino_acid_code="three"))]
+    #[pyo3(signature = (reference_json=None, direction="3prime", assembly=None, protein_stop="ter", amino_acid_code="three", error_config=None))]
     fn new(
         py: Python<'_>,
         reference_json: Option<&str>,
@@ -1381,11 +1412,13 @@ impl PyVariantProjector {
         assembly: Option<&str>,
         protein_stop: &str,
         amino_acid_code: &str,
+        error_config: Option<&PyErrorConfig>,
     ) -> PyResult<Self> {
         // Validate boundary args BEFORE loading any reference (a bad path must
         // not mask an invalid direction/assembly/protein_stop/amino_acid_code
         // ValueError).
-        let (config, assembly_build) = parse_projector_boundary_args(direction, assembly)?;
+        let (config, assembly_build) =
+            parse_projector_boundary_args(direction, assembly, error_config)?;
         let render_style = parse_render_style_or_raise(protein_stop, amino_acid_code)?;
         let (provider, kind) = match reference_json {
             Some(path) => (
@@ -1410,8 +1443,13 @@ impl PyVariantProjector {
     ///         (default) or "star" (`*`).
     ///     amino_acid_code: Amino-acid code width for rendered p. names —
     ///         "three" (default) or "one".
+    ///     error_config: Optional ErrorConfig controlling reference-mismatch
+    ///         handling (e.g. `ErrorConfig.strict()` to reject wrong-reference
+    ///         variants). Defaults to lenient (warn and continue; a
+    ///         wrong-reference substitution is preserved unchanged, not
+    ///         auto-corrected).
     #[staticmethod]
-    #[pyo3(signature = (manifest_path, direction="3prime", assembly=None, protein_stop="ter", amino_acid_code="three"))]
+    #[pyo3(signature = (manifest_path, direction="3prime", assembly=None, protein_stop="ter", amino_acid_code="three", error_config=None))]
     fn from_manifest(
         py: Python<'_>,
         manifest_path: &str,
@@ -1419,9 +1457,11 @@ impl PyVariantProjector {
         assembly: Option<&str>,
         protein_stop: &str,
         amino_acid_code: &str,
+        error_config: Option<&PyErrorConfig>,
     ) -> PyResult<Self> {
         // Validate boundary args before loading the manifest (see `new`).
-        let (config, assembly_build) = parse_projector_boundary_args(direction, assembly)?;
+        let (config, assembly_build) =
+            parse_projector_boundary_args(direction, assembly, error_config)?;
         let render_style = parse_render_style_or_raise(protein_stop, amino_acid_code)?;
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
         Self::from_provider(
@@ -1819,8 +1859,13 @@ impl PyVariantProjector {
 fn parse_projector_boundary_args(
     direction: &str,
     assembly: Option<&str>,
+    error_config: Option<&PyErrorConfig>,
 ) -> PyResult<(NormalizeConfig, Option<&'static str>)> {
-    let config = NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
+    let mut config =
+        NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
+    if let Some(ec) = error_config {
+        config = config.with_error_config(ec.inner.clone());
+    }
     let assembly_build = match assembly {
         Some(name) => Some(
             crate::liftover::aliases::normalize_assembly_name(name).ok_or_else(|| {
