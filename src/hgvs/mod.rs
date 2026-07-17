@@ -15,7 +15,9 @@ pub mod version;
 // Re-export commonly used types
 pub use edit::{FrameshiftTer, NaEdit, ProteinEdit, RepeatUnit};
 pub use interval::{CdsInterval, GenomeInterval, ProtInterval, TxInterval};
-pub use location::{CdsPos, GenomePos, ProtPos, SpecialPosition, TxPos};
+pub use location::{
+    AaCode, CdsPos, GenomePos, ProtPos, ProteinRenderStyle, SpecialPosition, TerStyle, TxPos,
+};
 pub use uncertainty::Mu;
 pub use validation::{ParseConfig, ValidationLevel};
 pub use variant::{AllelePhase, AlleleVariant, HgvsVariant};
