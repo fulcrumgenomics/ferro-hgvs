@@ -3259,6 +3259,28 @@ mod tests {
         assert!(format!("{err}").contains("does not match the expected schema"));
     }
 
+    /// A typo'd OPTIONAL key (`cdot_jsonn` instead of `cdot_json`) previously
+    /// deserialized as `None` and the run proceeded without cdot; with
+    /// `deny_unknown_fields` the runtime provider load path now fails loud
+    /// (#1001). This is an end-to-end lock on `from_manifest` itself, not just
+    /// the lower-level `validate_loaded_manifest` it calls.
+    #[test]
+    fn from_manifest_rejects_typoed_optional_key() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("manifest.json"),
+            format!(
+                r#"{{"prepared_at":"","transcript_fastas":[],"genome_fasta":null,"cdot_jsonn":"typo.json","transcript_count":0,"available_prefixes":[],"manifest_schema_version":{}}}"#,
+                crate::prepare::manifest::CURRENT_MANIFEST_SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+        let Err(err) = MultiFastaProvider::from_manifest(dir.path().join("manifest.json")) else {
+            panic!("a manifest with a typo'd optional key must fail to load");
+        };
+        assert!(format!("{err}").contains("does not match the expected schema"));
+    }
+
     // ----------------------------------------------------------------------
     // LRG placement parsing (#480)
     // ----------------------------------------------------------------------

@@ -18,6 +18,7 @@ pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 1;
 
 /// Manifest of prepared reference data.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReferenceManifest {
     /// When the data was prepared
     pub prepared_at: String,
@@ -476,9 +477,10 @@ pub fn check_schema_version(version: Option<u32>) -> Result<(), FerroError> {
 /// 1. refuses a manifest from a newer, forward-incompatible `ferro`
 ///    ([`check_schema_version`]); and
 /// 2. validates the value against the [`ReferenceManifest`] schema, catching a
-///    missing required field or a wrong-typed field. Unknown/extra fields are
-///    tolerated (no `deny_unknown_fields`), so a real reference carrying
-///    additional metadata (e.g. a content fingerprint) still loads.
+///    missing required field, a wrong-typed field, or an unknown/typo'd field
+///    (`#[serde(deny_unknown_fields)]`, #1001) — an unmodeled optional key would
+///    otherwise silently deserialize as `None` and the run would proceed on
+///    missing data.
 pub fn validate_loaded_manifest(value: &serde_json::Value) -> Result<(), FerroError> {
     let version = value
         .get("manifest_schema_version")
@@ -1020,8 +1022,7 @@ mod tests {
         );
     }
 
-    /// A realistic minimal manifest as `save()` writes it, plus an extra unknown
-    /// field (a content fingerprint) that real prepared references carry.
+    /// A minimal but schema-valid manifest as a JSON value, for load-gate tests.
     fn minimal_manifest_json() -> serde_json::Value {
         serde_json::json!({
             "prepared_at": "2024-01-01T00:00:00Z",
@@ -1030,8 +1031,7 @@ mod tests {
             "cdot_json": null,
             "transcript_count": 0,
             "available_prefixes": [],
-            "manifest_schema_version": CURRENT_MANIFEST_SCHEMA_VERSION,
-            "reference_identity": "deadbeefdeadbeef"
+            "manifest_schema_version": CURRENT_MANIFEST_SCHEMA_VERSION
         })
     }
 
@@ -1079,9 +1079,32 @@ mod tests {
     }
 
     #[test]
-    fn validate_loaded_manifest_accepts_valid_manifest_with_unknown_fields() {
+    fn validate_loaded_manifest_accepts_clean_manifest() {
         validate_loaded_manifest(&minimal_manifest_json())
-            .expect("a valid manifest carrying an unknown extra field must load");
+            .expect("a schema-valid manifest must load");
+    }
+
+    #[test]
+    fn validate_loaded_manifest_rejects_unknown_field() {
+        // A manifest carrying a key the struct does not model — e.g. a typo'd
+        // optional key (`cdot_jsonn`) or drift-era metadata — must now be rejected,
+        // not silently tolerated (#1001: an unmodeled optional key otherwise
+        // deserializes as `None` and the run proceeds on missing data).
+        let mut v = minimal_manifest_json();
+        v.as_object_mut()
+            .unwrap()
+            .insert("cdot_jsonn".to_string(), serde_json::json!("typo.json"));
+        let err = validate_loaded_manifest(&v)
+            .expect_err("a manifest with an unknown field must be rejected");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("does not match the expected schema"),
+            "actionable schema message: {msg}"
+        );
+        assert!(
+            msg.contains("ferro prepare"),
+            "message points to the remedy: {msg}"
+        );
     }
 
     #[test]
