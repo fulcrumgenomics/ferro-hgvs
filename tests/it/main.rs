@@ -84,6 +84,7 @@ mod issue_1004_samegap_insertion_idempotency;
 mod issue_1012_reduced_capability_no_genome;
 mod issue_1026_genome_capable_json;
 mod issue_1034_inv_subspan_delins;
+mod issue_1039_convert_gff_fasta_error;
 mod issue_1040_inv_overrecognition_probes;
 mod issue_1041_repro;
 mod issue_1044_mito_window_clamp;

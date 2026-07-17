@@ -52,7 +52,12 @@ pub struct ConvertGffConfig {
     pub strict: bool,
     /// Suppress loader diagnostic warnings (still counted in the report).
     pub silent: bool,
-    /// Skip CDS-length / start-codon FASTA-aware validation even when a FASTA is supplied.
+    /// Skip CDS-length / start-codon FASTA-aware validation even when a FASTA is
+    /// supplied. Also restores the tolerant handling of a FASTA that cannot cover
+    /// an exon's genomic coordinates (a missing contig, an assembly mismatch, or a
+    /// sub-region FASTA with whole-genome coordinates) instead of failing: an
+    /// unreadable exon is filled with an N-run, and an exon the FASTA only
+    /// partially covers keeps the covered bases as-is (#1039).
     pub no_validate_fasta: bool,
     /// Embed the referenced contig sequences under `genomic_sequences` so the
     /// output is genome-capable. Requires a FASTA (`fasta` argument of
@@ -122,8 +127,12 @@ pub struct ConvertGffOutcome {
 ///
 /// Returns [`FerroError`] if the annotation file cannot be read/parsed (or, in
 /// strict mode, records an error diagnostic), if a supplied FASTA cannot be
-/// opened, or if `emit_genomic_sequences` is set but a required contig is
-/// absent from — or too short in — the FASTA to cover a transcript placement.
+/// opened, if a supplied FASTA cannot cover an exon's genomic coordinates during
+/// sequence extraction — whether the read fails outright or is silently truncated
+/// to fewer bases than the exon span (unless [`ConvertGffConfig::no_validate_fasta`]
+/// is set, which restores the tolerant handling), or if `emit_genomic_sequences` is set but
+/// a required contig is absent from — or too short in — the FASTA to cover a
+/// transcript placement.
 pub fn convert_gff(
     gff: &Path,
     fasta: Option<&Path>,
@@ -216,9 +225,60 @@ pub fn convert_gff(
             for exon in &tx.exons {
                 if let (Some(g_start), Some(g_end)) = (exon.genomic_start, exon.genomic_end) {
                     // FASTA uses 0-based coordinates, GFF uses 1-based.
+                    let expected_len = (g_end - g_start + 1) as usize;
                     match fasta.get_sequence(chrom, g_start - 1, g_end) {
-                        Ok(seq) => exon_seqs.push(seq),
-                        Err(_) => exon_seqs.push("N".repeat((g_end - g_start + 1) as usize)),
+                        // The FASTA covered the whole exon: use the real bases.
+                        Ok(seq) if seq.len() == expected_len => exon_seqs.push(seq),
+                        // The contig is present but shorter than the exon needs, so
+                        // `get_sequence` clamped the read and returned fewer bases
+                        // than the exon span — a silent truncation, not a real
+                        // N-masked region. Treat it exactly like a hard extraction
+                        // failure: fail fast by default, keep the partial bases only
+                        // under the `no_validate_fasta` opt-out (#1039).
+                        Ok(partial) if config.no_validate_fasta => exon_seqs.push(partial),
+                        Ok(partial) => {
+                            return Err(FerroError::Io {
+                                msg: format!(
+                                    "convert-gff: the FASTA covers only {} of the {} bases of the \
+                                     exon of transcript '{}' at {}:{}-{}. The FASTA does not cover \
+                                     the annotation's coordinates (a sub-region FASTA with \
+                                     whole-genome coordinates, or a different assembly?). Pass \
+                                     --no-validate-fasta to keep the partial sequence instead of \
+                                     failing.",
+                                    partial.len(),
+                                    expected_len,
+                                    id,
+                                    chrom,
+                                    g_start,
+                                    g_end
+                                ),
+                            });
+                        }
+                        // A real extraction failure — a contig missing from the
+                        // FASTA, coordinates past the contig end, a corrupt index,
+                        // or an assembly mismatch — is NOT a legitimately N-masked
+                        // region. Fail fast by default (as the
+                        // `--emit-genomic-sequences` path does, #1026) so a wrong or
+                        // sub-region FASTA cannot silently degrade the transcript to
+                        // an N-run (#1039). Only when the user has opted out of
+                        // FASTA-aware validation via `no_validate_fasta` do we keep
+                        // the tolerant N-fill.
+                        Err(_) if config.no_validate_fasta => {
+                            exon_seqs.push("N".repeat(expected_len));
+                        }
+                        Err(source) => {
+                            return Err(FerroError::Io {
+                                msg: format!(
+                                    "convert-gff: could not extract exon sequence for transcript \
+                                     '{}' at {}:{}-{} from the FASTA: {}. The FASTA does not cover \
+                                     the annotation's coordinates (a wrong FASTA, a sub-region FASTA \
+                                     with whole-genome coordinates, or a different assembly?). Pass \
+                                     --no-validate-fasta to fill uncovered regions with Ns instead \
+                                     of failing.",
+                                    id, chrom, g_start, g_end, source
+                                ),
+                            });
+                        }
                     }
                 }
             }
