@@ -112,17 +112,15 @@ fn rewrite_is_idempotent() {
 }
 
 #[test]
-fn nm_gene_selector_is_preserved() {
-    // `NM_(GENE)` is out of scope (#121): the gene symbol stays on the already-named
-    // transcript; it is NOT treated as a legacy selector to resolve away.
+fn nm_gene_selector_is_not_resolved_away() {
+    // `NM_(GENE)` is out of scope for legacy-selector resolution: the accession
+    // is already a named transcript, so it is NOT rewritten to a different
+    // accession. The gene symbol is dropped from Display on the transcript
+    // reference (#1051), so the canonical output is the bare `NM_…:c.…` form.
     let out = normalize_str(provider(), "NM_003002.4(SDHD):c.92A>T");
-    assert!(
-        out.contains("NM_003002.4"),
-        "transcript selector kept: {out}"
-    );
-    assert!(
-        out.contains("(SDHD)"),
-        "gene symbol preserved on NM_(GENE): {out}"
+    assert_eq!(
+        out, "NM_003002.4:c.92A>T",
+        "NM_ accession kept (not resolved away); gene selector dropped on the transcript ref: {out}"
     );
 }
 

@@ -284,14 +284,29 @@ mod gene_selector {
     use super::*;
 
     #[test]
-    fn cis_with_gene_selectors_round_trips() {
-        let v = assert_round_trips("[NM_000088.3(COL1A1):c.100A>G;NM_000089.3(COL1A2):c.200C>T]");
+    fn cis_with_gene_selectors_drops_transcript_selectors() {
+        // Both accessions are transcripts, so Display drops the `(GENE)`
+        // selectors (#1051); the gene fields survive on each sub-variant.
+        let v = assert_canonicalizes_to(
+            "[NM_000088.3(COL1A1):c.100A>G;NM_000089.3(COL1A2):c.200C>T]",
+            "[NM_000088.3:c.100A>G;NM_000089.3:c.200C>T]",
+        );
         expect_phase(&v, AllelePhase::Cis, 2);
+        // The selectors are dropped from Display, but the gene fields survive on
+        // each sub-variant's struct — assert the invariant the comment claims.
+        let HgvsVariant::Allele(allele) = &v else {
+            unreachable!("expect_phase already asserted an allele");
+        };
+        assert_eq!(allele.variants[0].gene_symbol(), Some("COL1A1"));
+        assert_eq!(allele.variants[1].gene_symbol(), Some("COL1A2"));
     }
 
     #[test]
-    fn trans_with_gene_selectors_round_trips() {
-        let v = assert_round_trips("[NM_000088.3(COL1A1):c.100A>G];[NM_000089.3(COL1A2):c.200C>T]");
+    fn trans_with_gene_selectors_drops_transcript_selectors() {
+        let v = assert_canonicalizes_to(
+            "[NM_000088.3(COL1A1):c.100A>G];[NM_000089.3(COL1A2):c.200C>T]",
+            "[NM_000088.3:c.100A>G];[NM_000089.3:c.200C>T]",
+        );
         expect_phase(&v, AllelePhase::Trans, 2);
     }
 }

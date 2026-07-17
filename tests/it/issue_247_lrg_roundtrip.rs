@@ -262,13 +262,19 @@ mod lrg_with_gene_symbol {
     }
 
     #[test]
-    fn transcript_cds_with_gene_round_trips() {
-        assert_round_trips("LRG_199t1(BRCA1):c.100A>G");
+    fn transcript_cds_with_gene_drops_selector_on_display() {
+        // `LRG_<n>t<m>` is a transcript reference, so Display drops the `(GENE)`
+        // selector (#1051); the gene text is retained on the struct.
+        let v = parse_hgvs("LRG_199t1(BRCA1):c.100A>G").unwrap();
+        assert_eq!(v.gene_symbol(), Some("BRCA1"));
+        assert_eq!(format!("{}", v), "LRG_199t1:c.100A>G");
     }
 
     #[test]
-    fn transcript_rna_with_gene_round_trips() {
-        assert_round_trips("LRG_199t1(BRCA1):r.100a>g");
+    fn transcript_rna_with_gene_drops_selector_on_display() {
+        let v = parse_hgvs("LRG_199t1(BRCA1):r.100a>g").unwrap();
+        assert_eq!(v.gene_symbol(), Some("BRCA1"));
+        assert_eq!(format!("{}", v), "LRG_199t1:r.100a>g");
     }
 
     #[test]

@@ -1,29 +1,26 @@
-//! Display preserves the gene-symbol selector on round-trip (#121).
+//! Display's reference-type policy for the gene-symbol selector (#1051).
 //!
-//! Per HGVS Nomenclature, the gene-symbol selector (e.g. `(COL1A1)` in
-//! `NM_000088.3(COL1A1):c.459A>G`) is informational disambiguation. ferro's
-//! parsing layer captures it into `variant.<X>.gene_symbol: Option<String>`
-//! and normalization propagates it. Until #121, every concrete `Display`
-//! impl except `RnaFusionBreakpoint` dropped the selector.
+//! Per HGVS Nomenclature (`refseq.md`), the parenthetical after a reference is
+//! a *specification* whose accepted values are transcript/protein accessions,
+//! **not** gene symbols; and a transcript reference needs no specification at
+//! all (bare `NM_…:c.…` is canonical). ferro's `Display` therefore splits by
+//! reference type — the parser still captures `gene_symbol` on every family,
+//! but the formatter:
 //!
-//! This file pins the principled round-trip policy:
+//! 1. **Drops** the selector on a **transcript** reference
+//!    (`NM`/`NR`/`XM`/`XR`/`ENST`/`LRG_<n>t<m>`), emitting the canonical bare
+//!    form — the same treatment `p.` has always had (#310).
+//! 2. **Preserves** it on a **non-transcript** reference: genomic
+//!    (`NC`/`NG`/bare `LRG_<n>`) where the gene stands in for a transcript, the
+//!    spec-sanctioned mitochondrial exception, and unclassifiable custom
+//!    references.
+//! 3. **Never synthesizes** it — a bare input stays bare, and normalization
+//!    does not invent a selector from transcript metadata.
 //!
-//! 1. **Preserve when present in input** — Display emits `accession(gene):`
-//!    whenever `gene_symbol` is `Some(g)`, across all coordinate types
-//!    (`g`/`c`/`n`/`r`/`p`/`m`/`o`).
-//! 2. **Do not synthesize when absent** — Display emits the bare
-//!    `accession:` form when `gene_symbol` is `None`, even if the underlying
-//!    transcript provider could supply one.
-//! 3. **Idempotent re-parse** — `parse → display → parse` is byte-stable
-//!    and the second parse sees `gene_symbol = Some(<gene>)`.
-//!
-//! These cases are the inverse of the strip-pinned cases in PR #135's
-//! `tests/gene_selector_roundtrip.rs`; the `// TODO #121` markers there
-//! become preserve-assertions as a small follow-up after this PR lands.
-//!
-//! Spec rationale: <https://hgvs-nomenclature.org>. Mutalyzer and
-//! VariantValidator both preserve the selector on round-trip; ferro
-//! aligns with that policy here.
+//! The value always remains on the struct for programmatic access regardless
+//! of whether Display emits it (`variant.<X>.gene_symbol`). This file targets
+//! the *formatter* per-kind; end-to-end round-trip identity lives in
+//! `tests/gene_selector_roundtrip.rs`.
 
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::{parse_hgvs, HgvsVariant, Normalizer};
@@ -47,8 +44,28 @@ fn gene_symbol_of(variant: &HgvsVariant) -> Option<&str> {
     }
 }
 
-/// Assert that `input` round-trips through `parse → display` byte-stably and
-/// that the selector survives a second parse.
+/// Transcript reference: the parser captures `gene_symbol = Some(gene)`, but
+/// Display drops it, emitting `bare` (input with the `(GENE)` selector removed).
+fn assert_display_drops_gene_selector(input: &str, gene: &str, bare: &str) {
+    let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input:?} failed: {e:?}"));
+    assert_eq!(
+        gene_symbol_of(&v),
+        Some(gene),
+        "parse must still capture gene_symbol={gene:?} for {input:?}",
+    );
+    assert_eq!(
+        v.to_string(),
+        bare,
+        "Display must drop the selector on a transcript reference (#1051)",
+    );
+    // The bare form is idempotent and carries no selector on reparse.
+    let reparsed = parse_hgvs(bare).unwrap_or_else(|e| panic!("reparse {bare:?} failed: {e:?}"));
+    assert_eq!(reparsed.to_string(), bare, "bare form must be idempotent");
+    assert_eq!(gene_symbol_of(&reparsed), None);
+}
+
+/// Non-transcript reference: Display preserves the selector verbatim and the
+/// round-trip is byte-stable, with the reparse re-observing it.
 fn assert_display_preserves_gene_selector(input: &str, expected_gene: &str) {
     let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input:?} failed: {e:?}"));
     assert_eq!(
@@ -60,11 +77,9 @@ fn assert_display_preserves_gene_selector(input: &str, expected_gene: &str) {
     let displayed = v.to_string();
     assert_eq!(
         displayed, input,
-        "Display must preserve the gene-symbol selector verbatim",
+        "Display must preserve the selector on a non-transcript reference",
     );
 
-    // Re-parsing the displayed form must succeed, remain stable, and the
-    // selector must still be present (not synthesized — actually preserved).
     let reparsed =
         parse_hgvs(&displayed).unwrap_or_else(|e| panic!("reparse {displayed:?} failed: {e:?}"));
     assert_eq!(reparsed.to_string(), displayed, "Display is not idempotent");
@@ -76,67 +91,104 @@ fn assert_display_preserves_gene_selector(input: &str, expected_gene: &str) {
 }
 
 // =============================================================================
-// Preserve: every supported accession family emits `(gene)` after the accession.
+// Drop: a transcript reference emits the canonical bare form.
 // =============================================================================
 
 #[test]
-fn display_preserves_gene_selector_refseq_nm_cds() {
+fn display_drops_gene_selector_refseq_nm_cds() {
     // Canonical example from the HGVS Nomenclature page.
-    assert_display_preserves_gene_selector("NM_000088.3(COL1A1):c.459A>G", "COL1A1");
+    assert_display_drops_gene_selector(
+        "NM_000088.3(COL1A1):c.459A>G",
+        "COL1A1",
+        "NM_000088.3:c.459A>G",
+    );
 }
 
 #[test]
-fn display_preserves_gene_selector_refseq_nr_noncoding() {
-    // NR_ is a non-coding RNA RefSeq accession; coordinate type is `n.`.
-    assert_display_preserves_gene_selector("NR_046018.2(DDX11L1):n.100A>G", "DDX11L1");
+fn display_drops_gene_selector_refseq_nr_noncoding() {
+    // NR_ is a non-coding RNA RefSeq (transcript) accession; coordinate `n.`.
+    assert_display_drops_gene_selector(
+        "NR_046018.2(DDX11L1):n.100A>G",
+        "DDX11L1",
+        "NR_046018.2:n.100A>G",
+    );
 }
 
 #[test]
 fn display_drops_gene_selector_refseq_np_protein() {
-    // Per HGVS syntax.yaml 119–128 the protein-variant grammar has no
-    // parenthesized selector position; the `accession(selector):c.` form
-    // (syntax.yaml 213) is reserved for genomic-to-transcript projection on
-    // c./n., not p. The parser remains permissive and `gene_symbol` round-trips
-    // on the struct, but Display emits the spec-compliant `NP_*:p.` form.
-    // See #310.
-    use ferro_hgvs::hgvs::parser::parse_hgvs;
+    // Protein `p.` has always dropped the selector (#310); #1051 makes the
+    // transcript DNA/RNA forms consistent with it.
     let v = parse_hgvs("NP_000079.2(COL1A1):p.(Arg8Gln)").unwrap();
     assert_eq!(gene_symbol_of(&v), Some("COL1A1"));
     assert_eq!(v.to_string(), "NP_000079.2:p.(Arg8Gln)");
 }
 
 #[test]
-fn display_preserves_gene_selector_genome() {
-    // `(FLT3)` here is a gene-symbol selector, not a compound-ref wrapper.
-    assert_display_preserves_gene_selector("NC_000013.11(FLT3):g.12345A>G", "FLT3");
+fn display_drops_gene_selector_ensembl() {
+    assert_display_drops_gene_selector(
+        "ENST00000380152.7(BRCA2):c.100A>G",
+        "BRCA2",
+        "ENST00000380152.7:c.100A>G",
+    );
 }
 
 #[test]
-fn display_preserves_gene_selector_ensembl() {
-    assert_display_preserves_gene_selector("ENST00000380152.7(BRCA2):c.100A>G", "BRCA2");
+fn display_drops_gene_selector_rna() {
+    // `r.` form on a transcript reference: dropped like `c.`/`n.`.
+    assert_display_drops_gene_selector(
+        "NM_000088.3(COL1A1):r.100a>g",
+        "COL1A1",
+        "NM_000088.3:r.100a>g",
+    );
 }
 
 #[test]
-fn display_preserves_gene_selector_lrg() {
-    // LRG references come in three flavors: bare (`LRG_<n>`), transcript
-    // (`LRG_<n>t<m>`), and protein (`LRG_<n>p<m>`). The bare and transcript
-    // forms preserve the gene selector verbatim on `c.`/`n.`. The protein
-    // form does NOT round-trip the selector through Display: the HGVS
-    // protein-variant grammar (syntax.yaml 119–128) has no parenthesized
-    // selector position, so Display emits the spec-compliant `LRG_*p*:p.`
-    // form. See #310.
-    assert_display_preserves_gene_selector("LRG_199(BRCA1):c.100A>G", "BRCA1");
-    assert_display_preserves_gene_selector("LRG_199t1(BRCA1):c.100A>G", "BRCA1");
+fn display_drops_gene_selector_lrg_transcript() {
+    // An LRG transcript (`LRG_<n>t<m>`) is a transcript reference → drop.
+    assert_display_drops_gene_selector("LRG_199t1(BRCA1):c.100A>G", "BRCA1", "LRG_199t1:c.100A>G");
 
-    use ferro_hgvs::hgvs::parser::parse_hgvs;
+    // The LRG protein form drops it via the protein grammar (#310).
     let v = parse_hgvs("LRG_199p1(BRCA1):p.(Arg8Gln)").unwrap();
     assert_eq!(gene_symbol_of(&v), Some("BRCA1"));
     assert_eq!(v.to_string(), "LRG_199p1:p.(Arg8Gln)");
 }
 
+// =============================================================================
+// Preserve: a non-transcript reference keeps the selector.
+// =============================================================================
+
+#[test]
+fn display_preserves_gene_selector_genome() {
+    // `(FLT3)` is a gene-symbol selector on a single-segment genomic reference
+    // (no transcript named), so ferro preserves it.
+    assert_display_preserves_gene_selector("NC_000013.11(FLT3):g.12345A>G", "FLT3");
+}
+
+#[test]
+fn display_preserves_gene_selector_mitochondrial() {
+    // `m.` form: the spec explicitly endorses `NC_012920.1(MT-…):m.…` — the
+    // gene has no transcript reference (refseq.md lines 197–203), so the
+    // selector is the only way to specify it.
+    assert_display_preserves_gene_selector("NC_012920.1(MT-ND1):m.3460G>A", "MT-ND1");
+}
+
+#[test]
+fn display_preserves_gene_selector_circular() {
+    // `o.` form (circular DNA, SVD-WG006) on a genomic reference.
+    assert_display_preserves_gene_selector("NC_001416.1(genE):o.1A>G", "genE");
+}
+
+#[test]
+fn display_preserves_gene_selector_lrg_bare_genome() {
+    // Bare LRG (`LRG_<n>`) is the genomic record — a non-transcript reference,
+    // so the selector is preserved.
+    assert_display_preserves_gene_selector("LRG_199(BRCA1):g.100A>G", "BRCA1");
+}
+
 #[test]
 fn display_preserves_gene_selector_simple_accession() {
-    // Custom (non-RefSeq, non-Ensembl, non-LRG) accession with a selector.
+    // Custom (non-RefSeq, non-Ensembl, non-LRG) accession: unclassifiable, so
+    // ferro conservatively preserves the selector rather than drop information.
     assert_display_preserves_gene_selector("MYREF_SEQ(GENE1):c.100A>G", "GENE1");
 }
 
@@ -144,8 +196,6 @@ fn display_preserves_gene_selector_simple_accession() {
 // Do-not-synthesize: bare input stays bare on Display.
 // =============================================================================
 
-/// Assert Display emits the bare form when the input had no selector and
-/// re-parsing produces a variant with `gene_symbol == None`.
 fn assert_display_does_not_synthesize(input: &str) {
     let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input:?} failed: {e:?}"));
     assert_eq!(
@@ -186,21 +236,22 @@ fn display_does_not_synthesize_ensembl() {
 }
 
 // =============================================================================
-// Compound-ref + selector: a bare gene selector composes with the existing
-// `outer(inner)` compound-ref wrapper.
+// Compound-ref + selector: `NC_…(NM_…)(GENE):c.…`. The compound ref already
+// names the transcript (the spec-correct specification), so `self` is the
+// transcript `NM_` and the redundant `(GENE)` is dropped, leaving the
+// canonical `NC_(NM_):c.…` (#1051).
 // =============================================================================
 
 #[test]
-fn display_preserves_gene_selector_with_compound_ref() {
-    // `NC_…(NM_…)` is a compound-ref accession (genomic_context); the
-    // trailing `(GENE)` is the gene-symbol selector. Both must round-trip.
-    assert_display_preserves_gene_selector("NC_000013.11(NM_004119.3)(FLT3):c.100A>G", "FLT3");
+fn display_drops_redundant_gene_selector_with_compound_ref() {
+    let v = parse_hgvs("NC_000013.11(NM_004119.3)(FLT3):c.100A>G").unwrap();
+    assert_eq!(gene_symbol_of(&v), Some("FLT3"));
+    assert_eq!(v.to_string(), "NC_000013.11(NM_004119.3):c.100A>G");
 }
 
 #[test]
 fn display_compound_ref_without_selector_unchanged() {
-    // Compound-ref alone (no gene selector) must not be confused with a
-    // selector. The display is unchanged from PR #70's behavior.
+    // Compound-ref alone (no gene selector) is unchanged.
     let input = "NC_000013.11(NM_004119.3):c.100A>G";
     let v = parse_hgvs(input).unwrap();
     assert_eq!(gene_symbol_of(&v), None);
@@ -208,28 +259,79 @@ fn display_compound_ref_without_selector_unchanged() {
 }
 
 // =============================================================================
-// Allele compact form: `ACC(GENE):c.[edit1;edit2]` carries the selector once.
+// Allele forms on a transcript reference: the selector is dropped from the
+// compact prefix / expanded members, but the compaction decision still keys
+// off `gene_symbol` equality.
 // =============================================================================
 
 #[test]
-fn display_preserves_gene_selector_in_compact_allele() {
-    // Compact cis allele form: when both sub-variants share an accession
-    // and gene selector, the prefix emits `acc(gene):type.[…]` once.
+fn display_drops_gene_selector_in_compact_allele() {
     let input = "NM_000088.3(COL1A1):c.[100A>G;200C>T]";
-    let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input:?} failed: {e:?}"));
-    assert_eq!(v.to_string(), input);
-
-    // Idempotent re-parse.
+    let v = parse_hgvs(input).unwrap();
+    assert_eq!(v.to_string(), "NM_000088.3:c.[100A>G;200C>T]");
     let reparsed = parse_hgvs(&v.to_string()).unwrap();
-    assert_eq!(reparsed.to_string(), input);
+    assert_eq!(reparsed.to_string(), "NM_000088.3:c.[100A>G;200C>T]");
+}
+
+#[test]
+fn display_drops_gene_selector_in_compact_trans_allele() {
+    let input = "NM_000088.3(COL1A1):c.[100A>G];[200C>T]";
+    let v = parse_hgvs(input).unwrap();
+    assert_eq!(v.to_string(), "NM_000088.3:c.[100A>G];[200C>T]");
+}
+
+#[test]
+fn display_drops_gene_selector_in_unknown_phase_compact_allele() {
+    let input = "NM_000088.3(COL1A1):c.100A>G(;)200C>T";
+    let v = parse_hgvs(input).unwrap();
+    assert_eq!(v.to_string(), "NM_000088.3:c.100A>G(;)200C>T");
+}
+
+#[test]
+fn display_drops_gene_selector_in_trans_allele_same_acc_same_gene() {
+    // Same accession + same gene + trans phase → compact-trans, selector
+    // dropped from the transcript-reference prefix. The field survives on each
+    // sub-variant.
+    let input = "NM_000088.3(COL1A1):c.[100A>G];[200C>T]";
+    let v = parse_hgvs(input).unwrap();
+    assert_eq!(v.to_string(), "NM_000088.3:c.[100A>G];[200C>T]");
+
+    if let HgvsVariant::Allele(a) = &v {
+        for sub in &a.variants {
+            assert_eq!(gene_symbol_of(sub), Some("COL1A1"));
+        }
+    } else {
+        panic!("expected Allele; got {:?}", v);
+    }
+}
+
+#[test]
+fn display_drops_independent_gene_selectors_in_mixed_acc_trans() {
+    // Different transcript accessions with different gene symbols. Both
+    // selectors are dropped from Display; the fields survive on the members.
+    let input = "[NM_000088.3(COL1A1):c.100A>G];[NM_000089.3(COL1A2):c.200C>T]";
+    let v = parse_hgvs(input).unwrap();
+    assert_eq!(
+        v.to_string(),
+        "[NM_000088.3:c.100A>G];[NM_000089.3:c.200C>T]"
+    );
+
+    if let HgvsVariant::Allele(a) = &v {
+        assert_eq!(a.variants.len(), 2);
+        assert_eq!(gene_symbol_of(&a.variants[0]), Some("COL1A1"));
+        assert_eq!(gene_symbol_of(&a.variants[1]), Some("COL1A2"));
+    } else {
+        panic!("expected Allele; got {:?}", v);
+    }
 }
 
 // =============================================================================
-// Normalize → Display: the selector survives both stages.
+// Normalize → Display: the selector survives normalization on the struct, and
+// Display applies the reference-type policy afterward.
 // =============================================================================
 
 #[test]
-fn normalize_then_display_preserves_gene_selector() {
+fn normalize_then_display_drops_gene_selector_on_transcript_ref() {
     let provider = MockProvider::with_test_data();
     let normalizer = Normalizer::new(provider);
 
@@ -237,12 +339,15 @@ fn normalize_then_display_preserves_gene_selector() {
     let variant = parse_hgvs(input).unwrap();
     let normalized = normalizer.normalize(&variant).unwrap();
 
-    // gene_symbol survives normalization, and Display preserves it on output.
+    // gene_symbol survives normalization on the struct...
     assert_eq!(gene_symbol_of(&normalized), Some("COL1A1"));
-    assert!(
-        normalized.to_string().contains("(COL1A1)"),
-        "normalized Display must preserve the gene selector: {}",
-        normalized
+    // ...but Display drops it on the transcript reference (#1051). Pin the exact
+    // bare form, not just the absence of the selector, so malformed output can't
+    // slip past (a substitution does not shift under normalization).
+    assert_eq!(
+        normalized.to_string(),
+        "NM_000088.3:c.4A>G",
+        "Display on a transcript reference must emit the canonical bare form"
     );
 }
 
@@ -250,9 +355,6 @@ fn normalize_then_display_preserves_gene_selector() {
 fn normalize_does_not_synthesize_gene_selector_in_display() {
     // When the input lacked a selector, normalization must not invent one,
     // even though the underlying transcript record knows the gene symbol.
-    // The byte-equality assertion pins the exact canonical bare form so any
-    // future change that adds parens for an unrelated reason cannot
-    // silently introduce a synthesized selector.
     let provider = MockProvider::with_test_data();
     let normalizer = Normalizer::new(provider);
 
@@ -269,146 +371,9 @@ fn normalize_does_not_synthesize_gene_selector_in_display() {
 }
 
 // =============================================================================
-// Per-coordinate-type Preserve coverage for the kinds not exercised in the top
-// section (the top section already covers `c`, `n`, `p`, `g`).
-// =============================================================================
-
-#[test]
-fn display_preserves_gene_selector_rna() {
-    // `r.` form (RNA): selector follows the same rule as DNA forms.
-    assert_display_preserves_gene_selector("NM_000088.3(COL1A1):r.100a>g", "COL1A1");
-}
-
-#[test]
-fn display_preserves_gene_selector_mitochondrial() {
-    // `m.` form: spec explicitly endorses `NC_012920.1(MT-…):m.…` — see
-    // assets/hgvs-nomenclature/docs/background/refseq.md lines 197–203.
-    assert_display_preserves_gene_selector("NC_012920.1(MT-ND1):m.3460G>A", "MT-ND1");
-}
-
-#[test]
-fn display_preserves_gene_selector_circular() {
-    // `o.` form (circular DNA, SVD-WG006). ferro accepts the selector
-    // verbatim; Display preserves it.
-    assert_display_preserves_gene_selector("NC_001416.1(genE):o.1A>G", "genE");
-}
-
-// =============================================================================
-// Trans-allele expanded form: each sub-variant carries its own selector through
-// the `[v1];[v2]` wrapping (no shared prefix; no information loss).
-// =============================================================================
-
-#[test]
-fn display_preserves_gene_selector_in_trans_allele_same_acc_same_gene() {
-    // Same accession + same gene + trans phase. The compact-trans form
-    // `ACC(GENE):c.[a];[b]` is legal here, and ferro emits it because both
-    // sub-variants agree on accession and gene_symbol. The `Allele` wrapper
-    // returns `None` from `gene_symbol()` (selectors live on sub-variants),
-    // so we assert via byte-stable round-trip + per-sub-variant inspection
-    // rather than the generic helper.
-    let input = "NM_000088.3(COL1A1):c.[100A>G];[200C>T]";
-    let v = parse_hgvs(input).unwrap();
-    assert_eq!(
-        v.to_string(),
-        input,
-        "Display must preserve compact-trans selector"
-    );
-
-    if let HgvsVariant::Allele(a) = &v {
-        for sub in &a.variants {
-            assert_eq!(gene_symbol_of(sub), Some("COL1A1"));
-        }
-    } else {
-        panic!("expected Allele; got {:?}", v);
-    }
-
-    let reparsed = parse_hgvs(&v.to_string()).unwrap();
-    assert_eq!(reparsed.to_string(), input, "reparse must be byte-stable");
-}
-
-#[test]
-fn display_preserves_gene_selector_in_trans_allele_expanded_form() {
-    // Parse the expanded `[v1];[v2]` notation; each sub-variant captures the
-    // gene_symbol independently. Because both sub-variants share accession and
-    // gene_symbol, `all_share_accession_and_type` permits the compact-trans
-    // output `ACC(GENE):c.[a];[b]`, so this test does NOT exercise the
-    // per-kind expanded-form Display path (that case lives in
-    // `display_preserves_independent_gene_selectors_in_mixed_acc_trans`, where
-    // mismatched accessions force the expanded path). What this test pins is
-    // sub-variant `gene_symbol` capture under the expanded-input → compact-
-    // trans-output normalization, plus byte-stable re-parse of the output.
-    let input = "[NM_000088.3(COL1A1):c.100A>G];[NM_000088.3(COL1A1):c.200C>T]";
-    let v = parse_hgvs(input).unwrap();
-    let s = v.to_string();
-    let reparsed = parse_hgvs(&s).unwrap();
-    assert_eq!(reparsed.to_string(), s, "reparse must be byte-stable");
-
-    // Both inner sub-variants must observe the gene_symbol.
-    if let HgvsVariant::Allele(a) = &v {
-        assert_eq!(a.variants.len(), 2);
-        for sub in &a.variants {
-            assert_eq!(gene_symbol_of(sub), Some("COL1A1"));
-        }
-    } else {
-        panic!("expected Allele; got {:?}", v);
-    }
-}
-
-#[test]
-fn display_preserves_independent_gene_selectors_in_mixed_acc_trans() {
-    // Different accessions, each with its own gene symbol. Per #121 the
-    // expanded trans form must preserve both selectors, one per sub-variant.
-    // This is the round-trip-stability case for cross-gene compound
-    // heterozygosity reports.
-    let input = "[NM_000088.3(COL1A1):c.100A>G];[NM_000089.3(COL1A2):c.200C>T]";
-    let v = parse_hgvs(input).unwrap();
-    assert_eq!(v.to_string(), input);
-
-    if let HgvsVariant::Allele(a) = &v {
-        assert_eq!(a.variants.len(), 2);
-        assert_eq!(gene_symbol_of(&a.variants[0]), Some("COL1A1"));
-        assert_eq!(gene_symbol_of(&a.variants[1]), Some("COL1A2"));
-    } else {
-        panic!("expected Allele; got {:?}", v);
-    }
-
-    let reparsed = parse_hgvs(&v.to_string()).unwrap();
-    assert_eq!(reparsed.to_string(), input, "reparse must be byte-stable");
-}
-
-// =============================================================================
-// Allele compact forms (cis, trans, unknown-phase) all carry the selector once
-// on the prefix via `write_compact_prefix`.
-// =============================================================================
-
-#[test]
-fn display_preserves_gene_selector_in_compact_trans_allele() {
-    // Compact-trans form: `ACC(GENE):c.[edit1];[edit2]`. The selector lives
-    // on the prefix once (via `write_compact_prefix`); each bracketed group
-    // is a single trans variant.
-    let input = "NM_000088.3(COL1A1):c.[100A>G];[200C>T]";
-    let v = parse_hgvs(input).unwrap();
-    assert_eq!(v.to_string(), input);
-    let reparsed = parse_hgvs(&v.to_string()).unwrap();
-    assert_eq!(reparsed.to_string(), input);
-}
-
-#[test]
-fn display_preserves_gene_selector_in_unknown_phase_compact_allele() {
-    // Unknown-phase compact form: `ACC(GENE):c.edit1(;)edit2`. No surrounding
-    // brackets; the selector still lives on the prefix once.
-    let input = "NM_000088.3(COL1A1):c.100A>G(;)200C>T";
-    let v = parse_hgvs(input).unwrap();
-    assert_eq!(v.to_string(), input);
-    let reparsed = parse_hgvs(&v.to_string()).unwrap();
-    assert_eq!(reparsed.to_string(), input);
-}
-
-// =============================================================================
 // Hash + Eq: gene_symbol participates in the derived Hash/Eq on every variant
-// struct. Two variants with the same accession + edit but different selectors
-// must compare unequal and hash distinctly so set/map deduplication respects
-// the user-supplied disambiguation.
+// struct (parser-level; independent of the Display drop). Two variants with the
+// same accession + edit but different selectors must compare unequal.
 // =============================================================================
 
 #[test]
@@ -446,14 +411,8 @@ fn variants_with_different_gene_symbols_are_distinct() {
 }
 
 // =============================================================================
-// `HgvsVariant::gene_symbol()` accessor contract.
-//
-// The accessor is documented as returning `None` for variant kinds that don't
-// carry a single top-level selector (`Allele`, `RnaFusion`, `NullAllele`,
-// `UnknownAllele`). Selectors on those nested kinds are emitted by their own
-// `Display` impls (e.g. `RnaFusionBreakpoint::Display`). This test pins that
-// contract so a future "surface nested gene_symbol" change is a deliberate
-// API decision rather than an accident.
+// `HgvsVariant::gene_symbol()` accessor contract: `None` for nested kinds
+// (`Allele`, `RnaFusion`, …); selectors on those live on the sub-parts.
 // =============================================================================
 
 #[test]
@@ -476,32 +435,30 @@ fn gene_symbol_accessor_returns_none_for_nested_kinds() {
         None,
         "RnaFusion's top-level gene_symbol() is None; selectors live on breakpoints"
     );
-    // The breakpoint selectors must still appear in the Display output.
+    // Both breakpoints are transcript references (`NM_`), so Display drops the
+    // selectors (#1051) — the breakpoint genes must NOT appear in the output.
     let s = fusion.to_string();
-    assert!(
-        s.contains("(ACTN1)"),
-        "5' breakpoint gene must round-trip: {}",
-        s
+    assert_eq!(
+        s, "NM_152263.2:r.-115_775::NM_002609.3:r.1580_*1924",
+        "transcript-reference fusion breakpoints drop their gene selectors: {s}",
     );
-    assert!(
-        s.contains("(BCR)"),
-        "3' breakpoint gene must round-trip: {}",
-        s
-    );
+    // The captured gene_symbol still lives on each breakpoint struct.
+    if let HgvsVariant::RnaFusion(fx) = &fusion {
+        assert_eq!(fx.five_prime.gene_symbol.as_deref(), Some("ACTN1"));
+        assert_eq!(fx.three_prime.gene_symbol.as_deref(), Some("BCR"));
+    } else {
+        unreachable!()
+    }
 }
 
 // =============================================================================
-// Edge cases: empty selector, whitespace padding, casing, special characters.
-// ferro's policy is "preserve verbatim" — the parser does not sanitize
-// gene_symbol, and Display emits whatever was captured. The HGVS spec's
-// canonical form uses approved HGNC symbols (no whitespace, no quotes), but
-// ferro stays bytes-in / bytes-out so callers can detect malformed input.
+// Edge cases: empty selector, whitespace/case (captured verbatim on parse,
+// then subject to the reference-type Display policy).
 // =============================================================================
 
 #[test]
 fn empty_selector_is_treated_as_no_selector() {
-    // `NM_X():c.…` parses with gene_symbol = None (per the parser's
-    // "Treat empty strings as None" rule). Display must emit the bare form.
+    // `NM_X():c.…` parses with gene_symbol = None; Display emits the bare form.
     let v = parse_hgvs("NM_000088.3():c.100A>G").unwrap();
     assert_eq!(gene_symbol_of(&v), None);
     assert_eq!(
@@ -512,31 +469,29 @@ fn empty_selector_is_treated_as_no_selector() {
 }
 
 #[test]
-fn whitespace_padded_selector_round_trips_verbatim() {
-    // Padding is preserved in `gene_symbol` and round-trips on Display.
-    // Spec uses HGNC symbols which contain no whitespace; this pin documents
-    // ferro's bytes-in/bytes-out policy.
+fn whitespace_padded_selector_captured_then_dropped() {
+    // Padding is preserved in `gene_symbol` on parse; a transcript reference
+    // then drops it on Display (#1051).
     let input = "NM_000088.3( COL1A1 ):c.100A>G";
     let v = parse_hgvs(input).unwrap();
     assert_eq!(gene_symbol_of(&v), Some(" COL1A1 "));
-    assert_eq!(v.to_string(), input);
+    assert_eq!(v.to_string(), "NM_000088.3:c.100A>G");
 }
 
 #[test]
-fn lowercase_selector_preserved_verbatim() {
-    // Spec uses uppercase HGNC symbols; ferro does not normalize case.
+fn lowercase_selector_captured_then_dropped() {
+    // ferro does not normalize case; the transcript reference drops it anyway.
     let input = "NM_000088.3(col1a1):c.100A>G";
     let v = parse_hgvs(input).unwrap();
     assert_eq!(gene_symbol_of(&v), Some("col1a1"));
-    assert_eq!(v.to_string(), input);
+    assert_eq!(v.to_string(), "NM_000088.3:c.100A>G");
 }
 
 #[test]
-fn hyphenated_selector_round_trips() {
-    // Mitochondrial genes carry hyphens (MT-ND1, MT-TL1). The selector
-    // parser uses `take_while(c != ')')`, so any non-paren bytes are
-    // accepted verbatim. The spec endorses this exact form (see
-    // assets/hgvs-nomenclature/docs/background/refseq.md lines 197–203).
+fn hyphenated_selector_preserved_on_mitochondrial_reference() {
+    // Mitochondrial genes carry hyphens (MT-ND1, MT-TL1) and have no transcript
+    // reference, so the selector is the spec-sanctioned exception and preserved
+    // (refseq.md lines 197–203).
     assert_display_preserves_gene_selector("NC_012920.1(MT-TL1):m.3243A>G", "MT-TL1");
     assert_display_preserves_gene_selector("NC_012920.1(MT-ND1):m.3460G>A", "MT-ND1");
     assert_display_preserves_gene_selector("NC_012920.1(MT-TL1):n.14A>G", "MT-TL1");
