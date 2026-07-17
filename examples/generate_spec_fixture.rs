@@ -1116,10 +1116,18 @@ mod render {
     }
 
     fn read_submodule_commit(spec_dir: &Path) -> anyhow::Result<String> {
+        // Clear the ambient GIT_* env before resolving the submodule pin. Git
+        // exports GIT_DIR/GIT_WORK_TREE (pointing at the OUTER repo) when it
+        // runs a hook, and those override the `-C spec_dir` repo discovery — so
+        // under the pre-push `--check` hook this would otherwise resolve the
+        // outer branch HEAD instead of the submodule's commit (#1046).
         let out = std::process::Command::new("git")
             .arg("-C")
             .arg(spec_dir)
             .args(["rev-parse", "HEAD"])
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
             .output()
             .map_err(|e| anyhow::anyhow!("git rev-parse: {e}"))?;
         if !out.status.success() {
