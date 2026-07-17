@@ -702,7 +702,6 @@ impl fmt::Display for ProtPos {
 /// structural logic. `PartialEq` compares the position AND the style; within one
 /// render both interval endpoints carry the same style, so the interval's
 /// point-collapse (`start == end`) still reduces to position equality.
-#[allow(dead_code)] // consumed by a later task's Interval<ProtPos> styled rendering
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct StyledProtPos(pub ProtPos, pub ProteinRenderStyle);
 

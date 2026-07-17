@@ -72,7 +72,12 @@ impl<T> Mu<T> {
     ///
     /// This is useful when you want to transform the value but don't want to
     /// consume the original Mu.
-    pub fn map_ref<U, F: FnOnce(&T) -> U>(&self, f: F) -> Mu<U> {
+    ///
+    /// The lifetime is named (rather than elided) so `U` may itself borrow
+    /// from `self` for the caller's lifetime `'a` — e.g. wrapping the inner
+    /// reference in a newtype for styled `Display` — instead of being
+    /// restricted to a higher-ranked, per-call lifetime that can't escape.
+    pub fn map_ref<'a, U, F: FnOnce(&'a T) -> U>(&'a self, f: F) -> Mu<U> {
         match self {
             Mu::Certain(v) => Mu::Certain(f(v)),
             Mu::Uncertain(v) => Mu::Uncertain(f(v)),

@@ -1454,7 +1454,6 @@ impl fmt::Display for ProteinEdit {
 
 /// A `&ProteinEdit` paired with a style so it can be wrapped in the generic
 /// `Mu<T>` `Display` (uncertainty parens / `?`) without duplicating that logic.
-#[allow(dead_code)] // consumed by Task 4's ProteinVariant styled rendering
 pub(crate) struct StyledProteinEdit<'a>(
     pub &'a ProteinEdit,
     pub crate::hgvs::location::ProteinRenderStyle,
