@@ -359,8 +359,10 @@ fn display_compound_ref_without_selector_unchanged() {
 // =============================================================================
 // Allele compound-form matrix. On a transcript reference the per-sub-variant
 // selector is dropped (#1051), so the compact/expanded prefix loses `(GENE)`.
-// The compaction decision itself still keys off `gene_symbol` equality, so a
-// mismatch still forces the expanded bracket form.
+// Because that selector is never displayed on a transcript reference, the
+// compaction decision is gene-agnostic there — a gene mismatch does not block
+// compaction, keeping Display idempotent (#1058). On a non-transcript
+// reference the selector is shown, so a mismatch still forces expanded form.
 // =============================================================================
 
 #[test]
@@ -450,20 +452,23 @@ fn display_drops_independent_gene_selectors_in_mixed_acc_trans() {
 }
 
 #[test]
-fn display_falls_back_to_expanded_when_gene_symbols_mismatch() {
-    // The `all_share_accession_and_type` consensus rule still keys off
-    // gene_symbol: same accession but mismatched gene_symbol → the compaction
-    // is declined and the expanded bracket form is used. On a transcript
-    // reference the selector itself is not displayed, but the expanded vs
-    // compact bracket structure still differs, so the fallback is observable.
+fn mismatched_gene_symbols_compact_on_transcript_ref() {
+    // Same transcript accession, mismatched gene_symbol. On a transcript
+    // reference the selector is never displayed (#1051), so the mismatch is
+    // invisible in both the compact and the expanded form. Declining
+    // compaction on that invisible mismatch made Display non-idempotent (the
+    // expanded form reparses to all-`None` genes and then compacts), so the
+    // compaction decision is gene-agnostic on a transcript reference (#1058).
     let input = "[NM_000088.3(COL1A1):c.100A>G];[NM_000088.3(COL1A2):c.200C>T]";
     let v = parse_hgvs(input).unwrap();
+    let displayed = v.to_string();
     assert_eq!(
-        v.to_string(),
-        "[NM_000088.3:c.100A>G];[NM_000088.3:c.200C>T]",
-        "mismatched selectors keep expanded bracket structure, not compact",
+        displayed, "NM_000088.3:c.[100A>G];[200C>T]",
+        "mismatched selectors on a transcript ref compact (selector not shown)",
     );
 
+    // The parsed struct still carries both selectors for programmatic access,
+    // even though Display suppresses them.
     if let HgvsVariant::Allele(a) = &v {
         assert_eq!(a.variants.len(), 2);
         assert_eq!(gene_symbol_of(&a.variants[0]), Some("COL1A1"));
@@ -471,6 +476,9 @@ fn display_falls_back_to_expanded_when_gene_symbols_mismatch() {
     } else {
         panic!("expected Allele; got {:?}", v);
     }
+
+    // Display -> parse -> Display is now stable (#1058).
+    assert_eq!(parse_hgvs(&displayed).unwrap().to_string(), displayed);
 }
 
 // =============================================================================

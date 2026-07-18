@@ -1194,11 +1194,18 @@ fn use_compact_form(variants: &[HgvsVariant]) -> bool {
 
 /// For a `Trans` allele, return the first concrete leaf sub-variant if the
 /// compact form `ACC:c.[..];[..]` applies. Every concrete leaf — descending
-/// one level into nested cis-group members — must share accession, coord
-/// type, and gene selector; there must be at least one; and none may carry
-/// the per-variant unknown form. `[0]`/`[?]` members contribute no leaves
-/// and are permitted alongside concrete members (this is what keeps
-/// `ACC:c.[X];[?]` / `;[0]` in compact form).
+/// one level into nested cis-group members — must share accession and coord
+/// type; there must be at least one; and none may carry the per-variant
+/// unknown form. `[0]`/`[?]` members contribute no leaves and are permitted
+/// alongside concrete members (this is what keeps `ACC:c.[X];[?]` / `;[0]` in
+/// compact form).
+///
+/// The leaves must also agree on their gene-symbol selector — but only when
+/// that selector is actually displayed. On a **transcript** reference the
+/// selector is suppressed from Display (#1051), so a differing (invisible)
+/// selector must not block compaction; enforcing it there made Display
+/// non-idempotent (#1058). The gene agreement is therefore required only for a
+/// non-transcript (selector-visible) reference.
 fn trans_compact_anchor(variants: &[HgvsVariant]) -> Option<&HgvsVariant> {
     let mut anchor: Option<&HgvsVariant> = None;
     for member in variants {
@@ -1220,10 +1227,19 @@ fn trans_compact_anchor(variants: &[HgvsVariant]) -> Option<&HgvsVariant> {
             match anchor {
                 None => anchor = Some(leaf),
                 Some(a) => {
-                    if leaf.accession() != a.accession()
-                        || leaf.variant_type() != a.variant_type()
-                        || leaf.gene_symbol() != a.gene_symbol()
+                    if leaf.accession() != a.accession() || leaf.variant_type() != a.variant_type()
                     {
+                        return None;
+                    }
+                    // Accessions are equal here, so testing either is
+                    // equivalent. Only enforce gene-symbol agreement when the
+                    // selector is displayed — a transcript reference suppresses
+                    // it (#1051), and blocking compaction on an invisible
+                    // mismatch breaks Display idempotency (#1058).
+                    let selector_visible = a
+                        .accession()
+                        .is_some_and(|acc| !acc.is_transcript_reference());
+                    if selector_visible && leaf.gene_symbol() != a.gene_symbol() {
                         return None;
                     }
                 }
@@ -2071,6 +2087,14 @@ impl HgvsVariant {
     /// (same `g`) and all-`None` are safe; any disagreement (different `g`,
     /// or `Some` vs `None`) falls back to the expanded form so each
     /// sub-variant emits its own selector via per-variant `Display`.
+    ///
+    /// This gene agreement is required only when the selector is actually
+    /// displayed. On a **transcript** reference the selector is suppressed from
+    /// Display (#1051), so a differing (invisible) selector cannot appear in
+    /// either form; blocking compaction on it there made Display non-idempotent
+    /// (the expanded form reparses to all-`None` genes and then compacts,
+    /// #1058). So gene agreement is enforced only for a non-transcript
+    /// (selector-visible) reference.
     pub(crate) fn all_share_accession_and_type(variants: &[HgvsVariant]) -> bool {
         let Some(first) = variants.first() else {
             return true;
@@ -2087,10 +2111,15 @@ impl HgvsVariant {
             return false;
         }
 
+        // Only require matching gene symbols when the selector is displayed.
+        // A transcript reference suppresses it (#1051); all members share
+        // `first_acc`, so the first accession decides visibility for all.
+        let selector_visible = first_acc.is_some_and(|acc| !acc.is_transcript_reference());
+
         variants[1..].iter().all(|v| {
             v.variant_type() == first_type
                 && v.accession() == first_acc
-                && v.gene_symbol() == first_gene
+                && (!selector_visible || v.gene_symbol() == first_gene)
         })
     }
 }
@@ -3007,14 +3036,15 @@ mod tests {
     }
 
     #[test]
-    fn test_allele_compact_form_requires_matching_gene_symbol() {
-        // Hand-built cis allele: same accession, same coordinate type, but the
-        // sub-variants disagree on gene_symbol. The compaction decision still
-        // keys off gene_symbol (a single compact prefix cannot represent two
-        // distinct selectors), so the mismatch forces the expanded bracket
-        // form. On a transcript reference (`NM_`) the selector is not itself
-        // displayed (#1051), but the expanded-vs-compact bracket structure
-        // still differs, so the fallback is observable.
+    fn test_allele_compact_form_transcript_ref_compacts_despite_gene_mismatch() {
+        // Hand-built cis/trans alleles: same transcript accession, same
+        // coordinate type, but the sub-variants disagree on gene_symbol. On a
+        // transcript reference the gene-symbol selector is never displayed
+        // (#1051), so a differing selector cannot appear in either the compact
+        // or the expanded form. Blocking compaction on that invisible mismatch
+        // (the old behavior) made Display non-idempotent: the expanded form
+        // reparses to all-`None` genes and then compacts (#1058). So on a
+        // transcript reference the compaction decision must be gene-agnostic.
         use crate::hgvs::location::CdsPos;
 
         let acc = Accession::new("NM", "000088", Some(3));
@@ -3044,26 +3074,25 @@ mod tests {
         let cis = AlleleVariant::cis(vec![v_a.clone(), v_b.clone()]);
         assert_eq!(
             format!("{}", HgvsVariant::Allele(cis)),
-            "[NM_000088.3:c.100A>G;NM_000088.3:c.200C>T]",
-            "mismatched gene symbols must use expanded form (bracket structure \
-             still distinguishes it from the compact form)"
+            "NM_000088.3:c.[100A>G;200C>T]",
+            "mismatched gene symbols on a transcript reference must not block \
+             compaction (the selector is not displayed either way, #1058)"
         );
 
         let trans = AlleleVariant::trans(vec![v_a, v_b]);
         assert_eq!(
             format!("{}", HgvsVariant::Allele(trans)),
-            "[NM_000088.3:c.100A>G];[NM_000088.3:c.200C>T]",
-            "trans is always expanded"
+            "NM_000088.3:c.[100A>G];[200C>T]",
+            "mismatched gene symbols on a transcript reference must not block \
+             trans compaction either (#1058)"
         );
     }
 
     #[test]
-    fn test_allele_compact_form_requires_matching_gene_symbol_some_vs_none() {
-        // First sub-variant has Some(gene), second has None. The gene_symbol
-        // Some/None disagreement forces the expanded bracket form (the
-        // compaction anchor still compares gene_symbol). On a transcript
-        // reference the selector is not displayed (#1051), but the bracket
-        // structure still distinguishes expanded from compact.
+    fn test_allele_compact_form_transcript_ref_compacts_gene_some_vs_none() {
+        // First sub-variant has Some(gene), second has None. On a transcript
+        // reference neither selector is displayed, so this Some/None mismatch
+        // is likewise invisible and must not block compaction (#1058).
         use crate::hgvs::location::CdsPos;
 
         let acc = Accession::new("NM", "000088", Some(3));
@@ -3093,9 +3122,102 @@ mod tests {
         let cis = AlleleVariant::cis(vec![v_with, v_bare]);
         assert_eq!(
             format!("{}", HgvsVariant::Allele(cis)),
-            "[NM_000088.3:c.100A>G;NM_000088.3:c.200C>T]",
-            "Some/None gene_symbol mismatch must use expanded form"
+            "NM_000088.3:c.[100A>G;200C>T]",
+            "Some/None gene_symbol mismatch on a transcript reference must not \
+             block compaction (#1058)"
         );
+    }
+
+    #[test]
+    fn test_allele_compact_form_nontranscript_ref_requires_matching_gene_symbol() {
+        // On a *non*-transcript (genomic) reference the gene-symbol selector IS
+        // displayed, and a compact prefix carries exactly one selector. A
+        // differing selector must still force the expanded form so each
+        // sub-variant emits its own selector verbatim (#121 preserve policy) --
+        // the #1058 carve-out is transcript-reference-only.
+        use crate::hgvs::location::CdsPos;
+
+        // NG_ genomic reference with c. coordinates supplied via genomic context.
+        let acc = Accession::new("NG", "007400", Some(1));
+        let v_a = HgvsVariant::Cds(CdsVariant {
+            accession: acc.clone(),
+            gene_symbol: Some("COL1A1".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let v_b = HgvsVariant::Cds(CdsVariant {
+            accession: acc.clone(),
+            gene_symbol: Some("COL1A2".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(200)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::T,
+                },
+            ),
+        });
+
+        let cis = AlleleVariant::cis(vec![v_a, v_b]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(cis)),
+            "[NG_007400.1(COL1A1):c.100A>G;NG_007400.1(COL1A2):c.200C>T]",
+            "mismatched gene symbols on a non-transcript reference must still \
+             use the expanded form so both selectors survive"
+        );
+    }
+
+    #[test]
+    fn test_allele_display_idempotent_mismatched_gene_transcript_ref() {
+        // #1058 regression: a mismatched-gene cis/trans allele on a transcript
+        // reference must survive Display -> parse -> Display unchanged. Before
+        // the fix, the first Display emitted the expanded (bracket) form whose
+        // selectors are suppressed; reparsing produced all-`None` genes, and
+        // the second Display compacted -- a non-idempotent drift.
+        use crate::hgvs::location::CdsPos;
+        use crate::parse_hgvs;
+
+        let acc = Accession::new("NM", "000088", Some(3));
+        let v_a = HgvsVariant::Cds(CdsVariant {
+            accession: acc.clone(),
+            gene_symbol: Some("COL1A1".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(100)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        let v_b = HgvsVariant::Cds(CdsVariant {
+            accession: acc.clone(),
+            gene_symbol: Some("COL1A2".to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(200)),
+                NaEdit::Substitution {
+                    reference: Base::C,
+                    alternative: Base::T,
+                },
+            ),
+        });
+
+        for allele in [
+            AlleleVariant::cis(vec![v_a.clone(), v_b.clone()]),
+            AlleleVariant::trans(vec![v_a.clone(), v_b.clone()]),
+        ] {
+            let first = format!("{}", HgvsVariant::Allele(allele));
+            let reparsed = parse_hgvs(&first).expect("first Display must reparse");
+            let second = format!("{}", reparsed);
+            assert_eq!(
+                first, second,
+                "Display -> parse -> Display must be stable for a mismatched-gene \
+                 allele on a transcript reference (#1058)"
+            );
+        }
     }
 
     #[test]
