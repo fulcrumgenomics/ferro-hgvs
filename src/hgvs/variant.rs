@@ -248,6 +248,64 @@ impl Accession {
         self.ensembl_style || Self::is_ensembl_prefix(&self.prefix)
     }
 
+    /// Map an Ensembl-style prefix to the HGVS coordinate type its feature
+    /// implies, if any — species-independently.
+    ///
+    /// Ensembl stable IDs are `ENS<species_code><feature>` (see
+    /// [`is_ensembl_prefix`](Self::is_ensembl_prefix)); the *feature* is the
+    /// body suffix after the species code and fixes the coordinate type
+    /// regardless of the species code (so `ENST`, `ENSMUST`, `ENSRNOT` all map
+    /// alike):
+    /// - `T` (transcript) → `Some("c")` — coding is the primary type, matching
+    ///   the RefSeq `NM_` convention (see [`inferred_variant_type`]).
+    /// - `G` (gene, genomic) → `Some("g")`.
+    /// - `P` (peptide) → `Some("p")`.
+    /// - `E` (exon), `R` (regulatory) → `None`: these are not variant
+    ///   references and have no HGVS coordinate type.
+    ///
+    /// Most features are a single letter, but a few are multi-letter and must
+    /// not be classified by their final letter alone. The gene-tree feature
+    /// `GT` (Compara, `ENSGT…`) ends in `T` but is **not** a transcript, so it
+    /// is rejected explicitly before the single-letter dispatch. (`FM`, protein
+    /// family, ends in `M` and is already rejected by `is_ensembl_prefix`.)
+    ///
+    /// Returns `None` for any non-Ensembl prefix.
+    ///
+    /// [`inferred_variant_type`]: Self::inferred_variant_type
+    fn ensembl_feature_variant_type(prefix: &str) -> Option<&'static str> {
+        if !Self::is_ensembl_prefix(prefix) {
+            return None;
+        }
+        // `is_ensembl_prefix` guarantees an "ENS" prefix with a non-empty,
+        // all-uppercase-ASCII body, so this slice and the trailing-byte index
+        // below are both safe.
+        let body = &prefix["ENS".len()..];
+        if body.ends_with("GT") {
+            // Compara gene tree (`ENSGT…`) — not a variant reference. Guard
+            // before the single-letter dispatch so its trailing `T` is not
+            // misread as a transcript.
+            return None;
+        }
+        match body.as_bytes()[body.len() - 1] {
+            b'T' => Some("c"),
+            b'G' => Some("g"),
+            b'P' => Some("p"),
+            _ => None, // E (exon), R (regulatory): not variant references.
+        }
+    }
+
+    /// Check if a prefix is an Ensembl **transcript** prefix (feature `T`),
+    /// species-independently: `ENST` (human), `ENSMUST` (mouse), `ENSRNOT`
+    /// (rat), `ENSBTAT` (cow), etc.
+    ///
+    /// This is the transcript-only refinement of
+    /// [`is_ensembl_prefix`](Self::is_ensembl_prefix) (which accepts any Ensembl
+    /// feature). It is the shared basis for classifying Ensembl transcript
+    /// references in [`is_transcript_reference`](Self::is_transcript_reference).
+    pub fn is_ensembl_transcript_prefix(prefix: &str) -> bool {
+        Self::ensembl_feature_variant_type(prefix) == Some("c")
+    }
+
     /// Check if a prefix is the canonical LRG prefix (`"LRG"`, uppercase).
     ///
     /// Per HGVS spec the LRG prefix is case-sensitive (lowercase `lrg_` is not
@@ -294,6 +352,13 @@ impl Accession {
     /// (e.g. `prefix="LRG"`, `number="1t1"`), so the dispatch must inspect the
     /// trailing discriminator rather than only the prefix.
     pub fn inferred_variant_type(&self) -> Option<&'static str> {
+        // Ensembl accessions dispatch on their feature letter, species-
+        // independently (#1057): ENST/ENSMUST/… → c, ENSG/ENSMUSG/… → g,
+        // ENSP/… → p; exon (E) / regulatory (R) features are not variant
+        // references and infer nothing.
+        if let Some(variant_type) = Self::ensembl_feature_variant_type(&self.prefix) {
+            return Some(variant_type);
+        }
         match &*self.prefix {
             // RefSeq genomic
             "NC" | "NG" | "NT" | "NW" => Some("g"),
@@ -303,12 +368,6 @@ impl Accession {
             "NR" => Some("n"),
             // RefSeq protein
             "NP" => Some("p"),
-            // Ensembl transcript
-            "ENST" => Some("c"),
-            // Ensembl gene (genomic)
-            "ENSG" => Some("g"),
-            // Ensembl protein
-            "ENSP" => Some("p"),
             // LRG: dispatch on the t<M> / p<M> discriminator captured in `number`.
             // See `is_lrg_prefix` / `is_lrg` for the prefix-class predicate.
             p if Self::is_lrg_prefix(p) => Some(Self::lrg_inferred_variant_type(&self.number)),
@@ -375,8 +434,9 @@ impl Accession {
 
     /// Returns true if this accession is a **transcript-level** reference that
     /// fully specifies `c.`/`n.`/`r.` coordinates on its own: RefSeq mRNA/ncRNA
-    /// (`NM`/`NR`/`XM`/`XR`), an Ensembl transcript (`ENST`), or an LRG
-    /// transcript (`LRG_<N>t<M>`).
+    /// (`NM`/`NR`/`XM`/`XR`), an Ensembl transcript (`ENST`, `ENSMUST`,
+    /// `ENSRNOT`, … — any species, per #1057), or an LRG transcript
+    /// (`LRG_<N>t<M>`).
     ///
     /// This is the discriminator for the gene-symbol selector's Display policy
     /// (#1051). Per HGVS Nomenclature (`refseq.md`), the parenthetical after a
@@ -398,7 +458,10 @@ impl Accession {
     /// spec-correct `NC_(NM_)` form).
     pub fn is_transcript_reference(&self) -> bool {
         match &*self.prefix {
-            "NM" | "NR" | "XM" | "XR" | "ENST" => true,
+            "NM" | "NR" | "XM" | "XR" => true,
+            // Any Ensembl transcript, species-independently (#1057): ENST,
+            // ENSMUST, ENSRNOT, … — but not ENSG/ENSP (gene/protein).
+            p if Self::is_ensembl_transcript_prefix(p) => true,
             p if Self::is_lrg_prefix(p) => Self::lrg_inferred_variant_type(&self.number) == "c",
             _ => false,
         }
@@ -3335,6 +3398,42 @@ mod tests {
             Accession::new("ENSP", "00000012345", Some(1)).inferred_variant_type(),
             Some("p")
         );
+        // Species-qualified Ensembl accessions (#1057): the feature suffix
+        // (T/G/P) drives the type regardless of the species code (MUS, RNO, …),
+        // exactly as it does for the human (empty species code) forms above.
+        assert_eq!(
+            Accession::new("ENSMUST", "00000012345", Some(1)).inferred_variant_type(),
+            Some("c")
+        );
+        assert_eq!(
+            Accession::new("ENSRNOT", "00000012345", Some(1)).inferred_variant_type(),
+            Some("c")
+        );
+        assert_eq!(
+            Accession::new("ENSMUSG", "00000012345", Some(1)).inferred_variant_type(),
+            Some("g")
+        );
+        assert_eq!(
+            Accession::new("ENSMUSP", "00000012345", Some(1)).inferred_variant_type(),
+            Some("p")
+        );
+        // Ensembl exon (E) and regulatory (R) features have no HGVS coordinate
+        // type — they are not variant references — so they infer nothing.
+        assert_eq!(
+            Accession::new("ENSE", "00000012345", Some(1)).inferred_variant_type(),
+            None
+        );
+        assert_eq!(
+            Accession::new("ENSMUSE", "00000012345", Some(1)).inferred_variant_type(),
+            None
+        );
+        // The Compara gene-tree feature `GT` (`ENSGT…`) ends in `T` but is NOT
+        // a transcript — it must infer nothing, not `c` (the multi-letter
+        // feature must not be classified by its final letter alone).
+        assert_eq!(
+            Accession::new("ENSGT", "00000012345", Some(1)).inferred_variant_type(),
+            None
+        );
         assert_eq!(
             Accession::new("LRG", "1", None).inferred_variant_type(),
             Some("g")
@@ -3370,6 +3469,46 @@ mod tests {
             Accession::new("XX", "12345", None).inferred_variant_type(),
             None
         );
+    }
+
+    #[test]
+    fn test_accession_is_transcript_reference() {
+        // RefSeq transcript families are transcript references.
+        assert!(Accession::new("NM", "000088", Some(3)).is_transcript_reference());
+        assert!(Accession::new("NR", "046018", Some(2)).is_transcript_reference());
+        assert!(Accession::new("XM", "011535467", Some(1)).is_transcript_reference());
+        assert!(Accession::new("XR", "001737893", Some(1)).is_transcript_reference());
+
+        // Human Ensembl transcript (empty species code).
+        assert!(Accession::new("ENST", "00000012345", Some(1)).is_transcript_reference());
+        // Species-qualified Ensembl transcripts must classify the same way
+        // (#1057) — the species code (MUS, RNO, BTA, …) is irrelevant.
+        assert!(Accession::new("ENSMUST", "00000012345", Some(1)).is_transcript_reference());
+        assert!(Accession::new("ENSRNOT", "00000012345", Some(1)).is_transcript_reference());
+        assert!(Accession::new("ENSBTAT", "00000012345", Some(1)).is_transcript_reference());
+
+        // LRG transcript form (`t<M>` discriminator captured in `number`).
+        assert!(Accession::new("LRG", "199t1", None).is_transcript_reference());
+
+        // Non-transcript references are not.
+        assert!(!Accession::new("NC", "000013", Some(11)).is_transcript_reference());
+        assert!(!Accession::new("NG", "012345", Some(1)).is_transcript_reference());
+        assert!(!Accession::new("NP", "000079", Some(2)).is_transcript_reference());
+        // Ensembl gene/protein/exon/regulatory features are not transcripts,
+        // for the human forms and their species-qualified counterparts alike.
+        assert!(!Accession::new("ENSG", "00000012345", Some(1)).is_transcript_reference());
+        assert!(!Accession::new("ENSP", "00000012345", Some(1)).is_transcript_reference());
+        assert!(!Accession::new("ENSMUSG", "00000012345", Some(1)).is_transcript_reference());
+        assert!(!Accession::new("ENSMUSP", "00000012345", Some(1)).is_transcript_reference());
+        assert!(!Accession::new("ENSE", "00000012345", Some(1)).is_transcript_reference());
+        // Compara gene tree (`ENSGT…`): its feature `GT` ends in `T` but must
+        // not be misread as a transcript reference.
+        assert!(!Accession::new("ENSGT", "00000012345", Some(1)).is_transcript_reference());
+        assert!(!Accession::is_ensembl_transcript_prefix("ENSGT"));
+        // Bare LRG genomic record (no `t<M>`) is not a transcript reference.
+        assert!(!Accession::new("LRG", "199", None).is_transcript_reference());
+        // Custom / unknown prefixes are not transcript references.
+        assert!(!Accession::new("XX", "12345", None).is_transcript_reference());
     }
 
     #[test]
