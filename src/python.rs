@@ -3,7 +3,7 @@
 //! This module provides Python bindings for the HGVS parser and normalizer.
 //! Enable with the `python` feature flag.
 
-use pyo3::exceptions::{PyRuntimeError, PyUserWarning, PyValueError};
+use pyo3::exceptions::{PyDeprecationWarning, PyRuntimeError, PyUserWarning, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use std::collections::hash_map::DefaultHasher;
@@ -22,7 +22,7 @@ use crate::error_handling::{
     ferro_to_mutalyzer, CorrectionWarning, ErrorConfig, ErrorMode, ErrorOverride, ErrorType,
 };
 use crate::hgvs::location::{AminoAcid, CdsPos, TxPos};
-use crate::hgvs::variant::HgvsVariant;
+use crate::hgvs::variant::{CoordinateAxis, HgvsVariant};
 use crate::mave::{is_mave_short_form, parse_mave_hgvs, MaveContext};
 use crate::normalize::ShuffleDirection;
 use crate::prepare::{check_references, prepare_references, PrepareConfig, ReferenceManifest};
@@ -516,6 +516,93 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
     Ok(normalized.to_string())
 }
 
+/// The coordinate axis (reference molecule / coordinate system) a variant's
+/// positions are expressed in.
+///
+/// Returned by :attr:`HgvsVariant.axis`. Each member carries its single-letter
+/// HGVS coordinate code (:meth:`code`) and a molecule-type grouping
+/// (:meth:`is_dna` / :meth:`is_rna` / :meth:`is_protein`).
+#[pyclass(name = "Axis", eq, eq_int, frozen, hash, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PyCoordinateAxis {
+    Genomic = 0,
+    Coding = 1,
+    NonCoding = 2,
+    Rna = 3,
+    Protein = 4,
+    Mitochondrial = 5,
+    Circular = 6,
+}
+
+impl From<CoordinateAxis> for PyCoordinateAxis {
+    fn from(axis: CoordinateAxis) -> Self {
+        match axis {
+            CoordinateAxis::Genomic => PyCoordinateAxis::Genomic,
+            CoordinateAxis::Coding => PyCoordinateAxis::Coding,
+            CoordinateAxis::NonCoding => PyCoordinateAxis::NonCoding,
+            CoordinateAxis::Rna => PyCoordinateAxis::Rna,
+            CoordinateAxis::Protein => PyCoordinateAxis::Protein,
+            CoordinateAxis::Mitochondrial => PyCoordinateAxis::Mitochondrial,
+            CoordinateAxis::Circular => PyCoordinateAxis::Circular,
+        }
+    }
+}
+
+impl From<PyCoordinateAxis> for CoordinateAxis {
+    fn from(axis: PyCoordinateAxis) -> Self {
+        match axis {
+            PyCoordinateAxis::Genomic => CoordinateAxis::Genomic,
+            PyCoordinateAxis::Coding => CoordinateAxis::Coding,
+            PyCoordinateAxis::NonCoding => CoordinateAxis::NonCoding,
+            PyCoordinateAxis::Rna => CoordinateAxis::Rna,
+            PyCoordinateAxis::Protein => CoordinateAxis::Protein,
+            PyCoordinateAxis::Mitochondrial => CoordinateAxis::Mitochondrial,
+            PyCoordinateAxis::Circular => CoordinateAxis::Circular,
+        }
+    }
+}
+
+#[pymethods]
+impl PyCoordinateAxis {
+    /// The single-letter HGVS coordinate code (``g``/``c``/``n``/``r``/``p``/``m``/``o``).
+    fn code(&self) -> &'static str {
+        CoordinateAxis::from(*self).code()
+    }
+
+    /// Whether this axis addresses a DNA molecule (``g``/``c``/``n``/``m``/``o``).
+    ///
+    /// Treats mitochondrial and circular DNA as DNA, unlike the deprecated
+    /// ``is_genomic()`` predicate (which is ``g.``-only).
+    fn is_dna(&self) -> bool {
+        CoordinateAxis::from(*self).is_dna()
+    }
+
+    /// Whether this axis addresses an RNA molecule (``r.``).
+    fn is_rna(&self) -> bool {
+        CoordinateAxis::from(*self).is_rna()
+    }
+
+    /// Whether this axis addresses a protein (``p.``).
+    fn is_protein(&self) -> bool {
+        CoordinateAxis::from(*self).is_protein()
+    }
+
+    fn __str__(&self) -> &'static str {
+        CoordinateAxis::from(*self).code()
+    }
+}
+
+/// Emit a `DeprecationWarning` for a deprecated axis boolean predicate,
+/// steering callers to the `axis` property.
+fn warn_axis_predicate_deprecated(py: Python<'_>, name: &str) -> PyResult<()> {
+    let message = std::ffi::CString::new(format!(
+        "HgvsVariant.{name}() is deprecated; use the `axis` property instead \
+         (e.g. `variant.axis`), which resolves an allele's shared coordinate axis."
+    ))
+    .map_err(|e| PyRuntimeError::new_err(format!("invalid warning message: {e}")))?;
+    PyErr::warn(py, &py.get_type::<PyDeprecationWarning>(), &message, 1)
+}
+
 /// Python wrapper for HgvsVariant
 #[pyclass(name = "HgvsVariant", from_py_object)]
 #[derive(Clone)]
@@ -670,34 +757,83 @@ impl PyHgvsVariant {
         is_frameshift(&self.inner)
     }
 
-    /// Check if this is a genomic variant (g. prefix)
-    fn is_genomic(&self) -> bool {
-        matches!(self.inner, HgvsVariant::Genome(_))
+    /// The coordinate axis (reference molecule / coordinate system) of this
+    /// variant, or ``None`` if it has no single well-defined one.
+    ///
+    /// Returns an :class:`Axis` enum member. For a leaf variant this is its
+    /// coordinate kind; for an allele (``ACC:c.[…]``) it is the axis shared by
+    /// every member — so, unlike the deprecated ``is_*`` predicates, this works
+    /// consistently whether or not the edit is wrapped in an allele.
+    ///
+    /// Returns ``None`` when there is no single axis: an empty or mixed-axis
+    /// allele, a bare ``[0]``/``[?]`` marker, or an RNA-fusion ``::`` construct
+    /// joining two different transcripts. A genome ring (``ACC:g.[seg1::seg2]``)
+    /// is a single genomic accession, so it resolves to ``Axis.Genomic``.
+    #[getter]
+    fn axis(&self) -> Option<PyCoordinateAxis> {
+        self.inner.coordinate_axis().map(PyCoordinateAxis::from)
     }
 
-    /// Check if this is a coding variant (c. prefix)
-    fn is_coding(&self) -> bool {
-        matches!(self.inner, HgvsVariant::Cds(_))
+    /// Check if this is a genomic variant (g. prefix).
+    ///
+    /// .. deprecated::
+    ///     Use the :attr:`axis` property instead, e.g.
+    ///     ``variant.axis == Axis.Genomic``. Unlike this predicate, ``axis``
+    ///     resolves the shared axis of an allele (``g.[…]``) rather than
+    ///     returning ``False`` for every allele parent.
+    fn is_genomic(&self, py: Python<'_>) -> PyResult<bool> {
+        warn_axis_predicate_deprecated(py, "is_genomic")?;
+        Ok(self.inner.coordinate_axis() == Some(CoordinateAxis::Genomic))
     }
 
-    /// Check if this is a non-coding variant (n. prefix)
-    fn is_noncoding(&self) -> bool {
-        matches!(self.inner, HgvsVariant::Tx(_))
+    /// Check if this is a coding variant (c. prefix).
+    ///
+    /// .. deprecated::
+    ///     Use the :attr:`axis` property instead, e.g.
+    ///     ``variant.axis == Axis.Coding``.
+    fn is_coding(&self, py: Python<'_>) -> PyResult<bool> {
+        warn_axis_predicate_deprecated(py, "is_coding")?;
+        Ok(self.inner.coordinate_axis() == Some(CoordinateAxis::Coding))
     }
 
-    /// Check if this is a protein variant (p. prefix)
-    fn is_protein(&self) -> bool {
-        matches!(self.inner, HgvsVariant::Protein(_))
+    /// Check if this is a non-coding variant (n. prefix).
+    ///
+    /// .. deprecated::
+    ///     Use the :attr:`axis` property instead, e.g.
+    ///     ``variant.axis == Axis.NonCoding``.
+    fn is_noncoding(&self, py: Python<'_>) -> PyResult<bool> {
+        warn_axis_predicate_deprecated(py, "is_noncoding")?;
+        Ok(self.inner.coordinate_axis() == Some(CoordinateAxis::NonCoding))
     }
 
-    /// Check if this is an RNA variant (r. prefix)
-    fn is_rna(&self) -> bool {
-        matches!(self.inner, HgvsVariant::Rna(_))
+    /// Check if this is a protein variant (p. prefix).
+    ///
+    /// .. deprecated::
+    ///     Use the :attr:`axis` property instead, e.g.
+    ///     ``variant.axis == Axis.Protein``.
+    fn is_protein(&self, py: Python<'_>) -> PyResult<bool> {
+        warn_axis_predicate_deprecated(py, "is_protein")?;
+        Ok(self.inner.coordinate_axis() == Some(CoordinateAxis::Protein))
     }
 
-    /// Check if this is a mitochondrial variant (m. prefix)
-    fn is_mitochondrial(&self) -> bool {
-        matches!(self.inner, HgvsVariant::Mt(_))
+    /// Check if this is an RNA variant (r. prefix).
+    ///
+    /// .. deprecated::
+    ///     Use the :attr:`axis` property instead, e.g.
+    ///     ``variant.axis == Axis.Rna``.
+    fn is_rna(&self, py: Python<'_>) -> PyResult<bool> {
+        warn_axis_predicate_deprecated(py, "is_rna")?;
+        Ok(self.inner.coordinate_axis() == Some(CoordinateAxis::Rna))
+    }
+
+    /// Check if this is a mitochondrial variant (m. prefix).
+    ///
+    /// .. deprecated::
+    ///     Use the :attr:`axis` property instead, e.g.
+    ///     ``variant.axis == Axis.Mitochondrial``.
+    fn is_mitochondrial(&self, py: Python<'_>) -> PyResult<bool> {
+        warn_axis_predicate_deprecated(py, "is_mitochondrial")?;
+        Ok(self.inner.coordinate_axis() == Some(CoordinateAxis::Mitochondrial))
     }
 
     /// Check if this is a substitution
@@ -5370,6 +5506,7 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Core classes
     m.add_class::<PyHgvsVariant>()?;
+    m.add_class::<PyCoordinateAxis>()?;
     m.add_class::<PyNormalizer>()?;
 
     // SPDI classes

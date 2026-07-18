@@ -20,5 +20,5 @@ pub use location::{
 };
 pub use uncertainty::Mu;
 pub use validation::{ParseConfig, ValidationLevel};
-pub use variant::{AllelePhase, AlleleVariant, HgvsVariant};
+pub use variant::{AllelePhase, AlleleVariant, CoordinateAxis, HgvsVariant};
 pub use version::HgvsVersion;

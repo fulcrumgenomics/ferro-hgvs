@@ -122,6 +122,7 @@ __all__ = [
     "build_transcript",
     # Core classes
     "HgvsVariant",
+    "Axis",
     "Normalizer",
     # SPDI classes
     "SpdiVariant",

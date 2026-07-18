@@ -1866,6 +1866,75 @@ impl fmt::Display for AlleleVariant {
     }
 }
 
+/// The coordinate axis (reference molecule / coordinate system) a variant's
+/// positions are expressed in.
+///
+/// Every HGVS description that has a single, well-defined coordinate system maps
+/// to exactly one of these. An allele (`ACC:c.[…]`) maps to the axis shared by
+/// all of its members; see [`HgvsVariant::coordinate_axis`], which returns
+/// `None` when a description has no single axis (an empty or mixed-axis allele,
+/// a bare `[0]`/`[?]` marker, or an RNA-fusion `::` construct joining two
+/// different transcripts).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CoordinateAxis {
+    /// Genomic DNA (`g.`)
+    Genomic,
+    /// Coding DNA (`c.`)
+    Coding,
+    /// Non-coding transcript DNA (`n.`)
+    NonCoding,
+    /// RNA (`r.`)
+    Rna,
+    /// Protein (`p.`)
+    Protein,
+    /// Mitochondrial DNA (`m.`)
+    Mitochondrial,
+    /// Circular DNA (`o.`)
+    Circular,
+}
+
+impl CoordinateAxis {
+    /// The single-letter HGVS coordinate prefix for this axis
+    /// (`g`/`c`/`n`/`r`/`p`/`m`/`o`).
+    pub fn code(self) -> &'static str {
+        match self {
+            CoordinateAxis::Genomic => "g",
+            CoordinateAxis::Coding => "c",
+            CoordinateAxis::NonCoding => "n",
+            CoordinateAxis::Rna => "r",
+            CoordinateAxis::Protein => "p",
+            CoordinateAxis::Mitochondrial => "m",
+            CoordinateAxis::Circular => "o",
+        }
+    }
+
+    /// Whether this axis addresses a DNA molecule (`g`/`c`/`n`/`m`/`o`).
+    ///
+    /// This is the single home for the DNA-vs-RNA-vs-protein grouping: it treats
+    /// mitochondrial and circular DNA as DNA, unlike the narrow legacy
+    /// `is_genomic()` predicate (which is `g.`-only).
+    pub fn is_dna(self) -> bool {
+        matches!(
+            self,
+            CoordinateAxis::Genomic
+                | CoordinateAxis::Coding
+                | CoordinateAxis::NonCoding
+                | CoordinateAxis::Mitochondrial
+                | CoordinateAxis::Circular
+        )
+    }
+
+    /// Whether this axis addresses an RNA molecule (`r.`).
+    pub fn is_rna(self) -> bool {
+        matches!(self, CoordinateAxis::Rna)
+    }
+
+    /// Whether this axis addresses a protein (`p.`).
+    pub fn is_protein(self) -> bool {
+        matches!(self, CoordinateAxis::Protein)
+    }
+}
+
 /// Represents all types of HGVS variants:
 /// - g. (genomic)
 /// - c. (coding DNA)
@@ -1941,6 +2010,74 @@ impl HgvsVariant {
             HgvsVariant::Supernumerary(inner) => inner.accession(),
             HgvsVariant::Allele(a) => a.variants.first().and_then(|v| v.accession()),
             HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => None,
+        }
+    }
+
+    /// Get the [`CoordinateAxis`] (reference molecule / coordinate system) this
+    /// variant's positions are expressed in, if it has a single well-defined one.
+    ///
+    /// For a leaf variant this is simply its coordinate kind. For an allele
+    /// (`ACC:c.[…]`) it is the axis shared by every member — HGVS alleles are
+    /// single-coordinate-system by construction, so this is normally
+    /// well-defined; the method recurses into nested (and/or) sub-alleles and
+    /// skips bare `[0]`/`[?]` markers, which carry no axis of their own.
+    ///
+    /// Returns `None` when there is no single axis:
+    /// - an empty allele, or a (programmatically constructed) allele whose
+    ///   members disagree on axis;
+    /// - a bare `[0]` / `[?]` allele marker; or
+    /// - an RNA-fusion `::` construct, which joins two different transcripts
+    ///   rather than expressing one coordinate system.
+    ///
+    /// A genome ring (`ACC:g.[seg1::seg2]`), by contrast, is a single genomic
+    /// accession whose `::` are intra-molecule ISCN2020 break junctions, so it
+    /// resolves to [`CoordinateAxis::Genomic`].
+    pub fn coordinate_axis(&self) -> Option<CoordinateAxis> {
+        match self {
+            HgvsVariant::Genome(_) => Some(CoordinateAxis::Genomic),
+            HgvsVariant::Cds(_) => Some(CoordinateAxis::Coding),
+            HgvsVariant::Tx(_) => Some(CoordinateAxis::NonCoding),
+            HgvsVariant::Rna(_) => Some(CoordinateAxis::Rna),
+            HgvsVariant::Protein(_) => Some(CoordinateAxis::Protein),
+            HgvsVariant::Mt(_) => Some(CoordinateAxis::Mitochondrial),
+            HgvsVariant::Circular(_) => Some(CoordinateAxis::Circular),
+            HgvsVariant::Supernumerary(inner) => inner.coordinate_axis(),
+            HgvsVariant::Allele(a) => {
+                let mut axis: Option<CoordinateAxis> = None;
+                for member in &a.variants {
+                    match member.coordinate_axis() {
+                        // `[0]`/`[?]` markers carry no axis; skip them so a
+                        // `c.[X];[?]`-style allele still resolves to `X`'s axis.
+                        // Any other axis-less member (e.g. a nested fusion) makes
+                        // the whole allele's axis undefined.
+                        None => {
+                            if matches!(
+                                member,
+                                HgvsVariant::NullAllele | HgvsVariant::UnknownAllele
+                            ) {
+                                continue;
+                            }
+                            return None;
+                        }
+                        Some(member_axis) => match axis {
+                            None => axis = Some(member_axis),
+                            Some(prev) if prev == member_axis => {}
+                            Some(_) => return None,
+                        },
+                    }
+                }
+                axis
+            }
+            // A genome ring (`ACC:g.[seg1::seg2]`) is a single genomic accession
+            // whose `::` are intra-molecule ISCN2020 break junctions, not a
+            // fusion of two frames — every segment is `g.`, so its axis is
+            // Genomic. (Cross-chromosome `::` is rejected at parse time.) An
+            // RNA fusion, by contrast, joins two *different* transcripts and has
+            // no single reference molecule.
+            HgvsVariant::GenomeRing(_) => Some(CoordinateAxis::Genomic),
+            HgvsVariant::RnaFusion(_) | HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => {
+                None
+            }
         }
     }
 
@@ -3969,9 +4106,120 @@ mod tests {
         assert_eq!(compound.transcript_accession(), "ENST00000241453.7");
     }
 
-    // ----- Issue #115: self-cancelling allele detection (E3006) -----
+    // ----- Issue #1059: coordinate-axis resolution -----
 
     use crate::hgvs::parser::variant::parse_variant;
+
+    #[test]
+    fn test_coordinate_axis_leaf_kinds() {
+        let cases = [
+            ("NM_000088.3:c.459A>G", CoordinateAxis::Coding),
+            ("NC_000001.11:g.12345A>G", CoordinateAxis::Genomic),
+            ("NR_003286.2:n.100A>G", CoordinateAxis::NonCoding),
+            ("NM_000088.3:r.100a>g", CoordinateAxis::Rna),
+            ("NP_000079.2:p.Arg8Gln", CoordinateAxis::Protein),
+            ("NC_012920.1:m.100A>G", CoordinateAxis::Mitochondrial),
+        ];
+        for (input, expected) in cases {
+            let v = parse_variant(input).unwrap();
+            assert_eq!(
+                v.coordinate_axis(),
+                Some(expected),
+                "{input} should resolve to axis {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_coordinate_axis_allele_shares_member_axis() {
+        // The reported case: an allele's parent must report its members' shared axis.
+        let coding = parse_variant("NM_000000.1:c.[6G>C;16_18del]").unwrap();
+        assert_eq!(coding.coordinate_axis(), Some(CoordinateAxis::Coding));
+
+        let genomic = parse_variant("NC_000000.1:g.[6G>C;16_18del]").unwrap();
+        assert_eq!(genomic.coordinate_axis(), Some(CoordinateAxis::Genomic));
+
+        let protein = parse_variant("NP_000000.1:p.[(Arg8Gln);(Ser10Gly)]").unwrap();
+        assert_eq!(protein.coordinate_axis(), Some(CoordinateAxis::Protein));
+    }
+
+    #[test]
+    fn test_coordinate_axis_mixed_allele_is_none() {
+        // A synthesized allele whose members disagree on axis has no single axis.
+        let cds = parse_variant("NM_004006.2:c.100_150del").unwrap();
+        let tx = parse_variant("NM_004006.2:n.100_150dup").unwrap();
+        let mixed = HgvsVariant::Allele(AlleleVariant::new(vec![cds, tx], AllelePhase::Cis));
+        assert_eq!(mixed.coordinate_axis(), None);
+    }
+
+    #[test]
+    fn test_coordinate_axis_markers_contribute_no_axis() {
+        // Bare [0] / [?] markers have no axis at all.
+        assert_eq!(HgvsVariant::NullAllele.coordinate_axis(), None);
+        assert_eq!(HgvsVariant::UnknownAllele.coordinate_axis(), None);
+
+        // A trans allele mixing a concrete coding member with a [?] marker still
+        // resolves to the concrete member's axis (the marker is skipped).
+        let concrete = parse_variant("NM_000088.3:c.459A>G").unwrap();
+        let with_marker = HgvsVariant::Allele(AlleleVariant::new(
+            vec![concrete, HgvsVariant::UnknownAllele],
+            AllelePhase::Trans,
+        ));
+        assert_eq!(with_marker.coordinate_axis(), Some(CoordinateAxis::Coding));
+    }
+
+    #[test]
+    fn test_coordinate_axis_nested_allele() {
+        // and/or alleles nest one level: the parent must recurse into sub-alleles.
+        let a = parse_variant("NM_000088.3:c.459A>G").unwrap();
+        let b = parse_variant("NM_000088.3:c.500A>G").unwrap();
+        let inner = HgvsVariant::Allele(AlleleVariant::new(vec![a, b], AllelePhase::Cis));
+        let outer = HgvsVariant::Allele(AlleleVariant::new(vec![inner], AllelePhase::Cis));
+        assert_eq!(outer.coordinate_axis(), Some(CoordinateAxis::Coding));
+    }
+
+    #[test]
+    fn test_coordinate_axis_genome_ring_is_genomic() {
+        // A genome ring (`ACC:g.[seg1::seg2]`) is a single genomic accession
+        // whose `::` are intra-molecule ISCN2020 break junctions — not a fusion
+        // of two frames — so it resolves to Genomic, unlike an RNA fusion.
+        let ring = parse_variant("NC_000022.11:g.pter_1000del::2000_qterdel").unwrap();
+        assert!(
+            matches!(ring, HgvsVariant::GenomeRing(_)),
+            "expected a GenomeRing, got {ring:?}"
+        );
+        assert_eq!(ring.coordinate_axis(), Some(CoordinateAxis::Genomic));
+    }
+
+    #[test]
+    fn test_coordinate_axis_enum_groupings() {
+        assert_eq!(CoordinateAxis::Coding.code(), "c");
+        assert_eq!(CoordinateAxis::Genomic.code(), "g");
+        assert_eq!(CoordinateAxis::NonCoding.code(), "n");
+        assert_eq!(CoordinateAxis::Rna.code(), "r");
+        assert_eq!(CoordinateAxis::Protein.code(), "p");
+        assert_eq!(CoordinateAxis::Mitochondrial.code(), "m");
+        assert_eq!(CoordinateAxis::Circular.code(), "o");
+
+        // DNA axes: g / c / n / m / o. RNA: r. Protein: p.
+        for dna in [
+            CoordinateAxis::Genomic,
+            CoordinateAxis::Coding,
+            CoordinateAxis::NonCoding,
+            CoordinateAxis::Mitochondrial,
+            CoordinateAxis::Circular,
+        ] {
+            assert!(dna.is_dna(), "{dna:?} should be DNA");
+            assert!(!dna.is_rna());
+            assert!(!dna.is_protein());
+        }
+        assert!(CoordinateAxis::Rna.is_rna());
+        assert!(!CoordinateAxis::Rna.is_dna());
+        assert!(CoordinateAxis::Protein.is_protein());
+        assert!(!CoordinateAxis::Protein.is_dna());
+    }
+
+    // ----- Issue #115: self-cancelling allele detection (E3006) -----
 
     #[test]
     fn test_self_cancelling_detect_spec_example() {
