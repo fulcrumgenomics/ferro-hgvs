@@ -231,10 +231,12 @@ fn strict_mode_rejects_utr3_position_past_transcript_end() {
 
 #[test]
 fn strict_mode_accepts_utr3_position_at_transcript_end() {
-    // c.*8 → tx 20 (last base of transcript). In-bounds.
+    // c.*8 → tx 20 (last base of transcript, `C` in "AAAATGAAATAGCCCCCCCC").
+    // In-bounds; stated ref must match so strict mode's #1052 reference-base
+    // check doesn't also fire (this test isolates the bounds check).
     let provider = provider_with_short_cds_transcript();
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
-    let variant = parse_hgvs("NM_TEST.1:c.*8G>C").expect("parse");
+    let variant = parse_hgvs("NM_TEST.1:c.*8C>G").expect("parse");
     normalizer
         .normalize(&variant)
         .expect("c.*8 must pass strict-mode bounds check");
@@ -316,10 +318,12 @@ fn strict_mode_rejects_c_minus_position_past_5utr_start() {
 
 #[test]
 fn strict_mode_accepts_c_minus_position_at_5utr_start() {
-    // `c.-5` = the first 5'UTR base. In-bounds.
+    // `c.-5` = the first 5'UTR base (tx 1, `A` in "AAAAAATGAAATAGCCCCCC").
+    // In-bounds; stated ref must match so strict mode's #1052 reference-base
+    // check doesn't also fire (this test isolates the bounds check).
     let provider = provider_with_short_5utr_transcript();
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
-    let variant = parse_hgvs("NM_5UTR.1:c.-5G>C").expect("parse");
+    let variant = parse_hgvs("NM_5UTR.1:c.-5A>C").expect("parse");
     normalizer
         .normalize(&variant)
         .expect("c.-5 must pass strict-mode bounds check");
@@ -393,10 +397,12 @@ fn strict_mode_rejects_n_position_past_transcript_end() {
 
 #[test]
 fn strict_mode_accepts_n_position_at_transcript_end() {
-    // n.20 = the last base of the transcript. In-bounds.
+    // n.20 = the last base of the transcript (`T` in cyclic "ACGTACGT...").
+    // In-bounds; stated ref must match so strict mode's #1052 reference-base
+    // check doesn't also fire (this test isolates the bounds check).
     let provider = provider_with_short_noncoding_transcript();
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
-    let variant = parse_hgvs("NR_TEST.1:n.20G>C").expect("parse");
+    let variant = parse_hgvs("NR_TEST.1:n.20T>C").expect("parse");
     normalizer
         .normalize(&variant)
         .expect("n.20 must pass strict-mode bounds check");
