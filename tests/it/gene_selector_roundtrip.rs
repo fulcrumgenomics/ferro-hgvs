@@ -208,6 +208,23 @@ fn display_drops_gene_selector_ensembl() {
 }
 
 #[test]
+fn display_drops_gene_selector_ensembl_species_qualified() {
+    // #1057: a species-qualified Ensembl transcript (mouse ENSMUST, rat ENSRNOT,
+    // …) is just as much a transcript reference as the human ENST, so the
+    // gene-symbol selector must be dropped identically — not left dangling.
+    assert_transcript_ref_drops_selector(
+        "ENSMUST00000012345.1(Trp53):c.100A>G",
+        "Trp53",
+        "ENSMUST00000012345.1:c.100A>G",
+    );
+    assert_transcript_ref_drops_selector(
+        "ENSRNOT00000012345.1(Tp53):c.100A>G",
+        "Tp53",
+        "ENSRNOT00000012345.1:c.100A>G",
+    );
+}
+
+#[test]
 fn display_drops_gene_selector_rna() {
     // `r.` form on a transcript reference: selector dropped like `c.`/`n.`.
     assert_transcript_ref_drops_selector(
