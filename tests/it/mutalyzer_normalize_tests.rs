@@ -1358,14 +1358,25 @@ fn issue_506_bare_n_transcript_predicts_protein() {
         "worked example n.206_210del must predict the spec frameshift consequence"
     );
     // The coding axis must reframe n.206_210del to the spec-normalized c. form.
+    // The gene symbol (SDHD) is resolved and carried on the struct
+    // (`coding.gene_symbol`) but is *not* rendered: #1054 drops the gene-symbol
+    // selector on a transcript-reference Display (`NM_`/`NR_`/`XM_`/`XR_`/`ENST`),
+    // since a bare transcript accession already identifies the gene — the
+    // selector is only meaningful on a genomic reference (`NG_(SDHD):c.`).
     let coding = proj
         .coding
         .as_ref()
         .expect("coding (c.) axis should be derived");
     assert_eq!(
         coding.to_string(),
-        "NM_003002.4(SDHD):c.171_175del",
-        "n.206_210del should reframe to c.171_175del"
+        "NM_003002.4:c.171_175del",
+        "n.206_210del should reframe to c.171_175del (gene selector dropped on NM_ per #1054)"
+    );
+    assert_eq!(
+        coding.gene_symbol(),
+        Some("SDHD"),
+        "the gene symbol must still be resolved and available on the struct even though \
+         Display omits it for a transcript reference (#1054)"
     );
     // A bare-NM_ n. input has no genome alignment, so no genomic form.
     assert!(
