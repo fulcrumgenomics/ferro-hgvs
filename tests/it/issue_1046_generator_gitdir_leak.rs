@@ -34,8 +34,21 @@ fn rev_parse(dir: &Path, rev: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// Path to the built `generate_spec_fixture` example, derived from the running
-/// test binary's location (`<target>/<profile>/deps/<test-exe>` →
+/// The target directory root of the running test binary
+/// (`<target>/<profile>/deps/<test-exe>` → `<target>`). This tracks whatever
+/// `--target-dir` / `CARGO_TARGET_DIR` the outer `cargo test` used, including
+/// the `target/llvm-cov-target` override that the coverage job passes on the
+/// command line (which nested cargo invocations do *not* otherwise inherit).
+fn target_dir() -> PathBuf {
+    let mut p = std::env::current_exe().expect("current_exe");
+    p.pop(); // drop the test-exe filename → .../deps/
+    p.pop(); // drop deps → .../<profile>/
+    p.pop(); // drop <profile> → .../<target>/
+    p
+}
+
+/// Path to the built `generate_spec_fixture` example under the profile that the
+/// running test binary was built with (`<target>/<profile>/deps/<test-exe>` →
 /// `<target>/<profile>/examples/generate_spec_fixture`). This is robust to
 /// `CARGO_TARGET_DIR` and the active profile, and avoids invoking the example
 /// through `cargo run` (which would leak our hostile GIT env into cargo too).
@@ -85,7 +98,11 @@ fn commit_sha_is_submodule_pin_under_hook_git_env() {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
 
-    // Build the example with a clean env (a fast no-op when already built).
+    // Build the example (a fast no-op when already built). Pin `--target-dir`
+    // to the outer test binary's target root so the example lands exactly where
+    // `example_binary()` looks: the coverage job passes `--target-dir` on the
+    // command line, and that override is not inherited by this nested cargo
+    // invocation (which would otherwise build into the default `target/`).
     let build = Command::new(env!("CARGO"))
         .current_dir(&root)
         .args([
@@ -96,6 +113,8 @@ fn commit_sha_is_submodule_pin_under_hook_git_env() {
             "--example",
             "generate_spec_fixture",
         ])
+        .arg("--target-dir")
+        .arg(target_dir())
         .status()
         .expect("build generate_spec_fixture example");
     assert!(build.success(), "example build failed");
