@@ -1,0 +1,6 @@
+[workspace]
+# For a 0.x crate, release-plz's default bumps the patch version for feature
+# commits and reserves the minor bump for breaking changes. This project treats
+# pre-1.0 feature additions as minor bumps, so increment the minor version on
+# features even while the major version is 0.
+features_always_increment_minor = true
