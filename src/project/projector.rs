@@ -4,7 +4,7 @@ use crate::data::cdot::CdotTranscript;
 use crate::data::mapping::MappingInfo;
 use crate::data::projection::Projector;
 use crate::error::FerroError;
-use crate::hgvs::edit::NaEdit;
+use crate::hgvs::edit::{NaEdit, ProteinEdit};
 use crate::hgvs::interval::{CdsInterval, TxInterval};
 use crate::hgvs::location::{CdsPos, GenomePos, TxPos};
 use crate::hgvs::variant::{
@@ -237,6 +237,47 @@ fn cis_member_protein_accession(
             _ => None,
         })
         .unwrap_or_else(|| transcript_id.to_string())
+}
+
+/// Whether a predicted protein consequence is a frameshift form (`p.…fs…`).
+///
+/// The frameshift protein forms are exactly [`ProteinEdit::Frameshift`] and
+/// [`ProteinEdit::FrameshiftAlternatives`]. An [`ProteinEdit::Extension`]
+/// (stop-loss), an in-frame delins/deletion/insertion/duplication, a
+/// substitution, and the whole-protein-unknown/identity forms are **not**
+/// frameshifts — even when the underlying nucleotide length change is not
+/// divisible by three (a stop-codon duplication is an extension, not a
+/// frameshift; extension.md:18,57-59).
+fn protein_consequence_is_frameshift(protein: &HgvsVariant) -> bool {
+    matches!(
+        protein,
+        HgvsVariant::Protein(pv)
+            if matches!(
+                pv.loc_edit.edit.inner(),
+                Some(ProteinEdit::Frameshift { .. })
+                    | Some(ProteinEdit::FrameshiftAlternatives { .. })
+            )
+    )
+}
+
+/// The `is_frameshift` flag for a projected single coding variant, derived from
+/// the predicted protein **consequence** rather than a bare `net % 3` heuristic.
+///
+/// When a protein consequence was predicted, the flag is `true` iff that
+/// consequence is a frameshift form ([`protein_consequence_is_frameshift`]),
+/// keeping the flag consistent with `.protein`: an extension or an in-frame
+/// stop-delins is not reported as a frameshift even though its nucleotide length
+/// is not a multiple of three. When no protein was predicted (intronic / UTR /
+/// non-coding / a prediction the projector declined), fall back to the length
+/// heuristic [`is_frameshift`], which still signals the raw frame effect where a
+/// concrete consequence is unavailable. A genuine frameshift always has
+/// `net % 3 != 0`, so this only ever *removes* false-positive frameshift flags
+/// the bare heuristic raised — it never adds one.
+fn frameshift_flag_from_consequence(protein: &Option<HgvsVariant>, fallback: &HgvsVariant) -> bool {
+    match protein {
+        Some(p) => protein_consequence_is_frameshift(p),
+        None => is_frameshift(fallback),
+    }
 }
 
 /// Sort projected genomic allele members into ascending genomic order
@@ -3637,7 +3678,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             normalized,
         )?;
 
-        let frameshift = is_frameshift(normalized);
+        let frameshift = frameshift_flag_from_consequence(&protein, normalized);
 
         // c↔n axis: derive the n. (transcript-relative) form from the resolved
         // CDS positions via the exon/CIGAR-aware mapper. Carry the *input's*
@@ -3946,7 +3987,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             loc_edit: LocEdit::new(CdsInterval::new(cds_start, cds_end), c_edit.clone()),
         });
 
-        let frameshift = is_frameshift(normalized);
+        let frameshift = frameshift_flag_from_consequence(&protein, normalized);
 
         let rna = crate::project::rna::predict_rna(&coding, &tx);
         // The synthesized `coding` form carries a cdot-looked-up gene symbol the
@@ -4596,7 +4637,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             &cache_variant,
         )?;
 
-        let frameshift = is_frameshift(&coding);
+        let frameshift = frameshift_flag_from_consequence(&protein, &coding);
 
         // c↔n axis. For a coding transcript derive the n. form genome-free from
         // the resolved CDS positions (same edit, reframed coordinates);
@@ -7127,8 +7168,49 @@ mod tests {
             .expect("dup should project");
         let c = result.coding.as_ref().expect("c. expected").to_string();
         assert!(c.contains("dup"), "expected dup notation, got: {}", c);
-        assert!(result.protein.is_some(), "p. expected for CDS dup");
-        assert!(result.is_frameshift, "1-base dup is frameshift");
+        // `g.1004dup` 3'-normalizes onto the stop codon of "ATGCGCTAA"
+        // (Met-Arg-Ter). The +1 shift is synonymous at codon 2 (CGC→CGG, both
+        // Arg), so every sense residue is intact and the former stop now codes an
+        // amino acid: a clean stop-loss C-terminal EXTENSION, `p.(Ter3LeuextTer?)`.
+        // Per extension.md:18 (extension is prioritized over frameshift; a
+        // duplication in the stop codon is an extension) this is NOT a frameshift,
+        // even though the +1 length is not divisible by 3. `is_frameshift` follows
+        // the predicted consequence, not a bare `net % 3`.
+        let p = result
+            .protein
+            .as_ref()
+            .expect("p. expected for CDS dup")
+            .to_string();
+        assert_eq!(p, "NP_TEST.1:p.(Ter3LeuextTer?)");
+        assert!(
+            !result.is_frameshift,
+            "a stop-loss extension is not a frameshift (extension.md:18)"
+        );
+    }
+
+    /// The `is_frameshift` flag follows the predicted protein **consequence**:
+    /// only the frameshift protein forms count, an extension does not, and the
+    /// length heuristic is used only when no protein was predicted.
+    #[test]
+    fn frameshift_flag_follows_protein_consequence() {
+        let fs = crate::parse_hgvs("NP_X.1:p.(Arg97ProfsTer23)").expect("fs parse");
+        let ext = crate::parse_hgvs("NP_X.1:p.(Ter110GlnextTer17)").expect("ext parse");
+        let sub = crate::parse_hgvs("NP_X.1:p.(Arg2Ile)").expect("sub parse");
+        assert!(protein_consequence_is_frameshift(&fs));
+        assert!(!protein_consequence_is_frameshift(&ext));
+        assert!(!protein_consequence_is_frameshift(&sub));
+
+        // A frameshifting nucleotide edit (net -1) for the heuristic fallback.
+        let del1 = crate::parse_hgvs("NM_X.1:c.5del").expect("del parse");
+        assert!(is_frameshift(&del1), "sanity: bare heuristic true for -1");
+        // With a protein present, the flag follows it — an extension is NOT a
+        // frameshift even though the fallback heuristic would say true.
+        assert!(!frameshift_flag_from_consequence(&Some(ext), &del1));
+        assert!(frameshift_flag_from_consequence(&Some(fs), &del1));
+        // No protein → heuristic fallback (true for -1, false for -3).
+        assert!(frameshift_flag_from_consequence(&None, &del1));
+        let del3 = crate::parse_hgvs("NM_X.1:c.4_6del").expect("del3 parse");
+        assert!(!frameshift_flag_from_consequence(&None, &del3));
     }
 
     #[test]
