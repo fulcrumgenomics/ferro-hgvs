@@ -20,7 +20,10 @@ pub(crate) use helpers::{
     cds_has_valid_start, edit_reaches_initiation_codon, edit_spans_cds_into_3utr,
     read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
 };
-pub(crate) use indel::{predict_indel_protein, predict_stop_region_extension};
+pub(crate) use indel::{
+    predict_indel_protein, predict_stop_region_extension, try_project_cis_combined_inframe,
+    CisCombined,
+};
 pub(crate) use substitution::predict_substitution_protein;
 // `read_ref_codon` / `translate` are the position-level CDS primitives reused by
 // the service effect handler to resolve real amino-acid residues (issue #806);

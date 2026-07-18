@@ -2,7 +2,9 @@
 //! deletion-insertion, inversion) in the CDS.
 
 use crate::error::FerroError;
-use crate::hgvs::edit::{AminoAcidSeq, FrameshiftTer, NaEdit, ProteinEdit, ProteinInsSeq};
+use crate::hgvs::edit::{
+    AminoAcidSeq, FrameshiftTer, InsertedSequence, NaEdit, ProteinEdit, ProteinInsSeq, Sequence,
+};
 use crate::hgvs::interval::ProtInterval;
 use crate::hgvs::location::{AminoAcid, ProtPos};
 use crate::hgvs::variant::{HgvsVariant, LocEdit, ProteinVariant};
@@ -12,8 +14,8 @@ use crate::reference::transcript::Transcript;
 use super::helpers::{
     affects_initiation_codon, build_cterminal_extension, build_initiator_unknown,
     build_mutated_cds_with_ref, cds_has_recognized_start, first_diff_position, force_initiator_met,
-    mut_cds_with_3utr, net_length_change, translate_full_cds_with_stop, translate_mutated_cds,
-    translate_mutated_cds_inframe, RefProteinBundle,
+    mut_cds_with_3utr, net_length_change, translate_full_cds, translate_full_cds_with_stop,
+    translate_mutated_cds, translate_mutated_cds_inframe, RefProteinBundle,
 };
 
 // ── Main entry point ──────────────────────────────────────────────────────────
@@ -1165,6 +1167,217 @@ pub(crate) fn predict_stop_region_extension(
         protein_accession,
         transcript,
     )?))
+}
+
+// ── In-cis combined protein consequence (#1070) ───────────────────────────────
+
+/// Outcome of translating the combined product of a cis compound allele whose
+/// members individually frameshift but together net to an in-frame length.
+#[derive(Debug)]
+pub(crate) enum CisCombined {
+    /// The reading frame reconverged before the stop: a single bounded in-frame
+    /// delins (or stop-delins / identity) describing the whole-allele change.
+    /// Boxed to keep the enum small (the data-less `Frameshift` variant would
+    /// otherwise leave a large size gap, `clippy::large_enum_variant`).
+    InFrame(Box<HgvsVariant>),
+    /// The shifted frame terminated at a stop before reconverging: a genuine
+    /// frameshift (the caller renders the #855 whole-protein-unknown `p.?`).
+    Frameshift,
+}
+
+/// Predict the whole-allele protein consequence of an **in-cis** compound whose
+/// members compose on one molecule to a net in-frame change (#1070).
+///
+/// Per HGVS `recommendations/protein/frameshift.md` (Discussion), a protein
+/// description must be derived by comparing the *combined* variant protein to
+/// the reference protein — not by describing each member independently. This
+/// builds the combined mutated CDS (all members spliced onto the reference CDS),
+/// translates it, and:
+/// - if the frame reconverges before the stop, returns an in-frame delins built
+///   by [`build_inframe_variant`] (the same translate-and-diff path a single
+///   in-frame indel uses); otherwise
+/// - returns [`CisCombined::Frameshift`] (the shifted frame hit a stop first).
+///
+/// `members` are the pre-classified SimpleExonic members as `(lo, hi, edit)`
+/// with insertion spans already collapsed to `hi == lo`, in any order.
+///
+/// # Preconditions (caller-enforced gate)
+/// The net length change over the members is `≡ 0 (mod 3)` and at least one
+/// member individually frameshifts. Overlapping members, a non-literal inserted
+/// sequence, or an unreadable CDS surface as `Err`, which the caller treats as a
+/// conservative fallback.
+pub(crate) fn try_project_cis_combined_inframe(
+    transcript: &Transcript,
+    ref_bundle: &RefProteinBundle,
+    members: &[(i64, i64, &NaEdit)],
+    protein_accession: &str,
+) -> Result<CisCombined, FerroError> {
+    if members.is_empty() {
+        return Err(FerroError::UnsupportedProjection {
+            reason: "in-cis combined protein prediction requires at least one member".to_string(),
+        });
+    }
+
+    // Bounds guard: keep every span within `[1, ref_cds_len]` with `lo <= hi`.
+    // Callers pass classifier-vetted SimpleExonic members (`base > 0`,
+    // non-stop-region), so this holds today — but this is a `pub(crate)` entry
+    // point, and `build_mutated_cds_with_ref` casts `lo - 1` to `usize`, so a
+    // `lo < 1` would underflow into an out-of-bounds slice panic rather than a
+    // typed error. Reject up front so a mis-supplied span degrades to the
+    // caller's conservative fallback, never a panic.
+    let ref_cds_len = ref_bundle.ref_cds.len() as i64;
+    for (lo, hi, _) in members {
+        if *lo < 1 || *hi < *lo || *hi > ref_cds_len {
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "in-cis member span {lo}_{hi} out of CDS bounds [1, {ref_cds_len}]"
+                ),
+            });
+        }
+    }
+
+    // Sort ascending by `lo` for the overlap guard and the window computation.
+    let mut sorted: Vec<(i64, i64, &NaEdit)> = members.to_vec();
+    sorted.sort_by_key(|(lo, _, _)| *lo);
+    for pair in sorted.windows(2) {
+        let (_, prev_hi, _) = pair[0];
+        let (next_lo, _, _) = pair[1];
+        if next_lo <= prev_hi {
+            return Err(FerroError::UnsupportedProjection {
+                reason: "overlapping in-cis members; combined consequence is ambiguous".to_string(),
+            });
+        }
+    }
+
+    let lo_min = sorted[0].0;
+
+    // Build the combined mutated CDS by folding members onto the reference CDS
+    // in *descending* `lo` order, so a 3' splice never invalidates the
+    // coordinates of a not-yet-applied 5' member.
+    let mut mut_cds = ref_bundle.ref_cds.clone();
+    for (lo, hi, edit) in sorted.iter().rev() {
+        mut_cds = build_mutated_cds_with_ref(&mut_cds, transcript, *lo, *hi, edit)?;
+    }
+
+    let net = mut_cds.len() as i64 - ref_bundle.ref_cds.len() as i64;
+    debug_assert_eq!(net % 3, 0, "gate guarantees a net in-frame combined length");
+
+    // Translate the combined product; force residue 1 to Met on a recognized
+    // initiator so it agrees with the Met-forced reference protein.
+    let mut alt_protein = translate_full_cds(&mut_cds);
+    if cds_has_recognized_start(&ref_bundle.ref_cds) {
+        force_initiator_met(&mut alt_protein);
+    }
+
+    // 0-based `mut_cds` index of the first base of the terminating stop codon.
+    // Under the gate a stop always exists (net%3==0, no stop-region member);
+    // fall back if not.
+    let alt_with_stop = translate_full_cds_with_stop(&mut_cds);
+    let ter_residue = alt_with_stop
+        .iter()
+        .position(|aa| *aa == AminoAcid::Ter)
+        .ok_or_else(|| FerroError::UnsupportedProjection {
+            reason: "combined in-cis product has no stop codon".to_string(),
+        })?;
+    let stop_base = 3 * ter_residue as i64;
+
+    // Frame-phase criterion (#1070). The change is a genuine frameshift iff the
+    // reading frame is *shifted* (cumulative member delta ≢ 0 mod 3) at the
+    // terminating stop. Walk the members 5'→3', tracking the cumulative delta and
+    // each member's footprint in `mut_cds`, to find the phase at `stop_base`:
+    //   - stop in a verbatim stretch before member i, or exactly at the codon-
+    //     aligned start of member i's replacement → phase = delta of the members
+    //     strictly upstream (a deletion has an empty footprint, so a stop at its
+    //     position falls to the *downstream* phase, correctly including its
+    //     delta);
+    //   - stop after all members → phase = net (the verbatim tail, the natural
+    //     reference stop);
+    //   - stop landing *strictly inside* a member's edited/inserted bases → the
+    //     phase depends on insert internals, so treat conservatively as a
+    //     frameshift.
+    // This distinguishes a stop reached in a shifted interior (frameshift, e.g.
+    // −1 del then early stop) from an in-frame nonsense a downstream in-frame
+    // edit introduces after earlier members restore the frame (bounded stop-
+    // delins). A `0` phase falls through to the in-frame builder below, which
+    // renders the premature stop as a `…Ter` stop-delins.
+    let mut cum_delta = 0i64;
+    let mut phase_at_stop: Option<i64> = None;
+    for (lo, hi, edit) in &sorted {
+        let ref_span = hi - lo + 1;
+        let member_delta = net_length_change(edit, ref_span as usize).ok_or_else(|| {
+            FerroError::UnsupportedProjection {
+                reason: "in-cis member has no determinate length change".to_string(),
+            }
+        })?;
+        let mut_edit_start = (lo - 1) + cum_delta;
+        let mut_edit_end = mut_edit_start + ref_span + member_delta; // footprint end
+        if stop_base < mut_edit_start {
+            phase_at_stop = Some(cum_delta); // verbatim region before this member
+            break;
+        }
+        if stop_base < mut_edit_end {
+            // A stop at the codon-aligned start of the replacement, OR anywhere
+            // inside a *phase-neutral* member (`member_delta % 3 == 0`), does not
+            // read a shifted frame: a phase-neutral member preserves the
+            // cumulative delta, so the phase at the stop is `cum_delta` either
+            // way. Only a stop strictly inside a *frame-shifting* member reads
+            // that member's shifted interior — a genuine frameshift (#1070).
+            if stop_base == mut_edit_start || member_delta % 3 == 0 {
+                phase_at_stop = Some(cum_delta);
+            } else {
+                return Ok(CisCombined::Frameshift); // shifted interior of a frame-shifting member
+            }
+            break;
+        }
+        cum_delta += member_delta;
+    }
+    let phase_at_stop = phase_at_stop.unwrap_or(net); // stop after all members = net
+    if phase_at_stop % 3 != 0 {
+        // Terminated in a shifted frame, before the frame is restored → frameshift.
+        return Ok(CisCombined::Frameshift);
+    }
+
+    // The delins range END (`build_inframe_stop_delins` derives it from
+    // `cds_pos_end`) must not extend past the terminating stop: a member whose
+    // footprint begins *after* the stop is masked by the (premature) stop and
+    // contributes nothing to the translated product, so it must not inflate the
+    // range. Take the max `hi` over only members starting at or before the stop
+    // (#1070 follow-up). For the common case — the natural reference stop after
+    // all members — every member qualifies, so `end_hi == hi_max` and behavior
+    // is unchanged.
+    let end_hi = {
+        let mut cd = 0i64;
+        let mut acc = lo_min;
+        for (lo, hi, edit) in &sorted {
+            let ref_span = hi - lo + 1;
+            let member_delta = net_length_change(edit, ref_span as usize).unwrap_or(0);
+            if (lo - 1) + cd <= stop_base {
+                acc = acc.max(*hi);
+            }
+            cd += member_delta;
+        }
+        acc
+    };
+
+    // Frame is in phase at the stop. Route through the shared in-frame delins
+    // synthetic `Delins` (its field contents are ignored by the Delins arm at
+    // `build_inframe_variant`; the residues come from the ref/alt protein diff).
+    let synthetic = NaEdit::Delins {
+        sequence: InsertedSequence::Literal(Sequence::new(Vec::new())),
+        deleted: None,
+        deleted_length: None,
+    };
+    let pv = build_inframe_variant(
+        transcript,
+        lo_min,
+        end_hi,
+        &synthetic,
+        net,
+        &ref_bundle.ref_protein,
+        &alt_protein,
+        protein_accession,
+    )?;
+    Ok(CisCombined::InFrame(Box::new(pv)))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -2390,5 +2603,92 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ter3TyrextTer1)");
+    }
+
+    /// #1070: an out-of-bounds member span (`lo < 1`) must degrade to a typed
+    /// `Err`, NOT underflow the `lo - 1` usize cast in `build_mutated_cds_with_ref`
+    /// into an out-of-bounds slice panic. Guards the `pub(crate)` entry point
+    /// against a mis-supplied span (the classifier prevents this in practice).
+    #[test]
+    fn cis_combined_rejects_out_of_bounds_span_without_panic() {
+        let t = tx("ATGGATTATTGCTAA", 1, 15); // Met-Asp-Tyr-Cys-Ter
+        let bundle = RefProteinBundle::from_transcript(&t).expect("ref bundle");
+        let del = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        // lo = 0 would compute `(0 - 1) as usize` in the splicer.
+        let members = [(0i64, 1i64, &del)];
+        let result = try_project_cis_combined_inframe(&t, &bundle, &members, "NP_TEST.1");
+        assert!(
+            matches!(result, Err(FerroError::UnsupportedProjection { .. })),
+            "out-of-bounds span must be a typed Err, got {result:?}"
+        );
+        // hi > ref_cds_len is likewise rejected up front.
+        let members = [(4i64, 99i64, &del)];
+        assert!(matches!(
+            try_project_cis_combined_inframe(&t, &bundle, &members, "NP_TEST.1"),
+            Err(FerroError::UnsupportedProjection { .. })
+        ));
+    }
+
+    /// #1070 follow-up (CLI review): a stop landing strictly inside a
+    /// *phase-neutral* member, plus a member sitting *past* that premature stop.
+    /// CDS `ATGAAACCCGGGTAA` (Met-Lys-Pro-Gly-Ter); members
+    /// `c.4_6delinsTGGTAAGGG` (net +6, phase-neutral: TGG·TAA·GGG → Trp then an
+    /// internal stop) and the downstream `c.10_12del` (−3, past the stop).
+    /// Combined product `ATGTGGTAA…` = Met-Trp-Ter.
+    ///
+    /// Two things must hold: (a) the internal stop inside the phase-neutral
+    /// member is NOT a frameshift — the frame is in phase there, so the result
+    /// is `InFrame`, not `Frameshift`; and (b) the delins range must NOT extend
+    /// to the post-termination `c.10_12` member (Gly4) — that member is masked
+    /// by the premature stop and contributes nothing.
+    #[test]
+    fn cis_combined_phase_neutral_internal_stop_with_post_termination_member() {
+        use crate::hgvs::edit::{Base, InsertedSequence, Sequence};
+        let t = tx("ATGAAACCCGGGTAA", 1, 15); // Met-Lys-Pro-Gly-Ter
+        let bundle = RefProteinBundle::from_transcript(&t).expect("ref bundle");
+        let delins = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![
+                Base::T,
+                Base::G,
+                Base::G,
+                Base::T,
+                Base::A,
+                Base::A,
+                Base::G,
+                Base::G,
+                Base::G,
+            ])),
+            deleted: None,
+            deleted_length: None,
+        };
+        let del = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let members = [(4i64, 6i64, &delins), (10i64, 12i64, &del)];
+        let result = try_project_cis_combined_inframe(&t, &bundle, &members, "NP_TEST.1")
+            .expect("must not error");
+        let pv = match result {
+            CisCombined::InFrame(pv) => *pv, // (a) not a frameshift
+            CisCombined::Frameshift => {
+                panic!(
+                    "in-phase stop inside a phase-neutral member must be InFrame, not Frameshift"
+                )
+            }
+        };
+        let rendered = prot_str(&pv);
+        // (b) the range must end at the premature stop, never at the masked
+        // post-termination Gly4 member.
+        assert!(
+            !rendered.contains("Gly4") && !rendered.contains("_Gly"),
+            "delins range must not extend to the post-termination member, got {rendered}"
+        );
+        assert!(
+            rendered.contains("Ter") || rendered.contains('*'),
+            "expected a terminating stop, got {rendered}"
+        );
     }
 }

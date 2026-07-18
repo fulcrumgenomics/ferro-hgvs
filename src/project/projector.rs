@@ -18,7 +18,8 @@ use crate::project::protein::{
     build_initiator_unknown, build_whole_protein_unknown, cds_has_recognized_start,
     cds_has_valid_start, edit_reaches_initiation_codon, edit_spans_cds_into_3utr,
     predict_indel_protein, predict_stop_region_extension, predict_substitution_protein,
-    read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
+    read_cds_start_codon, try_project_cis_combined_inframe, whole_exon_deletion_span, CisCombined,
+    RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
 use crate::reference::transcript::Transcript;
@@ -56,6 +57,186 @@ fn build_cis_whole_protein_unknown(member: &HgvsVariant) -> HgvsVariant {
         }),
         other => other.clone(),
     }
+}
+
+/// Classification of a cis-allele member for phase-aware frameshift aggregation
+/// and combined-protein prediction (#1070). See [`classify_cis_member`].
+enum CisMemberClass<'a> {
+    /// An exonic in-CDS edit whose CDS-frame effect and combined-CDS splice are
+    /// trustworthy. Carries the (1-based) CDS span, the edit, its net indel
+    /// length, and whether it individually frameshifts. `hi == lo` for an
+    /// insertion (span collapsed to the anchor).
+    SimpleExonic {
+        lo: i64,
+        hi: i64,
+        edit: &'a NaEdit,
+        indel_len: i64,
+        is_fs: bool,
+    },
+    /// Removes zero CDS bases (pure intron, pure 5'UTR, or pure 3'UTR): no
+    /// CDS-frame / protein effect. Contributes 0 to the net and is ignored in
+    /// the combined build.
+    ProteinIrrelevant,
+    /// Anything whose CDS-frame effect or combined-CDS splice is untrustworthy
+    /// (whole-exon deletion, init- or stop-codon-touching, CDS↔UTR-spanning,
+    /// one-offset exon boundary, non-literal insert, uncertain/range boundary,
+    /// non-`Cds` coding). Makes the net indeterminate and blocks the combined
+    /// path — the allele takes the conservative fallback.
+    Opaque,
+}
+
+/// Classify a cis-allele member from its `.coding` projection (#1070).
+///
+/// Rules are evaluated top-to-bottom, first match wins; the trailing rule makes
+/// the classification total. Reuses the exact CDS-position predicates the
+/// single-variant protein path uses (`whole_exon_deletion_span`,
+/// `edit_reaches_initiation_codon`, `edit_spans_cds_into_3utr`) rather than the
+/// coarse any-endpoint `is_intronic`/`is_utr` booleans, which cannot tell a
+/// CDS↔UTR-spanning member from a pure-UTR one. `ref_cds_len` is the reference
+/// CDS length (including the stop codon), used for the terminal-stop-codon test.
+fn classify_cis_member(proj: &VariantProjection, ref_cds_len: i64) -> CisMemberClass<'_> {
+    // Rule 1: must be a c. coding variant with resolved point endpoints and a
+    // determinate (non-uncertain) edit; else Opaque.
+    let cds = match proj.coding.as_ref() {
+        Some(HgvsVariant::Cds(cds)) => cds,
+        _ => return CisMemberClass::Opaque,
+    };
+    let (start, end, edit) = match (
+        cds.loc_edit.location.start.inner(),
+        cds.loc_edit.location.end.inner(),
+        cds.loc_edit.edit.inner(),
+    ) {
+        (Some(start), Some(end), Some(edit)) => (start, end, edit),
+        _ => return CisMemberClass::Opaque,
+    };
+    // A non-literal inserted sequence can't be spliced into the combined CDS
+    // (`build_mutated_cds_with_ref` requires a literal). Only Insertion/Delins
+    // carry one in the supported set.
+    match edit {
+        NaEdit::Insertion { sequence } | NaEdit::Delins { sequence, .. }
+            if !sequence.is_literal() =>
+        {
+            return CisMemberClass::Opaque;
+        }
+        _ => {}
+    }
+    let member_is_intronic = start.offset.is_some() || end.offset.is_some();
+
+    // Rule 2: canonical whole-exon deletion — real frame effect but its
+    // offset-coordinate length is untrustworthy.
+    if whole_exon_deletion_span(edit, start, end).is_some() {
+        return CisMemberClass::Opaque;
+    }
+    // Rule 3: touches the initiation codon (handled by `cis_init_unknown`). The
+    // `!utr3` pre-guard is required because a `*N` 3'UTR position stores the
+    // small `*N` number in `base`, which `edit_reaches_initiation_codon` (no
+    // utr3 guard) would otherwise mistake for CDS 1-3.
+    if !start.utr3
+        && !end.utr3
+        && edit_reaches_initiation_codon(edit, start, end, member_is_intronic)
+    {
+        return CisMemberClass::Opaque;
+    }
+    // Rule 4: CDS→3'UTR stop-spanning (stop-loss / extension the CDS-only build
+    // can't model).
+    if edit_spans_cds_into_3utr(start, end, member_is_intronic) {
+        return CisMemberClass::Opaque;
+    }
+    // Rule 5: an in-CDS edit reaching the terminal stop codon
+    // `[ref_cds_len-2, ref_cds_len]` (not caught by rule 4 — both endpoints
+    // in-CDS). Guarded to true CDS coordinates so the base range test is
+    // meaningful.
+    if !start.utr3
+        && !end.utr3
+        && start.offset.is_none()
+        && end.offset.is_none()
+        && start.base.min(end.base) <= ref_cds_len
+        && end.base.max(start.base) >= ref_cds_len - 2
+    {
+        return CisMemberClass::Opaque;
+    }
+    // Rule 6: removes zero CDS bases — provably a single intron / pure 5'UTR /
+    // pure 3'UTR. A both-intronic span is intron-only ONLY when it cannot cross
+    // an exonic base: both endpoints anchored to the same CDS base (one intron),
+    // or the single intron strictly between consecutive CDS bases `N` and `N+1`
+    // (5' end `N+k`, 3' end `(N+1)-k`). A multi-exon-spanning intronic deletion
+    // (e.g. `c.5+10_20-10del`, which removes whole exons between bases 5 and 20)
+    // has a real frame effect, so it must NOT be treated as irrelevant — it falls
+    // through to rule 8 (Opaque) → conservative fallback.
+    let pure_intron = start.offset.is_some()
+        && end.offset.is_some()
+        && (start.base == end.base
+            || (end.base == start.base + 1
+                && start.offset.unwrap_or(0) > 0
+                && end.offset.unwrap_or(0) < 0));
+    let pure_5utr = start.offset.is_none()
+        && end.offset.is_none()
+        && start.base <= 0
+        && end.base <= 0
+        && !start.utr3
+        && !end.utr3;
+    let pure_3utr = start.utr3 && end.utr3;
+    if pure_intron || pure_5utr || pure_3utr {
+        return CisMemberClass::ProteinIrrelevant;
+    }
+    // Rule 7: both endpoints exonic in-CDS with a supported literal edit.
+    let both_exonic_in_cds = start.offset.is_none()
+        && end.offset.is_none()
+        && start.base > 0
+        && end.base > 0
+        && !start.utr3
+        && !end.utr3;
+    let supported = matches!(
+        edit,
+        NaEdit::Deletion { .. }
+            | NaEdit::Insertion { .. }
+            | NaEdit::Duplication { .. }
+            | NaEdit::Delins { .. }
+            | NaEdit::Inversion { .. }
+            | NaEdit::Substitution { .. }
+    );
+    if both_exonic_in_cds && supported {
+        let indel_len = proj
+            .coding
+            .as_ref()
+            .and_then(crate::python_helpers::get_indel_length);
+        if let Some(indel_len) = indel_len {
+            // Collapse an insertion's `[A, A+1]` span to the anchor `A` (mirrors
+            // `predict_indel_protein`; the combined splicer inserts after `lo`).
+            let (lo, hi) = if matches!(edit, NaEdit::Insertion { .. }) {
+                (start.base, start.base)
+            } else {
+                (start.base, end.base)
+            };
+            return CisMemberClass::SimpleExonic {
+                lo,
+                hi,
+                edit,
+                indel_len,
+                is_fs: proj.is_frameshift,
+            };
+        }
+    }
+    // Rule 8: terminal catch-all — most importantly a one-offset exon-boundary
+    // member (e.g. `c.5_5+2del`), whose offset-dropping length is untrustworthy.
+    CisMemberClass::Opaque
+}
+
+/// The protein accession to stamp on a combined cis consequence (#1070): taken
+/// from a member's own `.protein` (byte-consistent with how each member and
+/// [`build_cis_whole_protein_unknown`] name it), falling back to the transcript
+/// id — the single-variant `prot_acc` resolution uses locals not in scope here.
+fn cis_member_protein_accession(
+    inner_projections: &[VariantProjection],
+    transcript_id: &str,
+) -> String {
+    inner_projections
+        .iter()
+        .find_map(|p| match p.protein.as_ref() {
+            Some(HgvsVariant::Protein(pv)) => Some(pv.accession.to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| transcript_id.to_string())
 }
 
 /// Sort projected genomic allele members into ascending genomic order
@@ -2681,8 +2862,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             inner_projections.push(proj);
         }
 
-        // Aggregate flags.
-        let is_frameshift = inner_projections.iter().any(|p| p.is_frameshift);
+        // `is_frameshift` and the whole-allele protein are computed together for
+        // the cis case below (#1070): a cis compound's members compose on one
+        // molecule, so the flag and the combined protein consequence are both
+        // derived from the translated combined product.
         let is_intronic = inner_projections.iter().any(|p| p.is_intronic);
         let is_utr = inner_projections.iter().any(|p| p.is_utr);
 
@@ -2724,52 +2907,63 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         } else {
             None
         };
-        let protein = if let Some(init_unknown) = cis_init_unknown {
-            Some(init_unknown)
-        } else if allele.phase == AllelePhase::Cis
-            && is_frameshift
-            && inner_projections.iter().any(|p| p.protein.is_some())
-        {
-            // In-cis frameshift (#855): a downstream frameshift makes the combined
-            // protein product uncertain — there is no spec form for "sense change +
-            // frameshift" in one allele — so the whole-protein consequence collapses
-            // to `p.?` ("an effect is expected but cannot be reliably predicted",
-            // uncertain.md), reusing a member protein's accession/gene_symbol.
-            inner_projections
+        // The "all-or-nothing" protein: build the protein allele only when EVERY
+        // member carries a protein, combining in-cis adjacent substitutions into a
+        // single delins (#855; delins.md: `p.[Arg76Ser;Cys77Trp]` is "not correct"
+        // for adjacent residues; separated subs / non-sub members keep the
+        // bracketed allele). Cis only — trans members are independent alleles.
+        let build_all_or_nothing = || -> Option<HgvsVariant> {
+            if !inner_projections.iter().all(|p| p.protein.is_some()) {
+                return None;
+            }
+            let protein_variants: Vec<HgvsVariant> = inner_projections
                 .iter()
-                .find_map(|p| p.protein.as_ref())
-                .map(build_cis_whole_protein_unknown)
-        } else {
-            // Build the protein allele only if ALL inner projections have a protein.
-            let all_have_protein = inner_projections.iter().all(|p| p.protein.is_some());
-            if all_have_protein {
-                let protein_variants: Vec<HgvsVariant> = inner_projections
-                    .iter()
-                    .filter_map(|p| p.protein.clone())
-                    .collect();
-                // In-cis adjacent substitutions are described as a single combined
-                // delins, not a bracketed list (#855; delins.md: `p.[Arg76Ser;
-                // Cys77Trp]` is "not correct" for adjacent residues). Separated
-                // substitutions and any non-substitution member keep the bracketed
-                // allele (delins.md: "two variants separated by one or more amino
-                // acids should be described individually"). Cis only — trans members
-                // are independent alleles.
-                if allele.phase == AllelePhase::Cis {
-                    combine_cis_substitution_proteins(&protein_variants).or_else(|| {
-                        Some(HgvsVariant::Allele(AlleleVariant::new(
-                            protein_variants,
-                            allele.phase,
-                        )))
-                    })
-                } else {
+                .filter_map(|p| p.protein.clone())
+                .collect();
+            if allele.phase == AllelePhase::Cis {
+                combine_cis_substitution_proteins(&protein_variants).or_else(|| {
                     Some(HgvsVariant::Allele(AlleleVariant::new(
                         protein_variants,
                         allele.phase,
                     )))
-                }
+                })
             } else {
-                None
+                Some(HgvsVariant::Allele(AlleleVariant::new(
+                    protein_variants,
+                    allele.phase,
+                )))
             }
+        };
+        // The #855 in-cis frameshift collapse: a genuine frameshift makes the
+        // combined product uncertain (no spec form for "sense change + frameshift"
+        // in one allele) → `p.?` (uncertain.md), reusing a member protein's
+        // accession/gene_symbol. Falls back to all-or-nothing when no member
+        // carries a protein.
+        let build_cis_frameshift_unknown = || -> Option<HgvsVariant> {
+            inner_projections
+                .iter()
+                .find_map(|p| p.protein.as_ref())
+                .map(build_cis_whole_protein_unknown)
+                .or_else(build_all_or_nothing)
+        };
+
+        let (is_frameshift, protein) = if allele.phase != AllelePhase::Cis {
+            // trans / unknown phase: members are independent products — OR the
+            // per-member flags, and use the all-or-nothing protein (the #855
+            // collapse and combined-cis path are cis-only).
+            (
+                inner_projections.iter().any(|p| p.is_frameshift),
+                build_all_or_nothing(),
+            )
+        } else {
+            self.project_cis_flag_and_protein(
+                original,
+                transcript_id,
+                &inner_projections,
+                cis_init_unknown,
+                &build_all_or_nothing,
+                &build_cis_frameshift_unknown,
+            )?
         };
 
         // Derive `.genomic` from the inner projections, not the raw `original`:
@@ -2835,6 +3029,154 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             // Aggregate: true when any member's edit reaches the initiation codon.
             affects_init: inner_projections.iter().any(|p| p.affects_init),
         })
+    }
+
+    /// Decide `(is_frameshift, protein)` for a **cis** compound allele (#1070).
+    ///
+    /// A cis compound's members lie on one molecule, so their frame shifts
+    /// compose and can cancel before the stop. The flag and the whole-allele
+    /// protein are therefore both derived from the translated combined product
+    /// rather than a per-member OR. Members are classified
+    /// ([`classify_cis_member`]); when the CDS-frame net is in-frame, at least
+    /// one member individually frameshifts, and every member is trustworthy, the
+    /// combined product is translated ([`try_project_cis_combined_inframe`]) to a
+    /// bounded in-frame delins (or, if the shifted frame hit a stop first, the
+    /// #855 `p.?`). Everything else keeps today's behavior:
+    /// - a genuine frameshift (net%3≠0, or an Opaque-member fallback) → `p.?` (#855);
+    /// - an initiation-codon member → `p.(Met1?)`/`p.?` (#771), which wins first;
+    /// - a plain in-frame allele → the all-or-nothing / combined-substitution form.
+    #[allow(clippy::too_many_arguments)]
+    fn project_cis_flag_and_protein(
+        &self,
+        original: &HgvsVariant,
+        transcript_id: &str,
+        inner_projections: &[VariantProjection],
+        cis_init_unknown: Option<HgvsVariant>,
+        build_all_or_nothing: &dyn Fn() -> Option<HgvsVariant>,
+        build_cis_frameshift_unknown: &dyn Fn() -> Option<HgvsVariant>,
+    ) -> Result<(bool, Option<HgvsVariant>), FerroError> {
+        // Fetch the transcript + reference translation used for classification
+        // and the combined build. If unavailable, fall back to the per-member OR
+        // flag and the existing protein branches (today's behavior). This OUTER
+        // fetch-failure can only use `any()` — the net%3 base flag needs the
+        // bundle that just failed to load.
+        //
+        // Key the caches on a build-aware carrier (mirroring
+        // `predict_rna_transcript`), NOT the raw `original` allele: a bare `g.`
+        // allele is unparented, so keying on it would insert a parentless
+        // `(id, None)` transcript-cache entry and read the primary build (#843).
+        // Stamping the input's build context reuses the build-scoped key each
+        // member's genome pivot already created.
+        let cache_variant = {
+            let mut accession = parse_accession(transcript_id);
+            if let Some(context) = self.rna_build_context(original) {
+                accession = accession.with_genomic_context(context);
+            }
+            HgvsVariant::Cds(CdsVariant {
+                accession,
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::point(CdsPos::new(1)),
+                    NaEdit::Substitution {
+                        reference: crate::hgvs::edit::Base::A,
+                        alternative: crate::hgvs::edit::Base::G,
+                    },
+                ),
+            })
+        };
+        let fetched = self
+            .cached_get_transcript_for_variant(&cache_variant, transcript_id)
+            .and_then(|tx| {
+                self.cached_ref_translation(&cache_variant, transcript_id, &tx)
+                    .map(|bundle| (tx, bundle))
+            });
+        let (tx, bundle) = match fetched {
+            Ok(pair) => pair,
+            Err(_) => {
+                let fs = inner_projections.iter().any(|p| p.is_frameshift);
+                let protein = if let Some(init) = cis_init_unknown {
+                    Some(init)
+                } else if fs {
+                    build_cis_frameshift_unknown()
+                } else {
+                    build_all_or_nothing()
+                };
+                return Ok((fs, protein));
+            }
+        };
+
+        let ref_cds_len = bundle.ref_cds.len() as i64;
+        let classes: Vec<CisMemberClass> = inner_projections
+            .iter()
+            .map(|p| classify_cis_member(p, ref_cds_len))
+            .collect();
+        let has_opaque = classes.iter().any(|c| matches!(c, CisMemberClass::Opaque));
+        let any_simple_fs = classes
+            .iter()
+            .any(|c| matches!(c, CisMemberClass::SimpleExonic { is_fs: true, .. }));
+        // CDS-frame net over members (SimpleExonic → its indel length,
+        // ProteinIrrelevant → 0); indeterminate when any member is Opaque.
+        let cds_frame_net: Option<i64> = if has_opaque {
+            None
+        } else {
+            Some(
+                classes
+                    .iter()
+                    .map(|c| match c {
+                        CisMemberClass::SimpleExonic { indel_len, .. } => *indel_len,
+                        _ => 0,
+                    })
+                    .sum(),
+            )
+        };
+        // Base flag: net%3 when determinate, else the conservative per-member OR.
+        let base_flag = match cds_frame_net {
+            Some(n) => n != 0 && n % 3 != 0,
+            None => inner_projections.iter().any(|p| p.is_frameshift),
+        };
+
+        // Initiation-codon member wins the protein (#771); the flag stays base.
+        if let Some(init) = cis_init_unknown {
+            return Ok((base_flag, Some(init)));
+        }
+
+        // Combined-translation gate: net in-frame, ≥1 member individually
+        // frameshifts, and every member trustworthy (no Opaque). Only here can a
+        // net-in-frame cis compound become a bounded in-frame delins (#1070).
+        let net_in_frame = matches!(cds_frame_net, Some(n) if n % 3 == 0);
+        if net_in_frame && any_simple_fs && !has_opaque {
+            let members: Vec<(i64, i64, &NaEdit)> = classes
+                .iter()
+                .filter_map(|c| match c {
+                    CisMemberClass::SimpleExonic { lo, hi, edit, .. } => Some((*lo, *hi, *edit)),
+                    _ => None,
+                })
+                .collect();
+            let prot_acc = cis_member_protein_accession(inner_projections, transcript_id);
+            match try_project_cis_combined_inframe(&tx, &bundle, &members, &prot_acc) {
+                Ok(CisCombined::InFrame(pv)) => return Ok((false, Some(*pv))),
+                Ok(CisCombined::Frameshift) => return Ok((true, build_cis_frameshift_unknown())),
+                // Expected degradation (overlap / unreadable CDS): bundle IS in
+                // hand, so use the net%3 base flag (NOT `any()`), decoupling the
+                // flag from protein-buildability, and collapse the protein to
+                // `p.?`. Mirrors the single-variant path's selective swallow
+                // (`project_single_inner` NaEdit arms) — an unexpected error
+                // propagates rather than being masked as a `p.?` projection.
+                Err(FerroError::UnsupportedProjection { .. })
+                | Err(FerroError::ProteinSequenceUnavailable { .. }) => {
+                    return Ok((base_flag, build_cis_frameshift_unknown()));
+                }
+                Err(other) => return Err(other),
+            }
+        }
+
+        // No combined path: a genuine frameshift collapses to `p.?` (#855); a
+        // plain in-frame allele uses the all-or-nothing / combined-subs form.
+        if base_flag {
+            Ok((true, build_cis_frameshift_unknown()))
+        } else {
+            Ok((false, build_all_or_nothing()))
+        }
     }
 
     /// Project a single (non-allele) variant, assuming it has already been
@@ -5010,6 +5352,111 @@ mod tests {
         let prefix = "N".repeat(999);
         let suffix = "N".repeat(100);
         provider.add_genomic_sequence("chr1", format!("{}{}{}", prefix, "ATGCGCTAA", suffix));
+        (projector, provider)
+    }
+
+    /// Fixture for the #1070 B2 case: a CDS where a −1 frameshift creates an
+    /// *early* stop in the shifted frame. CDS `ATGGTAAAAGGGCCCTAA` =
+    /// Met-Val-Lys-Gly-Pro-Ter (in-frame, no internal stop). Deleting `c.4` (the
+    /// first G of codon 2) shifts the frame so it reads `ATG|TAA…` → an immediate
+    /// stop at codon 2. Used to verify that a net-in-frame cis pair whose shifted
+    /// interior terminates before reconvergence is classified a frameshift.
+    fn make_frameshift_stop_provider_and_projector() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_FSSTOP.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("FSSTOPGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[3000, 3018, 0, 18]],
+                cds_start: Some(0),
+                cds_end: Some(18),
+                gene_id: None,
+                protein: Some("NP_FSSTOP.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
+            id: "NM_FSSTOP.1".to_string(),
+            gene_symbol: Some("FSSTOPGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("ATGGTAAAAGGGCCCTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(18),
+            exons: vec![Exon::new(1, 1, 18)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(3000),
+            genomic_end: Some(3017),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let mut genome = String::new();
+        genome.push_str(&"N".repeat(3000));
+        genome.push_str("ATGGTAAAAGGGCCCTAA"); // [3000, 3018)
+        genome.push_str(&"N".repeat(100));
+        provider.add_genomic_sequence("chr1", genome);
+        (projector, provider)
+    }
+
+    /// Fixture for the #1070 three-member reconvergence case. CDS
+    /// `ATGGATTATAAACCCGGGTAA` = Met-Asp-Tyr-Lys-Pro-Gly-Ter (21 nt, 7 codons).
+    /// Used to verify that two frame-restoring members (`c.4del` + `c.6_7insT`,
+    /// −1 then +1) followed by an in-frame nonsense delins (`c.10_12delinsTGA`,
+    /// codon 4 → stop) yield a bounded in-frame stop-delins, not a frameshift.
+    fn make_three_member_provider_and_projector() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_TRIP.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("TRIPGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[4000, 4021, 0, 21]],
+                cds_start: Some(0),
+                cds_end: Some(21),
+                gene_id: None,
+                protein: Some("NP_TRIP.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
+            id: "NM_TRIP.1".to_string(),
+            gene_symbol: Some("TRIPGENE".to_string()),
+            strand: TxStrand::Plus,
+            sequence: Some("ATGGATTATAAACCCGGGTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(21),
+            exons: vec![Exon::new(1, 1, 21)],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(4000),
+            genomic_end: Some(4020),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        let mut genome = String::new();
+        genome.push_str(&"N".repeat(4000));
+        genome.push_str("ATGGATTATAAACCCGGGTAA"); // [4000, 4021)
+        genome.push_str(&"N".repeat(100));
+        provider.add_genomic_sequence("chr1", genome);
         (projector, provider)
     }
 
@@ -11502,6 +11949,479 @@ mod tests {
             .protein
             .expect("an in-cis frameshift allele must report a protein consequence");
         assert_eq!(format!("{protein}"), "NP_SEP.1:p.?");
+    }
+
+    /// #1070: an in-cis compound whose members individually shift the frame but
+    /// together net to an in-frame length is NOT a frameshift. On one molecule
+    /// the members' frame shifts compose: `c.[4del;11_12del]` is −1 then −2 =
+    /// −3 ≡ 0 (mod 3), so the reading frame is restored before the stop and
+    /// translation reaches the reference stop. Aggregation must be phase-aware —
+    /// cis judges the cumulative net frame, not the per-member OR — so the flag
+    /// is `false` and the protein consequence is a bounded in-frame form, never
+    /// the `p.?` (#855) frameshift collapse. CDS = "ATGGATTATTGCTAA".
+    #[test]
+    fn project_cis_net_in_frame_allele_is_not_frameshift() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let del1 = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let del2 = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(11), CdsPos::new(12)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![del1, del2]));
+        let proj = vp
+            .project_variant(&allele, "NM_SEP.1")
+            .expect("projection should succeed");
+        assert!(
+            !proj.is_frameshift,
+            "cis members netting to −3 restore the frame → not a frameshift"
+        );
+        let protein = proj
+            .protein
+            .expect("an in-frame cis allele must report a protein consequence");
+        // Combined mutated CDS = "ATGATTATTTAA" (delete c.4=G, c.11_12=GC) →
+        // Met-Ile-Ile-Ter; vs ref Met-Asp-Tyr-Cys → a single bounded in-frame
+        // delins of Asp2..Cys4 by IleIle. Must be neither `fs` nor `p.?`.
+        let rendered = format!("{protein}");
+        assert_eq!(rendered, "NP_SEP.1:p.(Asp2_Cys4delinsIleIle)");
+        assert!(!rendered.contains("fs"), "must not be a frameshift form");
+    }
+
+    /// #1070: the SAME two edits in *trans* (`c.[4del];[11_12del]`) are on
+    /// different molecules, so each haplotype independently frameshifts (−1 and
+    /// −2). Phase-aware aggregation keeps the per-member OR for trans, so the
+    /// allele flag is `true`. This is the counterpart to the cis test above —
+    /// the phase split is what distinguishes the two.
+    #[test]
+    fn project_trans_net_shifting_allele_is_frameshift() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let del1 = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(4)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let del2 = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(11), CdsPos::new(12)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::trans(vec![del1, del2]));
+        let proj = vp
+            .project_variant(&allele, "NM_SEP.1")
+            .expect("projection should succeed");
+        assert!(
+            proj.is_frameshift,
+            "trans members on different molecules each frameshift independently"
+        );
+    }
+
+    // ── #1070 test helpers ────────────────────────────────────────────────────
+
+    fn cds_del(acc: &str, lo: i64, hi: i64) -> HgvsVariant {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession(acc),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(lo), CdsPos::new(hi)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        })
+    }
+
+    /// #1070 / delins.md:21: two in-cis deletions that are each individually
+    /// in-frame (`c.[4_6del;10_12del]`, −3 and −3) and separated by unchanged
+    /// residues must NOT be merged into one delins — neither member frameshifts,
+    /// so the combined-translation gate is never entered and they stay on the
+    /// existing bracketed/individual path. `!is_frameshift`.
+    #[test]
+    fn project_cis_separated_inframe_deletions_stay_individual() {
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![
+            cds_del("NM_SEP.1", 4, 6),
+            cds_del("NM_SEP.1", 10, 12),
+        ]));
+        let proj = vp
+            .project_variant(&allele, "NM_SEP.1")
+            .expect("projection should succeed");
+        assert!(!proj.is_frameshift, "each member is individually in-frame");
+        // Stays a bracketed/individual form (each an in-frame codon deletion),
+        // NOT merged into a single delins (delins.md:21).
+        assert_eq!(
+            format!("{}", proj.protein.expect("protein expected")),
+            "NP_SEP.1(SEPGENE):p.[(Asp2del);(Cys4del)]"
+        );
+    }
+
+    /// #1070: overlapping cis members that individually frameshift
+    /// (`c.[4del;4_5del]`, −1 and −2, net −3) hit the overlap guard in
+    /// `try_project_cis_combined_inframe` → `Err` → conservative fallback. The
+    /// flag is decoupled from protein-buildability: base net%3 (`−3 → false`),
+    /// protein `p.?`. No panic.
+    #[test]
+    fn project_cis_overlapping_frameshift_members_fall_back() {
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![
+            cds_del("NM_SEP.1", 4, 4),
+            cds_del("NM_SEP.1", 4, 5),
+        ]));
+        let proj = vp
+            .project_variant(&allele, "NM_SEP.1")
+            .expect("projection should succeed");
+        assert!(
+            !proj.is_frameshift,
+            "overlap fallback uses the base net%3 flag (−3 → not frameshift), not any()"
+        );
+        assert_eq!(
+            format!("{}", proj.protein.expect("protein")),
+            "NP_SEP.1:p.?"
+        );
+    }
+
+    /// #1070: a cis pair with an **insertion** member netting in-frame with a
+    /// deletion (`c.[4del;6_7insGGGG]`, −1 and +4, net +3) exercises the
+    /// insertion-anchor collapse in the combined build. `!is_frameshift`, and a
+    /// single bounded in-frame delins.
+    #[test]
+    fn project_cis_insertion_member_nets_in_frame() {
+        use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let del = cds_del("NM_SEP.1", 4, 4);
+        let ins = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(6), CdsPos::new(7)),
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(Sequence::new(vec![
+                        Base::G,
+                        Base::G,
+                        Base::G,
+                        Base::G,
+                    ])),
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![del, ins]));
+        let proj = vp
+            .project_variant(&allele, "NM_SEP.1")
+            .expect("projection should succeed");
+        assert!(!proj.is_frameshift, "net +3 restores the frame");
+        // Combined CDS ATGATGGGGTATTGCTAA → Met-Met-Gly-Tyr-Cys-Ter; vs ref
+        // Met-Asp-Tyr-Cys → Asp2 replaced by Met-Gly (net +1 residue).
+        assert_eq!(
+            format!("{}", proj.protein.expect("protein expected")),
+            "NP_SEP.1:p.(Asp2delinsMetGly)"
+        );
+    }
+
+    /// #1070: a cis member reaching the initiation codon (`c.[2del;8del]`) is
+    /// classified Opaque (rule 3) and `cis_init_unknown` wins first — the
+    /// combined path is never entered, and the protein is the init-unknown
+    /// `p.(Met1?)` on an ATG-start transcript.
+    #[test]
+    fn project_cis_init_member_wins_over_combined() {
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![
+            cds_del("NM_SEP.1", 2, 2),
+            cds_del("NM_SEP.1", 8, 8),
+        ]));
+        let proj = vp
+            .project_variant(&allele, "NM_SEP.1")
+            .expect("projection should succeed");
+        assert_eq!(
+            format!("{}", proj.protein.expect("protein expected")),
+            "NP_SEP.1:p.(Met1?)"
+        );
+    }
+
+    /// #1070 Finding A: an innocuous pure-intron deletion co-occurring with the
+    /// headline in-frame pair must NOT disable the fix. On NM_INTR.1
+    /// (CDS `ATGCGCAAAGGGTAACCC`) `c.[4del;7_8del]` is −1 then −2 = −3 (frame
+    /// restored); the added deep-intron member `c.10+2_10+4del` is
+    /// ProteinIrrelevant (contributes 0, does not block the gate). Result:
+    /// `!is_frameshift` and a bounded in-frame delins (not `p.?`).
+    #[test]
+    fn project_cis_inframe_with_pure_intron_member() {
+        let (projector, provider) = make_intronic_test_data();
+        let vp = VariantProjector::new(projector, provider);
+        let intron_del = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_INTR.1"),
+            gene_symbol: None,
+            loc_edit: crate::hgvs::variant::LocEdit::new(
+                CdsInterval::new(CdsPos::with_offset(10, 2), CdsPos::with_offset(10, 4)),
+                crate::hgvs::edit::NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![
+            cds_del("NM_INTR.1", 4, 4),
+            cds_del("NM_INTR.1", 7, 8),
+            intron_del,
+        ]));
+        let proj = vp
+            .project_variant(&allele, "NM_INTR.1")
+            .expect("projection should succeed");
+        assert!(
+            !proj.is_frameshift,
+            "the pure-intron member must not disable the #1070 in-frame fix"
+        );
+        // c.4del (Arg2 codon CGC) + c.7_8del (Lys3 codon AAA), net −3 →
+        // Arg2-Lys3 replaced by a single Ala; pure-intron member ignored.
+        assert_eq!(
+            format!("{}", proj.protein.expect("protein expected")),
+            "NP_INTR.1:p.(Arg2_Lys3delinsAla)"
+        );
+    }
+
+    /// #1070 B2: a cis pair that nets in-frame (`c.[4del;10dup]`, −1 and +1,
+    /// net 0) but whose −1 shift hits an *early* stop before the +1 restores the
+    /// frame is a genuine frameshift, NOT an in-frame delins. `net%3 == 0` alone
+    /// would wrongly call it in-frame; the combined translation detects the
+    /// shifted-window stop (`stop_base < window_end`) and returns `Frameshift`.
+    /// Result: `is_frameshift == true`, protein `p.?` (#855). On NM_FSSTOP.1
+    /// (CDS `ATGGTAAAAGGGCCCTAA`) the combined product is `ATGTAA…` = Met-Ter.
+    #[test]
+    fn project_cis_net_in_frame_but_mid_shift_stop_is_frameshift() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_frameshift_stop_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let dup = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_FSSTOP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(10)),
+                NaEdit::Duplication {
+                    sequence: None,
+                    length: None,
+                    uncertain_extent: None,
+                },
+            ),
+        });
+        let allele =
+            HgvsVariant::Allele(AlleleVariant::cis(vec![cds_del("NM_FSSTOP.1", 4, 4), dup]));
+        let proj = vp
+            .project_variant(&allele, "NM_FSSTOP.1")
+            .expect("projection should succeed");
+        assert!(
+            proj.is_frameshift,
+            "shifted frame terminates before reconvergence → genuine frameshift"
+        );
+        assert_eq!(
+            format!("{}", proj.protein.expect("protein expected")),
+            "NP_FSSTOP.1:p.?"
+        );
+    }
+
+    /// #1070 rule-8 catch-all: an exon-boundary member with exactly one offset
+    /// endpoint (`c.10_10+2del` on NM_INTR.1) has an untrustworthy
+    /// offset-dropping length, so it is classified Opaque, which blocks the
+    /// combined gate. The allele takes the conservative fallback: flag via the
+    /// per-member OR and protein `p.?` — NOT a wrong in-frame delins. No panic.
+    #[test]
+    fn project_cis_exon_boundary_member_forces_fallback() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_intronic_test_data();
+        let vp = VariantProjector::new(projector, provider);
+        let boundary = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_INTR.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(10), CdsPos::with_offset(10, 2)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![
+            cds_del("NM_INTR.1", 4, 4),
+            cds_del("NM_INTR.1", 7, 8),
+            boundary,
+        ]));
+        let proj = vp
+            .project_variant(&allele, "NM_INTR.1")
+            .expect("projection should succeed (no panic on the Opaque member)");
+        // Opaque member → gate blocked → conservative fallback. The two headline
+        // members individually frameshift, so the per-member OR flag is true and
+        // the protein collapses to `p.?` (never the in-frame delins).
+        assert!(proj.is_frameshift, "Opaque member forces the fallback flag");
+        assert_eq!(
+            format!("{}", proj.protein.expect("protein expected")),
+            "NP_INTR.1:p.?"
+        );
+    }
+
+    /// #1070 classifier guard: a both-intronic member is `ProteinIrrelevant`
+    /// only when it provably spans a single intron; a multi-exon-spanning
+    /// intronic deletion (real frame effect) must be `Opaque` so it forces the
+    /// conservative fallback instead of being silently ignored in the combined
+    /// build.
+    #[test]
+    fn classify_cis_member_intronic_span() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        // Build a minimal projection carrying just the coding form the classifier
+        // reads; the intronic-span endpoints drive the classification.
+        let proj_with_del = |lo: CdsPos, hi: CdsPos| VariantProjection {
+            genomic: None,
+            coding: Some(HgvsVariant::Cds(CdsVariant {
+                accession: parse_accession("NM_X.1"),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    CdsInterval::new(lo, hi),
+                    NaEdit::Deletion {
+                        sequence: None,
+                        length: None,
+                    },
+                ),
+            })),
+            noncoding: None,
+            protein: None,
+            rna: None,
+            transcript_id: "NM_X.1".to_string(),
+            gene_symbol: None,
+            is_frameshift: false,
+            is_intronic: true,
+            is_utr: false,
+            affects_init: false,
+            normalization_warnings: Vec::new(),
+        };
+        // Multi-exon-spanning: c.5+10_20-10del deletes exon(s) between bases 5 and
+        // 20 → Opaque (not ProteinIrrelevant).
+        let multi = proj_with_del(CdsPos::with_offset(5, 10), CdsPos::with_offset(20, -10));
+        assert!(
+            matches!(classify_cis_member(&multi, 60), CisMemberClass::Opaque),
+            "multi-exon-spanning intronic deletion must be Opaque"
+        );
+        // Single intron between consecutive bases 5 and 6 → ProteinIrrelevant.
+        let one = proj_with_del(CdsPos::with_offset(5, 10), CdsPos::with_offset(6, -10));
+        assert!(
+            matches!(
+                classify_cis_member(&one, 60),
+                CisMemberClass::ProteinIrrelevant
+            ),
+            "single-intron deletion removes no CDS bases"
+        );
+        // Same anchor base (one intron) → ProteinIrrelevant.
+        let same = proj_with_del(CdsPos::with_offset(5, 10), CdsPos::with_offset(5, 20));
+        assert!(matches!(
+            classify_cis_member(&same, 60),
+            CisMemberClass::ProteinIrrelevant
+        ));
+    }
+
+    /// #1070 (three-member reconvergence): two frame-restoring members
+    /// (`c.4del` −1, `c.6_7insT` +1) followed by an in-frame nonsense delins
+    /// (`c.10_12delinsTGA`, codon 4 → stop) must NOT be a frameshift. After the
+    /// first two members restore the frame, the delins introduces the stop
+    /// **in-frame**, so the cumulative frame phase at the terminating stop is 0.
+    /// The bare `stop_base < window_end` proxy mislabels this as a frameshift;
+    /// the cumulative-phase walk classifies it in-frame → a bounded `…Ter`
+    /// stop-delins, not `p.?`. Combined CDS `ATGATTTATTGACCCGGGTAA` →
+    /// Met-Ile-Tyr-Ter.
+    #[test]
+    fn project_cis_three_member_inframe_nonsense_is_not_frameshift() {
+        use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_three_member_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let ins = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TRIP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(6), CdsPos::new(7)),
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(Sequence::new(vec![Base::T])),
+                },
+            ),
+        });
+        let delins = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_TRIP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(10), CdsPos::new(12)),
+                NaEdit::Delins {
+                    sequence: InsertedSequence::Literal(Sequence::new(vec![
+                        Base::T,
+                        Base::G,
+                        Base::A,
+                    ])),
+                    deleted: None,
+                    deleted_length: None,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![
+            cds_del("NM_TRIP.1", 4, 4),
+            ins,
+            delins,
+        ]));
+        let proj = vp
+            .project_variant(&allele, "NM_TRIP.1")
+            .expect("projection should succeed");
+        assert!(
+            !proj.is_frameshift,
+            "the frame is restored before the in-frame nonsense stop → not a frameshift"
+        );
+        let rendered = format!("{}", proj.protein.expect("protein expected"));
+        // Bounded in-frame consequence ending in a stop; must not be `p.?` and
+        // must not be a frameshift (`fs`) form.
+        assert!(
+            !rendered.contains("fs") && rendered != "NP_TRIP.1:p.?",
+            "expected a bounded in-frame stop consequence, got {rendered}"
+        );
+        assert!(
+            rendered.contains("Ter") || rendered.contains('*'),
+            "expected a terminating stop in the consequence, got {rendered}"
+        );
     }
 
     /// #855 regression guard (delins.md): two in-cis substitutions SEPARATED by an
