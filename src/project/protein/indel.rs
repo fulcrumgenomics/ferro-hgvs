@@ -110,22 +110,41 @@ pub(crate) fn predict_indel_protein(
     //    extension builder iff the protein is unchanged up to and including the
     //    last sense residue and the former stop now codes a non-stop AA. A
     //    frameshift *before* the stop diverges earlier and is excluded.
-    if ref_protein_with_stop.last() == Some(&AminoAcid::Ter)
-        && is_stop_loss_readthrough(
+    //    A stop-destroying edit is classified by SENSE-PREFIX PRESERVATION, not
+    //    net%3 (HGVS classifies by protein outcome, not ×3 arithmetic): if every
+    //    reference coding residue before the stop survives → extension
+    //    (extension.md:18 prioritizes it); if a sense residue changed → the
+    //    C-terminus is rewritten to a new downstream stop, a frameshift
+    //    (frameshift.md:25, delins.md:30) — even when net%3==0. Rendering the
+    //    latter as a bare in-frame `del`/`delins` (pretending the stop survives)
+    //    is the bug fixed here.
+    if ref_protein_with_stop.last() == Some(&AminoAcid::Ter) {
+        match classify_stop_disruption(
             ref_protein,
             &mut_cds,
             transcript,
             cds_pos_end,
             is_frameshift,
-        )?
-    {
-        return build_extension_variant(
-            ref_protein,
-            &alt_protein,
-            &mut_cds,
-            protein_accession,
-            transcript,
-        );
+        )? {
+            StopDisruption::CleanExtension => {
+                return build_extension_variant(
+                    ref_protein,
+                    &alt_protein,
+                    &mut_cds_with_3utr(&mut_cds, transcript)?,
+                    protein_accession,
+                    transcript,
+                );
+            }
+            StopDisruption::SenseChangedFrameshift => {
+                return build_stop_loss_frameshift(
+                    ref_protein,
+                    &mut_cds_with_3utr(&mut_cds, transcript)?,
+                    protein_accession,
+                    transcript,
+                );
+            }
+            StopDisruption::None => {}
+        }
     }
 
     // 4. Build the protein variant (net + is_frameshift were computed above).
@@ -133,7 +152,7 @@ pub(crate) fn predict_indel_protein(
         build_frameshift_variant(
             ref_protein,
             &alt_protein,
-            &mut_cds,
+            &mut_cds_with_3utr(&mut_cds, transcript)?,
             protein_accession,
             transcript,
         )
@@ -916,10 +935,15 @@ fn find_last_diff_alt(ref_prot: &[AminoAcid], alt_prot: &[AminoAcid]) -> usize {
 // ── Frameshift prediction ─────────────────────────────────────────────────────
 
 /// Build a `p.(Xxx{N}[Yyy]fsTer{K})` frameshift variant.
+/// `scan_seq` is the read-through sequence (mutated CDS ++ 3'UTR) for the new-stop
+/// scan, already extended by the caller — this builder does NOT append the 3'UTR
+/// itself. Callers holding a CDS-only mutated sequence pass
+/// `mut_cds_with_3utr(mut_cds)`; a caller holding an already-extended sequence
+/// (`mut_full`) passes it directly, avoiding a double-append.
 fn build_frameshift_variant(
     ref_protein: &[AminoAcid],
     alt_protein: &[AminoAcid],
-    mut_cds: &str,
+    scan_seq: &str,
     protein_accession: &str,
     transcript: &Transcript,
 ) -> Result<HgvsVariant, FerroError> {
@@ -938,7 +962,7 @@ fn build_frameshift_variant(
         return build_extension_variant(
             ref_protein,
             alt_protein,
-            mut_cds,
+            scan_seq,
             protein_accession,
             transcript,
         );
@@ -958,10 +982,9 @@ fn build_frameshift_variant(
     // `fs` — that is reserved for human-authored input with no detail. The
     // degenerate `else` (frameshift starts at/beyond the CDS end) is likewise
     // an unknown-termination case (frameshift.md:44; spec example p.Ile327Argfs*?).
-    // Scan for the new stop over the mutated CDS *plus* the unchanged 3'UTR:
-    // a frameshift's new in-frame stop commonly lies past the annotated CDS
-    // end. Scanning only the CDS-truncated `mut_cds` mis-emits `fsTer?`.
-    let scan_seq = mut_cds_with_3utr(mut_cds, transcript)?;
+    // Scan for the new stop over `scan_seq` (mutated CDS *plus* the unchanged
+    // 3'UTR, extended once by the caller): a frameshift's new in-frame stop
+    // commonly lies past the annotated CDS end.
     let codon_byte_offset = first_diff * 3;
     let ter: FrameshiftTer = if codon_byte_offset < scan_seq.len() {
         let downstream = &scan_seq[codon_byte_offset..];
@@ -1036,61 +1059,134 @@ fn build_frameshift_variant(
 /// so a length-based check would miss the readthrough and misroute to the
 /// frameshift path — which then reads the (nonexistent) reference residue at
 /// the empty stop slot and emits the invalid `Xaa` token (#615).
-fn is_stop_loss_readthrough(
+/// How an edit disrupts the reference terminator codon (extension.md:18 /
+/// frameshift.md:25 / delins.md:30). The discriminator between extension and
+/// frameshift is SENSE-PREFIX PRESERVATION, not net%3.
+enum StopDisruption {
+    /// The reference stop is intact (or not disrupted by this edit).
+    None,
+    /// The stop is destroyed but every reference coding residue before it is
+    /// preserved → a C-terminal extension (`p.(Ter…ext…)`).
+    CleanExtension,
+    /// The stop is destroyed AND a reference coding residue changed → the
+    /// C-terminus is rewritten to a new downstream stop, a frameshift.
+    SenseChangedFrameshift,
+}
+
+/// Classify how `edit` (already applied into `mut_cds`) disrupts the reference
+/// terminator codon, reading through the 3'UTR.
+///
+/// The `CleanExtension` result is byte-identical to the former
+/// `is_stop_loss_readthrough`: the terminator must be genuinely destroyed —
+/// either the edit is a frameshift (`net % 3 != 0`, which scrambles the frame
+/// through the stop) or its affected CDS span overlaps the terminator codon
+/// (`cds_pos_end >= stop_cds_start`) — AND the former-stop slot must hold a
+/// non-terminator residue. If additionally every sense residue before it is
+/// unchanged → `CleanExtension`; if a sense residue changed → the
+/// `SenseChangedFrameshift` case this refactor adds (was misrouted to a bare
+/// in-frame `del`/`delins`). Reading through the 3'UTR is essential (#615).
+fn classify_stop_disruption(
     ref_protein: &[AminoAcid],
     mut_cds: &str,
     transcript: &Transcript,
     cds_pos_end: i64,
     is_frameshift: bool,
-) -> Result<bool, FerroError> {
+) -> Result<StopDisruption, FerroError> {
     // 1-based CDS position of the (reference) terminator codon.
     let stop_cds_start = (ref_protein.len() * 3 + 1) as i64;
     // A frameshift scrambles the frame through the stop even when its anchor
     // lies a base or two upstream of the terminator codon; an in-frame edit
     // only disrupts the stop if its span actually overlaps it.
     if !is_frameshift && cds_pos_end < stop_cds_start {
-        return Ok(false);
+        return Ok(StopDisruption::None);
     }
 
     let scan_seq = mut_cds_with_3utr(mut_cds, transcript)?;
-    let mut readthrough = translate_full_cds_with_stop(&scan_seq);
-    // `ref_protein` had residue 1 forced to the initiator `Met` for a recognized
-    // initiator (`RefProteinBundle::from_transcript`, #801); apply the same
-    // normalization to the freshly re-translated read-through so the sense-prefix
-    // comparison below stays consistent. `scan_seq` shares the CDS start codon
-    // (a downstream stop-loss edit never touches codon 0), so the gate matches.
-    if cds_has_recognized_start(&scan_seq) {
+    let readthrough = translate_readthrough(&scan_seq);
+    Ok(classify_readthrough(&readthrough, ref_protein))
+}
+
+/// Translate a read-through sequence (mutated CDS ++ 3'UTR), forcing residue 1
+/// to the initiator `Met` for a recognized initiator so the sense-prefix
+/// comparison against a `RefProteinBundle` protein (whose residue 1 was likewise
+/// Met-forced, #801) stays consistent. Stops at the first terminator.
+fn translate_readthrough(scan_seq: &str) -> Vec<AminoAcid> {
+    let mut readthrough = translate_full_cds_with_stop(scan_seq);
+    if cds_has_recognized_start(scan_seq) {
         force_initiator_met(&mut readthrough);
     }
+    readthrough
+}
+
+/// The single source of truth for the stop-disruption rule, given an
+/// already-translated read-through and the reference protein. Both stop-region
+/// paths (in-CDS via [`classify_stop_disruption`] and the `*N`-spanning path in
+/// [`predict_stop_region_extension`]) route through this. The former-stop slot
+/// (index `ref_protein.len()`) must hold a non-terminator residue (the stop was
+/// read through); then sense-prefix preservation splits extension from
+/// frameshift (extension.md:18 / frameshift.md:25).
+fn classify_readthrough(readthrough: &[AminoAcid], ref_protein: &[AminoAcid]) -> StopDisruption {
     let stop_idx = ref_protein.len();
-    // The former-stop slot must hold a non-terminator residue (the stop was
-    // read through) and every sense residue before it must be unchanged.
     match readthrough.get(stop_idx) {
-        Some(&aa) if aa != AminoAcid::Ter => Ok(readthrough[..stop_idx] == *ref_protein),
-        _ => Ok(false),
+        Some(&aa) if aa != AminoAcid::Ter => {
+            if readthrough[..stop_idx] == *ref_protein {
+                StopDisruption::CleanExtension
+            } else {
+                StopDisruption::SenseChangedFrameshift
+            }
+        }
+        _ => StopDisruption::None,
     }
 }
 
+/// Build the frameshift consequence for a stop-destroying edit that changes a
+/// sense residue (`StopDisruption::SenseChangedFrameshift`). The new stop lies in
+/// the 3'UTR, and the CDS-only translation is too short to carry the first new
+/// residue, so build from the READTHROUGH translation of `scan_seq` (already the
+/// extended read-through sequence, CDS ++ 3'UTR — passed straight to the
+/// no-append [`build_frameshift_variant`]).
+fn build_stop_loss_frameshift(
+    ref_protein: &[AminoAcid],
+    scan_seq: &str,
+    protein_accession: &str,
+    transcript: &Transcript,
+) -> Result<HgvsVariant, FerroError> {
+    let mut readthrough = translate_full_cds(scan_seq);
+    if cds_has_recognized_start(scan_seq) {
+        force_initiator_met(&mut readthrough);
+    }
+    build_frameshift_variant(
+        ref_protein,
+        &readthrough,
+        scan_seq,
+        protein_accession,
+        transcript,
+    )
+}
+
 /// Build a `p.(Ter{N}{Yyy}ext*{K})` extension variant for stop-codon readthrough.
+///
+/// `scan_seq` is the read-through sequence (mutated CDS ++ 3'UTR), already
+/// extended by the caller — this builder does NOT append the 3'UTR itself, so a
+/// caller holding an already-extended sequence (`predict_stop_region_extension`'s
+/// `mut_full`) does not double-append (fabricating a spurious stop).
 fn build_extension_variant(
     ref_protein: &[AminoAcid],
     _alt_protein: &[AminoAcid],
-    mut_cds: &str,
+    scan_seq: &str,
     protein_accession: &str,
     transcript: &Transcript,
 ) -> Result<HgvsVariant, FerroError> {
     // 1-based protein position of the original stop codon; the read-through
     // tail is computed by the shared C-terminal extension builder.
     let stop_pos = (ref_protein.len() + 1) as u64;
-
-    let scan_seq = mut_cds_with_3utr(mut_cds, transcript)?;
-    build_cterminal_extension(stop_pos, &scan_seq, protein_accession, transcript)
+    build_cterminal_extension(stop_pos, scan_seq, protein_accession, transcript)
 }
 
 /// Predict a C-terminal extension for a **deletion that spans the CDS→3'UTR
 /// boundary** (5' end in the CDS, 3' end a `*N` position). Unlike the in-CDS
-/// stop-loss path (`build_extension_variant` / `is_stop_loss_readthrough`, which
-/// append the *unchanged* 3'UTR via `mut_cds_with_3utr`), the deleted bases here
+/// stop-loss path (`build_extension_variant` / `classify_stop_disruption`, whose
+/// callers append the *unchanged* 3'UTR via `mut_cds_with_3utr`), the deleted bases here
 /// include 3'UTR positions — so we splice the edit against the **extended
 /// reference** (CDS ++ 3'UTR) ONCE and translate that directly. Routing through
 /// the in-CDS helpers would double-append the 3'UTR and reintroduce the deleted
@@ -1137,36 +1233,40 @@ pub(crate) fn predict_stop_region_extension(
     // `ref_cds` covers the CDS incl. stop, so `*N` lands at `ref_cds.len() + N`.
     let abs_cds_pos_end = ref_bundle.ref_cds.len() as i64 + cds_end_utr3_n;
 
+    // Initiator-loss precedence (mirrors `predict_indel_protein`): a boundary
+    // deletion whose 5' end also reaches the initiation codon (CDS 1–3) has an
+    // unpredictable consequence — report `p.(Met1?)` up front rather than a
+    // stop-loss extension/frameshift, which the spec disallows (#498/#771).
+    if affects_initiation_codon(edit, cds_pos_start, abs_cds_pos_end) {
+        return Ok(Some(build_initiator_unknown(protein_accession, transcript)));
+    }
+
     // Splice the edit against the extended reference (no overrun, no double-3'UTR).
     let mut_full =
         build_mutated_cds_with_ref(&extended, transcript, cds_pos_start, abs_cds_pos_end, edit)?;
 
-    // Stop-loss check directly on `mut_full` (replicates `is_stop_loss_readthrough`
-    // without re-appending the 3'UTR). `force_initiator_met` keeps the sense-prefix
-    // compare consistent with `ref_protein` (residue 0 was forced to Met for a
-    // recognized initiator, #801).
-    let mut readthrough = translate_full_cds_with_stop(&mut_full);
-    if cds_has_recognized_start(&mut_full) {
-        force_initiator_met(&mut readthrough);
+    // `mut_full` is already CDS ++ 3'UTR (the deleted bases span the boundary),
+    // so classify directly on it — no re-append — through the shared
+    // `classify_readthrough` rule. A destroyed stop with a changed sense residue
+    // previously returned `None` here (no protein at all) — the `*N`-spanning arm
+    // of the same bug the in-CDS path fixes.
+    let readthrough = translate_readthrough(&mut_full);
+    match classify_readthrough(&readthrough, &ref_bundle.ref_protein) {
+        StopDisruption::CleanExtension => Ok(Some(build_extension_variant(
+            &ref_bundle.ref_protein,
+            &readthrough,
+            &mut_full,
+            protein_accession,
+            transcript,
+        )?)),
+        StopDisruption::SenseChangedFrameshift => Ok(Some(build_stop_loss_frameshift(
+            &ref_bundle.ref_protein,
+            &mut_full,
+            protein_accession,
+            transcript,
+        )?)),
+        StopDisruption::None => Ok(None),
     }
-    let stop_idx = ref_bundle.ref_protein.len();
-    // Former-stop slot holds a non-Ter residue AND every sense residue before it
-    // is unchanged. (The `.get(stop_idx)` match already bounds-checks.)
-    let is_readthrough = match readthrough.get(stop_idx) {
-        Some(&aa) if aa != AminoAcid::Ter => readthrough[..stop_idx] == *ref_bundle.ref_protein,
-        _ => false,
-    };
-    if !is_readthrough {
-        return Ok(None);
-    }
-
-    let stop_pos = stop_idx as u64 + 1;
-    Ok(Some(build_cterminal_extension(
-        stop_pos,
-        &mut_full,
-        protein_accession,
-        transcript,
-    )?))
 }
 
 // ── In-cis combined protein consequence (#1070) ───────────────────────────────
@@ -2078,7 +2178,7 @@ mod tests {
         // #801 regression: stop-loss readthrough on a non-AUG-initiation
         // transcript must still route to the C-terminal extension path. The
         // RefProteinBundle now forces residue 1 to Met for a recognized
-        // initiator (CTG here), so `is_stop_loss_readthrough` must apply the
+        // initiator (CTG here), so `classify_stop_disruption` must apply the
         // same Met1 normalization to the re-translated read-through sequence
         // before comparing — otherwise readthrough[0] (Leu, from the literal
         // CTG) would not equal ref_protein[0] (Met) and the variant would
@@ -2562,18 +2662,24 @@ mod tests {
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ter3TyrextTer?)");
     }
 
-    /// A boundary del that also changes a SENSE residue (5' end well inside the
-    /// CDS) is not a clean stop-loss ⇒ None (prefix-equality fails).
+    /// A boundary del whose 5' end reaches the initiation codon takes
+    /// initiator-loss precedence ⇒ the init-unknown `p.(Met1?)` (#498/#771),
+    /// not a stop-loss extension/frameshift. (Pre-PR-B this returned `None` —
+    /// the sense-changed-boundary-del bug.)
     #[test]
-    fn boundary_del_changing_sense_residue_returns_none() {
+    fn boundary_del_reaching_init_codon_is_unknown() {
+        // c.2_*1del reaches the initiation codon (CDS 1-3), so the consequence is
+        // the init-unknown `p.(Met1?)` (#498/#771) — NOT a stop-loss form and NOT
+        // the pre-PR-B `None` (which was the sense-changed-boundary-del bug).
         let t = tx("ATGAAATAATCTAA", 1, 9);
         let del = NaEdit::Deletion {
             sequence: None,
             length: None,
         };
-        assert!(predict_stop_ext(&t, 2, 1, &del, "NP_TEST.1")
+        let v = predict_stop_ext(&t, 2, 1, &del, "NP_TEST.1")
             .unwrap()
-            .is_none());
+            .expect("an init-reaching boundary deletion reports the init-unknown form");
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Met1?)");
     }
 
     /// CDS not terminated by a stop (cds_end before the real stop) ⇒ guard ⇒ None.
@@ -2690,5 +2796,83 @@ mod tests {
             rendered.contains("Ter") || rendered.contains('*'),
             "expected a terminating stop, got {rendered}"
         );
+    }
+
+    // ── Stop-region deletion → frameshift when a sense residue changes (PR-B) ──
+
+    fn del() -> NaEdit {
+        NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        }
+    }
+
+    /// A deletion spanning a sense codon AND the stop, changing a sense residue,
+    /// is a frameshift — NOT a bare `del` that pretends the stop survives
+    /// (frameshift.md:25). CDS "ATGCGCTAA" (Met-Arg-Ter) + 3'UTR "GGGCCCTGA".
+    /// `c.4_9del` deletes Arg2 + stop; reads Met-Gly-Pro-Ter → `p.(Arg2GlyfsTer3)`.
+    #[test]
+    fn stop_spanning_sense_changed_deletion_is_frameshift() {
+        let t = tx("ATGCGCTAAGGGCCCTGA", 1, 9);
+        let v = predict_indel(&t, 4, 9, &del(), "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Arg2GlyfsTer3)");
+    }
+
+    /// Regression: a deletion of exactly the stop codon (sense preserved) stays a
+    /// clean extension.
+    #[test]
+    fn stop_only_deletion_stays_extension() {
+        let t = tx("ATGCGCTAAGGGCCCTGA", 1, 9);
+        let v = predict_indel(&t, 7, 9, &del(), "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ter3GlyextTer2)");
+    }
+
+    /// Regression: a frame-shifting deletion into the stop whose junction is
+    /// synonymous (sense preserved) stays a clean extension, not a frameshift.
+    #[test]
+    fn stop_spanning_synonymous_deletion_stays_extension() {
+        let t = tx("ATGCGCTAAGGGCCCTGA", 1, 9);
+        let v = predict_indel(&t, 6, 9, &del(), "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ter3GlyextTer?)");
+    }
+
+    /// B1 double-append canary: a 3'UTR whose length is not a multiple of 3 and
+    /// that has NO in-frame stop must yield `fs*?`. Appending the 3'UTR twice
+    /// would fabricate a spurious `fsTer{K}` at the duplicate-copy junction.
+    /// CDS "ATGCGCTAA" + 3'UTR "AACAACT" (len 7): `c.4_9del` reads Met-Asn-Asn…
+    /// with no stop → `p.(Arg2AsnfsTer?)`.
+    #[test]
+    fn stop_loss_frameshift_no_downstream_stop_is_unknown() {
+        let t = tx("ATGCGCTAAAACAACT", 1, 9);
+        let v = predict_indel(&t, 4, 9, &del(), "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Arg2AsnfsTer?)");
+    }
+
+    /// A delins that changes a sense residue and destroys the stop is likewise a
+    /// frameshift. `c.4_9delinsAAA` replaces Arg2+stop with Lys, reads
+    /// Met-Lys-Gly-Pro-Ter.
+    #[test]
+    fn stop_spanning_sense_changed_delins_is_frameshift() {
+        let t = tx("ATGCGCTAAGGGCCCTGA", 1, 9);
+        let seq: crate::hgvs::edit::Sequence = "AAA".parse().unwrap();
+        let edit = NaEdit::Delins {
+            sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
+            deleted: None,
+            deleted_length: None,
+        };
+        let v = predict_indel(&t, 4, 9, &edit, "NP_TEST.1").unwrap();
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Arg2LysfsTer4)");
+    }
+
+    /// S2: a `*N`-spanning deletion that changes a sense residue routes through
+    /// `predict_stop_region_extension` and now yields a frameshift (previously it
+    /// returned no protein at all). `c.4_*2del` deletes Arg2..into the 3'UTR.
+    #[test]
+    fn stop_region_extension_sense_changed_is_frameshift() {
+        let t = tx("ATGCGCTAAGGGCCCTGA", 1, 9);
+        let v = predict_stop_ext(&t, 4, 2, &del(), "NP_TEST.1")
+            .unwrap()
+            .expect("a sense-changed *N-spanning deletion must yield a frameshift");
+        assert_eq!(prot_str(&v), "NP_TEST.1:p.(Arg2AlafsTer?)");
     }
 }
