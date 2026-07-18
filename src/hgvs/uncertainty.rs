@@ -99,6 +99,23 @@ impl<T> Mu<T> {
     pub fn unknown() -> Self {
         Mu::Unknown
     }
+
+    /// Build a `Mu<U>` carrying `value`, matching this wrapper's certainty
+    /// (Certain vs Uncertain/predicted). Encodes the #1063 policy: reconstruct
+    /// an edit while preserving the input's predicted/observed status.
+    ///
+    /// `Unknown` maps to `Unknown` (mirroring `map`/`map_ref`) rather than
+    /// carrying `value` — a `Mu::Unknown` has no payload to be "the same
+    /// certainty as", so callers reconstructing from a known `value` should
+    /// not expect this arm to fire on a variant's edit (normalization already
+    /// bails out before reconstruction when the input edit is unknown).
+    pub fn with_same_certainty<U>(&self, value: U) -> Mu<U> {
+        match self {
+            Mu::Certain(_) => Mu::Certain(value),
+            Mu::Uncertain(_) => Mu::Uncertain(value),
+            Mu::Unknown => Mu::Unknown,
+        }
+    }
 }
 
 impl<T: fmt::Display> fmt::Display for Mu<T> {
@@ -179,5 +196,20 @@ mod tests {
         assert_eq!(Mu::Certain(42).into_inner(), Some(42));
         assert_eq!(Mu::Uncertain(42).into_inner(), Some(42));
         assert_eq!(Mu::<i32>::Unknown.into_inner(), None);
+    }
+
+    #[test]
+    fn test_with_same_certainty() {
+        let certain: Mu<i32> = Mu::Certain(1);
+        let rebuilt = certain.with_same_certainty(99);
+        assert_eq!(rebuilt, Mu::Certain(99));
+
+        let uncertain: Mu<i32> = Mu::Uncertain(1);
+        let rebuilt = uncertain.with_same_certainty(99);
+        assert_eq!(rebuilt, Mu::Uncertain(99));
+
+        let unknown: Mu<i32> = Mu::Unknown;
+        let rebuilt = unknown.with_same_certainty(99);
+        assert_eq!(rebuilt, Mu::<i32>::Unknown);
     }
 }

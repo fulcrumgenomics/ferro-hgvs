@@ -2170,9 +2170,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
             let resolved = GenomeVariant {
                 accession: variant.accession.clone(),
                 gene_symbol: variant.gene_symbol.clone(),
-                loc_edit: LocEdit::new(
+                loc_edit: LocEdit::with_uncertainty(
                     Interval::new(GenomePos::new(start), GenomePos::new(end)),
-                    edit.clone(),
+                    variant.loc_edit.edit.with_same_certainty(edit.clone()),
                 ),
             };
             return Ok((
@@ -2240,9 +2240,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_variant = GenomeVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(
+            loc_edit: LocEdit::with_uncertainty(
                 Interval::new(GenomePos::new(new_start), GenomePos::new(new_end)),
-                new_edit,
+                variant.loc_edit.edit.with_same_certainty(new_edit),
             ),
         };
 
@@ -2252,9 +2252,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // (#1034: rev-comp sub-runs are not carved out) and/or into separate
         // subs across interior identities. Returns the variant unchanged for
         // non-Delins or no-decomposition cases.
+        let uncertain = new_variant.loc_edit.edit.is_uncertain();
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Genome(new_variant));
         warnings.append(&mut split_warnings);
-        Ok((wrap_allele_if_split(split), warnings))
+        Ok((wrap_allele_if_split(split, uncertain), warnings))
     }
 
     /// Normalize a CDS variant
@@ -3278,15 +3279,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_variant = CdsVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(Interval::new(new_start, new_end), new_edit),
+            loc_edit: LocEdit::with_uncertainty(
+                Interval::new(new_start, new_end),
+                variant.loc_edit.edit.with_same_certainty(new_edit),
+            ),
         };
 
         // Issue #160 + #165 post-canonicalization split. The codon-frame
         // exception applies only to CDS-proper positions, which the
         // helper filters internally via `simple_cds_pos`.
+        let uncertain = new_variant.loc_edit.edit.is_uncertain();
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Cds(new_variant));
         warnings.append(&mut split_warnings);
-        Ok((wrap_allele_if_split(split), warnings))
+        Ok((wrap_allele_if_split(split, uncertain), warnings))
     }
 
     /// Normalize a transcript variant
@@ -3588,16 +3593,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_variant = TxVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(
+            loc_edit: LocEdit::with_uncertainty(
                 Interval::new(TxPos::new(new_start as i64), TxPos::new(new_end as i64)),
-                new_edit,
+                variant.loc_edit.edit.with_same_certainty(new_edit),
             ),
         };
 
         // Issue #160 + #165 post-canonicalization split.
+        let uncertain = new_variant.loc_edit.edit.is_uncertain();
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Tx(new_variant));
         warnings.append(&mut split_warnings);
-        Ok((wrap_allele_if_split(split), warnings))
+        Ok((wrap_allele_if_split(split, uncertain), warnings))
     }
 
     /// Normalize a protein variant.
@@ -4762,7 +4768,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             let tx_variant = TxVariant {
                 accession: variant.accession.clone(),
                 gene_symbol: variant.gene_symbol.clone(),
-                loc_edit: LocEdit::new(Interval::new(tx_start, tx_end), edit.clone()),
+                loc_edit: LocEdit::with_uncertainty(
+                    Interval::new(tx_start, tx_end),
+                    variant.loc_edit.edit.with_same_certainty(edit.clone()),
+                ),
             };
 
             // Mirror of the `normalize_tx` intronic dispatch (both intronic in the
@@ -4793,10 +4802,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 });
             };
             let rna_variant = self.txvariant_to_rnavariant(&tv, cds_info)?;
+            let uncertain = rna_variant.loc_edit.edit.is_uncertain();
             let (split, mut split_warnings) = self.apply_canonical_split(HV::Rna(rna_variant));
             let mut warnings = tx_warnings;
             warnings.append(&mut split_warnings);
-            return Ok((wrap_allele_if_split(split), warnings));
+            return Ok((wrap_allele_if_split(split, uncertain), warnings));
         }
 
         // Try to get transcript (RNA uses the same accession as mRNA transcripts)
@@ -4924,7 +4934,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     let bs_variant = TxVariant {
                         accession: variant.accession.clone(),
                         gene_symbol: variant.gene_symbol.clone(),
-                        loc_edit: LocEdit::new(Interval::new(bs_start, bs_end), edit.clone()),
+                        loc_edit: LocEdit::with_uncertainty(
+                            Interval::new(bs_start, bs_end),
+                            variant.loc_edit.edit.with_same_certainty(edit.clone()),
+                        ),
                     };
                     // Engine errors (no following intron — last exon — no genomic
                     // alignment, …) fall through to the exon-confined result, the
@@ -4952,12 +4965,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 .is_some_and(|p| p.is_intronic());
                         if crossed_into_intron {
                             if let Ok(rna_variant) = self.txvariant_to_rnavariant(&tv, cds_info) {
+                                let uncertain = rna_variant.loc_edit.edit.is_uncertain();
                                 let (split, mut split_warnings) =
                                     self.apply_canonical_split(HV::Rna(rna_variant));
                                 let mut combined = warnings;
                                 combined.extend(boundary_warnings);
                                 combined.append(&mut split_warnings);
-                                return Ok((wrap_allele_if_split(split), combined));
+                                return Ok((wrap_allele_if_split(split, uncertain), combined));
                             }
                         }
                     }
@@ -4985,14 +4999,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_variant = RnaVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(RnaInterval::new(new_start, new_end), new_edit),
+            loc_edit: LocEdit::with_uncertainty(
+                RnaInterval::new(new_start, new_end),
+                variant.loc_edit.edit.with_same_certainty(new_edit),
+            ),
         };
 
         // Issue #160 + #165 post-canonicalization split (T/U-equivalent
         // comparison for the rev-comp scan and per-position emissions).
+        let uncertain = new_variant.loc_edit.edit.is_uncertain();
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Rna(new_variant));
         warnings.append(&mut split_warnings);
-        Ok((wrap_allele_if_split(split), warnings))
+        Ok((wrap_allele_if_split(split, uncertain), warnings))
     }
 
     /// Convert an `r.` position to a transcript-numbered [`TxPos`], carrying the
@@ -5081,7 +5099,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         Ok(RnaVariant {
             accession: tv.accession.clone(),
             gene_symbol: tv.gene_symbol.clone(),
-            loc_edit: LocEdit::new(RnaInterval::new(new_start, new_end), new_edit),
+            loc_edit: LocEdit::with_uncertainty(
+                RnaInterval::new(new_start, new_end),
+                tv.loc_edit.edit.with_same_certainty(new_edit),
+            ),
         })
     }
 
@@ -5310,8 +5331,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
             if is_reversed {
                 return (HV::Mt(canonical), vec![]);
             }
+            let uncertain = canonical.loc_edit.edit.is_uncertain();
             let (split, warnings) = self.apply_canonical_split(HV::Mt(canonical));
-            (wrap_allele_if_split(split), warnings)
+            (wrap_allele_if_split(split, uncertain), warnings)
         };
 
         let accession = variant.accession.transcript_accession();
@@ -5407,16 +5429,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_variant = MtVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(
+            loc_edit: LocEdit::with_uncertainty(
                 Interval::new(GenomePos::new(new_start), GenomePos::new(new_end)),
-                new_edit,
+                variant.loc_edit.edit.with_same_certainty(new_edit),
             ),
         };
 
         // Issue #160 inv-split post-pass (mirrors normalize_genome).
+        let uncertain = new_variant.loc_edit.edit.is_uncertain();
         let (split, mut split_warnings) = self.apply_canonical_split(HV::Mt(new_variant));
         warnings.append(&mut split_warnings);
-        Ok((wrap_allele_if_split(split), warnings))
+        Ok((wrap_allele_if_split(split, uncertain), warnings))
     }
 
     /// Apply minimal notation to an mt variant without full normalization.
@@ -5695,7 +5718,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_variant = CdsVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(Interval::new(new_start, new_end), new_edit),
+            loc_edit: LocEdit::with_uncertainty(
+                Interval::new(new_start, new_end),
+                variant.loc_edit.edit.with_same_certainty(new_edit),
+            ),
         };
 
         Ok((HV::Cds(new_variant), warnings))
@@ -5875,7 +5901,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_variant = TxVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(Interval::new(new_start, new_end), new_edit),
+            loc_edit: LocEdit::with_uncertainty(
+                Interval::new(new_start, new_end),
+                variant.loc_edit.edit.with_same_certainty(new_edit),
+            ),
         };
 
         Ok((HV::Tx(new_variant), warnings))
@@ -6042,7 +6071,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_variant = CdsVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(Interval::new(new_start, new_end), new_edit),
+            loc_edit: LocEdit::with_uncertainty(
+                Interval::new(new_start, new_end),
+                variant.loc_edit.edit.with_same_certainty(new_edit),
+            ),
         };
 
         Ok((HV::Cds(new_variant), warnings))
@@ -6481,7 +6513,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let new_variant = TxVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
-            loc_edit: LocEdit::new(Interval::new(new_start, new_end), new_edit),
+            loc_edit: LocEdit::with_uncertainty(
+                Interval::new(new_start, new_end),
+                variant.loc_edit.edit.with_same_certainty(new_edit),
+            ),
         };
 
         Ok((HV::Tx(new_variant), warnings))
@@ -8620,11 +8655,19 @@ fn is_transcript_accession(id: &str) -> bool {
         || id.starts_with("ENST")
 }
 
-/// If `variants` has 1 element return it directly; if >1 wrap in a cis Allele.
-fn wrap_allele_if_split(mut variants: Vec<HgvsVariant>) -> HgvsVariant {
+/// If `variants` has 1 element return it directly; if >1 wrap in a cis
+/// Allele. `uncertain` is the pre-split variant's edit certainty (#1063):
+/// a single predicted/uncertain edit that canonically decomposes into a
+/// multi-member allele carries its `(...)` wrapper onto the whole allele
+/// (`g.[(200C>T;202C>G)]`), never onto the individual members — members
+/// built by `build_variant_at` are always `Mu::Certain`. Ignored when the
+/// split doesn't fire (single-element `variants`).
+fn wrap_allele_if_split(mut variants: Vec<HgvsVariant>, uncertain: bool) -> HgvsVariant {
     debug_assert!(!variants.is_empty(), "wrap_allele_if_split: empty input");
     if variants.len() == 1 {
         variants.pop().unwrap()
+    } else if uncertain {
+        HgvsVariant::Allele(AlleleVariant::new_uncertain(variants, AllelePhase::Cis))
     } else {
         HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Cis))
     }
