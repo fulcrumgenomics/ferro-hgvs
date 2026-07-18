@@ -297,6 +297,44 @@ def build_transcript(config: BuildTranscriptConfig) -> BuildTranscriptReport:
 # Core Classes
 # ============================================================================
 
+class Axis(IntEnum):
+    """The coordinate axis (reference molecule / coordinate system) of a variant.
+
+    Returned by :attr:`HgvsVariant.axis`. Each member carries its single-letter
+    HGVS coordinate code (:meth:`code`) and a molecule-type grouping
+    (:meth:`is_dna` / :meth:`is_rna` / :meth:`is_protein`).
+    """
+
+    Genomic = 0
+    Coding = 1
+    NonCoding = 2
+    Rna = 3
+    Protein = 4
+    Mitochondrial = 5
+    Circular = 6
+
+    def code(self) -> str:
+        """The single-letter HGVS coordinate code (``g``/``c``/``n``/``r``/``p``/``m``/``o``)."""
+        ...
+
+    def is_dna(self) -> bool:
+        """Whether this axis addresses a DNA molecule (``g``/``c``/``n``/``m``/``o``).
+
+        Treats mitochondrial and circular DNA as DNA, unlike the deprecated
+        ``is_genomic()`` predicate (which is ``g.``-only).
+        """
+        ...
+
+    def is_rna(self) -> bool:
+        """Whether this axis addresses an RNA molecule (``r.``)."""
+        ...
+
+    def is_protein(self) -> bool:
+        """Whether this axis addresses a protein (``p.``)."""
+        ...
+
+    def __str__(self) -> str: ...
+
 class HgvsVariant:
     """A parsed HGVS variant.
 
@@ -380,6 +418,23 @@ class HgvsVariant:
         ...
 
     @property
+    def axis(self) -> Axis | None:
+        """The coordinate axis (reference molecule / coordinate system) of this variant.
+
+        Returns an :class:`Axis`, or ``None`` if there is no single well-defined
+        axis. For a leaf variant this is its coordinate kind; for an allele
+        (``ACC:c.[...]``) it is the axis shared by every member, so - unlike the
+        deprecated ``is_*`` predicates - it works consistently whether or not the
+        edit is wrapped in an allele.
+
+        Returns ``None`` for an empty or mixed-axis allele, a bare ``[0]``/``[?]``
+        marker, or an RNA-fusion ``::`` construct joining two different
+        transcripts. A genome ring (``ACC:g.[seg1::seg2]``) is a single genomic
+        accession, so it resolves to :attr:`Axis.Genomic`.
+        """
+        ...
+
+    @property
     def indel_length(self) -> int | None:
         """Get the net indel length (bases gained or lost).
 
@@ -430,27 +485,59 @@ class HgvsVariant:
         ...
 
     def is_genomic(self) -> bool:
-        """Check if this is a genomic variant (g. prefix)."""
+        """Check if this is a genomic variant (g. prefix).
+
+        .. deprecated::
+            Use the :attr:`axis` property instead (``variant.axis == Axis.Genomic``).
+            Unlike this predicate, ``axis`` resolves an allele's shared axis rather
+            than returning ``False`` for every allele parent. Emits a
+            ``DeprecationWarning``.
+        """
         ...
 
     def is_coding(self) -> bool:
-        """Check if this is a coding variant (c. prefix)."""
+        """Check if this is a coding variant (c. prefix).
+
+        .. deprecated::
+            Use the :attr:`axis` property instead (``variant.axis == Axis.Coding``).
+            Emits a ``DeprecationWarning``.
+        """
         ...
 
     def is_noncoding(self) -> bool:
-        """Check if this is a non-coding variant (n. prefix)."""
+        """Check if this is a non-coding variant (n. prefix).
+
+        .. deprecated::
+            Use the :attr:`axis` property instead (``variant.axis == Axis.NonCoding``).
+            Emits a ``DeprecationWarning``.
+        """
         ...
 
     def is_protein(self) -> bool:
-        """Check if this is a protein variant (p. prefix)."""
+        """Check if this is a protein variant (p. prefix).
+
+        .. deprecated::
+            Use the :attr:`axis` property instead (``variant.axis == Axis.Protein``).
+            Emits a ``DeprecationWarning``.
+        """
         ...
 
     def is_rna(self) -> bool:
-        """Check if this is an RNA variant (r. prefix)."""
+        """Check if this is an RNA variant (r. prefix).
+
+        .. deprecated::
+            Use the :attr:`axis` property instead (``variant.axis == Axis.Rna``).
+            Emits a ``DeprecationWarning``.
+        """
         ...
 
     def is_mitochondrial(self) -> bool:
-        """Check if this is a mitochondrial variant (m. prefix)."""
+        """Check if this is a mitochondrial variant (m. prefix).
+
+        .. deprecated::
+            Use the :attr:`axis` property instead (``variant.axis == Axis.Mitochondrial``).
+            Emits a ``DeprecationWarning``.
+        """
         ...
 
     def is_substitution(self) -> bool:

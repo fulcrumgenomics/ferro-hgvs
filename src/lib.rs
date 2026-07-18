@@ -74,7 +74,7 @@ pub mod vcf;
 pub use error::FerroError;
 pub use hgvs::location::{AaCode, ProteinRenderStyle, TerStyle};
 pub use hgvs::parser::{parse_hgvs, parse_hgvs_fast};
-pub use hgvs::variant::HgvsVariant;
+pub use hgvs::variant::{CoordinateAxis, HgvsVariant};
 pub use normalize::{NormalizeConfig, Normalizer, ShuffleDirection};
 pub use project::{VariantProjection, VariantProjector};
 pub use reference::{JsonProvider, MockProvider, MultiFastaProvider, ReferenceProvider};
