@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.8.1...v0.9.0) - 2026-07-19
+
+### Added
+
+- opt-in protein p. render style (Ter vs * / 3- vs 1-letter) ([#1056](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1056))
+- *(reference)* reject unknown manifest fields at load, fail loud on a misread reference ([#1055](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1055))
+
+### Fixed
+
+- render stop-spanning deletions/delins as frameshift when a sense residue changes ([#1073](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1073))
+- derive projection is_frameshift from the protein consequence ([#1072](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1072))
+- phase-aware frameshift aggregation with combined cis protein consequence ([#1071](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1071))
+- report an allele's coordinate axis from HgvsVariant ([#1064](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1064))
+- *(normalize)* preserve the uncertain/predicted (...) wrapper through normalization ([#1063](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1063)) ([#1065](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1065))
+- *(hgvs)* make allele compaction gene-agnostic on a transcript reference ([#1062](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1062))
+- *(hgvs)* classify species-qualified Ensembl transcripts uniformly ([#1061](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1061))
+- *(normalize)* validate substitution reference bases and expose error_config to Python ([#1052](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1052)) ([#1060](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1060))
+- *(hgvs)* drop the gene-symbol selector on transcript-reference Display ([#1054](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1054))
+- *(convert-gff)* fail fast when the FASTA cannot cover an exon, instead of masking it ([#1053](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1053))
+- *(normalize)* clamp the mitochondrial fetch window to contig length ([#1048](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1048))
+- *(dev)* resolve spec submodule commit_sha under git hook env ([#1047](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1047))
+- *(normalize)* clamp genome fetch window to contig length ([#1042](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1042))
+
+### Other
+
+- build generate_spec_fixture example into the outer target dir ([#1074](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1074))
+- bump minor version for feature commits on 0.x releases ([#1066](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1066))
+- *(conformance)* update issue_506 expectation for #1054 transcript-reference selector drop ([#1067](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1067))
+- *(normalize)* probe inv over-recognition boundary for issue #1040 ([#1043](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1043))
+
 ## [0.8.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.8.0...v0.8.1) - 2026-07-16
 
 ### Added
