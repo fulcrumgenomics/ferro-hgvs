@@ -4911,6 +4911,60 @@
       "input": "NM_003002.4:c.203_208delinsGGGGGG",
       "protein_description": "NP_002993.1:p.(Ser68_Arg70delinsArgGlyGly)",
       "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame tandem duplication (CDKN2A)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_duplication in src/project/protein/indel.rs."
+      ],
+      "input": "NM_000077.4:c.100_102dup",
+      "protein_description": "NP_000068.1:p.(Ala34dup)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame tandem duplication (TIMM8B)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_duplication in src/project/protein/indel.rs."
+      ],
+      "input": "NM_012459.2:c.109_111dup",
+      "protein_description": "NP_036591.2:p.(Lys37dup)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame tandem duplication (PCCB)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_duplication in src/project/protein/indel.rs."
+      ],
+      "input": "NM_000532.5:c.106_108dup",
+      "protein_description": "NP_000523.2:p.(Asn36dup)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: codon-boundary insertion (SHH)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Verifies a genuine (non-tandem) in-frame insertion in src/project/protein/indel.rs is reported as an insertion, not mis-rewritten as a duplication."
+      ],
+      "input": "NM_000193.2:c.117_118insGGGTTT",
+      "protein_description": "NP_000184.1:p.(Leu39_Thr40insGlyPhe)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: codon-boundary insertion (BMP1)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Verifies a genuine (non-tandem) in-frame insertion in src/project/protein/indel.rs is reported as an insertion, not mis-rewritten as a duplication."
+      ],
+      "input": "NM_001199.3:c.105_106insAAACCC",
+      "protein_description": "NP_001190.1:p.(Glu35_Asp36insLysPro)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: tandem-duplication insertion (VSIR)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets the duplication-over-insertion prioritisation path (protein_tandem_dup_range positive branch) in src/project/protein/indel.rs: the inserted bases are a tandem copy of the immediately preceding codon, so a spec-compliant normalizer must rewrite the insertion as a duplication."
+      ],
+      "input": "NM_022153.2:c.99_100insTTC",
+      "protein_description": "NP_071436.1:p.(Phe33dup)",
+      "to_test": true
     }
   ]
 }
