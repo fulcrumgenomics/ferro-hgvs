@@ -300,6 +300,90 @@ fn sort_genomic_allele_members(members: &mut [HgvsVariant]) {
     });
 }
 
+/// A single changed residue in an in-cis substitution combination: its 1-based
+/// protein position and the reference/alternative amino acids.
+struct SubSpan {
+    pos: u64,
+    ref_aa: crate::hgvs::location::AminoAcid,
+    alt_aa: crate::hgvs::location::AminoAcid,
+}
+
+/// Render already-grouped runs of changed residues into a protein consequence.
+///
+/// Shared by the description-level [`combine_cis_substitution_proteins`] and the
+/// codon-level [`combine_cis_substitutions_by_codon`]. Each run of a single
+/// residue renders as a substitution; a run of consecutive residues renders as
+/// one delins; multiple runs are bracketed into a cis allele so residues
+/// separated by an unchanged residue stay individual (delins.md). `groups` must
+/// be non-empty with each inner run sorted ascending and non-empty.
+fn render_cis_substitution_groups(
+    groups: &[Vec<SubSpan>],
+    accession: &crate::hgvs::variant::Accession,
+    gene_symbol: &Option<String>,
+) -> HgvsVariant {
+    use crate::hgvs::edit::{AminoAcidSeq, ProteinEdit};
+    use crate::hgvs::interval::ProtInterval;
+    use crate::hgvs::location::{AminoAcid, ProtPos};
+    use crate::hgvs::variant::{LocEdit, ProteinVariant};
+
+    let render_group = |g: &[SubSpan]| -> ProteinVariant {
+        if g.len() == 1 {
+            let s = &g[0];
+            ProteinVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit: LocEdit::new_predicted(
+                    ProtInterval::point(ProtPos::new(s.ref_aa, s.pos)),
+                    ProteinEdit::Substitution {
+                        reference: s.ref_aa,
+                        alternative: s.alt_aa,
+                    },
+                ),
+            }
+        } else {
+            let first = &g[0];
+            let last = &g[g.len() - 1];
+            let inserted: Vec<AminoAcid> = g.iter().map(|s| s.alt_aa).collect();
+            ProteinVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit: LocEdit::new_predicted(
+                    ProtInterval::new(
+                        ProtPos::new(first.ref_aa, first.pos),
+                        ProtPos::new(last.ref_aa, last.pos),
+                    ),
+                    ProteinEdit::Delins {
+                        sequence: AminoAcidSeq::new(inserted),
+                    },
+                ),
+            }
+        }
+    };
+
+    if groups.len() == 1 {
+        HgvsVariant::Protein(render_group(&groups[0]))
+    } else {
+        let variants: Vec<HgvsVariant> = groups
+            .iter()
+            .map(|g| HgvsVariant::Protein(render_group(g)))
+            .collect();
+        HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Cis))
+    }
+}
+
+/// Group changed residues (distinct, ascending) into runs of consecutive
+/// positions. Residues separated by an unchanged residue land in different runs.
+fn group_consecutive_residues(spans: Vec<SubSpan>) -> Vec<Vec<SubSpan>> {
+    let mut groups: Vec<Vec<SubSpan>> = Vec::new();
+    for s in spans {
+        match groups.last_mut() {
+            Some(g) if s.pos == g.last().expect("non-empty group").pos + 1 => g.push(s),
+            _ => groups.push(vec![s]),
+        }
+    }
+    groups
+}
+
 /// Combine the per-member protein consequences of an **in-cis** allele into a
 /// single description when the members are adjacent single substitutions (#855).
 ///
@@ -315,20 +399,13 @@ fn sort_genomic_allele_members(members: &mut [HgvsVariant]) {
 ///   bracketed) — separated runs stay individual;
 /// - `None` (caller keeps the existing bracketed allele) when any member is not a
 ///   single point substitution, two members hit the *same* residue (ambiguous —
-///   needs codon-level combination, not description merging), or there is nothing
-///   to merge (every run is a single residue, i.e. the existing bracket is
-///   already the correct individual-variant rendering).
+///   needs codon-level combination via [`combine_cis_substitutions_by_codon`],
+///   not description merging), or there is nothing to merge (every run is a
+///   single residue, i.e. the existing bracket is already the correct
+///   individual-variant rendering).
 fn combine_cis_substitution_proteins(members: &[HgvsVariant]) -> Option<HgvsVariant> {
-    use crate::hgvs::edit::{AminoAcidSeq, ProteinEdit};
-    use crate::hgvs::interval::ProtInterval;
-    use crate::hgvs::location::{AminoAcid, ProtPos};
-    use crate::hgvs::variant::{Accession, LocEdit, ProteinVariant};
-
-    struct SubSpan {
-        pos: u64,
-        ref_aa: AminoAcid,
-        alt_aa: AminoAcid,
-    }
+    use crate::hgvs::edit::ProteinEdit;
+    use crate::hgvs::variant::Accession;
 
     let mut spans: Vec<SubSpan> = Vec::with_capacity(members.len());
     let mut accession: Option<Accession> = None;
@@ -365,23 +442,14 @@ fn combine_cis_substitution_proteins(members: &[HgvsVariant]) -> Option<HgvsVari
     }
     spans.sort_by_key(|s| s.pos);
 
-    // Group consecutive residues (no unchanged residue between them).
-    let mut groups: Vec<Vec<SubSpan>> = Vec::new();
-    for s in spans {
-        match groups.last_mut() {
-            Some(g) if s.pos <= g.last().expect("non-empty group").pos + 1 => {
-                if s.pos == g.last().expect("non-empty group").pos {
-                    // Two substitutions on the same residue: this needs codon-level
-                    // combination, which per-member description merging cannot do.
-                    // Bail to the bracketed allele rather than emit a malformed
-                    // single-residue delins.
-                    return None;
-                }
-                g.push(s);
-            }
-            _ => groups.push(vec![s]),
-        }
+    // Two substitutions on the same residue: this needs codon-level combination,
+    // which per-member description merging cannot do. Bail so the caller routes
+    // through `combine_cis_substitutions_by_codon` (#1076) or keeps the bracket.
+    if spans.windows(2).any(|w| w[0].pos == w[1].pos) {
+        return None;
     }
+
+    let groups = group_consecutive_residues(spans);
     // Nothing merged → the existing bracket of individual substitutions is already
     // the spec-correct rendering for separated variants.
     if groups.iter().all(|g| g.len() == 1) {
@@ -389,52 +457,168 @@ fn combine_cis_substitution_proteins(members: &[HgvsVariant]) -> Option<HgvsVari
     }
 
     let accession = accession?;
-    let render_group = |g: &[SubSpan]| -> ProteinVariant {
-        if g.len() == 1 {
-            let s = &g[0];
-            ProteinVariant {
-                accession: accession.clone(),
-                gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new_predicted(
-                    ProtInterval::point(ProtPos::new(s.ref_aa, s.pos)),
-                    ProteinEdit::Substitution {
-                        reference: s.ref_aa,
-                        alternative: s.alt_aa,
-                    },
-                ),
-            }
-        } else {
-            let first = &g[0];
-            let last = &g[g.len() - 1];
-            let inserted: Vec<AminoAcid> = g.iter().map(|s| s.alt_aa).collect();
-            ProteinVariant {
-                accession: accession.clone(),
-                gene_symbol: gene_symbol.clone(),
-                loc_edit: LocEdit::new_predicted(
-                    ProtInterval::new(
-                        ProtPos::new(first.ref_aa, first.pos),
-                        ProtPos::new(last.ref_aa, last.pos),
-                    ),
-                    ProteinEdit::Delins {
-                        sequence: AminoAcidSeq::new(inserted),
-                    },
-                ),
-            }
-        }
-    };
+    Some(render_cis_substitution_groups(
+        &groups,
+        &accession,
+        &gene_symbol,
+    ))
+}
 
-    if groups.len() == 1 {
-        Some(HgvsVariant::Protein(render_group(&groups[0])))
-    } else {
-        let variants: Vec<HgvsVariant> = groups
-            .iter()
-            .map(|g| HgvsVariant::Protein(render_group(g)))
-            .collect();
-        Some(HgvsVariant::Allele(AlleleVariant::new(
-            variants,
-            AllelePhase::Cis,
-        )))
+/// If every cis member is a single-base exonic substitution, return their
+/// `(1-based CDS position, alternative base)` pairs (#1076); otherwise `None`.
+///
+/// Used to gate [`combine_cis_substitutions_by_codon`], which needs the raw base
+/// changes — not the per-member protein predictions — to translate a shared
+/// codon once. Any non-substitution or multi-base member disqualifies the whole
+/// allele, so mixed alleles fall back to the existing paths.
+fn cis_substitution_members(
+    classes: &[CisMemberClass],
+) -> Option<Vec<(i64, crate::hgvs::edit::Base)>> {
+    let mut subs = Vec::with_capacity(classes.len());
+    for class in classes {
+        match class {
+            CisMemberClass::SimpleExonic {
+                lo,
+                hi,
+                edit: NaEdit::Substitution { alternative, .. },
+                ..
+            } if lo == hi => subs.push((*lo, *alternative)),
+            _ => return None,
+        }
     }
+    Some(subs)
+}
+
+/// Combine in-cis single-base substitution members into per-residue protein
+/// consequences, computing each residue's amino acid on the **combined codon**
+/// (all member base changes applied to the one reference codon) before
+/// translating (#1076).
+///
+/// Unlike description-level merging ([`combine_cis_substitution_proteins`]), this
+/// recovers the correct amino acid when two or three members hit the **same**
+/// codon — e.g. `GAT` with `c.4G>C` + `c.6T>A` → `CAA` = Gln, a single
+/// `p.(Asp2Gln)`, not the spec-forbidden `p.[(Asp2His);(Asp2Glu)]`. It groups by
+/// CDS codon index (`(cds_pos-1)/3`), so it is axis-independent and also handles
+/// a codon split across an intron (members arbitrarily far apart on the genome
+/// still share a codon).
+///
+/// Returns `None` — the caller keeps its existing (bracketed / per-member)
+/// behavior — when the combined codon cannot faithfully describe the change:
+///
+/// - fewer than two members;
+/// - a codon's reference bases cannot be read;
+/// - two members hit the **same CDS base** (contradictory in cis: two alts on one
+///   molecule), mirroring the overlap rejection in
+///   [`try_project_cis_combined_inframe`];
+/// - a combined codon turns a reference **stop** into a sense codon (stop-loss),
+///   which the spec describes as a C-terminal extension built by reading through
+///   the 3'UTR — plumbing this codon-local function does not have.
+fn combine_cis_substitutions_by_codon(
+    transcript: &Transcript,
+    members: &[(i64, crate::hgvs::edit::Base)],
+    protein_accession: &str,
+) -> Option<HgvsVariant> {
+    use crate::hgvs::edit::ProteinEdit;
+    use crate::hgvs::interval::ProtInterval;
+    use crate::hgvs::location::{AminoAcid, ProtPos};
+    use crate::hgvs::variant::{LocEdit, ProteinVariant};
+    use crate::project::protein::{apply_substitution, read_ref_codon, translate};
+    use std::collections::BTreeMap;
+
+    if members.len() < 2 {
+        return None;
+    }
+
+    // Group each member's (frame, alt base) by CDS codon index; BTreeMap keeps
+    // codons in ascending residue order.
+    let mut by_codon: BTreeMap<i64, Vec<(u8, crate::hgvs::edit::Base)>> = BTreeMap::new();
+    for (cds_pos, alt) in members {
+        if *cds_pos < 1 {
+            return None;
+        }
+        let codon_index = (cds_pos - 1) / 3;
+        let frame = ((cds_pos - 1) % 3) as u8;
+        let codon = by_codon.entry(codon_index).or_default();
+        // Two members at the same CDS base are contradictory in cis (two alts on
+        // one molecule) — an overlap the combined codon cannot represent. Bail so
+        // the caller keeps the bracketed all-or-nothing form rather than silently
+        // apply one alt (last-write-wins), matching the overlap rejection in
+        // `try_project_cis_combined_inframe`.
+        if codon.iter().any(|(f, _)| *f == frame) {
+            return None;
+        }
+        codon.push((frame, *alt));
+    }
+
+    let accession = parse_accession(protein_accession);
+    let gene_symbol = transcript.gene_symbol.clone();
+
+    // Per codon: apply all member base changes to the reference codon, translate
+    // once, and keep the residues whose amino acid actually changes. Track the
+    // first affected residue so an all-synonymous result still names a position.
+    let mut changed: Vec<SubSpan> = Vec::new();
+    let mut first_affected: Option<(u64, AminoAcid)> = None;
+    for (codon_index, subs) in &by_codon {
+        let codon_first_cds_pos = codon_index * 3 + 1;
+        let (ref_codon, _frame) = read_ref_codon(transcript, codon_first_cds_pos).ok()?;
+        let mut alt_codon = ref_codon.clone();
+        for (frame, alt) in subs {
+            alt_codon = apply_substitution(&alt_codon, *frame, *alt);
+        }
+        let ref_aa = translate(&ref_codon).unwrap_or(AminoAcid::Xaa);
+        let alt_aa = translate(&alt_codon).unwrap_or(AminoAcid::Xaa);
+        let pos = (*codon_index + 1) as u64;
+        // A combined codon that turns a reference STOP into a sense codon is
+        // stop-loss: the spec requires a C-terminal extension
+        // (`p.(TerNNNXxxextTer<k>)`, substitution.md "a no-stop variant ... is
+        // described as an extension"), which needs read-through into the 3'UTR —
+        // plumbing this codon-local function does not have. Decline so the caller
+        // falls back to the per-member path, whose `predict_substitution_protein`
+        // builds the extension correctly.
+        //
+        // A member in the *terminal* stop codon never reaches here (it classifies
+        // Opaque via `classify_cis_member` rule 5, so `cis_substitution_members`
+        // already bails). This guards the remaining case: a stop codon *interior*
+        // to the annotated CDS (e.g. a selenoprotein `TGA`, which `translate`
+        // reports as `Ter`), which rule 5's terminal-range test does not cover.
+        if ref_aa == AminoAcid::Ter && alt_aa != AminoAcid::Ter {
+            return None;
+        }
+        if first_affected.is_none() {
+            first_affected = Some((pos, ref_aa));
+        }
+        if ref_aa != alt_aa {
+            changed.push(SubSpan {
+                pos,
+                ref_aa,
+                alt_aa,
+            });
+        }
+    }
+
+    // No residue changed: the combined product is synonymous → p.(RefNNN=) at the
+    // first affected residue (substitution.md: silent changes are `p.Cys123=`).
+    if changed.is_empty() {
+        let (pos, ref_aa) = first_affected?;
+        return Some(HgvsVariant::Protein(ProteinVariant {
+            accession,
+            gene_symbol,
+            loc_edit: LocEdit::new_predicted(
+                ProtInterval::point(ProtPos::new(ref_aa, pos)),
+                ProteinEdit::Identity {
+                    predicted: false,
+                    whole_protein: false,
+                },
+            ),
+        }));
+    }
+
+    let groups = group_consecutive_residues(changed);
+    Some(render_cis_substitution_groups(
+        &groups,
+        &accession,
+        &gene_symbol,
+    ))
 }
 
 /// Map an LRG transcript accession (`LRG_<gnum>t<tnum>`) to its protein
@@ -3211,6 +3395,31 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             }
         }
 
+        // Same-codon in-cis substitutions (#1076): when the allele is entirely
+        // single-base substitutions and two members share a codon, translate the
+        // combined codon once rather than predicting each member against the
+        // reference codon (which yields the spec-forbidden per-member
+        // `p.[(Asp2His);(Asp2Glu)]`). Gated to the shared-codon case so the
+        // established adjacent-/separated-residue behavior (`build_all_or_nothing`
+        // → `combine_cis_substitution_proteins`) is untouched; that path already
+        // renders those correctly. Codon-level, so it also covers a codon split
+        // across an intron, where DNA-level coalescing cannot reach.
+        if !base_flag {
+            if let Some(subs) = cis_substitution_members(&classes) {
+                let shares_codon = {
+                    let mut codons: Vec<i64> = subs.iter().map(|(pos, _)| (pos - 1) / 3).collect();
+                    codons.sort_unstable();
+                    codons.windows(2).any(|w| w[0] == w[1])
+                };
+                if shares_codon {
+                    let prot_acc = cis_member_protein_accession(inner_projections, transcript_id);
+                    if let Some(pv) = combine_cis_substitutions_by_codon(&tx, &subs, &prot_acc) {
+                        return Ok((false, Some(pv)));
+                    }
+                }
+            }
+        }
+
         // No combined path: a genuine frameshift collapses to `p.?` (#855); a
         // plain in-frame allele uses the all-or-nothing / combined-subs form.
         if base_flag {
@@ -5590,6 +5799,72 @@ mod tests {
         genome.push_str("ATGGATTATTAA"); // [1000, 1012)
         genome.push_str(&"N".repeat(2000 - 1012));
         genome.push_str("ATGGATTATTGCTAA"); // [2000, 2015)
+        genome.push_str(&"N".repeat(100));
+        provider.add_genomic_sequence("chr1", genome);
+        (projector, provider)
+    }
+
+    /// Provider for the #1076 intron-split-codon test: `NM_SPLIT.1`, a two-exon
+    /// plus-strand transcript whose CDS is `ATGGATTATTAA` (Met-Asp-Tyr-Stop) but
+    /// whose codon 2 (`GAT`, `c.4_6`) is split across an intron — `c.4` is the
+    /// last base of exon 1 and `c.5_6` open exon 2, ~100 bp away on the genome.
+    /// Two same-codon substitutions (`c.4` + `c.6`) are therefore far apart on the
+    /// genome and never coalesce, yet must still combine at the codon level.
+    ///
+    /// cdot 0-based exons: exon 1 = genome `[1000,1004)` ↔ tx `[0,4)` (c.1-4);
+    /// exon 2 = genome `[1100,1108)` ↔ tx `[4,12)` (c.5-12). In this fixture
+    /// `c.4` maps to `g.1003` (last exonic base of exon 1) and `c.6` to `g.1102`.
+    fn make_intron_split_codon_provider_and_projector() -> (Projector, MockProvider) {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_SPLIT.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("SPLITGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: ProvStrand::Plus,
+                exons: vec![[1000, 1004, 0, 4], [1100, 1108, 4, 12]],
+                cds_start: Some(0),
+                cds_end: Some(12),
+                gene_id: None,
+                protein: Some("NP_SPLIT.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        let projector = Projector::new(cdot);
+
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            cds_start_incomplete: false,
+            id: "NM_SPLIT.1".to_string(),
+            gene_symbol: Some("SPLITGENE".to_string()),
+            strand: TxStrand::Plus,
+            // Spliced CDS (introns removed): Met-Asp-Tyr-Stop.
+            sequence: Some("ATGGATTATTAA".to_string()),
+            cds_start: Some(1),
+            cds_end: Some(12),
+            exons: vec![
+                Exon::with_genomic(1, 1, 4, 1001, 1004),
+                Exon::with_genomic(2, 5, 12, 1101, 1108),
+            ],
+            chromosome: Some("chr1".to_string()),
+            genomic_start: Some(1001),
+            genomic_end: Some(1108),
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        });
+        // Genome: exon-1 bases at [1000,1004), exon-2 bases at [1100,1108), so the
+        // genomic base at each exonic position equals the spliced transcript base.
+        let mut genome = String::new();
+        genome.push_str(&"N".repeat(1000));
+        genome.push_str("ATGG"); // exon 1, genome [1000,1004) = c.1-4
+        genome.push_str(&"N".repeat(1100 - 1004)); // intron
+        genome.push_str("ATTATTAA"); // exon 2, genome [1100,1108) = c.5-12
         genome.push_str(&"N".repeat(100));
         provider.add_genomic_sequence("chr1", genome);
         (projector, provider)
@@ -11988,6 +12263,286 @@ mod tests {
             format!("{protein}"),
             "NP_DELINS.1:p.(Asp2_Tyr3delinsTyrCys)"
         );
+    }
+
+    /// Project an in-cis **genomic** substitution allele onto `NM_DELINS.1` and
+    /// return its protein consequence as a string. Shared by the #1076 same-codon
+    /// tests. Genomic input is essential: the bug is that the genomic axis leaves
+    /// the one-nucleotide gap between same-codon members unbridged (a c. allele
+    /// would coalesce to a delins during normalization and never reach protein
+    /// projection split). In the fixture the mapping is `g.N → c.(N-1000)`, so
+    /// codon 2 (`GAT` = Asp, `c.4_6`) occupies `g.1004/1005/1006`. The fixture's
+    /// genome and transcript sequences are offset by one, so the genomic ref
+    /// bases (`g.1004=A, g.1005=T, g.1006=T`) differ from the transcript codon;
+    /// the protein predictor translates the transcript codon with each member's
+    /// alt applied, which is what these tests pin.
+    fn project_cis_genomic_sub_protein(members: &[&str]) -> String {
+        let (projector, provider) = make_multicodon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let parsed: Vec<HgvsVariant> = members
+            .iter()
+            .map(|m| crate::parse_hgvs(m).expect("member parse"))
+            .collect();
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(parsed));
+        let proj = vp
+            .project_variant(&allele, "NM_DELINS.1")
+            .expect("projection should succeed");
+        proj.protein
+            .expect("same-codon cis subs must report a protein")
+            .to_string()
+    }
+
+    /// #1076: two in-cis substitutions in the SAME codon must be translated on
+    /// the combined codon, not predicted per-member against the reference codon.
+    /// Codon 2 = `GAT` (Asp); genomic `g.[1004A>C;1006T>A]` sets codon bases 1 & 3
+    /// (c.4G>C, c.6T>A) → `CAA` = Gln, a single `p.(Asp2Gln)` — NOT the
+    /// spec-forbidden per-member `p.[(Asp2His);(Asp2Glu)]` (DNA/delins.md,
+    /// protein/substitution.md).
+    #[test]
+    fn project_cis_same_codon_bases_1_and_3_combine_to_single_missense() {
+        let s = project_cis_genomic_sub_protein(&["chr1:g.1004A>C", "chr1:g.1006T>A"]);
+        assert_eq!(s, "NP_DELINS.1:p.(Asp2Gln)");
+    }
+
+    /// #1076: same-codon bases 1 & 2. Codon 2 `GAT` (Asp); `g.[1004A>C;1005T>C]`
+    /// sets c.4G>C, c.5A>C → `CCT` = Pro → single `p.(Asp2Pro)`.
+    #[test]
+    fn project_cis_same_codon_bases_1_and_2_combine_to_single_missense() {
+        let s = project_cis_genomic_sub_protein(&["chr1:g.1004A>C", "chr1:g.1005T>C"]);
+        assert_eq!(s, "NP_DELINS.1:p.(Asp2Pro)");
+    }
+
+    /// #1076: all three bases of one codon. Codon 2 `GAT` (Asp);
+    /// `g.[1004A>T;1005T>G;1006T>G]` sets c.4G>T, c.5A>G, c.6T>G → `TGG` = Trp →
+    /// single `p.(Asp2Trp)`.
+    #[test]
+    fn project_cis_same_codon_all_three_bases_combine_to_single_missense() {
+        let s = project_cis_genomic_sub_protein(&[
+            "chr1:g.1004A>T",
+            "chr1:g.1005T>G",
+            "chr1:g.1006T>G",
+        ]);
+        assert_eq!(s, "NP_DELINS.1:p.(Asp2Trp)");
+    }
+
+    /// #1076: same-codon combination can produce a stop. Codon 2 `GAT` (Asp);
+    /// `g.[1004A>T;1006T>A]` sets c.4G>T, c.6T>A → `TAA` = Ter → single
+    /// `p.(Asp2Ter)` nonsense, not a bracketed pair (a nonsense variant is a
+    /// substitution, substitution.md).
+    #[test]
+    fn project_cis_same_codon_combines_to_nonsense() {
+        let s = project_cis_genomic_sub_protein(&["chr1:g.1004A>T", "chr1:g.1006T>A"]);
+        assert_eq!(s, "NP_DELINS.1:p.(Asp2Ter)");
+    }
+
+    /// #1076: same-codon combination works on the minus strand too. On
+    /// `NM_TEST_MINUS.1` (CDS `ATGCGCTAA`, minus strand) codon 2 = `CGC` (Arg)
+    /// with `c.4` = `g.1005` and `c.6` = `g.1003`. Genomic `g.[1005G>A;1003G>C]`
+    /// reverse-complements to `c.4C>T` + `c.6C>G` → codon `TGG` = Trp → single
+    /// `p.(Arg2Trp)`, confirming the combiner consumes the CDS-oriented alt.
+    #[test]
+    fn project_cis_same_codon_minus_strand_combines_to_single_missense() {
+        let (projector, provider) = make_minus_strand_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        let v1 = crate::parse_hgvs("chr1:g.1005G>A").expect("v1 parse");
+        let v2 = crate::parse_hgvs("chr1:g.1003G>C").expect("v2 parse");
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![v1, v2]));
+        let proj = vp
+            .project_variant(&allele, "NM_TEST_MINUS.1")
+            .expect("projection should succeed");
+        let protein = proj.protein.expect("protein present").to_string();
+        assert_eq!(protein, "NP_TEST_MINUS.1:p.(Arg2Trp)");
+    }
+
+    /// #1076: two members at the SAME base are contradictory in cis (two alts on
+    /// one molecule) — the codon combiner must not silently apply one
+    /// (last-write-wins). It bails, so the allele keeps the bracketed
+    /// all-or-nothing form rather than a bogus single `p.(...)`.
+    #[test]
+    fn project_cis_same_position_overlap_stays_bracketed() {
+        let s = project_cis_genomic_sub_protein(&["chr1:g.1004A>C", "chr1:g.1004A>G"]);
+        assert!(
+            s.starts_with("NP_DELINS.1") && s.contains("p.[("),
+            "contradictory same-base cis members must stay bracketed, got {s}"
+        );
+    }
+
+    /// #1076 (unit): the codon combiner bails on a same-CDS-position overlap so
+    /// the caller falls back rather than pick an arbitrary alt.
+    #[test]
+    fn combine_by_codon_same_position_overlap_returns_none() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGGATTATTAA", &[(4, Base::C), (4, Base::G)]);
+        assert_eq!(s, None);
+    }
+
+    /// #1076 (unit): a combined codon that turns a reference STOP into a sense
+    /// codon is stop-loss and needs a C-terminal extension (substitution.md: "a
+    /// no-stop variant ... is described as an extension"), which this
+    /// codon-local function cannot build. It must decline rather than emit a
+    /// spec-invalid plain `p.(TerNNNXxx)` substitution.
+    ///
+    /// Uses a stop codon INTERIOR to the CDS (`ATGTAATATTAA`, codon 2 = `TAA`) —
+    /// a member in the *terminal* stop codon is already screened out upstream by
+    /// `classify_cis_member` rule 5, so the interior case is the reachable one.
+    #[test]
+    fn combine_by_codon_stop_loss_returns_none() {
+        use crate::hgvs::edit::Base;
+        // codon 2 = TAA (Ter); c.4T>C + c.6A>G → CAG = Gln, i.e. Ter→sense.
+        let s = combine_by_codon_str("ATGTAATATTAA", &[(4, Base::C), (6, Base::G)]);
+        assert_eq!(s, None, "stop-loss must decline, not emit p.(Ter2Gln)");
+    }
+
+    /// #1076: a cis allele whose member lands in the TERMINAL stop codon keeps
+    /// the per-member path, which renders the proper C-terminal extension for
+    /// that member. Guards the upstream `classify_cis_member` rule 5 screen the
+    /// stop-loss bail depends on.
+    #[test]
+    fn project_cis_terminal_stop_member_keeps_extension_form() {
+        // CDS "ATGGATTATTAA": stop = c.10-12. c.10 = g.1010.
+        let s = project_cis_genomic_sub_protein(&[
+            "chr1:g.1004A>C",
+            "chr1:g.1006T>A",
+            "chr1:g.1010T>G",
+        ]);
+        assert!(
+            s.contains("ext"),
+            "stop-codon member must render a C-terminal extension, got {s}"
+        );
+        assert!(
+            !s.contains("Ter4Glu)") || s.contains("extTer"),
+            "must not emit a bare Ter→sense substitution, got {s}"
+        );
+    }
+
+    /// #1076: an intron-split codon. Codon 2 (`GAT`) is split by an intron —
+    /// `c.4` ends exon 1, `c.5_6` open exon 2 — so `c.4` (`g.1003`) and `c.6`
+    /// (`g.1102`) are ~100 bp apart on the genome and never coalesce into a
+    /// delins. They must still combine at the codon level: codon `GAT` with base
+    /// 1 `G>C` and base 3 `T>A` gives `CAA` = Gln → single `p.(Asp2Gln)`. This is
+    /// exactly the case DNA-level coalescing cannot reach — the fix is codon-level.
+    #[test]
+    fn project_cis_intron_split_codon_combines_to_single_missense() {
+        let (projector, provider) = make_intron_split_codon_provider_and_projector();
+        let vp = VariantProjector::new(projector, provider);
+        // c.4 = g.1003 (exon 1, ref G), c.6 = g.1102 (exon 2, ref T).
+        let v1 = crate::parse_hgvs("chr1:g.1003G>C").expect("v1 parse");
+        let v2 = crate::parse_hgvs("chr1:g.1102T>A").expect("v2 parse");
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![v1, v2]));
+        let proj = vp
+            .project_variant(&allele, "NM_SPLIT.1")
+            .expect("projection should succeed");
+        // The coding members stay split (different exons, ~100 bp apart): confirm
+        // the fix operates codon-level, not via a coding-axis delins coalesce.
+        let coding = proj.coding.as_ref().expect("coding present").to_string();
+        assert!(
+            coding.contains("c.[4G>C;6T>A]"),
+            "coding members must stay split across the intron, got {coding}"
+        );
+        let protein = proj.protein.expect("protein present").to_string();
+        assert_eq!(protein, "NP_SPLIT.1:p.(Asp2Gln)");
+    }
+
+    /// Build a bare plus-strand coding [`Transcript`] with the given CDS sequence
+    /// (CDS spanning the whole sequence, no UTRs) for unit-testing the pure
+    /// codon-level combiner.
+    fn tx_with_cds_seq(id: &str, seq: &str) -> Transcript {
+        Transcript {
+            cds_start_incomplete: false,
+            id: id.to_string(),
+            gene_symbol: None,
+            strand: TxStrand::Plus,
+            sequence: Some(seq.to_string()),
+            cds_start: Some(1),
+            cds_end: Some(seq.len() as u64),
+            exons: vec![Exon::new(1, 1, seq.len() as u64)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: ManeStatus::default(),
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            exon_cigars: Vec::new(),
+            cached_introns: OnceLock::new(),
+        }
+    }
+
+    fn combine_by_codon_str(
+        seq: &str,
+        members: &[(i64, crate::hgvs::edit::Base)],
+    ) -> Option<String> {
+        let tx = tx_with_cds_seq("NM_X.1", seq);
+        combine_cis_substitutions_by_codon(&tx, members, "NP_X.1").map(|v| v.to_string())
+    }
+
+    /// #1076 (unit): two subs in one codon translate on the combined codon.
+    /// `CDS ATGGATTATTAA`, codon 2 `GAT` (Asp); `c.4G>C` + `c.6T>A` → `CAA` = Gln.
+    #[test]
+    fn combine_by_codon_same_codon_missense() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGGATTATTAA", &[(4, Base::C), (6, Base::A)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Asp2Gln)"));
+    }
+
+    /// #1076 (unit): combined codon can be a stop → nonsense substitution.
+    /// codon 2 `GAT`; `c.4G>T` + `c.6T>A` → `TAA` = Ter → `p.(Asp2Ter)`.
+    #[test]
+    fn combine_by_codon_same_codon_nonsense() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGGATTATTAA", &[(4, Base::T), (6, Base::A)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Asp2Ter)"));
+    }
+
+    /// #1076 (unit): a combined codon that stays the same amino acid is silent →
+    /// `p.(Arg2=)`. codon 2 `CGA` (Arg); `c.4C>A` + `c.6A>G` → `AGG` = Arg.
+    #[test]
+    fn combine_by_codon_same_codon_synonymous() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGCGATAA", &[(4, Base::A), (6, Base::G)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Arg2=)"));
+    }
+
+    /// #1076 (unit): substitutions in ADJACENT codons combine to one delins, not a
+    /// bracketed list (delins.md). codon 2 `GAT`→`TAT` (Asp2Tyr), codon 3
+    /// `TAT`→`TGT` (Tyr3Cys); `c.4G>T` + `c.8A>G` → `p.(Asp2_Tyr3delinsTyrCys)`.
+    #[test]
+    fn combine_by_codon_adjacent_codons_form_delins() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGGATTATTGCTAA", &[(4, Base::T), (8, Base::G)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Asp2_Tyr3delinsTyrCys)"));
+    }
+
+    /// #1076 (unit): substitutions in codons SEPARATED by an unchanged residue
+    /// stay individual (bracketed), not a delins. codon 2 `GAT`→`TAT` (Asp2Tyr),
+    /// codon 4 `TGC`→`TAC` (Cys4Tyr), codon 3 unchanged; `c.4G>T` + `c.11G>A`.
+    #[test]
+    fn combine_by_codon_separated_codons_stay_bracketed() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGGATTATTGCTAA", &[(4, Base::T), (11, Base::A)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.[(Asp2Tyr);(Cys4Tyr)]"));
+    }
+
+    /// #1076 (unit): a same-codon group that stays synonymous drops out while a
+    /// separate changed codon is still reported — the synonymous residue is
+    /// unchanged context, not a bracket member. codon 2 `CGA`→`AGG` (Arg, silent)
+    /// via `c.4C>A`+`c.6A>G`; codon 3 `TAA`? no — use a sequence with a real
+    /// codon 3. `CDS ATGCGATGGTAA` (Met-Arg-Trp-Stop): codon 3 `TGG`→`TGT` (Cys)
+    /// via `c.9G>T`. Result: only `p.(Trp3Cys)`.
+    #[test]
+    fn combine_by_codon_synonymous_group_drops_leaving_single() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGCGATGGTAA", &[(4, Base::A), (6, Base::G), (9, Base::T)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Trp3Cys)"));
+    }
+
+    /// #1076 (unit): fewer than two members is out of scope (defer to caller).
+    #[test]
+    fn combine_by_codon_single_member_returns_none() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGGATTATTAA", &[(4, Base::C)]);
+        assert_eq!(s, None);
     }
 
     /// #855: an in-cis frameshift allele collapses to the whole-protein-unknown
