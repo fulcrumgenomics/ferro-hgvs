@@ -4965,6 +4965,60 @@
       "input": "NM_022153.2:c.99_100insTTC",
       "protein_description": "NP_071436.1:p.(Phe33dup)",
       "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: nonsense substitution (WT1)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets predict_substitution_protein in src/project/protein/substitution.rs."
+      ],
+      "input": "NM_024426.4:c.421A>T",
+      "protein_description": "NP_077744.3:p.(Lys141Ter)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: nonsense substitution (FH)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets predict_substitution_protein in src/project/protein/substitution.rs."
+      ],
+      "input": "NM_000143.3:c.322C>T",
+      "protein_description": "NP_000134.2:p.(Gln108Ter)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: nonsense substitution (MECP2)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets predict_substitution_protein in src/project/protein/substitution.rs."
+      ],
+      "input": "NM_004992.3:c.244A>T",
+      "protein_description": "NP_004983.1:p.(Lys82Ter)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: frameshift deletion (KIF1A)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets the frameshift Ter-count path in src/project/protein/indel.rs: a single-base deletion whose new stop lands at the shortest legal count, fsTer2."
+      ],
+      "input": "NM_004321.7:c.1500del",
+      "protein_description": "NP_004312.2:p.(Pro501ArgfsTer2)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: frameshift deletion (CDH23)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets the frameshift Ter-count path in src/project/protein/indel.rs: a double-base deletion whose new stop lands well downstream (fsTer94)."
+      ],
+      "input": "NM_022124.6:c.3005_3006del",
+      "protein_description": "NP_071407.4:p.(Ser1003CysfsTer94)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: frameshift deletion (USH2A)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets the frameshift Ter-count path in src/project/protein/indel.rs: a single-base deletion whose new stop lands mid-range (fsTer12)."
+      ],
+      "input": "NM_206933.2:c.5000del",
+      "protein_description": "NP_996816.2:p.(Gly1668ValfsTer12)",
+      "to_test": true
     }
   ]
 }
