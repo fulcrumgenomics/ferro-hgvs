@@ -25,10 +25,8 @@ pub(crate) use indel::{
     CisCombined,
 };
 pub(crate) use substitution::predict_substitution_protein;
-// `read_ref_codon` / `translate` are the position-level CDS primitives reused by
-// the service effect handler to resolve real amino-acid residues (issue #806);
-// `read_ref_codon` is also the seam #498 (full c.→p.) inherits. They are only
-// consumed by the `web-service` handlers today, so gate the re-export to that
-// feature to keep non-service builds (e.g. `--features python`) warning-clean.
-#[cfg(feature = "web-service")]
-pub(crate) use substitution::{read_ref_codon, translate};
+// `apply_substitution` / `read_ref_codon` / `translate` are the position-level
+// CDS primitives reused by the projector's codon-level in-cis substitution
+// combiner (#1076) and by the service effect handler (#806); `read_ref_codon`
+// is also the seam #498 (full c.→p.) inherits.
+pub(crate) use substitution::{apply_substitution, read_ref_codon, translate};
