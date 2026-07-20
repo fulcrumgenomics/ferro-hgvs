@@ -19,12 +19,21 @@
 //! or improvement shows up as a budget mismatch.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
+use ferro_hgvs::conformance::reference_window::WindowProvider;
+use ferro_hgvs::conformance::spec_projection;
+use ferro_hgvs::data::cdot::CdotMapper;
+use ferro_hgvs::data::projection::Projector;
 use ferro_hgvs::error_handling::ErrorConfig;
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
+use ferro_hgvs::project::VariantProjector;
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::{parse_hgvs, Normalizer};
 use serde::Deserialize;
+
+/// Committed hermetic reference slice backing the `project-*` dimensions.
+const PROJECTION_WINDOWS: &str = "tests/fixtures/grammar/spec_enumeration_windows.json";
 
 #[derive(Debug, Deserialize)]
 struct Enumeration {
@@ -54,12 +63,44 @@ fn load() -> Enumeration {
     serde_json::from_str(&text).expect("parse enumeration fixture")
 }
 
+/// Everything a replay needs: the hermetic normalizer, plus the projector built
+/// from the committed reference slice (absent only on a checkout that has not
+/// been given the slice, in which case projection rows are skipped rather than
+/// failed).
+struct Replayer {
+    normalizer: Normalizer<MockProvider>,
+    projector: Option<VariantProjector<WindowProvider>>,
+}
+
+impl Replayer {
+    fn new() -> Self {
+        let projector = spec_projection::load_slice(Path::new(PROJECTION_WINDOWS))
+            .ok()
+            .map(|windows| {
+                let cdot = CdotMapper::from_transcripts(windows.transcripts.iter());
+                VariantProjector::new(Projector::new(cdot), windows.to_provider())
+            });
+        Replayer {
+            normalizer: Normalizer::new(MockProvider::new()),
+            projector,
+        }
+    }
+}
+
 /// Re-run a row's operation against live ferro.
 ///
 /// Returns `None` for rows whose operation cannot be replayed from the fixture
 /// alone (`invariant-check` needs the generator's catalog, which lives with the
 /// generator so the rules and their spec citations stay in one place).
-fn replay(row: &Row, normalizer: &Normalizer<MockProvider>) -> Option<String> {
+fn replay(row: &Row, ctx: &Replayer) -> Option<String> {
+    let normalizer = &ctx.normalizer;
+    if let Some(axis) = row.operation.strip_prefix("project-") {
+        let code = axis.chars().next()?;
+        let projector = ctx.projector.as_ref()?;
+        let variant = parse_hgvs(&row.target).ok()?;
+        let pass = spec_projection::project_all_axes(projector, &variant);
+        return pass.axes.get(&code).map(|r| r.as_observed());
+    }
     match row.operation.as_str() {
         "reject" | "normalize" => Some(match parse_hgvs(&row.target) {
             Err(e) => format!("parse error: {e}"),
@@ -110,12 +151,12 @@ fn replay(row: &Row, normalizer: &Normalizer<MockProvider>) -> Option<String> {
 #[test]
 fn enumeration_replays_recorded_behavior() {
     let fx = load();
-    let normalizer = Normalizer::new(MockProvider::new());
+    let ctx = Replayer::new();
     let mut diffs = Vec::new();
     let mut replayed = 0usize;
 
     for row in &fx.rows {
-        let Some(observed) = replay(row, &normalizer) else {
+        let Some(observed) = replay(row, &ctx) else {
             continue;
         };
         replayed += 1;
@@ -210,7 +251,20 @@ const DIVERGENCE_BUDGET: &[(&str, usize)] = &[
     ("invariant-violation-should", 2),
     // syntax.yaml examples that do not parse into their declared axis.
     ("form-axis-diverges", 3),
+    // Projections whose rendered form differs from the one the spec states.
+    ("projection-diverges", 0),
 ];
+
+/// Does a projected string match the form the spec states? Mirrors
+/// `generate_spec_enumeration`'s rule: a fully-qualified spec value is compared
+/// verbatim, an accession-less one against the coordinate part only.
+fn projection_matches(observed: &str, expected: &str) -> bool {
+    if expected.contains(':') {
+        observed == expected
+    } else {
+        observed.rsplit(':').next() == Some(expected)
+    }
+}
 
 #[test]
 fn divergence_budget_is_unchanged() {
@@ -279,7 +333,7 @@ fn invariant_catalog_has_no_false_positives_on_blessed_output() {
 #[test]
 fn passing_spec_mandated_musts_stay_passing() {
     let fx = load();
-    let normalizer = Normalizer::new(MockProvider::new());
+    let ctx = Replayer::new();
     let mut regressions = Vec::new();
     let mut checked = 0usize;
 
@@ -290,11 +344,13 @@ fn passing_spec_mandated_musts_stay_passing() {
         let passing = matches!(
             row.status.as_str(),
             "correctly-rejected" | "repaired" | "rejected-not-repaired" | "form-axis-ok"
+                // A projection that already matches the form the spec states.
+                | "preserved"
         );
         if !passing {
             continue;
         }
-        let Some(observed) = replay(row, &normalizer) else {
+        let Some(observed) = replay(row, &ctx) else {
             continue;
         };
         checked += 1;
@@ -304,6 +360,13 @@ fn passing_spec_mandated_musts_stay_passing() {
             }
             "repaired" => Some(&observed) == row.expected.as_ref(),
             "form-axis-ok" => Some(&observed) == row.expected.as_ref(),
+            // The spec writes a projected form with or without its accession;
+            // an accession-less statement is compared against the coordinate
+            // part only, mirroring the generator (see `projection_matches`).
+            "preserved" => row
+                .expected
+                .as_ref()
+                .is_some_and(|e| projection_matches(&observed, e)),
             _ => true,
         };
         if !ok {

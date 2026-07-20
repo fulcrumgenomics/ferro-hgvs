@@ -21,7 +21,23 @@
     "",
     "`normative_level` is RFC 2119 as the spec words it: 'is not correct' /",
     "'not allowed' / 'can not be' -> must; 'the recommendation is not to' /",
-    "'should not be used' -> should. Only `must` rows may ever hard-fail."
+    "'should not be used' -> should. Only `must` rows may ever hard-fail.",
+    "",
+    "`projections` maps `\"<axis>/<input>\"` to the projected form the spec ITSELF",
+    "states, on the cited line. Every entry is transcribed verbatim from the",
+    "pinned submodule; nothing here is inferred, and no entry exists for a",
+    "projection the spec merely describes in words without writing the string.",
+    "",
+    "Comparison follows the form the spec used. A fully-qualified value",
+    "(`NP_004371.2:p.(...)`) is compared verbatim. An accession-less value",
+    "(`p.(Arg1459Ter)`) is compared against the coordinate part of ferro's output",
+    "only, because the spec did not state an accession there -- the surrounding",
+    "paragraph supplies it -- and demanding one would fail a row for something",
+    "the spec never asserted.",
+    "",
+    "`normative_level` follows the source: `docs/recommendations/` is normative",
+    "(`must`); `docs/background/` and `docs/consultation/` are explanatory, so",
+    "their statements are recorded at `should`."
   ],
   "repairs": {
     "c.123-65_-50": {
@@ -212,6 +228,44 @@
       "normative_level": "must",
       "requires_reference": true,
       "note": "A frameshift starts at the first CHANGED residue. The spec writes the corrected form in the `*` stop style (`p.Gln151Thrfs*9`); rendered here in ferro's default `Ter` style, which the spec leaves as a free choice."
+    }
+  },
+  "projections": {
+    "p/NM_004380.2:c.139delinsTCATCATGAGCTG": {
+      "expected": "NP_004371.2:p.(Asn47delinsSerSerTer)",
+      "citation": "docs/recommendations/protein/delins.md:42",
+      "normative_level": "must",
+      "note": "Spec states the fully-qualified predicted protein consequence of this DNA variant."
+    },
+    "p/NM_004380.2:c.138_139insTCATCATGAGCTCCC": {
+      "expected": "NP_004371.2:p.(Pro46_Asn47insSerSerTer)",
+      "citation": "docs/recommendations/protein/insertion.md:41",
+      "normative_level": "must",
+      "note": "Amino acids after the translation termination codon are not listed."
+    },
+    "p/NM_000222.3:c.1676_1684del": {
+      "expected": "NP_000213.1:p.(Val559_Glu561del)",
+      "citation": "docs/recommendations/protein/delins.md:53",
+      "normative_level": "must",
+      "note": "Explicitly NOT p.(Val559_Glu562delinsGlu). Example derived from KIT."
+    },
+    "p/NM_003079.4:c.374_395inv": {
+      "expected": "NP_003070.3:p.(Glu125_Ala132delinsGlyLeuHisArgPheIleValLeu)",
+      "citation": "docs/recommendations/protein/delins.md:58",
+      "normative_level": "must",
+      "note": "An inversion's protein consequence is described as a deletion-insertion."
+    },
+    "p/NM_080877.2:c.1732_1794del": {
+      "expected": "p.(Pro578_Gln598del)",
+      "citation": "docs/recommendations/protein/delins.md:49",
+      "normative_level": "must",
+      "note": "Stated without an accession; example derived from SLC34A3."
+    },
+    "p/NM_004006.2:c.4375C>T": {
+      "expected": "p.(Arg1459Ter)",
+      "citation": "docs/background/simple.md:46",
+      "normative_level": "should",
+      "note": "Background (explanatory) text, so recorded at should-level."
     }
   },
   "by_id": {}

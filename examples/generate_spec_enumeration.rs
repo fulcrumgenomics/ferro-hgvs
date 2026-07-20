@@ -12,6 +12,7 @@
 //! | `error-mode`       | `parse` under strict / lenient / silent, kept only where the modes actually differ |
 //! | `grammar-form`     | `syntax.yaml` form × legal coordinate system                    |
 //! | `output-invariant` | the MUST-level output rules checked over every emitted output   |
+//! | `project-{g,c,n,r,p}` | every spec string projected onto each coordinate axis        |
 //!
 //! Every row carries its provenance (spec `file:line@SHA`, the dimension that
 //! produced it, and — for negatives — the RFC 2119 normative level), and a
@@ -30,6 +31,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::Parser as ClapParser;
+use ferro_hgvs::conformance::reference_window::WindowFixture;
+use ferro_hgvs::conformance::spec_projection;
 use serde::{Deserialize, Serialize};
 
 #[path = "common/spec_harvest.rs"]
@@ -57,6 +60,15 @@ struct Cli {
         default_value = "tests/fixtures/grammar/hgvs_spec_normalization.json"
     )]
     normalization_fixture: PathBuf,
+
+    /// Committed hermetic reference slice for the projection dimensions
+    /// (transcripts + genomic windows + NG_/LRG_ placements). Regenerate with
+    /// `cargo run --features dev --example extract_spec_enumeration_windows`.
+    #[arg(
+        long,
+        default_value = "tests/fixtures/grammar/spec_enumeration_windows.json"
+    )]
+    projection_windows: PathBuf,
 
     /// Output path for the generated enumeration.
     #[arg(
@@ -91,6 +103,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let overrides = overrides::load(&cli.overrides)?;
     let existing = dedup::ExistingCoverage::load(&cli.normalization_fixture)?;
     let sha = spec_sha(&cli.spec_dir)?;
+    let windows = load_projection_windows(&cli.projection_windows)?;
 
     let build = builder::build(
         &cli.spec_dir,
@@ -98,6 +111,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
         &prose,
         &overrides,
         &existing,
+        windows.as_ref(),
         &sha,
     )?;
     let rendered = render::render(&build, &sha)?;
@@ -145,6 +159,21 @@ fn spec_sha(spec_dir: &Path) -> anyhow::Result<String> {
         );
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Load the committed projection reference slice, if it is present.
+///
+/// Absent (or unreadable) is not an error: the projection dimensions then
+/// enumerate the same gross count but report every row not-applicable, with the
+/// missing fixture named as the reason. That keeps the census honest on a
+/// checkout that has not run the extractor.
+fn load_projection_windows(path: &Path) -> anyhow::Result<Option<WindowFixture>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let fixture = spec_projection::load_slice(path)
+        .map_err(|e| anyhow::anyhow!("load {}: {e}", path.display()))?;
+    Ok(Some(fixture))
 }
 
 // ---------- row ----------
@@ -333,9 +362,30 @@ mod overrides {
         /// corrected variant.
         #[serde(default)]
         pub repairs: BTreeMap<String, Repair>,
+        /// Hand-curated **spec-stated projections**: a spec string mapped to
+        /// the projected form the spec ITSELF states, on the cited line. Keyed
+        /// `"<axis>/<input>"` (e.g. `"p/NM_004006.2:c.4375C>T"`). Curated by
+        /// hand because the spec states these in prose, never in a machine
+        /// -readable pairing; nothing here is inferred.
+        #[serde(default)]
+        pub projections: BTreeMap<String, ProjectionExpectation>,
         /// Per-row pins keyed by `Row::id`.
         #[serde(default)]
         pub by_id: BTreeMap<String, RowOverride>,
+    }
+
+    /// One spec-stated projected form, transcribed verbatim from the spec.
+    #[derive(Debug, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ProjectionExpectation {
+        /// The projected HGVS string the spec states.
+        pub expected: String,
+        /// `docs/…md:<line>` for the sentence that states the pair.
+        pub citation: String,
+        /// RFC 2119 level of the sentence: `must` or `should`.
+        pub normative_level: String,
+        #[serde(default)]
+        pub note: Option<String>,
     }
 
     #[derive(Debug, Deserialize)]
@@ -938,6 +988,7 @@ mod builder {
         prose: &[negatives::ProseNegative],
         ov: &overrides::Overrides,
         existing: &dedup::ExistingCoverage,
+        windows: Option<&WindowFixture>,
         sha: &str,
     ) -> anyhow::Result<Build> {
         let normalizer = Normalizer::new(MockProvider::new());
@@ -966,6 +1017,7 @@ mod builder {
         error_mode(candidates, existing, sha, &mut rows, &mut cens);
         grammar_form(candidates, existing, sha, &mut rows, &mut cens);
         output_invariant(existing, sha, &mut rows, &mut cens);
+        projection(candidates, windows, ov, sha, &mut rows, &mut cens)?;
 
         // Apply per-row overrides, then check none is stale.
         let by_id: BTreeSet<String> = rows.iter().map(|r| r.id.clone()).collect();
@@ -1490,6 +1542,285 @@ mod builder {
         // are, and `emitted` counts those.
         let _ = emitted;
         cens.tally("output-invariant", gross, 0, 0);
+    }
+
+    /// Dimensions 6-10 — every spec string projected onto each of the five
+    /// coordinate axes (`g`/`c`/`n`/`r`/`p`).
+    ///
+    /// The existing suite is entirely *within-axis*: it parses a spec string and
+    /// re-renders it in its own coordinate system. Nothing asserts what that
+    /// string becomes on another axis, which is precisely where the project's
+    /// known defects live. These dimensions close that gap.
+    ///
+    /// **Hermetic by construction.** Projection needs real reference data, so
+    /// the rows are computed against the committed
+    /// [`WindowFixture`](ferro_hgvs::conformance::reference_window::WindowFixture)
+    /// slice — the same transcripts, bases and placements the extractor
+    /// recorded a real prepared reference serving for this exact pass — never a
+    /// manifest and never the network.
+    ///
+    /// **What a row asserts.** Where the spec states the projected form outright
+    /// (`overrides.projections`, transcribed verbatim), the row asserts it and
+    /// is `spec-mandated`. Everywhere else the spec is silent, so the row pins
+    /// current behaviour as a labelled baseline — including a *decline*, which
+    /// is a real part of the `ferro project` contract (an unavailable axis is an
+    /// exit-0 outcome carrying a stable reason, not a failure).
+    ///
+    /// **Not-applicable** (excluded, counted, never silently dropped):
+    /// - the input does not parse (the `error-mode` dimension owns those);
+    /// - the input carries no transcript frame (bare `p.`/`m.`/`o.`, allele
+    ///   lists) — there is nothing to project;
+    /// - the input's transcript is absent from the committed slice, because the
+    ///   prepared reference had no version-exact record for it. Asserting those
+    ///   would assert the fixture's gaps, not ferro's behaviour.
+    fn projection(
+        candidates: &[sources::Candidate],
+        windows: Option<&WindowFixture>,
+        ov: &overrides::Overrides,
+        sha: &str,
+        rows: &mut Vec<Row>,
+        cens: &mut Census,
+    ) -> anyhow::Result<()> {
+        use ferro_hgvs::conformance::spec_projection::{AxisResult, AXES};
+        use ferro_hgvs::data::cdot::CdotMapper;
+        use ferro_hgvs::data::projection::Projector;
+        use ferro_hgvs::project::VariantProjector;
+
+        let mut by_input: BTreeMap<String, (String, Option<usize>)> = BTreeMap::new();
+        for c in candidates {
+            by_input
+                .entry(c.input.clone())
+                .or_insert((c.source_path.clone(), c.source_line));
+        }
+        let gross = by_input.len();
+
+        let Some(windows) = windows else {
+            // No committed slice on this checkout: the dimensions still declare
+            // their full gross count, all not-applicable, so the census cannot
+            // quietly under-report what is missing.
+            for (code, _) in AXES {
+                cens.tally(&format!("project-{code}"), gross, 0, gross);
+            }
+            return Ok(());
+        };
+
+        let cdot = CdotMapper::from_transcripts(windows.transcripts.iter());
+        // Coverage is what the rebuilt cdot can actually map — a transcript in
+        // the slice that the mapper rejects is not usable, so it is not covered.
+        let covered: BTreeSet<String> = windows
+            .transcripts
+            .iter()
+            .filter(|tx| cdot.get_transcript(&tx.id).is_some())
+            .map(|tx| tx.id.clone())
+            .collect();
+        let projector = VariantProjector::new(Projector::new(cdot), windows.to_provider());
+
+        let mut na: BTreeMap<char, usize> = AXES.iter().map(|(c, _)| (*c, 0usize)).collect();
+        let mut uncovered: BTreeSet<String> = BTreeSet::new();
+        let mut used_overrides: BTreeSet<String> = BTreeSet::new();
+        // Why each excluded input was excluded. Reported, never silent: an
+        // unexplained exclusion is indistinguishable from lost coverage.
+        let mut na_reasons: BTreeMap<&str, usize> = BTreeMap::new();
+        let mut panicked: BTreeSet<String> = BTreeSet::new();
+        let mut slice_gaps: BTreeSet<String> = BTreeSet::new();
+
+        for (input, (path, line)) in &by_input {
+            let target = target_for(input);
+            let Ok(variant) = parse_hgvs(&target) else {
+                *na_reasons.entry("input does not parse").or_default() += 1;
+                bump_all(&mut na);
+                continue;
+            };
+            // A projection panic must not abort generation; it is recorded as a
+            // pinned row like any other engine outcome would be.
+            let pass = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                spec_projection::project_all_axes(&projector, &variant)
+            })) {
+                Ok(p) => p,
+                Err(_) => {
+                    *na_reasons.entry("projection panicked").or_default() += 1;
+                    panicked.insert(target.clone());
+                    bump_all(&mut na);
+                    continue;
+                }
+            };
+            let Some(transcript) = pass.transcript.clone() else {
+                *na_reasons
+                    .entry("no transcript frame to project from")
+                    .or_default() += 1;
+                bump_all(&mut na);
+                continue;
+            };
+            if !covered.contains(&transcript) {
+                *na_reasons
+                    .entry("transcript absent from the committed reference slice")
+                    .or_default() += 1;
+                uncovered.insert(transcript.clone());
+                bump_all(&mut na);
+                continue;
+            }
+
+            // An outcome that only reports what the *slice* lacks says nothing
+            // about ferro, so it is excluded rather than pinned. The two shapes
+            // are a read outside a captured window, and a record the slice does
+            // not carry at the build the input names (a `NC_000023.10(NM_...)`
+            // GRCh37 anchor against a GRCh38-anchored slice). Both resolve
+            // against a full prepared reference.
+            if let AxisResult::Error(msg) = &pass.axes[&'c'] {
+                if is_reference_slice_gap(msg) {
+                    *na_reasons
+                        .entry("reference slice does not cover this input")
+                        .or_default() += 1;
+                    slice_gaps.insert(target.clone());
+                    bump_all(&mut na);
+                    continue;
+                }
+            }
+
+            for (code, _) in AXES {
+                let result = &pass.axes[&code];
+                if matches!(result, AxisResult::NotApplicable(_)) {
+                    *na.entry(code).or_default() += 1;
+                    continue;
+                }
+                let observed = result.as_observed();
+                let key = format!("{code}/{input}");
+                let stated = ov.projections.get(&key);
+                if stated.is_some() {
+                    used_overrides.insert(key.clone());
+                }
+                let (expectation, normative_level, expected, status, citation) = match stated {
+                    Some(o) => (
+                        "spec-mandated",
+                        o.normative_level.clone(),
+                        Some(o.expected.clone()),
+                        if projection_matches(&observed, &o.expected) {
+                            "preserved"
+                        } else {
+                            "projection-diverges"
+                        },
+                        format!("{}@{sha}", o.citation),
+                    ),
+                    None => (
+                        "pinned-baseline",
+                        "n/a".to_string(),
+                        None,
+                        match result {
+                            AxisResult::Rendered(_) => "projection-pinned",
+                            AxisResult::Unavailable(_) => "projection-unavailable-pinned",
+                            AxisResult::Error(_) => "projection-error-pinned",
+                            AxisResult::NotApplicable(_) => unreachable!("filtered above"),
+                        },
+                        cite(path, *line, sha),
+                    ),
+                };
+                let note = match stated.and_then(|o| o.note.clone()) {
+                    Some(n) => format!("projected on {transcript}; {n}"),
+                    None => format!("projected on {transcript}"),
+                };
+                rows.push(Row {
+                    id: format!("project-{code}/{input}"),
+                    dimension: format!("project-{code}"),
+                    operation: format!("project-{code}"),
+                    error_mode: "default".to_string(),
+                    input: input.clone(),
+                    target: target.clone(),
+                    expectation: expectation.to_string(),
+                    normative_level,
+                    expected,
+                    observed,
+                    status: status.to_string(),
+                    spec_citation: citation,
+                    dedup_note: "the existing suite is entirely within-axis (parse / normalize /                                  render in the input's own coordinate system); nothing asserts                                  what this string becomes on another axis"
+                        .to_string(),
+                    note: Some(note),
+                });
+            }
+        }
+
+        // A stale curated projection is a silent lie about coverage, so fail.
+        let stale: Vec<&str> = ov
+            .projections
+            .keys()
+            .filter(|k| !used_overrides.contains(k.as_str()))
+            .map(String::as_str)
+            .collect();
+        if !stale.is_empty() {
+            anyhow::bail!(
+                "overrides.projections references rows that were not emitted \
+                 (spec drift, or the transcript is absent from the committed slice): {stale:?}"
+            );
+        }
+
+        for (code, _) in AXES {
+            cens.tally(
+                &format!("project-{code}"),
+                gross,
+                0,
+                na.get(&code).copied().unwrap_or(0),
+            );
+        }
+        eprintln!("projection: excluded inputs by reason (each costs 5 rows, one per axis):");
+        for (reason, n) in &na_reasons {
+            eprintln!("  {n:>5}  {reason}");
+        }
+        if !uncovered.is_empty() {
+            eprintln!(
+                "projection: {} transcript(s) referenced by the spec are absent from the \
+                 committed reference slice: {}",
+                uncovered.len(),
+                uncovered.iter().cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+        if !slice_gaps.is_empty() {
+            eprintln!(
+                "projection: {} input(s) excluded because the committed slice cannot serve \
+                 them (fixture gap, not ferro behaviour): {}",
+                slice_gaps.len(),
+                slice_gaps.iter().cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+        if !panicked.is_empty() {
+            eprintln!(
+                "projection: {} input(s) PANICKED the projector - a real defect, not a \
+                 fixture gap: {}",
+                panicked.len(),
+                panicked.iter().cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+        Ok(())
+    }
+
+    /// Is this engine error a gap in the committed reference slice rather than
+    /// a statement about ferro? Such a row would pin the fixture's limits, so it
+    /// is excluded and reported instead.
+    fn is_reference_slice_gap(message: &str) -> bool {
+        message.contains("not covered by any committed window")
+            || message.contains("Reference not found")
+    }
+
+    /// Does ferro's projected string match the form the spec states?
+    ///
+    /// The spec writes a projected form two ways. Fully qualified
+    /// (`NP_004371.2:p.(Asn47delinsSerSerTer)`) it is compared verbatim.
+    /// Accession-less (`p.(Arg1459Ter)` — the surrounding paragraph supplies
+    /// the reference) only the coordinate part is comparable, because the spec
+    /// simply did not state an accession there; requiring one would fail the
+    /// row for something the spec never asserted.
+    fn projection_matches(observed: &str, expected: &str) -> bool {
+        if expected.contains(':') {
+            observed == expected
+        } else {
+            observed.rsplit(':').next() == Some(expected)
+        }
+    }
+
+    /// Count one not-applicable against every axis (the input is unusable for
+    /// projection as a whole, not on one axis).
+    fn bump_all(na: &mut BTreeMap<char, usize>) {
+        for (code, _) in spec_projection::AXES {
+            *na.entry(code).or_default() += 1;
+        }
     }
 
     fn observe(normalizer: &Normalizer<MockProvider>, target: &str) -> String {
