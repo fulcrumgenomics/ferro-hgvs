@@ -716,8 +716,6 @@ mod overrides {
         pub status: Option<String>,
         #[serde(default, deserialize_with = "deserialize_some")]
         pub spec_expected: Option<Option<String>>,
-        #[serde(default)]
-        pub todo: Option<String>,
         /// Free-form note attached to the row in the emitted fixture.
         /// Used to capture nuances where the auto-classified `status`
         /// doesn't fully convey ferro's behavior — e.g. rows whose
@@ -786,8 +784,6 @@ mod runner {
         pub source_paths: Vec<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub working_group: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub todo: Option<String>,
         /// Free-form clarifying note. Surfaced from the override file
         /// for rows where the `status` bucket doesn't fully capture
         /// ferro's behavior (e.g. canonical form emitted from a
@@ -1000,24 +996,6 @@ mod runner {
                 .and_then(|o| o.status.clone())
                 .unwrap_or_else(|| auto_status.to_string());
 
-            // Audit todo attaches whenever status flags a row as needing
-            // review: ferro accepts a string the spec rejects (false-acceptance),
-            // ferro rejects a string the spec accepts (parse-error), ferro
-            // rewrites a canonical form (diverges), or normalization needs
-            // reference data we can't run yet (needs-reference). Override wins.
-            const ISSUE_83: &str = "https://github.com/fulcrumgenomics/ferro-hgvs/issues/83";
-            let needs_todo = matches!(
-                status.as_str(),
-                "false-acceptance" | "parse-error" | "needs-reference" | "diverges"
-            );
-            let todo = ov.and_then(|o| o.todo.clone()).or_else(|| {
-                if needs_todo {
-                    Some(ISSUE_83.to_string())
-                } else {
-                    None
-                }
-            });
-
             rows.push(Row {
                 coordinate_system: coord_system(&input),
                 input: input.clone(),
@@ -1028,7 +1006,6 @@ mod runner {
                 source_kind: source_kind_str(kind).to_string(),
                 source_paths: paths,
                 working_group: agg.wg,
-                todo,
                 note: ov.and_then(|o| o.note.clone()),
                 requires_reference: ov.and_then(|o| o.requires_reference),
                 expected_warnings,
