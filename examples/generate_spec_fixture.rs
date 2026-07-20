@@ -840,26 +840,70 @@ mod runner {
         "?".to_string()
     }
 
-    /// True when `input` is a bare coordinate reference: a coordinate-system
-    /// prefix (`c.`/`g.`/`m.`/`n.`/`o.`/`p.`/`r.`) followed only by position
-    /// characters (digits, `_ + - * ?`) with no edit operator.
+    /// Chromosome landmarks the spec uses in place of a numeric position.
+    /// They carry no edit meaning, so a coordinate built only from them (e.g.
+    /// `g.pter`) is still edit-less.
+    const POSITION_LANDMARKS: [&str; 3] = ["pter", "qter", "cen"];
+
+    /// True when `input` carries no edit operator: a coordinate-system prefix
+    /// (`c.`/`g.`/`m.`/`n.`/`o.`/`p.`/`r.`) followed only by position tokens —
+    /// position characters (digits, `+ - * ?`) or a chromosome landmark
+    /// (`pter`/`qter`/`cen`) — joined by `_`.
     ///
     /// The spec formats position references in prose (e.g. "the A-stretch
     /// running from position `c.5690` to `c.5697`") with the same inline-code
     /// markup as variant examples, so the harvester scrapes them; a bare
-    /// coordinate is not a describable variant. The spec's edit-less
-    /// whole-variant markers (`p.?`, `p.0`, `r.?`, …) share this shape but parse
-    /// successfully, so the caller gates the drop on a *parse failure* and never
-    /// removes them.
+    /// coordinate is not a describable variant. Edit-less strings are not all
+    /// prose references, though: the spec's whole-variant markers (`p.?`, `p.0`,
+    /// `r.?`, …) and its edit-less negatives (`c.123-65_-50`, an incomplete
+    /// range the spec requires be *rejected*) share this shape. So the caller
+    /// pairs this test with evidence that the string is only a position — see
+    /// [`is_position_reference`].
     fn is_edit_less_coordinate(input: &str) -> bool {
-        // Strip any leading accession: the coordinate lives after the last colon.
-        let core = input.rsplit(':').next().unwrap_or(input);
+        // Strip a leading accession: the coordinate follows the *first* colon.
+        // Splitting on the last colon instead would look past the junctions of a
+        // chimeric description (`NC_1:g.pter_100::NC_2:g.200_cen_qter`) and judge
+        // only its tail, wrongly calling the whole string edit-less.
+        let core = input.split_once(':').map_or(input, |(_, rest)| rest);
         let rest = match core.get(0..2) {
             Some("c." | "g." | "m." | "n." | "o." | "p." | "r.") => &core[2..],
             _ => return false,
         };
-        rest.chars()
-            .all(|ch| matches!(ch, '0'..='9' | '_' | '+' | '-' | '*' | '?'))
+        // A bare prefix (`c.`) is edit-less; but past that, an empty token from
+        // `_`-splitting means a malformed range (`c.1_`, `c.1__2`) — not a clean
+        // position, so it is not treated as an edit-less coordinate.
+        rest.is_empty()
+            || rest.split('_').all(|token| {
+                !token.is_empty()
+                    && (POSITION_LANDMARKS.contains(&token)
+                        || token
+                            .chars()
+                            .all(|ch| matches!(ch, '0'..='9' | '+' | '-' | '*' | '?')))
+            })
+    }
+
+    /// True when a harvested string is a position reference lifted out of spec
+    /// prose rather than a variant, and so should not become a fixture row.
+    ///
+    /// Two signals, both requiring [`is_edit_less_coordinate`] (no edit
+    /// operator) to hold:
+    ///
+    /// * ferro cannot parse it at all — a position cited in a sentence, e.g.
+    ///   `c.` or a truncated fragment; or
+    /// * ferro normalizes it by merely appending `=` (e.g. `g.12345678` →
+    ///   `NC_000023.11:g.12345678=`), i.e. it invented the "identity" edit the
+    ///   string never had. Scoring that as a divergence is noise.
+    ///
+    /// Edit-less strings that ferro parses *and* leaves alone are kept: the
+    /// whole-variant markers (`p.?`, `p.0`) and the spec's edit-less negatives
+    /// such as `c.123-65_-50`, which the checklist requires be rejected.
+    ///
+    /// `parse_ok`/`current` come from `target` (the accession-prefixed form)
+    /// while the shape test reads the raw `input`. These are equivalent here:
+    /// prefixing only prepends an accession, and `is_edit_less_coordinate`
+    /// strips any accession before testing, so both forms share the shape.
+    fn is_position_reference(input: &str, target: &str, current: &str, parse_ok: bool) -> bool {
+        is_edit_less_coordinate(input) && (!parse_ok || current == format!("{target}="))
     }
 
     pub fn build_rows(
@@ -919,19 +963,11 @@ mod runner {
             let (current, parse_ok, normalize_ok, expected_warnings) =
                 run_ferro(&normalizer, target);
 
-            // Drop bare coordinate references harvested from spec prose (e.g.
-            // "position `c.5690`"): an edit-less coordinate that ferro also
-            // rejects is not a describable variant, just a position cited in a
-            // sentence. Edit-less whole-variant markers (`p.?`, `p.0`) share the
-            // shape but parse, so they survive. An explicit override keeps the
-            // row regardless (the auditor deliberately classified it).
-            //
-            // `parse_ok` is from `target` (the prefixed form) but the shape test
-            // reads the raw `input`. These are equivalent here: prefixing only
-            // prepends an accession, and `is_edit_less_coordinate` strips any
-            // accession (`rsplit(':')`) before testing, so the bare/prefixed
-            // forms have the same edit-less shape.
-            if ov.is_none() && !parse_ok && is_edit_less_coordinate(&input) {
+            // Drop position references harvested from spec prose (e.g.
+            // "position `c.5690`"): they are not describable variants, just
+            // positions cited in a sentence. An explicit override keeps the row
+            // regardless (the auditor deliberately classified it).
+            if ov.is_none() && is_position_reference(&input, target, &current, parse_ok) {
                 continue;
             }
 
@@ -1044,7 +1080,7 @@ mod runner {
 
     #[cfg(test)]
     mod tests {
-        use super::is_edit_less_coordinate;
+        use super::{is_edit_less_coordinate, is_position_reference};
 
         #[test]
         fn flags_bare_position_references() {
@@ -1057,7 +1093,8 @@ mod runner {
                 "c.", // bare prefix
                 "c.*",
                 "g.12345678",
-                "p.?", // edit-less marker — shape matches; caller's parse gate keeps it
+                "g.pter", // chromosome landmark, still no edit operator
+                "p.?",    // edit-less marker — shape matches; caller's gate keeps it
             ] {
                 assert!(
                     is_edit_less_coordinate(bare),
@@ -1076,12 +1113,73 @@ mod runner {
                 "LRG_199t1:c.11T>G",
                 "p.Met1ext-5", // has an edit token (`ext`), not bare
                 "g.1234=",
+                // Malformed ranges: an empty `_`-token is not a clean position,
+                // so these are not classified as edit-less (would otherwise be
+                // wrongly dropped as prose if ferro rejects them).
+                "c.1_",
+                "c.1__2",
+                // Chimeric junctions: edit-less-looking tail, but the whole
+                // string is a (spec-rejected) description, not a position.
+                "NC_000002.12:g.pter_8247756::NC_000011.10:g.15825273_cen_qter",
+                "g.[chr11:pter_15825272::chr2:8247757_cen_qter]",
             ] {
                 assert!(
                     !is_edit_less_coordinate(variant),
                     "{variant:?} is a real variant, not a bare coordinate"
                 );
             }
+        }
+
+        #[test]
+        fn drops_coordinates_ferro_merely_stamps_with_equals() {
+            assert!(is_position_reference(
+                "g.12345678",
+                "NC_000023.11:g.12345678",
+                "NC_000023.11:g.12345678=",
+                true,
+            ));
+            assert!(is_position_reference(
+                "g.pter",
+                "NC_000023.11:g.pter",
+                "NC_000023.11:g.pter=",
+                true,
+            ));
+        }
+
+        #[test]
+        fn drops_unparsable_prose_fragments() {
+            assert!(is_position_reference(
+                "c.",
+                "NM_004006.2:c.",
+                "parse error",
+                false
+            ));
+        }
+
+        #[test]
+        fn keeps_edit_less_spec_negatives_and_markers() {
+            // `c.123-65_-50` is an incomplete range the spec requires be
+            // rejected: edit-less, but ferro leaves it untouched, so it stays.
+            assert!(!is_position_reference(
+                "c.123-65_-50",
+                "NM_004006.2:c.123-65_-50",
+                "NM_004006.2:c.123-65_-50",
+                true,
+            ));
+            // Whole-variant markers parse and round-trip unchanged.
+            assert!(!is_position_reference(
+                "p.?",
+                "NP_000079.2:p.?",
+                "NP_000079.2:p.?",
+                true
+            ));
+            // Real variants never match, whatever ferro does with them.
+            assert!(!is_position_reference(
+                "g.123del",
+                "NC_000023.11:g.123del",
+                "NC_000023.11:g.123del",
+                true,
+            ));
         }
     }
 }

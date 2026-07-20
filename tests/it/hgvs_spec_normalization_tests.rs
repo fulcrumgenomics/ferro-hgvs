@@ -100,25 +100,34 @@ fn harvester_yields_only_real_variants() {
         );
     }
 
-    // Outcome check over *every* parse-error row: an edit-less coordinate ferro
-    // rejects is spec prose, not a variant, and is dropped. This must scan all
-    // rows, not fixed examples — whether a bare-shaped coordinate is dropped
-    // depends on ferro's parse result (`!parse_ok`), not shape alone: e.g.
-    // `g.12345678` is bare-shaped but PARSES, so it legitimately survives. The
-    // predicate below only pins the outcome; the predicate's char-set is
-    // unit-tested independently in the generator (`is_edit_less_coordinate`
-    // tests). The generator's drop is also gated on `ov.is_none()` — an explicit
-    // override deliberately keeps its row; no current override is a bare
-    // coordinate, so this asserts over every parse-error row; if one is ever
-    // added, exempt overridden inputs here.
+    // Outcome check over *every* row: a bare coordinate is spec prose, not a
+    // variant, whenever ferro either rejects it outright or "normalizes" it by
+    // inventing an identity `=` it never had (`g.12345678` →
+    // `NC_000023.11:g.12345678=`). Both shapes are dropped. This must scan all
+    // rows, not fixed examples. Bare coordinates ferro parses and leaves alone
+    // legitimately survive — the whole-variant markers (`p.?`, `p.0`) and the
+    // spec's edit-less negatives such as `c.123-65_-50`. The predicate below
+    // only pins the outcome; its char-set is unit-tested independently in the
+    // generator (`is_edit_less_coordinate` tests). The generator's drop is also
+    // gated on `ov.is_none()` — an explicit override deliberately keeps its row;
+    // no current override is a bare coordinate, so this asserts over every row;
+    // if one is ever added, exempt overridden inputs here.
     for row in &fx.rows {
-        if row.status == "parse-error" {
-            assert!(
-                !is_bare_coordinate(&row.input),
-                "bare coordinate reference should have been dropped, not left as parse-error: {:?}",
-                row.input
-            );
+        if !is_bare_coordinate(&row.input) {
+            continue;
         }
+        assert_ne!(
+            row.status, "parse-error",
+            "bare coordinate reference should have been dropped, not left as parse-error: {:?}",
+            row.input
+        );
+        let target = row.input_prefixed.as_deref().unwrap_or(&row.input);
+        assert_ne!(
+            row.current,
+            format!("{target}="),
+            "bare coordinate reference stamped with an identity `=` should have been dropped: {:?}",
+            row.input
+        );
     }
 
     // Variants the spec split across a `<code class="spotN">` highlight are
