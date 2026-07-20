@@ -1481,6 +1481,97 @@ pub(crate) fn try_project_cis_combined_inframe(
     Ok(CisCombined::InFrame(Box::new(pv)))
 }
 
+/// The residues whose amino acid changes when a cis compound's members are
+/// applied **together** to the reference CDS (#1079).
+///
+/// This is the length-preserving companion of
+/// [`try_project_cis_combined_inframe`]: it does not build a description, it
+/// just reports which residues moved and to what, so the caller can render them
+/// with the spec's grouping rules (one contiguous run → a single
+/// substitution / delins; runs separated by an unchanged residue stay
+/// individual — `protein/substitution.md`, `DNA/delins.md`).
+///
+/// It exists because a `delins` that normalization decomposes into a cis allele
+/// (e.g. `c.415_419delinsATATG` → `c.[415T>A;417_419inv]`) must not be described
+/// member-by-member: each member would be predicted against the *reference*
+/// codon, which both yields the spec-forbidden bracketed protein allele and can
+/// name the wrong amino acid. Combining first is what fixes the amino acid.
+///
+/// `members` are the pre-classified `SimpleExonic` members as `(lo, hi, edit)`
+/// with insertion spans already collapsed to `hi == lo`, in any order.
+///
+/// Returns the changed residues as `(1-based position, reference AA,
+/// alternative AA)` in ascending order — empty when the combined product is
+/// silent. Returns `None` (caller keeps its existing behavior) when the combined
+/// product cannot be compared residue-for-residue against the reference:
+///
+/// - fewer than two members, an out-of-bounds or overlapping span (overlapping
+///   members are contradictory in cis), or an unreadable CDS;
+/// - the combined CDS changes length — an in-frame indel is a length-changing
+///   consequence that [`try_project_cis_combined_inframe`] already describes;
+/// - the combined protein changes length, i.e. a premature stop (nonsense) or a
+///   stop-loss, both of which need their own spec forms (a stop-delins or a
+///   C-terminal extension) rather than a residue-wise diff.
+pub(crate) fn combined_cis_residue_changes(
+    transcript: &Transcript,
+    ref_bundle: &RefProteinBundle,
+    members: &[(i64, i64, &NaEdit)],
+) -> Option<Vec<(u64, AminoAcid, AminoAcid)>> {
+    if members.len() < 2 {
+        return None;
+    }
+
+    // Bounds guard, mirroring `try_project_cis_combined_inframe`: a `lo < 1`
+    // would underflow the `lo - 1` usize cast in `build_mutated_cds_with_ref`
+    // into an out-of-bounds slice panic.
+    let ref_cds_len = ref_bundle.ref_cds.len() as i64;
+    for (lo, hi, _) in members {
+        if *lo < 1 || *hi < *lo || *hi > ref_cds_len {
+            return None;
+        }
+    }
+
+    // Sort ascending by `lo` for the overlap guard and the 3'→5' fold.
+    let mut sorted: Vec<(i64, i64, &NaEdit)> = members.to_vec();
+    sorted.sort_by_key(|(lo, _, _)| *lo);
+    for pair in sorted.windows(2) {
+        if pair[1].0 <= pair[0].1 {
+            return None; // overlapping members: contradictory in cis
+        }
+    }
+
+    // Fold the members onto the reference CDS in *descending* `lo` order so a 3'
+    // splice never invalidates a not-yet-applied 5' member's coordinates.
+    let mut mut_cds = ref_bundle.ref_cds.clone();
+    for (lo, hi, edit) in sorted.iter().rev() {
+        mut_cds = build_mutated_cds_with_ref(&mut_cds, transcript, *lo, *hi, edit).ok()?;
+    }
+    if mut_cds.len() != ref_bundle.ref_cds.len() {
+        return None; // length-changing: not a residue-wise substitution set
+    }
+
+    // Translate the combined product; force residue 1 to Met on a recognized
+    // initiator so it agrees with the Met-forced reference protein.
+    let mut alt_protein = translate_full_cds(&mut_cds);
+    if cds_has_recognized_start(&ref_bundle.ref_cds) {
+        force_initiator_met(&mut alt_protein);
+    }
+    if alt_protein.len() != ref_bundle.ref_protein.len() {
+        return None; // premature stop or stop-loss: needs its own spec form
+    }
+
+    Some(
+        ref_bundle
+            .ref_protein
+            .iter()
+            .zip(alt_protein.iter())
+            .enumerate()
+            .filter(|(_, (ref_aa, alt_aa))| ref_aa != alt_aa)
+            .map(|(i, (ref_aa, alt_aa))| ((i + 1) as u64, *ref_aa, *alt_aa))
+            .collect(),
+    )
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

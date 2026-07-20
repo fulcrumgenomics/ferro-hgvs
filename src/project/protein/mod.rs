@@ -21,8 +21,8 @@ pub(crate) use helpers::{
     read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
 };
 pub(crate) use indel::{
-    predict_indel_protein, predict_stop_region_extension, try_project_cis_combined_inframe,
-    CisCombined,
+    combined_cis_residue_changes, predict_indel_protein, predict_stop_region_extension,
+    try_project_cis_combined_inframe, CisCombined,
 };
 pub(crate) use substitution::predict_substitution_protein;
 // `apply_substitution` / `read_ref_codon` / `translate` are the position-level
