@@ -208,6 +208,9 @@ jobs:
       - name: Generate HGVS v21.0 spec fixture
         run: cargo run --features dev --example generate_spec_fixture
 
+      - name: Generate HGVS spec test enumeration
+        run: cargo run --features dev --example generate_spec_enumeration
+
       # `dev` bundles every testable feature; `slow-tests` is
       # intentionally opt-in because it requires a ~1 GB ClinVar
       # fixture that is not committed to the repo.

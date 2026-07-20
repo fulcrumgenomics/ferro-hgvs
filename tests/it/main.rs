@@ -281,6 +281,7 @@ mod spdi_dup_recovery;
 mod spdi_tests;
 mod spec_canonical_locks;
 mod spec_coverage_misc;
+mod spec_enumeration_tests;
 mod strict_del_size_suffix_mode;
 mod strict_explicit_seq_size_modes;
 mod strict_whitespace_mode;

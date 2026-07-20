@@ -244,6 +244,10 @@ jobs:
         # Regenerate it before the test run; the generator also validates the
         # overrides file, which is the guard the old `--check` step provided.
         run: cargo run --features dev --example generate_spec_fixture
+      - name: Generate HGVS spec test enumeration
+        # Second generated artifact (gitignored), built on top of the fixture
+        # above. Regenerating here also validates its overrides file.
+        run: cargo run --features dev --example generate_spec_enumeration
       - name: Run Rust tests
         run: cargo nextest run --features dev
       - name: Verify conformance summary docs are up to date

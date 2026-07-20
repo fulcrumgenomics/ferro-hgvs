@@ -37,6 +37,16 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      # Same drift guard for the spec test enumeration. It reads the
+      # normalization fixture, so it must run after the hook above.
+      - id: generate-spec-enumeration-check
+        name: generate_spec_enumeration --check
+        entry: cargo run --features dev --example generate_spec_enumeration -- --check
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]
+
   # Rust linting (optional - can be slow)
   # Uncomment if you want clippy in pre-commit
   # - repo: local
