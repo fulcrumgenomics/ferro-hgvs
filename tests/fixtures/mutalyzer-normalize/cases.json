@@ -4884,6 +4884,33 @@
         "ICORRECTEDSELECTORID"
       ],
       "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame delins spanning a codon boundary (WT1)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_variant -> build_inframe_delins (in-frame delins that introduces no premature stop) in src/project/protein/indel.rs."
+      ],
+      "input": "NM_024426.4:c.1234_1239delinsAAAGGG",
+      "protein_description": "NP_077744.3:p.(Ser412_Arg413delinsLysGly)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame delins spanning a codon boundary (FH)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_variant -> build_inframe_delins (in-frame delins that introduces no premature stop) in src/project/protein/indel.rs."
+      ],
+      "input": "NM_000143.3:c.401_403delinsGGG",
+      "protein_description": "NP_000134.2:p.(Asp134_His135delinsGlyAsp)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame delins spanning a codon boundary (SDHD)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_variant -> build_inframe_delins (in-frame delins that introduces no premature stop) in src/project/protein/indel.rs."
+      ],
+      "input": "NM_003002.4:c.203_208delinsGGGGGG",
+      "protein_description": "NP_002993.1:p.(Ser68_Arg70delinsArgGlyGly)",
+      "to_test": true
     }
   ]
 }
