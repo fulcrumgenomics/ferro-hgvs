@@ -83,3 +83,6 @@ manuscript/
 # Only the curated tests/fixtures/hgvs-rs-projection/cases.json is committed;
 # the bulk corpus must never be added to git.
 /vendor/
+
+# Local scratch working directory (ad hoc scripts, offline tooling)
+/scratch/
