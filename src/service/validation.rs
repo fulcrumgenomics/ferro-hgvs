@@ -3,9 +3,9 @@
 //! Provides comprehensive validation for HGVS strings, request parameters,
 //! and other user inputs to prevent injection attacks and ensure data integrity.
 
-use once_cell::sync::Lazy;
-use regex::Regex;
 use serde::{Deserialize, Serialize};
+
+use crate::hgvs::parser::parse_hgvs_lenient;
 
 /// Maximum allowed length for HGVS variant strings
 const MAX_HGVS_LENGTH: usize = 1000;
@@ -18,35 +18,6 @@ const MIN_TIMEOUT_SECONDS: u32 = 1;
 
 /// Maximum allowed variants in batch request
 const MAX_BATCH_SIZE: usize = 1000;
-
-/// Comprehensive HGVS pattern for basic format validation.
-///
-/// Accepts standard accession formats:
-///   - RefSeq: NC_000001.11, NM_000088.3, NP_000001.1, etc.
-///   - Ensembl: ENST, ENSG, ENSP, ENSE, ENSR
-///   - LRG: LRG_1
-///   - GenBank: U12345.1, AF118569.1
-///   - Assembly-prefixed: GRCh36/37/38, hg18/19/38
-///
-/// Followed by a coordinate type prefix (c./g./m./n./p./r.) and variant body.
-static HGVS_PATTERN: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(
-        r"(?x)
-        ^
-        (?:
-            [A-Za-z]{2,4}_\d+(?:\.\d+)?          # RefSeq / LRG (NM_000088.3, LRG_1)
-          | ENS[TGPER]\d+(?:\.\d+)?               # Ensembl (transcript/gene/protein/exon/regulatory)
-          | [A-Z]\d{5}(?:\.\d+)?                  # GenBank (U12345.1)
-          | [A-Z]{2}\d{6}(?:\.\d+)?               # GenBank (AF118569.1)
-          | (?:GRCh\d+|hg(?:18|19|38))\([^)]+\)   # Assembly-prefixed (GRCh38(chr1), hg38(chr1))
-        )
-        :[cgmnpro]\.
-        .+
-        $
-        ",
-    )
-    .unwrap()
-});
 
 /// Validation errors for user input
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,18 +86,28 @@ pub fn validate_hgvs(input: &str) -> Result<(), ValidationError> {
         return Err(ValidationError::NonAscii);
     }
 
-    // Basic HGVS format validation using regex
-    if !HGVS_PATTERN.is_match(input) {
-        return Err(ValidationError::InvalidFormat);
-    }
-
     // Security: check for dangerous characters that could be used in injection attacks.
     // Note: > is allowed (HGVS substitutions like A>G).
     // [] and () are allowed (repeats like C[8], predicted effects like p.(Val600Glu),
-    // uncertain positions, allele notation, and assembly-prefixed accessions).
+    // uncertain positions, allele notation, compound references like NG_x(NM_y), and
+    // assembly-prefixed accessions).
     // ; is allowed (allele phase separator like [var1;var2]).
+    // This runs before the format gate so injection attempts surface as
+    // `DangerousCharacters` rather than a generic format error.
     if input.chars().any(|c| "<|&`${}\\".contains(c)) {
         return Err(ValidationError::DangerousCharacters);
+    }
+
+    // Format validation: defer to the HGVS parser itself as the single source of truth
+    // for "valid HGVS format", rather than a second, hand-rolled grammar approximation
+    // that inevitably drifts and rejects valid inputs (e.g. the compound-reference form
+    // `NG_x(NM_y):c.…`; see issue #1102). The parser is a pure, I/O-free, fuzz-hardened
+    // function, and the length/ASCII/dangerous-character guards above have already
+    // bounded and sanitized the input, so running it here adds no execution risk. The
+    // lenient entry point is used so the gate is at least as permissive as the handlers,
+    // which parse in lenient mode; the caller's chosen error mode still applies downstream.
+    if parse_hgvs_lenient(input).is_err() {
+        return Err(ValidationError::InvalidFormat);
     }
 
     Ok(())
@@ -222,6 +203,27 @@ mod tests {
             validate_hgvs("NM_000001.1:x.123A>G"),
             Err(ValidationError::InvalidFormat)
         ));
+    }
+
+    #[test]
+    fn test_validate_hgvs_compound_reference_selector() {
+        // Regression (issue #1102): a gene/genomic reference carrying a parenthesized
+        // transcript or gene selector — the HGVS "reference with coordinates from an
+        // aligned transcript" form — is valid HGVS the parser accepts, and must pass
+        // the security gate. The web portal's spec example is the first case here.
+        assert!(validate_hgvs("NG_012232.1(NM_004006.2):c.93+1G>T").is_ok());
+        assert!(validate_hgvs("NC_000001.10(NM_002074.3):c.58del").is_ok());
+        assert!(validate_hgvs("ENSG00000184937.16(ENST00000452863.10):c.10del").is_ok());
+        assert!(validate_hgvs("NG_007485.1(CDKN2A):n.204_205insATC").is_ok());
+    }
+
+    #[test]
+    fn test_validate_hgvs_lrg_and_gene_symbol_references() {
+        // LRG transcript/protein references (t1/p1 suffix) and bare gene/protein-symbol
+        // references are also valid HGVS the parser accepts; the gate must not reject them.
+        assert!(validate_hgvs("LRG_199t1:c.100A>G").is_ok());
+        assert!(validate_hgvs("LRG_199p1:p.Val100Glu").is_ok());
+        assert!(validate_hgvs("BRAF:p.Val600Glu").is_ok());
     }
 
     #[test]
