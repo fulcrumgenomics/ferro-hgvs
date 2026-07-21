@@ -5251,8 +5251,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// Genomic-only projection for a whole-arm terminus (pter/qter) `c.` input
     /// whose parent genome frame IS resolvable (#887). Mirrors
     /// `polya_multiaxis_projection`'s shape: echo the input's own coding form
-    /// (framing included, #1086), no protein/noncoding/rna axis (a whole-arm marker does not round-trip
-    /// through cdot). `genomic` is the already-normalized parent-frame
+    /// (framing included, #1086), no protein/noncoding/rna axis (a whole-arm
+    /// marker does not round-trip through cdot). `genomic` is the
+    /// already-normalized parent-frame
     /// (NG_/LRG_) coordinate.
     ///
     /// #972: this site is reached from the top of `project_single_inner`,

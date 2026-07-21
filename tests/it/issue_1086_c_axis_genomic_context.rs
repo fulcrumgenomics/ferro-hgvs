@@ -208,22 +208,38 @@ fn exonic_input_with_context_keeps_context() {
     );
 }
 
-/// The `r.` axis was already correct — guard it against collateral damage.
-/// (The `c.`/`r.` 3'-shift difference on this input is *required*, not a bug:
-/// `RNA/deletion.md:20` excludes the exon/exon-junction exception to the 3'
-/// rule for an RNA reference sequence. Deliberately not asserted here beyond
-/// the framing.)
+/// The `r.` axis retains the input's genomic context too — guard it against
+/// collateral damage from the `c.`/`n.` framing change. An exonic input renders
+/// on `r.` (lowercase RNA alphabet) with the genomic parent echoed, exactly as
+/// the module doc notes (`NC_000023.11(NM_004006.2):r.(79a>g)`).
+///
+/// (An earlier revision pinned the deep-intronic `c.4072-1234_5155-246del`
+/// here; after #1089 the `r.` axis declines partial-intronic spans — it accepts
+/// only whole-exon-skip shapes — so that input is now `Unavailable`. This test
+/// uses an exonic input, which still renders, to keep asserting the framing.)
 #[test]
 fn rna_axis_framing_is_unchanged() {
     skip_without_manifest!(vp);
-    let AxisOutcome::Rendered { output, .. } = project(
-        &vp,
-        "NC_000023.11(NM_004006.2):c.4072-1234_5155-246del",
-        Axis::Rna,
-    ) else {
+    let AxisOutcome::Rendered { output, .. } =
+        project(&vp, "NC_000023.11(NM_004006.2):c.79A>G", Axis::Rna)
+    else {
         panic!("r. axis unexpectedly unavailable");
     };
-    assert_eq!(output, "NC_000023.11(NM_004006.2):r.(4073_5156del)");
+    assert_eq!(output, "NC_000023.11(NM_004006.2):r.(79a>g)");
+}
+
+/// The non-coding (`n.`) half of the "c./n." guarantee: an input that supplied
+/// a genomic context keeps it on the `n.` axis too. `NM_004006.2:c.79` is
+/// `n.323` (the 5'UTR is 244 bp), framed under the same `NC_` parent.
+#[test]
+fn noncoding_axis_retains_context() {
+    skip_without_manifest!(vp);
+    let AxisOutcome::Rendered { output, .. } =
+        project(&vp, "NC_000023.11(NM_004006.2):c.79A>G", Axis::Noncoding)
+    else {
+        panic!("n. axis unexpectedly unavailable");
+    };
+    assert_eq!(output, "NC_000023.11(NM_004006.2):n.323A>G");
 }
 
 // ---------------------------------------------------------------------------
