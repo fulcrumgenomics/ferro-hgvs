@@ -1785,6 +1785,59 @@ impl<P: ReferenceProvider> Normalizer<P> {
             allele.phase,
         ));
 
+        // Render cis-allele members in coordinate order, independent of input
+        // order (#1098), so normalization produces a single canonical form:
+        // leaving members in input order meant two inputs for the same allele
+        // (`[a;b]` vs `[b;a]`) normalized to two different strings, breaking use
+        // of the normalized descriptor as a stable key. Sort by a *total* order
+        // (`cis_member_order_key`) so the result is deterministic even when two
+        // members share a start.
+        //
+        // Basis: for DNA the spec discusses listing haplotype members "in
+        // genomic order" (DNA/alleles.md, a discussion note); for protein it is
+        // the machinery that makes the consecutive-residue delins reachable
+        // order-independently (protein/substitution.md:23 requires
+        // `p.[Arg76Ser;Cys77Trp]` to render as `p.Arg76_Cys77delinsSerTrp`
+        // whatever order the two subs are authored in). Either way the aim is a
+        // deterministic, input-order-independent canonical string.
+        //
+        // Only reorder when every member is on the **same accession**. The
+        // spec's genomic-order rule is about variants on the same chromosome;
+        // for a mixed-accession bracketed allele (`[NC_…;NM_…]`, #218/#219)
+        // there is no cross-molecule genomic order to canonicalize to, and an
+        // accession-string sort is not it — so those are left in authored order.
+        //
+        // Skip when the overlap passes above (`detect_insertion_overlaps`,
+        // `detect_overlap_conflicts`) flagged an `OverlapConflict`. Reordering is
+        // only meaning-preserving for *disjoint* members; a conflict means two
+        // members collide on one molecule, so they are NOT independent.
+        // `merge_consecutive_edits` collapses strictly-adjacent members but does
+        // not resolve a genuine overlap — that is exactly what those passes warn
+        // about — so overlapping members can reach here. Leaving them in authored
+        // order both avoids reordering edits whose combination is already
+        // ill-defined and honors the `OverlapConflictingEdits` "preserves input
+        // verbatim" contract (#395). Restricted to cis: trans / chimeric / mosaic
+        // member order is not a genomic-order question, and uncertain groups
+        // (`[(a;b)]`) are left untouched to preserve their authored form.
+        // `sort_by` (not `sort_unstable_by`) is a belt-and-suspenders choice — the
+        // key is already total, so stability is not relied upon.
+        let has_overlap_conflict = all_warnings
+            .iter()
+            .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
+        if is_cis && !allele.uncertain && !has_overlap_conflict && normalized.len() > 1 {
+            let first_accession = normalized[0].accession().map(|a| a.full());
+            let single_accession = first_accession.is_some()
+                && normalized
+                    .iter()
+                    .all(|m| m.accession().map(|a| a.full()) == first_accession);
+            if single_accession {
+                normalized.sort_by(|a, b| {
+                    crate::hgvs::variant::cis_member_order_key(a)
+                        .cmp(&crate::hgvs::variant::cis_member_order_key(b))
+                });
+            }
+        }
+
         // HGVS requires consecutive edits in cis to render as a single edit.
         // Only unwrap when a merge actually collapsed multiple sub-variants —
         // pre-existing singleton alleles must round-trip with the Allele
@@ -9677,6 +9730,91 @@ mod tests {
             format!("{}", result),
             "NM_000088.3:c.[10A>G;20C>T]",
             "Allele display should use canonical compact form"
+        );
+    }
+
+    #[test]
+    fn test_normalize_cis_allele_reorders_to_genomic_order() {
+        // #1098: cis-allele members must be rendered in genomic (coordinate)
+        // order regardless of the order they were written. A descending-order
+        // input normalizes to ascending genomic order.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant = parse_hgvs("[NM_000088.3:c.20C>T;NM_000088.3:c.10A>G]").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+
+        assert_eq!(
+            format!("{}", result),
+            "NM_000088.3:c.[10A>G;20C>T]",
+            "Descending-order cis members must be reordered into ascending genomic order"
+        );
+    }
+
+    #[test]
+    fn test_normalize_cis_allele_order_independent() {
+        // #1098: two inputs that denote the same allele in different member
+        // orders must normalize to the same canonical string.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let ascending = normalizer
+            .normalize(&parse_hgvs("[NM_000088.3:c.10A>G;NM_000088.3:c.20C>T]").unwrap())
+            .unwrap();
+        let descending = normalizer
+            .normalize(&parse_hgvs("[NM_000088.3:c.20C>T;NM_000088.3:c.10A>G]").unwrap())
+            .unwrap();
+
+        assert_eq!(
+            format!("{}", ascending),
+            format!("{}", descending),
+            "Ascending and descending inputs must normalize to the same canonical string"
+        );
+    }
+
+    #[test]
+    fn test_normalize_cis_allele_reorders_three_members() {
+        // #1098: a real sort, not just a two-member swap — three members given
+        // out of order settle into ascending genomic order.
+        let provider = MockProvider::with_test_data();
+        let normalizer = Normalizer::new(provider);
+
+        let variant =
+            parse_hgvs("[NM_000088.3:c.30G>A;NM_000088.3:c.10A>G;NM_000088.3:c.20C>T]").unwrap();
+        let result = normalizer.normalize(&variant).unwrap();
+
+        assert_eq!(
+            format!("{}", result),
+            "NM_000088.3:c.[10A>G;20C>T;30G>A]",
+            "Three shuffled cis members must be reordered into ascending genomic order"
+        );
+    }
+
+    #[test]
+    fn test_cis_member_order_key_is_total_order_with_content_tiebreak() {
+        // #1098: the ordering key must be a *total* order — two members that
+        // share a start position get a deterministic content tie-break (the
+        // rendered descriptor), so member order never falls back to input
+        // order. This is why a total order beats a stable sort keyed on start
+        // alone.
+        use crate::hgvs::variant::cis_member_order_key;
+
+        let sub = parse_hgvs("NC_000001.11:g.10A>G").unwrap();
+        let del = parse_hgvs("NC_000001.11:g.10del").unwrap();
+
+        let key_sub = cis_member_order_key(&sub);
+        let key_del = cis_member_order_key(&del);
+
+        // Same accession and same start point (region/base/offset)...
+        assert_eq!(
+            (&key_sub.0, key_sub.1, key_sub.2, key_sub.3),
+            (&key_del.0, key_del.1, key_del.2, key_del.3),
+            "the two members must share their start-point portion of the key"
+        );
+        // ...but distinct keys overall, via the rendered-descriptor tie-break.
+        assert_ne!(
+            key_sub, key_del,
+            "members sharing a start must still get distinct keys (total order)"
         );
     }
 

@@ -249,14 +249,16 @@ fn protein_separated_changes_survive_normalization() {
 }
 
 /// Two substitutions at the **same** residue are contradictory (one residue
-/// cannot be two things in cis), not a consecutive-residue delins — the allele
-/// survives normalization untouched rather than coalescing.
+/// cannot be two things in cis), not a consecutive-residue delins — so they are
+/// not coalesced. #1098's cis-member sort still reorders them into a
+/// deterministic (descriptor tie-break) order so the canonical string is
+/// input-order-independent; a same-residue two-member bracket stays spec-valid.
 #[test]
 fn protein_same_residue_changes_are_not_coalesced() {
     pin_canonicalizes_to(
         "NP_003997.1:p.[Asp2His;Asp2Glu]",
-        "NP_003997.1:p.[Asp2His;Asp2Glu]",
-        "protein/substitution.md:23 — same-residue pair is not a consecutive delins",
+        "NP_003997.1:p.[Asp2Glu;Asp2His]",
+        "protein/substitution.md:23 — same-residue pair is not a delins; #1098 orders members",
     );
 }
 
@@ -285,15 +287,22 @@ fn protein_to_ter_run_is_not_coalesced() {
     );
 }
 
-/// Members authored in descending residue order are left untouched (the rule
-/// only merges strictly-ascending runs; it never reorders the author's
-/// description — #395 preserve-authored-order).
+/// Members authored in descending residue order are reordered to ascending
+/// residue order by #1098's cis-member sort.
+///
+/// TRANSIENT (#1098/#1101): the sort runs *after* the delins-merge, which only
+/// fires on already-ascending runs, so descending input reorders to the bracket
+/// `p.[Arg76Ser;Cys77Trp]` but does not (yet) re-merge — a form
+/// `protein/substitution.md:23` calls "not correct". #1103/#1106 (sort *before*
+/// merge) closes this: once that lands, the expectation must flip to the delins
+/// `NP_003997.1:p.Arg76_Cys77delinsSerTrp`. Reordering here is the machinery
+/// that makes the order-independent delins reachable at all.
 #[test]
-fn protein_descending_order_members_stay_as_authored() {
+fn protein_descending_order_members_reorder_to_residue_order() {
     pin_canonicalizes_to(
         "NP_003997.1:p.[Cys77Trp;Arg76Ser]",
-        "NP_003997.1:p.[Cys77Trp;Arg76Ser]",
-        "ascending-only: a descending allele is not reordered into a delins",
+        "NP_003997.1:p.[Arg76Ser;Cys77Trp]",
+        "#1098 orders cis members; #1106 (sort-before-merge) will make this a delins",
     );
 }
 
