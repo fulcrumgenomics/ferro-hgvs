@@ -15,8 +15,12 @@
 //!     unchanged through parse + normalize — the merge pass does not
 //!     bridge gaps.
 //!   * Mixed-edit-kind compounds (sub + del + dup + inv + delins)
-//!     round-trip unchanged when the kinds are not merge-eligible.
-//!   * Input order is preserved verbatim through normalize — no sort.
+//!     round-trip unchanged when the kinds are not merge-eligible AND the
+//!     members are already in genomic order (all inputs here are ascending).
+//!   * Single-accession cis members are rendered in genomic (coordinate)
+//!     order regardless of input order (#1098) — see the `ordering` module.
+//!     (This supersedes the original audit's "input order preserved verbatim"
+//!     invariant, which pinned the pre-#1098 order-dependent behavior.)
 //!   * An adjacent pair surrounded by non-adjacent siblings merges
 //!     correctly without touching the siblings (selective merge).
 //!   * Each sub-variant 3'-shifts against its own neighborhood,
@@ -25,9 +29,11 @@
 //!     interchangeable inside one bracket — mixing them rejects.
 //!     Double-semicolons and trailing semicolons reject.
 //!
-//! No production-code changes land with this audit. A probe of every
-//! shape in this file showed the current behavior is correct; this PR
-//! documents that behavior and guards against regressions.
+//! The original audit (#221) landed no production-code changes and pinned the
+//! then-current behavior. The `ordering` module was later updated for #1098,
+//! which added genomic-order sorting of single-accession cis members; the
+//! other sections here were already in ascending order, so they still
+//! round-trip unchanged and continue to guard against regressions.
 
 use ferro_hgvs::hgvs::variant::{AllelePhase, HgvsVariant};
 use ferro_hgvs::parse_hgvs;
@@ -197,29 +203,74 @@ mod selective_merge {
 mod ordering {
     use super::*;
 
+    /// #1098: single-accession cis members are reordered into ascending
+    /// genomic order. These non-adjacent subs do not merge, so member count
+    /// is preserved — only the order changes.
     #[test]
-    fn descending_position_order_round_trips() {
-        let v = assert_parse_and_normalize_round_trip("NC_000001.11:g.[300C>T;200A>C;100G>A]");
-        expect_phase(&v, AllelePhase::Cis, 3);
+    fn descending_position_order_sorts_to_ascending() {
+        let out = normalize_to_string("NC_000001.11:g.[300C>T;200A>C;100G>A]");
+        assert_eq!(out, "NC_000001.11:g.[100G>A;200A>C;300C>T]");
+        expect_phase(&parse_hgvs(&out).unwrap(), AllelePhase::Cis, 3);
     }
 
     #[test]
-    fn shuffled_position_order_round_trips() {
-        let v = assert_parse_and_normalize_round_trip("NC_000001.11:g.[200A>C;100G>A;300C>T]");
-        expect_phase(&v, AllelePhase::Cis, 3);
+    fn shuffled_position_order_sorts_to_ascending() {
+        let out = normalize_to_string("NC_000001.11:g.[200A>C;100G>A;300C>T]");
+        assert_eq!(out, "NC_000001.11:g.[100G>A;200A>C;300C>T]");
+        expect_phase(&parse_hgvs(&out).unwrap(), AllelePhase::Cis, 3);
     }
 
     /// Five-element scramble — neither ascending nor descending, neither
-    /// alphabetical by edit type. A "no implicit sort" invariant only
-    /// holds under all permutations, so a 3-way shuffle can accidentally
-    /// pass if it happens to match the implicit sort key. 5 elements
-    /// in a non-monotonic order forecloses that loophole.
+    /// alphabetical by edit type. Order-independence only holds under all
+    /// permutations, so a 3-way shuffle can accidentally match the sort key;
+    /// 5 elements in a non-monotonic order forecloses that loophole.
     #[test]
-    fn five_way_scrambled_order_round_trips() {
-        let v = assert_parse_and_normalize_round_trip(
-            "NC_000001.11:g.[300C>T;100G>A;500A>G;200A>C;400T>G]",
-        );
-        expect_phase(&v, AllelePhase::Cis, 5);
+    fn five_way_scrambled_order_sorts_to_ascending() {
+        let out = normalize_to_string("NC_000001.11:g.[300C>T;100G>A;500A>G;200A>C;400T>G]");
+        assert_eq!(out, "NC_000001.11:g.[100G>A;200A>C;300C>T;400T>G;500A>G]");
+        expect_phase(&parse_hgvs(&out).unwrap(), AllelePhase::Cis, 5);
+    }
+
+    /// Order-independence: *every* permutation of the same members normalizes to
+    /// one canonical string — the core guarantee #1098 restores. All 3! = 6
+    /// orderings are generated programmatically (Heap's algorithm) so no
+    /// permutation is silently omitted.
+    #[test]
+    fn all_permutations_normalize_to_same_canonical_string() {
+        let members = ["100G>A", "200A>C", "300C>T"];
+        let canonical = "NC_000001.11:g.[100G>A;200A>C;300C>T]";
+        for perm in permutations(&members) {
+            let input = format!("NC_000001.11:g.[{}]", perm.join(";"));
+            assert_eq!(
+                normalize_to_string(&input),
+                canonical,
+                "input `{input}` must normalize to the canonical genomic order"
+            );
+        }
+    }
+
+    /// All permutations of `items` (Heap's algorithm), each as a `Vec` of the
+    /// original elements. Kept local to the test so no dependency is added.
+    fn permutations<'a>(items: &[&'a str]) -> Vec<Vec<&'a str>> {
+        fn generate<'a>(k: usize, arr: &mut Vec<&'a str>, out: &mut Vec<Vec<&'a str>>) {
+            if k <= 1 {
+                out.push(arr.clone());
+                return;
+            }
+            for i in 0..k {
+                generate(k - 1, arr, out);
+                if k.is_multiple_of(2) {
+                    arr.swap(i, k - 1);
+                } else {
+                    arr.swap(0, k - 1);
+                }
+            }
+        }
+        let mut arr = items.to_vec();
+        let mut out = Vec::new();
+        let n = arr.len();
+        generate(n, &mut arr, &mut out);
+        out
     }
 }
 

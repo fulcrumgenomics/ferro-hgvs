@@ -84,6 +84,37 @@ fn lenient_mode_emits_w5002_warning_and_preserves_input() {
 }
 
 #[test]
+fn lenient_mode_preserves_authored_order_of_conflicting_members() {
+    // #1098/#1101 interaction guard: the genomic-order sort added in #1101 must
+    // NOT reorder an overlap-conflicting cis allele — that would break the
+    // `OverlapConflictingEdits` "preserves input verbatim" contract above.
+    // The `preserves_input` test uses `[100A>C;100A>G]`, which is already in the
+    // sort's order, so it cannot catch a spurious reorder. Use the REVERSED
+    // coincident-bounds input: without the overlap-conflict guard the sort would
+    // canonicalize it to `[100A>C;100A>G]`; with the guard the authored order
+    // survives.
+    let normalizer = Normalizer::with_config(provider(), NormalizeConfig::lenient());
+    let variant = parse_hgvs("NC_000001.11:g.[100A>G;100A>C]").expect("parse");
+    let result = normalizer
+        .normalize_with_diagnostics(&variant)
+        .expect("lenient mode must accept coincident-bounds cis edits");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. })),
+        "expected an OverlapConflict (W5002) warning; got: {:?}",
+        result.warnings.iter().map(|w| w.code()).collect::<Vec<_>>(),
+    );
+    assert_eq!(
+        result.result, variant,
+        "an overlap-conflicting cis allele must keep its authored member order, \
+         not be reordered by the #1098 genomic-order sort; got: {}",
+        result.result,
+    );
+}
+
+#[test]
 fn strict_mode_accepts_non_coincident_cis_edits() {
     // Negative control: cis edits at DIFFERENT positions must not
     // trigger the overlap rejection.

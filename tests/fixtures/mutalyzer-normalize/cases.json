@@ -3545,12 +3545,7 @@
         "note": "ferro emits a per-member SHUFFLE_APPLIED for a genuine 3' shift (e.g. 310del->311del); mutalyzer reports only the allele-level ISORTEDVARIANTS (it sorts/collapses members, ferro preserves order). Both spec-defensible; ferro's shift info is correct. Precedent: #481.",
         "cluster": "shuffle-applied-compound-allele-499"
       },
-      "to_test": true,
-      "spec_citation": {
-        "axis": "normalized",
-        "section": "HGVS §Prioritization",
-        "note": "ferro preserves the input compound-allele member order ([311del;295G>A]); mutalyzer sorts members ([295G>A;311del]). Both spec-valid (the per-member 3' shift 310del->311del is correct). Same #499 divergence the infos-axis accepted_divergence already records for this row; recorded here via spec_citation because a case carries one accepted_divergence slot."
-      }
+      "to_test": true
     },
     {
       "keywords": [],

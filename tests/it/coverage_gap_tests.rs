@@ -712,10 +712,12 @@ mod multi_allele {
         // tandem repeat and 3'-shifts to c.38_40del; the substitution
         // c.10A>G never shifts. Locking the mixed-shift outcome verifies
         // that components are normalized in isolation rather than the
-        // bracket being treated as opaque.
+        // bracket being treated as opaque. The members are then rendered in
+        // genomic order (#1098): the sub at c.10 precedes the shifted
+        // deletion at c.38_40, regardless of the input order.
         let provider = MockProvider::with_test_data();
         let result = normalize(provider, "NM_000088.3:c.[34_36del;10A>G]");
-        assert_eq!(result, "NM_000088.3:c.[38_40del;10A>G]");
+        assert_eq!(result, "NM_000088.3:c.[10A>G;38_40del]");
     }
 }
 
