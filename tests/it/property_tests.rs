@@ -422,6 +422,11 @@ fn protein_substitution() -> impl Strategy<Value = String> {
         amino_acid(),
     )
         .prop_filter("ref != alt", |(_, _, r, _, a)| r != a)
+        // `p.Met1<aa>` is spec-forbidden (protein/substitution.md:49) — a
+        // start-codon variant is described as `p.0` / `p.0?` / `p.(Met1?)`.
+        .prop_filter("not a start-loss substitution", |(_, _, r, pos, _)| {
+            !(*pos == 1 && (*r == "Met" || *r == "M"))
+        })
         .prop_map(|(num, ver, ref_aa, pos, alt_aa)| {
             format!("NP_{}.{}:p.{}{}{}", num, ver, ref_aa, pos, alt_aa)
         })
@@ -437,6 +442,11 @@ fn protein_substitution_single() -> impl Strategy<Value = String> {
         amino_acid_single(),
     )
         .prop_filter("ref != alt", |(_, _, r, _, a)| r != a)
+        // `p.Met1<aa>` is spec-forbidden (protein/substitution.md:49) — a
+        // start-codon variant is described as `p.0` / `p.0?` / `p.(Met1?)`.
+        .prop_filter("not a start-loss substitution", |(_, _, r, pos, _)| {
+            !(*pos == 1 && *r == 'M')
+        })
         .prop_map(|(num, ver, ref_aa, pos, alt_aa)| {
             format!("NP_{}.{}:p.{}{}{}", num, ver, ref_aa, pos, alt_aa)
         })

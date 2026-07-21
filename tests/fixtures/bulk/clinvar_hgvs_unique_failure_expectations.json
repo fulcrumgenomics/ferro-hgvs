@@ -324,6 +324,11 @@
     "[single_position_insertion]": {
       "category": "rejected_by_design",
       "reason": "Single-position insertion is explicitly invalid per DNA/insertion.md:95-101 Q&A; the canonical form requires a 2-position adjacent range (closes #446)."
+    },
+    "[frameshift_immediate_ter]": {
+      "category": "rejected_by_design",
+      "reason": "Frameshift terminating at codon 1 of the shifted frame (`fsTer1`). HGVS protein/frameshift.md:22 states the shortest possible frameshift contains `fsTer2`; a variant introducing an immediate stop is a nonsense substitution (`p.<ref><pos>Ter`), not a frameshift (also protein/substitution.md:20).",
+      "tracking": "#1079"
     }
   },
   "expected_failures": {
@@ -532,6 +537,7 @@
     "NM_000249.3:c.1667+678insALU": "[single_position_insertion]",
     "NM_002485.4:c.842insT": "[single_position_insertion]",
     "NM_003977.2:c.919insC": "[single_position_insertion]",
-    "NM_007294.3:c.3627insA": "[single_position_insertion]"
+    "NM_007294.3:c.3627insA": "[single_position_insertion]",
+    "NP_002476.2:p.Gln279ProfsTer1": "[frameshift_immediate_ter]"
   }
 }

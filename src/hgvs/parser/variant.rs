@@ -7262,6 +7262,11 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // inversion (HGVS DNA/inversion.md:16; #1079).
     validate_no_single_nucleotide_inversion(&variant)?;
 
+    // Spec-mandated post-parse semantic check: reject a frameshift that
+    // terminates immediately (HGVS protein/frameshift.md:22,
+    // protein/substitution.md:20; #1079).
+    validate_no_immediate_ter_frameshift(&variant)?;
+
     // Spec-mandated post-parse semantic check: reject a coding/genomic/mito
     // coordinate system on a non-coding RNA (NR_/XR_) reference (#486,
     // ECOORDINATESYSTEMMISMATCH).
@@ -7667,6 +7672,88 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
         HgvsVariant::Allele(allele) => {
             for inner in &allele.variants {
                 validate_no_point_size_suffix(inner, source)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a frameshift that terminates immediately — `p.Tyr4TerfsTer1`
+/// (#1079).
+///
+/// Per `recommendations/protein/frameshift.md:22`:
+///
+/// > the shortest frameshift variant possible contains `fsTer2`; variants
+/// > which introduce an **immediate** translation termination (stop) codon
+/// > are described as nonsense variant, e.g., `p.Tyr4Ter` (or `p.Tyr4*`) not
+/// > `p.Tyr4TerfsTer1`.
+///
+/// restated from the substitution side in `protein/substitution.md:20`.
+///
+/// Two spellings assert the same impossible thing and both are rejected: a
+/// stop at codon 1 of the shifted frame (`fsTer1`), and a frameshift whose
+/// first new residue is already `Ter` (`p.Tyr4Terfs…`, whatever `Ter#`
+/// follows). `fsTer2` — the spec's stated minimum — and everything above it
+/// are untouched.
+///
+/// The repair is mechanical and the diagnostic names it verbatim
+/// (`p.Tyr4Ter`), but performing it would silently change the edit kind the
+/// author wrote from a frameshift to a substitution, so it is surfaced
+/// rather than applied.
+fn validate_no_immediate_ter_frameshift(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::{FrameshiftTer, ProteinEdit};
+    use crate::hgvs::location::AminoAcid;
+    use crate::hgvs::uncertainty::Mu;
+    use crate::hgvs::variant::ProteinVariant;
+
+    /// True when the edit describes a frameshift that stops at its own first
+    /// codon — either explicitly (`fsTer1`) or by naming `Ter` as the first
+    /// new residue.
+    fn terminates_immediately(edit: &Mu<ProteinEdit>) -> bool {
+        match edit.inner() {
+            Some(ProteinEdit::Frameshift { new_aa, ter }) => {
+                *ter == FrameshiftTer::At(1) || *new_aa == Some(AminoAcid::Ter)
+            }
+            Some(ProteinEdit::FrameshiftAlternatives { alternatives, ter }) => {
+                *ter == FrameshiftTer::At(1) || alternatives.contains(&AminoAcid::Ter)
+            }
+            _ => false,
+        }
+    }
+
+    /// The nonsense description the author should have written: the
+    /// reference residue and position from the location, terminated.
+    fn nonsense_form(v: &ProteinVariant) -> String {
+        match v.loc_edit.location.start.as_single() {
+            Some(Mu::Certain(pos)) => format!("p.{}{}Ter", pos.aa, pos.number),
+            _ => "p.<ref><pos>Ter".to_string(),
+        }
+    }
+
+    match variant {
+        HgvsVariant::Protein(v) if terminates_immediately(&v.loc_edit.edit) => {
+            let canonical = nonsense_form(v);
+            return Err(FerroError::parse_with_diagnostic(
+                0,
+                format!(
+                    "a variant that introduces an immediate translation termination codon is \
+                     a nonsense substitution, not a frameshift; write `{canonical}` \
+                     (protein/frameshift.md:22, protein/substitution.md:20)"
+                ),
+                Diagnostic::new()
+                    .with_code(ErrorCode::InvalidEdit)
+                    .with_suggestion(canonical)
+                    .with_hint(
+                        "the shortest frameshift the spec admits is `fsTer2` — a stop at \
+                         codon 1 of the shifted frame leaves no shifted sequence to describe",
+                    ),
+            ));
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_immediate_ter_frameshift(inner)?;
             }
         }
         _ => {}
