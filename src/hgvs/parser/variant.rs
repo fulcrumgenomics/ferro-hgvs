@@ -7471,17 +7471,138 @@ fn validate_no_dupins(variant: &HgvsVariant) -> Result<(), FerroError> {
     Ok(())
 }
 
-/// Reject insertions whose anchor is a single position rather than a
-/// two-position range. Per `DNA/insertion.md:95-101`:
+/// A position reduced to a `(region, index)` pair so that adjacency can be
+/// decided by integer arithmetic.
 ///
-/// > "Can I describe a variant as `g.123insG`? **No**, since the
-/// > description is not unequivocal, it is not allowed. What does the
-/// > description mean, the insertion of a `G` **at** position `g.123`
-/// > or the insertion of a `G` **after** position `g.123`?"
+/// `region` partitions a coordinate system into stretches that are numbered
+/// contiguously among themselves. Two positions in *different* regions have
+/// no decidable adjacency from the description alone — `c.-1` and `c.1` are
+/// in fact neighbours (there is no `c.0`), and whether `c.100` neighbours
+/// `c.*1` depends on the CDS length — so such pairs are deliberately left
+/// alone rather than guessed at.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct LinearPos {
+    region: u8,
+    index: i64,
+}
+
+/// Reduce a position to a [`LinearPos`], or `None` when adjacency is not
+/// decidable from the description alone (intronic offsets, `pter`/`qter`/
+/// `cen` markers, unknown bases).
+trait Linearize {
+    fn linearize(&self) -> Option<LinearPos>;
+}
+
+impl Linearize for crate::hgvs::location::GenomePos {
+    fn linearize(&self) -> Option<LinearPos> {
+        if self.special.is_some() || self.offset.is_some() {
+            return None;
+        }
+        Some(LinearPos {
+            region: 0,
+            index: i64::try_from(self.base).ok()?,
+        })
+    }
+}
+
+impl Linearize for crate::hgvs::location::CdsPos {
+    fn linearize(&self) -> Option<LinearPos> {
+        use crate::hgvs::location::CDS_BASE_UNKNOWN;
+        if self.special.is_some() || self.offset.is_some() || self.base == CDS_BASE_UNKNOWN {
+            return None;
+        }
+        // 5'UTR (`c.-N`), CDS (`c.N`) and 3'UTR (`c.*N`) are numbered
+        // independently of one another.
+        let region = if self.utr3 {
+            2
+        } else if self.base < 0 {
+            0
+        } else {
+            1
+        };
+        Some(LinearPos {
+            region,
+            index: self.base,
+        })
+    }
+}
+
+impl Linearize for crate::hgvs::location::TxPos {
+    fn linearize(&self) -> Option<LinearPos> {
+        if self.offset.is_some() {
+            return None;
+        }
+        let region = if self.downstream {
+            2
+        } else if self.base < 0 {
+            0
+        } else {
+            1
+        };
+        Some(LinearPos {
+            region,
+            index: self.base,
+        })
+    }
+}
+
+impl Linearize for crate::hgvs::location::RnaPos {
+    fn linearize(&self) -> Option<LinearPos> {
+        if self.offset.is_some() {
+            return None;
+        }
+        let region = if self.utr3 {
+            2
+        } else if self.base < 0 {
+            0
+        } else {
+            1
+        };
+        Some(LinearPos {
+            region,
+            index: self.base,
+        })
+    }
+}
+
+impl Linearize for crate::hgvs::location::ProtPos {
+    fn linearize(&self) -> Option<LinearPos> {
+        Some(LinearPos {
+            region: 0,
+            index: i64::try_from(self.number).ok()?,
+        })
+    }
+}
+
+/// Reject insertions whose anchor is not a pair of **flanking** positions.
 ///
-/// The check walks Allele wrappers and inspects each leaf NaEdit. The
-/// canonical fix for the user is to use `g.123_124insG` (or whatever
-/// adjacent-pair anchor is intended).
+/// Two MUST-level sub-rules, both from the insertion recommendations.
+///
+/// 1. The anchor may not be a **single** position. Per `DNA/insertion.md:95-101`:
+///
+///    > "Can I describe a variant as `g.123insG`? **No**, since the
+///    > description is not unequivocal, it is not allowed. What does the
+///    > description mean, the insertion of a `G` **at** position `g.123`
+///    > or the insertion of a `G` **after** position `g.123`?"
+///
+///    restated for nucleotides in `checklist.md:30-31` and for amino acids
+///    in `protein/insertion.md:18` ("an insertion can not be described using
+///    **one** amino acid position, like `p.Lys23insAsp`").
+///
+/// 2. The two positions must be **adjacent**. Per `DNA/insertion.md:15`
+///    ("`positions flanking` should contain **two flanking nucleotides**,
+///    e.g., `123_124`, not `123_125`") and `protein/insertion.md:17`
+///    (`Lys23_Leu24`, not `Lys23_Asn25`). The formal grammar states this as
+///    a requirement rather than a preference: `syntax.yaml` `dna.ins` notes
+///    "`range` must be specified using adjacent positions" and `aa.ins`
+///    "The position must be specified using adjacent sequence positions".
+///
+/// Both are rejections rather than repairs: given `g.123_125insG` there is
+/// no way to recover which flanking pair the author intended.
+///
+/// The check walks Allele wrappers and inspects each leaf edit. Adjacency is
+/// only enforced where it is decidable from the description alone — see
+/// [`Linearize`].
 fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(), FerroError> {
     use crate::hgvs::edit::NaEdit;
     use crate::hgvs::interval::UncertainBoundary;
@@ -7492,6 +7613,38 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
             (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
             _ => false,
         }
+    }
+
+    /// `true` when both endpoints are certain, plain, in the same region,
+    /// and *not* one apart — i.e. provably not a flanking pair.
+    fn definitely_not_flanking<T: Linearize>(
+        start: &UncertainBoundary<T>,
+        end: &UncertainBoundary<T>,
+    ) -> bool {
+        let (Some(Mu::Certain(s)), Some(Mu::Certain(e))) = (start.as_single(), end.as_single())
+        else {
+            return false;
+        };
+        let (Some(s), Some(e)) = (s.linearize(), e.linearize()) else {
+            return false;
+        };
+        s.region == e.region && e.index != s.index + 1
+    }
+
+    fn make_gap_error(prefix: &str) -> FerroError {
+        use crate::error::{Diagnostic, ErrorCode};
+        // Same structured `InvalidEdit` code as the single-position
+        // refusal, so both survive slash-form fallback paths that would
+        // otherwise mask an unstructured parse error.
+        FerroError::parse_with_diagnostic(
+            0,
+            format!(
+                "insertion anchor positions are not flanking on {prefix}; the two \
+                 positions MUST be adjacent (e.g. {prefix}123_124insATG, not \
+                 {prefix}123_125insATG) per DNA/insertion.md:15"
+            ),
+            Diagnostic::new().with_code(ErrorCode::InvalidEdit),
+        )
     }
     fn is_insertion(edit: &Mu<NaEdit>) -> bool {
         matches!(edit.inner(), Some(NaEdit::Insertion { .. }))
@@ -7513,50 +7666,63 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
         )
     }
 
+    /// Apply both sub-rules to one nucleotide variant's loc/edit pair.
+    macro_rules! check_na_anchor {
+        ($v:expr, $prefix:expr) => {{
+            if is_insertion(&$v.loc_edit.edit) {
+                let start = &$v.loc_edit.location.start;
+                let end = &$v.loc_edit.location.end;
+                if pos_eq(start, end) {
+                    return Err(make_error($prefix));
+                }
+                if definitely_not_flanking(start, end) {
+                    return Err(make_gap_error($prefix));
+                }
+            }
+        }};
+    }
+
     match variant {
-        HgvsVariant::Genome(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("g."));
-        }
-        HgvsVariant::Cds(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("c."));
-        }
-        HgvsVariant::Tx(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("n."));
-        }
-        HgvsVariant::Rna(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("r."));
-        }
-        HgvsVariant::Mt(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("m."));
-        }
-        HgvsVariant::Circular(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("o."));
+        HgvsVariant::Genome(v) => check_na_anchor!(v, "g."),
+        HgvsVariant::Cds(v) => check_na_anchor!(v, "c."),
+        HgvsVariant::Tx(v) => check_na_anchor!(v, "n."),
+        HgvsVariant::Rna(v) => check_na_anchor!(v, "r."),
+        HgvsVariant::Mt(v) => check_na_anchor!(v, "m."),
+        HgvsVariant::Circular(v) => check_na_anchor!(v, "o."),
+        // Protein insertions carry the single-position rule, restated for
+        // amino acids in `protein/insertion.md:18`.
+        //
+        // The protein *adjacency* half of the rule (`protein/insertion.md:17`
+        // — `Lys23_Leu24`, not `Lys23_Asn25`) is deliberately NOT enforced:
+        // the spec contradicts itself. `protein/alleles.md:61` prints
+        // `p.[Ser68_Ala74insSerGln];[Ser68_Ala74=]` as a valid illustration
+        // of the allele-bracket format, and its insertion anchor spans seven
+        // residues. Enforcing adjacency here would make ferro reject a
+        // description the spec itself publishes unmarked, so the narrower
+        // reading wins until the ambiguity is resolved upstream. The
+        // nucleotide axes carry no such contradicting example and are
+        // enforced above.
+        HgvsVariant::Protein(v) => {
+            use crate::error::{Diagnostic, ErrorCode};
+            use crate::hgvs::edit::ProteinEdit;
+
+            if matches!(v.loc_edit.edit.inner(), Some(ProteinEdit::Insertion { .. }))
+                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end)
+            {
+                return Err(FerroError::parse_with_diagnostic(
+                    0,
+                    "single-position insertion not allowed on p.; the anchor MUST be \
+                     two flanking residues (e.g. p.Lys23_Leu24insAsp, not \
+                     p.Lys23insAsp) per protein/insertion.md:18",
+                    Diagnostic::new().with_code(ErrorCode::InvalidEdit),
+                ));
+            }
         }
         HgvsVariant::Allele(allele) => {
             for inner in &allele.variants {
                 validate_no_point_insertion(inner, _source)?;
             }
         }
-        // Protein insertions use a different anchor model — handled
-        // elsewhere; nothing to validate here.
         _ => {}
     }
     Ok(())
@@ -9602,11 +9768,15 @@ mod tests {
     fn test_parse_reverse_order_intervals() {
         // Reverse order intervals - where start > end (used for structural variants)
         // Feature 15: Reverse order intervals
-        let variant =
-            parse_variant("NC_000011.10:g.5238138_5153222insTATTT").expect("should parse");
-        assert_eq!(
-            variant.to_string(),
-            "NC_000011.10:g.5238138_5153222insTATTT"
+        //
+        // The reversed *insertion* is the one exception: an insertion anchor
+        // MUST name two flanking positions listed 5' to 3'
+        // (`DNA/insertion.md:15-16`), so `g.5238138_5153222insTATTT` — 85 kb
+        // apart and descending — is refused rather than round-tripped (#1079).
+        // Reversed del/dup anchors carry no such rule and still parse.
+        assert!(
+            parse_variant("NC_000011.10:g.5238138_5153222insTATTT").is_err(),
+            "a reversed, non-flanking insertion anchor must be rejected"
         );
 
         let variant = parse_variant("NC_000012.11:g.110593351_110576466dup").expect("should parse");

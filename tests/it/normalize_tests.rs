@@ -1757,10 +1757,11 @@ mod clinvar_normalization {
 
     #[rstest]
     // Insertions at antisense/inverted positions
-    #[case(
-        "NC_000011.10:g.5238138_5153222insTATTT",
-        "NC_000011.10:g.5238138_5153222insTATTT"
-    )]
+    // NOTE: `NC_000011.10:g.5238138_5153222insTATTT` used to be the first
+    // case here. Since #1079 the parser refuses it — an insertion anchor MUST
+    // name two flanking positions listed 5' to 3' (`DNA/insertion.md:15-16`)
+    // — so it never reaches normalization. Rejection coverage lives in
+    // `issue_1079_flanking_insertion_anchor.rs`.
     // NG uncertain position variants
     #[case(
         "NG_011403.2:g.(80027_96047)_(99154_121150)del",

@@ -91,6 +91,7 @@ mod issue_1044_mito_window_clamp;
 mod issue_1046_generator_gitdir_leak;
 mod issue_1052_substitution_refseq;
 mod issue_1063_preserve_uncertain_wrapper;
+mod issue_1079_flanking_insertion_anchor;
 mod issue_1079_immediate_ter_frameshift;
 mod issue_1079_multibase_substitution;
 mod issue_1079_point_size_suffix;

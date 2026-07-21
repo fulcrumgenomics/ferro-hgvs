@@ -425,10 +425,11 @@ fn test_expected_parse_errors(#[case] input: &str, #[case] _description: &str) {
     "NC_000016.9:g.23634775_23621090dup",
     "NC_000016.9:g.23634775_23621090dup"
 )]
-#[case(
-    "NC_000011.10:g.5238138_5153222insTATTT",
-    "NC_000011.10:g.5238138_5153222insTATTT"
-)]
+// NOTE: the sibling ClinVar record `NC_000011.10:g.5238138_5153222insTATTT`
+// used to live here. Since #1079 it is refused: an insertion anchor MUST name
+// two flanking positions listed 5' to 3' (`DNA/insertion.md:15-16`), and this
+// one is descending and 85 kb wide. See
+// `issue_1079_flanking_insertion_anchor.rs` for the rejection coverage.
 // Unknown variant
 #[case("NM_001412270.1:c.?dup", "NM_001412270.1:c.?dup")]
 // Embedded accession insertions

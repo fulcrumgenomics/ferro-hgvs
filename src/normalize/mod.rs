@@ -10900,11 +10900,22 @@ mod tests {
         // Regression: ClinVar pattern NC_000011.10:g.5238138_5153222insTATTT
         // has start > end (inverted range).  Previously caused a panic in
         // insertion_is_duplication due to slice index out of bounds.
-        // The normalizer should return an error, not panic.
+        //
+        // Since #1079 the description never reaches the normalizer at all:
+        // an insertion anchor MUST name two flanking positions listed 5' to
+        // 3' (`DNA/insertion.md:15-16`), so the parser refuses it up front.
+        // That is a strictly stronger guarantee than "does not panic", but
+        // keep the normalizer half exercised on a legal inverted-range edit
+        // so the original slice-indexing regression stays covered.
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
 
-        let variant = parse_hgvs("NC_000011.10:g.5238138_5153222insTATTT").unwrap();
+        assert!(
+            parse_hgvs("NC_000011.10:g.5238138_5153222insTATTT").is_err(),
+            "non-flanking insertion anchor must be refused at parse time"
+        );
+
+        let variant = parse_hgvs("NC_000011.10:g.5238138_5153222dup").unwrap();
         let result = normalizer.normalize(&variant);
         // It's fine if this returns Ok (unchanged) or Err (validation failure),
         // but it must NOT panic.
