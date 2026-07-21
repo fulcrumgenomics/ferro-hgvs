@@ -88,7 +88,11 @@ fn shortest_legal_frameshift_still_parses() {
         "NP_003997.1:p.Glu5ValfsTer5",
         "NP_003997.1:p.Ile327ArgfsTer?",
         "NP_003997.1:p.Arg97fs",
-        "NP_003997.1:p.His150HisfsTer10",
+        // NB: `p.His150HisfsTer10` was previously listed here as "legal" — it
+        // clears the immediate-stop rule (`Ter10` ≥ `Ter2`) but violates the
+        // frameshift-anchor rule (`His150→His` is unchanged; frameshift.md:47-49).
+        // It is now rejected by `validate_no_unchanged_anchor_frameshift`
+        // (see issue_1079_unchanged_anchor_frameshift).
     ] {
         assert!(
             parse_hgvs(input).is_ok(),
