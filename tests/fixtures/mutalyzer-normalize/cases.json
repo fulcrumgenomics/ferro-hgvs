@@ -4884,6 +4884,141 @@
         "ICORRECTEDSELECTORID"
       ],
       "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame delins spanning a codon boundary (WT1)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_variant -> build_inframe_delins (in-frame delins that introduces no premature stop) in src/project/protein/indel.rs."
+      ],
+      "input": "NM_024426.4:c.1234_1239delinsAAAGGG",
+      "protein_description": "NP_077744.3:p.(Ser412_Arg413delinsLysGly)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame delins spanning a codon boundary (FH)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_variant -> build_inframe_delins (in-frame delins that introduces no premature stop) in src/project/protein/indel.rs."
+      ],
+      "input": "NM_000143.3:c.401_403delinsGGG",
+      "protein_description": "NP_000134.2:p.(Asp134_His135delinsGlyAsp)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame delins spanning a codon boundary (SDHD)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_variant -> build_inframe_delins (in-frame delins that introduces no premature stop) in src/project/protein/indel.rs."
+      ],
+      "input": "NM_003002.4:c.203_208delinsGGGGGG",
+      "protein_description": "NP_002993.1:p.(Ser68_Arg70delinsArgGlyGly)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame tandem duplication (CDKN2A)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_duplication in src/project/protein/indel.rs."
+      ],
+      "input": "NM_000077.4:c.100_102dup",
+      "protein_description": "NP_000068.1:p.(Ala34dup)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame tandem duplication (TIMM8B)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_duplication in src/project/protein/indel.rs."
+      ],
+      "input": "NM_012459.2:c.109_111dup",
+      "protein_description": "NP_036591.2:p.(Lys37dup)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: in-frame tandem duplication (PCCB)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets build_inframe_duplication in src/project/protein/indel.rs."
+      ],
+      "input": "NM_000532.5:c.106_108dup",
+      "protein_description": "NP_000523.2:p.(Asn36dup)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: codon-boundary insertion (SHH)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Verifies a genuine (non-tandem) in-frame insertion in src/project/protein/indel.rs is reported as an insertion, not mis-rewritten as a duplication."
+      ],
+      "input": "NM_000193.2:c.117_118insGGGTTT",
+      "protein_description": "NP_000184.1:p.(Leu39_Thr40insGlyPhe)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: codon-boundary insertion (BMP1)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Verifies a genuine (non-tandem) in-frame insertion in src/project/protein/indel.rs is reported as an insertion, not mis-rewritten as a duplication."
+      ],
+      "input": "NM_001199.3:c.105_106insAAACCC",
+      "protein_description": "NP_001190.1:p.(Glu35_Asp36insLysPro)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: tandem-duplication insertion (VSIR)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets the duplication-over-insertion prioritisation path (protein_tandem_dup_range positive branch) in src/project/protein/indel.rs: the inserted bases are a tandem copy of the immediately preceding codon, so a spec-compliant normalizer must rewrite the insertion as a duplication."
+      ],
+      "input": "NM_022153.2:c.99_100insTTC",
+      "protein_description": "NP_071436.1:p.(Phe33dup)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: nonsense substitution (WT1)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets predict_substitution_protein in src/project/protein/substitution.rs."
+      ],
+      "input": "NM_024426.4:c.421A>T",
+      "protein_description": "NP_077744.3:p.(Lys141Ter)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: nonsense substitution (FH)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets predict_substitution_protein in src/project/protein/substitution.rs."
+      ],
+      "input": "NM_000143.3:c.322C>T",
+      "protein_description": "NP_000134.2:p.(Gln108Ter)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: nonsense substitution (MECP2)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets predict_substitution_protein in src/project/protein/substitution.rs."
+      ],
+      "input": "NM_004992.3:c.244A>T",
+      "protein_description": "NP_004983.1:p.(Lys82Ter)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: frameshift deletion (KIF1A)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets the frameshift Ter-count path in src/project/protein/indel.rs: a single-base deletion whose new stop lands at the shortest legal count, fsTer2."
+      ],
+      "input": "NM_004321.7:c.1500del",
+      "protein_description": "NP_004312.2:p.(Pro501ArgfsTer2)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: frameshift deletion (CDH23)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets the frameshift Ter-count path in src/project/protein/indel.rs: a double-base deletion whose new stop lands well downstream (fsTer94)."
+      ],
+      "input": "NM_022124.6:c.3005_3006del",
+      "protein_description": "NP_071407.4:p.(Ser1003CysfsTer94)",
+      "to_test": true
+    },
+    {
+      "keywords": [
+        "ferro-hand-derived: frameshift deletion (USH2A)",
+        "Derived from the pinned comparator mutalyzer 3.1.1 / mutalyzer-hgvs-parser 0.4.0 per comparator_provenance.note; NOT from upstream variants_set.py. Targets the frameshift Ter-count path in src/project/protein/indel.rs: a single-base deletion whose new stop lands mid-range (fsTer12)."
+      ],
+      "input": "NM_206933.2:c.5000del",
+      "protein_description": "NP_996816.2:p.(Gly1668ValfsTer12)",
+      "to_test": true
     }
   ]
 }
