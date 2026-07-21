@@ -124,9 +124,18 @@ fn amino_acid_single() -> impl Strategy<Value = char> {
     ]
 }
 
-/// Generate amino acid sequence (1-5 residues)
-fn amino_acid_sequence() -> impl Strategy<Value = String> {
-    prop::collection::vec(amino_acid(), 1..=5).prop_map(|v| v.join(""))
+/// Generate an *inserted* peptide (1-5 residues), truncated at its first
+/// `Ter`. HGVS protein/delins.md:45 and protein/insertion.md:43 forbid
+/// listing amino acids after the translation termination codon, so a
+/// sequence with residues past a `Ter` is not a valid inserted peptide.
+fn inserted_peptide() -> impl Strategy<Value = String> {
+    prop::collection::vec(amino_acid(), 1..=5).prop_map(|v| {
+        let end = v
+            .iter()
+            .position(|aa| *aa == "Ter")
+            .map_or(v.len(), |i| i + 1);
+        v[..end].join("")
+    })
 }
 
 // =============================================================================
@@ -495,7 +504,7 @@ fn protein_insertion() -> impl Strategy<Value = String> {
         amino_acid(),
         1..500u64,
         amino_acid(),
-        amino_acid_sequence(),
+        inserted_peptide(),
     )
         .prop_map(|(num, ver, aa1, pos1, aa2, seq)| {
             format!(
@@ -520,7 +529,7 @@ fn protein_delins() -> impl Strategy<Value = String> {
         1..500u64,
         amino_acid(),
         1..10u64,
-        amino_acid_sequence(),
+        inserted_peptide(),
     )
         .prop_map(|(num, ver, aa1, pos1, aa2, len, seq)| {
             format!(

@@ -7267,6 +7267,11 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // protein/substitution.md:20; #1079).
     validate_no_immediate_ter_frameshift(&variant)?;
 
+    // Spec-mandated post-parse semantic check: reject residues listed after
+    // a translation stop in an inserted peptide (HGVS protein/delins.md:45,
+    // protein/insertion.md:43; #1079).
+    validate_no_residues_after_stop(&variant)?;
+
     // Spec-mandated post-parse semantic check: reject a coding/genomic/mito
     // coordinate system on a non-coding RNA (NR_/XR_) reference (#486,
     // ECOORDINATESYSTEMMISMATCH).
@@ -7672,6 +7677,85 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
         HgvsVariant::Allele(allele) => {
             for inner in &allele.variants {
                 validate_no_point_size_suffix(inner, source)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject amino acids listed *after* a translation stop in an inserted
+/// peptide — `p.Cys5_Ser6delinsTerGluAsp` (#1079).
+///
+/// Per `recommendations/protein/delins.md:45`:
+///
+/// > the deletion-insertion is not described as `delinsSerSerTerAlaAsp`,
+/// > amino acids after the translation termination codon are **not** listed.
+///
+/// and identically for insertions in `recommendations/protein/insertion.md:43`.
+/// Translation stops at the first `Ter`, so residues written after it are not
+/// part of any protein product — the description names a sequence that cannot
+/// exist.
+///
+/// Truncating at the first `Ter` is mechanical and the diagnostic names the
+/// result, but it is not applied automatically: when the insert *begins* with
+/// `Ter` the spec's own correct description is a nonsense substitution at the
+/// preceding residue (`protein/substitution.md:20`), which needs the
+/// reference sequence, so truncating would swap one non-canonical description
+/// for another.
+///
+/// The `insTer<n>` / `ins*<n>` form gives the stop's position inside the
+/// insertion rather than spelling residues out, so nothing can follow the
+/// stop and it is untouched.
+fn validate_no_residues_after_stop(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::{AminoAcidSeq, ProteinEdit, ProteinInsSeq};
+    use crate::hgvs::location::AminoAcid;
+    use crate::hgvs::uncertainty::Mu;
+
+    /// The peptide truncated at (and including) its first `Ter`, or `None`
+    /// when nothing follows the stop.
+    fn truncated_at_first_stop(seq: &AminoAcidSeq) -> Option<AminoAcidSeq> {
+        let first_stop = seq.0.iter().position(|aa| *aa == AminoAcid::Ter)?;
+        (first_stop + 1 < seq.0.len()).then(|| AminoAcidSeq::new(seq.0[..=first_stop].to_vec()))
+    }
+
+    fn offending_peptide(edit: &Mu<ProteinEdit>) -> Option<(&'static str, AminoAcidSeq)> {
+        match edit.inner() {
+            Some(ProteinEdit::Delins { sequence }) => {
+                truncated_at_first_stop(sequence).map(|t| ("delins", t))
+            }
+            Some(ProteinEdit::Insertion {
+                sequence: ProteinInsSeq::Literal(sequence),
+            }) => truncated_at_first_stop(sequence).map(|t| ("ins", t)),
+            _ => None,
+        }
+    }
+
+    match variant {
+        HgvsVariant::Protein(v) => {
+            if let Some((keyword, truncated)) = offending_peptide(&v.loc_edit.edit) {
+                let canonical = format!("{keyword}{truncated}");
+                return Err(FerroError::parse_with_diagnostic(
+                    0,
+                    format!(
+                        "amino acids after the translation termination codon are not listed; \
+                         the inserted peptide ends at its first `Ter`, so write `{canonical}` \
+                         (protein/delins.md:45, protein/insertion.md:43)"
+                    ),
+                    Diagnostic::new()
+                        .with_code(ErrorCode::InvalidEdit)
+                        .with_suggestion(canonical)
+                        .with_hint(
+                            "translation stops at the first `Ter`, so residues written after \
+                             it are not part of any protein product",
+                        ),
+                ));
+            }
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_residues_after_stop(inner)?;
             }
         }
         _ => {}
