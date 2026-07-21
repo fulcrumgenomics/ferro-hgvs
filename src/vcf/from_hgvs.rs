@@ -1705,6 +1705,7 @@ mod tests {
                     sequence: InsertedSequence::Literal(Sequence::from_str("UU").unwrap()),
                     deleted: None,
                     deleted_length: None,
+                    substitution_reference: None,
                 },
             ),
         });
@@ -2347,6 +2348,7 @@ mod tests {
                     sequence: InsertedSequence::Literal(Sequence::from_str("TTT").unwrap()),
                     deleted: None,
                     deleted_length: None,
+                    substitution_reference: None,
                 },
             ),
         });

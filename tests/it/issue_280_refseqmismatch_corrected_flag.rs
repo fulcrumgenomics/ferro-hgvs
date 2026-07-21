@@ -373,7 +373,7 @@ mod delins_mismatched_stated_ref {
 // SECTION 7 — Numeric del<N> length mismatch → corrected: true
 // =============================================================================
 //
-// `c.5del4` (single position, span 1) states length 4 → the Deletion arm's
+// `c.5_6del4` (span 2) states length 4 → the Deletion arm's
 // numeric-length check (#486) fires a RefSeqMismatch. `canonicalize_edit`
 // strips `length`, so the `corrected` flag is honest at `true`.
 
@@ -383,7 +383,7 @@ mod del_numeric_length_mismatch {
     #[test]
     fn del_numeric_length_mismatch_corrected_true() {
         let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
-        let v = parse_hgvs("NM_TEST.1:c.5del4").expect("parse");
+        let v = parse_hgvs("NM_TEST.1:c.5_6del4").expect("parse");
         let r = normalizer
             .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");
@@ -400,7 +400,7 @@ mod del_numeric_length_mismatch {
 // SECTION 7b — Numeric dup<N> length mismatch → corrected: true
 // =============================================================================
 //
-// `c.5dup4` (single position, span 1) states length 4 → the Duplication arm's
+// `c.5_6dup4` (span 2) states length 4 → the Duplication arm's
 // numeric-length check (#486) fires a RefSeqMismatch. `canonicalize_edit`
 // strips `length`, so the `corrected` flag is honest at `true`.
 
@@ -410,7 +410,7 @@ mod dup_numeric_length_mismatch {
     #[test]
     fn dup_numeric_length_mismatch_corrected_true() {
         let normalizer = Normalizer::with_config(tx_provider(), NormalizeConfig::lenient());
-        let v = parse_hgvs("NM_TEST.1:c.5dup4").expect("parse");
+        let v = parse_hgvs("NM_TEST.1:c.5_6dup4").expect("parse");
         let r = normalizer
             .normalize_with_diagnostics(&v)
             .expect("normalize must not reject in lenient");

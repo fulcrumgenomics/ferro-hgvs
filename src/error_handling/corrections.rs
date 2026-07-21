@@ -3055,6 +3055,211 @@ fn take_ref_seq_run(bytes: &[u8], pos: usize) -> &str {
     std::str::from_utf8(&bytes[pos..j]).unwrap_or("")
 }
 
+/// Rewrite a deletion written as `<point>del<size>` into the canonical
+/// range form `<point>_<point + size - 1>del` (W3011).
+///
+/// Per HGVS `recommendations/checklist.md:49` the size-suffix form on a
+/// single-position anchor is **not allowed**:
+///
+/// > Descriptions like `g.123del3` are not allowed, correct is `g.123_125del`.
+///
+/// The spec states the replacement outright, so the repair is mechanical: a
+/// size `N` deletion anchored at `p` spans `p`..`p + N - 1`. `del1` collapses
+/// to a plain `del` (a single residue needs no range).
+///
+/// Only a **plain** point anchor is rewritten — the digit run must be
+/// preceded by the coordinate-prefix `.` (`g.123del3`, `c.76del3`) or an
+/// allele-member boundary `[` / `;` (`c.[123del3;200del4]`), so each member
+/// of a compound allele is repaired the same way a standalone description is.
+/// That deliberately excludes every anchor whose arithmetic is not a simple
+/// increment: range endpoints (`_102del3`), intronic offsets (`+5del3`),
+/// UTR positions (`-12del3`, `*10del3`) and uncertain positions
+/// (`(123)del3`). Those keep whatever behaviour their own rule prescribes.
+/// The rewrite is coordinate-system agnostic — `p + N - 1` holds on every
+/// axis — so no coordinate context needs to be tracked across the members.
+///
+/// Returns the rewritten string plus one [`DetectedCorrection`] per rewrite,
+/// spanning the whole `<point>del<size>` token.
+pub fn correct_point_del_size_suffix(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection>) {
+    let mut corrections = Vec::new();
+    let bytes = input.as_bytes();
+    if !has_non_protein_description(bytes) || !input.contains("del") {
+        return (Cow::Borrowed(input), corrections);
+    }
+
+    let mut result = String::new();
+    let mut last_copied = 0usize;
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"del" {
+            i += 1;
+            continue;
+        }
+        // `delins` is a different edit; skip past it.
+        if bytes.get(i + 3..i + 6) == Some(b"ins") {
+            i += 6;
+            continue;
+        }
+        let Some(token) = point_size_token(input, i, 3) else {
+            i += 3;
+            continue;
+        };
+        let replacement = format!("{}_{}del", token.position, token.position + token.size - 1);
+        corrections.push(DetectedCorrection::new(
+            ErrorType::DelSizeSuffix,
+            &input[token.start..token.end],
+            replacement.clone(),
+            token.start,
+            token.end,
+        ));
+        result.push_str(&input[last_copied..token.start]);
+        result.push_str(&replacement);
+        last_copied = token.end;
+        i = token.end;
+    }
+
+    if corrections.is_empty() {
+        (Cow::Borrowed(input), corrections)
+    } else {
+        result.push_str(&input[last_copied..]);
+        (Cow::Owned(result), corrections)
+    }
+}
+
+/// A `<point><keyword><size>` token located in the input (e.g. `123del3`).
+struct PointSizeToken {
+    /// Byte offset of the first digit of the anchor position.
+    start: usize,
+    /// Byte offset one past the last digit of the size suffix.
+    end: usize,
+    /// The anchor position.
+    position: u64,
+    /// The size suffix.
+    size: u64,
+}
+
+/// Recognize `<point><keyword><size>` at `keyword_start`, where `keyword_len`
+/// is the length of the edit keyword (`del`/`dup`).
+///
+/// Returns `None` unless the anchor is a plain point position written
+/// directly after the coordinate-prefix `.` or an allele-member boundary
+/// (`[` / `;`), and the size suffix is a non-zero integer terminated by a
+/// top-level boundary.
+fn point_size_token(
+    input: &str,
+    keyword_start: usize,
+    keyword_len: usize,
+) -> Option<PointSizeToken> {
+    let bytes = input.as_bytes();
+
+    // Anchor: a digit run immediately before the keyword, itself immediately
+    // preceded by the coordinate-system `.` separator or an allele-member
+    // boundary (`[` opens the first member, `;` separates the rest). The
+    // boundary set is deliberately narrow: `_` (range endpoint), `+`/`-`/`*`
+    // (intronic/UTR offsets) and `(` (uncertain) all stay excluded, since
+    // their end position is not a plain `p + N - 1` increment.
+    let mut pos_start = keyword_start;
+    while pos_start > 0 && bytes[pos_start - 1].is_ascii_digit() {
+        pos_start -= 1;
+    }
+    if pos_start == keyword_start
+        || pos_start == 0
+        || !matches!(bytes[pos_start - 1], b'.' | b'[' | b';')
+    {
+        return None;
+    }
+
+    // Size: a digit run immediately after the keyword, ending at a boundary.
+    let size_start = keyword_start + keyword_len;
+    let mut size_end = size_start;
+    while size_end < bytes.len() && bytes[size_end].is_ascii_digit() {
+        size_end += 1;
+    }
+    if size_end == size_start {
+        return None;
+    }
+    let terminated = bytes
+        .get(size_end)
+        .is_none_or(|b| *b == b')' || *b == b';' || *b == b']' || b.is_ascii_whitespace());
+    if !terminated {
+        return None;
+    }
+
+    let position: u64 = input[pos_start..keyword_start].parse().ok()?;
+    let size: u64 = input[size_start..size_end].parse().ok()?;
+    // The rule targets a description "of more than one residue" that fails to
+    // name both endpoints (`DNA/deletion.md:117`). A size of one names exactly
+    // the anchor residue, so it is merely redundant, not incomplete, and stays
+    // a soft W3011 concern.
+    if size < 2 {
+        return None;
+    }
+    // The canonical range end is `position + size - 1`. A value that cannot be
+    // represented as a `u64` is not a real coordinate, so decline to rewrite
+    // (the anchor is still rejected downstream by `validate_no_point_size_suffix`)
+    // rather than overflow the arithmetic at the `format!` site below.
+    position.checked_add(size - 1)?;
+    Some(PointSizeToken {
+        start: pos_start,
+        end: size_end,
+        position,
+        size,
+    })
+}
+
+/// Suggest the canonical range form for a `<point>del<size>` description.
+///
+/// Returns `None` when `input` carries no rewritable point deletion (e.g. it
+/// is a `dup`, or the anchor is intronic). Used by the parser's spec-rule
+/// diagnostic so the rejection message can name the exact repair.
+pub fn suggest_point_del_range_form(input: &str) -> Option<String> {
+    let (rewritten, corrections) = correct_point_del_size_suffix(input);
+    (!corrections.is_empty()).then(|| rewritten.into_owned())
+}
+
+/// Count the reference bases a rewritten substitution named before its `>`.
+///
+/// The `original` of an [`ErrorType::OldSubstitutionSyntax`] correction has
+/// the shape `<pos>[_<pos>]<ref>*><alt>+`, so the reference run is the IUPAC
+/// bases immediately preceding the arrow; the position digits terminate it.
+fn substitution_ref_run(original: &str) -> &str {
+    match original.find('>') {
+        Some(arrow) => {
+            let lhs = &original[..arrow];
+            let start = lhs.len() - lhs.chars().rev().take_while(|c| is_iupac_base(*c)).count();
+            &lhs[start..]
+        }
+        None => "",
+    }
+}
+
+/// The reference run a deprecated `<pos>[_<pos>]<ref>><alt>` description
+/// states, when `input` holds exactly one such description and it names at
+/// least one reference base.
+///
+/// The preprocessor rewrites that spelling to the canonical `delins` **text**
+/// before the parser ever sees it (`c.79_80GC>TT` → `c.79_80delinsTT`), which
+/// is what drops the stated `GC` on the lenient/silent path. This lets the
+/// parse seam put the run back into the AST so `validate_reference` can check
+/// the claim (#1092) — a false claim must produce a diagnostic, not vanish.
+///
+/// Deliberately conservative: `None` unless there is exactly one such
+/// correction, so the run can be attributed to exactly one edit without
+/// guessing. The no-reference form (`c.100_102>ATG`) states no bases and
+/// yields `None`.
+pub fn stated_substitution_reference(input: &str) -> Option<String> {
+    let (_, corrections) = correct_old_substitution_syntax(input);
+    let mut subs = corrections
+        .iter()
+        .filter(|c| c.error_type == ErrorType::OldSubstitutionSyntax);
+    let only = subs.next()?;
+    if subs.next().is_some() {
+        return None;
+    }
+    let run = substitution_ref_run(&only.original);
+    (!run.is_empty()).then(|| run.to_string())
+}
+
 pub fn detect_del_size_suffix(input: &str) -> Vec<DetectedCorrection> {
     let mut hits = Vec::new();
     let bytes = input.as_bytes();
@@ -4912,6 +5117,34 @@ mod tests {
         assert_eq!(hits.len(), 2, "expected two W3023 hits in bracket allele");
         assert_eq!(hits[0].original, "dup2");
         assert_eq!(hits[1].original, "dup4");
+    }
+
+    #[test]
+    fn test_correct_point_del_size_suffix_rewrites_compound_allele_members() {
+        // Each `del<N>` member of a compound allele is repaired like a
+        // standalone description: the first anchor is preceded by `[`, the
+        // rest by `;`, and the `p + N - 1` end is coordinate-agnostic.
+        let (out, corrections) = correct_point_del_size_suffix("NM_004006.2:c.[100del3;200del4]");
+        assert_eq!(out, "NM_004006.2:c.[100_102del;200_203del]");
+        assert_eq!(corrections.len(), 2, "both members should be rewritten");
+    }
+
+    #[test]
+    fn test_correct_point_del_size_suffix_leaves_non_plain_anchors() {
+        // A range/intronic/UTR anchor inside a bracket is still excluded — its
+        // end is not a plain increment, so there is no safe rewrite.
+        for untouched in [
+            "NM_004006.2:c.[100_102del3;200del4]", // range endpoint member
+            "NM_004006.2:c.[100+5del3;200del4]",   // intronic member
+        ] {
+            let (out, corrections) = correct_point_del_size_suffix(untouched);
+            assert_eq!(
+                corrections.len(),
+                1,
+                "only the plain member is rewritten: {untouched:?}"
+            );
+            assert!(out.contains("200_203del"), "plain member rewritten: {out}");
+        }
     }
 
     #[test]

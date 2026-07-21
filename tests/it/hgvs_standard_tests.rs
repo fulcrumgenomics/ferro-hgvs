@@ -286,7 +286,7 @@ mod protein_variants {
             "NP_000138.2:p.G12D",  // KRAS G12D
             "NP_000138.2:p.G12V",  // KRAS G12V
             "NP_004314.2:p.L858R", // EGFR L858R
-            "NP_000079.2:p.M1I",   // Start codon
+            "NP_000079.2:p.M2I",   // Second residue
             "NP_000079.2:p.R100*", // Nonsense with stop
         ];
 

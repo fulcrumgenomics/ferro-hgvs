@@ -11,14 +11,30 @@ fn test_grammar_substitution() {
     let cases = vec![
         // Basic substitution
         "NC_000001.11:g.12345A>G",
-        // With sequence context
-        "NC_000001.11:g.12345CAT>G",
-        // Multi-base replacement
-        "NC_000001.11:g.12345_12347CAT>GGGG",
+        // Single reference base with a longer replacement
+        "NC_000001.11:g.12345A>GGGG",
     ];
 
     for case in cases {
         assert!(parse_hgvs(case).is_ok(), "Failed to parse: {}", case);
+    }
+}
+
+/// Mutalyzer's grammar accepts a multi-base reference on either side of the
+/// arrow, but the HGVS spec forbids it: a substitution replaces **one**
+/// nucleotide by **one** other (`DNA/substitution.md:30`,
+/// `DNA/delins.md:73`), so the change is a deletion-insertion. Strict parsing
+/// rejects the form; lenient/silent rewrite it (see
+/// `issue_1079_multibase_substitution.rs`).
+#[test]
+fn test_grammar_multibase_substitution_is_rejected() {
+    let cases = vec![
+        "NC_000001.11:g.12345CAT>G",
+        "NC_000001.11:g.12345_12347CAT>GGGG",
+    ];
+
+    for case in cases {
+        assert!(parse_hgvs(case).is_err(), "Should not parse: {}", case);
     }
 }
 

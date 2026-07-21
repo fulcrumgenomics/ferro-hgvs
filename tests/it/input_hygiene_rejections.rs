@@ -184,12 +184,12 @@ fn rejects_uppercase_rna_dup_keyword() {
 // at the parse_hgvs API level — pin the divergence.
 
 #[test]
-fn accepts_dup_size_suffix_pre_2016_diverges_from_spec() {
+fn rejects_del_size_suffix_pre_2016() {
     // checklist:C-5 — checklist.md:49 explicitly lists `g.123del3` as
     // invalid (pre-2016 size-suffix form; must be `g.123_125del`).
     // The probe uses `del3` not `dup3` per the checklist citation.
-    assert_accepted_diverges_from_spec(
-        "NC_000023.11:g.123del3",
+    // Enforced since #1079; lenient/silent modes canonicalise instead.
+    assert_rejected(
         "NC_000023.11:g.123del3",
         "checklist.md:49 — pre-2016 size-suffix form, must be g.123_125del",
     );

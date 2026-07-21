@@ -91,6 +91,11 @@
     "[silent_with_repeated_aa]": {
       "category": "rejected_by_design",
       "reason": "Silent should be `p.Trp16=` not `p.Trp16Trp=`."
+    },
+    "[non_flanking_insertion_anchor]": {
+      "category": "rejected_by_design",
+      "reason": "Insertion anchored on two positions that are not flanking (adjacent). HGVS DNA/insertion.md:15 requires the `positions flanking` to be `123_124`, not `123_125`; syntax.yaml `dna.ins` restates it as `range` must be specified using adjacent positions. The intended flanking pair is not recoverable, so no repair is derivable; a wide anchor is a deletion-insertion (`delins`), not an insertion.",
+      "tracking": "#1079"
     }
   },
   "expected_failures": {
@@ -138,6 +143,8 @@
     "NP_000021.1:p.Gly_142Gln145del": "[malformed_protein_underscore_between_aa_and_pos]",
     "NP_000539.2:p.Cys189_Tyr190delinsCysPheThrfs": "[trailing_fs_after_delins]",
     "NP_004534?.2:p.Arg2478_Asp2512del": "[malformed_question_mark_in_accession]",
-    "NP_065231.3:p.Trp16Trp=": "[silent_with_repeated_aa]"
+    "NP_065231.3:p.Trp16Trp=": "[silent_with_repeated_aa]",
+    "NM_000061.3:c.418_424insSVA": "[non_flanking_insertion_anchor]",
+    "NM_000548.3:c.[4621_4629del9;4621_4634ins14]": "[non_flanking_insertion_anchor]"
   }
 }

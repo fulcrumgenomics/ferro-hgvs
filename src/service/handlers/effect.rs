@@ -2181,6 +2181,7 @@ mod tests {
             sequence: InsertedSequence::Range(5, 10),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         assert!(
             delins_frame_undecidable(&edit, Some(3)),
@@ -2198,6 +2199,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::new(vec![Base::A])),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         assert!(
             delins_frame_undecidable(&edit, None),
@@ -2214,6 +2216,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::new(vec![Base::A, Base::T])),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         assert!(
             !delins_frame_undecidable(&edit, Some(3)),

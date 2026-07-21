@@ -124,6 +124,7 @@ fn plus_strand_delins_u_in_both_translates_both() {
         sequence: InsertedSequence::Literal("CU".parse::<Sequence>().unwrap()),
         deleted: Some("AUU".parse::<Sequence>().unwrap()),
         deleted_length: None,
+        substitution_reference: None,
     };
     let g_edit = transform_edit_for_strand(&r_edit, Strand::Plus);
     let expected_del: Sequence = "ATT".parse().unwrap();

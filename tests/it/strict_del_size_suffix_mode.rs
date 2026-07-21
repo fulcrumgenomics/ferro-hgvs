@@ -5,11 +5,13 @@
 //! > `g.123del3` is invalid: pre-2016 size-suffix form. Must be
 //! > `g.123_125del`.
 //!
-//! ferro's default `parse_hgvs` is **lenient** — it accepts the legacy
-//! form, round-trips it (preserving the `<N>` as `NaEdit::Deletion.length`),
-//! and emits W3011 (DelSizeSuffix) as a non-rewriting warning. ferro cannot
-//! synthesise the end position safely because offset/intronic semantics
-//! defeat naive `start + length - 1` arithmetic.
+//! Since #1079 the default `parse_hgvs` **rejects** the form outright when
+//! the anchor is a single position (the spec's prohibition is MUST-level),
+//! and lenient/silent modes canonicalise it to the range form the spec
+//! states. An offset/intronic anchor is rejected in every mode: the form is
+//! just as forbidden (it names one endpoint of a multi-residue deletion), but
+//! `start + length - 1` arithmetic is not safe there, so no rewrite can be
+//! offered.
 //!
 //! For callers that want strict spec conformance, override
 //! `ErrorType::DelSizeSuffix` to `Reject` on the config:
@@ -67,8 +69,8 @@ fn assert_lenient_accepts(input: &str, expected_display: &str) {
 
 /// Like [`assert_lenient_accepts`], but for the legacy `del<N>` size-count
 /// form: lenient mode must accept AND surface the W3011/DelSizeSuffix
-/// warning (non-rewriting). Acceptance alone would miss a regression
-/// where `del<N>` is silently accepted with the flag dropped.
+/// warning. Acceptance alone would miss a regression where `del<N>` is
+/// silently repaired with the flag dropped.
 fn assert_lenient_accepts_with_size_warning(input: &str, expected_display: &str) {
     let out = parse_hgvs_with_config(input, lenient())
         .unwrap_or_else(|e| panic!("lenient must accept {input:?}: {e}"));
@@ -123,23 +125,35 @@ fn strict_rejects_large_size_count() {
 }
 
 // =====================================================================
-// Default lenient mode accepts `del<N>` (existing intentional behavior —
-// preserved for interop with real-world ClinVar / pre-2016 submissions)
+// Lenient mode canonicalises `del<N>` at a point anchor to the range form
+// (#1079) and still warns; intronic anchors are rejected in every mode
+// (no safe rewrite) — see `lenient_rejects_intronic_del_size_suffix`
 // =====================================================================
 
 #[test]
-fn lenient_accepts_genomic_del_size_suffix() {
-    assert_lenient_accepts_with_size_warning("NG_012232.1:g.123del6", "NG_012232.1:g.123del6");
+fn lenient_canonicalises_genomic_del_size_suffix() {
+    assert_lenient_accepts_with_size_warning("NG_012232.1:g.123del6", "NG_012232.1:g.123_128del");
 }
 
 #[test]
-fn lenient_accepts_cds_del_size_suffix() {
-    assert_lenient_accepts_with_size_warning("NM_004006.2:c.76del3", "NM_004006.2:c.76del3");
+fn lenient_canonicalises_cds_del_size_suffix() {
+    assert_lenient_accepts_with_size_warning("NM_004006.2:c.76del3", "NM_004006.2:c.76_78del");
 }
 
 #[test]
-fn lenient_accepts_mito_del_size_suffix() {
-    assert_lenient_accepts_with_size_warning("NC_012920.1:m.3243del4", "NC_012920.1:m.3243del4");
+fn lenient_canonicalises_mito_del_size_suffix() {
+    assert_lenient_accepts_with_size_warning(
+        "NC_012920.1:m.3243del4",
+        "NC_012920.1:m.3243_3246del",
+    );
+}
+
+/// An intronic anchor is just as forbidden (it names one endpoint), but
+/// `c.100+5 + 6 - 1` is not a position ferro can synthesise safely — so
+/// there is no repair to offer and every mode rejects.
+#[test]
+fn lenient_rejects_intronic_del_size_suffix() {
+    assert!(parse_hgvs_with_config("NM_004006.2:c.100+5del6", lenient()).is_err());
 }
 
 // =====================================================================

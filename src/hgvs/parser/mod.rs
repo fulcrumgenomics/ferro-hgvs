@@ -151,7 +151,17 @@ pub fn parse_hgvs_with_config(
     }
 
     // Parse the preprocessed input
-    let variant = variant::parse_variant(&preprocess_result.preprocessed)?;
+    let mut variant = variant::parse_variant(&preprocess_result.preprocessed)?;
+
+    // Put back the reference run the preprocessor's textual rewrite dropped
+    // (#1092). Lenient/silent turn `c.79_80GC>TT` into the canonical text
+    // `c.79_80delinsTT` before the grammar runs, so the stated `GC` never
+    // reaches the AST and a *false* claim about the reference would disappear
+    // with no diagnostic. Restoring it into the provenance field — which
+    // `Display` ignores, so the repaired output is byte-identical — routes the
+    // claim through the same `validate_reference` check the neighbouring
+    // `delGCinsTT` spelling already gets (#486).
+    restore_stated_substitution_reference(&mut variant, &preprocess_result.original);
 
     // Apply the bracket/allele cardinality conformance rule on the parsed AST
     // (#493). This is a structural rule, identical across all coordinate
@@ -171,6 +181,63 @@ pub fn parse_hgvs_with_config(
         preprocess_result.original,
         preprocess_result.preprocessed,
     ))
+}
+
+/// Restore the reference run stated by a deprecated `<ref>><alt>` description
+/// onto the `Delins` the preprocessor's textual rewrite produced (#1092).
+///
+/// The rewrite happens on the input *string*, so the run is only recoverable
+/// from the original text — this is the one place that is unavoidable, and it
+/// is a repair path, not the conformance rule (which is AST-keyed, see
+/// [`variant::validate_no_multibase_substitution`]).
+///
+/// Deliberately narrow: it fires only for a single non-allele nucleic-acid
+/// variant whose edit is a bare `Delins` (no stated `deleted` / `deleted_length`
+/// and no run already recorded), and only when the original names exactly one
+/// such description. Anything more ambiguous is left alone rather than
+/// attributing a run to the wrong edit.
+fn restore_stated_substitution_reference(variant: &mut HgvsVariant, original: &str) {
+    use crate::error_handling::corrections::stated_substitution_reference;
+    use crate::hgvs::edit::{NaEdit, Sequence};
+    use crate::hgvs::uncertainty::Mu;
+    use std::str::FromStr;
+
+    fn bare_delins_run(edit: &mut Mu<NaEdit>) -> Option<&mut Option<Sequence>> {
+        match edit {
+            Mu::Certain(NaEdit::Delins {
+                deleted: None,
+                deleted_length: None,
+                substitution_reference: slot @ None,
+                ..
+            })
+            | Mu::Uncertain(NaEdit::Delins {
+                deleted: None,
+                deleted_length: None,
+                substitution_reference: slot @ None,
+                ..
+            }) => Some(slot),
+            _ => None,
+        }
+    }
+
+    let Some(run) = stated_substitution_reference(original) else {
+        return;
+    };
+    let Ok(run) = Sequence::from_str(&run) else {
+        return;
+    };
+    let edit = match variant {
+        HgvsVariant::Genome(v) => &mut v.loc_edit.edit,
+        HgvsVariant::Cds(v) => &mut v.loc_edit.edit,
+        HgvsVariant::Tx(v) => &mut v.loc_edit.edit,
+        HgvsVariant::Rna(v) => &mut v.loc_edit.edit,
+        HgvsVariant::Mt(v) => &mut v.loc_edit.edit,
+        HgvsVariant::Circular(v) => &mut v.loc_edit.edit,
+        _ => return,
+    };
+    if let Some(slot) = bare_delins_run(edit) {
+        *slot = Some(run);
+    }
 }
 
 /// Enforce the HGVS bracket/allele cardinality rule on a parsed variant (#493).

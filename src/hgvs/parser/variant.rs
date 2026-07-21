@@ -7248,6 +7248,34 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // insertion (HGVS DNA/insertion.md:95-101 Q&A — explicit "No"; #446).
     validate_no_point_insertion(&variant, input)?;
 
+    // Spec-mandated post-parse semantic check: reject a `del`/`dup` size
+    // suffix on a single-position anchor (HGVS checklist.md:49,
+    // DNA/deletion.md:117, DNA/duplication.md:140, RNA/deletion.md:49; #1079).
+    validate_no_point_size_suffix(&variant, input)?;
+
+    // Spec-mandated post-parse semantic check: reject a multi-nucleotide
+    // substitution (HGVS DNA/substitution.md:30, DNA/delins.md:73; #1079).
+    validate_no_multibase_substitution(&variant)?;
+
+    // Spec-mandated post-parse semantic check: reject a start-codon variant
+    // written as an amino acid substitution (HGVS protein/substitution.md:49,
+    // checklist.md:65; #1079).
+    validate_no_start_loss_substitution(&variant)?;
+
+    // Spec-mandated post-parse semantic check: reject a one-nucleotide
+    // inversion (HGVS DNA/inversion.md:16; #1079).
+    validate_no_single_nucleotide_inversion(&variant)?;
+
+    // Spec-mandated post-parse semantic check: reject a frameshift that
+    // terminates immediately (HGVS protein/frameshift.md:22,
+    // protein/substitution.md:20; #1079).
+    validate_no_immediate_ter_frameshift(&variant)?;
+
+    // Spec-mandated post-parse semantic check: reject residues listed after
+    // a translation stop in an inserted peptide (HGVS protein/delins.md:45,
+    // protein/insertion.md:43; #1079).
+    validate_no_residues_after_stop(&variant)?;
+
     // Spec-mandated post-parse semantic check: reject a coding/genomic/mito
     // coordinate system on a non-coding RNA (NR_/XR_) reference (#486,
     // ECOORDINATESYSTEMMISMATCH).
@@ -7443,17 +7471,138 @@ fn validate_no_dupins(variant: &HgvsVariant) -> Result<(), FerroError> {
     Ok(())
 }
 
-/// Reject insertions whose anchor is a single position rather than a
-/// two-position range. Per `DNA/insertion.md:95-101`:
+/// A position reduced to a `(region, index)` pair so that adjacency can be
+/// decided by integer arithmetic.
 ///
-/// > "Can I describe a variant as `g.123insG`? **No**, since the
-/// > description is not unequivocal, it is not allowed. What does the
-/// > description mean, the insertion of a `G` **at** position `g.123`
-/// > or the insertion of a `G` **after** position `g.123`?"
+/// `region` partitions a coordinate system into stretches that are numbered
+/// contiguously among themselves. Two positions in *different* regions have
+/// no decidable adjacency from the description alone — `c.-1` and `c.1` are
+/// in fact neighbours (there is no `c.0`), and whether `c.100` neighbours
+/// `c.*1` depends on the CDS length — so such pairs are deliberately left
+/// alone rather than guessed at.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct LinearPos {
+    region: u8,
+    index: i64,
+}
+
+/// Reduce a position to a [`LinearPos`], or `None` when adjacency is not
+/// decidable from the description alone (intronic offsets, `pter`/`qter`/
+/// `cen` markers, unknown bases).
+trait Linearize {
+    fn linearize(&self) -> Option<LinearPos>;
+}
+
+impl Linearize for crate::hgvs::location::GenomePos {
+    fn linearize(&self) -> Option<LinearPos> {
+        if self.special.is_some() || self.offset.is_some() {
+            return None;
+        }
+        Some(LinearPos {
+            region: 0,
+            index: i64::try_from(self.base).ok()?,
+        })
+    }
+}
+
+impl Linearize for crate::hgvs::location::CdsPos {
+    fn linearize(&self) -> Option<LinearPos> {
+        use crate::hgvs::location::CDS_BASE_UNKNOWN;
+        if self.special.is_some() || self.offset.is_some() || self.base == CDS_BASE_UNKNOWN {
+            return None;
+        }
+        // 5'UTR (`c.-N`), CDS (`c.N`) and 3'UTR (`c.*N`) are numbered
+        // independently of one another.
+        let region = if self.utr3 {
+            2
+        } else if self.base < 0 {
+            0
+        } else {
+            1
+        };
+        Some(LinearPos {
+            region,
+            index: self.base,
+        })
+    }
+}
+
+impl Linearize for crate::hgvs::location::TxPos {
+    fn linearize(&self) -> Option<LinearPos> {
+        if self.offset.is_some() {
+            return None;
+        }
+        let region = if self.downstream {
+            2
+        } else if self.base < 0 {
+            0
+        } else {
+            1
+        };
+        Some(LinearPos {
+            region,
+            index: self.base,
+        })
+    }
+}
+
+impl Linearize for crate::hgvs::location::RnaPos {
+    fn linearize(&self) -> Option<LinearPos> {
+        if self.offset.is_some() {
+            return None;
+        }
+        let region = if self.utr3 {
+            2
+        } else if self.base < 0 {
+            0
+        } else {
+            1
+        };
+        Some(LinearPos {
+            region,
+            index: self.base,
+        })
+    }
+}
+
+impl Linearize for crate::hgvs::location::ProtPos {
+    fn linearize(&self) -> Option<LinearPos> {
+        Some(LinearPos {
+            region: 0,
+            index: i64::try_from(self.number).ok()?,
+        })
+    }
+}
+
+/// Reject insertions whose anchor is not a pair of **flanking** positions.
 ///
-/// The check walks Allele wrappers and inspects each leaf NaEdit. The
-/// canonical fix for the user is to use `g.123_124insG` (or whatever
-/// adjacent-pair anchor is intended).
+/// Two MUST-level sub-rules, both from the insertion recommendations.
+///
+/// 1. The anchor may not be a **single** position. Per `DNA/insertion.md:95-101`:
+///
+///    > "Can I describe a variant as `g.123insG`? **No**, since the
+///    > description is not unequivocal, it is not allowed. What does the
+///    > description mean, the insertion of a `G` **at** position `g.123`
+///    > or the insertion of a `G` **after** position `g.123`?"
+///
+///    restated for nucleotides in `checklist.md:30-31` and for amino acids
+///    in `protein/insertion.md:18` ("an insertion can not be described using
+///    **one** amino acid position, like `p.Lys23insAsp`").
+///
+/// 2. The two positions must be **adjacent**. Per `DNA/insertion.md:15`
+///    ("`positions flanking` should contain **two flanking nucleotides**,
+///    e.g., `123_124`, not `123_125`") and `protein/insertion.md:17`
+///    (`Lys23_Leu24`, not `Lys23_Asn25`). The formal grammar states this as
+///    a requirement rather than a preference: `syntax.yaml` `dna.ins` notes
+///    "`range` must be specified using adjacent positions" and `aa.ins`
+///    "The position must be specified using adjacent sequence positions".
+///
+/// Both are rejections rather than repairs: given `g.123_125insG` there is
+/// no way to recover which flanking pair the author intended.
+///
+/// The check walks Allele wrappers and inspects each leaf edit. Adjacency is
+/// only enforced where it is decidable from the description alone — see
+/// [`Linearize`].
 fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(), FerroError> {
     use crate::hgvs::edit::NaEdit;
     use crate::hgvs::interval::UncertainBoundary;
@@ -7464,6 +7613,38 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
             (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
             _ => false,
         }
+    }
+
+    /// `true` when both endpoints are certain, plain, in the same region,
+    /// and *not* one apart — i.e. provably not a flanking pair.
+    fn definitely_not_flanking<T: Linearize>(
+        start: &UncertainBoundary<T>,
+        end: &UncertainBoundary<T>,
+    ) -> bool {
+        let (Some(Mu::Certain(s)), Some(Mu::Certain(e))) = (start.as_single(), end.as_single())
+        else {
+            return false;
+        };
+        let (Some(s), Some(e)) = (s.linearize(), e.linearize()) else {
+            return false;
+        };
+        s.region == e.region && e.index != s.index + 1
+    }
+
+    fn make_gap_error(prefix: &str) -> FerroError {
+        use crate::error::{Diagnostic, ErrorCode};
+        // Same structured `InvalidEdit` code as the single-position
+        // refusal, so both survive slash-form fallback paths that would
+        // otherwise mask an unstructured parse error.
+        FerroError::parse_with_diagnostic(
+            0,
+            format!(
+                "insertion anchor positions are not flanking on {prefix}; the two \
+                 positions MUST be adjacent (e.g. {prefix}123_124insATG, not \
+                 {prefix}123_125insATG) per DNA/insertion.md:15"
+            ),
+            Diagnostic::new().with_code(ErrorCode::InvalidEdit),
+        )
     }
     fn is_insertion(edit: &Mu<NaEdit>) -> bool {
         matches!(edit.inner(), Some(NaEdit::Insertion { .. }))
@@ -7485,50 +7666,683 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
         )
     }
 
+    /// Apply both sub-rules to one nucleotide variant's loc/edit pair.
+    macro_rules! check_na_anchor {
+        ($v:expr, $prefix:expr) => {{
+            if is_insertion(&$v.loc_edit.edit) {
+                let start = &$v.loc_edit.location.start;
+                let end = &$v.loc_edit.location.end;
+                if pos_eq(start, end) {
+                    return Err(make_error($prefix));
+                }
+                if definitely_not_flanking(start, end) {
+                    return Err(make_gap_error($prefix));
+                }
+            }
+        }};
+    }
+
     match variant {
-        HgvsVariant::Genome(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("g."));
-        }
-        HgvsVariant::Cds(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("c."));
-        }
-        HgvsVariant::Tx(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("n."));
-        }
-        HgvsVariant::Rna(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("r."));
-        }
-        HgvsVariant::Mt(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("m."));
-        }
-        HgvsVariant::Circular(v)
-            if is_insertion(&v.loc_edit.edit)
-                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end) =>
-        {
-            return Err(make_error("o."));
+        HgvsVariant::Genome(v) => check_na_anchor!(v, "g."),
+        HgvsVariant::Cds(v) => check_na_anchor!(v, "c."),
+        HgvsVariant::Tx(v) => check_na_anchor!(v, "n."),
+        HgvsVariant::Rna(v) => check_na_anchor!(v, "r."),
+        HgvsVariant::Mt(v) => check_na_anchor!(v, "m."),
+        HgvsVariant::Circular(v) => check_na_anchor!(v, "o."),
+        // Protein insertions carry the single-position rule, restated for
+        // amino acids in `protein/insertion.md:18`.
+        //
+        // The protein *adjacency* half of the rule (`protein/insertion.md:17`
+        // — `Lys23_Leu24`, not `Lys23_Asn25`) is deliberately NOT enforced:
+        // the spec contradicts itself. `protein/alleles.md:61` prints
+        // `p.[Ser68_Ala74insSerGln];[Ser68_Ala74=]` as a valid illustration
+        // of the allele-bracket format, and its insertion anchor spans seven
+        // residues. Enforcing adjacency here would make ferro reject a
+        // description the spec itself publishes unmarked, so the narrower
+        // reading wins until the ambiguity is resolved upstream. The
+        // nucleotide axes carry no such contradicting example and are
+        // enforced above.
+        HgvsVariant::Protein(v) => {
+            use crate::error::{Diagnostic, ErrorCode};
+            use crate::hgvs::edit::ProteinEdit;
+
+            if matches!(v.loc_edit.edit.inner(), Some(ProteinEdit::Insertion { .. }))
+                && pos_eq(&v.loc_edit.location.start, &v.loc_edit.location.end)
+            {
+                return Err(FerroError::parse_with_diagnostic(
+                    0,
+                    "single-position insertion not allowed on p.; the anchor MUST be \
+                     two flanking residues (e.g. p.Lys23_Leu24insAsp, not \
+                     p.Lys23insAsp) per protein/insertion.md:18",
+                    Diagnostic::new().with_code(ErrorCode::InvalidEdit),
+                ));
+            }
         }
         HgvsVariant::Allele(allele) => {
             for inner in &allele.variants {
                 validate_no_point_insertion(inner, _source)?;
             }
         }
-        // Protein insertions use a different anchor model — handled
-        // elsewhere; nothing to validate here.
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a `del`/`dup` size-count suffix hung on a **single-position**
+/// anchor — `g.123del3`, `g.123dup6`, `r.123del6`, `p.Arg45del6` (#1079).
+///
+/// Per `recommendations/checklist.md:49`:
+///
+/// > Descriptions like `g.123del3` are not allowed, correct is `g.123_125del`.
+///
+/// restated for each axis in `DNA/deletion.md:117`, `RNA/deletion.md:49` and
+/// `DNA/duplication.md:140`. "not allowed" is MUST-level under the spec's
+/// RFC 2119 reading (`recommendations/style.md:9`), so the rejection applies
+/// on every parse path rather than being mode-configurable.
+///
+/// Scope is deliberately narrow: only an anchor that fails to name both
+/// endpoints violates the rule. A range anchor that also carries a redundant
+/// size (`c.100_102del3`) already names them, and stays a soft W3011/W3016
+/// concern handled by the preprocessor.
+///
+/// Lenient and silent modes never reach this check for a deletion — the
+/// preprocessor rewrites `g.123del3` to `g.123_125del` first (the spec states
+/// that replacement outright). A duplication has no such repair: the spec
+/// declines to say whether `g.123dup6` starts at or after position 123
+/// (`DNA/duplication.md:143`), so guessing would risk emitting a different
+/// variant than the author meant, and every mode rejects.
+fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::error_handling::corrections::suggest_point_del_range_form;
+    use crate::hgvs::edit::{NaEdit, ProteinEdit};
+    use crate::hgvs::interval::UncertainBoundary;
+    use crate::hgvs::uncertainty::Mu;
+
+    /// The edit kind whose size suffix was found, for the diagnostic text.
+    enum SizedEdit {
+        Deletion,
+        Duplication,
+    }
+
+    fn is_point<T: PartialEq>(start: &UncertainBoundary<T>, end: &UncertainBoundary<T>) -> bool {
+        match (start.as_single(), end.as_single()) {
+            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
+            _ => false,
+        }
+    }
+
+    /// The rule targets a description "of more than one residue" that fails
+    /// to name both endpoints (`DNA/deletion.md:117`). A size of one names
+    /// exactly the anchor residue — redundant, not incomplete — so it stays a
+    /// soft W3011/W3023 concern rather than a hard rejection.
+    fn sized_na_edit(edit: &Mu<NaEdit>) -> Option<SizedEdit> {
+        match edit.inner() {
+            Some(NaEdit::Deletion {
+                length: Some(n), ..
+            }) if *n > 1 => Some(SizedEdit::Deletion),
+            Some(NaEdit::Duplication {
+                length: Some(n), ..
+            }) if *n > 1 => Some(SizedEdit::Duplication),
+            _ => None,
+        }
+    }
+
+    fn make_error(kind: &SizedEdit, source: &str) -> FerroError {
+        let (noun, spec) = match kind {
+            SizedEdit::Deletion => ("deletion", "checklist.md:49 / DNA/deletion.md:117"),
+            SizedEdit::Duplication => ("duplication", "DNA/duplication.md:140"),
+        };
+        let repair = match (kind, suggest_point_del_range_form(source)) {
+            (SizedEdit::Deletion, Some(canonical)) => {
+                format!("write `{canonical}` instead")
+            }
+            (SizedEdit::Deletion, None) => {
+                "write `<start>_<end>del`, not `<start>del<size>`".to_string()
+            }
+            (SizedEdit::Duplication, _) => {
+                "write `<start>_<end>dup`, not `<start>dup<size>`. The spec declines to \
+                 disambiguate whether the duplication starts at or after the anchor, so \
+                 ferro will not guess"
+                    .to_string()
+            }
+        };
+        FerroError::parse_with_diagnostic(
+            0,
+            format!(
+                "a {noun} sized by a suffix on a single-position anchor names only one \
+                 endpoint and is not allowed ({spec}); {repair}"
+            ),
+            Diagnostic::new()
+                .with_code(ErrorCode::InvalidEdit)
+                .with_hint(format!("name both endpoints — {repair}")),
+        )
+    }
+
+    macro_rules! check_na {
+        ($v:expr) => {
+            if let Some(kind) = sized_na_edit(&$v.loc_edit.edit) {
+                if is_point(&$v.loc_edit.location.start, &$v.loc_edit.location.end) {
+                    return Err(make_error(&kind, source));
+                }
+            }
+        };
+    }
+
+    match variant {
+        HgvsVariant::Genome(v) => check_na!(v),
+        HgvsVariant::Cds(v) => check_na!(v),
+        HgvsVariant::Tx(v) => check_na!(v),
+        HgvsVariant::Rna(v) => check_na!(v),
+        HgvsVariant::Mt(v) => check_na!(v),
+        HgvsVariant::Circular(v) => check_na!(v),
+        HgvsVariant::Protein(v) => {
+            if matches!(
+                v.loc_edit.edit.inner(),
+                Some(ProteinEdit::Deletion { count: Some(n), .. }) if *n > 1
+            ) && is_point(&v.loc_edit.location.start, &v.loc_edit.location.end)
+            {
+                return Err(make_error(&SizedEdit::Deletion, source));
+            }
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_point_size_suffix(inner, source)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a multi-nucleotide substitution — `c.79GC>TT`, `c.79_80GC>TT`,
+/// `g.4GC>TG` (#1079).
+///
+/// Per `recommendations/DNA/delins.md:73`:
+///
+/// > Can I describe a `GC` to `TG` variant as a di-nucleotide substitution
+/// > (`g.4GC>TG`)? No, this is not allowed. By definition, a substitution
+/// > changes **one** nucleotide into **one** other nucleotide. […] should be
+/// > described as `g.4_5delinsTG`.
+///
+/// and `recommendations/DNA/substitution.md:30` names both spellings:
+///
+/// > this change can not be described as a substitution like `c.79_80GC>TT`
+/// > or `c.79GC>TT`.
+///
+/// "not allowed" is MUST-level under the spec's RFC 2119 reading
+/// (`recommendations/style.md:9`), so the rejection applies on every parse
+/// path that reaches the grammar with the form still spelled out.
+///
+/// # Why the check reads the AST
+///
+/// The grammar used to fold `GC>TT` into a `Delins` edit that kept no record
+/// of the reference bases, so the rule had to re-read the input string — which
+/// meant it could not fire for an allele member composed programmatically, a
+/// variant produced by projection or round-trip, or anything constructed
+/// rather than parsed. The parser now preserves the stated run in
+/// [`NaEdit::Delins::substitution_reference`] (#1092), so the rule keys off
+/// that field instead and survives composition. The field is provenance only:
+/// `Display` ignores it, so the canonical short form `delinsTT` is still what
+/// is rendered.
+///
+/// Lenient and silent modes never reach this check: the preprocessor rewrites
+/// both spellings to `c.79_80delinsTT` first (the spec states the replacement
+/// outright, and the reference length is stated in the input, so the end
+/// coordinate is `start + len(ref) - 1` with no reference lookup).
+///
+/// Scope is limited to a **multi-base reference**. A one-base reference with a
+/// longer insert (`c.79G>TT`) already spans exactly its anchor and cannot lose
+/// a base, and the no-reference form (`c.100_102>ATG`) states no reference
+/// bases at all; both remain ordinary preprocessor concerns.
+pub fn validate_no_multibase_substitution(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::{NaEdit, Sequence};
+    use crate::hgvs::interval::UncertainBoundary;
+    use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
+
+    /// The stated reference run of a `NN>MM` edit, when it names more than one
+    /// base. One base cannot be lost at its own anchor, so it is out of scope.
+    fn multibase_run(edit: &Mu<NaEdit>) -> Option<&Sequence> {
+        match edit.inner() {
+            Some(NaEdit::Delins {
+                substitution_reference: Some(run),
+                ..
+            }) if run.len() > 1 => Some(run),
+            _ => None,
+        }
+    }
+
+    /// Drop the provenance so the repaired clone renders as a plain `delins`.
+    fn clear_run(edit: &mut Mu<NaEdit>) {
+        if let Mu::Certain(NaEdit::Delins {
+            substitution_reference,
+            ..
+        })
+        | Mu::Uncertain(NaEdit::Delins {
+            substitution_reference,
+            ..
+        }) = edit
+        {
+            *substitution_reference = None;
+        }
+    }
+
+    /// A single certain position, or `None` for uncertain / range boundaries.
+    fn point<T: PartialEq>(
+        start: &UncertainBoundary<T>,
+        end: &UncertainBoundary<T>,
+    ) -> Option<&'static ()> {
+        match (start.as_single(), end.as_single()) {
+            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) if s == e => Some(&()),
+            _ => None,
+        }
+    }
+
+    // The canonical repair names both endpoints. Extending a point anchor is
+    // only safe for a plain positive coordinate with no intronic offset and no
+    // `*`/`-`/pter-style qualifier — the same restriction the preprocessor's
+    // textual rewrite applies. When it does not hold the repair keeps the
+    // stated anchor rather than guessing.
+    fn wider_genome(p: &GenomePos, extra: u64) -> Option<GenomePos> {
+        (p.special.is_none() && p.offset.is_none() && p.base >= 1)
+            .then(|| GenomePos::new(p.base + extra))
+    }
+    fn wider_cds(p: &CdsPos, extra: u64) -> Option<CdsPos> {
+        (p.special.is_none() && p.offset.is_none() && !p.utr3 && p.base >= 1)
+            .then(|| CdsPos::new(p.base + extra as i64))
+    }
+    fn wider_tx(p: &TxPos, extra: u64) -> Option<TxPos> {
+        (p.offset.is_none() && !p.downstream && p.base >= 1)
+            .then(|| TxPos::new(p.base + extra as i64))
+    }
+    fn wider_rna(p: &RnaPos, extra: u64) -> Option<RnaPos> {
+        (p.offset.is_none() && !p.utr3 && p.base >= 1).then(|| RnaPos::new(p.base + extra as i64))
+    }
+
+    fn make_error(canonical: &str) -> FerroError {
+        FerroError::parse_with_diagnostic(
+            0,
+            format!(
+                "a substitution replaces one nucleotide by one other, so naming several \
+                 reference bases is not allowed (DNA/substitution.md:30, DNA/delins.md:73); \
+                 write `{canonical}` instead"
+            ),
+            Diagnostic::new()
+                .with_code(ErrorCode::InvalidEdit)
+                .with_hint(format!(
+                    "describe the change as a deletion-insertion — write `{canonical}`"
+                )),
+        )
+    }
+
+    /// Clone `$v`, strip the provenance and widen a point anchor to the run's
+    /// full span, then render the result as the canonical repair.
+    macro_rules! check {
+        ($v:expr, $ctor:path, $widen:ident) => {{
+            if let Some(run) = multibase_run(&$v.loc_edit.edit) {
+                let extra = run.len() as u64 - 1;
+                let mut repaired = $v.clone();
+                clear_run(&mut repaired.loc_edit.edit);
+                if point(
+                    &repaired.loc_edit.location.start,
+                    &repaired.loc_edit.location.end,
+                )
+                .is_some()
+                {
+                    if let Some(end) = repaired
+                        .loc_edit
+                        .location
+                        .start
+                        .inner()
+                        .and_then(|p| $widen(p, extra))
+                    {
+                        repaired.loc_edit.location.end = UncertainBoundary::certain(end);
+                    }
+                }
+                return Err(make_error(&$ctor(repaired).to_string()));
+            }
+        }};
+    }
+
+    match variant {
+        HgvsVariant::Genome(v) => check!(v, HgvsVariant::Genome, wider_genome),
+        HgvsVariant::Cds(v) => check!(v, HgvsVariant::Cds, wider_cds),
+        HgvsVariant::Tx(v) => check!(v, HgvsVariant::Tx, wider_tx),
+        HgvsVariant::Rna(v) => check!(v, HgvsVariant::Rna, wider_rna),
+        HgvsVariant::Mt(v) => check!(v, HgvsVariant::Mt, wider_genome),
+        HgvsVariant::Circular(v) => check!(v, HgvsVariant::Circular, wider_genome),
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_multibase_substitution(inner)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject amino acids listed *after* a translation stop in an inserted
+/// peptide — `p.Cys5_Ser6delinsTerGluAsp` (#1079).
+///
+/// Per `recommendations/protein/delins.md:45`:
+///
+/// > the deletion-insertion is not described as `delinsSerSerTerAlaAsp`,
+/// > amino acids after the translation termination codon are **not** listed.
+///
+/// and identically for insertions in `recommendations/protein/insertion.md:43`.
+/// Translation stops at the first `Ter`, so residues written after it are not
+/// part of any protein product — the description names a sequence that cannot
+/// exist.
+///
+/// Truncating at the first `Ter` is mechanical and the diagnostic names the
+/// result, but it is not applied automatically: when the insert *begins* with
+/// `Ter` the spec's own correct description is a nonsense substitution at the
+/// preceding residue (`protein/substitution.md:20`), which needs the
+/// reference sequence, so truncating would swap one non-canonical description
+/// for another.
+///
+/// The `insTer<n>` / `ins*<n>` form gives the stop's position inside the
+/// insertion rather than spelling residues out, so nothing can follow the
+/// stop and it is untouched.
+fn validate_no_residues_after_stop(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::{AminoAcidSeq, ProteinEdit, ProteinInsSeq};
+    use crate::hgvs::location::AminoAcid;
+    use crate::hgvs::uncertainty::Mu;
+
+    /// The peptide truncated at (and including) its first `Ter`, or `None`
+    /// when nothing follows the stop.
+    fn truncated_at_first_stop(seq: &AminoAcidSeq) -> Option<AminoAcidSeq> {
+        let first_stop = seq.0.iter().position(|aa| *aa == AminoAcid::Ter)?;
+        (first_stop + 1 < seq.0.len()).then(|| AminoAcidSeq::new(seq.0[..=first_stop].to_vec()))
+    }
+
+    fn offending_peptide(edit: &Mu<ProteinEdit>) -> Option<(&'static str, AminoAcidSeq)> {
+        match edit.inner() {
+            Some(ProteinEdit::Delins { sequence }) => {
+                truncated_at_first_stop(sequence).map(|t| ("delins", t))
+            }
+            Some(ProteinEdit::Insertion {
+                sequence: ProteinInsSeq::Literal(sequence),
+            }) => truncated_at_first_stop(sequence).map(|t| ("ins", t)),
+            _ => None,
+        }
+    }
+
+    match variant {
+        HgvsVariant::Protein(v) => {
+            if let Some((keyword, truncated)) = offending_peptide(&v.loc_edit.edit) {
+                let canonical = format!("{keyword}{truncated}");
+                return Err(FerroError::parse_with_diagnostic(
+                    0,
+                    format!(
+                        "amino acids after the translation termination codon are not listed; \
+                         the inserted peptide ends at its first `Ter`, so write `{canonical}` \
+                         (protein/delins.md:45, protein/insertion.md:43)"
+                    ),
+                    Diagnostic::new()
+                        .with_code(ErrorCode::InvalidEdit)
+                        .with_suggestion(canonical)
+                        .with_hint(
+                            "translation stops at the first `Ter`, so residues written after \
+                             it are not part of any protein product",
+                        ),
+                ));
+            }
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_residues_after_stop(inner)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a frameshift that terminates immediately — `p.Tyr4TerfsTer1`
+/// (#1079).
+///
+/// Per `recommendations/protein/frameshift.md:22`:
+///
+/// > the shortest frameshift variant possible contains `fsTer2`; variants
+/// > which introduce an **immediate** translation termination (stop) codon
+/// > are described as nonsense variant, e.g., `p.Tyr4Ter` (or `p.Tyr4*`) not
+/// > `p.Tyr4TerfsTer1`.
+///
+/// restated from the substitution side in `protein/substitution.md:20`.
+///
+/// Two spellings assert the same impossible thing and both are rejected: a
+/// stop at codon 1 of the shifted frame (`fsTer1`), and a frameshift whose
+/// first new residue is already `Ter` (`p.Tyr4Terfs…`, whatever `Ter#`
+/// follows). `fsTer2` — the spec's stated minimum — and everything above it
+/// are untouched.
+///
+/// The repair is mechanical and the diagnostic names it verbatim
+/// (`p.Tyr4Ter`), but performing it would silently change the edit kind the
+/// author wrote from a frameshift to a substitution, so it is surfaced
+/// rather than applied.
+fn validate_no_immediate_ter_frameshift(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::{FrameshiftTer, ProteinEdit};
+    use crate::hgvs::location::AminoAcid;
+    use crate::hgvs::uncertainty::Mu;
+    use crate::hgvs::variant::ProteinVariant;
+
+    /// True when the edit describes a frameshift that stops at its own first
+    /// codon — either explicitly (`fsTer1`) or by naming `Ter` as the first
+    /// new residue.
+    fn terminates_immediately(edit: &Mu<ProteinEdit>) -> bool {
+        match edit.inner() {
+            Some(ProteinEdit::Frameshift { new_aa, ter }) => {
+                *ter == FrameshiftTer::At(1) || *new_aa == Some(AminoAcid::Ter)
+            }
+            Some(ProteinEdit::FrameshiftAlternatives { alternatives, ter }) => {
+                *ter == FrameshiftTer::At(1) || alternatives.contains(&AminoAcid::Ter)
+            }
+            _ => false,
+        }
+    }
+
+    /// The nonsense description the author should have written: the
+    /// reference residue and position from the location, terminated.
+    fn nonsense_form(v: &ProteinVariant) -> String {
+        match v.loc_edit.location.start.as_single() {
+            Some(Mu::Certain(pos)) => format!("p.{}{}Ter", pos.aa, pos.number),
+            _ => "p.<ref><pos>Ter".to_string(),
+        }
+    }
+
+    match variant {
+        HgvsVariant::Protein(v) if terminates_immediately(&v.loc_edit.edit) => {
+            let canonical = nonsense_form(v);
+            return Err(FerroError::parse_with_diagnostic(
+                0,
+                format!(
+                    "a variant that introduces an immediate translation termination codon is \
+                     a nonsense substitution, not a frameshift; write `{canonical}` \
+                     (protein/frameshift.md:22, protein/substitution.md:20)"
+                ),
+                Diagnostic::new()
+                    .with_code(ErrorCode::InvalidEdit)
+                    .with_suggestion(canonical)
+                    .with_hint(
+                        "the shortest frameshift the spec admits is `fsTer2` — a stop at \
+                         codon 1 of the shifted frame leaves no shifted sequence to describe",
+                    ),
+            ));
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_immediate_ter_frameshift(inner)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a one-nucleotide inversion — `g.234inv`, `r.234inv` (#1079).
+///
+/// Per `recommendations/DNA/inversion.md:16`:
+///
+/// > by definition, the region inverted (`positions_inverted`) contains
+/// > **more than one nucleotide**. The description `g.234inv` is therefore
+/// > not allowed; a one-nucleotide inversion should be described as a
+/// > substitution.
+///
+/// Inverting a single base is a substitution to its complement, so the
+/// inversion notation carries no information the substitution notation does
+/// not. The rejection applies in every mode: the replacement needs the
+/// reference base at that position (and its complement), which the parser
+/// does not have, so there is no canonical form to rewrite to.
+///
+/// Only the top-level edit is inspected. An inverted *inserted range*
+/// (`g.234_235ins123_234inv`, the spec's inverted-duplication form) is an
+/// insertion whose source happens to be reversed, and is untouched.
+fn validate_no_single_nucleotide_inversion(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::NaEdit;
+    use crate::hgvs::interval::UncertainBoundary;
+    use crate::hgvs::uncertainty::Mu;
+
+    fn is_point<T: PartialEq>(start: &UncertainBoundary<T>, end: &UncertainBoundary<T>) -> bool {
+        match (start.as_single(), end.as_single()) {
+            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
+            _ => false,
+        }
+    }
+
+    fn make_error() -> FerroError {
+        FerroError::parse_with_diagnostic(
+            0,
+            "an inversion covers more than one nucleotide by definition; describe a \
+             one-nucleotide inversion as a substitution to the complementary base \
+             (DNA/inversion.md:16)",
+            Diagnostic::new()
+                .with_code(ErrorCode::InvalidEdit)
+                .with_hint(
+                    "write `<pos><ref>><complement>` (e.g. `g.234T>A`) instead of \
+                     `<pos>inv`",
+                ),
+        )
+    }
+
+    macro_rules! check_inv {
+        ($v:expr) => {
+            if matches!($v.loc_edit.edit.inner(), Some(NaEdit::Inversion { .. }))
+                && is_point(&$v.loc_edit.location.start, &$v.loc_edit.location.end)
+            {
+                return Err(make_error());
+            }
+        };
+    }
+
+    match variant {
+        HgvsVariant::Genome(v) => check_inv!(v),
+        HgvsVariant::Cds(v) => check_inv!(v),
+        HgvsVariant::Tx(v) => check_inv!(v),
+        HgvsVariant::Rna(v) => check_inv!(v),
+        HgvsVariant::Mt(v) => check_inv!(v),
+        HgvsVariant::Circular(v) => check_inv!(v),
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_single_nucleotide_inversion(inner)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a translation-initiation-codon variant written as a plain amino
+/// acid substitution — `p.Met1Thr`, `p.(Met1Val)` (#1079).
+///
+/// Per `recommendations/protein/substitution.md:49`:
+///
+/// > Do not use descriptions like `p.Met1Thr`, this is for sure **not** the
+/// > consequence of the effect on protein translation.
+///
+/// and `recommendations/checklist.md:65`:
+///
+/// > the description `p.(Met1Val)` is not allowed.
+///
+/// Losing the initiator methionine does not swap one residue for another: it
+/// abolishes translation from that codon, so the outcome is either no protein
+/// (`p.0`, `p.0?`) or an unpredictable one (`p.(Met1?)`) — never a
+/// substitution.
+///
+/// The rejection applies in every mode. The spec offers three correct forms
+/// and which one holds depends on evidence the description does not carry, so
+/// canonicalising would assert a finding the author never made; the
+/// diagnostic lists all three instead.
+///
+/// A start-codon variant that activates an **upstream** initiation site is an
+/// extension (`protein/extension.md`), not a substitution, and a downstream
+/// one is a deletion — neither shape reaches this check.
+fn validate_no_start_loss_substitution(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::{ExtDirection, ProteinEdit};
+    use crate::hgvs::location::AminoAcid;
+    use crate::hgvs::uncertainty::Mu;
+
+    /// True when the edit replaces the residue with a *different* one. An
+    /// identity (`p.Met1=`), an unknown (`p.Met1?`) or a same-residue
+    /// substitution is not a start loss.
+    fn is_residue_swap(edit: &Mu<ProteinEdit>) -> bool {
+        match edit.inner() {
+            Some(ProteinEdit::Substitution { alternative, .. }) => *alternative != AminoAcid::Met,
+            Some(ProteinEdit::SubstitutionAlternatives { alternatives }) => {
+                alternatives.iter().any(|aa| *aa != AminoAcid::Met)
+            }
+            // An N-terminal extension that *also* renames `Met1` — the
+            // `p.Met1Valext-4` form. `protein/extension.md:28` rules it out
+            // for the same reason: `Met1` is part of the normal sequence, so
+            // a description that changes it is not an extension. The spec's
+            // replacement is the insertion form
+            // (`p.Met1_Leu2insArgSerThrVal`), which needs the inserted
+            // residues, so there is nothing to canonicalise to. A plain
+            // `p.Met1ext-5` carries no new residue and is untouched.
+            Some(ProteinEdit::Extension {
+                new_aa: Some(new_aa),
+                direction: ExtDirection::NTerminal,
+                ..
+            }) => *new_aa != AminoAcid::Met,
+            _ => false,
+        }
+    }
+
+    match variant {
+        HgvsVariant::Protein(v) => {
+            let at_initiator = matches!(
+                (v.loc_edit.location.start.as_single(), v.loc_edit.location.end.as_single()),
+                (Some(Mu::Certain(s)), Some(Mu::Certain(e)))
+                    if s == e && s.number == 1 && s.aa == AminoAcid::Met
+            );
+            if at_initiator && is_residue_swap(&v.loc_edit.edit) {
+                return Err(FerroError::parse_with_diagnostic(
+                    0,
+                    "a variant that changes the translation initiation codon is not described \
+                     as a substitution or as an extension; use `p.0` (no protein), `p.0?` \
+                     (predicted no protein) or `p.(Met1?)` (consequence unknown), or — when \
+                     an upstream initiation site is activated — the insertion form \
+                     `p.Met1_Leu2ins...` (protein/substitution.md:49, checklist.md:65, \
+                     protein/extension.md:28)",
+                    Diagnostic::new()
+                        .with_code(ErrorCode::InvalidEdit)
+                        .with_hint(
+                            "losing the initiator methionine abolishes translation from that \
+                             codon rather than swapping one residue for another, so the \
+                             consequence is `p.0`, `p.0?` or `p.(Met1?)`",
+                        ),
+                ));
+            }
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_start_loss_substitution(inner)?;
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -8008,11 +8822,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_protein_start_codon_substitution() {
-        // Start codon substitution (p.Met1Leu)
-        let variant = parse_variant("NP_000079.2:p.Met1Leu").unwrap();
-        assert!(matches!(variant, HgvsVariant::Protein(_)));
-        assert_eq!(format!("{}", variant), "NP_000079.2:p.Met1Leu");
+    fn test_parse_protein_start_codon_substitution_rejected() {
+        // A start-codon variant is not a substitution — `p.Met1Leu` is
+        // forbidden by protein/substitution.md:49 (#1079). The spec forms
+        // are `p.0`, `p.0?` and `p.(Met1?)`.
+        assert!(parse_variant("NP_000079.2:p.Met1Leu").is_err());
+        assert!(parse_variant("NP_000079.2:p.(Met1?)").is_ok());
     }
 
     #[test]
@@ -9059,11 +9874,15 @@ mod tests {
     fn test_parse_reverse_order_intervals() {
         // Reverse order intervals - where start > end (used for structural variants)
         // Feature 15: Reverse order intervals
-        let variant =
-            parse_variant("NC_000011.10:g.5238138_5153222insTATTT").expect("should parse");
-        assert_eq!(
-            variant.to_string(),
-            "NC_000011.10:g.5238138_5153222insTATTT"
+        //
+        // The reversed *insertion* is the one exception: an insertion anchor
+        // MUST name two flanking positions listed 5' to 3'
+        // (`DNA/insertion.md:15-16`), so `g.5238138_5153222insTATTT` — 85 kb
+        // apart and descending — is refused rather than round-tripped (#1079).
+        // Reversed del/dup anchors carry no such rule and still parse.
+        assert!(
+            parse_variant("NC_000011.10:g.5238138_5153222insTATTT").is_err(),
+            "a reversed, non-flanking insertion anchor must be rejected"
         );
 
         let variant = parse_variant("NC_000012.11:g.110593351_110576466dup").expect("should parse");

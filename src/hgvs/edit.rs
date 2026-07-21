@@ -579,10 +579,21 @@ pub enum NaEdit {
     /// form `delinsXXX`. `Display` preserves on round-trip; `canonicalize_edit`
     /// strips them back to the short form per the HGVS spec recommendation
     /// (`recommendations/DNA/delins.md`).
+    /// `substitution_reference` preserves the reference run stated by the
+    /// **forbidden** `NN>MM` substitution spelling (`c.79_80GC>TT`), which the
+    /// grammar folds into a `Delins` (#1092). It is provenance, not
+    /// description: `Display` ignores it, so the edit still renders as the
+    /// canonical short form `delinsTT` and never as the deprecated explicit
+    /// `delGCinsTT` (`recommendations/DNA/delins.md:29-30`). Keeping it in a
+    /// field of its own — rather than reusing `deleted` — is what makes the
+    /// preservation inert to every existing consumer while still letting
+    /// `validate_reference` check the claim and the MUST-level rejection key
+    /// off the AST instead of the source string.
     Delins {
         sequence: InsertedSequence,
         deleted: Option<Sequence>,
         deleted_length: Option<u64>,
+        substitution_reference: Option<Sequence>,
     },
 
     /// Duplication: copy of bases (e.g., dup, dupATG, dup101, dup(731_741), dup?)
@@ -782,6 +793,7 @@ impl NaEdit {
                 sequence,
                 deleted,
                 deleted_length,
+                ..
             } => {
                 let mut s = String::from("del");
                 if let Some(seq) = deleted {
@@ -903,6 +915,7 @@ impl fmt::Display for NaEdit {
                 sequence,
                 deleted,
                 deleted_length,
+                ..
             } => {
                 write!(f, "del")?;
                 if let Some(seq) = deleted {
@@ -1513,6 +1526,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("ATG").unwrap()),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         assert_eq!(format!("{}", edit), "delinsATG");
     }
@@ -1523,6 +1537,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
             deleted: Some(Sequence::from_str("ATG").unwrap()),
             deleted_length: None,
+            substitution_reference: None,
         };
         assert_eq!(format!("{}", edit), "delATGinsTTCC");
     }
@@ -1533,6 +1548,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("TA").unwrap()),
             deleted: None,
             deleted_length: Some(3),
+            substitution_reference: None,
         };
         assert_eq!(format!("{}", edit), "del3insTA");
     }
@@ -1543,6 +1559,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("UUCC").unwrap()),
             deleted: Some(Sequence::from_str("AUG").unwrap()),
             deleted_length: None,
+            substitution_reference: None,
         };
         assert_eq!(edit.to_rna_string(), "delauginsuucc");
     }
@@ -1553,11 +1570,13 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let explicit = NaEdit::Delins {
             sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
             deleted: Some(Sequence::from_str("ATG").unwrap()),
             deleted_length: None,
+            substitution_reference: None,
         };
         assert_ne!(short, explicit);
     }
@@ -2107,6 +2126,7 @@ mod tests {
             },
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         assert_eq!(format!("{}", edit), "delinsA[10]");
     }

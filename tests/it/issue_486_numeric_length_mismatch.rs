@@ -43,12 +43,12 @@ fn assert_rejects(input: &str) {
 
 #[test]
 fn del_numeric_length_mismatch_rejects() {
-    assert_rejects("NM_TEST.1:c.5del4"); // span 1 != 4
+    assert_rejects("NM_TEST.1:c.5_6del4"); // span 2 != 4
 }
 
 #[test]
 fn dup_numeric_length_mismatch_rejects() {
-    assert_rejects("NM_TEST.1:c.5dup4"); // span 1 != 4
+    assert_rejects("NM_TEST.1:c.5_6dup4"); // span 2 != 4
 }
 
 #[test]

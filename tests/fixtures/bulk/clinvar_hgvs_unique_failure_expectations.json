@@ -324,6 +324,21 @@
     "[single_position_insertion]": {
       "category": "rejected_by_design",
       "reason": "Single-position insertion is explicitly invalid per DNA/insertion.md:95-101 Q&A; the canonical form requires a 2-position adjacent range (closes #446)."
+    },
+    "[frameshift_immediate_ter]": {
+      "category": "rejected_by_design",
+      "reason": "Frameshift terminating at codon 1 of the shifted frame (`fsTer1`). HGVS protein/frameshift.md:22 states the shortest possible frameshift contains `fsTer2`; a variant introducing an immediate stop is a nonsense substitution (`p.<ref><pos>Ter`), not a frameshift (also protein/substitution.md:20).",
+      "tracking": "#1079"
+    },
+    "[multibase_substitution]": {
+      "category": "rejected_by_design",
+      "reason": "Multi-nucleotide substitution (`c.878_879AG>GT`). HGVS DNA/substitution.md:30 names both `c.79_80GC>TT` and `c.79GC>TT` as invalid because a substitution replaces one nucleotide by one other; DNA/delins.md:73 states the change is a deletion-insertion (`c.878_879delinsGT`). Lenient and silent modes rewrite it; strict rejects and names the repair.",
+      "tracking": "#1079"
+    },
+    "[non_flanking_insertion_anchor]": {
+      "category": "rejected_by_design",
+      "reason": "Insertion anchored on two positions that are not flanking (adjacent). HGVS DNA/insertion.md:15 requires the `positions flanking` to be `123_124`, not `123_125`, and line 16 requires them listed 5' to 3'; syntax.yaml `dna.ins` restates it as `range` must be specified using adjacent positions. Sibling rule to `[single_position_insertion]`, and rejected for the same reason: the intended flanking pair is not recoverable, so no repair is derivable. A wide anchor is a deletion-insertion (`delins`), not an insertion.",
+      "tracking": "#1079"
     }
   },
   "expected_failures": {
@@ -532,6 +547,11 @@
     "NM_000249.3:c.1667+678insALU": "[single_position_insertion]",
     "NM_002485.4:c.842insT": "[single_position_insertion]",
     "NM_003977.2:c.919insC": "[single_position_insertion]",
-    "NM_007294.3:c.3627insA": "[single_position_insertion]"
+    "NM_007294.3:c.3627insA": "[single_position_insertion]",
+    "NP_002476.2:p.Gln279ProfsTer1": "[frameshift_immediate_ter]",
+    "NM_003977.2:c.878_879AG>GT": "[multibase_substitution]",
+    "NC_000011.10:g.5238138_5153222insTATTT": "[non_flanking_insertion_anchor]",
+    "NM_000061.3:c.418_424insSVA": "[non_flanking_insertion_anchor]",
+    "NM_000548.3:c.[4621_4629del9;4621_4634ins14]": "[non_flanking_insertion_anchor]"
   }
 }

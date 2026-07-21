@@ -375,6 +375,7 @@ mod c_axis_edit_kind_matrix {
                     sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
                     deleted: Some(Sequence::from_str("TGC").unwrap()),
                     deleted_length: None,
+                    substitution_reference: None,
                 },
             ),
         })

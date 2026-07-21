@@ -93,9 +93,12 @@ mod n_terminal_extension {
         assert_round_trips("NP_003997.1:p.Met1ext-5");
     }
 
+    /// A longer upstream offset still round-trips. The probe deliberately
+    /// does *not* rename `Met1` — `p.Met1Valext-12` is forbidden by
+    /// `protein/extension.md:28` and rejected since #1079.
     #[test]
-    fn met_loss_with_new_aa_round_trips() {
-        assert_round_trips("NP_003997.1:p.Met1Valext-12");
+    fn met_loss_long_offset_round_trips() {
+        assert_round_trips("NP_003997.1:p.Met1ext-12");
     }
 }
 

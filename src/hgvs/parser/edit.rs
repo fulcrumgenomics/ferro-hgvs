@@ -202,14 +202,22 @@ fn parse_multibase_substitution(input: &str) -> IResult<&str, NaEdit> {
         )));
     }
 
-    // Convert to delins. Multi-base ">" notation does not carry an explicit
-    // deleted sequence/length, so leave both as None.
+    // Convert to delins. The `>` spelling carries no `del<seq>` / `del<N>`
+    // token, so `deleted` / `deleted_length` stay `None` and Display keeps
+    // rendering the canonical short form `delins<alt>`. The reference run the
+    // input *did* state is kept in `substitution_reference` (#1092): it is a
+    // required element of the `dna.sub` production (`docs/syntax.yaml:209`),
+    // so dropping it discarded a claim about the reference that
+    // `validate_reference` can — and now does — check, exactly as it already
+    // checks the stated run of the neighbouring `delGCinsTT` spelling (#486).
     Ok((
         input,
         NaEdit::Delins {
             sequence: InsertedSequence::Literal(alt_seq),
             deleted: None,
             deleted_length: None,
+            // The no-reference form (`c.100_102>ATG`) states no bases at all.
+            substitution_reference: (!ref_seq.is_empty()).then_some(ref_seq),
         },
     ))
 }
@@ -1000,6 +1008,7 @@ fn parse_delins(input: &str, allow_special_positions: bool) -> IResult<&str, NaE
             sequence,
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         },
     ))
 }
@@ -1026,6 +1035,7 @@ fn parse_delins_with_deleted_seq(
             sequence: inserted_seq,
             deleted: Some(deleted_seq),
             deleted_length: None,
+            substitution_reference: None,
         },
     ))
 }
@@ -1051,6 +1061,7 @@ fn parse_delins_with_deleted_count(
             sequence: inserted_seq,
             deleted: None,
             deleted_length: Some(deleted_count),
+            substitution_reference: None,
         },
     ))
 }
@@ -2435,6 +2446,7 @@ mod tests {
             sequence,
             deleted,
             deleted_length,
+            ..
         } = edit
         {
             assert_eq!(deleted, Some(Sequence::from_str("ATG").unwrap()));
@@ -2457,6 +2469,7 @@ mod tests {
             sequence: _,
             deleted,
             deleted_length,
+            ..
         } = edit
         {
             assert_eq!(deleted, None);
@@ -2474,6 +2487,7 @@ mod tests {
             sequence: _,
             deleted,
             deleted_length,
+            ..
         } = edit
         {
             assert_eq!(deleted, None);
@@ -2491,6 +2505,7 @@ mod tests {
             sequence: _,
             deleted,
             deleted_length,
+            ..
         } = edit
         {
             assert_eq!(deleted, None);

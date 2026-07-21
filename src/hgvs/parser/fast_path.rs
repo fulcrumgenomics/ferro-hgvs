@@ -848,6 +848,16 @@ fn try_parse_protein_edit(input: &str, edit_start: usize, accession: Accession) 
         )
     } else {
         match parse_amino_acid(rest) {
+            // A substitution at the initiator methionine is spec-forbidden
+            // (`protein/substitution.md:49`). The generic parser owns that
+            // rejection, so defer rather than build a variant the caller
+            // would have to re-check — this keeps the fast path
+            // observationally identical to `parse_variant` (#1079).
+            Ok((_, alternative))
+                if pos.number == 1 && pos.aa == AminoAcid::Met && alternative != AminoAcid::Met =>
+            {
+                return FastPathResult::Fallback
+            }
             Ok((r, alternative)) => (
                 r,
                 ProteinEdit::Substitution {
@@ -1208,7 +1218,7 @@ mod tests {
             "NP_000079.2:p.(Val600Glu)",
             "NP_000079.2:p.Gly12Cys",
             "NP_000079.2:p.Arg100Ter", // substitution to stop
-            "NP_000079.2:p.Met1Val",
+            "NP_000079.2:p.Met2Val",
             "ENSP00000369497.3:p.Asp427Tyr",
         ];
         for input in cases {
@@ -1218,6 +1228,18 @@ mod tests {
             };
             let generic = parse_variant(input).expect("generic should parse");
             assert_eq!(fast, generic, "fast-path/generic mismatch for {input:?}");
+        }
+    }
+
+    /// A substitution at the initiator methionine is spec-forbidden
+    /// (`protein/substitution.md:49`), so the fast path must defer to the
+    /// generic parser, which owns the rejection (#1079).
+    #[test]
+    fn test_fast_path_defers_start_loss_substitution() {
+        use crate::hgvs::parser::variant::parse_variant;
+        for input in ["NP_000079.2:p.Met1Val", "NP_000079.2:p.(Met1Val)"] {
+            assert!(matches!(try_fast_path(input), FastPathResult::Fallback));
+            assert!(parse_variant(input).is_err());
         }
     }
 

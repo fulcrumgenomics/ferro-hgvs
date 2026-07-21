@@ -587,6 +587,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("ATG").unwrap()),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         assert_eq!(na_edit_type_str(&edit), "delins");
     }

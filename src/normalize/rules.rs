@@ -1849,6 +1849,7 @@ pub fn canonicalize_edit(edit: &NaEdit) -> NaEdit {
                 sequence: sequence.clone(),
                 deleted: None,
                 deleted_length: None,
+                substitution_reference: None,
             }
         }
         // Inversion: §HGVS v21.0 DNA/inversion.md — "the recommendation
@@ -1954,6 +1955,7 @@ pub fn canonicalize_conversion_to_delins(edit: &NaEdit) -> Option<NaEdit> {
                         sequence: InsertedSequence::PositionRange { start, end },
                         deleted: None,
                         deleted_length: None,
+                        substitution_reference: None,
                     });
                 }
             }
@@ -1979,6 +1981,7 @@ pub fn canonicalize_conversion_to_delins(edit: &NaEdit) -> Option<NaEdit> {
         sequence: InsertedSequence::Reference(inner.to_string()),
         deleted: None,
         deleted_length: None,
+        substitution_reference: None,
     })
 }
 
@@ -2083,10 +2086,12 @@ pub fn rna_uracil_to_thymine(edit: &NaEdit) -> Option<NaEdit> {
             sequence,
             deleted,
             deleted_length,
+            substitution_reference,
         } => NaEdit::Delins {
             sequence: map_ins(sequence),
             deleted: map_opt_seq(deleted),
             deleted_length: *deleted_length,
+            substitution_reference: map_opt_seq(substitution_reference),
         },
         NaEdit::DupIns { sequence } => NaEdit::DupIns {
             sequence: map_ins(sequence),
@@ -2826,11 +2831,13 @@ pub fn canonicalize_insertion_expand<P: ReferenceProvider>(
             sequence,
             deleted,
             deleted_length,
+            ..
         } => match expand_inserted_sequence(sequence, accession, kind, provider)? {
             Some(new_seq) => Ok(Some(NaEdit::Delins {
                 sequence: new_seq,
                 deleted: deleted.clone(),
                 deleted_length: *deleted_length,
+                substitution_reference: None,
             })),
             None => Ok(None),
         },
@@ -4056,16 +4063,19 @@ mod tests {
             sequence: trimmed_seq.clone(),
             deleted: Some(Sequence::from_str("CA").unwrap()),
             deleted_length: None,
+            substitution_reference: None,
         }));
         assert!(should_canonicalize(&NaEdit::Delins {
             sequence: trimmed_seq.clone(),
             deleted: None,
             deleted_length: Some(2),
+            substitution_reference: None,
         }));
         assert!(!should_canonicalize(&NaEdit::Delins {
             sequence: trimmed_seq,
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         }));
     }
 
@@ -5108,6 +5118,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("TTCC").unwrap()),
             deleted: Some(Sequence::from_str("ATG").unwrap()),
             deleted_length: None,
+            substitution_reference: None,
         };
         let canonical = canonicalize_edit(&edit);
         match canonical {
@@ -5115,6 +5126,7 @@ mod tests {
                 sequence: _,
                 deleted,
                 deleted_length,
+                ..
             } => {
                 assert_eq!(deleted, None);
                 assert_eq!(deleted_length, None);
@@ -5131,6 +5143,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("TA").unwrap()),
             deleted: None,
             deleted_length: Some(3),
+            substitution_reference: None,
         };
         let canonical = canonicalize_edit(&edit);
         match canonical {
@@ -5138,6 +5151,7 @@ mod tests {
                 sequence: _,
                 deleted,
                 deleted_length,
+                ..
             } => {
                 assert_eq!(deleted, None);
                 assert_eq!(deleted_length, None);
@@ -5168,6 +5182,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("AU").unwrap()),
             deleted: Some(Sequence::from_str("UG").unwrap()),
             deleted_length: None,
+            substitution_reference: None,
         };
         let mapped = rna_uracil_to_thymine(&edit).expect("expected Some");
         assert_eq!(
@@ -5176,6 +5191,7 @@ mod tests {
                 sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
                 deleted: Some(Sequence::from_str("TG").unwrap()),
                 deleted_length: None,
+                substitution_reference: None,
             }
         );
     }

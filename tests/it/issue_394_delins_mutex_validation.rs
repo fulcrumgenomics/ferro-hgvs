@@ -22,6 +22,7 @@ fn validation_rejects_delins_with_both_deleted_and_deleted_length() {
         sequence: InsertedSequence::Literal(Sequence::from_str("G").unwrap()),
         deleted: Some(Sequence::from_str("ATGC").unwrap()),
         deleted_length: Some(4),
+        substitution_reference: None,
     };
     let result = validate_na_edit(&edit);
     assert!(
@@ -48,6 +49,7 @@ fn validation_accepts_delins_with_deleted_only() {
         sequence: InsertedSequence::Literal(Sequence::from_str("G").unwrap()),
         deleted: Some(Sequence::from_str("ATGC").unwrap()),
         deleted_length: None,
+        substitution_reference: None,
     };
     let result = validate_na_edit(&edit);
     assert!(
@@ -63,6 +65,7 @@ fn validation_accepts_delins_with_deleted_length_only() {
         sequence: InsertedSequence::Literal(Sequence::from_str("G").unwrap()),
         deleted: None,
         deleted_length: Some(4),
+        substitution_reference: None,
     };
     let result = validate_na_edit(&edit);
     assert!(
@@ -78,6 +81,7 @@ fn validation_accepts_canonical_short_form_delins() {
         sequence: InsertedSequence::Literal(Sequence::from_str("G").unwrap()),
         deleted: None,
         deleted_length: None,
+        substitution_reference: None,
     };
     let result = validate_na_edit(&edit);
     assert!(

@@ -445,6 +445,7 @@ impl<'a> VcfToHgvsConverter<'a> {
                 sequence: InsertedSequence::Literal(seq),
                 deleted: None,
                 deleted_length: None,
+                substitution_reference: None,
             }
         };
 
@@ -612,6 +613,7 @@ pub fn vcf_to_genomic_hgvs(vcf: &VcfRecord, alt_index: usize) -> Result<GenomeVa
             sequence: InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         }
     };
 

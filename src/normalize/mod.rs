@@ -3141,6 +3141,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     sequence: InsertedSequence::Literal(Sequence::new(bases)),
                                     deleted: None,
                                     deleted_length: None,
+                                    substitution_reference: None,
                                 };
                                 new_tx_start = cds_start;
                                 new_tx_end = cds_start + (k as u64) - 1;
@@ -3252,6 +3253,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     sequence: InsertedSequence::Literal(Sequence::new(bases)),
                                     deleted: None,
                                     deleted_length: None,
+                                    substitution_reference: None,
                                 };
                                 new_tx_start = cds_end_tx;
                                 new_tx_end = cds_end_tx;
@@ -6879,6 +6881,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     sequence: bytes_to_inserted_seq(&trimmed_bytes),
                                     deleted: None,
                                     deleted_length: None,
+                                    substitution_reference: None,
                                 },
                                 warnings.clone(),
                             ));
@@ -8525,6 +8528,7 @@ fn build_split_variants(
                                 sequence: InsertedSequence::Literal(Sequence::new(alt_bases)),
                                 deleted: None,
                                 deleted_length: None,
+                                substitution_reference: None,
                             },
                         ));
                         i += 3;
@@ -8620,6 +8624,7 @@ fn flush_substitution_run(
             sequence: InsertedSequence::Literal(Sequence::new(alt_bases)),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         },
     ));
 }
@@ -9437,8 +9442,10 @@ mod tests {
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
 
-        // Position 1 = M (Met), Position 2 = V (Val)
-        let variant = parse_hgvs("NP_TEST.1:p.Met1Val").unwrap();
+        // Position 1 = M (Met), Position 2 = V (Val). Position 2 is used
+        // because a substitution at the initiator Met is spec-forbidden
+        // (protein/substitution.md:49).
+        let variant = parse_hgvs("NP_TEST.1:p.Val2Leu").unwrap();
         let result = normalizer.normalize(&variant);
         assert!(
             result.is_ok(),
@@ -10898,11 +10905,22 @@ mod tests {
         // Regression: ClinVar pattern NC_000011.10:g.5238138_5153222insTATTT
         // has start > end (inverted range).  Previously caused a panic in
         // insertion_is_duplication due to slice index out of bounds.
-        // The normalizer should return an error, not panic.
+        //
+        // Since #1079 the description never reaches the normalizer at all:
+        // an insertion anchor MUST name two flanking positions listed 5' to
+        // 3' (`DNA/insertion.md:15-16`), so the parser refuses it up front.
+        // That is a strictly stronger guarantee than "does not panic", but
+        // keep the normalizer half exercised on a legal inverted-range edit
+        // so the original slice-indexing regression stays covered.
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
 
-        let variant = parse_hgvs("NC_000011.10:g.5238138_5153222insTATTT").unwrap();
+        assert!(
+            parse_hgvs("NC_000011.10:g.5238138_5153222insTATTT").is_err(),
+            "non-flanking insertion anchor must be refused at parse time"
+        );
+
+        let variant = parse_hgvs("NC_000011.10:g.5238138_5153222dup").unwrap();
         let result = normalizer.normalize(&variant);
         // It's fine if this returns Ok (unchanged) or Err (validation failure),
         // but it must NOT panic.

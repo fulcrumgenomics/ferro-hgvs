@@ -1348,6 +1348,7 @@ where
             sequence: ins_seq,
             deleted,
             deleted_length: _,
+            substitution_reference: None,
         } => {
             // Closes #394 item 3. Non-literal delins inserted sequences
             // (any `InsertedSequence` variant other than `Literal`) are
@@ -1762,6 +1763,7 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
                 sequence: InsertedSequence::Literal(ins_seq),
                 deleted: None,
                 deleted_length: None,
+                substitution_reference: None,
             },
         )
     };
@@ -3996,9 +3998,22 @@ mod tests {
 
     #[test]
     fn test_hgvs_to_spdi_inversion_single_base() {
-        // Inversion of a single base 'A' → 'T'
+        // Inversion of a single base 'A' → 'T'. `g.100_100inv` cannot be
+        // parsed — DNA/inversion.md:16 forbids a one-nucleotide inversion —
+        // so the variant is built directly to keep the conversion arm
+        // covered for callers that construct an AST themselves.
         let provider = make_test_genomic_provider();
-        let hgvs = parse_hgvs("NC_000001.11:g.100_100inv").unwrap();
+        let hgvs = HgvsVariant::Genome(GenomeVariant {
+            accession: parse_accession("NC_000001.11").unwrap().1,
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                crate::hgvs::interval::GenomeInterval::point(GenomePos::new(100)),
+                NaEdit::Inversion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
         let spdi = hgvs_to_spdi(&hgvs, &provider).unwrap();
         assert_eq!(spdi.position, 99);
         assert_eq!(spdi.deletion, "A");
