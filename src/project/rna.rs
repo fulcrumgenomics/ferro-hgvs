@@ -1,7 +1,17 @@
 //! Predicted RNA consequence surface: `c.`/`n.` → `r.(…)`.
 //!
-//! Numbering is CDS-relative (identical to `c.`); the 3′ shift, intron-clamp,
-//! and range-reference resolution are performed in transcript-sequence space.
+//! Numbering is CDS-relative (identical to `c.`); the 3′ shift and
+//! range-reference resolution are performed in transcript-sequence space.
+//!
+//! Intronic positions have no `r.` representation of their own: an RNA
+//! reference sequence is the *spliced* transcript, and the spec is explicit
+//! that it therefore "can … **not be used** to describe variants affecting
+//! these sequences" (`background/numbering.md`). An edit with an intronic
+//! endpoint is only rendered when its exonic span is itself the consequence —
+//! a whole-exon skip, which `RNA/splicing.md` spells with plain exonic
+//! positions. Otherwise the axis declines rather than re-anchor onto the
+//! neighbouring exonic base, which exists on the mature RNA and would silently
+//! describe a different nucleotide. See `exonic_span`.
 //! RNA rendering (T→U, lowercase, predicted `( )` wrapper) is handled by the
 //! existing `RnaVariant` Display path; this module only builds the value.
 
@@ -37,8 +47,8 @@ fn cds_interval_to_rna(iv: &CdsInterval) -> Option<RnaInterval> {
 
 /// 3′-shift a single deletion interval along the spliced transcript sequence,
 /// in CDS coordinates. Exonic deletions only; the intronic/special/utr3 guard is
-/// a safety fallback (intronic offsets are already stripped by `clamp_intronic`
-/// before this runs) — such intervals are returned unchanged.
+/// a safety fallback (`exonic_span` already stripped or declined every intronic
+/// endpoint before this runs) — such intervals are returned unchanged.
 fn shift_deletion_3prime(iv: &CdsInterval, transcript: &Transcript) -> Option<CdsInterval> {
     let start_cds = iv.start.inner()?;
     let end_cds = iv.end.inner()?;
@@ -76,38 +86,60 @@ fn shift_deletion_3prime(iv: &CdsInterval, transcript: &Transcript) -> Option<Cd
     Some(CdsInterval::new(new_start, new_end))
 }
 
-/// Strip non-zero intronic offsets from a CDS interval, keeping the exon-anchor
-/// `base`. Collapses an intron-spanning edit to its exonic span on the RNA
-/// (introns are not present in the spliced transcript). Must run before any
-/// 3′ shift, which is undefined on intronic-offset positions.
-fn clamp_intronic(iv: &CdsInterval) -> Option<CdsInterval> {
-    // Collapsing to the exonic span: the output is always exon-anchored, so the
-    // intronic offset is dropped unconditionally (an exonic input already has
-    // `None`; a `Some(0)` boundary offset would otherwise render as `+0`).
+/// Reduce a CDS interval to the exonic span the `r.` axis may name, declining
+/// (`None`) when no such span exists.
+///
+/// A non-zero intronic offset (`c.3675-45`, `c.831+2`) names a nucleotide that
+/// is spliced out of the mature RNA, so it has no `r.` position of its own.
+/// Dropping the offset re-anchors the description onto the exon-boundary base —
+/// which *does* exist on the RNA — so the output stays well-formed while
+/// describing a different nucleotide. That is only acceptable when the exonic
+/// span is itself the thing being described, which is true for exactly one
+/// shape:
+///
+/// **Whole exon(s).** A span reaching 5′ into the intron *preceding* its start
+/// exon and 3′ into the intron *following* its end exon removes complete exons,
+/// and the spec spells that consequence with plain exonic positions —
+/// `RNA/splicing.md`: "`NC_000023.11(NM_004006.2):r.650_831del` … the sequence
+/// from nucleotide `r.650` to `r.831` (exon 8) is deleted from the transcript".
+/// HGVS intron numbering makes the test purely local: a **negative** offset is
+/// anchored on the first base of the downstream exon and a **positive** offset
+/// on the last base of the upstream exon (`background/numbering.md`), so
+/// `start.offset < 0 && end.offset > 0` means `start.base ..= end.base` is
+/// exactly a whole number of exons.
+///
+/// Everything else declines: a partial-exon edit with one intronic endpoint
+/// (`c.3675-45_3692del` — #1086 D5) has no exon-sized RNA consequence to name,
+/// and a purely intronic edit (`c.100+5_100+10del`, `c.831+2T>A`) touches no
+/// exonic base at all. For those, `background/numbering.md` is explicit that an
+/// RNA reference "can therefore **not be used** to describe variants affecting
+/// these sequences"; the spec's remedy is a genome-anchored `r.` carrying the
+/// offsets, which this surface does not emit.
+///
+/// Note this is *not* a general "make `r.` agree with `c.`" rule: the 3′-shift
+/// difference between the two axes is spec-mandated (`RNA/deletion.md`) and is
+/// deliberately left alone — only exonic spans reach the shift, exactly as
+/// before.
+fn exonic_span(iv: &CdsInterval) -> Option<CdsInterval> {
+    let start_in = iv.start.inner()?;
+    let end_in = iv.end.inner()?;
+    if start_in.is_intronic() || end_in.is_intronic() {
+        let spans_whole_exons =
+            start_in.offset.is_some_and(|o| o < 0) && end_in.offset.is_some_and(|o| o > 0);
+        if !spans_whole_exons {
+            return None;
+        }
+    }
+    // A `Some(0)` offset is exonic but would render as a spurious `+0`; the
+    // whole-exon offsets above are deliberately dropped (that is the exon-span
+    // reduction). Either way the output is exon-anchored.
     let strip = |p: &CdsPos| CdsPos {
         base: p.base,
         offset: None,
         utr3: p.utr3,
         special: p.special,
     };
-    let start_in = iv.start.inner()?;
-    let end_in = iv.end.inner()?;
-    let start = strip(start_in);
-    let end = strip(end_in);
-    // A purely intronic edit (both endpoints carry a non-zero intronic offset)
-    // that lies wholly within a single intron has no exonic component and hence no
-    // RNA consequence — decline rather than fabricate a spurious exonic span. This
-    // covers two shapes:
-    //   * shared exon anchor — `c.100+5_100+10del` collapses to `c.100_100del`;
-    //   * adjacent exon anchors — `c.100+5_101-3del` (the span sits in the lone
-    //     intron between bases 100 and 101, which are consecutive exonic positions)
-    //     collapses to `c.100_101del`.
-    // Both endpoints intronic with `end.base - start.base <= 1` means no exonic base
-    // falls inside the span.
-    if end.base.saturating_sub(start.base) <= 1 && start_in.is_intronic() && end_in.is_intronic() {
-        return None;
-    }
-    Some(CdsInterval::new(start, end))
+    Some(CdsInterval::new(strip(start_in), strip(end_in)))
 }
 
 /// Resolve a CDS position range to literal DNA bases against `transcript.sequence`.
@@ -200,12 +232,12 @@ pub(crate) fn predict_rna(coding: &HgvsVariant, transcript: &Transcript) -> Opti
         _ => return None, // non-c. inputs unsupported (alleles handled above)
     };
     let edit: &NaEdit = cds.loc_edit.edit.inner()?;
-    // Clamp intronic offsets to the exonic span first, then 3′-shift deletions
-    // along the spliced sequence (shifting an intronic-offset edit is undefined).
-    let clamped = clamp_intronic(&cds.loc_edit.location)?;
+    // Reduce to the exonic span the r. axis may name (declining an intronic
+    // endpoint that has none), then 3′-shift deletions along the spliced sequence.
+    let exonic = exonic_span(&cds.loc_edit.location)?;
     let location = match edit {
-        NaEdit::Deletion { .. } => shift_deletion_3prime(&clamped, transcript)?,
-        _ => clamped,
+        NaEdit::Deletion { .. } => shift_deletion_3prime(&exonic, transcript)?,
+        _ => exonic,
     };
     let rna_interval = cds_interval_to_rna(&location)?;
     // Resolve position-range/inversion inserts against the transcript sequence to
@@ -373,25 +405,30 @@ mod tests {
     }
 
     #[test]
-    fn intronic_endpoints_clamp_to_exonic_span() {
+    fn whole_exon_span_reduces_to_its_exonic_positions() {
         use crate::hgvs::edit::NaEdit;
         use crate::hgvs::interval::CdsInterval;
         use crate::hgvs::location::CdsPos;
         use crate::hgvs::variant::{Accession, CdsVariant, LocEdit};
 
-        // sequence present, cds_start = 1; needs >=704 nt in-bounds. Make
-        // position 705 distinct from the deleted run so the post-clamp 3′ shift
-        // leaves `677_704del` in place rather than shuffling rightward.
+        // `c.677-18_704+65del` brackets whole exon(s): the start offset is
+        // negative (anchored on the exon's FIRST base) and the end offset is
+        // positive (anchored on the exon's LAST base), so c.677..704 is exactly
+        // the skipped exon. RNA/splicing.md spells that consequence with plain
+        // exonic positions (`r.650_831del`, "exon 8 is deleted from the
+        // transcript"), so the offsets are dropped here by design — this is the
+        // one intronic shape #1086 keeps.
         let mut tx = coding_tx();
         let mut s = vec![b'A'; 900];
-        s[704] = b'C'; // 0-based 704 == c.705 differs from the deleted `A` run end
+        s[704] = b'C'; // c.705 differs from the deleted `A` run end => no 3' shift
         tx.sequence = Some(String::from_utf8(s).unwrap());
         tx.cds_end = Some(900);
         tx.exons = vec![Exon::new(1, 1, 900)];
 
-        let start = CdsPos::with_offset(677, -18); // c.677-18
-        let end = CdsPos::with_offset(704, 65); // c.704+65
-        let iv = CdsInterval::new(start, end);
+        let iv = CdsInterval::new(
+            CdsPos::with_offset(677, -18), // c.677-18
+            CdsPos::with_offset(704, 65),  // c.704+65
+        );
         let cds = CdsVariant {
             accession: Accession::new("NM", "000001", Some(1)),
             gene_symbol: None,
@@ -405,6 +442,90 @@ mod tests {
         };
         let out = predict_rna(&HgvsVariant::Cds(cds), &tx).expect("some");
         assert_eq!(out.to_string(), "NM_000001.1:r.(677_704del)");
+    }
+
+    #[test]
+    fn partial_exon_span_with_intronic_endpoints_declines() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::interval::CdsInterval;
+        use crate::hgvs::location::CdsPos;
+        use crate::hgvs::variant::{Accession, CdsVariant, LocEdit};
+
+        // Both endpoints intronic, but bracketed the WRONG way round:
+        // `c.677+18_704-65del` starts in the intron *following* exon-base 677
+        // and ends in the intron *preceding* exon-base 704, so it clips the
+        // flanking exons rather than removing whole ones. There is no exon-sized
+        // RNA consequence to name — decline (#1086).
+        let tx = coding_tx();
+        let iv = CdsInterval::new(CdsPos::with_offset(150, 18), CdsPos::with_offset(180, -65));
+        let cds = CdsVariant {
+            accession: Accession::new("NM", "000001", Some(1)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                iv,
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        };
+        assert!(predict_rna(&HgvsVariant::Cds(cds), &tx).is_none());
+    }
+
+    #[test]
+    fn single_intronic_endpoint_declines() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::interval::CdsInterval;
+        use crate::hgvs::location::CdsPos;
+        use crate::hgvs::variant::{Accession, CdsVariant, LocEdit};
+
+        // #1086 D5, the reported shape: only the *start* is intronic
+        // (`c.150-45_180del`), so the span clips into an exon rather than
+        // removing whole ones. Stripping the offset would name r.150 — an exonic
+        // base that exists, but is not `c.150-45`.
+        let tx = coding_tx();
+        let iv = CdsInterval::new(CdsPos::with_offset(150, -45), CdsPos::new(180));
+        let cds = CdsVariant {
+            accession: Accession::new("NM", "000001", Some(1)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                iv,
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        };
+        assert!(predict_rna(&HgvsVariant::Cds(cds), &tx).is_none());
+    }
+
+    #[test]
+    fn zero_offset_endpoint_is_exonic_and_renders() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::interval::CdsInterval;
+        use crate::hgvs::location::CdsPos;
+        use crate::hgvs::variant::{Accession, CdsVariant, LocEdit};
+
+        // A `Some(0)` offset is exonic, not intronic: it must still render (and
+        // without a spurious `+0`). Pins that the #1086 guard keys off
+        // `is_intronic()` rather than `offset.is_some()`.
+        let tx = coding_tx();
+        let mut start = CdsPos::new(141);
+        start.offset = Some(0);
+        let iv = CdsInterval::new(start, CdsPos::new(142));
+        let cds = CdsVariant {
+            accession: Accession::new("NM", "000001", Some(1)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                iv,
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        };
+        let out = predict_rna(&HgvsVariant::Cds(cds), &tx).expect("some");
+        assert_eq!(out.to_string(), "NM_000001.1:r.(141_142del)");
     }
 
     #[test]
@@ -513,9 +634,10 @@ mod tests {
         use crate::hgvs::variant::{Accession, CdsVariant, LocEdit};
 
         // An intron-only deletion whose endpoints share an exon anchor —
-        // c.100+5_100+10del — has no RNA consequence. Clamping its offsets would
+        // c.100+5_100+10del — has no RNA consequence. Stripping its offsets would
         // otherwise collapse it to a spurious single-base c.100_100del; predict_rna
-        // must decline (return None) instead.
+        // must decline (return None) instead. Covered by `exonic_span` since #1086
+        // (offset `+5` is not the whole-exon `-`/`+` bracketing shape).
         let tx = coding_tx();
         let start = CdsPos::with_offset(100, 5); // c.100+5
         let end = CdsPos::with_offset(100, 10); // c.100+10
@@ -545,7 +667,7 @@ mod tests {
         // *adjacent* exonic bases — c.100+5_101-3del. The span never touches an
         // exonic base, so it has no RNA consequence. Stripping the offsets would
         // otherwise fabricate a spurious two-base exonic c.100_101del; predict_rna
-        // must decline (return None) instead.
+        // must decline (return None) instead. Covered by `exonic_span` since #1086.
         let tx = coding_tx();
         let start = CdsPos::with_offset(100, 5); // c.100+5
         let end = CdsPos::with_offset(101, -3); // c.101-3
