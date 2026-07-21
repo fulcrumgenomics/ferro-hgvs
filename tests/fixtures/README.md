@@ -98,3 +98,14 @@ Smaller fixtures (<1 MB) are tracked directly in git. Key categories:
 - **`transcripts/`** — Mock transcript metadata
 
 See `SCHEMAS.md` for JSON format documentation.
+
+## Spec-divergence tracking
+
+`grammar/hgvs_spec_normalization.json` (generated, gitignored) classifies every harvested spec string
+with a `status`. Rows whose status is `diverges`, `false-acceptance`, `needs-reference`, or
+`parse-error` are the outstanding spec-divergence work.
+
+The umbrella tracking issue is <https://github.com/fulcrumgenomics/ferro-hgvs/issues/1079>. It is
+deliberately recorded here — in prose a human edits — rather than stamped onto each generated row,
+so that a superseded tracker cannot silently rot inside the generator (which is what happened with
+the previous tracker, #83).
