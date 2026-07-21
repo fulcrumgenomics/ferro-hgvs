@@ -1761,6 +1761,73 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Some(rna)
     }
 
+    /// Re-frame a derived transcript-coordinate axis (`c.` / `n.`) so its
+    /// accession carries the *input's* genomic context (#1086).
+    ///
+    /// The `coding`/`noncoding` axes are built on the bare transcript accession
+    /// (`NM_004006.2`), which silently discarded an `NC_`/`NG_` parent the input
+    /// supplied. For an **intronic** position that bare form is not merely a
+    /// stylistic loss — it is spec-invalid. `background/refseq.md:47-49`:
+    ///
+    /// > intronic sequences are considered to be **within the boundaries** of a
+    /// > transcript reference sequence and may only be used to describe a
+    /// > variant when a genomic reference sequence identifier is provided …
+    /// > **not correct:** `NM_004006.2:c.357+1G>A` … **correct:**
+    /// > `NC_000023.10(NM_004006.2):c.357+1G>A`,
+    /// > `NG_012232.1(NM_004006.2):c.357+1G>A`.
+    ///
+    /// (Restated for coding transcripts at `refseq.md:136` and for non-coding
+    /// transcripts — the `n.` axis — at `refseq.md:157`; the parenthesised
+    /// rendering is specified at `refseq.md:138-140`.)
+    ///
+    /// The rule applied is **preserve the caller's framing**: retain the parent
+    /// whenever the input supplied one, render bare whenever it did not. This is
+    /// a superset of the spec's mandatory (intronic / flanking) case, so the
+    /// "not correct" bare-intronic form can never be produced from a parented
+    /// input; and it is what `refseq.md:138-140` prescribes for *any* `c.`
+    /// description "based on a genomic reference sequence", with no exonic
+    /// carve-out. It also matches the framing `ferro normalize` and the `r.`
+    /// axis ([`Self::reframe_rna_from_input`]) already preserve, so the axes of
+    /// one projection agree on their reference.
+    ///
+    /// A parent is never fabricated: a bare input stays bare (#121). Unlike the
+    /// `r.` path this deliberately leaves `gene_symbol` alone — the `c.`/`n.`
+    /// symbol is already the input's own on every site that calls this.
+    fn reframe_transcript_axis_from_input(
+        axis: Option<HgvsVariant>,
+        input: &HgvsVariant,
+    ) -> Option<HgvsVariant> {
+        let mut axis = axis?;
+        let context = input
+            .accession()
+            .and_then(|a| a.genomic_context.as_deref().cloned());
+        Self::apply_transcript_axis_framing(&mut axis, context.as_ref());
+        Some(axis)
+    }
+
+    /// Stamp `context` onto every `c.`/`n.` leaf of `axis` (descending into an
+    /// allele so its first-member-derived prefix is re-framed), or strip any
+    /// context when `context` is `None`. See
+    /// [`Self::reframe_transcript_axis_from_input`] for the rule and citation.
+    fn apply_transcript_axis_framing(axis: &mut HgvsVariant, context: Option<&Accession>) {
+        let reframe = |acc: &Accession| match context {
+            Some(parent) => acc.clone().with_genomic_context(parent.clone()),
+            None => acc.clone().without_genomic_context(),
+        };
+        match axis {
+            HgvsVariant::Cds(c) => c.accession = reframe(&c.accession),
+            HgvsVariant::Tx(t) => t.accession = reframe(&t.accession),
+            // An allele renders its prefix from the first member, so every
+            // member must carry the input frame (mirrors `apply_rna_framing`).
+            HgvsVariant::Allele(a) => {
+                for member in &mut a.variants {
+                    Self::apply_transcript_axis_framing(member, context);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Stamp `context`/`gene_symbol` onto every `r.` leaf of `rna` (descending
     /// into a predicted allele so its first-member-derived prefix is re-framed).
     fn apply_rna_framing(
@@ -5068,6 +5135,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         } else {
             (Some(coding), protein, rna)
         };
+
+        // #1086: `coding`/`noncoding` were built on the bare transcript
+        // accession, dropping any `NC_`/`NG_` parent the input supplied — which
+        // for an intronic position yields the spec's literal "not correct" form
+        // (`refseq.md:47-49`). Carry the input's framing onto both axes.
+        let coding = Self::reframe_transcript_axis_from_input(coding, normalized);
+        let noncoding = Self::reframe_transcript_axis_from_input(noncoding, normalized);
 
         Ok(VariantProjection {
             normalization_warnings: Vec::new(),
