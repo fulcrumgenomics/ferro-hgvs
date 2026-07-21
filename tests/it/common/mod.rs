@@ -7,6 +7,9 @@
 //!   bulk parser fixtures (cmrg, paraphase, clinvar 500K + unique). See
 //!   `failure_expectations.rs` for the snapshot shape and contract;
 //!   tracking issue: #174.
+//! - `fixture_gen`: the shared on-demand regeneration flow (locking,
+//!   subprocess, atomic rename) that `spec_fixture` and `spec_enumeration`
+//!   both wrap.
 //! - `spec_fixture`: regenerates the gitignored HGVS spec-normalization
 //!   fixture on demand so tests that read it work on a fresh checkout.
 //! - `spec_enumeration`: same, for the gitignored exhaustive spec test
@@ -20,6 +23,7 @@
 #![allow(dead_code)]
 
 pub mod failure_expectations;
+pub mod fixture_gen;
 pub mod spec_enumeration;
 pub mod spec_fixture;
 pub mod synthetic;

@@ -1013,7 +1013,7 @@ mod builder {
             &normalizer,
             &mut rows,
             &mut cens,
-        );
+        )?;
         error_mode(candidates, existing, sha, &mut rows, &mut cens);
         grammar_form(candidates, existing, sha, &mut rows, &mut cens);
         output_invariant(existing, sha, &mut rows, &mut cens);
@@ -1061,7 +1061,7 @@ mod builder {
     fn raw_spec_negatives(spec_dir: &Path) -> anyhow::Result<Vec<(String, String, usize)>> {
         let mut out = Vec::new();
         let recs = spec_dir.join("docs/recommendations");
-        for path in sources::walkdir_md_pub(&recs) {
+        for path in sources::walkdir_md_pub(&recs)? {
             let text = std::fs::read_to_string(&path)?;
             let rel = path
                 .strip_prefix(spec_dir)
@@ -1194,8 +1194,8 @@ mod builder {
     /// extraction is unreliable — the spec routinely cites a bare coordinate on
     /// the same line as the corrected form.
     ///
-    /// Not-applicable = negatives the spec forbids without naming a replacement
-    /// (`repaired: null`), and repairs that need real reference bases.
+    /// Not-applicable = negatives with no curated repair target: either no
+    /// `overrides.repairs` entry at all, or one whose `repaired` is `null`.
     fn negative_repair(
         raw_negatives: &[(String, String, usize)],
         prose: &[negatives::ProseNegative],
@@ -1204,7 +1204,7 @@ mod builder {
         normalizer: &Normalizer<MockProvider>,
         rows: &mut Vec<Row>,
         cens: &mut Census,
-    ) {
+    ) -> anyhow::Result<()> {
         // Gross = every distinct spec-stated negative (a repair assertion is
         // conceivable for each); n/a = those with no curated target.
         let mut all: BTreeSet<String> = raw_negatives
@@ -1216,6 +1216,22 @@ mod builder {
         }
         let gross = all.len();
         let mut na = 0usize;
+
+        // A curated repair whose key matches no spec-stated negative is stale
+        // (spec drift or a typo'd key) — it silently over-reports repair
+        // coverage, so fail rather than skip it, mirroring the `by_id` and
+        // `projections` stale-key guards.
+        let stale: Vec<&str> = ov
+            .repairs
+            .keys()
+            .filter(|k| !all.contains(k.as_str()))
+            .map(String::as_str)
+            .collect();
+        if !stale.is_empty() {
+            anyhow::bail!(
+                "overrides.repairs references inputs that are not spec-stated negatives: {stale:?}"
+            );
+        }
 
         for input in &all {
             let Some(rep) = ov.repairs.get(input) else {
@@ -1264,6 +1280,7 @@ mod builder {
             });
         }
         cens.tally("negative-repair", gross, 0, na);
+        Ok(())
     }
 
     /// Dimension 3 — `parse` under strict / lenient / silent.
@@ -1506,10 +1523,15 @@ mod builder {
             if vs.is_empty() {
                 continue;
             }
-            for v in vs {
+            // One rule can raise several violations for a single output (e.g.
+            // one per offending member), and `dedup_by` only collapses those
+            // sharing both rule_id and message — so the per-output iteration
+            // index is needed to keep the row id unique (the build's final
+            // uniqueness guard hard-errors on a collision).
+            for (i, v) in vs.into_iter().enumerate() {
                 emitted += 1;
                 rows.push(Row {
-                    id: format!("output-invariant/{}/{}", v.rule_id, target),
+                    id: format!("output-invariant/{}/{}#{i}", v.rule_id, target),
                     dimension: "output-invariant".to_string(),
                     operation: "invariant-check".to_string(),
                     error_mode: "default".to_string(),
@@ -1731,7 +1753,9 @@ mod builder {
                     observed,
                     status: status.to_string(),
                     spec_citation: citation,
-                    dedup_note: "the existing suite is entirely within-axis (parse / normalize /                                  render in the input's own coordinate system); nothing asserts                                  what this string becomes on another axis"
+                    dedup_note: "the existing suite is entirely within-axis (parse / normalize / \
+                                 render in the input's own coordinate system); nothing asserts \
+                                 what this string becomes on another axis"
                         .to_string(),
                     note: Some(note),
                 });

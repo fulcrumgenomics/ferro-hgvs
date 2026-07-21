@@ -19,7 +19,7 @@
 //! or improvement shows up as a budget mismatch.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::PathBuf;
 
 use ferro_hgvs::conformance::reference_window::WindowProvider;
 use ferro_hgvs::conformance::spec_projection;
@@ -33,7 +33,13 @@ use ferro_hgvs::{parse_hgvs, Normalizer};
 use serde::Deserialize;
 
 /// Committed hermetic reference slice backing the `project-*` dimensions.
-const PROJECTION_WINDOWS: &str = "tests/fixtures/grammar/spec_enumeration_windows.json";
+/// Anchored on `CARGO_MANIFEST_DIR` (via the shared helper) so the path
+/// resolves regardless of the test's working directory. Unlike the generated
+/// fixtures this slice is committed, so it is returned directly — no
+/// `ensure_generated_fixture` regeneration step.
+fn projection_windows_path() -> PathBuf {
+    crate::common::fixture_gen::fixture_path("tests/fixtures/grammar/spec_enumeration_windows.json")
+}
 
 #[derive(Debug, Deserialize)]
 struct Enumeration {
@@ -74,12 +80,28 @@ struct Replayer {
 
 impl Replayer {
     fn new() -> Self {
-        let projector = spec_projection::load_slice(Path::new(PROJECTION_WINDOWS))
-            .ok()
-            .map(|windows| {
-                let cdot = CdotMapper::from_transcripts(windows.transcripts.iter());
-                VariantProjector::new(Projector::new(cdot), windows.to_provider())
+        // The slice is committed, so its absence means only a checkout that has
+        // not materialised it — skip the `project-*` rows then. But if the file
+        // *is* present, any load failure (malformed JSON, a missing sidecar
+        // FASTA) is a corrupt fixture: fail loudly rather than silently drop all
+        // projection coverage, which a blanket `.ok()` would have done.
+        let windows_path = projection_windows_path();
+        let projector = if windows_path.exists() {
+            let windows = spec_projection::load_slice(&windows_path).unwrap_or_else(|e| {
+                panic!(
+                    "committed projection slice {} is present but failed to load \
+                     (corrupt fixture?): {e}",
+                    windows_path.display()
+                )
             });
+            let cdot = CdotMapper::from_transcripts(windows.transcripts.iter());
+            Some(VariantProjector::new(
+                Projector::new(cdot),
+                windows.to_provider(),
+            ))
+        } else {
+            None
+        };
         Replayer {
             normalizer: Normalizer::new(MockProvider::new()),
             projector,

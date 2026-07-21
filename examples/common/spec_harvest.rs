@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 pub mod sources {
     use super::*;
+    use anyhow::Context as _;
     use std::ffi::OsStr;
 
     #[derive(Debug)]
@@ -50,7 +51,7 @@ pub mod sources {
 
     pub fn discover(spec_dir: &Path) -> anyhow::Result<Vec<Candidate>> {
         let mut all = Vec::new();
-        for (path, kind, wg) in whitelisted_files(spec_dir) {
+        for (path, kind, wg) in whitelisted_files(spec_dir)? {
             let text = std::fs::read_to_string(&path)?;
             let rel = path
                 .strip_prefix(spec_dir)
@@ -87,12 +88,14 @@ pub mod sources {
         Ok(all)
     }
 
-    fn whitelisted_files(spec_dir: &Path) -> Vec<(PathBuf, SourceKind, Option<String>)> {
+    fn whitelisted_files(
+        spec_dir: &Path,
+    ) -> anyhow::Result<Vec<(PathBuf, SourceKind, Option<String>)>> {
         let mut out = Vec::new();
         let docs = spec_dir.join("docs");
 
         let recs = docs.join("recommendations");
-        for entry in walkdir_md(&recs) {
+        for entry in walkdir_md(&recs)? {
             out.push((entry, SourceKind::Recommendation, None));
         }
 
@@ -115,11 +118,11 @@ pub mod sources {
                 out.push((p, SourceKind::Consultation, Some(wg)));
             }
         }
-        out
+        Ok(out)
     }
 
     /// Public alias of [`walkdir_md`] for the `negatives` harvester.
-    pub fn walkdir_md_pub(dir: &Path) -> Vec<PathBuf> {
+    pub fn walkdir_md_pub(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
         walkdir_md(dir)
     }
 
@@ -128,21 +131,22 @@ pub mod sources {
         canonicalize(s)
     }
 
-    fn walkdir_md(dir: &Path) -> Vec<PathBuf> {
+    fn walkdir_md(dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
         let mut out = Vec::new();
         if !dir.exists() {
-            return out;
+            return Ok(out);
         }
         let mut stack = vec![dir.to_path_buf()];
         while let Some(d) = stack.pop() {
-            let entries = match std::fs::read_dir(&d) {
-                Ok(r) => r,
-                Err(e) => {
-                    eprintln!("warning: cannot read dir {}: {e}", d.display());
-                    continue;
-                }
-            };
-            for e in entries.flatten() {
+            // Propagate read failures rather than warn-and-continue: a directory
+            // the harvester cannot read yields a silently incomplete candidate
+            // set, and this feeds a conformance fixture, so an incomplete scan
+            // must fail generation (matching `discover`'s error propagation).
+            let entries = std::fs::read_dir(&d)
+                .with_context(|| format!("read spec documentation directory {}", d.display()))?;
+            for e in entries {
+                let e =
+                    e.with_context(|| format!("read a directory entry under {}", d.display()))?;
                 let p = e.path();
                 if p.is_dir() {
                     stack.push(p);
@@ -152,7 +156,7 @@ pub mod sources {
             }
         }
         out.sort();
-        out
+        Ok(out)
     }
 
     /// Return every variant string the spec explicitly marks as invalid via
@@ -759,7 +763,7 @@ pub mod negatives {
     pub fn discover(spec_dir: &Path) -> anyhow::Result<Vec<ProseNegative>> {
         let mut out = Vec::new();
         let recs = spec_dir.join("docs/recommendations");
-        for path in super::sources::walkdir_md_pub(&recs) {
+        for path in super::sources::walkdir_md_pub(&recs)? {
             let text = std::fs::read_to_string(&path)?;
             let rel = path
                 .strip_prefix(spec_dir)

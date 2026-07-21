@@ -235,12 +235,17 @@ pub fn project_all_axes<P: ReferenceProvider + Clone>(
         // A whole-projection failure applies identically to all five axes, but
         // decline (exit 0) and hard failure (exit 1) are different contracts.
         // Rather than restate the shipped classification here — where it could
-        // silently drift — ask `project_axis` once and reuse its verdict.
+        // silently drift — ask `project_axis` once and reuse its verdict. The
+        // probe is genomic, so its non-rendered *message* is genomic-flavoured;
+        // re-frame it axis-neutrally before fanning it out so a c./n./r./p. row
+        // does not read as though the failure were specific to the g. axis.
         Err(_) => {
             let verdict = match project_axis(projector, variant, Axis::Genomic, Some(&transcript)) {
                 Ok(AxisOutcome::Rendered { output, .. }) => AxisResult::Rendered(output),
-                Ok(AxisOutcome::Unavailable { reason, .. }) => AxisResult::Unavailable(reason),
-                Err(e) => AxisResult::Error(e.to_string()),
+                Ok(AxisOutcome::Unavailable { reason, .. }) => AxisResult::Unavailable(format!(
+                    "projection unavailable for all axes: {reason}"
+                )),
+                Err(e) => AxisResult::Error(format!("projection failed for all axes: {e}")),
             };
             AXES.iter()
                 .map(|(code, _)| (*code, verdict.clone()))
@@ -373,8 +378,10 @@ mod tests {
         assert_eq!(pass.transcript.as_deref(), Some("NM_ABSENT.1"));
         for (code, _) in AXES {
             assert!(
-                !matches!(pass.axes[&code], AxisResult::NotApplicable(_)),
-                "axis {code} must report the failure, not drop it"
+                matches!(pass.axes[&code], AxisResult::Error(_)),
+                "axis {code} must surface the unknown transcript as a hard error, \
+                 not drop it or soften it to unavailable: got {:?}",
+                pass.axes[&code]
             );
         }
     }

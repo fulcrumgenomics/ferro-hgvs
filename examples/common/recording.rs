@@ -296,3 +296,61 @@ pub fn build_window_fixture(
         placements,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{merged_windows, MERGE_GAP, PAD};
+
+    // Guard the arithmetic below against a future retuning of the constants.
+    const _: () = assert!(PAD == 64 && MERGE_GAP == 128);
+
+    #[test]
+    fn start_padding_saturates_at_zero() {
+        // 10 - PAD underflows u64 → clamps to 0; end grows by PAD.
+        assert_eq!(merged_windows(vec![(10, 20)], None), vec![(0, 20 + PAD)]);
+    }
+
+    #[test]
+    fn end_padding_clamps_to_len() {
+        // 20 + PAD = 84 would exceed len 50 → clamped to len.
+        assert_eq!(merged_windows(vec![(10, 20)], Some(50)), vec![(0, 50)]);
+    }
+
+    #[test]
+    fn overlapping_padded_ranges_merge() {
+        // (100,110)→(36,174) and (150,160)→(86,224) overlap → one interval.
+        assert_eq!(
+            merged_windows(vec![(100, 110), (150, 160)], None),
+            vec![(36, 224)]
+        );
+    }
+
+    #[test]
+    fn ranges_within_merge_gap_merge() {
+        // (100,110)→(36,174) and (300,310)→(236,374): a 62 bp gap ≤ MERGE_GAP
+        // (128) → still merged into one interval.
+        assert_eq!(
+            merged_windows(vec![(100, 110), (300, 310)], None),
+            vec![(36, 374)]
+        );
+    }
+
+    #[test]
+    fn disjoint_ranges_stay_separate() {
+        // (100,110)→(36,174) and (1000,1010)→(936,1074): the 762 bp gap exceeds
+        // MERGE_GAP → two intervals.
+        assert_eq!(
+            merged_windows(vec![(100, 110), (1000, 1010)], None),
+            vec![(36, 174), (936, 1074)]
+        );
+    }
+
+    #[test]
+    fn input_is_sorted_before_merging() {
+        // Reversed input yields the same merged result as the sorted order.
+        assert_eq!(
+            merged_windows(vec![(150, 160), (100, 110)], None),
+            vec![(36, 224)]
+        );
+    }
+}
