@@ -215,10 +215,12 @@ pub(crate) fn predict_rna(coding: &HgvsVariant, transcript: &Transcript) -> Opti
             sequence,
             deleted,
             deleted_length,
+            substitution_reference,
         } => NaEdit::Delins {
             sequence: resolve_range_insert(sequence, transcript)?,
             deleted: deleted.clone(),
             deleted_length: *deleted_length,
+            substitution_reference: substitution_reference.clone(),
         },
         NaEdit::Insertion { sequence } => NaEdit::Insertion {
             sequence: resolve_range_insert(sequence, transcript)?,

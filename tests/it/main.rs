@@ -98,6 +98,7 @@ mod issue_1079_point_size_suffix;
 mod issue_1079_residues_after_stop;
 mod issue_1079_single_nucleotide_inversion;
 mod issue_1079_start_loss_substitution;
+mod issue_1092_stated_substitution_reference;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;

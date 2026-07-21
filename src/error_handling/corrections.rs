@@ -3222,39 +3222,42 @@ pub fn suggest_point_del_range_form(input: &str) -> Option<String> {
 /// The `original` of an [`ErrorType::OldSubstitutionSyntax`] correction has
 /// the shape `<pos>[_<pos>]<ref>*><alt>+`, so the reference run is the IUPAC
 /// bases immediately preceding the arrow; the position digits terminate it.
-fn substitution_ref_len(original: &str) -> usize {
+fn substitution_ref_run(original: &str) -> &str {
     match original.find('>') {
-        Some(arrow) => original[..arrow]
-            .chars()
-            .rev()
-            .take_while(|c| is_iupac_base(*c))
-            .count(),
-        None => 0,
+        Some(arrow) => {
+            let lhs = &original[..arrow];
+            let start = lhs.len() - lhs.chars().rev().take_while(|c| is_iupac_base(*c)).count();
+            &lhs[start..]
+        }
+        None => "",
     }
 }
 
-/// Suggest the canonical `delins` form for a **multi-base reference**
-/// substitution (`c.79GC>TT`, `c.79_80GC>TT`, `g.4GC>TG`).
+/// The reference run a deprecated `<pos>[_<pos>]<ref>><alt>` description
+/// states, when `input` holds exactly one such description and it names at
+/// least one reference base.
 ///
-/// Per `recommendations/DNA/substitution.md:30` a substitution replaces one
-/// nucleotide by one other, so naming two or more reference bases either side
-/// of the arrow is not a substitution at all — the change is a deletion /
-/// insertion and must be written as one.
+/// The preprocessor rewrites that spelling to the canonical `delins` **text**
+/// before the parser ever sees it (`c.79_80GC>TT` → `c.79_80delinsTT`), which
+/// is what drops the stated `GC` on the lenient/silent path. This lets the
+/// parse seam put the run back into the AST so `validate_reference` can check
+/// the claim (#1092) — a false claim must produce a diagnostic, not vanish.
 ///
-/// Returns `None` when `input` carries no such form. The no-reference form
-/// (`c.100_102>ATG`) and a one-base reference with a longer insert
-/// (`c.79G>TT`) are deliberately not matched: neither can lose a reference
-/// base, and both are handled as ordinary preprocessor corrections. Used by
-/// the parser's spec-rule diagnostic so the rejection message names the repair.
-pub fn suggest_multibase_substitution_form(input: &str) -> Option<String> {
-    let (rewritten, corrections) = correct_old_substitution_syntax(input);
-    corrections
+/// Deliberately conservative: `None` unless there is exactly one such
+/// correction, so the run can be attributed to exactly one edit without
+/// guessing. The no-reference form (`c.100_102>ATG`) states no bases and
+/// yields `None`.
+pub fn stated_substitution_reference(input: &str) -> Option<String> {
+    let (_, corrections) = correct_old_substitution_syntax(input);
+    let mut subs = corrections
         .iter()
-        .any(|c| {
-            c.error_type == ErrorType::OldSubstitutionSyntax
-                && substitution_ref_len(&c.original) > 1
-        })
-        .then(|| rewritten.into_owned())
+        .filter(|c| c.error_type == ErrorType::OldSubstitutionSyntax);
+    let only = subs.next()?;
+    if subs.next().is_some() {
+        return None;
+    }
+    let run = substitution_ref_run(&only.original);
+    (!run.is_empty()).then(|| run.to_string())
 }
 
 pub fn detect_del_size_suffix(input: &str) -> Vec<DetectedCorrection> {

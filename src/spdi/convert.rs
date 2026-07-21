@@ -1348,6 +1348,7 @@ where
             sequence: ins_seq,
             deleted,
             deleted_length: _,
+            substitution_reference: None,
         } => {
             // Closes #394 item 3. Non-literal delins inserted sequences
             // (any `InsertedSequence` variant other than `Literal`) are
@@ -1762,6 +1763,7 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
                 sequence: InsertedSequence::Literal(ins_seq),
                 deleted: None,
                 deleted_length: None,
+                substitution_reference: None,
             },
         )
     };

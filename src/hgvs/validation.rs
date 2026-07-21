@@ -619,6 +619,7 @@ mod tests {
                 sequence: InsertedSequence::Literal(Sequence::new(vec![])),
                 deleted: None,
                 deleted_length: None,
+                substitution_reference: None,
             };
             let result = rules::validate_na_edit(&edit);
             assert!(!result.valid);

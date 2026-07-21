@@ -7255,7 +7255,7 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
 
     // Spec-mandated post-parse semantic check: reject a multi-nucleotide
     // substitution (HGVS DNA/substitution.md:30, DNA/delins.md:73; #1079).
-    validate_no_multibase_substitution(input)?;
+    validate_no_multibase_substitution(&variant)?;
 
     // Spec-mandated post-parse semantic check: reject a start-codon variant
     // written as an amino acid substitution (HGVS protein/substitution.md:49,
@@ -7873,16 +7873,17 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
 /// (`recommendations/style.md:9`), so the rejection applies on every parse
 /// path that reaches the grammar with the form still spelled out.
 ///
-/// # Why the check reads the source
+/// # Why the check reads the AST
 ///
-/// The grammar folds `GC>TT` into a `Delins` edit and keeps no record of the
-/// reference bases, so by post-parse time `c.79_80GC>TT` and a hand-written
-/// `c.79_80delinsTT` are indistinguishable in the AST. Worse, the single-
-/// position spelling folded `c.79GC>TT` into `c.79delinsTT` — a one-base
-/// deletion with a two-base insert, silently dropping a stated reference base
-/// and yielding a *different variant* from the `c.79_80delinsTT` the
-/// preprocessor produced for the same input. Keying off the source is what
-/// lets the two entry points converge.
+/// The grammar used to fold `GC>TT` into a `Delins` edit that kept no record
+/// of the reference bases, so the rule had to re-read the input string — which
+/// meant it could not fire for an allele member composed programmatically, a
+/// variant produced by projection or round-trip, or anything constructed
+/// rather than parsed. The parser now preserves the stated run in
+/// [`NaEdit::Delins::substitution_reference`] (#1092), so the rule keys off
+/// that field instead and survives composition. The field is provenance only:
+/// `Display` ignores it, so the canonical short form `delinsTT` is still what
+/// is rendered.
 ///
 /// Lenient and silent modes never reach this check: the preprocessor rewrites
 /// both spellings to `c.79_80delinsTT` first (the spec states the replacement
@@ -7893,26 +7894,131 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
 /// longer insert (`c.79G>TT`) already spans exactly its anchor and cannot lose
 /// a base, and the no-reference form (`c.100_102>ATG`) states no reference
 /// bases at all; both remain ordinary preprocessor concerns.
-fn validate_no_multibase_substitution(source: &str) -> Result<(), FerroError> {
+pub fn validate_no_multibase_substitution(variant: &HgvsVariant) -> Result<(), FerroError> {
     use crate::error::{Diagnostic, ErrorCode};
-    use crate::error_handling::corrections::suggest_multibase_substitution_form;
+    use crate::hgvs::edit::{NaEdit, Sequence};
+    use crate::hgvs::interval::UncertainBoundary;
+    use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 
-    let Some(canonical) = suggest_multibase_substitution_form(source) else {
-        return Ok(());
-    };
-    Err(FerroError::parse_with_diagnostic(
-        0,
-        format!(
-            "a substitution replaces one nucleotide by one other, so naming several \
-             reference bases is not allowed (DNA/substitution.md:30, DNA/delins.md:73); \
-             write `{canonical}` instead"
-        ),
-        Diagnostic::new()
-            .with_code(ErrorCode::InvalidEdit)
-            .with_hint(format!(
-                "describe the change as a deletion-insertion — write `{canonical}`"
-            )),
-    ))
+    /// The stated reference run of a `NN>MM` edit, when it names more than one
+    /// base. One base cannot be lost at its own anchor, so it is out of scope.
+    fn multibase_run(edit: &Mu<NaEdit>) -> Option<&Sequence> {
+        match edit.inner() {
+            Some(NaEdit::Delins {
+                substitution_reference: Some(run),
+                ..
+            }) if run.len() > 1 => Some(run),
+            _ => None,
+        }
+    }
+
+    /// Drop the provenance so the repaired clone renders as a plain `delins`.
+    fn clear_run(edit: &mut Mu<NaEdit>) {
+        if let Mu::Certain(NaEdit::Delins {
+            substitution_reference,
+            ..
+        })
+        | Mu::Uncertain(NaEdit::Delins {
+            substitution_reference,
+            ..
+        }) = edit
+        {
+            *substitution_reference = None;
+        }
+    }
+
+    /// A single certain position, or `None` for uncertain / range boundaries.
+    fn point<T: PartialEq>(
+        start: &UncertainBoundary<T>,
+        end: &UncertainBoundary<T>,
+    ) -> Option<&'static ()> {
+        match (start.as_single(), end.as_single()) {
+            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) if s == e => Some(&()),
+            _ => None,
+        }
+    }
+
+    // The canonical repair names both endpoints. Extending a point anchor is
+    // only safe for a plain positive coordinate with no intronic offset and no
+    // `*`/`-`/pter-style qualifier — the same restriction the preprocessor's
+    // textual rewrite applies. When it does not hold the repair keeps the
+    // stated anchor rather than guessing.
+    fn wider_genome(p: &GenomePos, extra: u64) -> Option<GenomePos> {
+        (p.special.is_none() && p.offset.is_none() && p.base >= 1)
+            .then(|| GenomePos::new(p.base + extra))
+    }
+    fn wider_cds(p: &CdsPos, extra: u64) -> Option<CdsPos> {
+        (p.special.is_none() && p.offset.is_none() && !p.utr3 && p.base >= 1)
+            .then(|| CdsPos::new(p.base + extra as i64))
+    }
+    fn wider_tx(p: &TxPos, extra: u64) -> Option<TxPos> {
+        (p.offset.is_none() && !p.downstream && p.base >= 1)
+            .then(|| TxPos::new(p.base + extra as i64))
+    }
+    fn wider_rna(p: &RnaPos, extra: u64) -> Option<RnaPos> {
+        (p.offset.is_none() && !p.utr3 && p.base >= 1).then(|| RnaPos::new(p.base + extra as i64))
+    }
+
+    fn make_error(canonical: &str) -> FerroError {
+        FerroError::parse_with_diagnostic(
+            0,
+            format!(
+                "a substitution replaces one nucleotide by one other, so naming several \
+                 reference bases is not allowed (DNA/substitution.md:30, DNA/delins.md:73); \
+                 write `{canonical}` instead"
+            ),
+            Diagnostic::new()
+                .with_code(ErrorCode::InvalidEdit)
+                .with_hint(format!(
+                    "describe the change as a deletion-insertion — write `{canonical}`"
+                )),
+        )
+    }
+
+    /// Clone `$v`, strip the provenance and widen a point anchor to the run's
+    /// full span, then render the result as the canonical repair.
+    macro_rules! check {
+        ($v:expr, $ctor:path, $widen:ident) => {{
+            if let Some(run) = multibase_run(&$v.loc_edit.edit) {
+                let extra = run.len() as u64 - 1;
+                let mut repaired = $v.clone();
+                clear_run(&mut repaired.loc_edit.edit);
+                if point(
+                    &repaired.loc_edit.location.start,
+                    &repaired.loc_edit.location.end,
+                )
+                .is_some()
+                {
+                    if let Some(end) = repaired
+                        .loc_edit
+                        .location
+                        .start
+                        .inner()
+                        .and_then(|p| $widen(p, extra))
+                    {
+                        repaired.loc_edit.location.end = UncertainBoundary::certain(end);
+                    }
+                }
+                return Err(make_error(&$ctor(repaired).to_string()));
+            }
+        }};
+    }
+
+    match variant {
+        HgvsVariant::Genome(v) => check!(v, HgvsVariant::Genome, wider_genome),
+        HgvsVariant::Cds(v) => check!(v, HgvsVariant::Cds, wider_cds),
+        HgvsVariant::Tx(v) => check!(v, HgvsVariant::Tx, wider_tx),
+        HgvsVariant::Rna(v) => check!(v, HgvsVariant::Rna, wider_rna),
+        HgvsVariant::Mt(v) => check!(v, HgvsVariant::Mt, wider_genome),
+        HgvsVariant::Circular(v) => check!(v, HgvsVariant::Circular, wider_genome),
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_multibase_substitution(inner)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Reject amino acids listed *after* a translation stop in an inserted

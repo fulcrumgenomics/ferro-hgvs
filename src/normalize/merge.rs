@@ -1109,6 +1109,7 @@ fn build_naedit<P>(
             sequence: InsertedSequence::Literal(Sequence::new(merged.alt)),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         }
     };
     let (lo, hi) = if merged.start > merged.end {

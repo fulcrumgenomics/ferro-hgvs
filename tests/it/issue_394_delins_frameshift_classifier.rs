@@ -385,6 +385,7 @@ fn delins_uncertain_range_insert_alt_len_unknown_falls_back_to_false() {
         sequence: InsertedSequence::Range(10, 20),
         deleted: None,
         deleted_length: None,
+        substitution_reference: None,
     };
     let (kind, is_fs, ref_len, alt_len) = analyze_na_edit(&edit, Some(3));
     assert_eq!(kind, "delins");
@@ -407,6 +408,7 @@ fn delins_empty_insert_with_known_span_is_pure_deletion() {
         sequence: InsertedSequence::Empty,
         deleted: None,
         deleted_length: None,
+        substitution_reference: None,
     };
     let (_, is_fs, ref_len, alt_len) = analyze_na_edit(&edit, Some(3));
     assert_eq!(ref_len, 3);

@@ -87,12 +87,19 @@ pub fn validate_reference(edit: &NaEdit, ref_seq: &[u8], start: u64, end: u64) -
         NaEdit::Delins {
             deleted,
             deleted_length,
+            substitution_reference,
             ..
         } => {
             if let Some(seq) = deleted {
                 // Non-recommended `delACinsGT` form: ferro parses the stated
                 // deleted bases into `deleted`. Validate them against the
                 // reference span (#486) — mirrors the `Deletion` arm.
+                validate_sequence(seq.bases(), ref_seq, start, end)
+            } else if let Some(seq) = substitution_reference {
+                // Forbidden `AC>GT` form: the reference run it states is kept
+                // in `substitution_reference` (#1092). It asserts exactly what
+                // `delACinsGT` asserts, so it gets exactly the same check —
+                // otherwise a false claim would vanish without a diagnostic.
                 validate_sequence(seq.bases(), ref_seq, start, end)
             } else if let Some(n) = deleted_length {
                 // Numeric `del<N>ins…`: N must equal the position span (#486).
@@ -750,6 +757,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
             deleted: Some(Sequence::from_str("GGG").unwrap()),
             deleted_length: None,
+            substitution_reference: None,
         };
         let ref_seq = b"ATGC";
         let result = validate_reference(&edit, ref_seq, 1, 3);
@@ -765,6 +773,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
             deleted: Some(Sequence::from_str("ATG").unwrap()),
             deleted_length: None,
+            substitution_reference: None,
         };
         let ref_seq = b"ATGC";
         let result = validate_reference(&edit, ref_seq, 1, 3);
@@ -779,6 +788,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let ref_seq = b"ATGC";
         let result = validate_reference(&edit, ref_seq, 1, 3);
@@ -794,6 +804,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("AT").unwrap()),
             deleted: None,
             deleted_length: Some(3),
+            substitution_reference: None,
         };
         let ref_seq = b"ATGC";
         let result = validate_reference(&edit, ref_seq, 1, 3);
@@ -912,6 +923,7 @@ mod tests {
             sequence: InsertedSequence::Literal(Sequence::from_str("ATC").unwrap()),
             deleted: None,
             deleted_length: Some(4),
+            substitution_reference: None,
         };
         let result = validate_reference(&edit, b"ATGC", 45, 45);
         assert!(!result.valid);

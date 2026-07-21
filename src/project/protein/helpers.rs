@@ -927,6 +927,7 @@ mod tests {
             sequence: InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let result = build_mutated_cds(&t, 4, 6, &edit).unwrap();
         assert_eq!(result, "ATGTCCTAA");

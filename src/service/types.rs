@@ -216,6 +216,7 @@ pub(crate) fn extract_na_edit_info(edit: &NaEdit) -> (String, Option<String>, Op
             sequence,
             deleted,
             deleted_length,
+            ..
         } => {
             let deleted = deleted
                 .as_ref()

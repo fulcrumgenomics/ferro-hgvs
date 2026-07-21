@@ -1466,6 +1466,7 @@ pub(crate) fn try_project_cis_combined_inframe(
         sequence: InsertedSequence::Literal(Sequence::new(Vec::new())),
         deleted: None,
         deleted_length: None,
+        substitution_reference: None,
     };
     let pv = build_inframe_variant(
         transcript,
@@ -1993,6 +1994,7 @@ mod tests {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let result = predict_indel(&t, 4, 6, &edit, "NP_TEST.1").unwrap();
         assert_eq!(prot_str(&result), "NP_TEST.1:p.(Arg2Ser)");
@@ -2107,6 +2109,7 @@ mod tests {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let result = predict_indel(&t, 4, 6, &edit, "NP_TEST.1").unwrap();
         assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2Ter)");
@@ -2125,6 +2128,7 @@ mod tests {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let result = predict_indel(&t, 4, 9, &edit, "NP_TEST.1").unwrap();
         assert_eq!(prot_str(&result), "NP_TEST.1:p.(Lys2Ter)");
@@ -2143,6 +2147,7 @@ mod tests {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let result = predict_indel(&t, 7, 9, &edit, "NP_TEST.1").unwrap();
         assert_eq!(prot_str(&result), "NP_TEST.1:p.(Gly3delinsSerTer)");
@@ -2165,6 +2170,7 @@ mod tests {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let result = predict_indel(&t, 7, 9, &edit, "NP_TEST.1").unwrap();
         let s = prot_str(&result);
@@ -2193,6 +2199,7 @@ mod tests {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let result = predict_indel(&t, 7, 9, &edit, "NP_TEST.1").unwrap();
         let s = prot_str(&result);
@@ -2223,6 +2230,7 @@ mod tests {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let result = predict_indel(&t, 7, 9, &edit, "NP_TEST.1").unwrap();
         let s = prot_str(&result);
@@ -2273,6 +2281,7 @@ mod tests {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let result = predict_indel(&t, 1, 3, &edit, "NP_TEST.1").unwrap();
         assert_eq!(prot_str(&result), "NP_TEST.1:p.(Met1?)");
@@ -2769,6 +2778,7 @@ mod tests {
             ])),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let del = NaEdit::Deletion {
             sequence: None,
@@ -2859,6 +2869,7 @@ mod tests {
             sequence: crate::hgvs::edit::InsertedSequence::Literal(seq),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         };
         let v = predict_indel(&t, 4, 9, &edit, "NP_TEST.1").unwrap();
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Arg2LysfsTer4)");

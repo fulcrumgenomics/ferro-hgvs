@@ -10221,6 +10221,7 @@ mod tests {
                         sequence: InsertedSequence::Literal("GG".parse().unwrap()),
                         deleted: None,
                         deleted_length: None,
+                        substitution_reference: None,
                     },
                 ),
             };
@@ -10289,6 +10290,7 @@ mod tests {
                         sequence: InsertedSequence::Literal("GG".parse().unwrap()),
                         deleted: None,
                         deleted_length: None,
+                        substitution_reference: None,
                     },
                 ),
             };
@@ -13033,6 +13035,7 @@ mod tests {
                     ])),
                     deleted: None,
                     deleted_length: None,
+                    substitution_reference: None,
                 },
             ),
         });

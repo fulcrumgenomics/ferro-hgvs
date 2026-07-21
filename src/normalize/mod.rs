@@ -3141,6 +3141,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     sequence: InsertedSequence::Literal(Sequence::new(bases)),
                                     deleted: None,
                                     deleted_length: None,
+                                    substitution_reference: None,
                                 };
                                 new_tx_start = cds_start;
                                 new_tx_end = cds_start + (k as u64) - 1;
@@ -3252,6 +3253,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     sequence: InsertedSequence::Literal(Sequence::new(bases)),
                                     deleted: None,
                                     deleted_length: None,
+                                    substitution_reference: None,
                                 };
                                 new_tx_start = cds_end_tx;
                                 new_tx_end = cds_end_tx;
@@ -6879,6 +6881,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     sequence: bytes_to_inserted_seq(&trimmed_bytes),
                                     deleted: None,
                                     deleted_length: None,
+                                    substitution_reference: None,
                                 },
                                 warnings.clone(),
                             ));
@@ -8525,6 +8528,7 @@ fn build_split_variants(
                                 sequence: InsertedSequence::Literal(Sequence::new(alt_bases)),
                                 deleted: None,
                                 deleted_length: None,
+                                substitution_reference: None,
                             },
                         ));
                         i += 3;
@@ -8620,6 +8624,7 @@ fn flush_substitution_run(
             sequence: InsertedSequence::Literal(Sequence::new(alt_bases)),
             deleted: None,
             deleted_length: None,
+            substitution_reference: None,
         },
     ));
 }

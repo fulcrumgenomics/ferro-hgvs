@@ -43,10 +43,12 @@ pub fn transform_edit_for_strand(edit: &NaEdit, strand: Strand) -> NaEdit {
             sequence,
             deleted,
             deleted_length,
+            substitution_reference,
         } => NaEdit::Delins {
             sequence: revcomp_inserted(sequence),
             deleted: deleted.as_ref().map(revcomp_sequence),
             deleted_length: *deleted_length,
+            substitution_reference: substitution_reference.as_ref().map(revcomp_sequence),
         },
         NaEdit::Duplication {
             sequence,
@@ -174,10 +176,12 @@ pub(crate) fn u_to_t_edit(edit: &NaEdit) -> NaEdit {
             sequence,
             deleted,
             deleted_length,
+            substitution_reference,
         } => NaEdit::Delins {
             sequence: u_to_t_inserted(sequence),
             deleted: deleted.as_ref().map(u_to_t_sequence),
             deleted_length: *deleted_length,
+            substitution_reference: substitution_reference.as_ref().map(u_to_t_sequence),
         },
         NaEdit::Duplication {
             sequence,
@@ -342,6 +346,7 @@ mod tests {
             sequence: InsertedSequence::Literal(seq("CC")),
             deleted: Some(seq("ATG")),
             deleted_length: None,
+            substitution_reference: None,
         };
         let out = transform_edit_for_strand(&edit, Strand::Minus);
         let s = out.to_string();
