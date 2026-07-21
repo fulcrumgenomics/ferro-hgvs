@@ -60,10 +60,7 @@ use shuffle::shuffle;
 
 /// Check if a CDS position has an unknown (?) offset sentinel value
 fn has_unknown_offset_cds(pos: &CdsPos) -> bool {
-    matches!(
-        pos.offset,
-        Some(OFFSET_UNKNOWN_POSITIVE) | Some(OFFSET_UNKNOWN_NEGATIVE)
-    )
+    pos.has_unknown_offset()
 }
 
 /// Intron length (1-based inclusive base count) at the intron addressed by
