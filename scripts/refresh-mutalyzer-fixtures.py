@@ -173,6 +173,12 @@ def _merge_case(existing_case: dict, upstream_case: dict) -> tuple[dict, bool, b
     merged.update(dispositions)
 
     removed_keys = existing_case.get("removed_keys") or []
+    unknown_removed = [k for k in removed_keys if k not in EXPECTED_VALUE_KEYS]
+    if unknown_removed:
+        raise ValueError(
+            f"removed_keys for input {existing_case.get('input')!r} names non-expected-value "
+            f"key(s) {unknown_removed}; only {list(EXPECTED_VALUE_KEYS)} may be removed"
+        )
     corrected = False
     for key in EXPECTED_VALUE_KEYS:
         in_existing, in_upstream = key in existing_case, key in upstream_case

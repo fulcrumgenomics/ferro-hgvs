@@ -466,6 +466,9 @@
       "to_test": false,
       "errors": [
         "ECOORDINATESYSTEMMISMATCH"
+      ],
+      "removed_keys": [
+        "normalized"
       ]
     },
     {
@@ -675,6 +678,11 @@
       "to_test": false,
       "errors": [
         "EUNCERTAIN"
+      ],
+      "removed_keys": [
+        "normalized",
+        "genomic",
+        "protein_description"
       ]
     },
     {
@@ -687,6 +695,11 @@
       "to_test": false,
       "errors": [
         "EUNCERTAIN"
+      ],
+      "removed_keys": [
+        "normalized",
+        "genomic",
+        "protein_description"
       ]
     },
     {
@@ -699,6 +712,11 @@
       "to_test": false,
       "errors": [
         "EUNCERTAIN"
+      ],
+      "removed_keys": [
+        "normalized",
+        "genomic",
+        "coding_protein_descriptions"
       ]
     },
     {
