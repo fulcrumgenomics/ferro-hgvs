@@ -7248,6 +7248,11 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // insertion (HGVS DNA/insertion.md:95-101 Q&A — explicit "No"; #446).
     validate_no_point_insertion(&variant, input)?;
 
+    // Spec-mandated post-parse semantic check: reject a `del`/`dup` size
+    // suffix on a single-position anchor (HGVS checklist.md:49,
+    // DNA/deletion.md:117, DNA/duplication.md:140, RNA/deletion.md:49; #1079).
+    validate_no_point_size_suffix(&variant, input)?;
+
     // Spec-mandated post-parse semantic check: reject a coding/genomic/mito
     // coordinate system on a non-coding RNA (NR_/XR_) reference (#486,
     // ECOORDINATESYSTEMMISMATCH).
@@ -7529,6 +7534,132 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
         }
         // Protein insertions use a different anchor model — handled
         // elsewhere; nothing to validate here.
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a `del`/`dup` size-count suffix hung on a **single-position**
+/// anchor — `g.123del3`, `g.123dup6`, `r.123del6`, `p.Arg45del6` (#1079).
+///
+/// Per `recommendations/checklist.md:49`:
+///
+/// > Descriptions like `g.123del3` are not allowed, correct is `g.123_125del`.
+///
+/// restated for each axis in `DNA/deletion.md:117`, `RNA/deletion.md:49` and
+/// `DNA/duplication.md:140`. "not allowed" is MUST-level under the spec's
+/// RFC 2119 reading (`recommendations/style.md:9`), so the rejection applies
+/// on every parse path rather than being mode-configurable.
+///
+/// Scope is deliberately narrow: only an anchor that fails to name both
+/// endpoints violates the rule. A range anchor that also carries a redundant
+/// size (`c.100_102del3`) already names them, and stays a soft W3011/W3016
+/// concern handled by the preprocessor.
+///
+/// Lenient and silent modes never reach this check for a deletion — the
+/// preprocessor rewrites `g.123del3` to `g.123_125del` first (the spec states
+/// that replacement outright). A duplication has no such repair: the spec
+/// declines to say whether `g.123dup6` starts at or after position 123
+/// (`DNA/duplication.md:143`), so guessing would risk emitting a different
+/// variant than the author meant, and every mode rejects.
+fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::error_handling::corrections::suggest_point_del_range_form;
+    use crate::hgvs::edit::{NaEdit, ProteinEdit};
+    use crate::hgvs::interval::UncertainBoundary;
+    use crate::hgvs::uncertainty::Mu;
+
+    /// The edit kind whose size suffix was found, for the diagnostic text.
+    enum SizedEdit {
+        Deletion,
+        Duplication,
+    }
+
+    fn is_point<T: PartialEq>(start: &UncertainBoundary<T>, end: &UncertainBoundary<T>) -> bool {
+        match (start.as_single(), end.as_single()) {
+            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
+            _ => false,
+        }
+    }
+
+    /// The rule targets a description "of more than one residue" that fails
+    /// to name both endpoints (`DNA/deletion.md:117`). A size of one names
+    /// exactly the anchor residue — redundant, not incomplete — so it stays a
+    /// soft W3011/W3023 concern rather than a hard rejection.
+    fn sized_na_edit(edit: &Mu<NaEdit>) -> Option<SizedEdit> {
+        match edit.inner() {
+            Some(NaEdit::Deletion {
+                length: Some(n), ..
+            }) if *n > 1 => Some(SizedEdit::Deletion),
+            Some(NaEdit::Duplication {
+                length: Some(n), ..
+            }) if *n > 1 => Some(SizedEdit::Duplication),
+            _ => None,
+        }
+    }
+
+    fn make_error(kind: &SizedEdit, source: &str) -> FerroError {
+        let (noun, spec) = match kind {
+            SizedEdit::Deletion => ("deletion", "checklist.md:49 / DNA/deletion.md:117"),
+            SizedEdit::Duplication => ("duplication", "DNA/duplication.md:140"),
+        };
+        let repair = match (kind, suggest_point_del_range_form(source)) {
+            (SizedEdit::Deletion, Some(canonical)) => {
+                format!("write `{canonical}` instead")
+            }
+            (SizedEdit::Deletion, None) => {
+                "write `<start>_<end>del`, not `<start>del<size>`".to_string()
+            }
+            (SizedEdit::Duplication, _) => {
+                "write `<start>_<end>dup`, not `<start>dup<size>`. The spec declines to \
+                 disambiguate whether the duplication starts at or after the anchor, so \
+                 ferro will not guess"
+                    .to_string()
+            }
+        };
+        FerroError::parse_with_diagnostic(
+            0,
+            format!(
+                "a {noun} sized by a suffix on a single-position anchor names only one \
+                 endpoint and is not allowed ({spec}); {repair}"
+            ),
+            Diagnostic::new()
+                .with_code(ErrorCode::InvalidEdit)
+                .with_hint(format!("name both endpoints — {repair}")),
+        )
+    }
+
+    macro_rules! check_na {
+        ($v:expr) => {
+            if let Some(kind) = sized_na_edit(&$v.loc_edit.edit) {
+                if is_point(&$v.loc_edit.location.start, &$v.loc_edit.location.end) {
+                    return Err(make_error(&kind, source));
+                }
+            }
+        };
+    }
+
+    match variant {
+        HgvsVariant::Genome(v) => check_na!(v),
+        HgvsVariant::Cds(v) => check_na!(v),
+        HgvsVariant::Tx(v) => check_na!(v),
+        HgvsVariant::Rna(v) => check_na!(v),
+        HgvsVariant::Mt(v) => check_na!(v),
+        HgvsVariant::Circular(v) => check_na!(v),
+        HgvsVariant::Protein(v) => {
+            if matches!(
+                v.loc_edit.edit.inner(),
+                Some(ProteinEdit::Deletion { count: Some(n), .. }) if *n > 1
+            ) && is_point(&v.loc_edit.location.start, &v.loc_edit.location.end)
+            {
+                return Err(make_error(&SizedEdit::Deletion, source));
+            }
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_point_size_suffix(inner, source)?;
+            }
+        }
         _ => {}
     }
     Ok(())

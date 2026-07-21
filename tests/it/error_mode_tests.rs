@@ -1284,9 +1284,11 @@ mod w3011_del_size_suffix_emission {
     use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
 
     #[test]
-    fn lenient_warns_without_rewrite() {
-        // SVA-007: warn_accept — lenient warns but does NOT rewrite the input
-        // (we cannot synthesise the end position safely).
+    fn lenient_rewrites_point_anchor_to_range() {
+        // #1079: `checklist.md:49` states the replacement outright
+        // ("not allowed, correct is `g.123_125del`"), so a *point* anchor is
+        // canonicalised rather than merely flagged. An offset/range anchor,
+        // where the arithmetic is not a simple increment, still only warns.
         let result = parse_hgvs_lenient("NG_012232.1:g.123del6").unwrap();
         assert!(result.has_warnings());
         assert_eq!(
@@ -1297,8 +1299,16 @@ mod w3011_del_size_suffix_emission {
                 .count(),
             1
         );
-        // Input is unchanged (no auto-correction).
-        assert_eq!(result.preprocessed_input, "NG_012232.1:g.123del6");
+        assert_eq!(result.preprocessed_input, "NG_012232.1:g.123_128del");
+    }
+
+    #[test]
+    fn lenient_rejects_offset_anchor_it_cannot_repair() {
+        // An intronic anchor names one endpoint too, so the MUST-level rule
+        // applies — but `c.100+5 + 6 - 1` is not safely computable, so there
+        // is no canonical form to offer and lenient rejects rather than
+        // passing a spec-invalid description through.
+        assert!(parse_hgvs_lenient("NM_004006.2:c.100+5del6").is_err());
     }
 
     #[test]
@@ -1308,10 +1318,10 @@ mod w3011_del_size_suffix_emission {
     }
 
     #[test]
-    fn silent_accepts_without_warning() {
+    fn silent_rewrites_without_warning() {
         let result = parse_hgvs_silent("NG_012232.1:g.123del6").unwrap();
         assert!(!result.has_warnings());
-        assert_eq!(result.preprocessed_input, "NG_012232.1:g.123del6");
+        assert_eq!(result.preprocessed_input, "NG_012232.1:g.123_128del");
     }
 
     #[test]
@@ -1327,8 +1337,10 @@ mod w3011_del_size_suffix_emission {
     fn idempotent_re_pass() {
         let r1 = parse_hgvs_lenient("NG_012232.1:g.123del6").unwrap();
         let r2 = parse_hgvs_lenient(&r1.preprocessed_input).unwrap();
+        // The rewritten form is canonical, so a second pass is a no-op and
+        // no longer warns.
         assert_eq!(r1.preprocessed_input, r2.preprocessed_input);
-        assert!(r2.has_warnings());
+        assert!(!r2.has_warnings());
     }
 }
 

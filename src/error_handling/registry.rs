@@ -865,12 +865,14 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             code: "W3011",
             name: "DelSizeSuffix",
             summary: "Deletion described with a size-count suffix instead of a position range.",
-            explanation:
-                "HGVS recommends naming both endpoints of a multi-residue deletion. The legacy \
-                form `g.123del6` (size 6 starting at position 123) is non-canonical; the canonical \
-                form lists the first and last residue deleted, e.g. `g.123_128del`. ferro cannot \
-                auto-synthesize the end position safely (it depends on offset/intronic semantics), \
-                so this warning is emitted but not auto-corrected.",
+            explanation: "HGVS requires both endpoints of a multi-residue deletion to be named \
+                (`checklist.md:49`: `g.123del3` is \"not allowed, correct is `g.123_125del`\"). \
+                When the anchor is a plain point position ferro treats this as MUST-level: the \
+                default parse rejects, and lenient/silent modes rewrite `g.123del6` to \
+                `g.123_128del`. When the anchor is intronic/offset the end position cannot be \
+                synthesized safely, so there is no repair to offer and the form is rejected \
+                outright. A range anchor that merely repeats the size (`c.100_102del3`) already \
+                names both endpoints and only warns.",
             category: CodeCategory::Format,
             bad_examples: &["NG_012232.1:g.123del6"],
             good_examples: &["NG_012232.1:g.123_128del"],
@@ -1187,12 +1189,12 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             code: "W3023",
             name: "DupSizeSuffix",
             summary: "Duplication described with a size-count suffix instead of a position range.",
-            explanation:
-                "HGVS recommends naming both endpoints of a multi-residue duplication. The legacy \
-                form `g.123dup6` (size 6 starting at position 123) is non-canonical; the canonical \
-                form lists the first and last residue duplicated, e.g. `g.123_128dup`. ferro cannot \
-                auto-synthesize the end position safely (`g.123dup6` is ambiguous between `g.123_128dup` \
-                and `g.124_129dup` per the spec Q&A), so this warning is emitted but not auto-corrected.",
+            explanation: "HGVS requires both endpoints of a multi-residue duplication to be named \
+                (`DNA/duplication.md:140`). The legacy form `g.123dup6` names only one, and the \
+                spec explicitly declines to disambiguate it (`g.123_128dup` vs `g.124_129dup`), \
+                so there is no safe repair: a point-anchored `dup<N>` is rejected in every mode. \
+                A range anchor that merely repeats the size (`c.20_21dup2`) already names both \
+                endpoints and only warns.",
             category: CodeCategory::Format,
             bad_examples: &["NM_004006.2:c.20_21dup2", "NC_000023.11:g.123dup6"],
             good_examples: &["NM_004006.2:c.20_21dup", "NC_000023.11:g.123_124dup"],

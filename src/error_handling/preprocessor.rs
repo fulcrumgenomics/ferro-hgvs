@@ -8,12 +8,12 @@ use super::corrections::{
     correct_del_explicit_seq, correct_deprecated_con, correct_deprecated_protein_forms,
     correct_dup_explicit_seq, correct_edit_type_case_full, correct_empty_delins,
     correct_missing_coordinate_prefix, correct_old_allele_format, correct_old_substitution_syntax,
-    correct_protein_arrow, correct_quote_characters, correct_redundant_repeat_label,
-    correct_rna_thymine, correct_single_letter_aa_in_protein, correct_single_position_range,
-    correct_swapped_positions, correct_whitespace, detect_del_size_suffix, detect_deprecated_ivs,
-    detect_dup_size_suffix, detect_length_mismatch, detect_length_mismatch_with_provider,
-    detect_missing_versions, detect_position_zero, detect_protein_bracketed_aa_insertion,
-    strip_trailing_annotation, DetectedCorrection,
+    correct_point_del_size_suffix, correct_protein_arrow, correct_quote_characters,
+    correct_redundant_repeat_label, correct_rna_thymine, correct_single_letter_aa_in_protein,
+    correct_single_position_range, correct_swapped_positions, correct_whitespace,
+    detect_del_size_suffix, detect_deprecated_ivs, detect_dup_size_suffix, detect_length_mismatch,
+    detect_length_mismatch_with_provider, detect_missing_versions, detect_position_zero,
+    detect_protein_bracketed_aa_insertion, strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
@@ -834,6 +834,52 @@ impl InputPreprocessor {
                                 .with_suggestion(corrected.clone())
                                 .with_hint(
                                     "RNA repeat descriptions should omit the base label when positions already define the unit",
+                                ),
+                        ),
+                    );
+                }
+                ResolvedAction::WarnCorrect => {
+                    for c in &corrections {
+                        all_warnings.push(CorrectionWarning::from_correction(c));
+                    }
+                    current = corrected.into_owned();
+                }
+                ResolvedAction::SilentCorrect => {
+                    current = corrected.into_owned();
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 12b: Canonicalise a deletion anchored at a *single position*
+        // and sized by a suffix — `g.123del3` → `g.123_125del` (W3011, #1079).
+        // `checklist.md:49` states the replacement outright ("not allowed,
+        // correct is `g.123_125del`"), so unlike the broader Phase 13 check
+        // this subset has a mechanical repair and follows
+        // `standard_correctable` semantics: strict rejects, lenient rewrites
+        // with a warning, silent rewrites quietly. Runs before Phase 13 so a
+        // rewritten description no longer trips the non-rewriting warning.
+        let (corrected, corrections) = correct_point_del_size_suffix(&current);
+        if !corrections.is_empty() {
+            let action = self.action_for(ErrorType::DelSizeSuffix);
+            match action {
+                ResolvedAction::Reject => {
+                    let first = &corrections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            format!(
+                                "Deletion '{}' uses size-count suffix; canonical form names both endpoints",
+                                first.original
+                            ),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InvalidEdit)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_suggestion(corrected.clone())
+                                .with_hint(
+                                    "Write `g.<start>_<end>del` instead of `g.<start>del<size>`",
                                 ),
                         ),
                     );
