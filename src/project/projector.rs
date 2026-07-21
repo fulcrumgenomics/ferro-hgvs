@@ -4239,6 +4239,28 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // U→T mapping. This is a no-op for n. (DNA) inputs.
         let c_edit = transform_edit_for_strand(&edit, RefStrand::Plus);
 
+        // #1086 (D2): `.noncoding` is contracted to always mean the `n.` form.
+        // For an `n.` input that IS the input; for an `r.` input the input is an
+        // RNA description (`r.` prefix, lowercase RNA alphabet with `u`), and
+        // returning it verbatim reports the wrong coordinate system on the `n.`
+        // axis. Numbering is shared between the two — `RnaPos` and `TxPos` have
+        // the same base/offset/downstream shape, which is exactly how
+        // `start_tx`/`end_tx` were derived above — so re-expressing an `r.` input
+        // as `n.` is a prefix + alphabet change only (`c_edit`'s U→T mapping).
+        // The edit's certainty is carried through so a predicted `r.(11u>g)`
+        // stays predicted on the `n.` axis.
+        let noncoding_axis = match normalized {
+            HgvsVariant::Rna(_) => HgvsVariant::Tx(TxVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit: LocEdit::with_uncertainty(
+                    TxInterval::new(start_tx, end_tx),
+                    edit_mu.map_ref(|e| transform_edit_for_strand(e, RefStrand::Plus)),
+                ),
+            }),
+            _ => normalized.clone(),
+        };
+
         // #886: a bare LRG transcript has a structurally derivable genomic
         // parent, so its genomic axis IS resolvable; a bare NM_/NR_ has no
         // genome alignment -> stays None. Use `project_to_genomic_normalized`
@@ -4259,7 +4281,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 normalization_warnings: Vec::new(),
                 genomic,
                 coding: None,
-                noncoding: Some(normalized.clone()),
+                noncoding: Some(noncoding_axis),
                 protein: None,
                 // No coding form on a non-coding transcript; the RNA prediction
                 // surface (#485) predicts from the c. form, so it's unavailable here.
@@ -4337,8 +4359,9 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             normalization_warnings: Vec::new(),
             genomic,
             coding,
-            // The non-coding axis is the input itself.
-            noncoding: Some(normalized.clone()),
+            // The non-coding axis is the input itself for an `n.` input, and the
+            // `n.`-reframed form of an `r.` input (#1086).
+            noncoding: Some(noncoding_axis),
             protein,
             rna,
             transcript_id: transcript_id.to_string(),
