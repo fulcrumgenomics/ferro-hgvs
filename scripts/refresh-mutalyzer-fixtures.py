@@ -141,18 +141,28 @@ def _is_hand_added(case: dict) -> bool:
     return any(str(k).startswith(HAND_ADDED_PREFIX) for k in kws)
 
 
-def _merge_case(existing_case: dict, upstream_case: dict) -> tuple[dict, bool, bool]:
+def _merge_case(existing_case: dict, upstream_case: dict) -> tuple[dict, bool, bool, bool]:
     """Overlay one existing row's curation onto its fresh upstream row.
 
-    Returns `(merged_row, carried_disposition, carried_correction)`. The
+    Returns `(merged_row, carried_disposition, carried_correction,
+    carried_removal)`. `carried_correction` flags an expected-value field whose
+    curated value overrides upstream's; `carried_removal` flags a row carrying a
+    non-empty `removed_keys` marker (a deliberately-dropped expected value) —
+    tracked separately because a removal is curation the refresh must reconcile
+    even when upstream no longer ships the removed field, in which case there is
+    no value difference to flag as a correction. The
     upstream row is the base so genuinely-new upstream fields still arrive;
     onto it we overlay
 
     - every disposition key present on the existing row, and
-    - every expected-value field whose existing value differs from upstream's,
-      including the case where we deliberately *removed* the key (upstream has
-      it, the curated row does not) — that removal is a correction too, so the
-      key is dropped rather than resurrected;
+    - every expected-value field whose existing value differs from upstream's;
+    - every expected-value field the curated row *deliberately removed*, recorded
+      explicitly in its `removed_keys` list. Only a key named there is dropped —
+      an expected-value field absent from the curated row but NOT named in
+      `removed_keys` is treated as genuinely new upstream data and kept, so a
+      field upstream added after the row was curated survives the merge. The
+      `removed_keys` marker itself is carried forward so the removal keeps
+      holding across future refreshes;
     - any keyword the curated row added and upstream does not have. Keyword
       annotations are how a disposition's rationale is recorded, and appending
       (rather than replacing) keeps new upstream keywords as well.
@@ -162,17 +172,17 @@ def _merge_case(existing_case: dict, upstream_case: dict) -> tuple[dict, bool, b
     dispositions = {k: existing_case[k] for k in DISPOSITION_KEYS if k in existing_case}
     merged.update(dispositions)
 
+    removed_keys = existing_case.get("removed_keys") or []
     corrected = False
     for key in EXPECTED_VALUE_KEYS:
         in_existing, in_upstream = key in existing_case, key in upstream_case
-        if not in_existing and not in_upstream:
-            continue
         if in_existing and existing_case[key] != upstream_case.get(key):
             merged[key] = existing_case[key]
             corrected = True
-        elif not in_existing and in_upstream:
+        elif not in_existing and in_upstream and key in removed_keys:
             del merged[key]
-            corrected = True
+    if removed_keys:
+        merged["removed_keys"] = list(removed_keys)
 
     upstream_keywords = list(upstream_case.get("keywords") or [])
     added_keywords = [
@@ -181,18 +191,24 @@ def _merge_case(existing_case: dict, upstream_case: dict) -> tuple[dict, bool, b
     if added_keywords:
         merged["keywords"] = upstream_keywords + added_keywords
 
-    return merged, bool(dispositions), corrected
+    return merged, bool(dispositions), corrected, bool(removed_keys)
 
 
 def _pair_with_existing(
     upstream_cases: list[dict], existing_cases: list[dict]
-) -> list[tuple[dict, dict | None]]:
+) -> tuple[list[tuple[dict, dict | None]], list[dict]]:
     """Pair each upstream row with the curated row it supersedes.
 
     Rows are matched on `input`, and on *occurrence order* within a duplicated
     `input` — upstream occasionally ships the same variant twice with different
     expected values, and collapsing those onto one curated row would copy the
     wrong curation onto both.
+
+    Returns `(pairs, unmatched)`. `unmatched` holds the curated (non-hand-added)
+    rows that no upstream occurrence claimed — e.g. upstream dropped one of a
+    duplicated `input` that carried curation. Those rows must not be dropped
+    silently (that is the very curation loss the merge exists to prevent), so
+    the caller carries them forward and counts them.
     """
     by_input: dict[str | None, list[dict]] = {}
     for case in existing_cases:
@@ -206,7 +222,11 @@ def _pair_with_existing(
         seen[key] = ordinal + 1
         candidates = by_input.get(key, [])
         pairs.append((upstream, candidates[ordinal] if ordinal < len(candidates) else None))
-    return pairs
+    unmatched: list[dict] = []
+    for key, candidates in by_input.items():
+        claimed = seen.get(key, 0)
+        unmatched.extend(candidates[claimed:])
+    return pairs, unmatched
 
 
 def build_refresh_payload(upstream_cases: list[dict], existing: dict, force: bool) -> dict:
@@ -216,26 +236,33 @@ def build_refresh_payload(upstream_cases: list[dict], existing: dict, force: boo
     it supersedes (see `_pair_with_existing`); that row's per-case dispositions,
     hand-corrected expected values and added keyword annotations are overlaid
     onto it (see `_merge_case`), so genuinely-new upstream fields still arrive
-    while curation survives. Hand-added rows (marked via HAND_ADDED_PREFIX) and
-    corpus-level curation (clusters, comparator_provenance) are carried forward
-    verbatim. Raises when the existing file holds curation and force is not set,
-    so the operator can reconcile the merge first.
+    while curation survives. Curated rows that no upstream occurrence claims
+    (e.g. upstream dropped one of a duplicated `input`) are carried forward
+    rather than silently dropped, so their curation is never lost. Hand-added
+    rows (marked via HAND_ADDED_PREFIX) and corpus-level curation (clusters,
+    comparator_provenance) are carried forward verbatim. Raises when the existing
+    file holds curation and force is not set, so the operator can reconcile the
+    merge first.
     """
     existing_cases = existing.get("cases", [])
     preserved = [c for c in existing_cases if _is_hand_added(c)]
-    pairs = _pair_with_existing(upstream_cases, existing_cases)
+    pairs, unmatched = _pair_with_existing(upstream_cases, existing_cases)
 
     merged_cases: list[dict] = []
-    n_disp = n_corrected = 0
+    n_disp = n_corrected = n_removed = 0
     for upstream, prior in pairs:
         if prior is None:
             merged_cases.append(dict(upstream))
             continue
-        merged, carried_disposition, carried_correction = _merge_case(prior, upstream)
+        merged, carried_disposition, carried_correction, carried_removal = _merge_case(
+            prior, upstream
+        )
         n_disp += carried_disposition
         n_corrected += carried_correction
+        n_removed += carried_removal
         merged_cases.append(merged)
     n_hand = len(preserved)
+    n_unmatched = len(unmatched)
 
     has_curation = bool(
         existing.get("clusters")
@@ -243,6 +270,8 @@ def build_refresh_payload(upstream_cases: list[dict], existing: dict, force: boo
         or preserved
         or n_disp
         or n_corrected
+        or n_removed
+        or n_unmatched
     )
     if has_curation and not force:
         raise SystemExit(
@@ -253,6 +282,10 @@ def build_refresh_payload(upstream_cases: list[dict], existing: dict, force: boo
             f"({', '.join(DISPOSITION_KEYS)})\n"
             f"  - {n_corrected} upstream row(s) whose expected values were hand-corrected "
             "away from upstream (reverting these flips them PASS -> FAIL)\n"
+            f"  - {n_removed} upstream row(s) with deliberately-removed expected values "
+            "(removed_keys; resurrecting the removed key flips them PASS -> FAIL)\n"
+            f"  - {n_unmatched} curated row(s) upstream no longer ships (paired to no "
+            "upstream occurrence; carried forward so their curation is not lost)\n"
             f"  - {len(existing.get('clusters', []))} cluster(s), "
             f"comparator_provenance {'present' if existing.get('comparator_provenance') else 'absent'}\n"
             "Rerun with --force once you have reviewed the merge; --force keeps the "
@@ -270,11 +303,12 @@ def build_refresh_payload(upstream_cases: list[dict], existing: dict, force: boo
         payload["comparator_provenance"] = existing["comparator_provenance"]
     if existing.get("clusters"):
         payload["clusters"] = existing["clusters"]
-    payload["cases"] = merged_cases + preserved
+    payload["cases"] = merged_cases + unmatched + preserved
     print(
         f"merge: preserved dispositions on {n_disp} row(s), "
         f"corrected expected values on {n_corrected} row(s), "
-        f"{n_hand} hand-added row(s)"
+        f"{n_hand} hand-added row(s), "
+        f"{n_unmatched} unmatched curated row(s) carried forward"
     )
     return payload
 
@@ -312,12 +346,17 @@ same `input`, and overlays that row's per-case dispositions
 reference_unavailable, accepted_rejection) plus any expected-value field
 we had hand-corrected away from upstream (normalized, genomic,
 protein_description, coding_protein_descriptions, rna_description,
-noncoding, errors, infos) — including a field we deliberately REMOVED,
-which is dropped again rather than resurrected. Keyword annotations the
-curated row added are appended to upstream's keywords. New upstream
-fields therefore still arrive. Hand-added rows and corpus-level curation
-are carried forward verbatim. Rows are paired on `input` and on
-occurrence order within a duplicated `input`.
+noncoding, errors, infos). A field we deliberately REMOVED is recorded
+explicitly in the curated row's "removed_keys" list; only a key named
+there is dropped on refresh. An expected-value field absent from the
+curated row but NOT in "removed_keys" is treated as genuinely-new
+upstream data and kept — so a field upstream adds after a row is curated
+still arrives. Keyword annotations the curated row added are appended to
+upstream's keywords. New upstream fields therefore still arrive. Hand-added
+rows and corpus-level curation are carried forward verbatim. Curated rows
+that no upstream occurrence claims (e.g. upstream dropped one of a
+duplicated `input`) are carried forward too, never silently dropped. Rows
+are paired on `input` and on occurrence order within a duplicated `input`.
 
 The script still REFUSES to run while curation is present, listing what
 is at stake, so the merge is reviewed rather than assumed. --force is the
