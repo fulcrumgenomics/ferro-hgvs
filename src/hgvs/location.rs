@@ -173,8 +173,32 @@ impl CdsPos {
     }
 
     /// Check if this is an unknown position (?)
+    ///
+    /// Note this inspects the *base* only: `c.100-?` has a known base and an
+    /// unknown offset, so it is not "unknown" by this predicate. Use
+    /// [`has_unknown_offset`](Self::has_unknown_offset) for that.
     pub fn is_unknown(&self) -> bool {
         self.base == CDS_BASE_UNKNOWN && !self.utr3 && self.special.is_none()
+    }
+
+    /// Whether the offset is one of the parser's unknown-offset sentinels
+    /// (`+?` → [`OFFSET_UNKNOWN_POSITIVE`], `-?` → [`OFFSET_UNKNOWN_NEGATIVE`])
+    /// rather than a measured intronic distance.
+    ///
+    /// Callers doing coordinate arithmetic MUST check this first: the
+    /// sentinels are `i64::MAX` / `i64::MIN`, so using one as a distance
+    /// overflows (issue #1087). Per the spec these denote an unknown position
+    /// 3'/5' of the base, unbounded in that direction, so no coordinate can be
+    /// derived from them at all.
+    ///
+    /// [`OFFSET_UNKNOWN_POSITIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE
+    /// [`OFFSET_UNKNOWN_NEGATIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE
+    pub fn has_unknown_offset(&self) -> bool {
+        use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
+        matches!(
+            self.offset,
+            Some(OFFSET_UNKNOWN_POSITIVE) | Some(OFFSET_UNKNOWN_NEGATIVE)
+        )
     }
 
     /// Create a CDS position with intronic offset

@@ -312,6 +312,34 @@ impl CoordinateMapper {
 
         // Handle intronic positions
         if let Some(offset) = cds_pos.offset {
+            // #1087: `c.N-?` / `c.N+?` are parsed as sentinel offsets
+            // (`i64::MIN` / `i64::MAX`), not measured distances — the spec
+            // reads them as an unknown position 5'/3' of `c.N`, unbounded in
+            // that direction (recommendations/DNA/deletion.md), so there is no
+            // genomic coordinate to compute. Decline before any arithmetic:
+            // the sentinels overflow the offset math below (panicking in debug,
+            // wrapping to a plausible-looking garbage coordinate in release,
+            // which has no overflow checks). This is the chokepoint all three
+            // projector entry points funnel through. `UnsupportedProjection`
+            // is deliberate — `cli::project::engine_error_is_unavailable`
+            // renders only that set as a clean `unavailable` decline at exit 0.
+            if cds_pos.has_unknown_offset() {
+                let sign = if offset == crate::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE {
+                    '-'
+                } else {
+                    '+'
+                };
+                // 3'UTR bases render as `*N` in c. coordinates; keep the marker so
+                // the diagnostic names the actual position (`c.*100-?`, not `c.100-?`).
+                let star = if cds_pos.utr3 { "*" } else { "" };
+                return Err(FerroError::UnsupportedProjection {
+                    reason: format!(
+                        "cannot resolve unknown intronic offset (`{sign}?`) at c.{star}{}",
+                        cds_pos.base
+                    ),
+                });
+            }
+
             // First convert the base position to genomic
             let tx_pos = cds_to_tx_aware(cds_pos.base)?;
 
@@ -1049,6 +1077,66 @@ mod tests {
         };
         cdot.add_transcript("NM_INS.1".to_string(), tx);
         CoordinateMapper::new(cdot)
+    }
+
+    /// `c.N-?` / `c.N+?` carry the parser's unknown-offset sentinels
+    /// (`i64::MIN` / `i64::MAX`), which are not real intronic offsets: the
+    /// spec defines them as an unknown position 5'/3' of `c.N`, unbounded in
+    /// that direction, so no genomic coordinate exists. Feeding them to the
+    /// coordinate arithmetic panicked in debug and silently wrapped to a
+    /// garbage coordinate in release (issue #1087). Decline instead — and
+    /// specifically with `UnsupportedProjection`, the only variant the CLI
+    /// renders as `unavailable` at exit 0 (`cli::project::engine_error_is_unavailable`).
+    #[test]
+    fn cds_to_genome_declines_unknown_offset_sentinels() {
+        use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
+        let mapper = create_test_mapper();
+
+        // Both strands: the minus-strand arms panicked in debug, while the
+        // plus-strand arms wrapped silently in *both* profiles.
+        for transcript_id in ["NM_TEST.1", "NM_MINUS.1"] {
+            for offset in [OFFSET_UNKNOWN_POSITIVE, OFFSET_UNKNOWN_NEGATIVE] {
+                let err = mapper
+                    .cds_to_genome(
+                        transcript_id,
+                        &CdsPos {
+                            base: 51,
+                            offset: Some(offset),
+                            utr3: false,
+                            special: None,
+                        },
+                    )
+                    .expect_err("unknown intronic offset has no genomic coordinate");
+                assert!(
+                    matches!(err, FerroError::UnsupportedProjection { .. }),
+                    "{transcript_id} offset {offset}: expected UnsupportedProjection, got {err:?}"
+                );
+            }
+        }
+    }
+
+    /// The sentinel guard must key off the sentinel constants themselves, not
+    /// off "the offset looks large" — a real intronic offset still resolves.
+    #[test]
+    fn cds_to_genome_resolves_real_intronic_offset() {
+        let mapper = create_test_mapper();
+        for transcript_id in ["NM_TEST.1", "NM_MINUS.1"] {
+            for offset in [-6, 6] {
+                mapper
+                    .cds_to_genome(
+                        transcript_id,
+                        &CdsPos {
+                            base: 51,
+                            offset: Some(offset),
+                            utr3: false,
+                            special: None,
+                        },
+                    )
+                    .unwrap_or_else(|e| {
+                        panic!("{transcript_id} offset {offset}: expected a mapping, got {e:?}")
+                    });
+            }
+        }
     }
 
     #[test]
