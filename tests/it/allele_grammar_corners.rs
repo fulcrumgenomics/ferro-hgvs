@@ -290,19 +290,21 @@ fn protein_to_ter_run_is_not_coalesced() {
 /// Members authored in descending residue order are reordered to ascending
 /// residue order by #1098's cis-member sort.
 ///
-/// TRANSIENT (#1098/#1101): the sort runs *after* the delins-merge, which only
-/// fires on already-ascending runs, so descending input reorders to the bracket
-/// `p.[Arg76Ser;Cys77Trp]` but does not (yet) re-merge — a form
-/// `protein/substitution.md:23` calls "not correct". #1103/#1106 (sort *before*
-/// merge) closes this: once that lands, the expectation must flip to the delins
-/// `NP_003997.1:p.Arg76_Cys77delinsSerTrp`. Reordering here is the machinery
-/// that makes the order-independent delins reachable at all.
+/// KNOWN LIMITATION (protein axis): the descending input reorders to the bracket
+/// `p.[Arg76Ser;Cys77Trp]` but is *not* re-merged into the delins
+/// `protein/substitution.md:23` requires (`p.Arg76_Cys77delinsSerTrp`). #1103/#1106
+/// makes the *nucleotide* merge input-order-independent by sorting before the
+/// `merge_consecutive_edits` pipeline, but the protein delins-canonicalization
+/// (`coalesce_protein_adjacent_substitutions`) is a separate pass that still runs
+/// before the sort, so this protein order-dependence persists after #1106 — a
+/// candidate follow-up (re-run the protein coalesce after the sort). The sort is
+/// nonetheless the machinery that makes the ascending delins reachable at all.
 #[test]
 fn protein_descending_order_members_reorder_to_residue_order() {
     pin_canonicalizes_to(
         "NP_003997.1:p.[Cys77Trp;Arg76Ser]",
         "NP_003997.1:p.[Arg76Ser;Cys77Trp]",
-        "#1098 orders cis members; #1106 (sort-before-merge) will make this a delins",
+        "#1098 orders cis members; protein delins-canonicalization does not re-run after the sort",
     );
 }
 

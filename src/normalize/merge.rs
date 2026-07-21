@@ -694,6 +694,78 @@ fn simple_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
     }
 }
 
+/// Raw location `(region, start, end)` for a sub-variant, regardless of edit
+/// kind. Unlike [`simple_range_for_variant`] it does not filter by edit kind or
+/// swap insertion endpoints — it is the positional fallback used by
+/// [`cis_merge_order_key`] to place non-merge-eligible members (`dup` / `inv` /
+/// `repeat` / …) into genomic order too, so a merge barrier lands at its own
+/// coordinate instead of wherever it was authored.
+fn location_range_for_variant(v: &HgvsVariant) -> Option<(Region, i64, i64)> {
+    match v {
+        HgvsVariant::Genome(g) => simple_genome_range(&g.loc_edit.location),
+        HgvsVariant::Cds(c) => simple_cds_range(&c.loc_edit.location),
+        HgvsVariant::Tx(t) => simple_tx_range(&t.loc_edit.location),
+        HgvsVariant::Rna(r) => simple_rna_range(&r.loc_edit.location),
+        HgvsVariant::Mt(m) => simple_genome_range(&m.loc_edit.location),
+        _ => None,
+    }
+}
+
+/// Total-order key that puts cis members into the canonical **merge** order
+/// (#1103), so `merge_consecutive_edits`' greedy left-to-right adjacency walk
+/// fires every valid merge regardless of input order.
+///
+/// The primary axis is the merge **anchor**'s `(end, start)` (not the display
+/// start point [`crate::hgvs::variant::cis_member_order_key`] uses): an edit
+/// ending at `X` must precede one starting at `X + 1`, and — crucially for a
+/// co-located ins/del — a span edit *at* a locus `p` must precede an insertion
+/// in the gap 3' of it. Insertions anchor as `[p + 1, p]`, so their `end = p`
+/// ties with a span at `p` and their `start = p + 1` breaks the tie *after* it;
+/// an insertion in the gap 5' of `p` (`(p-1)_p ins`) anchors as `[p, p - 1]`,
+/// so its `end = p - 1` sorts it *before* the span. That is exactly what turns
+/// `[104_105insA; 105del; 105_106insC]` into the chainable order
+/// `104_105insA → 105del → 105_106insC` (→ `105delinsAC`) for every input
+/// permutation. The rendered descriptor is the final tie-break, making the
+/// order total so it never falls back to input order. Members with no simple
+/// location (special/uncertain/offset-only positions this pass cannot place)
+/// get a `no_position` sentinel and sort last, still deterministically.
+fn cis_merge_order_key(v: &HgvsVariant) -> (bool, Region, i64, i64, String) {
+    let descriptor = format!("{v}");
+    // Prefer the merge anchor (insertion endpoints swapped to `[p + 1, p]`);
+    // fall back to the raw location for non-merge-eligible kinds.
+    match simple_range_for_variant(v).or_else(|| location_range_for_variant(v)) {
+        Some((region, anchor_start, anchor_end)) => {
+            (false, region, anchor_end, anchor_start, descriptor)
+        }
+        // `Region::Genome` is an unused placeholder here — `no_position == true`
+        // already segregates these, and the `i64::MAX` ties defer to the
+        // descriptor tie-break.
+        None => (true, Region::Genome, i64::MAX, i64::MAX, descriptor),
+    }
+}
+
+/// Sort cis members into the canonical merge order (see [`cis_merge_order_key`])
+/// so `merge_consecutive_edits` is input-order-independent (#1103).
+///
+/// A no-op unless every member shares a single accession: `merge_consecutive_edits`
+/// only combines same-accession members, and a mixed-accession bracketed allele
+/// (`[NC_…;NM_…]`, #218/#219) is left in authored order by the post-merge display
+/// sort too, so reordering it here would leak an arbitrary order into the output.
+/// Callers additionally gate on cis / certain / not-overlap-conflicting (see
+/// `Normalizer::normalize_allele`).
+pub(crate) fn sort_cis_members_for_merge(variants: &mut [HgvsVariant]) {
+    let first_accession = variants
+        .first()
+        .and_then(|v| v.accession().map(|a| a.full()));
+    let single_accession = first_accession.is_some()
+        && variants
+            .iter()
+            .all(|v| v.accession().map(|a| a.full()) == first_accession);
+    if single_accession {
+        variants.sort_by_key(cis_merge_order_key);
+    }
+}
+
 /// Per-coordinate-system dispatch for full anchor extraction.
 fn anchor_for_variant(v: &HgvsVariant) -> Option<Anchor> {
     match v {

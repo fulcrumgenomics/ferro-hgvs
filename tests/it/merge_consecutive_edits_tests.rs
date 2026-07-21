@@ -384,14 +384,21 @@ fn test_no_merge_two_ins_different_boundaries() {
 }
 
 #[test]
-fn test_no_merge_reverse_input_order() {
-    // Input listed in reverse position order; the walk preserves input order
-    // and checks input-order adjacency (1001's anchor end + 1 != 1000's start),
-    // so no merge happens. Pins the no-resort decision.
-    let result = normalize_to_string("NC_000001.11:g.[1001A>C;1000G>A]");
-    assert!(result.contains("1001A>C"), "got {}", result);
-    assert!(result.contains("1000G>A"), "got {}", result);
-    assert!(!result.contains("delins"), "got {}", result);
+fn test_merge_reverse_input_order_is_order_independent() {
+    // #1103: cis members are sorted into genomic order *before* the merge, so an
+    // adjacent pair listed in reverse position order fires the same merge as the
+    // forward order. (Before #1103 the walk preserved input order and checked
+    // input-order adjacency, so `[1001A>C;1000G>A]` was left unmerged — the exact
+    // order-dependence #1103 removes.)
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1001A>C;1000G>A]"),
+        "NC_000001.11:g.1000_1001delinsAC",
+    );
+    // The forward order yields the identical canonical string.
+    assert_eq!(
+        normalize_to_string("NC_000001.11:g.[1000G>A;1001A>C]"),
+        "NC_000001.11:g.1000_1001delinsAC",
+    );
 }
 
 // =====================================================================
