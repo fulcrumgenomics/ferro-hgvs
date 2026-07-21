@@ -7253,6 +7253,11 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // DNA/deletion.md:117, DNA/duplication.md:140, RNA/deletion.md:49; #1079).
     validate_no_point_size_suffix(&variant, input)?;
 
+    // Spec-mandated post-parse semantic check: reject a start-codon variant
+    // written as an amino acid substitution (HGVS protein/substitution.md:49,
+    // checklist.md:65; #1079).
+    validate_no_start_loss_substitution(&variant)?;
+
     // Spec-mandated post-parse semantic check: reject a coding/genomic/mito
     // coordinate system on a non-coding RNA (NR_/XR_) reference (#486,
     // ECOORDINATESYSTEMMISMATCH).
@@ -7658,6 +7663,99 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
         HgvsVariant::Allele(allele) => {
             for inner in &allele.variants {
                 validate_no_point_size_suffix(inner, source)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a translation-initiation-codon variant written as a plain amino
+/// acid substitution — `p.Met1Thr`, `p.(Met1Val)` (#1079).
+///
+/// Per `recommendations/protein/substitution.md:49`:
+///
+/// > Do not use descriptions like `p.Met1Thr`, this is for sure **not** the
+/// > consequence of the effect on protein translation.
+///
+/// and `recommendations/checklist.md:65`:
+///
+/// > the description `p.(Met1Val)` is not allowed.
+///
+/// Losing the initiator methionine does not swap one residue for another: it
+/// abolishes translation from that codon, so the outcome is either no protein
+/// (`p.0`, `p.0?`) or an unpredictable one (`p.(Met1?)`) — never a
+/// substitution.
+///
+/// The rejection applies in every mode. The spec offers three correct forms
+/// and which one holds depends on evidence the description does not carry, so
+/// canonicalising would assert a finding the author never made; the
+/// diagnostic lists all three instead.
+///
+/// A start-codon variant that activates an **upstream** initiation site is an
+/// extension (`protein/extension.md`), not a substitution, and a downstream
+/// one is a deletion — neither shape reaches this check.
+fn validate_no_start_loss_substitution(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::{ExtDirection, ProteinEdit};
+    use crate::hgvs::location::AminoAcid;
+    use crate::hgvs::uncertainty::Mu;
+
+    /// True when the edit replaces the residue with a *different* one. An
+    /// identity (`p.Met1=`), an unknown (`p.Met1?`) or a same-residue
+    /// substitution is not a start loss.
+    fn is_residue_swap(edit: &Mu<ProteinEdit>) -> bool {
+        match edit.inner() {
+            Some(ProteinEdit::Substitution { alternative, .. }) => *alternative != AminoAcid::Met,
+            Some(ProteinEdit::SubstitutionAlternatives { alternatives }) => {
+                alternatives.iter().any(|aa| *aa != AminoAcid::Met)
+            }
+            // An N-terminal extension that *also* renames `Met1` — the
+            // `p.Met1Valext-4` form. `protein/extension.md:28` rules it out
+            // for the same reason: `Met1` is part of the normal sequence, so
+            // a description that changes it is not an extension. The spec's
+            // replacement is the insertion form
+            // (`p.Met1_Leu2insArgSerThrVal`), which needs the inserted
+            // residues, so there is nothing to canonicalise to. A plain
+            // `p.Met1ext-5` carries no new residue and is untouched.
+            Some(ProteinEdit::Extension {
+                new_aa: Some(new_aa),
+                direction: ExtDirection::NTerminal,
+                ..
+            }) => *new_aa != AminoAcid::Met,
+            _ => false,
+        }
+    }
+
+    match variant {
+        HgvsVariant::Protein(v) => {
+            let at_initiator = matches!(
+                (v.loc_edit.location.start.as_single(), v.loc_edit.location.end.as_single()),
+                (Some(Mu::Certain(s)), Some(Mu::Certain(e)))
+                    if s == e && s.number == 1 && s.aa == AminoAcid::Met
+            );
+            if at_initiator && is_residue_swap(&v.loc_edit.edit) {
+                return Err(FerroError::parse_with_diagnostic(
+                    0,
+                    "a variant that changes the translation initiation codon is not described \
+                     as a substitution or as an extension; use `p.0` (no protein), `p.0?` \
+                     (predicted no protein) or `p.(Met1?)` (consequence unknown), or — when \
+                     an upstream initiation site is activated — the insertion form \
+                     `p.Met1_Leu2ins...` (protein/substitution.md:49, checklist.md:65, \
+                     protein/extension.md:28)",
+                    Diagnostic::new()
+                        .with_code(ErrorCode::InvalidEdit)
+                        .with_hint(
+                            "losing the initiator methionine abolishes translation from that \
+                             codon rather than swapping one residue for another, so the \
+                             consequence is `p.0`, `p.0?` or `p.(Met1?)`",
+                        ),
+                ));
+            }
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_start_loss_substitution(inner)?;
             }
         }
         _ => {}
@@ -8139,11 +8237,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_protein_start_codon_substitution() {
-        // Start codon substitution (p.Met1Leu)
-        let variant = parse_variant("NP_000079.2:p.Met1Leu").unwrap();
-        assert!(matches!(variant, HgvsVariant::Protein(_)));
-        assert_eq!(format!("{}", variant), "NP_000079.2:p.Met1Leu");
+    fn test_parse_protein_start_codon_substitution_rejected() {
+        // A start-codon variant is not a substitution — `p.Met1Leu` is
+        // forbidden by protein/substitution.md:49 (#1079). The spec forms
+        // are `p.0`, `p.0?` and `p.(Met1?)`.
+        assert!(parse_variant("NP_000079.2:p.Met1Leu").is_err());
+        assert!(parse_variant("NP_000079.2:p.(Met1?)").is_ok());
     }
 
     #[test]

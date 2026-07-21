@@ -69,10 +69,11 @@ mod extension_is_stop_loss {
     /// N-terminal extension (Met loss) — start position is `Met1`, no
     /// `Ter` substring at all. Still must classify as StopLoss because
     /// Extension semantics are about gain-of-translated-sequence on
-    /// either terminus.
+    /// either terminus. The probe uses the plain form; the residue-renaming
+    /// `p.Met1Valext-12` is forbidden by `protein/extension.md:28`.
     #[test]
     fn n_terminal_extension_classifies_as_stop_loss() {
-        let ann = protein_annotation("NP_003997.1:p.Met1Valext-12");
+        let ann = protein_annotation("NP_003997.1:p.Met1ext-12");
         assert_eq!(determine_consequence(&ann), Consequence::StopLoss);
     }
 

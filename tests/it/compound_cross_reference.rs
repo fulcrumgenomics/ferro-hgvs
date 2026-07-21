@@ -195,7 +195,7 @@ fn test_cis_mixed_c_and_r() {
 #[test]
 fn test_cis_mixed_c_and_p() {
     // c. + p. on the matched mRNA / protein pair.
-    let input = "[NM_000088.3:c.1A>G;NP_000079.2:p.Met1Val]";
+    let input = "[NM_000088.3:c.1A>G;NP_000079.2:p.Met2Val]";
     let parsed = assert_parse_roundtrip(input);
     let allele = expect_allele(&parsed, AllelePhase::Cis, 2);
     assert_eq!(allele.variants[0].variant_type(), "c");
@@ -218,7 +218,7 @@ fn test_cis_mixed_c_and_n_same_accession() {
 fn test_cis_three_different_coord_systems() {
     // Three sub-variants, three different coord systems (c., g., p.).
     // Pins that the expanded form scales beyond two variants.
-    let input = "[NM_000088.3:c.1A>G;NC_000017.11:g.2A>G;NP_000079.2:p.Met1Val]";
+    let input = "[NM_000088.3:c.1A>G;NC_000017.11:g.2A>G;NP_000079.2:p.Met2Val]";
     let parsed = assert_parse_roundtrip(input);
     let allele = expect_allele(&parsed, AllelePhase::Cis, 3);
     assert_eq!(allele.variants[0].variant_type(), "c");
@@ -343,13 +343,13 @@ fn test_no_merge_across_coord_systems_different_accession() {
 #[test]
 fn test_no_merge_across_coord_systems_three_variant() {
     // Three-variant chain mixing c./g./p. — even though c.1 and (notional)
-    // g.2 / p.Met1Val are numerically "adjacent" in a numeric sense, the
+    // g.2 / p.Met2Val are numerically "adjacent" in a numeric sense, the
     // merge pass cannot bridge the coord-system boundary.
     let result =
-        normalize_to_string("[NM_000088.3:c.1A>G;NC_000017.11:g.2A>G;NP_000079.2:p.Met1Val]");
+        normalize_to_string("[NM_000088.3:c.1A>G;NC_000017.11:g.2A>G;NP_000079.2:p.Met2Val]");
     assert!(result.contains("NM_000088.3:c.1A>G"), "got {}", result);
     assert!(result.contains("NC_000017.11:g.2A>G"), "got {}", result);
-    assert!(result.contains("NP_000079.2:p.Met1Val"), "got {}", result);
+    assert!(result.contains("NP_000079.2:p.Met2Val"), "got {}", result);
     assert!(!result.contains("delins"), "got {}", result);
 }
 
@@ -471,7 +471,7 @@ fn test_cis_mixed_n_and_r() {
 
 #[test]
 fn test_cis_mixed_n_and_p() {
-    let input = "[NR_000001.1:n.100A>G;NP_000079.2:p.Met1Val]";
+    let input = "[NR_000001.1:n.100A>G;NP_000079.2:p.Met2Val]";
     let parsed = assert_parse_roundtrip(input);
     let allele = expect_allele(&parsed, AllelePhase::Cis, 2);
     assert_eq!(allele.variants[0].variant_type(), "n");
@@ -480,7 +480,7 @@ fn test_cis_mixed_n_and_p() {
 
 #[test]
 fn test_cis_mixed_r_and_p() {
-    let input = "[NM_000088.3:r.50a>g;NP_000079.2:p.Met1Val]";
+    let input = "[NM_000088.3:r.50a>g;NP_000079.2:p.Met2Val]";
     let parsed = assert_parse_roundtrip(input);
     let allele = expect_allele(&parsed, AllelePhase::Cis, 2);
     assert_eq!(allele.variants[0].variant_type(), "r");
@@ -500,7 +500,7 @@ fn test_cis_mixed_m_and_r() {
 
 #[test]
 fn test_cis_mixed_m_and_p() {
-    let input = "[NC_012920.1:m.100A>G;NP_000079.2:p.Met1Val]";
+    let input = "[NC_012920.1:m.100A>G;NP_000079.2:p.Met2Val]";
     let parsed = assert_parse_roundtrip(input);
     let allele = expect_allele(&parsed, AllelePhase::Cis, 2);
     assert_eq!(allele.variants[0].variant_type(), "m");
@@ -824,7 +824,7 @@ fn test_trans_cross_reference_marker_normalize_preserves_shape() {
 #[test]
 fn test_unknown_phase_three_way_cross_coord_round_trip() {
     // Three sub-variants with three coord systems in unknown phase.
-    let input = "[NM_000088.3:c.1A>G(;)NC_000017.11:g.2A>G(;)NP_000079.2:p.Met1Val]";
+    let input = "[NM_000088.3:c.1A>G(;)NC_000017.11:g.2A>G(;)NP_000079.2:p.Met2Val]";
     let parsed = assert_parse_roundtrip(input);
     let allele = expect_allele(&parsed, AllelePhase::Unknown, 3);
     assert_eq!(allele.variants[0].variant_type(), "c");

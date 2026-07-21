@@ -125,7 +125,7 @@ mod compact_form {
     /// preserves shape.
     #[test]
     fn compact_trans_allele_three_member_zero_middle_routes_to_no_protein() {
-        let input = "NP_003997.2:p.[Arg97Trp];[0];[Met1Val]";
+        let input = "NP_003997.2:p.[Arg97Trp];[0];[Met2Val]";
         let parsed = parse_hgvs(input).expect("parse 3-member compact trans-allele with [0] mid");
 
         let allele = match &parsed {

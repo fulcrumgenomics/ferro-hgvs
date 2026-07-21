@@ -9437,8 +9437,10 @@ mod tests {
         let provider = MockProvider::with_test_data();
         let normalizer = Normalizer::new(provider);
 
-        // Position 1 = M (Met), Position 2 = V (Val)
-        let variant = parse_hgvs("NP_TEST.1:p.Met1Val").unwrap();
+        // Position 1 = M (Met), Position 2 = V (Val). Position 2 is used
+        // because a substitution at the initiator Met is spec-forbidden
+        // (protein/substitution.md:49).
+        let variant = parse_hgvs("NP_TEST.1:p.Val2Leu").unwrap();
         let result = normalizer.normalize(&variant);
         assert!(
             result.is_ok(),
