@@ -73,6 +73,8 @@ manuscript/
 # parser PR a conflict magnet, so it is produced on demand instead.
 /tests/fixtures/grammar/hgvs_spec_normalization.json
 /tests/fixtures/grammar/.hgvs_spec_normalization.*.tmp
+/tests/fixtures/grammar/hgvs_spec_enumeration.json
+/tests/fixtures/grammar/.hgvs_spec_enumeration.*.tmp
 
 # Generated reference caches (cdot rkyv, TranscriptDb)
 *.tdb

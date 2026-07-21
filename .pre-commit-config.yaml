@@ -37,6 +37,19 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
+      # Same drift guard for the spec test enumeration. The generator reads
+      # hgvs_spec_normalization.json (a gitignored build artifact, absent on a
+      # fresh checkout) for deduplication, so bootstrap that fixture first —
+      # otherwise --check aborts with "read ...: No such file" instead of a
+      # drift verdict. Generating it in-place is cheap and idempotent.
+      - id: generate-spec-enumeration-check
+        name: generate_spec_enumeration --check
+        entry: bash -c 'cargo run --features dev --example generate_spec_fixture && cargo run --features dev --example generate_spec_enumeration -- --check'
+        language: system
+        always_run: true
+        pass_filenames: false
+        stages: [pre-push]
+
   # Rust linting (optional - can be slow)
   # Uncomment if you want clippy in pre-commit
   # - repo: local

@@ -224,6 +224,20 @@ required-features = ["dev"]
 name = "generate_perf_tables"
 required-features = ["dev"]
 
+# These two carry `#[cfg(test)]` unit tests (in the example and in the shared
+# `common/` modules they include via `#[path]`). Cargo does not build an
+# example's tests unless the target opts in with `test = true`, so without this
+# their tests silently never run under `cargo nextest --features dev`.
+[[example]]
+name = "generate_spec_enumeration"
+required-features = ["dev"]
+test = true
+
+[[example]]
+name = "extract_spec_enumeration_windows"
+required-features = ["dev"]
+test = true
+
 [[bin]]
 name = "ferro"
 path = "src/bin/ferro.rs"

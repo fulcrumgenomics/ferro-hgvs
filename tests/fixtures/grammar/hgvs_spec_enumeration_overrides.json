@@ -1,0 +1,272 @@
+{
+  "_readme": [
+    "Hand-curated overrides for `generate_spec_enumeration`.",
+    "",
+    "`repairs` maps a string the HGVS spec marks invalid to the canonical form",
+    "the spec ITSELF states, on the cited line. Every entry is transcribed",
+    "verbatim from the pinned submodule; nothing here is inferred. When the spec",
+    "forbids a form without naming a replacement (`c.52insT` is 'ambiguous';",
+    "`g.123dup6` is explicitly 'not clear whether ... g.123_128dup or",
+    "g.124_129dup'), the entry is omitted rather than guessed.",
+    "",
+    "Keys are the verbatim spec string; values are the repaired form INCLUDING",
+    "the default accession `prefix::DEFAULTS` prepends to a bare fragment",
+    "(c -> NM_004006.2, r -> NM_004006.3, g -> NC_000023.11, p -> NP_003997.1),",
+    "since the row asserts `normalize(target) == repaired`.",
+    "",
+    "`requires_reference: true` marks a repair whose evaluation needs real",
+    "reference bases (3'-rule shifting, repeat-to-dup collapse, residue",
+    "identities). Those rows are emitted for the record but the hermetic driver",
+    "does not assert them.",
+    "",
+    "`normative_level` is RFC 2119 as the spec words it: 'is not correct' /",
+    "'not allowed' / 'can not be' -> must; 'the recommendation is not to' /",
+    "'should not be used' -> should. Only `must` rows may ever hard-fail.",
+    "",
+    "`projections` maps `\"<axis>/<input>\"` to the projected form the spec ITSELF",
+    "states, on the cited line. Every entry is transcribed verbatim from the",
+    "pinned submodule; nothing here is inferred, and no entry exists for a",
+    "projection the spec merely describes in words without writing the string.",
+    "",
+    "Comparison follows the form the spec used. A fully-qualified value",
+    "(`NP_004371.2:p.(...)`) is compared verbatim. An accession-less value",
+    "(`p.(Arg1459Ter)`) is compared against the coordinate part of ferro's output",
+    "only, because the spec did not state an accession there -- the surrounding",
+    "paragraph supplies it -- and demanding one would fail a row for something",
+    "the spec never asserted.",
+    "",
+    "`normative_level` follows the source: `docs/recommendations/` is normative",
+    "(`must`); `docs/background/` and `docs/consultation/` are explanatory, so",
+    "their statements are recorded at `should`."
+  ],
+  "repairs": {
+    "c.123-65_-50": {
+      "repaired": "NM_004006.2:c.123-65_123-50",
+      "citation": "docs/recommendations/checklist.md:26",
+      "normative_level": "must",
+      "note": "An intronic range endpoint must be complete, not abbreviated."
+    },
+    "g.123del3": {
+      "repaired": "NC_000023.11:g.123_125del",
+      "citation": "docs/recommendations/checklist.md:49",
+      "normative_level": "must"
+    },
+    "NG_012232.1:g.123del6": {
+      "repaired": "NG_012232.1:g.123_128del",
+      "citation": "docs/recommendations/DNA/deletion.md:117",
+      "normative_level": "must"
+    },
+    "r.123del6": {
+      "repaired": "NM_004006.3:r.123_128del",
+      "citation": "docs/recommendations/RNA/deletion.md:49",
+      "normative_level": "must"
+    },
+    "g.4GC>TG": {
+      "repaired": "NC_000023.11:g.4_5delinsTG",
+      "citation": "docs/recommendations/DNA/delins.md:77",
+      "normative_level": "must",
+      "note": "A substitution is one nucleotide for one nucleotide."
+    },
+    "NG_012232.1:g.12GC>TG": {
+      "repaired": "NG_012232.1:g.12_13delinsTG",
+      "citation": "docs/recommendations/DNA/substitution.md:90",
+      "normative_level": "must"
+    },
+    "r.4gc>ug": {
+      "repaired": "NM_004006.3:r.5_6delinsug",
+      "citation": "docs/recommendations/RNA/delins.md:66",
+      "normative_level": "must"
+    },
+    "p.TrpVal24CysArg": {
+      "repaired": "NP_003997.1:p.Trp24_Val25delinsCysArg",
+      "citation": "docs/recommendations/protein/delins.md:77",
+      "normative_level": "must"
+    },
+    "p.Tyr4TerfsTer1": {
+      "repaired": "NP_003997.1:p.Tyr4Ter",
+      "citation": "docs/recommendations/protein/substitution.md:20",
+      "normative_level": "must",
+      "note": "An immediate stop is a nonsense substitution, never a frameshift."
+    },
+    "LRG_199t1:c.[2376G>C;3103=];[2376=;3103del]": {
+      "repaired": "LRG_199t1:c.[2376G>C];[3103del]",
+      "citation": "docs/recommendations/DNA/alleles.md:19",
+      "normative_level": "must",
+      "note": "`=` is used only when a single variant was identified."
+    },
+    "p.([Ser68Arg;Asn594del])": {
+      "repaired": "NP_003997.1:p.[(Ser68Arg;Asn594del)]",
+      "citation": "docs/recommendations/protein/alleles.md:34",
+      "normative_level": "must",
+      "note": "Parentheses go inside the allele brackets."
+    },
+    "p.([Ser68Arg];[Ser68Arg])": {
+      "repaired": "NP_003997.1:p.[(Ser68Arg)];[(Ser68Arg)]",
+      "citation": "docs/recommendations/protein/alleles.md:45",
+      "normative_level": "must",
+      "note": "Parentheses go inside the allele brackets."
+    },
+    "g.456_457ins123_456": {
+      "repaired": "NC_000023.11:g.123_456dup",
+      "citation": "docs/recommendations/DNA/insertion.md:17",
+      "normative_level": "must",
+      "requires_reference": true,
+      "note": "Prioritisation: a tandem copy of the immediately-5' bases is a dup. Confirming the copy is tandem needs the reference bases."
+    },
+    "r.456_457ins123_456": {
+      "repaired": "NM_004006.3:r.123_456dup",
+      "citation": "docs/recommendations/RNA/insertion.md:17",
+      "normative_level": "must",
+      "requires_reference": true
+    },
+    "g.123_234dupinv": {
+      "repaired": "NC_000023.11:g.234_235ins123_234inv",
+      "citation": "docs/recommendations/DNA/inversion.md:64",
+      "normative_level": "must",
+      "note": "`dupinv` is not an HGVS format; an inverted duplication is an insertion."
+    },
+    "r.124_500delinsoAB053210.2:r.1289-365_1289-73": {
+      "repaired": "NM_004006.3:r.124_500delins[AB053210.2:r.1289-365_1289-73inv]",
+      "citation": "docs/recommendations/RNA/inversion.md:46",
+      "normative_level": "must",
+      "note": "The legacy `o` orientation prefix was replaced by `inv` on the inserted sequence."
+    },
+    "r.6_7insu": {
+      "repaired": "NM_004006.3:r.7dup",
+      "citation": "docs/recommendations/RNA/duplication.md:30",
+      "normative_level": "must",
+      "requires_reference": true,
+      "note": "Prioritisation: dup outranks ins. Needs reference bases to confirm the tandem copy."
+    },
+    "NC_000023.11:g.33344591delA": {
+      "repaired": "NC_000023.11:g.33344591del",
+      "citation": "docs/recommendations/DNA/deletion.md:30",
+      "normative_level": "should"
+    },
+    "NC_000023.11:g.33344590_33344592delGAT": {
+      "repaired": "NC_000023.11:g.33344590_33344592del",
+      "citation": "docs/recommendations/DNA/deletion.md:45",
+      "normative_level": "should"
+    },
+    "NC_000023.11:g.32386323delTinsGA": {
+      "repaired": "NC_000023.11:g.32386323delinsGA",
+      "citation": "docs/recommendations/DNA/delins.md:29",
+      "normative_level": "should"
+    },
+    "NM_004006.2:c.6775_6777delGAGinsC": {
+      "repaired": "NM_004006.2:c.6775_6777delinsC",
+      "citation": "docs/recommendations/DNA/delins.md:34",
+      "normative_level": "should"
+    },
+    "NM_004006.2:c.20dupT": {
+      "repaired": "NM_004006.2:c.20dup",
+      "citation": "docs/recommendations/DNA/duplication.md:35",
+      "normative_level": "should"
+    },
+    "c.20_23dupTAGA": {
+      "repaired": "NM_004006.2:c.20_23dup",
+      "citation": "docs/recommendations/DNA/duplication.md:50",
+      "normative_level": "should"
+    },
+    "r.6_8deluug": {
+      "repaired": "NM_004006.3:r.6_8del",
+      "citation": "docs/recommendations/RNA/deletion.md:32",
+      "normative_level": "should"
+    },
+    "r.6_8dupugc": {
+      "repaired": "NM_004006.3:r.6_8dup",
+      "citation": "docs/recommendations/RNA/duplication.md:34",
+      "normative_level": "should"
+    },
+    "r.-125_-123cug[4]": {
+      "repaired": "NM_004006.3:r.-125_-123[4]",
+      "citation": "docs/recommendations/RNA/repeated.md:22",
+      "normative_level": "should",
+      "note": "The repeat unit is redundant when the range already gives it."
+    },
+    "NM_004006.2:c.5690del": {
+      "repaired": "NM_004006.2:c.5697del",
+      "citation": "docs/recommendations/DNA/deletion.md:40",
+      "normative_level": "must",
+      "requires_reference": true,
+      "note": "3'-rule shift across a homopolymer; needs the transcript bases."
+    },
+    "p.Arg45del6": {
+      "repaired": "NP_003997.1:p.Arg45_Gly50del",
+      "citation": "docs/recommendations/protein/deletion.md:89",
+      "normative_level": "must",
+      "requires_reference": true,
+      "note": "The last deleted residue's identity comes from the protein sequence."
+    },
+    "NM_024312.4:c.2686A[10]": {
+      "repaired": "NM_024312.4:c.2692_2693dup",
+      "citation": "docs/recommendations/DNA/repeated.md:22",
+      "normative_level": "must",
+      "requires_reference": true
+    },
+    "NM_024312.4:c.1738TA[6]": {
+      "repaired": "NM_024312.4:c.1741_1742insTATATATA",
+      "citation": "docs/recommendations/DNA/repeated.md:22",
+      "normative_level": "must",
+      "requires_reference": true
+    },
+    "NM_024312.4:r.2686a[10]": {
+      "repaired": "NM_024312.4:r.2692_2693dup",
+      "citation": "docs/recommendations/RNA/repeated.md:25",
+      "normative_level": "must",
+      "requires_reference": true
+    },
+    "NM_024312.4:r.1738ua[6]": {
+      "repaired": "NM_024312.4:r.1741_1742insuauauaua",
+      "citation": "docs/recommendations/RNA/repeated.md:25",
+      "normative_level": "must",
+      "requires_reference": true
+    },
+    "p.His150HisfsTer10": {
+      "repaired": "NP_003997.1:p.Gln151ThrfsTer9",
+      "citation": "docs/recommendations/protein/frameshift.md:49",
+      "normative_level": "must",
+      "requires_reference": true,
+      "note": "A frameshift starts at the first CHANGED residue. The spec writes the corrected form in the `*` stop style (`p.Gln151Thrfs*9`); rendered here in ferro's default `Ter` style, which the spec leaves as a free choice."
+    }
+  },
+  "projections": {
+    "p/NM_004380.2:c.139delinsTCATCATGAGCTG": {
+      "expected": "NP_004371.2:p.(Asn47delinsSerSerTer)",
+      "citation": "docs/recommendations/protein/delins.md:42",
+      "normative_level": "must",
+      "note": "Spec states the fully-qualified predicted protein consequence of this DNA variant."
+    },
+    "p/NM_004380.2:c.138_139insTCATCATGAGCTCCC": {
+      "expected": "NP_004371.2:p.(Pro46_Asn47insSerSerTer)",
+      "citation": "docs/recommendations/protein/insertion.md:41",
+      "normative_level": "must",
+      "note": "Amino acids after the translation termination codon are not listed."
+    },
+    "p/NM_000222.3:c.1676_1684del": {
+      "expected": "NP_000213.1:p.(Val559_Glu561del)",
+      "citation": "docs/recommendations/protein/delins.md:53",
+      "normative_level": "must",
+      "note": "Explicitly NOT p.(Val559_Glu562delinsGlu). Example derived from KIT."
+    },
+    "p/NM_003079.4:c.374_395inv": {
+      "expected": "NP_003070.3:p.(Glu125_Ala132delinsGlyLeuHisArgPheIleValLeu)",
+      "citation": "docs/recommendations/protein/delins.md:58",
+      "normative_level": "must",
+      "note": "An inversion's protein consequence is described as a deletion-insertion."
+    },
+    "p/NM_080877.2:c.1732_1794del": {
+      "expected": "p.(Pro578_Gln598del)",
+      "citation": "docs/recommendations/protein/delins.md:49",
+      "normative_level": "must",
+      "note": "Stated without an accession; example derived from SLC34A3."
+    },
+    "p/NM_004006.2:c.4375C>T": {
+      "expected": "p.(Arg1459Ter)",
+      "citation": "docs/background/simple.md:46",
+      "normative_level": "should",
+      "note": "Background (explanatory) text, so recorded at should-level."
+    }
+  },
+  "by_id": {}
+}
