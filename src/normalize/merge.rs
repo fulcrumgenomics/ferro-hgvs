@@ -1123,6 +1123,150 @@ fn build_naedit<P>(
     )
 }
 
+/// Coalesce runs of consecutive-residue substitutions in a **cis protein
+/// allele** into a single delins, per `protein/substitution.md:23`:
+///
+/// > changes involving two or more consecutive amino acids are described as a
+/// > deletion/insertion variant (delins) […] the description
+/// > `p.Arg76_Cys77delinsSerTrp` is correct, the description
+/// > `p.[Arg76Ser;Cys77Trp]` is not correct.
+///
+/// This is the protein-axis counterpart of the nucleotide adjacency merge that
+/// [`merge_consecutive_edits`] performs — the nucleotide path is positional on
+/// a `Base` sequence and never fires on protein members, so the protein axis is
+/// handled here instead.
+///
+/// Only **strictly adjacent** residues (position `n` and `n+1`) coalesce.
+/// A gap of one or more unchanged residues keeps the members separate — the
+/// spec pins that exact non-example (`protein/delins.md:63`: `p.[Ser44Arg;Trp46Arg]`
+/// is *not* described as `p.Ser44_Trp46delinsArgLeuArg`).
+///
+/// Returns `Some` only when at least one run of ≥2 adjacent substitutions is
+/// merged; a fully-merged allele collapses to a bare [`HgvsVariant::Protein`],
+/// a partial merge to a smaller [`HgvsVariant::Allele`]. Returns `None` — leave
+/// the allele untouched — when it is conservatively out of scope:
+///   - the phase is not cis (trans / unknown / mosaic / … are independent),
+///   - any member is not a single-residue protein substitution (mixed edit
+///     kinds are out of scope for this narrow rule),
+///   - members are not in ascending, duplicate-free residue order (a `n,n`
+///     pair is the contradictory same-residue case, not a delins; an
+///     out-of-order allele is left as the author wrote it), or
+///   - a run would mix predicted `( )` and certain members (ambiguous).
+pub(crate) fn coalesce_protein_adjacent_substitutions(
+    allele: &crate::hgvs::variant::AlleleVariant,
+) -> Option<HgvsVariant> {
+    use crate::hgvs::edit::{AminoAcidSeq, ProteinEdit};
+    use crate::hgvs::interval::ProtInterval;
+    use crate::hgvs::location::{AminoAcid, ProtPos};
+    use crate::hgvs::variant::ProteinVariant;
+
+    if allele.phase != AllelePhase::Cis || allele.variants.len() < 2 {
+        return None;
+    }
+
+    /// One member reduced to a single-residue substitution.
+    struct Sub {
+        pos: u64,
+        reference: AminoAcid,
+        alternative: AminoAcid,
+        predicted: bool,
+    }
+
+    let first = match &allele.variants[0] {
+        HgvsVariant::Protein(pv) => pv,
+        _ => return None,
+    };
+    let accession = first.accession.clone();
+    let gene_symbol = first.gene_symbol.clone();
+
+    let mut subs: Vec<Sub> = Vec::with_capacity(allele.variants.len());
+    for v in &allele.variants {
+        let HgvsVariant::Protein(pv) = v else {
+            return None;
+        };
+        // Exactly one certain residue (a point, start == end, both certain).
+        let (Some(Mu::Certain(s)), Some(Mu::Certain(e))) = (
+            pv.loc_edit.location.start.as_single(),
+            pv.loc_edit.location.end.as_single(),
+        ) else {
+            return None;
+        };
+        if s != e {
+            return None;
+        }
+        let (alternative, predicted) = match &pv.loc_edit.edit {
+            Mu::Certain(ProteinEdit::Substitution { alternative, .. }) => (*alternative, false),
+            Mu::Uncertain(ProteinEdit::Substitution { alternative, .. }) => (*alternative, true),
+            _ => return None,
+        };
+        subs.push(Sub {
+            pos: s.number,
+            reference: s.aa,
+            alternative,
+            predicted,
+        });
+    }
+
+    // Require ascending, duplicate-free residue order. A descending or
+    // duplicate (`n,n`) allele is out of scope — do not reorder the author's
+    // description, and the same-residue pair is a contradiction, not a delins.
+    if subs.windows(2).any(|w| w[1].pos <= w[0].pos) {
+        return None;
+    }
+
+    let mut merged: Vec<HgvsVariant> = Vec::new();
+    let mut changed = false;
+    let mut i = 0;
+    while i < subs.len() {
+        let mut j = i;
+        while j + 1 < subs.len() && subs[j + 1].pos == subs[j].pos + 1 {
+            j += 1;
+        }
+        if j > i {
+            // A run of ≥2 strictly-adjacent substitutions → one delins spanning
+            // residues `i..=j`, inserting each member's alternative in order.
+            let all_predicted = subs[i..=j].iter().all(|s| s.predicted);
+            let any_predicted = subs[i..=j].iter().any(|s| s.predicted);
+            if any_predicted && !all_predicted {
+                return None;
+            }
+            let loc = ProtInterval::new(
+                ProtPos::new(subs[i].reference, subs[i].pos),
+                ProtPos::new(subs[j].reference, subs[j].pos),
+            );
+            let edit = ProteinEdit::Delins {
+                sequence: AminoAcidSeq::new(subs[i..=j].iter().map(|s| s.alternative).collect()),
+            };
+            let loc_edit = if all_predicted {
+                LocEdit::new_predicted(loc, edit)
+            } else {
+                LocEdit::new(loc, edit)
+            };
+            merged.push(HgvsVariant::Protein(ProteinVariant {
+                accession: accession.clone(),
+                gene_symbol: gene_symbol.clone(),
+                loc_edit,
+            }));
+            changed = true;
+        } else {
+            // A lone substitution keeps its original member verbatim.
+            merged.push(allele.variants[i].clone());
+        }
+        i = j + 1;
+    }
+
+    if !changed {
+        return None;
+    }
+    if merged.len() == 1 {
+        merged.into_iter().next()
+    } else {
+        let mut coalesced = crate::hgvs::variant::AlleleVariant::new(merged, allele.phase);
+        coalesced.uncertain = allele.uncertain;
+        Some(HgvsVariant::Allele(coalesced))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
