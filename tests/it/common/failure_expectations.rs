@@ -42,11 +42,37 @@
 //!    real category before merge (Phase 2 of #174 enforced this; new
 //!    kinds discovered after that point need triage in the same PR).
 //!
-//! Set `UPDATE_FAILURE_EXPECTATIONS=1` to regenerate the snapshot from the
-//! current parse output. Newly-observed kinds are written with category
-//! `needs_triage` and the parser's verbatim error string as `reason`;
-//! existing kinds' categories are preserved so manual triage is sticky.
-//! Any new kinds force a triage decision before the test passes.
+//! ## Re-blessing (`UPDATE_FAILURE_EXPECTATIONS=1`)
+//!
+//! Set `UPDATE_FAILURE_EXPECTATIONS=1` to update the snapshot from the
+//! current parse output. The snapshots are hand-curated — the kind ids are
+//! human-chosen names, and each `reason` is prose citing the HGVS spec.
+//! None of that is recoverable from a parser error string, so the blesser
+//! is a **merge**, never a regeneration:
+//!
+//! - An input that is already in `expected_failures` and still fails keeps
+//!   its curated kind id verbatim. Its kind's `category`, `reason`, and
+//!   `tracking` are never rewritten.
+//! - An input that fails and is *not* in `expected_failures` is added under
+//!   a synthetic kind id prefixed [`AUTO_KIND_PREFIX`] (derived from the
+//!   normalized error string) with category `needs_triage`. The prefix
+//!   makes machine-written ids obvious next to curated ones, and
+//!   `needs_triage` fails the build until a human names and categorizes it.
+//! - An input that no longer fails is removed from `expected_failures` —
+//!   leaving it would permanently fail the "improvement" check — but its
+//!   *kind* is kept, so the curated prose survives, and the removal is
+//!   printed in the bless report.
+//! - Kinds are **never deleted**, even when nothing references them any
+//!   more. Unreferenced kinds are reported so a human can delete them
+//!   deliberately; the blesser will not throw prose away on its own.
+//! - The blesser refuses to run (panics) when it cannot guarantee the
+//!   above: an unparseable snapshot, a snapshot carrying fields this
+//!   framework does not model (`deny_unknown_fields`), or a fixture run
+//!   that produced zero inputs (dataset missing/skipped — blessing would
+//!   wipe the file).
+//!
+//! Merge behaviour is covered directly by
+//! `tests/it/failure_expectations_blesser_tests.rs`.
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -72,6 +98,7 @@ pub enum Category {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Kind {
     pub category: Category,
     pub reason: String,
@@ -80,6 +107,7 @@ pub struct Kind {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FailureExpectations {
     pub kinds: BTreeMap<String, Kind>,
     pub expected_failures: BTreeMap<String, String>,
@@ -104,7 +132,7 @@ pub struct FixtureCheck<'a> {
 /// update a category, etc.).
 pub fn enforce(expectations_path: &Path, update_env_var: &str, check: FixtureCheck<'_>) {
     if std::env::var_os(update_env_var).is_some() {
-        regenerate_snapshot(expectations_path, &check);
+        bless(expectations_path, &check);
         return;
     }
 
@@ -235,57 +263,198 @@ fn read_snapshot(path: &Path) -> FailureExpectations {
     serde_json::from_str(&raw).unwrap_or_else(|e| panic!("parse {}: {}", path.display(), e))
 }
 
-fn regenerate_snapshot(path: &Path, check: &FixtureCheck<'_>) {
-    // Preserve any existing categories/tracking so manual triage is sticky:
-    // re-read the current snapshot (if any) and only insert *new* kinds.
-    let mut existing: FailureExpectations = if path.exists() {
+/// Prefix on kind ids the blesser invents for newly-observed failures, so
+/// machine-written ids are never mistaken for hand-curated ones.
+pub const AUTO_KIND_PREFIX: &str = "auto:";
+
+/// What a bless changed, returned so callers (and tests) can inspect it
+/// instead of scraping stderr.
+#[derive(Debug, Default)]
+pub struct BlessReport {
+    /// Failing inputs whose curated kind mapping was carried over as-is.
+    pub preserved_inputs: usize,
+    /// Newly-failing inputs added to `expected_failures`.
+    pub new_inputs: Vec<String>,
+    /// Kind ids invented for those new inputs (all `needs_triage`).
+    pub new_kinds: Vec<String>,
+    /// Inputs that no longer fail; removed from `expected_failures`.
+    pub resolved_inputs: Vec<String>,
+    /// Kinds no longer referenced by any expected failure. Kept on disk.
+    pub orphaned_kinds: Vec<String>,
+    /// Kinds referenced by an expected failure but never defined; given a
+    /// `needs_triage` placeholder so the enforcing test can explain itself.
+    pub synthesized_kinds: Vec<String>,
+}
+
+/// Merge the current parse outcome into the snapshot at `path`, preserving
+/// every piece of human-authored content (see the module docs for the exact
+/// semantics), write it back, and print a report of what changed.
+///
+/// Panics rather than proceeding whenever curated content would be at risk:
+/// an unreadable/unparseable snapshot, a snapshot with fields this framework
+/// does not model, or a fixture run that produced no inputs at all.
+pub fn bless(path: &Path, check: &FixtureCheck<'_>) -> BlessReport {
+    let mut snapshot: FailureExpectations = if path.exists() {
         let raw = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("read {}: {}", path.display(), e));
-        serde_json::from_str(&raw)
-            .unwrap_or_else(|e| panic!("parse existing {}: {}", path.display(), e))
+        serde_json::from_str(&raw).unwrap_or_else(|e| {
+            panic!(
+                "refusing to bless {}: the existing snapshot could not be parsed \
+                 ({e}). Rewriting it would destroy hand-curated kinds and reasons; \
+                 fix the file (or the framework's schema) first.",
+                path.display()
+            )
+        })
     } else {
         FailureExpectations::default()
     };
 
-    // Group failing inputs by *normalized* error string so per-input variability
-    // (position numbers and the unparsed-remainder substring inside the nom
-    // error) collapses into a small set of kinds. Phase 2 triage will rename
-    // these to nicer ids and assign categories.
-    let mut next_expected: BTreeMap<String, String> = BTreeMap::new();
-    let mut new_kinds_seen: BTreeMap<String, ()> = BTreeMap::new();
-    for (input, err) in &check.failures {
-        let kind_id = normalize_error_for_kind(err);
-        next_expected.insert((*input).to_string(), kind_id.clone());
-        new_kinds_seen.insert(kind_id, ());
+    // A fixture that yielded zero inputs means the dataset was missing or
+    // skipped, not that everything now parses. Blessing would empty the file.
+    if check.total_inputs == 0 && !snapshot.expected_failures.is_empty() {
+        panic!(
+            "refusing to bless {}: the fixture produced 0 inputs, so this run \
+             carries no evidence about the {} curated expected failure(s). \
+             Check that the fixture data is present (Git LFS) and re-run.",
+            path.display(),
+            snapshot.expected_failures.len()
+        );
     }
 
-    // Add any newly-observed kinds with NeedsTriage; preserve existing ones.
-    for kind_id in new_kinds_seen.keys() {
-        existing
-            .kinds
-            .entry(kind_id.clone())
-            .or_insert_with(|| Kind {
-                category: Category::NeedsTriage,
-                reason: kind_id.clone(),
-                tracking: None,
-            });
-    }
+    let report = merge_into(&mut snapshot, check);
 
-    // Drop kinds no longer referenced by any expected failure.
-    existing
-        .kinds
-        .retain(|kind_id, _| next_expected.values().any(|v| v == kind_id));
-
-    existing.expected_failures = next_expected;
-
-    let json = serde_json::to_string_pretty(&existing).expect("serialize FailureExpectations");
+    let json = serde_json::to_string_pretty(&snapshot).expect("serialize FailureExpectations");
     std::fs::write(path, json + "\n").unwrap_or_else(|e| panic!("write {}: {}", path.display(), e));
+
+    print_bless_report(path, &snapshot, &report);
+    report
+}
+
+/// Pure merge step of [`bless`]: updates `snapshot` in place and describes
+/// what changed. Kept separate from all I/O so it is directly testable.
+fn merge_into(snapshot: &mut FailureExpectations, check: &FixtureCheck<'_>) -> BlessReport {
+    let mut report = BlessReport::default();
+    let mut next_expected: BTreeMap<String, String> = BTreeMap::new();
+
+    for (input, err) in &check.failures {
+        match snapshot.expected_failures.get(*input) {
+            // Curated (or previously blessed) mapping: carry it over verbatim.
+            Some(kind_id) => {
+                next_expected.insert((*input).to_string(), kind_id.clone());
+                report.preserved_inputs += 1;
+            }
+            // Genuinely new failure: invent an obviously-machine-written kind
+            // id from the normalized error, awaiting human triage.
+            None => {
+                let normalized = normalize_error_for_kind(err);
+                let kind_id = format!("{}{}", AUTO_KIND_PREFIX, normalized);
+                if !snapshot.kinds.contains_key(&kind_id) {
+                    snapshot.kinds.insert(
+                        kind_id.clone(),
+                        Kind {
+                            category: Category::NeedsTriage,
+                            reason: normalized,
+                            tracking: None,
+                        },
+                    );
+                    report.new_kinds.push(kind_id.clone());
+                }
+                next_expected.insert((*input).to_string(), kind_id);
+                report.new_inputs.push((*input).to_string());
+            }
+        }
+    }
+
+    // Inputs that no longer fail: drop the mapping (keeping it would fail the
+    // "improvement" check forever) but keep the kind, so the curated reason
+    // survives and the change is visible in the report.
+    for input in snapshot.expected_failures.keys() {
+        if !next_expected.contains_key(input) {
+            report.resolved_inputs.push(input.clone());
+        }
+    }
+    snapshot.expected_failures = next_expected;
+
+    // Dangling kind references (a typo, or a hand-edit that removed a kind):
+    // give them a placeholder so the enforcing test reports `needs_triage`
+    // rather than a bare "undefined kind".
+    let dangling: Vec<String> = snapshot
+        .expected_failures
+        .values()
+        .filter(|kind_id| !snapshot.kinds.contains_key(*kind_id))
+        .cloned()
+        .collect();
+    for kind_id in dangling {
+        if snapshot.kinds.contains_key(&kind_id) {
+            continue;
+        }
+        snapshot.kinds.insert(
+            kind_id.clone(),
+            Kind {
+                category: Category::NeedsTriage,
+                reason: format!(
+                    "Referenced by expected_failures but never defined; needs a category and reason ({kind_id})."
+                ),
+                tracking: None,
+            },
+        );
+        report.synthesized_kinds.push(kind_id);
+    }
+
+    // Report — never delete — kinds nothing references any more.
+    report.orphaned_kinds = snapshot
+        .kinds
+        .keys()
+        .filter(|kind_id| !snapshot.expected_failures.values().any(|v| v == *kind_id))
+        .cloned()
+        .collect();
+
+    report
+}
+
+/// Print a human-readable summary of a bless to stderr.
+fn print_bless_report(path: &Path, snapshot: &FailureExpectations, report: &BlessReport) {
     eprintln!(
-        "Updated failure-expectations snapshot: {} ({} expected failures, {} kinds)",
+        "Blessed failure-expectations snapshot: {} ({} expected failures, {} kinds; \
+         {} mapping(s) preserved)",
         path.display(),
-        existing.expected_failures.len(),
-        existing.kinds.len()
+        snapshot.expected_failures.len(),
+        snapshot.kinds.len(),
+        report.preserved_inputs
     );
+    let sections: [(&str, &Vec<String>); 4] = [
+        (
+            "NEW failure(s) added (kind id prefixed `auto:`, category `needs_triage` — \
+             rename and categorize before merge)",
+            &report.new_inputs,
+        ),
+        (
+            "input(s) NO LONGER failing — removed from expected_failures (their kind \
+             definitions were kept)",
+            &report.resolved_inputs,
+        ),
+        (
+            "kind(s) now UNREFERENCED — kept so the curated reason is not lost; delete \
+             by hand if truly obsolete",
+            &report.orphaned_kinds,
+        ),
+        (
+            "kind(s) referenced but UNDEFINED — a `needs_triage` placeholder was written",
+            &report.synthesized_kinds,
+        ),
+    ];
+    for (label, items) in sections {
+        if items.is_empty() {
+            continue;
+        }
+        eprintln!("  {} {}:", items.len(), label);
+        for item in items.iter().take(20) {
+            eprintln!("    {}", item);
+        }
+        if items.len() > 20 {
+            eprintln!("    ... and {} more", items.len() - 20);
+        }
+    }
 }
 
 /// Normalize a parser error string to use as a kind identifier so that

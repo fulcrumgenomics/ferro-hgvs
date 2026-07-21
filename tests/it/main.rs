@@ -61,6 +61,7 @@ mod error_mode_tests;
 mod exac_validation;
 mod external_pattern_analysis;
 mod external_pattern_tests;
+mod failure_expectations_blesser_tests;
 mod fast_path_differential;
 mod fast_path_drift_scope;
 mod fast_path_flip_bench;
