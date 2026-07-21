@@ -1,4 +1,4 @@
-//! Issue #1086: cross-axis projection defects.
+//! Issue #1086: two cross-axis projection defects.
 //!
 //! **D5** — the `r.` axis silently discarded intronic offsets, mapping an
 //! intronic position onto a *different, existing* exonic RNA base
@@ -9,6 +9,11 @@
 //! therefore **not be used** to describe variants affecting these
 //! sequences"). The correct behaviour is to decline the `r.` axis rather
 //! than fabricate an exonic coordinate.
+//!
+//! **D2** — `VariantProjection::noncoding` is documented as "a single field
+//! that always means the `n.` form", but for an `r.` input it returned the
+//! `r.` form unchanged (wrong coordinate system, lowercase alphabet, `u`
+//! rather than `t`).
 //!
 //! Reference-backed: skips unless `FERRO_MANIFEST` points at a prepared
 //! reference (the same manifest gate the other axis tests use).
@@ -215,5 +220,47 @@ fn exonic_edit_still_projects_to_rna_axis() {
     assert_eq!(
         proj.rna.expect("exonic edits keep an r. axis").to_string(),
         "NM_004006.2:r.(897u>g)",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// D2 — the n. axis must be a genuine n. description for an r. input.
+// ---------------------------------------------------------------------------
+
+/// `LRG_199t1:r.11u>g` (the spec's own example, `background/refseq.md`) must
+/// yield a real `n.` description on the non-coding axis. Before the fix the
+/// field held the `r.` input verbatim.
+#[test]
+fn rna_input_noncoding_axis_is_an_n_description() {
+    let Some(vp) = manifest_projector() else {
+        eprintln!("issue_1086: skipping — no manifest at FERRO_MANIFEST");
+        return;
+    };
+    let proj = project(&vp, "LRG_199t1:r.11u>g", "LRG_199t1");
+    let noncoding = proj.noncoding.expect("noncoding axis");
+    assert!(
+        matches!(noncoding, ferro_hgvs::HgvsVariant::Tx(_)),
+        "noncoding axis must hold an n. (Tx) variant, got {noncoding}",
+    );
+    assert_eq!(noncoding.to_string(), "LRG_199t1:n.11T>G");
+    // The c. axis already handled this input and must stay correct.
+    assert_eq!(
+        proj.coding.expect("coding axis").to_string(),
+        "LRG_199t1:c.-234T>G",
+    );
+}
+
+/// An `n.` input keeps its own form on the non-coding axis (no regression from
+/// the D2 fix, which only reshapes the `r.` case).
+#[test]
+fn noncoding_input_noncoding_axis_unchanged() {
+    let Some(vp) = manifest_projector() else {
+        eprintln!("issue_1086: skipping — no manifest at FERRO_MANIFEST");
+        return;
+    };
+    let proj = project(&vp, "LRG_199t1:n.11T>G", "LRG_199t1");
+    assert_eq!(
+        proj.noncoding.expect("noncoding axis").to_string(),
+        "LRG_199t1:n.11T>G",
     );
 }
