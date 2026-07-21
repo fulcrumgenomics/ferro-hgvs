@@ -1559,11 +1559,13 @@ mod w4003_single_position_range_emission {
         assert_eq!(result.preprocessed_input, "NM_000088.3:c.123dup");
     }
 
+    /// The `inv` probe collapses to `c.100inv`, which DNA/inversion.md:16
+    /// forbids outright ("a one-nucleotide inversion should be described as
+    /// a substitution"), so lenient rejects after the W4003 collapse rather
+    /// than emitting a spec-invalid description (#1079).
     #[test]
-    fn lenient_warns_and_collapses_inv() {
-        let result = parse_hgvs_lenient("NM_000088.3:c.100_100inv").unwrap();
-        assert!(result.has_warnings());
-        assert_eq!(result.preprocessed_input, "NM_000088.3:c.100inv");
+    fn lenient_rejects_single_base_inv_after_collapse() {
+        assert!(parse_hgvs_lenient("NM_000088.3:c.100_100inv").is_err());
     }
 
     #[test]

@@ -92,6 +92,7 @@ mod issue_1046_generator_gitdir_leak;
 mod issue_1052_substitution_refseq;
 mod issue_1063_preserve_uncertain_wrapper;
 mod issue_1079_point_size_suffix;
+mod issue_1079_single_nucleotide_inversion;
 mod issue_1079_start_loss_substitution;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;

@@ -7258,6 +7258,10 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // checklist.md:65; #1079).
     validate_no_start_loss_substitution(&variant)?;
 
+    // Spec-mandated post-parse semantic check: reject a one-nucleotide
+    // inversion (HGVS DNA/inversion.md:16; #1079).
+    validate_no_single_nucleotide_inversion(&variant)?;
+
     // Spec-mandated post-parse semantic check: reject a coding/genomic/mito
     // coordinate system on a non-coding RNA (NR_/XR_) reference (#486,
     // ECOORDINATESYSTEMMISMATCH).
@@ -7663,6 +7667,79 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
         HgvsVariant::Allele(allele) => {
             for inner in &allele.variants {
                 validate_no_point_size_suffix(inner, source)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a one-nucleotide inversion — `g.234inv`, `r.234inv` (#1079).
+///
+/// Per `recommendations/DNA/inversion.md:16`:
+///
+/// > by definition, the region inverted (`positions_inverted`) contains
+/// > **more than one nucleotide**. The description `g.234inv` is therefore
+/// > not allowed; a one-nucleotide inversion should be described as a
+/// > substitution.
+///
+/// Inverting a single base is a substitution to its complement, so the
+/// inversion notation carries no information the substitution notation does
+/// not. The rejection applies in every mode: the replacement needs the
+/// reference base at that position (and its complement), which the parser
+/// does not have, so there is no canonical form to rewrite to.
+///
+/// Only the top-level edit is inspected. An inverted *inserted range*
+/// (`g.234_235ins123_234inv`, the spec's inverted-duplication form) is an
+/// insertion whose source happens to be reversed, and is untouched.
+fn validate_no_single_nucleotide_inversion(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::NaEdit;
+    use crate::hgvs::interval::UncertainBoundary;
+    use crate::hgvs::uncertainty::Mu;
+
+    fn is_point<T: PartialEq>(start: &UncertainBoundary<T>, end: &UncertainBoundary<T>) -> bool {
+        match (start.as_single(), end.as_single()) {
+            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
+            _ => false,
+        }
+    }
+
+    fn make_error() -> FerroError {
+        FerroError::parse_with_diagnostic(
+            0,
+            "an inversion covers more than one nucleotide by definition; describe a \
+             one-nucleotide inversion as a substitution to the complementary base \
+             (DNA/inversion.md:16)",
+            Diagnostic::new()
+                .with_code(ErrorCode::InvalidEdit)
+                .with_hint(
+                    "write `<pos><ref>><complement>` (e.g. `g.234T>A`) instead of \
+                     `<pos>inv`",
+                ),
+        )
+    }
+
+    macro_rules! check_inv {
+        ($v:expr) => {
+            if matches!($v.loc_edit.edit.inner(), Some(NaEdit::Inversion { .. }))
+                && is_point(&$v.loc_edit.location.start, &$v.loc_edit.location.end)
+            {
+                return Err(make_error());
+            }
+        };
+    }
+
+    match variant {
+        HgvsVariant::Genome(v) => check_inv!(v),
+        HgvsVariant::Cds(v) => check_inv!(v),
+        HgvsVariant::Tx(v) => check_inv!(v),
+        HgvsVariant::Rna(v) => check_inv!(v),
+        HgvsVariant::Mt(v) => check_inv!(v),
+        HgvsVariant::Circular(v) => check_inv!(v),
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_single_nucleotide_inversion(inner)?;
             }
         }
         _ => {}
