@@ -7253,6 +7253,10 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // DNA/deletion.md:117, DNA/duplication.md:140, RNA/deletion.md:49; #1079).
     validate_no_point_size_suffix(&variant, input)?;
 
+    // Spec-mandated post-parse semantic check: reject a multi-nucleotide
+    // substitution (HGVS DNA/substitution.md:30, DNA/delins.md:73; #1079).
+    validate_no_multibase_substitution(input)?;
+
     // Spec-mandated post-parse semantic check: reject a start-codon variant
     // written as an amino acid substitution (HGVS protein/substitution.md:49,
     // checklist.md:65; #1079).
@@ -7682,6 +7686,67 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
         _ => {}
     }
     Ok(())
+}
+
+/// Reject a multi-nucleotide substitution — `c.79GC>TT`, `c.79_80GC>TT`,
+/// `g.4GC>TG` (#1079).
+///
+/// Per `recommendations/DNA/delins.md:73`:
+///
+/// > Can I describe a `GC` to `TG` variant as a di-nucleotide substitution
+/// > (`g.4GC>TG`)? No, this is not allowed. By definition, a substitution
+/// > changes **one** nucleotide into **one** other nucleotide. […] should be
+/// > described as `g.4_5delinsTG`.
+///
+/// and `recommendations/DNA/substitution.md:30` names both spellings:
+///
+/// > this change can not be described as a substitution like `c.79_80GC>TT`
+/// > or `c.79GC>TT`.
+///
+/// "not allowed" is MUST-level under the spec's RFC 2119 reading
+/// (`recommendations/style.md:9`), so the rejection applies on every parse
+/// path that reaches the grammar with the form still spelled out.
+///
+/// # Why the check reads the source
+///
+/// The grammar folds `GC>TT` into a `Delins` edit and keeps no record of the
+/// reference bases, so by post-parse time `c.79_80GC>TT` and a hand-written
+/// `c.79_80delinsTT` are indistinguishable in the AST. Worse, the single-
+/// position spelling folded `c.79GC>TT` into `c.79delinsTT` — a one-base
+/// deletion with a two-base insert, silently dropping a stated reference base
+/// and yielding a *different variant* from the `c.79_80delinsTT` the
+/// preprocessor produced for the same input. Keying off the source is what
+/// lets the two entry points converge.
+///
+/// Lenient and silent modes never reach this check: the preprocessor rewrites
+/// both spellings to `c.79_80delinsTT` first (the spec states the replacement
+/// outright, and the reference length is stated in the input, so the end
+/// coordinate is `start + len(ref) - 1` with no reference lookup).
+///
+/// Scope is limited to a **multi-base reference**. A one-base reference with a
+/// longer insert (`c.79G>TT`) already spans exactly its anchor and cannot lose
+/// a base, and the no-reference form (`c.100_102>ATG`) states no reference
+/// bases at all; both remain ordinary preprocessor concerns.
+fn validate_no_multibase_substitution(source: &str) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::error_handling::corrections::suggest_multibase_substitution_form;
+
+    let Some(canonical) = suggest_multibase_substitution_form(source) else {
+        return Ok(());
+    };
+    Err(FerroError::parse_with_diagnostic(
+        0,
+        format!(
+            "a substitution replaces one nucleotide by one other, so naming several \
+             reference bases is not allowed (DNA/substitution.md:30, DNA/delins.md:73); \
+             write `{canonical}` instead"
+        ),
+        Diagnostic::new()
+            .with_code(ErrorCode::InvalidEdit)
+            .with_hint(format!(
+                "describe the change as a deletion-insertion — write `{canonical}`"
+            )),
+    ))
 }
 
 /// Reject amino acids listed *after* a translation stop in an inserted

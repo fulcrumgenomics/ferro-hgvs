@@ -92,6 +92,7 @@ mod issue_1046_generator_gitdir_leak;
 mod issue_1052_substitution_refseq;
 mod issue_1063_preserve_uncertain_wrapper;
 mod issue_1079_immediate_ter_frameshift;
+mod issue_1079_multibase_substitution;
 mod issue_1079_point_size_suffix;
 mod issue_1079_residues_after_stop;
 mod issue_1079_single_nucleotide_inversion;

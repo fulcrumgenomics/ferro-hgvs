@@ -3217,6 +3217,46 @@ pub fn suggest_point_del_range_form(input: &str) -> Option<String> {
     (!corrections.is_empty()).then(|| rewritten.into_owned())
 }
 
+/// Count the reference bases a rewritten substitution named before its `>`.
+///
+/// The `original` of an [`ErrorType::OldSubstitutionSyntax`] correction has
+/// the shape `<pos>[_<pos>]<ref>*><alt>+`, so the reference run is the IUPAC
+/// bases immediately preceding the arrow; the position digits terminate it.
+fn substitution_ref_len(original: &str) -> usize {
+    match original.find('>') {
+        Some(arrow) => original[..arrow]
+            .chars()
+            .rev()
+            .take_while(|c| is_iupac_base(*c))
+            .count(),
+        None => 0,
+    }
+}
+
+/// Suggest the canonical `delins` form for a **multi-base reference**
+/// substitution (`c.79GC>TT`, `c.79_80GC>TT`, `g.4GC>TG`).
+///
+/// Per `recommendations/DNA/substitution.md:30` a substitution replaces one
+/// nucleotide by one other, so naming two or more reference bases either side
+/// of the arrow is not a substitution at all — the change is a deletion /
+/// insertion and must be written as one.
+///
+/// Returns `None` when `input` carries no such form. The no-reference form
+/// (`c.100_102>ATG`) and a one-base reference with a longer insert
+/// (`c.79G>TT`) are deliberately not matched: neither can lose a reference
+/// base, and both are handled as ordinary preprocessor corrections. Used by
+/// the parser's spec-rule diagnostic so the rejection message names the repair.
+pub fn suggest_multibase_substitution_form(input: &str) -> Option<String> {
+    let (rewritten, corrections) = correct_old_substitution_syntax(input);
+    corrections
+        .iter()
+        .any(|c| {
+            c.error_type == ErrorType::OldSubstitutionSyntax
+                && substitution_ref_len(&c.original) > 1
+        })
+        .then(|| rewritten.into_owned())
+}
+
 pub fn detect_del_size_suffix(input: &str) -> Vec<DetectedCorrection> {
     let mut hits = Vec::new();
     let bytes = input.as_bytes();

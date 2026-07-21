@@ -329,6 +329,11 @@
       "category": "rejected_by_design",
       "reason": "Frameshift terminating at codon 1 of the shifted frame (`fsTer1`). HGVS protein/frameshift.md:22 states the shortest possible frameshift contains `fsTer2`; a variant introducing an immediate stop is a nonsense substitution (`p.<ref><pos>Ter`), not a frameshift (also protein/substitution.md:20).",
       "tracking": "#1079"
+    },
+    "[multibase_substitution]": {
+      "category": "rejected_by_design",
+      "reason": "Multi-nucleotide substitution (`c.878_879AG>GT`). HGVS DNA/substitution.md:30 names both `c.79_80GC>TT` and `c.79GC>TT` as invalid because a substitution replaces one nucleotide by one other; DNA/delins.md:73 states the change is a deletion-insertion (`c.878_879delinsGT`). Lenient and silent modes rewrite it; strict rejects and names the repair.",
+      "tracking": "#1079"
     }
   },
   "expected_failures": {
@@ -538,6 +543,7 @@
     "NM_002485.4:c.842insT": "[single_position_insertion]",
     "NM_003977.2:c.919insC": "[single_position_insertion]",
     "NM_007294.3:c.3627insA": "[single_position_insertion]",
-    "NP_002476.2:p.Gln279ProfsTer1": "[frameshift_immediate_ter]"
+    "NP_002476.2:p.Gln279ProfsTer1": "[frameshift_immediate_ter]",
+    "NM_003977.2:c.878_879AG>GT": "[multibase_substitution]"
   }
 }
