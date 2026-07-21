@@ -116,16 +116,18 @@ pub struct FailureExpectations {
 /// One fixture's parse outcome handed to [`enforce`].
 ///
 /// `failures[input] = parser_error_string`. Inputs that parsed successfully
-/// are simply absent. `total_inputs` is the total number of fixture entries
-/// (used only for diagnostic eprintln output).
+/// are simply absent. `total_inputs` is the total number of fixture entries;
+/// besides diagnostic output it drives the zero-inputs safety guard in
+/// [`bless`] (a run of 0 inputs must not empty a curated snapshot), so it must
+/// reflect the real corpus size, not just the failing subset.
 pub struct FixtureCheck<'a> {
     pub total_inputs: usize,
     pub failures: BTreeMap<&'a str, String>,
 }
 
 /// Compare a fixture's parse outcome against the expectations snapshot at
-/// `expectations_path`, or regenerate the snapshot if `update_env_var` is
-/// set in the environment.
+/// `expectations_path`, or bless (non-destructively merge into) the snapshot if
+/// `update_env_var` is set in the environment.
 ///
 /// Panics on regression, improvement, undefined kind, or `parser_bug` hit
 /// — with a message that explains how to fix it (regenerate the snapshot,
@@ -175,7 +177,8 @@ pub fn enforce(expectations_path: &Path, update_env_var: &str, check: FixtureChe
         }
         msg.push_str(&format!(
             "\nIf the new failure is intended (parser change rejecting more inputs), \
-             regenerate the snapshot:\n  {}=1 cargo nextest run --features dev <test-name>\n",
+             bless the snapshot (a non-destructive merge that keeps curated kinds):\n  \
+             {}=1 cargo nextest run --features dev <test-name>\n",
             update_env_var
         ));
         errors.push(msg);
@@ -184,8 +187,8 @@ pub fn enforce(expectations_path: &Path, update_env_var: &str, check: FixtureChe
     if !improvements.is_empty() {
         let mut msg = format!(
             "{} fixture input(s) used to fail but now parse — \"improvement\". \
-             Update the snapshot to remove these entries (regenerate):\n  {}=1 cargo nextest run \
-             --features dev <test-name>\n\nShowing up to 20:\n",
+             Bless the snapshot to drop these entries (a merge; curated kinds are kept):\n  \
+             {}=1 cargo nextest run --features dev <test-name>\n\nShowing up to 20:\n",
             improvements.len(),
             update_env_var
         );
@@ -198,8 +201,8 @@ pub fn enforce(expectations_path: &Path, update_env_var: &str, check: FixtureChe
     if !undefined_kinds.is_empty() {
         let mut msg = format!(
             "{} expected_failures entry/entries reference an undefined kind. \
-             Either define the kind under \"kinds\" or regenerate the snapshot. \
-             Showing up to 20:\n",
+             Either define the kind under \"kinds\" or bless the snapshot (which writes a \
+             needs_triage placeholder). Showing up to 20:\n",
             undefined_kinds.len()
         );
         for (input, kind_id) in undefined_kinds.iter().take(20) {
@@ -332,6 +335,17 @@ pub fn bless(path: &Path, check: &FixtureCheck<'_>) -> BlessReport {
 
 /// Pure merge step of [`bless`]: updates `snapshot` in place and describes
 /// what changed. Kept separate from all I/O so it is directly testable.
+/// Merge this run's failures into `snapshot`, returning a [`BlessReport`].
+///
+/// Contract (what "merge" preserves): the hand-curated **kinds** (their
+/// category / reason / tracking prose) are never deleted — that is the whole
+/// point over the old destructive regenerate. `expected_failures`, by contrast,
+/// is rebuilt from the current run: a curated mapping whose input still fails is
+/// carried over verbatim, a newly-failing input gets an `auto:` needs-triage
+/// kind, and an input **absent from this run is treated as resolved and its
+/// mapping dropped** (its kind is kept). This assumes the run covers the full
+/// corpus; a wholly-missing dataset is caught by [`bless`]'s zero-inputs guard,
+/// but a *partial* run would silently drop the absent inputs' mappings.
 fn merge_into(snapshot: &mut FailureExpectations, check: &FixtureCheck<'_>) -> BlessReport {
     let mut report = BlessReport::default();
     let mut next_expected: BTreeMap<String, String> = BTreeMap::new();
@@ -422,11 +436,16 @@ fn print_bless_report(path: &Path, snapshot: &FailureExpectations, report: &Bles
         snapshot.kinds.len(),
         report.preserved_inputs
     );
-    let sections: [(&str, &Vec<String>); 4] = [
+    let sections: [(&str, &Vec<String>); 5] = [
         (
             "NEW failure(s) added (kind id prefixed `auto:`, category `needs_triage` — \
              rename and categorize before merge)",
             &report.new_inputs,
+        ),
+        (
+            "NEW kind id(s) synthesized for those failures (the `auto:`-prefixed ids to \
+             rename and give a real category/tracking before merge)",
+            &report.new_kinds,
         ),
         (
             "input(s) NO LONGER failing — removed from expected_failures (their kind \

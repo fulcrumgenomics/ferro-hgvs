@@ -245,12 +245,14 @@ fn bless_synthesizes_placeholder_for_undefined_kind() {
 /// must leave every kind id, category, reason, and tracking untouched.
 #[test]
 fn bless_roundtrips_real_clinvar_unique_snapshot() {
-    let source = Path::new("tests/fixtures/bulk/clinvar_hgvs_unique_failure_expectations.json");
-    if !source.exists() {
-        eprintln!("Skipping: {} not found", source.display());
-        return;
-    }
-    let raw = std::fs::read_to_string(source).expect("read real snapshot");
+    // Anchor on CARGO_MANIFEST_DIR so the path resolves regardless of the
+    // test's working directory (repo convention). The fixture is a committed
+    // file, so it must be present — a silent skip here would turn the most
+    // valuable test into a no-op that still reports green.
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/bulk/clinvar_hgvs_unique_failure_expectations.json");
+    let raw = std::fs::read_to_string(&source)
+        .unwrap_or_else(|e| panic!("read committed snapshot {}: {e}", source.display()));
     let before: FailureExpectations = serde_json::from_str(&raw).expect("parse real snapshot");
     assert!(before.kinds.len() > 50, "fixture unexpectedly small");
 
