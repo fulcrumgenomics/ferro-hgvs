@@ -16,10 +16,10 @@ use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
     build_initiator_unknown, build_whole_protein_unknown, cds_has_recognized_start,
-    cds_has_valid_start, edit_reaches_initiation_codon, edit_spans_cds_into_3utr,
-    predict_indel_protein, predict_stop_region_extension, predict_substitution_protein,
-    read_cds_start_codon, try_project_cis_combined_inframe, whole_exon_deletion_span, CisCombined,
-    RefProteinBundle,
+    cds_has_valid_start, combined_cis_residue_changes, edit_reaches_initiation_codon,
+    edit_spans_cds_into_3utr, predict_indel_protein, predict_stop_region_extension,
+    predict_substitution_protein, read_cds_start_codon, try_project_cis_combined_inframe,
+    whole_exon_deletion_span, CisCombined, RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
 use crate::reference::transcript::Transcript;
@@ -614,6 +614,87 @@ fn combine_cis_substitutions_by_codon(
     }
 
     let groups = group_consecutive_residues(changed);
+    Some(render_cis_substitution_groups(
+        &groups,
+        &accession,
+        &gene_symbol,
+    ))
+}
+
+/// Describe an **in-cis** allele of arbitrary length-preserving members as a
+/// single protein consequence over the residues its *combined* product changes
+/// (#1079).
+///
+/// This is the general form of [`combine_cis_substitutions_by_codon`]: it does
+/// not require the members to be single-base substitutions, so it also covers a
+/// `delins` that normalization decomposed into a cis allele of mixed sub-edits
+/// (e.g. `c.415_419delinsATATG` → `c.[415T>A;417_419inv]`). Describing such an
+/// allele member-by-member predicts each member against the *reference* codon,
+/// which yields a spec-forbidden bracketed protein allele
+/// (`protein/substitution.md`: `p.[Arg76Ser;Cys77Trp]` "is not correct") and can
+/// even name the wrong amino acid — exactly the "conflicting and incorrect
+/// predictions" `DNA/delins.md` introduces the coalescing rule to prevent.
+///
+/// The changed residues come from [`combined_cis_residue_changes`] (a
+/// residue-wise diff of the combined product against the reference protein) and
+/// are rendered by the shared [`render_cis_substitution_groups`]: one changed
+/// residue → a substitution, a contiguous run → one delins, no change → the
+/// silent `p.(Xxx{N}=)` at the first affected residue.
+///
+/// Returns `None` — the caller keeps its existing (bracketed / per-member)
+/// behavior — when the combined product is not a length-preserving residue-wise
+/// change (see [`combined_cis_residue_changes`]), or when the changed residues
+/// form **more than one run**: residues separated by an unchanged residue are
+/// described individually (`DNA/delins.md`), which is what the existing bracket
+/// already does (#855).
+fn combine_cis_members_by_residue(
+    transcript: &Transcript,
+    bundle: &RefProteinBundle,
+    members: &[(i64, i64, &NaEdit)],
+    protein_accession: &str,
+) -> Option<HgvsVariant> {
+    use crate::hgvs::edit::ProteinEdit;
+    use crate::hgvs::interval::ProtInterval;
+    use crate::hgvs::location::ProtPos;
+    use crate::hgvs::variant::{LocEdit, ProteinVariant};
+
+    let changed = combined_cis_residue_changes(transcript, bundle, members)?;
+    let accession = parse_accession(protein_accession);
+    let gene_symbol = transcript.gene_symbol.clone();
+
+    // Nothing changed: the combined product is silent → `p.(Xxx{N}=)` at the
+    // 5'-most residue any member touches (substitution.md: `p.Cys123=`).
+    if changed.is_empty() {
+        let lo_min = members.iter().map(|(lo, _, _)| *lo).min()?;
+        let pos = ((lo_min - 1) / 3 + 1) as u64;
+        let ref_aa = *bundle.ref_protein.get((pos - 1) as usize)?;
+        return Some(HgvsVariant::Protein(ProteinVariant {
+            accession,
+            gene_symbol,
+            loc_edit: LocEdit::new_predicted(
+                ProtInterval::point(ProtPos::new(ref_aa, pos)),
+                ProteinEdit::Identity {
+                    predicted: false,
+                    whole_protein: false,
+                },
+            ),
+        }));
+    }
+
+    let spans: Vec<SubSpan> = changed
+        .into_iter()
+        .map(|(pos, ref_aa, alt_aa)| SubSpan {
+            pos,
+            ref_aa,
+            alt_aa,
+        })
+        .collect();
+    let groups = group_consecutive_residues(spans);
+    if groups.len() != 1 {
+        // Separated residues are described individually — the caller's existing
+        // bracketed allele is already the spec-correct rendering (#855).
+        return None;
+    }
     Some(render_cis_substitution_groups(
         &groups,
         &accession,
@@ -3416,6 +3497,39 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                     if let Some(pv) = combine_cis_substitutions_by_codon(&tx, &subs, &prot_acc) {
                         return Ok((false, Some(pv)));
                     }
+                }
+            }
+        }
+
+        // Decomposed-delins in-cis members (#1079): a `delins` that
+        // normalization split into a cis allele of sub-edits (e.g.
+        // `c.415_419delinsATATG` → `c.[415T>A;417_419inv]`) must still be
+        // described as ONE protein consequence over the residues its *combined*
+        // product changes. Predicting each member against the reference codon
+        // emits the spec-forbidden bracketed protein allele
+        // (substitution.md: `p.[Arg76Ser;Cys77Trp]` "is not correct") and can
+        // name the wrong amino acid — the "conflicting and incorrect
+        // predictions" delins.md's coalescing rule exists to prevent. Runs
+        // itself: the #1076 codon path above is the special case where every
+        // member is a single-base substitution sharing a codon.
+        //
+        // Declines (keeping the existing bracket) when the changed residues are
+        // separated by an unchanged residue — those are described individually
+        // (delins.md, #855) — or when the combined product changes length, which
+        // `try_project_cis_combined_inframe` above already describes.
+        if !base_flag && !has_opaque {
+            let members: Vec<(i64, i64, &NaEdit)> = classes
+                .iter()
+                .filter_map(|c| match c {
+                    CisMemberClass::SimpleExonic { lo, hi, edit, .. } => Some((*lo, *hi, *edit)),
+                    _ => None,
+                })
+                .collect();
+            if members.len() > 1 {
+                let prot_acc = cis_member_protein_accession(inner_projections, transcript_id);
+                if let Some(pv) = combine_cis_members_by_residue(&tx, &bundle, &members, &prot_acc)
+                {
+                    return Ok((false, Some(pv)));
                 }
             }
         }
@@ -12545,6 +12659,100 @@ mod tests {
         use crate::hgvs::edit::Base;
         let s = combine_by_codon_str("ATGGATTATTAA", &[(4, Base::C)]);
         assert_eq!(s, None);
+    }
+
+    /// Literal `delins` edit over `[lo, hi]` replacing it with `alt`.
+    fn delins_edit(alt: &str) -> NaEdit {
+        use crate::hgvs::edit::{Base, InsertedSequence, Sequence};
+        NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(
+                alt.chars()
+                    .map(|c| Base::from_char(c).expect("ACGT literal"))
+                    .collect(),
+            )),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        }
+    }
+
+    /// Run the residue-level in-cis combiner over `seq` (the whole sequence is
+    /// the CDS) with `(lo, hi, replacement)` members.
+    fn combine_by_residue_str(seq: &str, members: &[(i64, i64, &str)]) -> Option<String> {
+        let tx = tx_with_cds_seq("NM_X.1", seq);
+        let bundle = RefProteinBundle::from_transcript(&tx).expect("ref bundle");
+        let edits: Vec<NaEdit> = members.iter().map(|(_, _, alt)| delins_edit(alt)).collect();
+        let spans: Vec<(i64, i64, &NaEdit)> = members
+            .iter()
+            .zip(edits.iter())
+            .map(|((lo, hi, _), edit)| (*lo, *hi, edit))
+            .collect();
+        combine_cis_members_by_residue(&tx, &bundle, &spans, "NP_X.1").map(|v| v.to_string())
+    }
+
+    /// #1079 (unit): the reported shape — a decomposed `delins` whose members
+    /// touch a shared residue. CDS `ATGGATTATTGCTAA` (Met-Asp-Tyr-Cys-Ter);
+    /// members `c.4G>C` (inside codon 2) and `c.6_8delinsAGC` (spanning codons 2
+    /// and 3) give the combined CDS `ATG CAA GCT TGC TAA` = Met-Gln-Ala-Cys-Ter.
+    /// Both residues are read off the *combined* CDS, never from per-member
+    /// predictions against the reference codon.
+    #[test]
+    fn combine_by_residue_shared_residue_forms_one_delins() {
+        let s = combine_by_residue_str("ATGGATTATTGCTAA", &[(4, 4, "C"), (6, 8, "AGC")]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Asp2_Tyr3delinsGlnAla)"));
+    }
+
+    /// #1079 (unit): when only ONE residue ends up changed — the other member is
+    /// silent — the consequence is a plain substitution, not a delins spanning
+    /// the unchanged residue (substitution.md). CDS `ATGCGATGGTAA`
+    /// (Met-Arg-Trp-Ter); `c.6A>G` is silent (`CGA`→`CGG`, still Arg) and
+    /// `c.9G>T` changes `TGG`→`TGT` (Cys).
+    #[test]
+    fn combine_by_residue_silent_member_drops_out() {
+        let s = combine_by_residue_str("ATGCGATGGTAA", &[(6, 6, "G"), (9, 9, "T")]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Trp3Cys)"));
+    }
+
+    /// #1079 (unit): an all-silent combination is `p.(Xxx{N}=)` at the 5'-most
+    /// residue any member touches (substitution.md `p.Cys123=`), not a bracketed
+    /// pair of `(=)` members (alleles.md). CDS `ATGCGACGCTAA`: `c.6A>G`
+    /// (`CGA`→`CGG`, Arg) and `c.9C>T` (`CGC`→`CGT`, Arg) are both silent.
+    #[test]
+    fn combine_by_residue_all_silent_is_identity_at_first_residue() {
+        let s = combine_by_residue_str("ATGCGACGCTAA", &[(6, 6, "G"), (9, 9, "T")]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Arg2=)"));
+    }
+
+    /// #1079 (unit): residues separated by an UNCHANGED residue are described
+    /// individually (delins.md), so the combiner declines and the caller keeps
+    /// its existing bracketed allele. CDS `ATGGATTATTGCTAA`: codon 2 `GAT`→`TAT`
+    /// and codon 4 `TGC`→`TAC`, codon 3 untouched.
+    #[test]
+    fn combine_by_residue_separated_residues_decline() {
+        let s = combine_by_residue_str("ATGGATTATTGCTAA", &[(4, 4, "T"), (11, 11, "A")]);
+        assert_eq!(s, None);
+    }
+
+    /// #1079 (unit): a length-changing combination is out of scope — the in-frame
+    /// indel path (`try_project_cis_combined_inframe`) owns those forms.
+    #[test]
+    fn combine_by_residue_length_change_declines() {
+        let s = combine_by_residue_str("ATGGATTATTGCTAA", &[(4, 6, ""), (8, 8, "G")]);
+        assert_eq!(s, None);
+    }
+
+    /// #1079 (unit): overlapping members are contradictory in cis (two alts on one
+    /// molecule) and a single member has nothing to combine — both decline.
+    #[test]
+    fn combine_by_residue_overlap_and_single_member_decline() {
+        assert_eq!(
+            combine_by_residue_str("ATGGATTATTGCTAA", &[(4, 6, "CAT"), (5, 5, "G")]),
+            None
+        );
+        assert_eq!(
+            combine_by_residue_str("ATGGATTATTGCTAA", &[(4, 4, "C")]),
+            None
+        );
     }
 
     /// #855: an in-cis frameshift allele collapses to the whole-protein-unknown
