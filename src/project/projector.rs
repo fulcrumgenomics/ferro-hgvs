@@ -1761,6 +1761,73 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Some(rna)
     }
 
+    /// Re-frame a derived transcript-coordinate axis (`c.` / `n.`) so its
+    /// accession carries the *input's* genomic context (#1086).
+    ///
+    /// The `coding`/`noncoding` axes are built on the bare transcript accession
+    /// (`NM_004006.2`), which silently discarded an `NC_`/`NG_` parent the input
+    /// supplied. For an **intronic** position that bare form is not merely a
+    /// stylistic loss — it is spec-invalid. `background/refseq.md:47-49`:
+    ///
+    /// > intronic sequences are considered to be **within the boundaries** of a
+    /// > transcript reference sequence and may only be used to describe a
+    /// > variant when a genomic reference sequence identifier is provided …
+    /// > **not correct:** `NM_004006.2:c.357+1G>A` … **correct:**
+    /// > `NC_000023.10(NM_004006.2):c.357+1G>A`,
+    /// > `NG_012232.1(NM_004006.2):c.357+1G>A`.
+    ///
+    /// (Restated for coding transcripts at `refseq.md:136` and for non-coding
+    /// transcripts — the `n.` axis — at `refseq.md:157`; the parenthesised
+    /// rendering is specified at `refseq.md:138-140`.)
+    ///
+    /// The rule applied is **preserve the caller's framing**: retain the parent
+    /// whenever the input supplied one, render bare whenever it did not. This is
+    /// a superset of the spec's mandatory (intronic / flanking) case, so the
+    /// "not correct" bare-intronic form can never be produced from a parented
+    /// input; and it is what `refseq.md:138-140` prescribes for *any* `c.`
+    /// description "based on a genomic reference sequence", with no exonic
+    /// carve-out. It also matches the framing `ferro normalize` and the `r.`
+    /// axis ([`Self::reframe_rna_from_input`]) already preserve, so the axes of
+    /// one projection agree on their reference.
+    ///
+    /// A parent is never fabricated: a bare input stays bare (#121). Unlike the
+    /// `r.` path this deliberately leaves `gene_symbol` alone — the `c.`/`n.`
+    /// symbol is already the input's own on every site that calls this.
+    fn reframe_transcript_axis_from_input(
+        axis: Option<HgvsVariant>,
+        input: &HgvsVariant,
+    ) -> Option<HgvsVariant> {
+        let mut axis = axis?;
+        let context = input
+            .accession()
+            .and_then(|a| a.genomic_context.as_deref().cloned());
+        Self::apply_transcript_axis_framing(&mut axis, context.as_ref());
+        Some(axis)
+    }
+
+    /// Stamp `context` onto every `c.`/`n.` leaf of `axis` (descending into an
+    /// allele so its first-member-derived prefix is re-framed), or strip any
+    /// context when `context` is `None`. See
+    /// [`Self::reframe_transcript_axis_from_input`] for the rule and citation.
+    fn apply_transcript_axis_framing(axis: &mut HgvsVariant, context: Option<&Accession>) {
+        let reframe = |acc: &Accession| match context {
+            Some(parent) => acc.clone().with_genomic_context(parent.clone()),
+            None => acc.clone().without_genomic_context(),
+        };
+        match axis {
+            HgvsVariant::Cds(c) => c.accession = reframe(&c.accession),
+            HgvsVariant::Tx(t) => t.accession = reframe(&t.accession),
+            // An allele renders its prefix from the first member, so every
+            // member must carry the input frame (mirrors `apply_rna_framing`).
+            HgvsVariant::Allele(a) => {
+                for member in &mut a.variants {
+                    Self::apply_transcript_axis_framing(member, context);
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Stamp `context`/`gene_symbol` onto every `r.` leaf of `rna` (descending
     /// into a predicted allele so its first-member-derived prefix is re-framed).
     fn apply_rna_framing(
@@ -4910,9 +4977,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         let c_edit = transform_edit_for_strand(&edit, strand);
 
         // Build the c./n. HGVS variant returned in `VariantProjection.coding`.
-        // Kept bare-accession (no NC_* wrapper) for caller-visible rendering;
-        // build-awareness for the parent-aware caches goes through
-        // `cache_variant` below.
+        // Built bare-accession (no NC_* wrapper) here; the caller-visible
+        // framing is applied at the end of this function by
+        // `reframe_transcript_axis_from_input` (#1086), which re-stamps the
+        // input's own `NC_`/`NG_` parent. Build-awareness for the parent-aware
+        // caches goes through `cache_variant` below.
         let coding = if is_coding {
             let interval = CdsInterval::new(cds_start, cds_end);
             HgvsVariant::Cds(CdsVariant {
@@ -5069,6 +5138,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             (Some(coding), protein, rna)
         };
 
+        // #1086: `coding`/`noncoding` were built on the bare transcript
+        // accession, dropping any `NC_`/`NG_` parent the input supplied — which
+        // for an intronic position yields the spec's literal "not correct" form
+        // (`refseq.md:47-49`). Carry the input's framing onto both axes.
+        let coding = Self::reframe_transcript_axis_from_input(coding, normalized);
+        let noncoding = Self::reframe_transcript_axis_from_input(noncoding, normalized);
+
         Ok(VariantProjection {
             normalization_warnings: Vec::new(),
             genomic,
@@ -5093,8 +5169,8 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// contiguous downstream walk cannot be re-derived back to a CDS position via
     /// the normal genome→CDS path (it would be rejected as
     /// `TranscriptNotOverlapping`). The coding axis is therefore the input's own
-    /// (bare-accession) form, and the genomic axis is the re-anchored walked
-    /// coordinate. A `c.*` 3'UTR/poly-A position has no protein consequence, so
+    /// form (retaining the input's framing, #1086), and the genomic axis is the
+    /// re-anchored walked coordinate. A `c.*` 3'UTR/poly-A position has no protein consequence, so
     /// `protein`/`rna`/`noncoding` are `None` (best-effort: nothing to derive
     /// from a position with no genomic exon context).
     ///
@@ -5123,16 +5199,21 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         gene_symbol: Option<String>,
         cds_start_incomplete: bool,
     ) -> Option<VariantProjection> {
-        // The coding axis is the input's own form, rendered bare (no NC_ wrapper),
-        // matching how `coding` is reported on the normal path. Only `c.*` (CDS)
-        // inputs qualify for the poly-A fallback (the caller gates on
-        // `HgvsVariant::Cds`); `n.`/`r.` inputs have no poly-A 3'UTR endpoint and
-        // must fall through to the canonical `TranscriptNotOverlapping` decline.
+        // The coding axis is the input's own form, carrying the input's own
+        // framing — matching how `coding` is reported on the normal path
+        // (#1086: that path used to render bare and now preserves the caller's
+        // `NC_`/`NG_` parent, so this echo follows it). Retaining the parent
+        // also keeps this axis in the same reference frame as the `genomic`
+        // axis reported alongside it below. Only `c.*` (CDS) inputs qualify for
+        // the poly-A fallback (the caller gates on `HgvsVariant::Cds`);
+        // `n.`/`r.` inputs have no poly-A 3'UTR endpoint and must fall through
+        // to the canonical `TranscriptNotOverlapping` decline.
         let coding = match normalized {
             HgvsVariant::Cds(c) if !cds_start_incomplete => {
-                let mut c = c.clone();
-                c.accession.genomic_context = None;
-                Some(HgvsVariant::Cds(c))
+                Self::reframe_transcript_axis_from_input(
+                    Some(HgvsVariant::Cds(c.clone())),
+                    normalized,
+                )
             }
             HgvsVariant::Cds(_) => None,
             _ => return None,
@@ -5169,9 +5250,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
     /// Genomic-only projection for a whole-arm terminus (pter/qter) `c.` input
     /// whose parent genome frame IS resolvable (#887). Mirrors
-    /// `polya_multiaxis_projection`'s shape: echo the input's bare coding form,
-    /// no protein/noncoding/rna axis (a whole-arm marker does not round-trip
-    /// through cdot). `genomic` is the already-normalized parent-frame
+    /// `polya_multiaxis_projection`'s shape: echo the input's own coding form
+    /// (framing included, #1086), no protein/noncoding/rna axis (a whole-arm
+    /// marker does not round-trip through cdot). `genomic` is the
+    /// already-normalized parent-frame
     /// (NG_/LRG_) coordinate.
     ///
     /// #972: this site is reached from the top of `project_single_inner`,
@@ -5206,11 +5288,18 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             HgvsVariant::Cds(c) => c.gene_symbol.clone(),
             _ => None,
         };
+        // As on the poly-A echo above, the coding axis carries the input's own
+        // framing (#1086). A whole-arm terminus makes that mandatory rather
+        // than merely consistent: `pter`/`qter` are genomic-frame landmarks
+        // that `project_cds_terminus_to_parent` can only resolve *because* a
+        // parent reference was supplied, so a bare `NM_…:c.pterdel` would name
+        // a position its own stated reference cannot locate.
         let coding = match normalized {
             HgvsVariant::Cds(c) if !cds_start_incomplete => {
-                let mut c = c.clone();
-                c.accession.genomic_context = None;
-                Some(HgvsVariant::Cds(c))
+                Self::reframe_transcript_axis_from_input(
+                    Some(HgvsVariant::Cds(c.clone())),
+                    normalized,
+                )
             }
             _ => None,
         };
