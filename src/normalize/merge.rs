@@ -1255,18 +1255,31 @@ fn build_naedit<P>(
 /// authored. Collapsing a nonsense change toward `p.<ref><pos>Ter` is a
 /// separate rule.
 ///
+/// Every other restriction is likewise scoped to the member or run it concerns,
+/// so one out-of-scope member never leaves a well-formed run elsewhere in the
+/// allele as the bracket `protein/substitution.md:23` calls "not correct"
+/// (#1130). A member is barred from merging — and re-emitted verbatim — when:
+///   - its edit is not a single-residue substitution or deletion (`dup` / `ins`
+///     / `fs` / `ext` / multi-residue are out of scope for this narrow rule);
+///     such a member is **opaque**, and it also bars any member it overlaps;
+///   - it overlaps another member — two edits at one residue are the
+///     contradictory same-residue case, not a delins.
+///
+/// A run additionally **splits** at any predicted `( )` ↔ certain boundary, so a
+/// mixed stretch never fabricates a certainty its members do not jointly assert,
+/// while each same-certainty stretch of ≥2 still merges.
+///
 /// Returns `Some` only when at least one run of ≥2 adjacent members is merged;
 /// a fully-merged allele collapses to a bare [`HgvsVariant::Protein`], a
 /// partial merge to a smaller [`HgvsVariant::Allele`]. Returns `None` — leave
-/// the allele untouched — when it is conservatively out of scope:
+/// the allele untouched — when no run merges, or when the allele as a whole is
+/// out of scope:
 ///   - the phase is not cis (trans / unknown / mosaic / … are independent),
-///   - any member is not a single-residue protein substitution or deletion
-///     (other edit kinds — dup / ins / inv / fs / ext / multi-residue — are
-///     out of scope for this narrow rule),
-///   - every run is at or after a to-`Ter` member (see above),
-///   - two members share a residue position (a `n,n` pair is the contradictory
-///     same-residue case, not a delins), or
-///   - a run would mix predicted `( )` and certain members (ambiguous).
+///   - a member is not a protein variant, or does not share the first member's
+///     accession and gene symbol, or
+///   - a member has an uncertain or range endpoint, leaving it unplaceable —
+///     without a total order over the members, run detection is unsound, so
+///     this one really does decline the whole allele.
 pub(crate) fn coalesce_protein_adjacent_changes(
     allele: &crate::hgvs::variant::AlleleVariant,
 ) -> Option<HgvsVariant> {
@@ -1279,17 +1292,36 @@ pub(crate) fn coalesce_protein_adjacent_changes(
         return None;
     }
 
-    /// One member reduced to a single-residue edit: a substitution
-    /// (`alternative = Some(aa)`, contributes that residue to the merged
-    /// insert) or a deletion (`alternative = None`, contributes nothing).
-    /// `source` is the member's index in `allele.variants`, kept so a member
-    /// that ends up in no run is re-emitted verbatim even after the
-    /// residue-order sort (#1116).
+    /// What a member contributes to a merged run.
+    enum Change {
+        /// A single-residue substitution; contributes `aa` to the insert.
+        Substitution(AminoAcid),
+        /// A single-residue deletion; contributes nothing to the insert.
+        Deletion,
+        /// Any other member — a `dup` / `ins` / `fs` / `ext` / multi-residue
+        /// edit, i.e. an edit kind this narrow rule does not merge. It is
+        /// ordered with the rest and re-emitted verbatim, but never joins a run
+        /// (#1130).
+        Opaque,
+    }
+
+    /// One member of the allele, reduced to what run detection needs.
+    ///
+    /// `lo`/`hi` are the member's occupied residue span (1-based, inclusive);
+    /// a single-residue member has `lo == hi`. `source` is the member's index
+    /// in `allele.variants`, kept so a member that ends up in no run is
+    /// re-emitted verbatim even after the residue-order sort (#1116).
     struct Member {
-        pos: u64,
+        lo: u64,
+        hi: u64,
         reference: AminoAcid,
-        alternative: Option<AminoAcid>,
+        change: Change,
         predicted: bool,
+        /// Set when this member overlaps another: a second edit at one residue
+        /// (contradictory), or a residue covered by an opaque member's span.
+        /// Blocked members are emitted verbatim and break any run through them
+        /// (#1130).
+        blocked: bool,
         source: usize,
     }
 
@@ -1312,52 +1344,70 @@ pub(crate) fn coalesce_protein_adjacent_changes(
         if pv.accession != accession || pv.gene_symbol != gene_symbol {
             return None;
         }
-        // Exactly one certain residue (a point, start == end, both certain).
+        // Both endpoints must be certain single points so the member can be
+        // ordered and its span known. An uncertain or range endpoint leaves the
+        // member unplaceable, and run detection would be unsound without a
+        // total order — so that one really does decline the whole allele.
         let (Some(Mu::Certain(s)), Some(Mu::Certain(e))) = (
             pv.loc_edit.location.start.as_single(),
             pv.loc_edit.location.end.as_single(),
         ) else {
             return None;
         };
-        if s != e {
+        if e.number < s.number {
             return None;
         }
-        let (alternative, predicted) = match &pv.loc_edit.edit {
-            Mu::Certain(ProteinEdit::Substitution { alternative, .. }) => {
-                (Some(*alternative), false)
+        let single_residue = s == e;
+        let (change, predicted) = match &pv.loc_edit.edit {
+            Mu::Certain(ProteinEdit::Substitution { alternative, .. }) if single_residue => {
+                (Change::Substitution(*alternative), false)
             }
-            Mu::Uncertain(ProteinEdit::Substitution { alternative, .. }) => {
-                (Some(*alternative), true)
+            Mu::Uncertain(ProteinEdit::Substitution { alternative, .. }) if single_residue => {
+                (Change::Substitution(*alternative), true)
             }
             // A single-residue deletion contributes no residue to the merged
-            // insert. `start == end` was already enforced above, so this is a
-            // one-residue `del` (a multi-residue `del` range has `s != e` and
-            // bails). A deletion carrying an explicit deleted-sequence or count
+            // insert. A deletion carrying an explicit deleted-sequence or count
             // annotation still describes a single residue here, so it merges
-            // the same way.
-            Mu::Certain(ProteinEdit::Deletion { .. }) => (None, false),
-            Mu::Uncertain(ProteinEdit::Deletion { .. }) => (None, true),
-            _ => return None,
+            // the same way; a multi-residue `del` range falls through to
+            // `Opaque` below.
+            Mu::Certain(ProteinEdit::Deletion { .. }) if single_residue => {
+                (Change::Deletion, false)
+            }
+            Mu::Uncertain(ProteinEdit::Deletion { .. }) if single_residue => {
+                (Change::Deletion, true)
+            }
+            // Every other edit kind is out of scope for this narrow rule, but
+            // only for itself — it no longer vetoes the allele (#1130).
+            other => (Change::Opaque, matches!(other, Mu::Uncertain(_))),
         };
         members.push(Member {
-            pos: s.number,
+            lo: s.number,
+            hi: e.number,
             reference: s.aa,
-            alternative,
+            change,
             predicted,
+            blocked: false,
             source,
         });
     }
 
     // Sort into ascending residue order so run detection — and therefore the
     // coalesced payload — is independent of the author's member order (#1116).
-    // The sort is stable, so members sharing a residue stay adjacent and are
-    // caught by the duplicate check below.
-    members.sort_by_key(|m| m.pos);
+    // The sort is stable, so members sharing a start stay in input order.
+    members.sort_by_key(|m| (m.lo, m.hi));
 
-    // Two members at the same residue are a contradiction, not a delins: the
-    // allele states two different changes to one amino acid. Leave it untouched.
-    if members.windows(2).any(|w| w[1].pos == w[0].pos) {
-        return None;
+    // Mark every member that overlaps another. Two edits at one residue are a
+    // contradiction rather than a delins, and a residue covered by an opaque
+    // member's span cannot also be merged into a run — so both members of any
+    // overlapping pair are emitted verbatim, and neither can join a run
+    // (#1130). Quadratic in the member count, which is tiny for an allele.
+    for i in 0..members.len() {
+        for j in (i + 1)..members.len() {
+            if members[i].hi >= members[j].lo {
+                members[i].blocked = true;
+                members[j].blocked = true;
+            }
+        }
     }
 
     // The earliest residue changed to `Ter` (a nonsense substitution), if any.
@@ -1367,16 +1417,34 @@ pub(crate) fn coalesce_protein_adjacent_changes(
     // member is the earliest.
     let first_ter_pos = members
         .iter()
-        .find(|m| m.alternative == Some(AminoAcid::Ter))
-        .map(|m| m.pos);
+        .find(|m| matches!(m.change, Change::Substitution(AminoAcid::Ter)))
+        .map(|m| m.lo);
+
+    /// Whether `m` may take part in a merged run at all: it must be one of the
+    /// two mergeable single-residue edit kinds and must not overlap another
+    /// member (#1130).
+    fn is_runnable(m: &Member) -> bool {
+        !m.blocked && !matches!(m.change, Change::Opaque)
+    }
 
     let mut merged: Vec<HgvsVariant> = Vec::new();
     let mut changed = false;
     let mut i = 0;
     while i < members.len() {
+        // Grow the longest run of strictly-adjacent runnable members that also
+        // agree on certainty. Splitting at a predicted/certain boundary keeps a
+        // mixed stretch from fabricating a certainty its members do not jointly
+        // assert, while still letting each same-certainty stretch of ≥2 merge
+        // (#1130); before, the mixed case declined the whole allele.
         let mut j = i;
-        while j + 1 < members.len() && members[j + 1].pos == members[j].pos + 1 {
-            j += 1;
+        if is_runnable(&members[i]) {
+            while j + 1 < members.len()
+                && is_runnable(&members[j + 1])
+                && members[j + 1].lo == members[j].lo + 1
+                && members[j + 1].predicted == members[j].predicted
+            {
+                j += 1;
+            }
         }
         // A run may merge when it ends at or before the earliest stop.
         //
@@ -1392,23 +1460,25 @@ pub(crate) fn coalesce_protein_adjacent_changes(
         // a nonsense substitution — `protein/substitution.md:20`) or carries it
         // interior (residues after the stop — `protein/delins.md:45`), or else
         // sits wholly downstream of an earlier stop, which stays out of scope.
-        let run_ends_at_or_before_any_ter = first_ter_pos.is_none_or(|ter| members[j].pos <= ter);
+        let run_ends_at_or_before_any_ter = first_ter_pos.is_none_or(|ter| members[j].lo <= ter);
         if j > i && run_ends_at_or_before_any_ter {
             // A run of ≥2 strictly-adjacent members → one edit spanning
             // residues `i..=j`. The inserted sequence is each member's
             // alternative in order, with deletions contributing nothing.
-            let all_predicted = members[i..=j].iter().all(|m| m.predicted);
-            let any_predicted = members[i..=j].iter().any(|m| m.predicted);
-            if any_predicted && !all_predicted {
-                return None;
-            }
+            // Certainty is uniform across the run by construction (the walk
+            // above splits on it), so the whole run is predicted iff its first
+            // member is.
+            let all_predicted = members[i].predicted;
             let loc = ProtInterval::new(
-                ProtPos::new(members[i].reference, members[i].pos),
-                ProtPos::new(members[j].reference, members[j].pos),
+                ProtPos::new(members[i].reference, members[i].lo),
+                ProtPos::new(members[j].reference, members[j].lo),
             );
             let inserted: Vec<AminoAcid> = members[i..=j]
                 .iter()
-                .filter_map(|m| m.alternative)
+                .filter_map(|m| match m.change {
+                    Change::Substitution(aa) => Some(aa),
+                    Change::Deletion | Change::Opaque => None,
+                })
                 .collect();
             let edit = if inserted.is_empty() {
                 // Every member in the run is a deletion, so there is nothing to
