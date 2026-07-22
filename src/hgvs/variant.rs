@@ -1056,6 +1056,60 @@ fn rna_simple_range(interval: &crate::hgvs::interval::RnaInterval) -> Option<Sel
     ))
 }
 
+/// Total-ordering key for a cis-allele member, used to render bracketed
+/// cis-allele members in genomic (coordinate) order regardless of the order
+/// they were written (#1098).
+///
+/// The key is `(accession, region, base, offset, descriptor)`:
+///
+/// - `accession` groups members by molecule first. A bracketed cis allele is
+///   normally single-accession, so this is constant in the common case; for a
+///   mixed-accession allele it at least keeps members grouped and
+///   deterministic.
+/// - `(region, base, offset)` is the member's canonical **start** point in the
+///   same "region + base + offset" coordinate the self-cancelling detector
+///   uses, so 5'UTR sorts before CDS-proper before 3'UTR and intronic offsets
+///   sort within their anchor. Members whose start cannot be resolved to a
+///   definite point (uncertain/unknown positions, or a non-positional arm)
+///   get a max sentinel so they sort last, still deterministically.
+/// - `descriptor` (the member's rendered HGVS string) is the final tie-break.
+///   It makes the order **total**: two members that share a start point still
+///   get distinct keys, so the sort result never depends on input order. This
+///   is why a total order is used rather than a stable sort keyed on the start
+///   alone — the latter would leave same-start members in input order, which
+///   is the exact order-dependence #1098 is about.
+pub(crate) fn cis_member_order_key(v: &HgvsVariant) -> (String, bool, i64, i64, String) {
+    let accession = v.accession().map(Accession::full).unwrap_or_default();
+    let descriptor = format!("{v}");
+    let (region, base, offset) = match cis_member_start_point(v) {
+        Some(p) => (p.region, p.base, p.offset),
+        None => (true, i64::MAX, i64::MAX),
+    };
+    (accession, region, base, offset, descriptor)
+}
+
+/// Canonical **start** point of a cis-allele member's location, or `None` when
+/// the member has no definite positional start (uncertain/unknown positions,
+/// or a non-positional arm such as a null/unknown-allele marker). Reuses the
+/// per-axis range extractors that back the self-cancelling detector.
+fn cis_member_start_point(v: &HgvsVariant) -> Option<SelfCancellingPoint> {
+    match v {
+        HgvsVariant::Genome(x) => genome_simple_range(&x.loc_edit.location).map(|r| r.0),
+        HgvsVariant::Cds(x) => cds_simple_range(&x.loc_edit.location).map(|r| r.0),
+        HgvsVariant::Tx(x) => tx_simple_range(&x.loc_edit.location).map(|r| r.0),
+        HgvsVariant::Rna(x) => rna_simple_range(&x.loc_edit.location).map(|r| r.0),
+        HgvsVariant::Mt(x) => genome_simple_range(&x.loc_edit.location).map(|r| r.0),
+        HgvsVariant::Circular(x) => genome_simple_range(&x.loc_edit.location).map(|r| r.0),
+        HgvsVariant::Protein(x) => x
+            .loc_edit
+            .location
+            .start
+            .inner()
+            .map(|p| SelfCancellingPoint::new(false, p.number as i64, 0)),
+        _ => None,
+    }
+}
+
 /// Returns `true` when ranges `a` and `b` overlap.
 ///
 /// **Precondition**: both ranges are in canonical orientation
