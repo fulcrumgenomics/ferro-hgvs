@@ -1235,21 +1235,25 @@ fn build_naedit<P>(
 /// "not correct".
 ///
 /// A to-`Ter` (nonsense) member **bounds** coalescing rather than vetoing the
-/// whole allele (#1125): only a run lying **entirely 5′ of the earliest `Ter`**
-/// may merge. A run that contains that `Ter`, or that sits wholly downstream of
-/// it, is left as authored — but an unrelated upstream run still collapses, e.g.
+/// whole allele (#1125): a run merges only when it **ends at or before the
+/// earliest `Ter`**. An unrelated upstream run still collapses, e.g.
 /// `p.[Cys100Ser;Asp101Gly;Arg200Ter]` → `p.[Cys100_Asp101delinsSerGly;Arg200Ter]`.
 ///
-/// The `Ter`-containing run is declined **conservatively**, not because every
-/// such merge is spec-invalid. The spec forbids two specific shapes: residues
-/// listed *after* a stop (`protein/delins.md:45` — not `delinsSerSerTerAlaAsp`)
-/// and an *immediate* stop written as a delins (`protein/substitution.md:20` —
-/// not `p.Cys5_Ser6delinsTerGluAsp`, but `p.Tyr4Ter`). A run whose to-`Ter`
-/// member is **last** would merge to a *trailing*-`Ter` delins, which the spec
-/// endorses (`protein/delins.md:47`: `p.(Pro578_Lys579delinsLeuTer)`); declining
-/// it is a known completeness gap inherited from #1095, tracked separately.
-/// Collapsing a nonsense change toward `p.<ref><pos>Ter` is likewise a separate
-/// rule.
+/// A run that ends *exactly* at that `Ter` merges too (#1129): its insert then
+/// carries the stop in final position, which the spec endorses
+/// (`protein/delins.md:47`: `p.(Pro578_Lys579delinsLeuTer)`), so
+/// `p.[Cys100Ser;Asp101Ter]` → `p.Cys100_Asp101delinsSerTer`. Only the two
+/// shapes the spec actually forbids stay declined, and one comparison covers
+/// both since `first_ter_pos` is the earliest stop:
+///   - a run whose **first** member is the `Ter` — an *immediate* stop, which
+///     must be a nonsense substitution (`protein/substitution.md:20`: not
+///     `p.Cys5_Ser6delinsTerGluAsp`, but `p.Tyr4Ter`);
+///   - a run carrying the `Ter` **interior** — residues after the stop
+///     (`protein/delins.md:45`: not `delinsSerSerTerAlaAsp`).
+///
+/// A run sitting wholly downstream of an earlier stop is likewise left as
+/// authored. Collapsing a nonsense change toward `p.<ref><pos>Ter` is a
+/// separate rule.
 ///
 /// Returns `Some` only when at least one run of ≥2 adjacent members is merged;
 /// a fully-merged allele collapses to a bare [`HgvsVariant::Protein`], a
@@ -1357,7 +1361,7 @@ pub(crate) fn coalesce_protein_adjacent_changes(
     }
 
     // The earliest residue changed to `Ter` (a nonsense substitution), if any.
-    // Only a run lying *entirely* 5′ of this position may coalesce; every other
+    // Only a run ending at or before this position may coalesce; every other
     // run is left as authored (see the to-`Ter` paragraph on this function).
     // Members are already in ascending residue order, so the first to-`Ter`
     // member is the earliest.
@@ -1374,12 +1378,22 @@ pub(crate) fn coalesce_protein_adjacent_changes(
         while j + 1 < members.len() && members[j + 1].pos == members[j].pos + 1 {
             j += 1;
         }
-        // A run that reaches the earliest stop — whether it contains that
-        // `Ter` or sits wholly downstream of it — stays as authored. Only the
-        // run itself is declined, so a coalescible run 5′ of the stop is
-        // unaffected (#1125).
-        let run_precedes_any_ter = first_ter_pos.is_none_or(|ter| members[j].pos < ter);
-        if j > i && run_precedes_any_ter {
+        // A run may merge when it ends at or before the earliest stop.
+        //
+        // `<` is the #1125 case: the run lies wholly 5′ of the stop, which does
+        // not constrain it. `==` is the #1129 case: the earliest `Ter` is the
+        // run's own **last** member, so the merged insert carries the `Ter` in
+        // final position — the spec's `p.(Pro578_Lys579delinsLeuTer)` form
+        // (`protein/delins.md:47`).
+        //
+        // `>` covers both forbidden shapes at once, because `first_ter_pos` is
+        // the *earliest* stop and run positions strictly ascend: a run reaching
+        // past it either starts at that `Ter` (an immediate stop, which must be
+        // a nonsense substitution — `protein/substitution.md:20`) or carries it
+        // interior (residues after the stop — `protein/delins.md:45`), or else
+        // sits wholly downstream of an earlier stop, which stays out of scope.
+        let run_ends_at_or_before_any_ter = first_ter_pos.is_none_or(|ter| members[j].pos <= ter);
+        if j > i && run_ends_at_or_before_any_ter {
             // A run of ≥2 strictly-adjacent members → one edit spanning
             // residues `i..=j`. The inserted sequence is each member's
             // alternative in order, with deletions contributing nothing.

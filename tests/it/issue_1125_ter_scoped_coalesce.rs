@@ -18,10 +18,11 @@
 //! entirely 5′ of the earliest `Ter` is unaffected by the stop and still owes
 //! the spec its `delins`. That is what this suite pins.
 //!
-//! Known gap (pre-existing, tracked separately): a run whose to-`Ter` member is
-//! **last** would merge to a *trailing*-`Ter` delins, a form the spec endorses
-//! (`protein/delins.md:47`: `p.(Pro578_Lys579delinsLeuTer)`). It is still
-//! declined here; the tests below pin the current conservative behavior.
+//! A run whose to-`Ter` member is **last** does merge, to the trailing-`Ter`
+//! delins the spec endorses (`protein/delins.md:47`) — see
+//! `issue_1129_trailing_ter_delins` for that rule and the two `Ter` shapes that
+//! still decline. This file stays on the *scoping* question: which runs a `Ter`
+//! elsewhere in the allele may and may not hold back.
 //!
 //! Every rewrite here is reference-independent (all residues are named in the
 //! AST), so an empty `MockProvider` exercises them.
@@ -108,18 +109,7 @@ fn downstream_ter_does_not_block_an_upstream_run() {
     );
 }
 
-/// A run that *contains* the nonsense member still declines — the conservative
-/// pre-existing behavior this PR does not change (see the module header's known
-/// gap note for the trailing-`Ter` form the spec would allow).
-#[test]
-fn a_run_containing_the_ter_still_declines() {
-    all_orders_canonicalize_to(
-        &["Cys100Ser", "Asp101Ter"],
-        "NP_003997.1:p.[Cys100Ser;Asp101Ter]",
-    );
-}
-
-/// A run whose members sit at/after the earliest `Ter` also declines — the
+/// A run whose members sit after the earliest `Ter` declines — the
 /// residues it would describe are downstream of a stop, so coalescing them
 /// into a new `delins` is out of scope for this narrow rule.
 #[test]
@@ -147,14 +137,16 @@ fn the_earliest_ter_governs_when_several_are_present() {
     );
 }
 
-/// A `Ter` strictly adjacent to a run is *part of* that run (adjacency is what
-/// defines a run), so the run contains the stop and takes the same conservative
-/// decline — the scoping does not let an adjacent stop be merged in.
+/// A run that must decline does not drag down an unrelated upstream run: the
+/// `Ter` here **leads** its own run (`Arg100Ter;Gly101Ala`), so that run stays
+/// as authored per `protein/substitution.md:20`, while the run at `50/51` — 5′
+/// of the stop — still collapses. This is the scoping property in its sharpest
+/// form: two runs, one declining, one merging, in a single allele.
 #[test]
-fn a_ter_adjacent_to_a_run_joins_it_and_declines() {
+fn a_declining_run_does_not_block_an_upstream_run() {
     all_orders_canonicalize_to(
-        &["Cys100Ser", "Asp101Gly", "Arg102Ter"],
-        "NP_003997.1:p.[Cys100Ser;Asp101Gly;Arg102Ter]",
+        &["Cys50Ser", "Asp51Gly", "Arg100Ter", "Gly101Ala"],
+        "NP_003997.1:p.[Cys50_Asp51delinsSerGly;Arg100Ter;Gly101Ala]",
     );
 }
 
