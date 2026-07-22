@@ -105,6 +105,7 @@ mod issue_1086_cross_axis_projection;
 mod issue_1086_genomic_input_context;
 mod issue_1092_stated_substitution_reference;
 mod issue_1097_range_sub_refseq_reject;
+mod issue_1099_all_silent_protein;
 mod issue_1103_cis_merge_order_independence;
 mod issue_1111_rna_noncoding_reframe;
 mod issue_1114_star_ter_strict;

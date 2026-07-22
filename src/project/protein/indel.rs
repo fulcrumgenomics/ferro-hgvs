@@ -17,6 +17,7 @@ use super::helpers::{
     mut_cds_with_3utr, net_length_change, translate_full_cds, translate_full_cds_with_stop,
     translate_mutated_cds, translate_mutated_cds_inframe, RefProteinBundle,
 };
+use super::identity::{codon_residues, render_silent_identity, rewritten_codons};
 
 // ── Main entry point ──────────────────────────────────────────────────────────
 
@@ -165,6 +166,11 @@ pub(crate) fn predict_indel_protein(
             net,
             ref_protein,
             &alt_protein,
+            IdentityContext {
+                ref_cds,
+                mut_cds: &mut_cds,
+                ref_residues: ref_protein_with_stop,
+            },
             protein_accession,
         )
     }
@@ -182,11 +188,13 @@ fn build_inframe_variant(
     net: i64, // net nucleotide change (negative = deletion, positive = insertion)
     ref_protein: &[AminoAcid],
     alt_protein: &[AminoAcid],
+    identity: IdentityContext<'_>,
     protein_accession: &str,
 ) -> Result<HgvsVariant, FerroError> {
-    // Check identity first: if the proteins are identical, emit p.(=).
+    // Check identity first: if the proteins are identical, describe the codons
+    // the edit rewrote (#1099).
     if ref_protein == alt_protein {
-        return build_identity_variant(ref_protein, protein_accession, transcript);
+        return build_identity_variant(identity, protein_accession, transcript);
     }
 
     // Did the edit introduce a premature termination codon? An in-frame edit
@@ -216,6 +224,7 @@ fn build_inframe_variant(
                 ref_protein,
                 alt_protein,
                 cds_start,
+                identity,
                 protein_accession,
                 transcript,
             )
@@ -230,7 +239,13 @@ fn build_inframe_variant(
             // Net < 0 always for deletion.
             if frame_at_start == 0 && net % 3 == 0 {
                 // Codon-aligned deletion: whole codons removed.
-                build_inframe_deletion(ref_protein, alt_protein, protein_accession, transcript)
+                build_inframe_deletion(
+                    ref_protein,
+                    alt_protein,
+                    identity,
+                    protein_accession,
+                    transcript,
+                )
             } else {
                 // Straddles a codon boundary: effectively a delins at the AA level.
                 delins(cds_pos_start)
@@ -293,33 +308,67 @@ fn build_inframe_variant(
     }
 }
 
-/// Identity: proteins are identical after the edit (e.g. synonymous codon change).
+/// Identity: the protein is unchanged after the edit (e.g. a synonymous codon
+/// change, or a delins that rewrites codons without changing what they encode).
+///
+/// Described by the codons the edit rewrote rather than the whole-molecule
+/// `p.(=)`, which claims nothing about *what was interrogated* (#1099; see
+/// [`super::identity`] for the rule and its citations).
+///
+/// The affected codons are derived from `identity`'s CDS pair — **not** from the
+/// edit's span, which would name codons a 3'-shifted spelling only appears to
+/// touch. This site has no fallback: declining here makes `predict_indel_protein`
+/// return `Err`, which the caller swallows to `None`, so the projection would
+/// emit no `p.` at all. When the set cannot be derived — zero rewritten codons,
+/// or a codon with no reference residue — it therefore keeps the
+/// accurate-but-unspecific `p.(=)` rather than declining.
 fn build_identity_variant(
-    ref_protein: &[AminoAcid],
+    identity: IdentityContext<'_>,
     protein_accession: &str,
     transcript: &Transcript,
 ) -> Result<HgvsVariant, FerroError> {
-    // Use the whole-protein identity representation.
     let accession = parse_accession(protein_accession);
-    // Point at Met1 for simplicity.
-    let ref_aa = ref_protein.first().copied().unwrap_or(AminoAcid::Met);
-    let loc = ProtInterval::point(ProtPos::new(ref_aa, 1));
-    let edit = crate::hgvs::edit::ProteinEdit::Identity {
-        predicted: false,
-        whole_protein: true,
-    };
-    let variant = ProteinVariant {
-        accession,
-        gene_symbol: transcript.gene_symbol.clone(),
-        loc_edit: LocEdit::new_predicted(loc, edit),
-    };
-    Ok(HgvsVariant::Protein(variant))
+    let gene_symbol = transcript.gene_symbol.clone();
+    let codons = rewritten_codons(identity.ref_cds, identity.mut_cds);
+    // `None` (a codon past the translated protein) and an empty set both render
+    // the whole-molecule identity — the one output that is always safe here. A
+    // partially derivable set is discarded whole rather than named in part:
+    // naming a subset would assert that the unnamed codons were NOT rewritten,
+    // which is exactly the over-claim `p.(=)` at least makes honestly.
+    let residues = codon_residues(&codons, identity.ref_residues).unwrap_or_default();
+    let initiator = identity.ref_residues.first().copied();
+    Ok(render_silent_identity(
+        residues,
+        initiator,
+        &accession,
+        &gene_symbol,
+    ))
+}
+
+/// What an identity consequence is derived from: the reference and mutated CDS,
+/// whose triplet-wise difference is the set of codons the edit rewrote, plus the
+/// reference residues those codons are named with (#1099).
+///
+/// Passed as a unit because the three are only meaningful together, and threaded
+/// through [`build_inframe_variant`] because the identity branch lives there
+/// while the data is only in scope at its callers.
+#[derive(Clone, Copy)]
+pub(crate) struct IdentityContext<'a> {
+    /// The transcript's reference CDS.
+    pub ref_cds: &'a str,
+    /// The same CDS with the edit (or every cis member) applied.
+    pub mut_cds: &'a str,
+    /// The reference translation **including the terminator**, indexed by codon
+    /// position, so a silent change in the stop codon is named `p.(Ter66=)`
+    /// rather than dropped.
+    pub ref_residues: &'a [AminoAcid],
 }
 
 /// Codon-aligned in-frame deletion: `p.(Xxx{N}del)` or `p.(Xxx{N}_Yyy{M}del)`.
 fn build_inframe_deletion(
     ref_protein: &[AminoAcid],
     alt_protein: &[AminoAcid],
+    identity: IdentityContext<'_>,
     protein_accession: &str,
     transcript: &Transcript,
 ) -> Result<HgvsVariant, FerroError> {
@@ -334,7 +383,7 @@ fn build_inframe_deletion(
         // "deletion" didn't shorten the protein (e.g. a stop-disrupting deletion whose
         // extension detection missed an edge case). Avoid the underflow in the
         // last_deleted computation by short-circuiting to an identity variant.
-        return build_identity_variant(ref_protein, protein_accession, transcript);
+        return build_identity_variant(identity, protein_accession, transcript);
     }
 
     let last_deleted = first_diff + n_deleted - 1;
@@ -611,6 +660,7 @@ fn build_inframe_delins(
     ref_protein: &[AminoAcid],
     alt_protein: &[AminoAcid],
     cds_pos_start: i64,
+    identity: IdentityContext<'_>,
     protein_accession: &str,
     transcript: &Transcript,
 ) -> Result<HgvsVariant, FerroError> {
@@ -629,7 +679,7 @@ fn build_inframe_delins(
     // If the alt protein is empty or only differs at the last AA:
     if first_diff >= ref_len && first_diff >= alt_len {
         // No difference at the amino acid level.
-        return build_identity_variant(ref_protein, protein_accession, transcript);
+        return build_identity_variant(identity, protein_accession, transcript);
     }
 
     // Pure-deletion guard (#847): when the last differing ref index falls
@@ -763,7 +813,13 @@ fn build_inframe_delins(
     // codon-aligned-deletion builder, which recomputes the deleted range from
     // `first_diff` and `ref_len - alt_len` (point when one residue, else range).
     if inserted.is_empty() && alt_len < ref_len {
-        return build_inframe_deletion(ref_protein, alt_protein, protein_accession, transcript);
+        return build_inframe_deletion(
+            ref_protein,
+            alt_protein,
+            identity,
+            protein_accession,
+            transcript,
+        );
     }
 
     // One amino acid replaced by one (non-stop) amino acid is, by definition, a
@@ -1476,6 +1532,11 @@ pub(crate) fn try_project_cis_combined_inframe(
         net,
         &ref_bundle.ref_protein,
         &alt_protein,
+        IdentityContext {
+            ref_cds: &ref_bundle.ref_cds,
+            mut_cds: &mut_cds,
+            ref_residues: &ref_bundle.ref_protein_with_stop,
+        },
         protein_accession,
     )?;
     Ok(CisCombined::InFrame(Box::new(pv)))
@@ -1500,10 +1561,12 @@ pub(crate) fn try_project_cis_combined_inframe(
 /// `members` are the pre-classified `SimpleExonic` members as `(lo, hi, edit)`
 /// with insertion spans already collapsed to `hi == lo`, in any order.
 ///
-/// Returns the changed residues as `(1-based position, reference AA,
-/// alternative AA)` in ascending order — empty when the combined product is
-/// silent. Returns `None` (caller keeps its existing behavior) when the combined
-/// product cannot be compared residue-for-residue against the reference:
+/// Returns a [`CisResidueDiff`]: the changed residues in ascending order — empty
+/// when the combined product is silent — alongside the codons whose reference
+/// triplet the members rewrote, which is what an all-silent combination is
+/// described by (#1099). Returns `None` (caller keeps its existing behavior)
+/// when the combined product cannot be compared residue-for-residue against the
+/// reference:
 ///
 /// - fewer than two members, an out-of-bounds or overlapping span (overlapping
 ///   members are contradictory in cis), or an unreadable CDS;
@@ -1516,7 +1579,7 @@ pub(crate) fn combined_cis_residue_changes(
     transcript: &Transcript,
     ref_bundle: &RefProteinBundle,
     members: &[(i64, i64, &NaEdit)],
-) -> Option<Vec<(u64, AminoAcid, AminoAcid)>> {
+) -> Option<CisResidueDiff> {
     if members.len() < 2 {
         return None;
     }
@@ -1560,8 +1623,8 @@ pub(crate) fn combined_cis_residue_changes(
         return None; // premature stop or stop-loss: needs its own spec form
     }
 
-    Some(
-        ref_bundle
+    Some(CisResidueDiff {
+        changed: ref_bundle
             .ref_protein
             .iter()
             .zip(alt_protein.iter())
@@ -1569,7 +1632,25 @@ pub(crate) fn combined_cis_residue_changes(
             .filter(|(_, (ref_aa, alt_aa))| ref_aa != alt_aa)
             .map(|(i, (ref_aa, alt_aa))| ((i + 1) as u64, *ref_aa, *alt_aa))
             .collect(),
-    )
+        rewritten_codons: rewritten_codons(&ref_bundle.ref_cds, &mut_cds),
+    })
+}
+
+/// The residue-level effect of applying a cis compound's members together.
+///
+/// Carries both halves of the comparison because they answer different
+/// questions: `changed` drives the description of what the change *did*, while
+/// `rewritten_codons` records what it *interrogated* — the set an all-silent
+/// combination is described by, and the same set the protein-consequence
+/// predicate will expose (#1099).
+pub(crate) struct CisResidueDiff {
+    /// Residues whose amino acid changed, as `(1-based position, reference AA,
+    /// alternative AA)` in ascending order. Empty when the combination is silent.
+    pub changed: Vec<(u64, AminoAcid, AminoAcid)>,
+    /// The 1-based codon positions whose reference triplet was rewritten,
+    /// ascending. Derived by triplet comparison, never from member spans — see
+    /// [`super::identity::rewritten_codons`].
+    pub rewritten_codons: Vec<u64>,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1579,6 +1660,18 @@ mod tests {
     use super::*;
     use crate::reference::transcript::{Exon, ManeStatus, Strand};
     use std::sync::OnceLock;
+
+    /// An identity context for a CDS the edit did not rewrite, for the builders
+    /// whose *position* logic is under test: their defensive identity
+    /// short-circuits then describe whole-molecule identity, as they did before
+    /// the affected-codon derivation existed (#1099).
+    fn unchanged_cds() -> IdentityContext<'static> {
+        IdentityContext {
+            ref_cds: "",
+            mut_cds: "",
+            ref_residues: &[],
+        }
+    }
 
     fn tx(seq: &str, cds_start: u64, cds_end: u64) -> Transcript {
         Transcript {
@@ -1623,7 +1716,15 @@ mod tests {
         let t = tx("ATGGCTGGTTAA", 1, 12); // sequence unused by the position logic
         let ref_protein = [Met, Ala, Gly];
         let alt_protein = [Met, Ala, Ile, Gly]; // Ile inserted between Ala(2) and Gly(3)
-        let v = build_inframe_delins(&ref_protein, &alt_protein, 5, "NP_TEST.1", &t).unwrap();
+        let v = build_inframe_delins(
+            &ref_protein,
+            &alt_protein,
+            5,
+            unchanged_cds(),
+            "NP_TEST.1",
+            &t,
+        )
+        .unwrap();
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ala2_Gly3insIle)");
     }
 
@@ -1635,7 +1736,15 @@ mod tests {
         let t = tx("ATGCGCGGTTAA", 1, 12);
         let ref_protein = [Met, Arg, Gly];
         let alt_protein = [Met, Val, Gly]; // Arg2 → Val (1 AA → 1 AA)
-        let v = build_inframe_delins(&ref_protein, &alt_protein, 4, "NP_TEST.1", &t).unwrap();
+        let v = build_inframe_delins(
+            &ref_protein,
+            &alt_protein,
+            4,
+            unchanged_cds(),
+            "NP_TEST.1",
+            &t,
+        )
+        .unwrap();
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Arg2Val)");
     }
 
@@ -1649,7 +1758,15 @@ mod tests {
         let t = tx("ATGTGCCGCTAA", 1, 12);
         let ref_protein = [Met, Cys, Arg];
         let alt_protein = [Met, Cys, Cys, Arg]; // extra Cys inserted after Cys2
-        let v = build_inframe_delins(&ref_protein, &alt_protein, 6, "NP_TEST.1", &t).unwrap();
+        let v = build_inframe_delins(
+            &ref_protein,
+            &alt_protein,
+            6,
+            unchanged_cds(),
+            "NP_TEST.1",
+            &t,
+        )
+        .unwrap();
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Cys2dup)");
     }
 
@@ -1662,7 +1779,15 @@ mod tests {
         let t = tx("ATGGCAGCAGGTTAA", 1, 15);
         let ref_protein = [Met, Ala, Ala, Gly]; // Ala at positions 2 and 3
         let alt_protein = [Met, Ala, Ala, Ala, Gly]; // one extra Ala in the run
-        let v = build_inframe_delins(&ref_protein, &alt_protein, 5, "NP_TEST.1", &t).unwrap();
+        let v = build_inframe_delins(
+            &ref_protein,
+            &alt_protein,
+            5,
+            unchanged_cds(),
+            "NP_TEST.1",
+            &t,
+        )
+        .unwrap();
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ala3dup)");
     }
 
@@ -1673,7 +1798,15 @@ mod tests {
         let t = tx("ATGGGCTCCCACTAA", 1, 15);
         let ref_protein = [Met, Gly, Ser, His];
         let alt_protein = [Met, Gly, Ser, Gly, Ser, His]; // GlySer copied in tandem
-        let v = build_inframe_delins(&ref_protein, &alt_protein, 8, "NP_TEST.1", &t).unwrap();
+        let v = build_inframe_delins(
+            &ref_protein,
+            &alt_protein,
+            8,
+            unchanged_cds(),
+            "NP_TEST.1",
+            &t,
+        )
+        .unwrap();
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Gly2_Ser3dup)");
     }
 
@@ -1685,7 +1818,15 @@ mod tests {
         let t = tx("ATGGCTGGTTAA", 1, 12);
         let ref_protein = [Met, Ala, Gly];
         let alt_protein = [Met, Ala, Ile, Gly]; // Ile ≠ Ala(2) → genuine insertion
-        let v = build_inframe_delins(&ref_protein, &alt_protein, 5, "NP_TEST.1", &t).unwrap();
+        let v = build_inframe_delins(
+            &ref_protein,
+            &alt_protein,
+            5,
+            unchanged_cds(),
+            "NP_TEST.1",
+            &t,
+        )
+        .unwrap();
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Ala2_Gly3insIle)");
     }
 
@@ -1717,7 +1858,15 @@ mod tests {
         let t = tx("ATGGCTCTTCTTGGTTAA", 1, 18); // sequence unused by the position logic
         let ref_protein = [Met, Ala, Leu, Leu, Gly];
         let alt_protein = [Met, Ala, Leu, Gly]; // one Leu removed from the Leu-Leu run
-        let v = build_inframe_delins(&ref_protein, &alt_protein, 8, "NP_TEST.1", &t).unwrap();
+        let v = build_inframe_delins(
+            &ref_protein,
+            &alt_protein,
+            8,
+            unchanged_cds(),
+            "NP_TEST.1",
+            &t,
+        )
+        .unwrap();
         assert_eq!(prot_str(&v), "NP_TEST.1:p.(Leu4del)");
     }
 
@@ -2108,6 +2257,33 @@ mod tests {
         assert_eq!(prot_str(&result), "NP_TEST.1:p.(Arg2Ala)");
     }
 
+    /// #1099: a real synonymous `delins` routed through `predict_indel_protein`
+    /// names the codons it rewrote instead of claiming whole-molecule identity.
+    ///
+    /// This exercises the derivation itself — a mutated CDS spliced by the edit
+    /// and diffed against the reference triplet-by-triplet — rather than the
+    /// zero-diff defensive fallback below, which hands the builders a synthetic
+    /// empty CDS pair. CDS `ATGCTGCGTTAA` (Met-Leu-Arg-Ter); `c.6delinsA`
+    /// rewrites codon 2 `CTG`→`CTA` (still Leu) and leaves codon 3 `CGT`
+    /// untouched, so exactly one codon is named.
+    #[test]
+    fn synonymous_delins_names_its_codon_not_whole_protein_identity() {
+        let t = tx("ATGCTGCGTTAA", 1, 12);
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![crate::hgvs::edit::Base::A])),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        };
+        let result = predict_indel(&t, 6, 6, &edit, "NP_TEST.1").expect("predicted");
+        let s = prot_str(&result);
+        assert_eq!(s, "NP_TEST.1:p.(Leu2=)");
+        assert!(
+            !s.contains("p.(=)"),
+            "a targeted synonymous edit must not claim whole-molecule identity: {s}"
+        );
+    }
+
     // ─── Regression tests for CodeRabbit-flagged edge cases ───────────────────
 
     #[test]
@@ -2121,7 +2297,8 @@ mod tests {
         let ref_protein = [AminoAcid::Met, AminoAcid::Arg];
         let alt_protein = [AminoAcid::Met, AminoAcid::Arg];
         let result =
-            build_inframe_deletion(&ref_protein, &alt_protein, "NP_TEST.1", &t).expect("no panic");
+            build_inframe_deletion(&ref_protein, &alt_protein, unchanged_cds(), "NP_TEST.1", &t)
+                .expect("no panic");
         let s = prot_str(&result);
         // Identity variant -- whole-protein "=" representation.
         assert!(s.contains("(="), "expected identity '(=' in '{}'", s);

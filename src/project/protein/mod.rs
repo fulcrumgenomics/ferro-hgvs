@@ -8,9 +8,11 @@
 //!
 //! * [`substitution`] — substitution (missense / synonymous / nonsense) prediction.
 //! * [`indel`]         — deletion / insertion / duplication / delins / inversion prediction.
+//! * [`identity`]      — describing an all-silent change by the codons it rewrote.
 //! * [`helpers`]       — shared pure helpers (CDS building, translation, diff-finding).
 
 mod helpers;
+mod identity;
 mod indel;
 mod substitution;
 
@@ -20,6 +22,10 @@ pub(crate) use helpers::{
     cds_has_valid_start, edit_reaches_initiation_codon, edit_spans_cds_into_3utr,
     read_cds_start_codon, whole_exon_deletion_span, RefProteinBundle,
 };
+// The one place an all-silent change is turned into a description (#1099), so
+// the codon-level and residue-level cis combiners in `projector.rs` and the
+// indel path cannot drift apart in how they name the codons they rewrote.
+pub(crate) use identity::{codon_residues, group_consecutive_by, render_silent_identity};
 pub(crate) use indel::{
     combined_cis_residue_changes, predict_indel_protein, predict_stop_region_extension,
     try_project_cis_combined_inframe, CisCombined,

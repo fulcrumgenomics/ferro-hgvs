@@ -1811,7 +1811,7 @@
       "spec_citation": {
         "axis": "protein_description",
         "section": "HGVS §Synonymous (residue-level p.(Xaa=))",
-        "note": "For a single synonymous substitution the spec's predicted-consequence form is the residue-level p.(Asp92=) (substitution.md L24/L41-43 p.(Lys874=); SVD-WG001 p.(Phe41=)); p.(=) is reserved for 'the entire coding region was analysed'. ferro's residue-level p.(Asp92=) is spec-preferred vs mutalyzer's whole-protein p.(=). (Bare NP_ framing also differs.)"
+        "note": "For a single synonymous substitution the spec's PREFERRED predicted-consequence form is the residue-level p.(Asp92=) (checklist.md:64 'predicted silent protein level variants are described as p.(Leu54=)'; substitution.md L24/L41-43 p.(Lys874=); SVD-WG001:17 'should include the position(s) screened', :54-55 p.(Phe41=)). Mutalyzer's p.(=) is LEGAL, not a violation: uncertain.md:212-213 licenses the parenthesised whole-molecule form, and the 'entire coding region was analysed' reservation applies to the BARE p.= (substitution.md:43). It is simply less specific, naming no position. ferro's residue-level p.(Asp92=) is spec-preferred. (Bare NP_ framing also differs.)"
       }
     },
     {
@@ -1825,7 +1825,7 @@
       "spec_citation": {
         "axis": "protein_description",
         "section": "HGVS protein reference (bare NP)",
-        "note": "WT1 (NM_024426.4) is a legitimate CUG-initiation transcript; ferro translates downstream variants on it after #780. The synonymous change at codon 369 is described residue-specifically as p.(Arg369=) per HGVS substitution.md (silent change, e.g. p.(Lys874=)); mutalyzer's bare p.(=) (whole-protein-unchanged) is non-standard for a single synonymous codon. The reference is the bare NP_ (HGVS general.md §147/§148); mutalyzer's NM_x(NP_y):p. wrapper is non-standard. ferro's value is spec-correct on both.",
+        "note": "WT1 (NM_024426.4) is a legitimate CUG-initiation transcript; ferro translates downstream variants on it after #780. The synonymous change at codon 369 is described residue-specifically as p.(Arg369=) per HGVS substitution.md (silent change, e.g. p.(Lys874=)); mutalyzer's p.(=) is legal but less specific, naming no position (uncertain.md:212-213 licenses the parenthesised form; only the bare p.= carries the 'entire coding region was analysed' reservation, substitution.md:43). The reference is the bare NP_ (HGVS general.md §147/§148); mutalyzer's NM_x(NP_y):p. wrapper is non-standard. ferro's value is spec-correct on both.",
         "cluster": "bare-np-protein"
       }
     },
