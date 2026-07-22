@@ -372,6 +372,54 @@ fn display_drops_gene_selector_with_compound_ref_whose_inner_is_not_a_transcript
     );
 }
 
+// =============================================================================
+// Assembly/chromosome references (#1145). `GRCh38(chr1)` renders its
+// parenthesised group from the `assembly`/`chromosome` fields: that group is
+// part of the reference *identifier* (an assembly alone names no sequence), not
+// a `refseq.md:38` specification. So a following `(GENE)` is the reference's
+// FIRST specification — the structural analogue of the preserved
+// `NC_000023.10(DMD):c.…` — and must be kept, not treated as a stacked group.
+// These pin that distinction so the #1139 drop is never widened to swallow it.
+// =============================================================================
+
+#[test]
+fn assembly_ref_keeps_its_gene_selector() {
+    let input = "GRCh38(chr1)(BRCA1):g.100A>G";
+    let v = parse_hgvs(input).unwrap();
+    assert_eq!(gene_symbol_of(&v), Some("BRCA1"));
+    assert_eq!(
+        v.to_string(),
+        input,
+        "the assembly group is the identifier, so (BRCA1) is the sole specification and is preserved",
+    );
+}
+
+#[test]
+fn assembly_ref_gene_selector_survives_reparse() {
+    // Idempotency: the preserved form must be a fixed point, exactly as the
+    // dropped compound form is. Assert the concrete string at *both* steps, not
+    // just `once == twice` — the latter also holds if both renders wrongly
+    // dropped the selector, so it would not catch the regression this pins.
+    const EXPECTED: &str = "GRCh38(chr1)(BRCA1):g.100A>G";
+    let once = parse_hgvs(EXPECTED).unwrap().to_string();
+    assert_eq!(once, EXPECTED, "first render must keep the selector");
+    let reparsed = parse_hgvs(&once).unwrap();
+    assert_eq!(
+        gene_symbol_of(&reparsed),
+        Some("BRCA1"),
+        "reparse must re-observe the selector, not silently drop it",
+    );
+    assert_eq!(reparsed.to_string(), EXPECTED, "second render must match");
+}
+
+#[test]
+fn assembly_ref_without_selector_unchanged() {
+    let input = "GRCh38(chr1):g.100A>G";
+    let v = parse_hgvs(input).unwrap();
+    assert_eq!(gene_symbol_of(&v), None);
+    assert_eq!(v.to_string(), input);
+}
+
 #[test]
 fn compound_ref_with_nontranscript_inner_display_is_idempotent() {
     // The dropped form must be a fixed point — re-parsing the rendered string
