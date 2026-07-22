@@ -111,6 +111,7 @@ mod issue_1114_star_ter_strict;
 mod issue_1116_protein_coalesce_order_independence;
 mod issue_1119_protein_delins_canonical;
 mod issue_1120_cis_coalesce_sub_del;
+mod issue_1125_ter_scoped_coalesce;
 mod issue_1126_reference_free_delins_to_ins;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;

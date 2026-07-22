@@ -1234,6 +1234,23 @@ fn build_naedit<P>(
 /// allele fell through to the bracket form `protein/substitution.md:23` calls
 /// "not correct".
 ///
+/// A to-`Ter` (nonsense) member **bounds** coalescing rather than vetoing the
+/// whole allele (#1125): only a run lying **entirely 5′ of the earliest `Ter`**
+/// may merge. A run that contains that `Ter`, or that sits wholly downstream of
+/// it, is left as authored — but an unrelated upstream run still collapses, e.g.
+/// `p.[Cys100Ser;Asp101Gly;Arg200Ter]` → `p.[Cys100_Asp101delinsSerGly;Arg200Ter]`.
+///
+/// The `Ter`-containing run is declined **conservatively**, not because every
+/// such merge is spec-invalid. The spec forbids two specific shapes: residues
+/// listed *after* a stop (`protein/delins.md:45` — not `delinsSerSerTerAlaAsp`)
+/// and an *immediate* stop written as a delins (`protein/substitution.md:20` —
+/// not `p.Cys5_Ser6delinsTerGluAsp`, but `p.Tyr4Ter`). A run whose to-`Ter`
+/// member is **last** would merge to a *trailing*-`Ter` delins, which the spec
+/// endorses (`protein/delins.md:47`: `p.(Pro578_Lys579delinsLeuTer)`); declining
+/// it is a known completeness gap inherited from #1095, tracked separately.
+/// Collapsing a nonsense change toward `p.<ref><pos>Ter` is likewise a separate
+/// rule.
+///
 /// Returns `Some` only when at least one run of ≥2 adjacent members is merged;
 /// a fully-merged allele collapses to a bare [`HgvsVariant::Protein`], a
 /// partial merge to a smaller [`HgvsVariant::Allele`]. Returns `None` — leave
@@ -1242,8 +1259,7 @@ fn build_naedit<P>(
 ///   - any member is not a single-residue protein substitution or deletion
 ///     (other edit kinds — dup / ins / inv / fs / ext / multi-residue — are
 ///     out of scope for this narrow rule),
-///   - any substitution member changes the residue to `Ter` (a `delins…Ter…`
-///     run would list residues after the stop — spec-invalid),
+///   - every run is at or after a to-`Ter` member (see above),
 ///   - two members share a residue position (a `n,n` pair is the contradictory
 ///     same-residue case, not a delins), or
 ///   - a run would mix predicted `( )` and certain members (ambiguous).
@@ -1319,14 +1335,6 @@ pub(crate) fn coalesce_protein_adjacent_changes(
             Mu::Uncertain(ProteinEdit::Deletion { .. }) => (None, true),
             _ => return None,
         };
-        // A to-`Ter` (nonsense) substitution is out of scope: the spec forbids
-        // listing residues after the stop, so a `delins…Ter…` run would be
-        // unparseable and spec-invalid (protein/substitution.md:20,
-        // protein/delins.md:45). Leave such an allele untouched — collapsing a
-        // nonsense change toward `p.<ref><pos>Ter` is a separate rule.
-        if alternative == Some(AminoAcid::Ter) {
-            return None;
-        }
         members.push(Member {
             pos: s.number,
             reference: s.aa,
@@ -1348,6 +1356,16 @@ pub(crate) fn coalesce_protein_adjacent_changes(
         return None;
     }
 
+    // The earliest residue changed to `Ter` (a nonsense substitution), if any.
+    // Only a run lying *entirely* 5′ of this position may coalesce; every other
+    // run is left as authored (see the to-`Ter` paragraph on this function).
+    // Members are already in ascending residue order, so the first to-`Ter`
+    // member is the earliest.
+    let first_ter_pos = members
+        .iter()
+        .find(|m| m.alternative == Some(AminoAcid::Ter))
+        .map(|m| m.pos);
+
     let mut merged: Vec<HgvsVariant> = Vec::new();
     let mut changed = false;
     let mut i = 0;
@@ -1356,7 +1374,12 @@ pub(crate) fn coalesce_protein_adjacent_changes(
         while j + 1 < members.len() && members[j + 1].pos == members[j].pos + 1 {
             j += 1;
         }
-        if j > i {
+        // A run that reaches the earliest stop — whether it contains that
+        // `Ter` or sits wholly downstream of it — stays as authored. Only the
+        // run itself is declined, so a coalescible run 5′ of the stop is
+        // unaffected (#1125).
+        let run_precedes_any_ter = first_ter_pos.is_none_or(|ter| members[j].pos < ter);
+        if j > i && run_precedes_any_ter {
             // A run of ≥2 strictly-adjacent members → one edit spanning
             // residues `i..=j`. The inserted sequence is each member's
             // alternative in order, with deletions contributing nothing.
@@ -1398,10 +1421,13 @@ pub(crate) fn coalesce_protein_adjacent_changes(
             }));
             changed = true;
         } else {
-            // A lone member (substitution or deletion) keeps its original
-            // variant verbatim, indexed through `source` since `members` is in
-            // residue order, not input order.
-            merged.push(allele.variants[members[i].source].clone());
+            // A lone member (substitution or deletion) — or every member of a
+            // declined run — keeps its original variant verbatim, indexed
+            // through `source` since `members` is in residue order, not input
+            // order.
+            for m in &members[i..=j] {
+                merged.push(allele.variants[m.source].clone());
+            }
         }
         i = j + 1;
     }
