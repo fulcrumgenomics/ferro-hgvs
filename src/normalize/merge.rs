@@ -1184,6 +1184,13 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
         let HgvsVariant::Protein(pv) = v else {
             return None;
         };
+        // Every member must share the first member's reference. A cis allele
+        // states its accession once, so this normally holds by construction, but
+        // the merged delins is stamped with `accession`/`gene_symbol` below —
+        // guard so a mixed-accession member can never be silently re-labelled.
+        if pv.accession != accession || pv.gene_symbol != gene_symbol {
+            return None;
+        }
         // Exactly one certain residue (a point, start == end, both certain).
         let (Some(Mu::Certain(s)), Some(Mu::Certain(e))) = (
             pv.loc_edit.location.start.as_single(),
@@ -1199,6 +1206,14 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
             Mu::Uncertain(ProteinEdit::Substitution { alternative, .. }) => (*alternative, true),
             _ => return None,
         };
+        // A to-`Ter` (nonsense) substitution is out of scope: the spec forbids
+        // listing residues after the stop, so a `delins…Ter…` run would be
+        // unparseable and spec-invalid (protein/substitution.md:20,
+        // protein/delins.md:45). Leave such an allele untouched — collapsing a
+        // nonsense change toward `p.<ref><pos>Ter` is a separate rule.
+        if alternative == AminoAcid::Ter {
+            return None;
+        }
         subs.push(Sub {
             pos: s.number,
             reference: s.aa,
@@ -1258,7 +1273,13 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
     if !changed {
         return None;
     }
-    if merged.len() == 1 {
+    // A full merge to a single member drops the allele wrapper — but only when
+    // the allele carried no whole-bracket uncertainty, so the outer predicted
+    // marker is not silently lost. In practice `allele.uncertain` is always
+    // false here (the `p.(…;…)` whole-allele form does not parse into a live
+    // `AlleleVariant`), so the bare return is what actually fires; the guard is
+    // defensive future-proofing against that parser gap ever closing.
+    if merged.len() == 1 && !allele.uncertain {
         merged.into_iter().next()
     } else {
         let mut coalesced = crate::hgvs::variant::AlleleVariant::new(merged, allele.phase);

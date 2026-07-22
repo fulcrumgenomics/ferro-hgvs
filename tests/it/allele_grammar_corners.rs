@@ -271,6 +271,32 @@ fn protein_trans_consecutive_changes_stay_separate() {
     );
 }
 
+/// A run containing a nonsense (to-`Ter`) substitution must NOT coalesce: the
+/// spec forbids listing residues after the stop, so `delins…Ter…` would be
+/// spec-invalid AND unparseable (a round-trip break). The allele is left as
+/// authored. Asserting the output equals the (parseable) input also pins that
+/// normalize does not emit a string it cannot re-read.
+#[test]
+fn protein_to_ter_run_is_not_coalesced() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[Arg76Ter;Cys77Trp]",
+        "NP_003997.1:p.[Arg76Ter;Cys77Trp]",
+        "protein/substitution.md:20, protein/delins.md:45 — no residues after Ter; do not merge",
+    );
+}
+
+/// Members authored in descending residue order are left untouched (the rule
+/// only merges strictly-ascending runs; it never reorders the author's
+/// description — #395 preserve-authored-order).
+#[test]
+fn protein_descending_order_members_stay_as_authored() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[Cys77Trp;Arg76Ser]",
+        "NP_003997.1:p.[Cys77Trp;Arg76Ser]",
+        "ascending-only: a descending allele is not reordered into a delins",
+    );
+}
+
 // =====================================================================
 // Single-bracket allele description (misleading per spec)
 // =====================================================================
