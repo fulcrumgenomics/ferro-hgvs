@@ -99,6 +99,7 @@ mod issue_1079_point_size_suffix;
 mod issue_1079_residues_after_stop;
 mod issue_1079_single_nucleotide_inversion;
 mod issue_1079_start_loss_substitution;
+mod issue_1079_unchanged_anchor_frameshift;
 mod issue_1086_c_axis_genomic_context;
 mod issue_1086_cross_axis_projection;
 mod issue_1092_stated_substitution_reference;

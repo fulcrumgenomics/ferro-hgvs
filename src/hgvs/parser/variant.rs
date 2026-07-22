@@ -7271,6 +7271,11 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // protein/substitution.md:20; #1079).
     validate_no_immediate_ter_frameshift(&variant)?;
 
+    // Spec-mandated post-parse semantic check: reject a frameshift anchored at
+    // an unchanged residue — it must start at the first amino acid *changed*
+    // (HGVS protein/frameshift.md:47-49; #1079).
+    validate_no_unchanged_anchor_frameshift(&variant)?;
+
     // Spec-mandated post-parse semantic check: reject residues listed after
     // a translation stop in an inserted peptide (HGVS protein/delins.md:45,
     // protein/insertion.md:43; #1079).
@@ -8175,6 +8180,89 @@ fn validate_no_immediate_ter_frameshift(variant: &HgvsVariant) -> Result<(), Fer
         HgvsVariant::Allele(allele) => {
             for inner in &allele.variants {
                 validate_no_immediate_ter_frameshift(inner)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Reject a frameshift anchored at an **unchanged** amino acid —
+/// `p.His150HisfsTer10` / `p.His150Hisfs*10` (#1079).
+///
+/// Per `recommendations/protein/frameshift.md:47-49`:
+///
+/// > Since frameshift variants start with the **first amino acid changed**, the
+/// > description `p.His150HisfsTer10` (or `p.His150Hisfs*10`) is not correct.
+///
+/// A frameshift is anchored at the first residue the shifted reading frame
+/// alters. When the description names the anchor's new residue equal to the
+/// reference (`His150His…`) it anchors at an unchanged residue, which the spec
+/// forbids.
+///
+/// This is a rejection rather than a rewrite: the correct form
+/// (`p.Gln151Thrfs*9`) names the first *changed* residue and the shifted-tail
+/// length, neither of which is recoverable from the description alone — it
+/// needs the shifted protein sequence. That mirrors the immediate-stop
+/// (`fsTer1`) and initiator-loss rules, which reject for the same reason.
+///
+/// Scope: only a frameshift that **states** its new anchor residue is checked —
+/// the short form `p.Arg97fs` (no stated residue) makes no unchanged-anchor
+/// claim and is untouched, as is any genuine change (`p.Gln151Thr…`). A
+/// `FrameshiftAlternatives` (`p.Gly719(Ala^Ser)fs…`) is rejected only when
+/// *every* alternative equals the reference, i.e. no alternative is a change.
+fn validate_no_unchanged_anchor_frameshift(variant: &HgvsVariant) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode};
+    use crate::hgvs::edit::ProteinEdit;
+    use crate::hgvs::location::AminoAcid;
+    use crate::hgvs::uncertainty::Mu;
+
+    /// True when the frameshift names a new anchor residue and it equals the
+    /// reference residue `reference` (an unchanged anchor).
+    fn names_unchanged_anchor(edit: &Mu<ProteinEdit>, reference: AminoAcid) -> bool {
+        match edit.inner() {
+            Some(ProteinEdit::Frameshift {
+                new_aa: Some(new_aa),
+                ..
+            }) => *new_aa == reference,
+            Some(ProteinEdit::FrameshiftAlternatives { alternatives, .. }) => {
+                !alternatives.is_empty() && alternatives.iter().all(|aa| *aa == reference)
+            }
+            _ => false,
+        }
+    }
+
+    match variant {
+        HgvsVariant::Protein(v) => {
+            // Read the anchor position through `.inner()` so an *uncertain*
+            // position (`p.(His150)HisfsTer10`) is validated too, not only a
+            // certain one — mirroring how `names_unchanged_anchor` reads the
+            // edit. Gating on `Mu::Certain` here would silently let an
+            // uncertain-position unchanged anchor slip through.
+            let anchor = v.loc_edit.location.start.as_single();
+            if let Some(pos) = anchor.as_ref().and_then(|mu| mu.inner()) {
+                if names_unchanged_anchor(&v.loc_edit.edit, pos.aa) {
+                    return Err(FerroError::parse_with_diagnostic(
+                        0,
+                        format!(
+                            "a frameshift is anchored at the first amino acid changed, but \
+                             `{}{}` names an unchanged residue; anchor the description at the \
+                             first residue the shifted frame alters (protein/frameshift.md:47-49)",
+                            pos.aa, pos.number
+                        ),
+                        Diagnostic::new()
+                            .with_code(ErrorCode::InvalidEdit)
+                            .with_hint(
+                                "e.g. `p.Gln151ThrfsTer9`, not `p.His150HisfsTer10` — the anchor \
+                             residue must differ from the reference",
+                            ),
+                    ));
+                }
+            }
+        }
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                validate_no_unchanged_anchor_frameshift(inner)?;
             }
         }
         _ => {}
