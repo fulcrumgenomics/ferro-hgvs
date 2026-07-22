@@ -7418,7 +7418,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     // rotates. For example, shifting "GGC" by 1 position gives "GCG".
                     let shift_amount =
                         (result.start as usize).saturating_sub(shuffle_start as usize);
-                    let rotation = shift_amount % seq_bytes.len();
+                    // Defence in depth. `build_naedit` no longer merges a
+                    // cancelling del+ins into an empty insertion (#1135), which
+                    // was the reachable producer here — but the *type* still
+                    // permits one (the parser accepts a bare `ins`), so a
+                    // future path must not be able to turn that into a process
+                    // abort. Nothing to rotate means no rotation.
+                    let rotation = if seq_bytes.is_empty() {
+                        0
+                    } else {
+                        shift_amount % seq_bytes.len()
+                    };
                     let rotated_seq: Vec<u8> = if rotation > 0 {
                         seq_bytes[rotation..]
                             .iter()

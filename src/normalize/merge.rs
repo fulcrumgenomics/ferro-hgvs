@@ -1168,8 +1168,27 @@ fn build_naedit<P>(
             merged.end + 1,
             "invariant: insertion anchor span = 1 nt"
         );
-        NaEdit::Insertion {
-            sequence: InsertedSequence::Literal(Sequence::new(merged.alt)),
+        if merged.alt.is_empty() {
+            // The members cancelled out: an insertion anchor with nothing left
+            // to insert (e.g. `g.[100del;100_101insA]` over a homopolymer,
+            // where the deletion 3'-shifts onto the insertion point). Emitting
+            // `NaEdit::Insertion` here would build an edit with an empty
+            // sequence — not a valid HGVS description (it renders as `ins`
+            // with no bases), and it later divides by zero when
+            // `normalize_na_edit` rotates the inserted sequence through a
+            // repeat. The sequence is unchanged across the anchor, so describe
+            // it as an identity (`DNA/other.md`, `c.123_145=`).
+            //
+            // Mirrors the protein coalescer below, which likewise refuses to
+            // emit an empty `delins` when every member of a run is a deletion.
+            NaEdit::Identity {
+                sequence: None,
+                whole_entity: false,
+            }
+        } else {
+            NaEdit::Insertion {
+                sequence: InsertedSequence::Literal(Sequence::new(merged.alt)),
+            }
         }
     } else if merged.alt.is_empty() {
         NaEdit::Deletion {
@@ -1540,6 +1559,50 @@ mod tests {
     use crate::hgvs::parser::parse_hgvs;
     use crate::hgvs::variant::Accession;
     use crate::reference::MockProvider;
+
+    /// #1135: an insertion-shaped anchor with nothing left to insert (a
+    /// cancelling del+ins after 3'-shifting) must not become an `Insertion`
+    /// carrying an empty sequence — that is not valid HGVS and made
+    /// `normalize_na_edit` divide by zero rotating the empty sequence.
+    ///
+    /// Pinned on `build_naedit` with the anchor state directly: reaching it
+    /// through `merge_consecutive_edits` requires the normalizer to have
+    /// shifted the pair together first, so a merge-level test exercises the
+    /// `Delins` branch instead and would not cover this.
+    #[test]
+    fn empty_insertion_anchor_builds_an_identity() {
+        // Insertion-shaped anchor (`start == end + 1`) with an empty payload.
+        let anchor = Anchor {
+            region: Region::Genome,
+            start: 1010,
+            end: 1009,
+            alt: Vec::new(),
+        };
+        let (interval, edit) = build_naedit(anchor, |_, p| GenomePos::new(p as u64));
+
+        match edit {
+            NaEdit::Identity { .. } => {}
+            other => panic!("expected NaEdit::Identity, got {other:?}"),
+        }
+        assert_eq!(interval.to_string(), "1009_1010");
+    }
+
+    /// The non-empty sibling still builds a real insertion — the guard must not
+    /// swallow a payload-carrying anchor.
+    #[test]
+    fn non_empty_insertion_anchor_still_builds_an_insertion() {
+        let anchor = Anchor {
+            region: Region::Genome,
+            start: 1010,
+            end: 1009,
+            alt: vec![Base::A],
+        };
+        let (_, edit) = build_naedit(anchor, |_, p| GenomePos::new(p as u64));
+        match edit {
+            NaEdit::Insertion { .. } => {}
+            other => panic!("expected NaEdit::Insertion, got {other:?}"),
+        }
+    }
 
     #[test]
     fn empty_input_returns_empty() {
