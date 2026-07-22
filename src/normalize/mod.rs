@@ -4275,27 +4275,37 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let expected_len = (end_pos.number - start_pos.number + 1) as usize;
 
         // Obtain the deleted reference residues. Prefer the provider's protein
-        // sequence (works for any range length); without it, fall back to the
+        // sequence (works for any range length); failing that, fall back to the
         // residues NAMED in the `delins` location endpoints. That fallback is
         // valid only when *every* deleted residue is named — i.e. the range
         // spans ≤ 2 residues (start and/or end). A ≥ 3-residue range has
         // unnamed interior residues and cannot be trimmed reference-free
         // (#1119). This mirrors the nucleotide axis's reference-driven
         // `canonicalize_delins`, restricted here to the AST-derivable cases.
-        let ref_aas: Vec<AminoAcid> = if self.provider.has_protein_data() {
+        //
+        // `has_protein_data()` is a **provider-wide** flag, so a provider that
+        // carries proteins for other accessions still fails to fetch the one at
+        // hand. That is "no reference for this accession", not "cannot
+        // canonicalize": take the same named-endpoint fallback rather than
+        // declining outright (#1131).
+        let fetched: Option<Vec<AminoAcid>> = if self.provider.has_protein_data() {
             let accession = variant.accession.transcript_accession();
-            let aas =
-                self.fetch_protein_window(&accession, start_pos.number - 1, end_pos.number)?;
-            if aas.len() != expected_len {
-                return None;
-            }
-            aas
+            self.fetch_protein_window(&accession, start_pos.number - 1, end_pos.number)
+                .filter(|aas| aas.len() == expected_len)
         } else {
-            match expected_len {
+            None
+        };
+        // Whether `ref_aas` came from the reference. Gates the branches below
+        // that need more of the protein than the location names — the ins→dup
+        // search and its flanking-residue lookups.
+        let reference_backed = fetched.is_some();
+        let ref_aas: Vec<AminoAcid> = match fetched {
+            Some(aas) => aas,
+            None => match expected_len {
                 1 => vec![start_pos.aa],
                 2 => vec![start_pos.aa, end_pos.aa],
                 _ => return None,
-            }
+            },
         };
 
         // Affix-trim: longest common prefix then longest common suffix.
@@ -4381,10 +4391,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // residue is only knowable from the reference — so keep the input
             // delins (#1119's conservative default).
             //
-            // The ins→dup refinement stays reference-gated: a protein-backed
-            // provider may reduce this same insertion further to a `dup`, which
-            // only the reference can establish.
-            if !self.provider.has_protein_data() {
+            // The ins→dup refinement stays reference-gated: when the reference
+            // really backed `ref_aas`, it may reduce this same insertion further
+            // to a `dup`, which only the reference can establish. Gate on
+            // `reference_backed`, not the provider-wide capability flag — for an
+            // accession the provider lacks, the reference path can only bail
+            // (#1131).
+            if !reference_backed {
                 if lcp == 0 || lcp >= ref_aas.len() {
                     return None;
                 }
