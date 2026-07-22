@@ -23,6 +23,7 @@ use std::path::PathBuf;
 
 use ferro_hgvs::conformance::reference_window::WindowProvider;
 use ferro_hgvs::conformance::spec_projection;
+use ferro_hgvs::conformance::{Expectation, NormativeLevel, Status};
 use ferro_hgvs::data::cdot::CdotMapper;
 use ferro_hgvs::data::projection::Projector;
 use ferro_hgvs::error_handling::ErrorConfig;
@@ -53,12 +54,12 @@ struct Row {
     operation: String,
     error_mode: String,
     target: String,
-    expectation: String,
-    normative_level: String,
+    expectation: Expectation,
+    normative_level: NormativeLevel,
     #[serde(default)]
     expected: Option<String>,
     observed: String,
-    status: String,
+    status: Status,
     spec_citation: String,
 }
 
@@ -210,7 +211,10 @@ fn enumeration_replays_recorded_behavior() {
 }
 
 /// Every row must carry usable provenance: a spec citation pinned to the
-/// submodule SHA, a dimension, and an RFC 2119 level.
+/// submodule SHA. The `normative_level` and `expectation` vocabularies are now
+/// enforced structurally — an unknown value fails deserialization by naming
+/// itself — so the only cross-field invariant left to assert is that a pinned
+/// baseline never masquerades as a MUST-level spec expectation.
 #[test]
 fn every_row_carries_provenance() {
     let fx = load();
@@ -221,25 +225,11 @@ fn every_row_carries_provenance() {
             row.id,
             row.spec_citation
         );
-        assert!(
-            matches!(row.normative_level.as_str(), "must" | "should" | "n/a"),
-            "row {} has an unknown normative level {:?}",
-            row.id,
-            row.normative_level
-        );
-        assert!(
-            matches!(
-                row.expectation.as_str(),
-                "spec-mandated" | "pinned-baseline"
-            ),
-            "row {} has an unknown expectation kind {:?}",
-            row.id,
-            row.expectation
-        );
         // A pinned baseline must never masquerade as a spec expectation.
-        if row.expectation == "pinned-baseline" {
+        if row.expectation == Expectation::PinnedBaseline {
             assert_ne!(
-                row.normative_level, "must",
+                row.normative_level,
+                NormativeLevel::Must,
                 "row {} pins current behaviour but claims MUST-level force",
                 row.id
             );
@@ -256,25 +246,25 @@ fn every_row_carries_provenance() {
 /// Regenerate the numbers with:
 ///   `cargo run --features dev --example generate_spec_enumeration -- --census`
 /// and read `by_status` in the generated fixture.
-const DIVERGENCE_BUDGET: &[(&str, usize)] = &[
+const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // Spec-forbidden strings ferro parses and renders anyway.
-    ("false-acceptance", 6),
+    (Status::FalseAcceptance, 6),
     // Spec names a canonical replacement; ferro accepts the bad string and
     // renders something else. These are the genuine violations.
-    ("repair-diverges", 4),
+    (Status::RepairDiverges, 4),
     // Spec names a canonical replacement; ferro rejects the bad string instead
     // of repairing it. Spec-conformant — rejection is always permitted.
-    ("rejected-not-repaired", 13),
+    (Status::RejectedNotRepaired, 13),
     // Repairs that need real reference bases; not assertable hermetically.
-    ("requires-reference", 10),
+    (Status::RequiresReference, 10),
     // MUST-level output invariants violated by a string ferro emits.
-    ("invariant-violation-must", 0),
+    (Status::InvariantViolationMust, 0),
     // SHOULD-level (advisory) output invariants. Never a hard failure.
-    ("invariant-violation-should", 2),
+    (Status::InvariantViolationShould, 2),
     // syntax.yaml examples that do not parse into their declared axis.
-    ("form-axis-diverges", 3),
+    (Status::FormAxisDiverges, 3),
     // Projections whose rendered form differs from the one the spec states.
-    ("projection-diverges", 0),
+    (Status::ProjectionDiverges, 0),
 ];
 
 /// Does a projected string match the form the spec states? Mirrors
@@ -297,7 +287,7 @@ fn divergence_budget_is_unchanged() {
     }
     let mut mismatches = Vec::new();
     for (status, budget) in DIVERGENCE_BUDGET {
-        let actual = counts.get(status).copied().unwrap_or(0);
+        let actual = counts.get(status.as_str()).copied().unwrap_or(0);
         if actual != *budget {
             mismatches.push(format!("  {status}: budget {budget}, actual {actual}"));
         }
@@ -320,37 +310,37 @@ fn divergence_budget_is_unchanged() {
 /// silent pass. Regenerate the roster of observed statuses with:
 ///   `cargo run --features dev --example generate_spec_enumeration -- --census`
 /// and read `by_status` in the generated fixture.
-const KNOWN_PASSING_STATUSES: &[&str] = &[
+const KNOWN_PASSING_STATUSES: &[Status] = &[
     // Spec-forbidden string that ferro rejected outright (parse error) — the
     // conformant counterpart of the budgeted `false-acceptance`.
-    "correctly-rejected",
+    Status::CorrectlyRejected,
     // Bad string repaired to the canonical form the spec names — the ideal
     // outcome of a repair.
-    "repaired",
+    Status::Repaired,
     // Grammar example that parses into the coordinate axis the spec declares.
-    "form-axis-ok",
+    Status::FormAxisOk,
     // Grammar example whose axis the spec does not state; ferro's parsed axis is
     // pinned as a baseline (not a spec matter). Emittable but currently 0 rows.
-    "form-axis-pinned",
+    Status::FormAxisPinned,
     // Projection that matches the form the spec states — the conformant
     // counterpart of the budgeted `projection-diverges`.
-    "preserved",
+    Status::Preserved,
     // Projection with no spec-stated expectation, pinned as a baseline: ferro
     // rendered a form, declined/unavailable, or errored. None is a spec
     // divergence — the spec mandates no expectation for these.
-    "projection-pinned",
-    "projection-unavailable-pinned",
-    "projection-error-pinned",
+    Status::ProjectionPinned,
+    Status::ProjectionUnavailablePinned,
+    Status::ProjectionErrorPinned,
     // Error-mode outcome pinned as ferro policy: the spec says nothing about
     // ferro's error modes, so a per-mode divergence is never a spec expectation.
-    "mode-divergence-pinned",
+    Status::ModeDivergencePinned,
 ];
 
 /// A status is accounted for if it is either budgeted (a tracked divergence in
 /// `DIVERGENCE_BUDGET`) or allowlisted (a known passing outcome in
 /// `KNOWN_PASSING_STATUSES`).
-fn status_is_accounted_for(status: &str) -> bool {
-    DIVERGENCE_BUDGET.iter().any(|(s, _)| *s == status) || KNOWN_PASSING_STATUSES.contains(&status)
+fn status_is_accounted_for(status: &Status) -> bool {
+    DIVERGENCE_BUDGET.iter().any(|(s, _)| s == status) || KNOWN_PASSING_STATUSES.contains(status)
 }
 
 /// Returns the distinct observed statuses that are neither budgeted (a tracked
@@ -359,8 +349,8 @@ fn status_is_accounted_for(status: &str) -> bool {
 /// status is a new, unreviewed category — `divergence_budget_is_unchanged` is
 /// blind to it, so this is what `every_observed_status_is_accounted_for` gates
 /// on.
-fn unaccounted_statuses<'a>(statuses: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
-    let mut unknown: Vec<&str> = statuses
+fn unaccounted_statuses<'a>(statuses: impl IntoIterator<Item = &'a Status>) -> Vec<&'a Status> {
+    let mut unknown: Vec<&Status> = statuses
         .into_iter()
         .filter(|status| !status_is_accounted_for(status))
         .collect();
@@ -375,8 +365,12 @@ fn unaccounted_statuses_flags_a_new_status() {
     // allowlisted (e.g. a future `projection panicked` defect indicator) must
     // be surfaced by name so it becomes a deliberate decision, not a silent
     // pass. This holds independent of the allowlist's contents.
-    let observed = ["false-acceptance", "projection panicked"];
-    assert_eq!(unaccounted_statuses(observed), vec!["projection panicked"]);
+    let observed = [
+        Status::FalseAcceptance,
+        Status::from_wire("projection panicked"),
+    ];
+    let expected = Status::Unknown("projection panicked".to_string());
+    assert_eq!(unaccounted_statuses(&observed), vec![&expected]);
 }
 
 #[test]
@@ -385,10 +379,13 @@ fn budget_and_allowlist_are_disjoint() {
     // conformant outcomes: the two carve the status vocabulary into disjoint
     // halves. A status in both would blur that intent (and be double-classified),
     // so guard the split explicitly.
-    let overlap: Vec<&str> = KNOWN_PASSING_STATUSES
+    let overlap: Vec<&Status> = KNOWN_PASSING_STATUSES
         .iter()
-        .copied()
-        .filter(|s| DIVERGENCE_BUDGET.iter().any(|(b, _)| b == s))
+        .filter(|passing| {
+            DIVERGENCE_BUDGET
+                .iter()
+                .any(|(budgeted, _)| budgeted == *passing)
+        })
         .collect();
     assert!(
         overlap.is_empty(),
@@ -399,7 +396,7 @@ fn budget_and_allowlist_are_disjoint() {
 #[test]
 fn every_observed_status_is_accounted_for() {
     let fx = load();
-    let unknown = unaccounted_statuses(fx.rows.iter().map(|row| row.status.as_str()));
+    let unknown = unaccounted_statuses(fx.rows.iter().map(|row| &row.status));
     assert!(
         unknown.is_empty(),
         "the enumeration emitted status(es) that are neither in DIVERGENCE_BUDGET \
@@ -422,7 +419,7 @@ fn invariant_catalog_has_no_false_positives_on_blessed_output() {
     let offenders: Vec<&Row> = fx
         .rows
         .iter()
-        .filter(|r| r.status == "invariant-violation-must")
+        .filter(|r| r.status == Status::InvariantViolationMust)
         .filter(|r| {
             // The generator records the source row's pinned status in `note`;
             // a blessed output is one whose source row is `preserved`.
@@ -441,7 +438,8 @@ fn invariant_catalog_has_no_false_positives_on_blessed_output() {
     for row in fx.rows.iter().filter(|r| r.dimension == "output-invariant") {
         if row.id.contains("/A1-") || row.id.contains("/A2-") {
             assert_eq!(
-                row.normative_level, "should",
+                row.normative_level,
+                NormativeLevel::Should,
                 "advisory rule {} must never be MUST-level",
                 row.id
             );
@@ -460,14 +458,19 @@ fn passing_spec_mandated_musts_stay_passing() {
     let mut checked = 0usize;
 
     for row in &fx.rows {
-        if row.expectation != "spec-mandated" || row.normative_level != "must" {
+        if row.expectation != Expectation::SpecMandated
+            || row.normative_level != NormativeLevel::Must
+        {
             continue;
         }
         let passing = matches!(
-            row.status.as_str(),
-            "correctly-rejected" | "repaired" | "rejected-not-repaired" | "form-axis-ok"
+            row.status,
+            Status::CorrectlyRejected
+                | Status::Repaired
+                | Status::RejectedNotRepaired
+                | Status::FormAxisOk
                 // A projection that already matches the form the spec states.
-                | "preserved"
+                | Status::Preserved
         );
         if !passing {
             continue;
@@ -476,16 +479,16 @@ fn passing_spec_mandated_musts_stay_passing() {
             continue;
         };
         checked += 1;
-        let ok = match row.status.as_str() {
-            "correctly-rejected" | "rejected-not-repaired" => {
+        let ok = match row.status {
+            Status::CorrectlyRejected | Status::RejectedNotRepaired => {
                 observed.starts_with("parse error") || observed.starts_with("normalize error")
             }
-            "repaired" => Some(&observed) == row.expected.as_ref(),
-            "form-axis-ok" => Some(&observed) == row.expected.as_ref(),
+            Status::Repaired => Some(&observed) == row.expected.as_ref(),
+            Status::FormAxisOk => Some(&observed) == row.expected.as_ref(),
             // The spec writes a projected form with or without its accession;
             // an accession-less statement is compared against the coordinate
             // part only, mirroring the generator (see `projection_matches`).
-            "preserved" => row
+            Status::Preserved => row
                 .expected
                 .as_ref()
                 .is_some_and(|e| projection_matches(&observed, e)),

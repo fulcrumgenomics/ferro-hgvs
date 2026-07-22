@@ -17,7 +17,9 @@ pub mod mutalyzer;
 pub mod reference_snapshot;
 pub mod reference_window;
 pub mod schema;
+pub mod spec_enumeration;
 pub mod spec_projection;
 pub mod summary;
 
 pub use schema::{validate_cluster_refs, Cluster};
+pub use spec_enumeration::{Expectation, NormativeLevel, Status};
