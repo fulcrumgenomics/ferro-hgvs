@@ -1095,6 +1095,35 @@ fn resolve_special_cds_pos(
     Ok(mapper.tx_to_cds(&tx_pos).ok())
 }
 
+/// Sort cis-allele members into genomic (coordinate) order using the total
+/// order `cis_member_order_key` (#1098). A no-op unless every member shares a
+/// single accession — a mixed-accession bracketed allele (`[NC_…;NM_…]`,
+/// #218/#219) has no cross-molecule genomic order to canonicalize to, so those
+/// are left in authored order. The key is total (the rendered descriptor is the
+/// final tie-break), so the result never depends on input order even when two
+/// members share a start point.
+///
+/// Callers gate on the cis / not-uncertain / not-overlap-conflicting conditions
+/// (see `normalize_allele`): this is used both *before* the merge, so
+/// `merge_consecutive_edits` fires deterministically regardless of input order
+/// (#1103), and *after* it, to render the surviving members in genomic order
+/// (#1098/#1101).
+fn sort_cis_members_by_genomic_order(members: &mut [HgvsVariant]) {
+    let first_accession = members
+        .first()
+        .and_then(|m| m.accession().map(|a| a.full()));
+    let single_accession = first_accession.is_some()
+        && members
+            .iter()
+            .all(|m| m.accession().map(|a| a.full()) == first_accession);
+    if single_accession {
+        members.sort_by(|a, b| {
+            crate::hgvs::variant::cis_member_order_key(a)
+                .cmp(&crate::hgvs::variant::cis_member_order_key(b))
+        });
+    }
+}
+
 impl<P: ReferenceProvider> Normalizer<P> {
     /// Create a new normalizer with the given reference provider
     pub fn new(provider: P) -> Self {
@@ -1731,11 +1760,49 @@ impl<P: ReferenceProvider> Normalizer<P> {
         } else {
             1
         };
+        // #1103: sort cis members into genomic order *before* the merge, so
+        // `merge_consecutive_edits` sees a canonical member order and fires the
+        // same merges regardless of input order. #1101 sorts *after* the merge,
+        // which restores order-independence for disjoint members but cannot undo
+        // an order-dependent merge: `merge_consecutive_edits` only combines pairs
+        // that are adjacent *in the input list*, so two permutations of one
+        // adjacency-mergeable member set collapsed to different strings — and
+        // different member counts (e.g. `g.[104_105insA;105del;105_106insC]`
+        // merged all three into `g.105delinsAC`, but `g.[105del;104_105insA;
+        // 105_106insC]` left them as three members). Feeding the merge a
+        // genomic-order member list makes the merge deterministic; the two
+        // flanking insertions of a co-located ins/del/ins trio land on distinct
+        // junctions, so their genomic order (not input order) fixes the merged
+        // `delins` payload unambiguously.
+        //
+        // Gated exactly like the post-merge sort (cis, certain, single-accession
+        // — the latter checked inside the helper), plus: skip when the *input*
+        // members already conflict. Reordering is only meaning-preserving for
+        // disjoint members; an *input-time* overlap-conflicting allele must
+        // preserve its authored order (#395), so it is left intact here and the
+        // post-merge overlap guard handles it. (A conflict that emerges only
+        // from the per-member 3' shift is not covered by this input-time gate:
+        // such members are reordered by this sort and then rendered in the
+        // deterministic descriptor tie-break order rather than authored order —
+        // input-order-independent, but a narrowing of the #395 verbatim
+        // contract for that shift-emergent case.) Same-junction insertions are
+        // already returned verbatim above (#1004), so they never reach here.
+        let input_has_overlap_conflict = all_warnings
+            .iter()
+            .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }))
+            || crate::normalize::overlap::detect_overlap_conflicts(&allele.variants, allele.phase)
+                .iter()
+                .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
+        let reorder_before_merge = is_cis && !allele.uncertain && !input_has_overlap_conflict;
+
         let mut current = allele.variants.clone();
         let mut normalized: Vec<HgvsVariant>;
         let settled_warnings: Vec<NormalizationWarning>;
         let mut pass = 0;
         loop {
+            if reorder_before_merge {
+                merge::sort_cis_members_for_merge(&mut current);
+            }
             let pre_collapsed = merge::collapse_overlapping_cis_edits(
                 current.clone(),
                 allele.phase,
@@ -1825,17 +1892,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             .iter()
             .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
         if is_cis && !allele.uncertain && !has_overlap_conflict && normalized.len() > 1 {
-            let first_accession = normalized[0].accession().map(|a| a.full());
-            let single_accession = first_accession.is_some()
-                && normalized
-                    .iter()
-                    .all(|m| m.accession().map(|a| a.full()) == first_accession);
-            if single_accession {
-                normalized.sort_by(|a, b| {
-                    crate::hgvs::variant::cis_member_order_key(a)
-                        .cmp(&crate::hgvs::variant::cis_member_order_key(b))
-                });
-            }
+            sort_cis_members_by_genomic_order(&mut normalized);
         }
 
         // HGVS requires consecutive edits in cis to render as a single edit.
