@@ -17,6 +17,13 @@
 //! 3. **Never synthesizes** it — a bare input stays bare, and normalization
 //!    does not invent a selector from transcript metadata.
 //!
+//! A **second, orthogonal rule** applies on the protein axis: `p.` carries no
+//! gene-symbol selector on **any** accession (#310/#1142), enforced by
+//! coordinate type rather than reference class. The two rules can disagree, and
+//! both are tested here — `NC_012920.1(MT-TL1):m.[…]` keeps its selector under
+//! the mitochondrial exception while `YP_003024026.1(MT-ND1):p.[…]` drops its
+//! own, because the axis rule wins on `p.`.
+//!
 //! The value always remains on the struct for programmatic access regardless
 //! of whether Display emits it (`variant.<X>.gene_symbol`). This file targets
 //! the *formatter* per-kind; end-to-end round-trip identity lives in
@@ -495,4 +502,177 @@ fn hyphenated_selector_preserved_on_mitochondrial_reference() {
     assert_display_preserves_gene_selector("NC_012920.1(MT-TL1):m.3243A>G", "MT-TL1");
     assert_display_preserves_gene_selector("NC_012920.1(MT-ND1):m.3460G>A", "MT-ND1");
     assert_display_preserves_gene_selector("NC_012920.1(MT-TL1):n.14A>G", "MT-TL1");
+}
+
+// =============================================================================
+// Drop: the `p.` axis takes no gene-symbol selector in ANY shape (#1142).
+//
+// `refseq.md:41` — "Gene symbols should **not** be used as specification" —
+// with the exception at `:42` scoped to "genes annotated on a genomic reference
+// for which no transcript reference sequence is available". A protein accession
+// is not a genomic reference, so no protein form may carry one.
+//
+// The single-variant case is covered above (`..._refseq_np_protein`). It is
+// enforced by `ProteinVariant`'s own Display, which never reads `gene_symbol`,
+// so it never reached the allele path — an allele renders through
+// `write_compact_prefix`, whose only gate was "is this a transcript reference?".
+// =============================================================================
+
+/// The gene symbol of a variant, reaching into an allele's first member.
+///
+/// `gene_symbol_of` reads the field off a single variant and an `Allele` carries
+/// none — the symbol lives on each member — so allele cases need this instead.
+fn member_gene_symbol(variant: &HgvsVariant) -> Option<&str> {
+    match variant {
+        HgvsVariant::Allele(a) => a.variants.first().and_then(member_gene_symbol),
+        other => gene_symbol_of(other),
+    }
+}
+
+/// Assert `input` parses, **retains** `gene` on the member, and Displays as
+/// `expected` without it.
+///
+/// Both halves matter: this file's contract is that the parser always captures
+/// the selector for programmatic access and only `Display` omits it. Asserting
+/// the rendering alone would pass equally if the parser had silently dropped the
+/// value, which would be a different (and worse) bug.
+fn assert_selector_dropped(input: &str, gene: &str, expected: &str) {
+    let v = parse_hgvs(input).unwrap_or_else(|e| panic!("{input} should parse: {e}"));
+    assert_eq!(
+        member_gene_symbol(&v),
+        Some(gene),
+        "parse must still capture gene_symbol={gene:?} for {input}"
+    );
+    assert_eq!(
+        v.to_string(),
+        expected,
+        "Display should drop the gene-symbol selector for {input}"
+    );
+}
+
+#[test]
+fn display_drops_gene_selector_protein_cis_allele() {
+    // The shape #1099's projector emits for an all-silent cis allele whose
+    // rewritten codons are separated.
+    assert_selector_dropped(
+        "NP_003997.2(DMD):p.[(Phe41=);(Gly47=)]",
+        "DMD",
+        "NP_003997.2:p.[(Phe41=);(Gly47=)]",
+    );
+    assert_selector_dropped(
+        "NP_003997.2(DMD):p.[(Phe41Cys);(Gly47Arg)]",
+        "DMD",
+        "NP_003997.2:p.[(Phe41Cys);(Gly47Arg)]",
+    );
+}
+
+#[test]
+fn display_drops_gene_selector_protein_trans_allele() {
+    assert_selector_dropped(
+        "NP_003997.2(DMD):p.[(Phe41Cys)];[(Gly47Arg)]",
+        "DMD",
+        "NP_003997.2:p.[(Phe41Cys)];[(Gly47Arg)]",
+    );
+}
+
+#[test]
+fn display_drops_gene_selector_protein_unknown_phase_allele() {
+    assert_selector_dropped(
+        "NP_003997.2(DMD):p.(Phe41Cys)(;)(Gly47Arg)",
+        "DMD",
+        "NP_003997.2:p.(Phe41Cys)(;)(Gly47Arg)",
+    );
+}
+
+/// Every protein accession class, not just `NP_`.
+///
+/// The obvious gate — "does the accession prefix infer to `p`?" — is incomplete:
+/// `XP_` and `YP_` are not in `Accession::inferred_variant_type`'s match, so
+/// they would keep the selector. `YP_` matters especially: it is the accession
+/// class the spec's own mitochondrial passage uses (`refseq.md:291` gives
+/// `YP_003024026.1:p.(Ala52Thr)` as the correct form). Gating on the rendered
+/// *coordinate type* rather than the accession prefix covers all of them.
+#[test]
+fn display_drops_gene_selector_on_every_protein_accession_class() {
+    assert_selector_dropped(
+        "XP_003997.2(DMD):p.[(Phe41Cys);(Gly300Arg)]",
+        "DMD",
+        "XP_003997.2:p.[(Phe41Cys);(Gly300Arg)]",
+    );
+    assert_selector_dropped(
+        "YP_003024026.1(MT-ND1):p.[(Ala52Thr);(Gly300Arg)]",
+        "MT-ND1",
+        "YP_003024026.1:p.[(Ala52Thr);(Gly300Arg)]",
+    );
+    // The classes the prefix-based predicate does cover, asserted so the gate
+    // cannot regress to one that only handles RefSeq.
+    assert_selector_dropped(
+        "ENSP00000369497.3(BRCA2):p.[(Phe41Cys);(Gly47Arg)]",
+        "BRCA2",
+        "ENSP00000369497.3:p.[(Phe41Cys);(Gly47Arg)]",
+    );
+    assert_selector_dropped(
+        "LRG_199p1(BRCA1):p.[(Phe41Cys);(Gly47Arg)]",
+        "BRCA1",
+        "LRG_199p1:p.[(Phe41Cys);(Gly47Arg)]",
+    );
+    // UniProt: a single-letter prefix, and no RefSeq-shaped accession at all.
+    assert_selector_dropped(
+        "P38398(BRCA1):p.[(Phe41Cys);(Gly47Arg)]",
+        "BRCA1",
+        "P38398:p.[(Phe41Cys);(Gly47Arg)]",
+    );
+}
+
+// =============================================================================
+// Guards: what the #1142 gate must NOT touch.
+// =============================================================================
+
+/// A parenthesised **accession** is a spec-sanctioned specification, not a gene
+/// symbol, and must survive on the protein axis.
+///
+/// `refseq.md:40` — "accepted specifications include transcripts
+/// (`NM_004006.2`) and proteins (`NP_003997.1`)" — and `:190`, "when, based on
+/// a genomic reference sequence, variants are reported using a `p.` prefix, the
+/// reference protein isoform used should be indicated". This parenthetical is
+/// the accession's own `genomic_context`, a different field from the gene-symbol
+/// selector, so narrowing the selector must leave it alone.
+#[test]
+fn display_preserves_a_protein_accession_specification() {
+    let v = parse_hgvs("NG_012232.1(NP_003997.1):p.(Val25Gly)").unwrap();
+    assert_eq!(v.to_string(), "NG_012232.1(NP_003997.1):p.(Val25Gly)");
+}
+
+/// Assert an allele retains `gene` on its member AND renders it, naming the
+/// expected string explicitly rather than comparing against the input.
+fn assert_allele_selector_preserved(input: &str, gene: &str, expected: &str) {
+    let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse {input:?} failed: {e:?}"));
+    assert_eq!(
+        member_gene_symbol(&v),
+        Some(gene),
+        "parse must capture gene_symbol={gene:?} for {input}"
+    );
+    assert_eq!(v.to_string(), expected, "Display must preserve {input}");
+}
+
+/// The mitochondrial exception still holds for an *allele*, not just a single
+/// variant — the gate is on the `p.` axis, not on alleles generally.
+#[test]
+fn display_preserves_mitochondrial_gene_selector_on_an_allele() {
+    assert_allele_selector_preserved(
+        "NC_012920.1(MT-TL1):m.[3243A>G;3244G>A]",
+        "MT-TL1",
+        "NC_012920.1(MT-TL1):m.[3243A>G;3244G>A]",
+    );
+}
+
+/// A genomic allele keeps its selector: the gene stands in for a transcript
+/// there, and `g.` is not the axis #1142 narrows.
+#[test]
+fn display_preserves_genomic_gene_selector_on_an_allele() {
+    assert_allele_selector_preserved(
+        "NC_000013.11(FLT3):g.[12345A>G;12400C>T]",
+        "FLT3",
+        "NC_000013.11(FLT3):g.[12345A>G;12400C>T]",
+    );
 }
