@@ -342,20 +342,21 @@ pub fn correct_protein_arrow(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrecti
     (Cow::Borrowed(input), corrections)
 }
 
-/// Correct deprecated stop-codon and frameshift forms in protein descriptions.
+/// Correct deprecated `X` stop-codon and frameshift forms in protein
+/// descriptions.
 ///
-/// Detects four deprecated forms within `p.` segments of the input and rewrites
-/// them to their canonical `Ter`-based equivalents:
+/// Detects the two deprecated `X` forms within `p.` segments of the input and
+/// rewrites them to their canonical `Ter`-based equivalents:
 ///
 /// - `fsXN` (digits) or `fsX?` (uncertain) → `fsTerN` / `fsTer?` — emits
 ///   `DeprecatedFrameshiftX` (W3010).
-/// - `fs*N` (digits) or `fs*?` (uncertain) → `fsTerN` / `fsTer?` — emits
-///   `DeprecatedFrameshiftStar` (W3009).
 /// - position-then-`X` at edit boundary → `Ter` — emits `DeprecatedStopCodonX` (W3008).
 ///   Distinguished from `Xaa` by requiring `X` not followed by a letter.
-/// - position-then-`*` at edit boundary → `Ter` — emits `DeprecatedStopCodonStar` (W3007).
-///   Distinguished from `fs*N` (already handled), from `c.*N` UTR positions
-///   (digits do NOT precede `*` there), and from `delext*N` (preceding `t` is `t`).
+///
+/// The `*` spellings (`p.Arg97*`, `p.Arg97fs*23`) are **not** handled here:
+/// `*` is a spec-sanctioned stop-codon glyph co-equal with `Ter`
+/// (`checklist.md:63`), so it is left untouched for the core parser to accept
+/// natively and `Display`-canonicalize to `Ter` (#1114).
 ///
 /// The function preserves byte offsets relative to the *original* input by tracking
 /// the input cursor, even when replacements change the output length. Only operates
@@ -375,21 +376,27 @@ pub fn correct_deprecated_protein_forms(input: &str) -> (Cow<'_, str>, Vec<Detec
     while i < bytes.len() {
         let c = bytes[i];
 
-        // Detect "fs*N", "fsXN", "fs*?", or "fsX?" (frameshift termination
-        // notation, both known-position and uncertain-position forms).
-        // Must begin at a literal "fs" boundary; the byte before the `f` is not
-        // a lowercase letter (so we don't catch e.g. "ffs" — though that's
-        // implausible in HGVS).
+        // Detect "fsXN" or "fsX?" (deprecated frameshift termination notation,
+        // both known-position and uncertain-position forms). Must begin at a
+        // literal "fs" boundary; the byte before the `f` is not a lowercase
+        // letter (so we don't catch e.g. "ffs" — though that's implausible in
+        // HGVS).
+        //
+        // Only `X` is handled here. The `*` spelling (`fs*N` / `fs*?`) is a
+        // spec-sanctioned equivalent of `fsTerN` (`checklist.md:63` "`Ter` or
+        // `*` should be used ... the `X` should not be used"; `frameshift.md`
+        // lists `p.Arg97Profs*23` as valid), so it is left untouched for the
+        // core parser to accept natively as `Ter` rather than flagged as a
+        // deprecated form (#1114).
         if c == b'f'
             && i + 1 < bytes.len()
             && bytes[i + 1] == b's'
             && i + 2 < bytes.len()
-            && (bytes[i + 2] == b'*' || bytes[i + 2] == b'X')
+            && bytes[i + 2] == b'X'
             && i + 3 < bytes.len()
             && (bytes[i + 3].is_ascii_digit() || bytes[i + 3] == b'?')
             && in_protein_segment(input, i + 2)
         {
-            let star_or_x = bytes[i + 2];
             // Walk the trailing token: either a digit run ("23") or a single
             // "?" (uncertain termination position, VEP notation).
             let trail_start = i + 3;
@@ -402,15 +409,10 @@ pub fn correct_deprecated_protein_forms(input: &str) -> (Cow<'_, str>, Vec<Detec
                 }
                 (input[trail_start..digits_end].to_string(), digits_end)
             };
-            let original = &input[i + 2..trail_end]; // "*23", "X23", "*?", or "X?"
+            let original = &input[i + 2..trail_end]; // "X23" or "X?"
             let corrected = format!("Ter{}", corrected_trail);
-            let error_type = if star_or_x == b'*' {
-                ErrorType::DeprecatedFrameshiftStar
-            } else {
-                ErrorType::DeprecatedFrameshiftX
-            };
             corrections.push(DetectedCorrection::new(
-                error_type,
+                ErrorType::DeprecatedFrameshiftX,
                 original.to_string(),
                 corrected.clone(),
                 i + 2,
@@ -423,32 +425,28 @@ pub fn correct_deprecated_protein_forms(input: &str) -> (Cow<'_, str>, Vec<Detec
             continue;
         }
 
-        // Detect a stop-codon `*` or `X` immediately following a digit at the
-        // edit boundary. The `*` or `X` must:
+        // Detect a deprecated stop-codon `X` immediately following a digit at
+        // the edit boundary. The `X` must:
         // - be preceded by an ASCII digit (the position number),
-        // - not be followed by a digit (else it's a position offset like c.*5),
-        // - for `X`, not be followed by an ASCII letter (else it's `Xaa`),
-        // - not be part of a `fs*N` / `fsXN` run (handled above).
+        // - not be followed by a digit (else it's a position offset),
+        // - not be followed by an ASCII letter (else it's `Xaa` / `Xxx`),
+        // - not be part of an `fsXN` run (handled above).
         //
         // We also gate on protein context: only when, looking back, we find
         // `p.` before a top-level boundary (`:` or `[` or start) without an
         // intervening boundary that would put us back outside protein context.
-        if (c == b'*' || c == b'X') && i > 0 && bytes[i - 1].is_ascii_digit() {
+        //
+        // The `*` spelling is intentionally NOT handled here: it is a
+        // spec-sanctioned equivalent of `Ter` (`checklist.md:63`), so a
+        // stop-codon `*` is left for the core parser to accept natively rather
+        // than flagged as a deprecated form (#1114).
+        if c == b'X' && i > 0 && bytes[i - 1].is_ascii_digit() {
             let next_is_digit = i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit();
             let next_is_alpha = i + 1 < bytes.len() && bytes[i + 1].is_ascii_alphabetic();
-            // For `X`, also reject when followed by an ASCII letter (Xaa, Xxx).
-            let invalid_for_x = c == b'X' && next_is_alpha;
-            // For `*`, `c.*5` UTR position has `*` BEFORE digits, not after, so
-            // we don't need to filter that here; but `*N` followed by another
-            // digit is rare in protein context — still, safer to skip.
-            if !next_is_digit && !invalid_for_x && in_protein_segment(input, i) {
-                let error_type = if c == b'*' {
-                    ErrorType::DeprecatedStopCodonStar
-                } else {
-                    ErrorType::DeprecatedStopCodonX
-                };
+            // Reject when followed by an ASCII letter (Xaa, Xxx).
+            if !next_is_digit && !next_is_alpha && in_protein_segment(input, i) {
                 corrections.push(DetectedCorrection::new(
-                    error_type,
+                    ErrorType::DeprecatedStopCodonX,
                     (c as char).to_string(),
                     "Ter".to_string(),
                     i,
@@ -4942,16 +4940,14 @@ mod tests {
     // ----------------------------------------------------------------------
 
     #[test]
-    fn test_deprecated_stop_star_substitution() {
+    fn test_star_stop_substitution_not_corrected() {
+        // `*` is a spec-valid stop-codon glyph (`checklist.md:63`: "`Ter` or
+        // `*` should be used ... the `X` should not be used"), so the
+        // deprecated-form corrector must leave it untouched — the core parser
+        // accepts it natively as `Ter` (#1114). Only `X` is deprecated.
         let (corrected, corrections) = correct_deprecated_protein_forms("NP_000079.2:p.Arg97*");
-        assert_eq!(corrected, "NP_000079.2:p.Arg97Ter");
-        assert_eq!(corrections.len(), 1);
-        assert_eq!(
-            corrections[0].error_type,
-            ErrorType::DeprecatedStopCodonStar
-        );
-        assert_eq!(corrections[0].original, "*");
-        assert_eq!(corrections[0].corrected, "Ter");
+        assert_eq!(corrected, "NP_000079.2:p.Arg97*");
+        assert!(corrections.is_empty());
     }
 
     #[test]
@@ -4963,16 +4959,13 @@ mod tests {
     }
 
     #[test]
-    fn test_deprecated_frameshift_star() {
+    fn test_frameshift_star_not_corrected() {
+        // The `fs*N` frameshift-termination glyph is spec-valid
+        // (`frameshift.md` lists `p.Arg97Profs*23`), so the corrector leaves
+        // it untouched for the core parser to accept natively (#1114).
         let (corrected, corrections) = correct_deprecated_protein_forms("NP_000079.2:p.Arg97fs*23");
-        assert_eq!(corrected, "NP_000079.2:p.Arg97fsTer23");
-        assert_eq!(corrections.len(), 1);
-        assert_eq!(
-            corrections[0].error_type,
-            ErrorType::DeprecatedFrameshiftStar
-        );
-        assert_eq!(corrections[0].original, "*23");
-        assert_eq!(corrections[0].corrected, "Ter23");
+        assert_eq!(corrected, "NP_000079.2:p.Arg97fs*23");
+        assert!(corrections.is_empty());
     }
 
     #[test]
@@ -4985,15 +4978,12 @@ mod tests {
 
     #[test]
     fn test_deprecated_frameshift_with_new_aa() {
-        // p.Arg97ProfsTer23 with deprecated Star or X.
+        // The spec-valid `*` glyph is left untouched (#1114); only the
+        // deprecated `X` glyph is corrected to `Ter`.
         let (corrected, corrections) =
             correct_deprecated_protein_forms("NP_000079.2:p.Arg97Profs*23");
-        assert_eq!(corrected, "NP_000079.2:p.Arg97ProfsTer23");
-        assert_eq!(corrections.len(), 1);
-        assert_eq!(
-            corrections[0].error_type,
-            ErrorType::DeprecatedFrameshiftStar
-        );
+        assert_eq!(corrected, "NP_000079.2:p.Arg97Profs*23");
+        assert!(corrections.is_empty());
 
         let (corrected, corrections) =
             correct_deprecated_protein_forms("NP_000079.2:p.Arg97ProfsX23");
@@ -5219,17 +5209,14 @@ mod tests {
 
     #[test]
     fn test_deprecated_multiple_in_compound_allele() {
-        // Compound protein allele with two deprecated forms should emit two
-        // corrections in order.
+        // Compound protein allele mixing the spec-valid `*` with the
+        // deprecated `X`: only the `X` member is corrected (#1114). The `*`
+        // is preserved for native parsing.
         let (corrected, corrections) =
             correct_deprecated_protein_forms("NP_000079.2:p.[Arg97*;Arg100X]");
-        assert_eq!(corrected, "NP_000079.2:p.[Arg97Ter;Arg100Ter]");
-        assert_eq!(corrections.len(), 2);
-        assert_eq!(
-            corrections[0].error_type,
-            ErrorType::DeprecatedStopCodonStar
-        );
-        assert_eq!(corrections[1].error_type, ErrorType::DeprecatedStopCodonX);
+        assert_eq!(corrected, "NP_000079.2:p.[Arg97*;Arg100Ter]");
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].error_type, ErrorType::DeprecatedStopCodonX);
     }
 
     #[test]
@@ -5250,8 +5237,9 @@ mod tests {
 
     #[test]
     fn test_deprecated_predicted_paren_form() {
-        // Predicted protein consequences in parentheses still match.
-        let (corrected, corrections) = correct_deprecated_protein_forms("NP_000079.2:p.(Arg97*)");
+        // Predicted protein consequences in parentheses still match (uses the
+        // deprecated `X` glyph, since `*` is no longer corrected — #1114).
+        let (corrected, corrections) = correct_deprecated_protein_forms("NP_000079.2:p.(Arg97X)");
         assert_eq!(corrected, "NP_000079.2:p.(Arg97Ter)");
         assert_eq!(corrections.len(), 1);
     }
@@ -5260,12 +5248,14 @@ mod tests {
     fn test_deprecated_byte_offsets_track_original_input() {
         // The DetectedCorrection's start/end refer to the ORIGINAL input bytes,
         // not the rewritten output, so downstream span reporting is accurate.
-        let input = "NP_000079.2:p.Arg97fs*23";
+        // Uses the deprecated `X` glyph, since `*` is no longer corrected
+        // (#1114).
+        let input = "NP_000079.2:p.Arg97fsX23";
         let (_, corrections) = correct_deprecated_protein_forms(input);
         assert_eq!(corrections.len(), 1);
-        // "*23" begins at byte index of the '*' in the input.
-        let star_pos = input.find('*').unwrap();
-        assert_eq!(corrections[0].start, star_pos);
+        // "X23" begins at byte index of the 'X' in the input.
+        let x_pos = input.find('X').unwrap();
+        assert_eq!(corrections[0].start, x_pos);
         assert_eq!(corrections[0].end, input.len()); // up through "23"
     }
 
@@ -5274,8 +5264,9 @@ mod tests {
         // Non-ASCII bytes elsewhere in the input must pass through unchanged
         // (the byte-walking loop must not split multi-byte UTF-8 into stray
         // Latin-1 codepoints). Input is not valid HGVS but the corrector
-        // should be UTF-8 correct regardless.
-        let input = "NP_000079.2:p.Arg97* αβ";
+        // should be UTF-8 correct regardless. Uses the deprecated `X` glyph,
+        // since `*` is no longer corrected (#1114).
+        let input = "NP_000079.2:p.Arg97X αβ";
         let (corrected, corrections) = correct_deprecated_protein_forms(input);
         assert_eq!(corrections.len(), 1);
         assert_eq!(corrected, "NP_000079.2:p.Arg97Ter αβ");

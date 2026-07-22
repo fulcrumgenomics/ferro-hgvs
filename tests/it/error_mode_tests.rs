@@ -1085,33 +1085,44 @@ mod deprecated_stop_codon_and_frameshift_forms {
         assert_eq!(parsed.to_string(), expected);
     }
 
-    // --- W3007: deprecated `*` for stop in protein substitution (SVA-003) ---
-
-    #[test]
-    fn lenient_corrects_w3007_star_for_stop() {
-        assert_corrects_with_warning(
-            "NP_000079.2:p.Arg97*",
-            "NP_000079.2:p.Arg97Ter",
-            ErrorType::DeprecatedStopCodonStar,
-        );
+    /// Assert a `*` stop glyph is accepted in every mode: the preprocessor
+    /// preserves it verbatim (no correction, no warning) and the full parser
+    /// canonicalizes it to the spec-preferred three-letter `Ter` (#1114).
+    fn assert_star_accepted_as_ter(input: &str, expected_display: &str) {
+        for config in [
+            ErrorConfig::strict(),
+            ErrorConfig::lenient(),
+            ErrorConfig::silent(),
+        ] {
+            let preprocessor = config.preprocessor();
+            let result = preprocessor.preprocess(input);
+            assert!(
+                result.success,
+                "{input:?} must be accepted: {:?}",
+                result.error
+            );
+            assert_eq!(
+                result.preprocessed, input,
+                "`*` must be preserved for {input:?}",
+            );
+            assert!(
+                result.warnings.is_empty(),
+                "{input:?} must not warn; got {:?}",
+                result.warnings,
+            );
+        }
+        let parsed = parse_hgvs(input).unwrap_or_else(|e| panic!("{input:?} must parse: {e}"));
+        assert_eq!(parsed.to_string(), expected_display);
     }
 
-    #[test]
-    fn strict_rejects_w3007_star_for_stop() {
-        let config = ErrorConfig::strict();
-        let preprocessor = config.preprocessor();
-        let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
-        assert!(!result.success);
-    }
+    // --- `*` for stop in protein substitution: spec-valid per checklist.md:63
+    // ("`Ter` or `*` should be used ... the `X` should not be used"). Accepted
+    // in every mode and canonicalized to `Ter`; NOT a deprecated form (#1114).
+    // Only `X` (W3008, below) is deprecated. ---
 
     #[test]
-    fn silent_corrects_w3007_no_warning() {
-        let config = ErrorConfig::silent();
-        let preprocessor = config.preprocessor();
-        let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
-        assert!(result.success);
-        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97Ter");
-        assert!(result.warnings.is_empty());
+    fn star_for_stop_accepted_as_ter_all_modes() {
+        assert_star_accepted_as_ter("NP_000079.2:p.Arg97*", "NP_000079.2:p.Arg97Ter");
     }
 
     // --- W3008: deprecated `X` for stop in protein substitution (SVA-004) ---
@@ -1154,32 +1165,21 @@ mod deprecated_stop_codon_and_frameshift_forms {
         assert!(result.warnings.is_empty());
     }
 
-    // --- W3009: deprecated `fs*N` frameshift termination (SVA-006) ---
+    // --- `fs*N` frameshift termination: spec-valid (`frameshift.md` lists
+    // `p.Arg97Profs*23`). Accepted in every mode and canonicalized to `fsTer`;
+    // NOT a deprecated form (#1114). Only `fsXN` (W3010, below) is deprecated. ---
 
     #[test]
-    fn lenient_corrects_w3009_fs_star_n() {
-        assert_corrects_with_warning(
-            "NP_000079.2:p.Arg97fs*23",
-            "NP_000079.2:p.Arg97fsTer23",
-            ErrorType::DeprecatedFrameshiftStar,
-        );
+    fn fs_star_n_accepted_as_ter_all_modes() {
+        assert_star_accepted_as_ter("NP_000079.2:p.Arg97fs*23", "NP_000079.2:p.Arg97fsTer23");
     }
 
     #[test]
-    fn lenient_corrects_w3009_with_new_aa() {
-        assert_corrects_with_warning(
+    fn fs_star_with_new_aa_accepted_as_ter_all_modes() {
+        assert_star_accepted_as_ter(
             "NP_000079.2:p.Arg97Profs*23",
             "NP_000079.2:p.Arg97ProfsTer23",
-            ErrorType::DeprecatedFrameshiftStar,
         );
-    }
-
-    #[test]
-    fn strict_rejects_w3009_fs_star_n() {
-        let config = ErrorConfig::strict();
-        let preprocessor = config.preprocessor();
-        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
-        assert!(!result.success);
     }
 
     // --- W3010: deprecated `fsXN` frameshift termination (SVA-005) ---
@@ -1229,13 +1229,20 @@ mod deprecated_stop_codon_and_frameshift_forms {
     }
 
     #[test]
-    fn lenient_compound_protein_allele_emits_two_warnings() {
+    fn lenient_compound_protein_allele_emits_one_warning() {
+        // A compound allele mixing the spec-valid `*` with the deprecated `X`:
+        // only the `X` member is corrected (one W3008 warning); the `*` is
+        // preserved for native parsing (#1114).
         let config = ErrorConfig::lenient();
         let preprocessor = config.preprocessor();
         let result = preprocessor.preprocess("NP_000079.2:p.[Arg97*;Arg100X]");
         assert!(result.success);
-        assert_eq!(result.preprocessed, "NP_000079.2:p.[Arg97Ter;Arg100Ter]");
-        assert_eq!(result.warnings.len(), 2);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.[Arg97*;Arg100Ter]");
+        assert_eq!(result.warnings.len(), 1);
+        assert_eq!(
+            result.warnings[0].error_type,
+            ferro_hgvs::error_handling::ErrorType::DeprecatedStopCodonX
+        );
     }
 
     #[test]

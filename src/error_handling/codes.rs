@@ -77,6 +77,14 @@ impl ModeBehavior {
         )
     }
 
+    /// Accept as-is in every mode with no warning or correction — for a
+    /// spec-valid input form that the parser handles natively (e.g. a glyph
+    /// canonicalized on display). The code is retained for documentation but is
+    /// never emitted.
+    pub const fn accepted() -> Self {
+        Self::new(ModeAction::Accept, ModeAction::Accept, ModeAction::Accept)
+    }
+
     /// Reject in strict, warn in lenient, warn in silent (always warn if not rejected).
     pub const fn always_warn_if_not_rejected() -> Self {
         Self::new(
