@@ -87,10 +87,13 @@ def _existing_fixture() -> dict:
             },
             {
                 # `normalized` deliberately dropped: the pinned comparator
-                # rejects this variant, so there is no normalized form.
+                # rejects this variant, so there is no normalized form. The
+                # removal is recorded explicitly so a refresh drops the key
+                # rather than resurrecting upstream's value.
                 "input": "NM_000000.1:g.5del",
                 "to_test": True,
                 "keywords": ["upstream"],
+                "removed_keys": ["normalized"],
                 "errors": ["ECOORDINATESYSTEMMISMATCH"],
             },
             {
@@ -133,10 +136,12 @@ def test_merge_preserves_hand_rows_dispositions_and_corrections() -> None:
     assert merged["keywords"] == ["upstream", "ferro: start-codon policy, see #857"]
     # An uncorrected upstream row is taken as-is.
     assert by_input["NM_000000.1:c.9del"]["normalized"] == "NM_000000.1:c.9del"
-    # A deliberately removed expected value stays removed, not resurrected.
+    # A deliberately removed expected value stays removed, not resurrected, and
+    # the removal marker persists so future refreshes keep honoring it.
     removed = by_input["NM_000000.1:g.5del"]
     assert "normalized" not in removed
     assert removed["errors"] == ["ECOORDINATESYSTEMMISMATCH"]
+    assert removed["removed_keys"] == ["normalized"]
 
 
 def test_duplicate_inputs_are_paired_by_occurrence_order() -> None:
@@ -173,12 +178,151 @@ def test_duplicate_inputs_are_paired_by_occurrence_order() -> None:
     ]
 
 
+def test_unmatched_curated_duplicate_tail_is_preserved() -> None:
+    """Boundary: upstream drops one occurrence of a duplicated, curated input.
+
+    Existing carries two curated (non-hand) rows for one `input`; upstream now
+    ships only one occurrence. The surplus curated row must not vanish — its
+    curation is carried forward rather than silently dropped.
+    """
+    upstream = [{"input": "NG_000000.1:g.26_31del", "keywords": [], "normalized": "a"}]
+    existing = {
+        "cases": [
+            {
+                "input": "NG_000000.1:g.26_31del",
+                "keywords": [],
+                "normalized": "a",
+                "spec_citation": "first",
+            },
+            {
+                "input": "NG_000000.1:g.26_31del",
+                "keywords": [],
+                "normalized": "b",
+                "spec_citation": "second",
+            },
+        ]
+    }
+    cases = refresh.build_refresh_payload(upstream, existing, force=True)["cases"]
+    # The matched occurrence AND the unmatched tail row both survive.
+    citations = sorted(c["spec_citation"] for c in cases)
+    assert citations == ["first", "second"]
+
+
+def test_unmatched_curated_row_triggers_refusal() -> None:
+    """Error case: an unmatched curated row is enumerated so refresh refuses.
+
+    A curated row that no upstream occurrence claims is curation at stake; the
+    guard must count it and refuse (absent --force) rather than drop it silently.
+    """
+    upstream = [{"input": "NG_000000.1:g.26_31del", "keywords": [], "normalized": "a"}]
+    existing = {
+        "cases": [
+            {"input": "NG_000000.1:g.26_31del", "keywords": [], "normalized": "a"},
+            {"input": "NG_000000.1:g.26_31del", "keywords": [], "normalized": "b"},
+        ]
+    }
+    with pytest.raises(SystemExit) as excinfo:
+        refresh.build_refresh_payload(upstream, existing, force=False)
+    message = str(excinfo.value)
+    assert "refusing to refresh" in message
+    assert "1 curated row(s) upstream no longer ships" in message
+
+
 def test_hand_added_marker_is_found_in_any_keyword_position() -> None:
     """Boundary: prepending a keyword must not reclassify a hand row."""
     case = {"keywords": ["cluster:protein", f"{refresh.HAND_ADDED_PREFIX}protein"]}
     assert refresh._is_hand_added(case)
     assert not refresh._is_hand_added({"keywords": ["upstream"]})
     assert not refresh._is_hand_added({})
+
+
+def test_new_upstream_expected_value_field_survives_without_removal_marker() -> None:
+    """Expected case: an expected-value field upstream added after a row was
+    curated must arrive on refresh, not be mistaken for a deliberate removal.
+
+    The curated row predates upstream's `infos`; with no `removed_keys` marker
+    naming it, the field is genuinely new and must survive the merge.
+    """
+    upstream = [
+        {
+            "input": "NM_000000.1:c.1A>T",
+            "keywords": ["upstream"],
+            "normalized": "NM_000000.1:c.1A>T",
+            "infos": ["ISOMEINFO"],
+        }
+    ]
+    existing = {
+        "cases": [
+            {
+                "input": "NM_000000.1:c.1A>T",
+                "keywords": ["upstream"],
+                "normalized": "NM_000000.1:c.1A>T",
+                "spec_citation": "sub.md:1",
+            }
+        ]
+    }
+    merged = refresh.build_refresh_payload(upstream, existing, force=True)["cases"][0]
+    assert merged["infos"] == ["ISOMEINFO"]
+    assert merged["spec_citation"] == "sub.md:1"
+
+
+def test_removed_keys_marker_drops_field_and_persists() -> None:
+    """Boundary: a key named in `removed_keys` is dropped and the marker is
+    carried forward so the removal keeps holding across refreshes."""
+    upstream = [
+        {
+            "input": "NM_000000.1:g.5del",
+            "keywords": ["upstream"],
+            "normalized": "NM_000000.1:n.5del",
+        }
+    ]
+    existing = {
+        "cases": [
+            {
+                "input": "NM_000000.1:g.5del",
+                "keywords": ["upstream"],
+                "removed_keys": ["normalized"],
+                "errors": ["ECOORDINATESYSTEMMISMATCH"],
+            }
+        ]
+    }
+    merged = refresh.build_refresh_payload(upstream, existing, force=True)["cases"][0]
+    assert "normalized" not in merged
+    assert merged["removed_keys"] == ["normalized"]
+    assert merged["errors"] == ["ECOORDINATESYSTEMMISMATCH"]
+
+
+def test_removed_keys_marker_triggers_refusal_when_field_absent_upstream() -> None:
+    """Error case: a `removed_keys` marker is curation even when upstream no
+    longer ships the removed field.
+
+    When upstream still shipped the removed field, the merge deleted it and the
+    value difference alone could have tripped the refusal gate. But once upstream
+    drops the field too, there is no value difference left — only the marker. The
+    marker is still curation the refresh must reconcile (resurrecting the key on a
+    later upstream re-add would flip the row PASS -> FAIL), so it must trip the
+    guard on its own, absent --force.
+    """
+    upstream = [{"input": "NM_000000.1:g.5del", "keywords": ["upstream"]}]
+    existing = {
+        "cases": [
+            {
+                "input": "NM_000000.1:g.5del",
+                "keywords": ["upstream"],
+                "removed_keys": ["normalized"],
+            }
+        ]
+    }
+    # Forcing carries the marker forward unchanged (no value to delete).
+    forced = refresh.build_refresh_payload(upstream, existing, force=True)["cases"][0]
+    assert forced["removed_keys"] == ["normalized"]
+    assert "normalized" not in forced
+    # Without --force, the marker alone is enough to refuse.
+    with pytest.raises(SystemExit) as excinfo:
+        refresh.build_refresh_payload(upstream, existing, force=False)
+    message = str(excinfo.value)
+    assert "refusing to refresh" in message
+    assert "1 upstream row(s) with deliberately-removed expected values" in message
 
 
 def test_refuses_when_curation_present_and_not_forced() -> None:
@@ -189,7 +333,11 @@ def test_refuses_when_curation_present_and_not_forced() -> None:
     assert "refusing to refresh" in message
     assert "1 hand-added case(s)" in message
     assert "1 upstream row(s) carrying per-case dispositions" in message
+    # c.1A>T (protein_description) and g.5del (its hand-added `errors`) are both
+    # genuine value corrections; the g.5del row is ALSO a deliberate removal,
+    # now counted separately rather than conflated with the corrections.
     assert "2 upstream row(s) whose expected values were hand-corrected" in message
+    assert "1 upstream row(s) with deliberately-removed expected values" in message
 
 
 def test_fresh_import_against_empty_fixture_proceeds() -> None:
