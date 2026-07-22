@@ -9,21 +9,21 @@
 //! not be used."*
 //!
 //! ferro's mode-aware error handling distinguishes these correctly:
-//! - `Ter` and `*` (with digits OR `?`) are parser-native and round-trip
-//!   silently in every mode.
+//! - `Ter` and `*` (with digits OR `?`) are parser-native and accepted in
+//!   every mode, canonicalizing to the spec-preferred three-letter `Ter` on
+//!   Display with no warning. `*` is a valid glyph, not a deprecated form
+//!   (#1114).
 //! - `X` (with digits OR `?`) triggers **W3010 DeprecatedFrameshiftX**:
 //!   strict rejects, lenient rewrites → `Ter` + warning, silent rewrites
 //!   silently.
-//! - `*` ALSO triggers **W3009 DeprecatedFrameshiftStar** at the
-//!   preprocessor level (ferro is stricter than the spec here, treating
-//!   `*` as deprecated and canonicalizing to `Ter`). Same mode mapping.
 //!
-//! This file pins all four lanes — `fsXN`, `fsX?`, `fs*N`, `fs*?` — in
-//! both lenient (warn-and-correct) and strict (reject) modes, plus the
-//! canonical `fsTerN` / `fsTer?` round-trip. Closes the gap surfaced
-//! while investigating #81 D1: previously `fsX?` was rejected outright
-//! by the parser (corrector required digits after `X`), inconsistent
-//! with the digit-bearing `fsXN` lenient path.
+//! This file pins the `fsXN` / `fsX?` deprecated lanes (lenient warn-and-
+//! correct, strict reject), the spec-valid `fs*N` / `fs*?` lanes (accepted
+//! in every mode, canonicalized to `Ter`, no warning), and the canonical
+//! `fsTerN` / `fsTer?` round-trip. Closes the gap surfaced while
+//! investigating #81 D1: previously `fsX?` was rejected outright by the
+//! parser (corrector required digits after `X`), inconsistent with the
+//! digit-bearing `fsXN` lenient path.
 
 use ferro_hgvs::error_handling::{ErrorConfig, ErrorType};
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
@@ -32,6 +32,10 @@ const ACC: &str = "NP_000079.2";
 
 fn lenient() -> ErrorConfig {
     ErrorConfig::lenient()
+}
+
+fn silent() -> ErrorConfig {
+    ErrorConfig::silent()
 }
 
 fn strict() -> ErrorConfig {
@@ -130,38 +134,47 @@ fn strict_rejects_fs_x_question_per_checklist_63() {
 }
 
 // =====================================================================
-// W3009 — fs* (one-letter Star spelling, spec-valid but ferro deprecates)
+// fs* — one-letter Star spelling: spec-valid (checklist.md:63), parser-
+// native. Accepted in every mode, canonicalized to `Ter`, no W3009.
 // =====================================================================
 
+/// `*` is a valid frameshift-stop glyph: accepted in ALL modes (strict,
+/// lenient, silent), canonicalized to the three-letter `Ter` on Display, with
+/// no warning at all — it is not a correction, it is native acceptance (#1114).
+fn star_accepted_as_ter(input: &str, expected_display: &str) {
+    for config in [strict(), lenient(), silent()] {
+        let result = parse_hgvs_with_config(input, config)
+            .unwrap_or_else(|e| panic!("must accept {input:?}: {e}"));
+        assert_eq!(
+            result.result.to_string(),
+            expected_display,
+            "Display mismatch for {input:?}",
+        );
+        assert!(
+            result.warnings.is_empty(),
+            "{input:?} must be accepted natively with no warning (not corrected); \
+             got {:?}",
+            result.warnings,
+        );
+    }
+}
+
 #[test]
-fn lenient_rewrites_fs_star_n_with_digits() {
-    lenient_rewrites_to(
+fn fs_star_n_with_digits_accepted_as_ter() {
+    star_accepted_as_ter(
         &format!("{ACC}:p.Arg97fs*23"),
         &format!("{ACC}:p.Arg97fsTer23"),
-        ErrorType::DeprecatedFrameshiftStar,
     );
 }
 
 #[test]
-fn lenient_rewrites_fs_star_question_uncertain() {
-    // `fs*?` goes through the corrector (same mode mapping as `fs*N`); the
-    // deprecated `*?` rewrites to the canonical unknown-stop marker `fsTer?`
-    // (preserved, no longer collapsed to bare `fs`).
-    lenient_rewrites_to(
+fn fs_star_question_uncertain_accepted_as_ter() {
+    // `fs*?` (uncertain stop position) is parser-native; it canonicalizes to
+    // the unknown-stop marker `fsTer?`.
+    star_accepted_as_ter(
         &format!("{ACC}:p.Arg97fs*?"),
         &format!("{ACC}:p.Arg97fsTer?"),
-        ErrorType::DeprecatedFrameshiftStar,
     );
-}
-
-#[test]
-fn strict_rejects_fs_star_n() {
-    strict_rejects(&format!("{ACC}:p.Arg97fs*23"), "Deprecated");
-}
-
-#[test]
-fn strict_rejects_fs_star_question() {
-    strict_rejects(&format!("{ACC}:p.Arg97fs*?"), "Deprecated");
 }
 
 // =====================================================================

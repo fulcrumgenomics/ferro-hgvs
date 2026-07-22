@@ -781,14 +781,18 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         CodeInfo {
             code: "W3007",
             name: "DeprecatedStopCodonStar",
-            summary: "Deprecated '*' for stop codon in protein substitution.",
-            explanation: "The HGVS checklist permits both 'Ter' and '*' to indicate a \
-                translation stop codon, but the three-letter 'Ter' is the preferred form. \
-                In lenient/silent modes 'p.Arg97*' is rewritten to 'p.Arg97Ter'.",
+            summary: "'*' stop-codon glyph (spec-valid; retained but no longer emitted).",
+            explanation: "Per the HGVS checklist ('Ter' or '*' should be used for a \
+                translation stop codon; 'X' should not), '*' is a spec-valid glyph \
+                co-equal with 'Ter' — not a deprecated form. The parser accepts '*' \
+                natively in every mode (e.g. 'p.Arg97*') and canonicalizes it to the \
+                preferred three-letter 'Ter' on display, so no correction or warning is \
+                produced. This code is retained (python-exposed, stable discriminant) but \
+                is never emitted (#1114).",
             category: CodeCategory::Format,
-            bad_examples: &["NP_000079.2:p.Arg97*", "NP_000079.2:p.Trp10*"],
+            bad_examples: &[],
             good_examples: &["NP_000079.2:p.Arg97Ter", "NP_000079.2:p.Trp10Ter"],
-            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            mode_behavior: Some(ModeBehavior::accepted()),
             hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/checklist/"),
             related_codes: &["W3008", "W3009", "W3010"],
         },
@@ -820,17 +824,22 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         CodeInfo {
             code: "W3009",
             name: "DeprecatedFrameshiftStar",
-            summary: "Deprecated 'fs*N' frameshift termination notation.",
-            explanation: "The canonical HGVS frameshift form uses 'fsTerN', e.g. \
-                'p.Arg123LysfsTer34'. The 'fs*N' alternative is permitted but discouraged. \
-                In lenient/silent modes 'p.Arg97fs*23' is rewritten to 'p.Arg97fsTer23'.",
+            summary: "'fs*N' frameshift-termination glyph (spec-valid; retained but no longer \
+                emitted).",
+            explanation: "Per HGVS (the checklist's 'Ter' or '*' guidance, and \
+                'protein/frameshift.md', which lists 'p.Arg97Profs*23' as a valid example), \
+                'fs*N' is a spec-valid frameshift-termination glyph — not a deprecated form. \
+                The parser accepts it natively in every mode (e.g. 'p.Arg97fs*23') and \
+                canonicalizes it to the preferred 'fsTerN' on display, so no correction or \
+                warning is produced. This code is retained (python-exposed, stable \
+                discriminant) but is never emitted (#1114).",
             category: CodeCategory::Format,
-            bad_examples: &["NP_000079.2:p.Arg97fs*23", "NP_000079.2:p.Ser539Alafs*110"],
+            bad_examples: &[],
             good_examples: &[
                 "NP_000079.2:p.Arg97fsTer23",
                 "NP_000079.2:p.Ser539AlafsTer110",
             ],
-            mode_behavior: Some(ModeBehavior::standard_correctable()),
+            mode_behavior: Some(ModeBehavior::accepted()),
             hgvs_spec_url: Some(
                 "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/frameshift/",
             ),

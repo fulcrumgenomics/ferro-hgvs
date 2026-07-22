@@ -307,12 +307,12 @@
     },
     {
       "code": "W3007",
-      "description": "DeprecatedStopCodonStar — 'p.Arg97*' rewritten to 'p.Arg97Ter' (Ter is the preferred stop-codon form).",
-      "spec_section": "recommendations/checklist.md (HGVS checklist: 'Ter' is the preferred form for the translation stop codon; '*' is permitted but discouraged)",
+      "description": "DeprecatedStopCodonStar — retained for compatibility but no longer emitted: '*' is a spec-valid stop-codon glyph, accepted natively and canonicalized to 'Ter' by the parser (#1114).",
+      "spec_section": "recommendations/checklist.md:63 ('Ter or * should be used to indicate a translation stop codon; the X should not be used') — '*' is co-equal with 'Ter', not deprecated",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/checklist/",
-      "status": "enforced",
-      "spec_section_notes": "correct_deprecated_protein_forms in src/error_handling/corrections.rs returns ErrorType::DeprecatedStopCodonStar; emitted by preprocessor Phase 6b (deprecated-form rewrites) in lenient/silent modes. Strict mode rejects the input. Closes #125.",
-      "follow_up_issues": [125]
+      "status": "registered",
+      "spec_section_notes": "The '*' stop-codon glyph is spec-sanctioned (checklist.md:63), so correct_deprecated_protein_forms no longer detects it — the core parser accepts '*' natively as Ter and Display canonicalizes it. The ErrorType variant is retained (python-exposed) but never emitted. Reclassified from `enforced` to `registered` in #1114 (originally #125).",
+      "follow_up_issues": [125, 1114]
     },
     {
       "code": "W3008",
@@ -325,12 +325,12 @@
     },
     {
       "code": "W3009",
-      "description": "DeprecatedFrameshiftStar — 'p.Arg97fs*23' rewritten to 'p.Arg97fsTer23'.",
-      "spec_section": "recommendations/protein/variant/frameshift.md (canonical 'fsTerN'; 'fs*N' is permitted but discouraged)",
+      "description": "DeprecatedFrameshiftStar — retained for compatibility but no longer emitted: 'fs*N' is a spec-valid frameshift-termination glyph, accepted natively and canonicalized to 'fsTerN' by the parser (#1114).",
+      "spec_section": "recommendations/checklist.md:63 ('Ter or * should be used ... the X should not be used'); recommendations/protein/frameshift.md lists 'p.Arg97Profs*23' as a valid example — 'fs*N' is not deprecated",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/frameshift/",
-      "status": "enforced",
-      "spec_section_notes": "correct_deprecated_protein_forms in src/error_handling/corrections.rs returns ErrorType::DeprecatedFrameshiftStar; emitted by preprocessor Phase 6b (deprecated-form rewrites) in lenient/silent modes. Strict mode rejects the input. Closes #125.",
-      "follow_up_issues": [125]
+      "status": "registered",
+      "spec_section_notes": "The 'fs*N' glyph is spec-sanctioned, so correct_deprecated_protein_forms no longer detects it — the core parser accepts 'fs*N' natively as fsTerN and Display canonicalizes it. The ErrorType variant is retained (python-exposed) but never emitted. Reclassified from `enforced` to `registered` in #1114 (originally #125).",
+      "follow_up_issues": [125, 1114]
     },
     {
       "code": "W3010",

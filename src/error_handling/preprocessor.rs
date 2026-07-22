@@ -476,12 +476,15 @@ impl InputPreprocessor {
             }
         }
 
-        // Phase 6b: Rewrite deprecated stop-codon and frameshift forms in protein
-        // descriptions (SVA-003..SVA-006, issue #125):
-        //   p.Arg97*       → p.Arg97Ter         (W3007 DeprecatedStopCodonStar)
+        // Phase 6b: Rewrite deprecated `X` stop-codon and frameshift forms in
+        // protein descriptions (SVA-004/SVA-005, issue #125):
         //   p.Arg97X       → p.Arg97Ter         (W3008 DeprecatedStopCodonX)
-        //   p.Arg97fs*23   → p.Arg97fsTer23     (W3009 DeprecatedFrameshiftStar)
         //   p.Arg97fsX23   → p.Arg97fsTer23     (W3010 DeprecatedFrameshiftX)
+        //
+        // The `*` spellings (`p.Arg97*`, `p.Arg97fs*23`) are NOT rewritten
+        // here: `*` is a spec-sanctioned stop-codon glyph co-equal with `Ter`
+        // (`checklist.md:63`), so it is left for the core parser to accept
+        // natively and `Display`-canonicalize to `Ter` (#1114).
         //
         // Must run BEFORE Phase 6c (single-letter expansion): otherwise the
         // `X` in `p.Arg97X` would be expanded to `Xaa` ("any amino acid") and
@@ -489,7 +492,7 @@ impl InputPreprocessor {
         //
         // Each detection's action is resolved independently and applied
         // per-correction, so mixing `Accept` with `WarnCorrect`/`SilentCorrect`
-        // overrides across the four W-codes yields a partial rewrite —
+        // overrides across the `X` W-codes yields a partial rewrite —
         // Accept-marked tokens are preserved even when sibling detections in
         // the same input are rewritten.
         let (corrected_full, corrections) = correct_deprecated_protein_forms(&current);
@@ -513,7 +516,8 @@ impl InputPreprocessor {
                                 .with_suggestion(corrected_full.clone())
                                 .with_hint(
                                     "HGVS uses 'Ter' (or 'fsTerN') for translation termination; \
-                                    'X' and '*' are deprecated alternatives.",
+                                    'X' is a deprecated alternative. ('*' is a spec-valid glyph \
+                                    co-equal with 'Ter' and is accepted as-is.)",
                                 ),
                         ),
                     );
@@ -1630,11 +1634,14 @@ mod tests {
     // ----------------------------------------------------------------------
 
     #[test]
-    fn test_preprocessor_strict_rejects_deprecated_stop_star() {
+    fn test_preprocessor_strict_accepts_star_stop() {
+        // Strict mode accepts the spec-valid `*` glyph (#1114), preserving it
+        // verbatim for native parsing rather than rejecting it.
         let preprocessor = InputPreprocessor::strict();
         let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
-        assert!(!result.success);
-        assert!(result.error.is_some());
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97*");
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
@@ -1645,10 +1652,13 @@ mod tests {
     }
 
     #[test]
-    fn test_preprocessor_strict_rejects_deprecated_frameshift_star() {
+    fn test_preprocessor_strict_accepts_frameshift_star() {
+        // Strict mode accepts the spec-valid `fs*N` glyph (#1114).
         let preprocessor = InputPreprocessor::strict();
         let result = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
-        assert!(!result.success);
+        assert!(result.success);
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97fs*23");
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
@@ -1659,16 +1669,15 @@ mod tests {
     }
 
     #[test]
-    fn test_preprocessor_lenient_corrects_deprecated_stop_star() {
+    fn test_preprocessor_accepts_star_stop_uncorrected() {
+        // `*` is a spec-valid stop-codon glyph (#1114): the preprocessor
+        // preserves it verbatim (no correction, no warning) and the core
+        // parser canonicalizes it to `Ter` downstream.
         let preprocessor = InputPreprocessor::lenient();
         let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
         assert!(result.success);
-        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97Ter");
-        assert_eq!(result.warnings.len(), 1);
-        assert_eq!(
-            result.warnings[0].error_type,
-            ErrorType::DeprecatedStopCodonStar
-        );
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97*");
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
@@ -1685,16 +1694,15 @@ mod tests {
     }
 
     #[test]
-    fn test_preprocessor_lenient_corrects_deprecated_frameshift_star() {
+    fn test_preprocessor_accepts_frameshift_star_uncorrected() {
+        // `fs*N` is a spec-valid frameshift-termination glyph (#1114): the
+        // preprocessor preserves it verbatim (no correction, no warning); the
+        // core parser canonicalizes it to `fsTer` downstream.
         let preprocessor = InputPreprocessor::lenient();
         let result = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
         assert!(result.success);
-        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97fsTer23");
-        assert_eq!(result.warnings.len(), 1);
-        assert_eq!(
-            result.warnings[0].error_type,
-            ErrorType::DeprecatedFrameshiftStar
-        );
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97fs*23");
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
@@ -1713,12 +1721,8 @@ mod tests {
     #[test]
     fn test_preprocessor_silent_corrects_deprecated_without_warnings() {
         let preprocessor = InputPreprocessor::silent();
-        for input in [
-            "NP_000079.2:p.Arg97*",
-            "NP_000079.2:p.Arg97X",
-            "NP_000079.2:p.Arg97fs*23",
-            "NP_000079.2:p.Arg97fsX23",
-        ] {
+        // Deprecated `X` glyphs are corrected to `Ter` silently.
+        for input in ["NP_000079.2:p.Arg97X", "NP_000079.2:p.Arg97fsX23"] {
             let result = preprocessor.preprocess(input);
             assert!(result.success, "expected success for {}", input);
             assert!(!result.has_warnings(), "expected no warnings for {}", input);
@@ -1726,6 +1730,18 @@ mod tests {
                 result.preprocessed.contains("Ter"),
                 "expected Ter in {}",
                 result.preprocessed
+            );
+        }
+        // Spec-valid `*` glyphs are accepted unchanged — no correction, no
+        // warning; the core parser canonicalizes them to `Ter` (#1114).
+        for input in ["NP_000079.2:p.Arg97*", "NP_000079.2:p.Arg97fs*23"] {
+            let result = preprocessor.preprocess(input);
+            assert!(result.success, "expected success for {}", input);
+            assert!(!result.has_warnings(), "expected no warnings for {}", input);
+            assert_eq!(
+                result.preprocessed, input,
+                "`*` glyph must be preserved for {}",
+                input
             );
         }
     }
@@ -1757,18 +1773,16 @@ mod tests {
     }
 
     #[test]
-    fn test_preprocessor_lenient_compound_protein_allele_two_warnings() {
+    fn test_preprocessor_lenient_compound_protein_allele_one_warning() {
         let preprocessor = InputPreprocessor::lenient();
         let result = preprocessor.preprocess("NP_000079.2:p.[Arg97*;Arg100X]");
         assert!(result.success);
-        assert_eq!(result.preprocessed, "NP_000079.2:p.[Arg97Ter;Arg100Ter]");
-        assert_eq!(result.warnings.len(), 2);
+        // Only the deprecated `X` member is corrected; the spec-valid `*` is
+        // preserved for native parsing (#1114).
+        assert_eq!(result.preprocessed, "NP_000079.2:p.[Arg97*;Arg100Ter]");
+        assert_eq!(result.warnings.len(), 1);
         assert_eq!(
             result.warnings[0].error_type,
-            ErrorType::DeprecatedStopCodonStar
-        );
-        assert_eq!(
-            result.warnings[1].error_type,
             ErrorType::DeprecatedStopCodonX
         );
     }
@@ -1776,36 +1790,52 @@ mod tests {
     #[test]
     fn test_preprocessor_lenient_idempotent_on_corrected_output() {
         // Re-running the preprocessor on its own output yields no further
-        // deprecated-form warnings.
+        // deprecated-form warnings (uses the deprecated `X` glyph, which IS
+        // corrected — `*` is no longer a correctable form, #1114).
         let preprocessor = InputPreprocessor::lenient();
-        let first = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
+        let first = preprocessor.preprocess("NP_000079.2:p.Arg97fsX23");
+        assert_eq!(first.preprocessed, "NP_000079.2:p.Arg97fsTer23");
         let second = preprocessor.preprocess(&first.preprocessed);
         assert_eq!(second.preprocessed, first.preprocessed);
         assert!(!second.has_warnings());
     }
 
     #[test]
-    fn test_preprocessor_override_accept_keeps_deprecated_form() {
-        // When the override is Accept, the deprecated form passes through
-        // unchanged with no warning.
+    fn test_preprocessor_override_accept_x_falls_through_to_xaa() {
+        // When DeprecatedStopCodonX is Accept-overridden, the `X` is not
+        // treated as a stop codon and emits no warning; it then falls through
+        // to single-letter expansion (Phase 6c) and becomes the canonical
+        // `Xaa` ("any amino acid"). (This test used `*` before #1114; `*` is
+        // no longer a detected form, so it exercises the `X` code instead.)
         let config = ErrorConfig::lenient()
-            .with_override(ErrorType::DeprecatedStopCodonStar, ErrorOverride::Accept);
+            .with_override(ErrorType::DeprecatedStopCodonX, ErrorOverride::Accept);
         let preprocessor = InputPreprocessor::new(config);
-        let result = preprocessor.preprocess("NP_000079.2:p.Arg97*");
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97X");
         assert!(result.success);
-        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97*");
-        assert!(!result.has_warnings());
+        assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97Xaa");
+        // The stop-codon-X detection was Accepted (no W3008 warning); the only
+        // warning is the downstream single-letter `X` → `Xaa` expansion.
+        assert!(result
+            .warnings
+            .iter()
+            .all(|w| w.error_type != ErrorType::DeprecatedStopCodonX));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::SingleLetterAminoAcid));
     }
 
     #[test]
     fn test_preprocessor_override_silent_in_strict_mode() {
-        // SilentCorrect override in strict mode rewrites without warning.
+        // SilentCorrect override in strict mode rewrites without warning. Uses
+        // the deprecated `X` glyph (W3010), since `*` is no longer a
+        // correctable form (#1114).
         let config = ErrorConfig::strict().with_override(
-            ErrorType::DeprecatedFrameshiftStar,
+            ErrorType::DeprecatedFrameshiftX,
             ErrorOverride::SilentCorrect,
         );
         let preprocessor = InputPreprocessor::new(config);
-        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fs*23");
+        let result = preprocessor.preprocess("NP_000079.2:p.Arg97fsX23");
         assert!(result.success);
         assert_eq!(result.preprocessed, "NP_000079.2:p.Arg97fsTer23");
         assert!(!result.has_warnings());
@@ -1824,22 +1854,38 @@ mod tests {
 
     #[test]
     fn test_preprocessor_partial_accept_only_rewrites_non_accept_codes() {
-        // With DeprecatedStopCodonStar = Accept and DeprecatedStopCodonX left
-        // at the lenient default (WarnCorrect), the `*` must remain literal
-        // while the `X` is rewritten to `Ter`. Per-correction action
-        // resolution — without it, the Accept override is silently ignored
-        // when any sibling detection is non-Accept.
+        // Per-correction action resolution: with DeprecatedStopCodonX = Accept
+        // and DeprecatedFrameshiftX left at the lenient default (WarnCorrect),
+        // the Accept applies only to the stop `X` (which is not corrected to
+        // `Ter` and instead falls through to `Xaa` expansion) while the
+        // frameshift `X` is still rewritten to `Ter` with its warning. Without
+        // per-correction resolution, the Accept override would be silently
+        // ignored when a sibling detection is non-Accept. (Uses the two `X`
+        // codes since `*` is no longer a detected form — #1114.)
         let config = ErrorConfig::lenient()
-            .with_override(ErrorType::DeprecatedStopCodonStar, ErrorOverride::Accept);
+            .with_override(ErrorType::DeprecatedStopCodonX, ErrorOverride::Accept);
         let preprocessor = InputPreprocessor::new(config);
-        let result = preprocessor.preprocess("NP_000079.2:p.[Arg97*;Arg100X]");
+        let result = preprocessor.preprocess("NP_000079.2:p.[Arg97X;Arg100fsX23]");
         assert!(result.success);
-        assert_eq!(result.preprocessed, "NP_000079.2:p.[Arg97*;Arg100Ter]");
-        assert_eq!(result.warnings.len(), 1);
         assert_eq!(
-            result.warnings[0].error_type,
-            ErrorType::DeprecatedStopCodonX
+            result.preprocessed,
+            "NP_000079.2:p.[Arg97Xaa;Arg100fsTer23]"
         );
+        // Stop-X was Accepted (no W3008) → falls through to `Xaa`
+        // (SingleLetterAminoAcid); the sibling frameshift-X was still corrected
+        // to `fsTer23` (W3010). The Accept override applied per-correction.
+        assert!(result
+            .warnings
+            .iter()
+            .all(|w| w.error_type != ErrorType::DeprecatedStopCodonX));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::DeprecatedFrameshiftX));
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| w.error_type == ErrorType::SingleLetterAminoAcid));
     }
 
     // ===== Issue #115: deprecated multi-base substitution (W3003) =====

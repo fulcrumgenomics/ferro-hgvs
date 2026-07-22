@@ -126,11 +126,16 @@ pub enum ErrorType {
     /// This format was used in older databases but is not valid per current HGVS spec.
     OldAlleleFormat,
 
-    /// Deprecated `*` for stop codon in protein substitution position.
+    /// `*` for stop codon in protein substitution position.
     ///
-    /// Per HGVS checklist (`recommendations/checklist.md`), `Ter` and `*` may
-    /// both indicate a translation stop codon, but the three-letter `Ter` is
-    /// preferred. Example: `p.Arg97*` (corrected to `p.Arg97Ter`).
+    /// **Retained for compatibility but no longer emitted (#1114).** Per HGVS
+    /// checklist (`recommendations/checklist.md:63`, "`Ter` or `*` should be
+    /// used ... the `X` should not be used"), `*` is a spec-valid stop-codon
+    /// glyph co-equal with `Ter` — not a deprecated form. The core parser
+    /// accepts `*` natively (e.g. `p.Arg97*`) and `Display` canonicalizes it
+    /// to the preferred three-letter `Ter`, so no correction/warning is
+    /// produced. This variant is kept (it is python-exposed with a stable
+    /// discriminant) but is never raised.
     DeprecatedStopCodonStar,
 
     /// Deprecated `X` for stop codon in protein substitution position.
@@ -142,12 +147,16 @@ pub enum ErrorType {
     /// Corrected to `p.Arg97Ter`.
     DeprecatedStopCodonX,
 
-    /// Deprecated `fs*N` frameshift termination notation.
+    /// `fs*N` frameshift termination notation.
     ///
-    /// Per HGVS frameshift recommendation (`recommendations/protein/frameshift.md`),
-    /// the canonical form is `fsTerN` (e.g. `p.Arg123LysfsTer34`). The `fs*N`
-    /// form is permitted as an alternative but `fsTerN` is preferred.
-    /// Example: `p.Arg97fs*23` (corrected to `p.Arg97fsTer23`).
+    /// **Retained for compatibility but no longer emitted (#1114).** Per HGVS
+    /// (`recommendations/checklist.md:63` and `protein/frameshift.md`, which
+    /// lists `p.Arg97Profs*23` as a valid example), `fs*N` is a spec-valid
+    /// frameshift-termination glyph — not a deprecated form. The core parser
+    /// accepts it natively (e.g. `p.Arg97fs*23`) and `Display` canonicalizes
+    /// it to the preferred `fsTerN`, so no correction/warning is produced.
+    /// This variant is kept (python-exposed with a stable discriminant) but
+    /// is never raised.
     DeprecatedFrameshiftStar,
 
     /// Deprecated `fsXN` frameshift termination notation.
@@ -593,10 +602,12 @@ impl ErrorType {
             ErrorType::TrailingAnnotation => "trailing protein annotation",
             ErrorType::MissingCoordinatePrefix => "missing coordinate type prefix",
             ErrorType::OldAlleleFormat => "old/deprecated allele format",
-            ErrorType::DeprecatedStopCodonStar => "deprecated '*' for stop codon (use 'Ter')",
+            ErrorType::DeprecatedStopCodonStar => {
+                "spec-valid '*' stop-codon glyph, canonicalized to 'Ter' (retained, not emitted)"
+            }
             ErrorType::DeprecatedStopCodonX => "deprecated 'X' for stop codon (use 'Ter')",
             ErrorType::DeprecatedFrameshiftStar => {
-                "deprecated 'fs*N' frameshift notation (use 'fsTerN')"
+                "spec-valid 'fs*N' frameshift glyph, canonicalized to 'fsTerN' (retained, not emitted)"
             }
             ErrorType::DeprecatedFrameshiftX => {
                 "deprecated 'fsXN' frameshift notation (use 'fsTerN')"
@@ -681,9 +692,12 @@ impl ErrorType {
             ErrorType::OldAlleleFormat => true,
             // RefSeqMismatch can be "corrected" by using the actual reference
             ErrorType::RefSeqMismatch => true,
-            ErrorType::DeprecatedStopCodonStar => true,
+            // The `*` glyphs are spec-valid and accepted natively (never
+            // corrected), so they are not correctable (#1114); only the `X`
+            // forms are rewritten.
+            ErrorType::DeprecatedStopCodonStar => false,
             ErrorType::DeprecatedStopCodonX => true,
-            ErrorType::DeprecatedFrameshiftStar => true,
+            ErrorType::DeprecatedFrameshiftStar => false,
             ErrorType::DeprecatedFrameshiftX => true,
             // Lenient mode warns without rewriting (warn_accept); strict rejects.
             ErrorType::DelSizeSuffix => false,
