@@ -242,8 +242,13 @@ fn minus_strand_codon_aligned_insertion() {
     let vp = VariantProjector::new(projector, provider);
     let res = vp.project("chr1:g.1005_1006insCCC", "NM_MINUS1.1").unwrap();
     let c = res.coding.unwrap().to_string();
-    assert!(c.starts_with("NM_MINUS1.1"), "got c. = {c}");
-    assert!(c.contains(":c."), "got c. = {c}");
+    // The genomic input's contig is retained as the c.-axis reference context
+    // (#1086), so the form is exactly `chr1(NM_MINUS1.1):c.…`. Pin the full
+    // context prefix so a future context-drop or malformed stamp is caught.
+    assert!(
+        c.starts_with("chr1(NM_MINUS1.1):c."),
+        "genomic input's contig must be retained as c.-axis context; got c. = {c}"
+    );
     assert!(!res.is_frameshift);
 }
 
