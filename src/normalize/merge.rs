@@ -1195,13 +1195,22 @@ fn build_naedit<P>(
     )
 }
 
-/// Coalesce runs of consecutive-residue substitutions in a **cis protein
-/// allele** into a single delins, per `protein/substitution.md:23`:
+/// Coalesce runs of consecutive-residue changes in a **cis protein allele**
+/// into a single delins (or a pure range deletion), per
+/// `protein/substitution.md:23` / `protein/delins.md:18`:
 ///
 /// > changes involving two or more consecutive amino acids are described as a
 /// > deletion/insertion variant (delins) […] the description
 /// > `p.Arg76_Cys77delinsSerTrp` is correct, the description
 /// > `p.[Arg76Ser;Cys77Trp]` is not correct.
+///
+/// "changes" is general: each member may be a single-residue **substitution**
+/// (contributing its alternative residue to the merged insert) or a
+/// single-residue **deletion** (contributing nothing) — e.g.
+/// `p.[Arg76Ser;Cys77del]` → `p.Arg76_Cys77delinsSer`, and `delins.md:41`'s
+/// `p.Cys28_Lys29delinsTrp` (del+sub). A run whose members are *all* deletions
+/// has an empty insert, so it collapses to a pure range deletion
+/// (`p.Arg76_Cys77del`) rather than an invalid empty `delins`.
 ///
 /// This is the protein-axis counterpart of the nucleotide adjacency merge that
 /// [`merge_consecutive_edits`] performs — the nucleotide path is positional on
@@ -1217,24 +1226,28 @@ fn build_naedit<P>(
 /// sorted into ascending residue order before runs are detected, so every
 /// permutation of one member set coalesces identically. Reordering is
 /// meaning-preserving here because every member has already been established to
-/// be a plain single-residue substitution on one shared accession — and the
-/// post-normalize display sort (#1098/#1101) puts cis members into exactly that
-/// residue order anyway, so an allele that does *not* coalesce still renders
-/// ascending. This is the protein-axis counterpart of #1103's sort-before-merge
-/// on the nucleotide axis; without it a descending-order allele fell through to
-/// the bracket form `protein/substitution.md:23` calls "not correct".
+/// be a plain single-residue substitution or deletion on one shared accession —
+/// and the post-normalize display sort (#1098/#1101) puts cis members into
+/// exactly that residue order anyway, so an allele that does *not* coalesce
+/// still renders ascending. This is the protein-axis counterpart of #1103's
+/// sort-before-merge on the nucleotide axis; without it a descending-order
+/// allele fell through to the bracket form `protein/substitution.md:23` calls
+/// "not correct".
 ///
-/// Returns `Some` only when at least one run of ≥2 adjacent substitutions is
-/// merged; a fully-merged allele collapses to a bare [`HgvsVariant::Protein`],
-/// a partial merge to a smaller [`HgvsVariant::Allele`]. Returns `None` — leave
+/// Returns `Some` only when at least one run of ≥2 adjacent members is merged;
+/// a fully-merged allele collapses to a bare [`HgvsVariant::Protein`], a
+/// partial merge to a smaller [`HgvsVariant::Allele`]. Returns `None` — leave
 /// the allele untouched — when it is conservatively out of scope:
 ///   - the phase is not cis (trans / unknown / mosaic / … are independent),
-///   - any member is not a single-residue protein substitution (mixed edit
-///     kinds are out of scope for this narrow rule),
+///   - any member is not a single-residue protein substitution or deletion
+///     (other edit kinds — dup / ins / inv / fs / ext / multi-residue — are
+///     out of scope for this narrow rule),
+///   - any substitution member changes the residue to `Ter` (a `delins…Ter…`
+///     run would list residues after the stop — spec-invalid),
 ///   - two members share a residue position (a `n,n` pair is the contradictory
 ///     same-residue case, not a delins), or
 ///   - a run would mix predicted `( )` and certain members (ambiguous).
-pub(crate) fn coalesce_protein_adjacent_substitutions(
+pub(crate) fn coalesce_protein_adjacent_changes(
     allele: &crate::hgvs::variant::AlleleVariant,
 ) -> Option<HgvsVariant> {
     use crate::hgvs::edit::{AminoAcidSeq, ProteinEdit};
@@ -1246,13 +1259,16 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
         return None;
     }
 
-    /// One member reduced to a single-residue substitution. `source` is the
-    /// member's index in `allele.variants`, kept so a substitution that ends up
-    /// in no run is re-emitted verbatim even after the residue-order sort.
-    struct Sub {
+    /// One member reduced to a single-residue edit: a substitution
+    /// (`alternative = Some(aa)`, contributes that residue to the merged
+    /// insert) or a deletion (`alternative = None`, contributes nothing).
+    /// `source` is the member's index in `allele.variants`, kept so a member
+    /// that ends up in no run is re-emitted verbatim even after the
+    /// residue-order sort (#1116).
+    struct Member {
         pos: u64,
         reference: AminoAcid,
-        alternative: AminoAcid,
+        alternative: Option<AminoAcid>,
         predicted: bool,
         source: usize,
     }
@@ -1264,7 +1280,7 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
     let accession = first.accession.clone();
     let gene_symbol = first.gene_symbol.clone();
 
-    let mut subs: Vec<Sub> = Vec::with_capacity(allele.variants.len());
+    let mut members: Vec<Member> = Vec::with_capacity(allele.variants.len());
     for (source, v) in allele.variants.iter().enumerate() {
         let HgvsVariant::Protein(pv) = v else {
             return None;
@@ -1287,8 +1303,20 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
             return None;
         }
         let (alternative, predicted) = match &pv.loc_edit.edit {
-            Mu::Certain(ProteinEdit::Substitution { alternative, .. }) => (*alternative, false),
-            Mu::Uncertain(ProteinEdit::Substitution { alternative, .. }) => (*alternative, true),
+            Mu::Certain(ProteinEdit::Substitution { alternative, .. }) => {
+                (Some(*alternative), false)
+            }
+            Mu::Uncertain(ProteinEdit::Substitution { alternative, .. }) => {
+                (Some(*alternative), true)
+            }
+            // A single-residue deletion contributes no residue to the merged
+            // insert. `start == end` was already enforced above, so this is a
+            // one-residue `del` (a multi-residue `del` range has `s != e` and
+            // bails). A deletion carrying an explicit deleted-sequence or count
+            // annotation still describes a single residue here, so it merges
+            // the same way.
+            Mu::Certain(ProteinEdit::Deletion { .. }) => (None, false),
+            Mu::Uncertain(ProteinEdit::Deletion { .. }) => (None, true),
             _ => return None,
         };
         // A to-`Ter` (nonsense) substitution is out of scope: the spec forbids
@@ -1296,10 +1324,10 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
         // unparseable and spec-invalid (protein/substitution.md:20,
         // protein/delins.md:45). Leave such an allele untouched — collapsing a
         // nonsense change toward `p.<ref><pos>Ter` is a separate rule.
-        if alternative == AminoAcid::Ter {
+        if alternative == Some(AminoAcid::Ter) {
             return None;
         }
-        subs.push(Sub {
+        members.push(Member {
             pos: s.number,
             reference: s.aa,
             alternative,
@@ -1309,39 +1337,54 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
     }
 
     // Sort into ascending residue order so run detection — and therefore the
-    // coalesced `delins` payload — is independent of the author's member order
-    // (#1116). The sort is stable, so members sharing a residue stay adjacent
-    // in input order and are caught by the duplicate check below.
-    subs.sort_by_key(|s| s.pos);
+    // coalesced payload — is independent of the author's member order (#1116).
+    // The sort is stable, so members sharing a residue stay adjacent and are
+    // caught by the duplicate check below.
+    members.sort_by_key(|m| m.pos);
 
     // Two members at the same residue are a contradiction, not a delins: the
     // allele states two different changes to one amino acid. Leave it untouched.
-    if subs.windows(2).any(|w| w[1].pos == w[0].pos) {
+    if members.windows(2).any(|w| w[1].pos == w[0].pos) {
         return None;
     }
 
     let mut merged: Vec<HgvsVariant> = Vec::new();
     let mut changed = false;
     let mut i = 0;
-    while i < subs.len() {
+    while i < members.len() {
         let mut j = i;
-        while j + 1 < subs.len() && subs[j + 1].pos == subs[j].pos + 1 {
+        while j + 1 < members.len() && members[j + 1].pos == members[j].pos + 1 {
             j += 1;
         }
         if j > i {
-            // A run of ≥2 strictly-adjacent substitutions → one delins spanning
-            // residues `i..=j`, inserting each member's alternative in order.
-            let all_predicted = subs[i..=j].iter().all(|s| s.predicted);
-            let any_predicted = subs[i..=j].iter().any(|s| s.predicted);
+            // A run of ≥2 strictly-adjacent members → one edit spanning
+            // residues `i..=j`. The inserted sequence is each member's
+            // alternative in order, with deletions contributing nothing.
+            let all_predicted = members[i..=j].iter().all(|m| m.predicted);
+            let any_predicted = members[i..=j].iter().any(|m| m.predicted);
             if any_predicted && !all_predicted {
                 return None;
             }
             let loc = ProtInterval::new(
-                ProtPos::new(subs[i].reference, subs[i].pos),
-                ProtPos::new(subs[j].reference, subs[j].pos),
+                ProtPos::new(members[i].reference, members[i].pos),
+                ProtPos::new(members[j].reference, members[j].pos),
             );
-            let edit = ProteinEdit::Delins {
-                sequence: AminoAcidSeq::new(subs[i..=j].iter().map(|s| s.alternative).collect()),
+            let inserted: Vec<AminoAcid> = members[i..=j]
+                .iter()
+                .filter_map(|m| m.alternative)
+                .collect();
+            let edit = if inserted.is_empty() {
+                // Every member in the run is a deletion, so there is nothing to
+                // insert: emit a pure range deletion, not an (invalid) empty
+                // `delins`.
+                ProteinEdit::Deletion {
+                    sequence: None,
+                    count: None,
+                }
+            } else {
+                ProteinEdit::Delins {
+                    sequence: AminoAcidSeq::new(inserted),
+                }
             };
             let loc_edit = if all_predicted {
                 LocEdit::new_predicted(loc, edit)
@@ -1355,10 +1398,10 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
             }));
             changed = true;
         } else {
-            // A lone substitution keeps its original member verbatim (indexed
-            // through `source`, since `subs` is in residue order, not input
-            // order).
-            merged.push(allele.variants[subs[i].source].clone());
+            // A lone member (substitution or deletion) keeps its original
+            // variant verbatim, indexed through `source` since `members` is in
+            // residue order, not input order.
+            merged.push(allele.variants[members[i].source].clone());
         }
         i = j + 1;
     }
