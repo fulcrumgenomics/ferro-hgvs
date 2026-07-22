@@ -33,6 +33,7 @@ use std::process::ExitCode;
 use clap::Parser as ClapParser;
 use ferro_hgvs::conformance::reference_window::WindowFixture;
 use ferro_hgvs::conformance::spec_projection;
+use ferro_hgvs::conformance::{Expectation, NormativeLevel, Status};
 use serde::{Deserialize, Serialize};
 
 #[path = "common/spec_harvest.rs"]
@@ -203,15 +204,15 @@ pub struct Row {
     /// `spec-mandated` when the spec states the expected value outright;
     /// `pinned-baseline` when it does not and the row records current
     /// behaviour instead. **Never** invent a spec expectation.
-    pub expectation: String,
+    pub expectation: Expectation,
     /// RFC 2119 level. Only `must` rows may ever hard-fail.
-    pub normative_level: String,
+    pub normative_level: NormativeLevel,
     /// The spec-stated expected value, when there is one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected: Option<String>,
     /// Ferro's behaviour at generation time.
     pub observed: String,
-    pub status: String,
+    pub status: Status,
     /// `docs/recommendations/<file>.md:<line>@<sha>` — or the artifact the row
     /// was derived from when the spec has no single line to cite.
     pub spec_citation: String,
@@ -383,7 +384,7 @@ mod overrides {
         /// `docs/…md:<line>` for the sentence that states the pair.
         pub citation: String,
         /// RFC 2119 level of the sentence: `must` or `should`.
-        pub normative_level: String,
+        pub normative_level: NormativeLevel,
         #[serde(default)]
         pub note: Option<String>,
     }
@@ -397,7 +398,7 @@ mod overrides {
         /// `docs/…md:<line>` for the sentence that states the pair.
         pub citation: String,
         /// RFC 2119 level of the sentence: `must` or `should`.
-        pub normative_level: String,
+        pub normative_level: NormativeLevel,
         /// Set when evaluating the repair needs real reference bases (e.g. any
         /// 3'-rule example). Such rows are emitted but marked, and the driver
         /// does not assert them under the hermetic mock provider.
@@ -411,7 +412,7 @@ mod overrides {
     #[serde(deny_unknown_fields)]
     pub struct RowOverride {
         #[serde(default)]
-        pub status: Option<String>,
+        pub status: Option<Status>,
         #[serde(default)]
         pub note: Option<String>,
     }
@@ -500,7 +501,7 @@ mod invariants {
     #[derive(Debug, Clone)]
     pub struct Violation {
         pub rule_id: &'static str,
-        pub level: &'static str,
+        pub level: NormativeLevel,
         pub message: String,
         pub citation: &'static str,
     }
@@ -596,7 +597,7 @@ mod invariants {
         if rendered.contains("dupinv") || rendered.contains("dupins") {
             v.push(Violation {
                 rule_id: "B7-no-composite-dup",
-                level: "must",
+                level: NormativeLevel::Must,
                 message: format!("composite dup edit in {rendered}"),
                 citation: "docs/recommendations/DNA/duplication.md:92",
             });
@@ -607,7 +608,7 @@ mod invariants {
             if cap.0.chars().count() != 1 || cap.1.chars().count() != 1 {
                 v.push(Violation {
                     rule_id: "B4-substitution-one-to-one",
-                    level: "must",
+                    level: NormativeLevel::Must,
                     message: format!("`{}>{}` is not a 1-to-1 substitution", cap.0, cap.1),
                     citation: "docs/recommendations/DNA/delins.md:73",
                 });
@@ -615,7 +616,7 @@ mod invariants {
                 // B13 — an unchanged residue is `=`, never X>X.
                 v.push(Violation {
                     rule_id: "B13-silent-is-equals",
-                    level: "must",
+                    level: NormativeLevel::Must,
                     message: format!("unchanged residue written as `{}>{}`", cap.0, cap.1),
                     citation: "docs/recommendations/checklist.md:64",
                 });
@@ -628,7 +629,7 @@ mod invariants {
         if has_ter_count_one(rendered) {
             v.push(Violation {
                 rule_id: "S6-no-fsTer1",
-                level: "must",
+                level: NormativeLevel::Must,
                 message: format!("`fsTer1` in {rendered}; a nonsense change is `Ter`/`*`"),
                 citation: "docs/recommendations/protein/frameshift.md:22",
             });
@@ -646,7 +647,7 @@ mod invariants {
                 {
                     v.push(Violation {
                         rule_id: "B11-start-loss-not-met1xxx",
-                        level: "must",
+                        level: NormativeLevel::Must,
                         message: format!(
                             "start-loss written as {rendered}; use p.0/p.0?/p.(Met1?)"
                         ),
@@ -660,7 +661,7 @@ mod invariants {
             if rest.replace("Xaa", "").contains('X') {
                 v.push(Violation {
                     rule_id: "B10-no-X-for-stop",
-                    level: "must",
+                    level: NormativeLevel::Must,
                     message: format!("`X` used as an amino-acid code in {rendered}"),
                     citation: "docs/recommendations/checklist.md:63",
                 });
@@ -672,7 +673,7 @@ mod invariants {
         if axes.len() > 1 {
             v.push(Violation {
                 rule_id: "B15-no-mixed-reference-types",
-                level: "must",
+                level: NormativeLevel::Must,
                 message: format!("mixed coordinate types in one allele: {rendered}"),
                 citation: "docs/recommendations/DNA/alleles.md:23",
             });
@@ -693,7 +694,7 @@ mod invariants {
                 if n > 1 {
                     v.push(Violation {
                         rule_id: "S1-no-conflicting-cis-members",
-                        level: "must",
+                        level: NormativeLevel::Must,
                         message: format!("{n} cis members at position `{loc}` in {rendered}"),
                         citation: "docs/recommendations/DNA/delins.md:19",
                     });
@@ -706,7 +707,7 @@ mod invariants {
                 // B5 — an inversion is at least two residues.
                 "inv" if is_plain_position(&m.loc) => v.push(Violation {
                     rule_id: "B5-inversion-min-length",
-                    level: "must",
+                    level: NormativeLevel::Must,
                     message: format!("single-position inversion `{}inv`", m.loc),
                     citation: "docs/recommendations/DNA/inversion.md:16",
                 }),
@@ -715,7 +716,7 @@ mod invariants {
                     if is_plain_position(&m.loc) {
                         v.push(Violation {
                             rule_id: "S5-insertion-spans-two-positions",
-                            level: "must",
+                            level: NormativeLevel::Must,
                             message: format!("insertion at one position `{}ins`", m.loc),
                             citation: "docs/recommendations/protein/insertion.md:18",
                         });
@@ -723,7 +724,7 @@ mod invariants {
                         if b != a + 1 {
                             v.push(Violation {
                                 rule_id: "B16-insertion-flanks-adjacent",
-                                level: "must",
+                                level: NormativeLevel::Must,
                                 message: format!("insertion flanks {a}_{b} are not adjacent"),
                                 citation: "docs/recommendations/protein/insertion.md:17",
                             });
@@ -740,14 +741,14 @@ mod invariants {
                     if a == b {
                         v.push(Violation {
                             rule_id: "B6-range-two-distinct-positions",
-                            level: "must",
+                            level: NormativeLevel::Must,
                             message: format!("range `{a}_{b}` repeats one position"),
                             citation: "docs/recommendations/DNA/deletion.md:15",
                         });
                     } else if a > b && !matches!(m.axis, 'o' | 'm') {
                         v.push(Violation {
                             rule_id: "B6-range-two-distinct-positions",
-                            level: "must",
+                            level: NormativeLevel::Must,
                             message: format!("range `{a}_{b}` is not ordered 5'->3'"),
                             citation: "docs/recommendations/DNA/deletion.md:17",
                         });
@@ -762,7 +763,7 @@ mod invariants {
             {
                 v.push(Violation {
                     rule_id: "B8-no-size-number-forms",
-                    level: "must",
+                    level: NormativeLevel::Must,
                     message: format!("size-number form `{}{}`", m.kw, m.arg),
                     citation: "docs/recommendations/checklist.md:49",
                 });
@@ -776,7 +777,7 @@ mod invariants {
                     if tail.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
                         v.push(Violation {
                             rule_id: "B9-nothing-after-stop",
-                            level: "must",
+                            level: NormativeLevel::Must,
                             message: format!("residues listed after `Ter` in `{}`", m.arg),
                             citation: "docs/recommendations/protein/delins.md:45",
                         });
@@ -792,7 +793,7 @@ mod invariants {
             {
                 v.push(Violation {
                     rule_id: "A1-no-longform-del-dup",
-                    level: "should",
+                    level: NormativeLevel::Should,
                     message: format!("long form `{}{}`", m.kw, m.arg),
                     citation: "docs/recommendations/DNA/deletion.md:30",
                 });
@@ -805,7 +806,7 @@ mod invariants {
         if is_lone_single_member_allele(rendered) {
             v.push(Violation {
                 rule_id: "A2-lone-single-member-bracket",
-                level: "should",
+                level: NormativeLevel::Should,
                 message: format!("lone single-member allele bracket in {rendered}"),
                 citation: "docs/recommendations/DNA/alleles.md:99",
             });
@@ -934,7 +935,7 @@ mod invariants {
             ] {
                 let musts: Vec<&str> = check(legal)
                     .into_iter()
-                    .filter(|v| v.level == "must")
+                    .filter(|v| v.level == NormativeLevel::Must)
                     .map(|v| v.rule_id)
                     .collect();
                 assert!(musts.is_empty(), "{legal} wrongly flagged: {musts:?}");
@@ -947,7 +948,7 @@ mod invariants {
         fn trans_genotype_single_member_brackets_are_legal() {
             let musts: Vec<&str> = check("NM_004006.2:c.[2376G>C];[3103del]")
                 .into_iter()
-                .filter(|v| v.level == "must")
+                .filter(|v| v.level == NormativeLevel::Must)
                 .map(|v| v.rule_id)
                 .collect();
             assert!(musts.is_empty(), "{musts:?}");
@@ -1130,15 +1131,15 @@ mod builder {
         rows: &mut Vec<Row>,
         cens: &mut Census,
     ) {
-        let mut all: BTreeMap<String, (String, Option<usize>, &'static str)> = BTreeMap::new();
+        let mut all: BTreeMap<String, (String, Option<usize>, NormativeLevel)> = BTreeMap::new();
         for (input, path, line) in raw_negatives {
             all.entry(input.clone())
-                .or_insert((path.clone(), Some(*line), "must"));
+                .or_insert((path.clone(), Some(*line), NormativeLevel::Must));
         }
         for p in prose {
             let level = match p.normative_level {
-                negatives::NormativeLevel::Must => "must",
-                negatives::NormativeLevel::Should => "should",
+                negatives::NormativeLevel::Must => NormativeLevel::Must,
+                negatives::NormativeLevel::Should => NormativeLevel::Should,
             };
             for s in &p.invalid_spans {
                 all.entry(s.clone())
@@ -1156,9 +1157,9 @@ mod builder {
             }
             let observed = observe(normalizer, &target);
             let status = if observed.starts_with("parse error") {
-                "correctly-rejected"
+                Status::CorrectlyRejected
             } else {
-                "false-acceptance"
+                Status::FalseAcceptance
             };
             net += 1;
             rows.push(Row {
@@ -1168,11 +1169,11 @@ mod builder {
                 error_mode: "default".to_string(),
                 input,
                 target,
-                expectation: "spec-mandated".to_string(),
-                normative_level: level.to_string(),
+                expectation: Expectation::SpecMandated,
+                normative_level: level,
                 expected: None,
                 observed,
-                status: status.to_string(),
+                status,
                 spec_citation: cite(&path, line, sha),
                 dedup_note: "spec-marked negative the normalization fixture's harvester drops \
                              (escaped underscores / bare bracket allele list), so its rejection \
@@ -1250,14 +1251,14 @@ mod builder {
             // Accepting it and rendering something other than the canonical form
             // the spec names is the genuine violation.
             let status = if rep.requires_reference {
-                "requires-reference"
+                Status::RequiresReference
             } else if observed == repaired {
-                "repaired"
+                Status::Repaired
             } else if observed.starts_with("parse error") || observed.starts_with("normalize error")
             {
-                "rejected-not-repaired"
+                Status::RejectedNotRepaired
             } else {
-                "repair-diverges"
+                Status::RepairDiverges
             };
             rows.push(Row {
                 id: format!("negative-repair/{input}"),
@@ -1266,11 +1267,11 @@ mod builder {
                 error_mode: "default".to_string(),
                 input: input.clone(),
                 target,
-                expectation: "spec-mandated".to_string(),
-                normative_level: rep.normative_level.clone(),
+                expectation: Expectation::SpecMandated,
+                normative_level: rep.normative_level,
                 expected: Some(repaired),
                 observed,
-                status: status.to_string(),
+                status,
                 spec_citation: format!("{}@{sha}", rep.citation),
                 dedup_note: "the normalization fixture records only that ferro rejects this \
                              string; the canonical form the spec names on the same line is \
@@ -1342,11 +1343,11 @@ mod builder {
                     target: target.clone(),
                     // The spec says nothing about ferro's error modes: this is
                     // ferro policy, pinned, never a spec expectation.
-                    expectation: "pinned-baseline".to_string(),
-                    normative_level: "n/a".to_string(),
+                    expectation: Expectation::PinnedBaseline,
+                    normative_level: NormativeLevel::Na,
                     expected: None,
                     observed,
-                    status: "mode-divergence-pinned".to_string(),
+                    status: Status::ModeDivergencePinned,
                     spec_citation: cite(path, *line, sha),
                     dedup_note: "the three error modes disagree on this input; the normalization \
                                  fixture pins only the default mode"
@@ -1439,11 +1440,11 @@ mod builder {
                 let expected = format!("axis={a}");
                 let spec_stated = a == axis;
                 let status = if observed == expected {
-                    "form-axis-ok"
+                    Status::FormAxisOk
                 } else if spec_stated {
-                    "form-axis-diverges"
+                    Status::FormAxisDiverges
                 } else {
-                    "form-axis-pinned"
+                    Status::FormAxisPinned
                 };
                 rows.push(Row {
                     id: format!("grammar-form/{a}/{}", c.input),
@@ -1453,14 +1454,18 @@ mod builder {
                     input: c.input.clone(),
                     target: derived,
                     expectation: if spec_stated {
-                        "spec-mandated".to_string()
+                        Expectation::SpecMandated
                     } else {
-                        "pinned-baseline".to_string()
+                        Expectation::PinnedBaseline
                     },
-                    normative_level: if spec_stated { "must" } else { "n/a" }.to_string(),
+                    normative_level: if spec_stated {
+                        NormativeLevel::Must
+                    } else {
+                        NormativeLevel::Na
+                    },
                     expected: Some(expected),
                     observed,
-                    status: status.to_string(),
+                    status,
                     spec_citation: format!("docs/syntax.yaml@{sha}"),
                     dedup_note: "the normalization fixture pins this example's normalized \
                                  rendering; nothing asserts which coordinate axis it parses into"
@@ -1537,14 +1542,14 @@ mod builder {
                     error_mode: "default".to_string(),
                     input: target.clone(),
                     target: rendered.clone(),
-                    expectation: "spec-mandated".to_string(),
-                    normative_level: v.level.to_string(),
+                    expectation: Expectation::SpecMandated,
+                    normative_level: v.level,
                     expected: Some("no violation".to_string()),
                     observed: v.message.clone(),
-                    status: if v.level == "must" {
-                        "invariant-violation-must".to_string()
+                    status: if v.level == NormativeLevel::Must {
+                        Status::InvariantViolationMust
                     } else {
-                        "invariant-violation-should".to_string()
+                        Status::InvariantViolationShould
                     },
                     spec_citation: format!("{}@{sha}", v.citation),
                     dedup_note: "no existing test asserts any property of the string ferro \
@@ -1713,24 +1718,24 @@ mod builder {
                 }
                 let (expectation, normative_level, expected, status, citation) = match stated {
                     Some(o) => (
-                        "spec-mandated",
-                        o.normative_level.clone(),
+                        Expectation::SpecMandated,
+                        o.normative_level,
                         Some(o.expected.clone()),
                         if projection_matches(&observed, &o.expected) {
-                            "preserved"
+                            Status::Preserved
                         } else {
-                            "projection-diverges"
+                            Status::ProjectionDiverges
                         },
                         format!("{}@{sha}", o.citation),
                     ),
                     None => (
-                        "pinned-baseline",
-                        "n/a".to_string(),
+                        Expectation::PinnedBaseline,
+                        NormativeLevel::Na,
                         None,
                         match result {
-                            AxisResult::Rendered(_) => "projection-pinned",
-                            AxisResult::Unavailable(_) => "projection-unavailable-pinned",
-                            AxisResult::Error(_) => "projection-error-pinned",
+                            AxisResult::Rendered(_) => Status::ProjectionPinned,
+                            AxisResult::Unavailable(_) => Status::ProjectionUnavailablePinned,
+                            AxisResult::Error(_) => Status::ProjectionErrorPinned,
                             AxisResult::NotApplicable(_) => unreachable!("filtered above"),
                         },
                         cite(path, *line, sha),
@@ -1747,11 +1752,11 @@ mod builder {
                     error_mode: "default".to_string(),
                     input: input.clone(),
                     target: target.clone(),
-                    expectation: expectation.to_string(),
+                    expectation,
                     normative_level,
                     expected,
                     observed,
-                    status: status.to_string(),
+                    status,
                     spec_citation: citation,
                     dedup_note: "the existing suite is entirely within-axis (parse / normalize / \
                                  render in the input's own coordinate system); nothing asserts \
@@ -1915,14 +1920,17 @@ mod render {
         };
         for r in &build.rows {
             *summary.by_dimension.entry(r.dimension.clone()).or_default() += 1;
-            *summary.by_status.entry(r.status.clone()).or_default() += 1;
+            *summary
+                .by_status
+                .entry(r.status.as_str().to_string())
+                .or_default() += 1;
             *summary
                 .by_expectation
-                .entry(r.expectation.clone())
+                .entry(r.expectation.as_str().to_string())
                 .or_default() += 1;
             *summary
                 .by_normative_level
-                .entry(r.normative_level.clone())
+                .entry(r.normative_level.as_str().to_string())
                 .or_default() += 1;
         }
         let doc = Document {
