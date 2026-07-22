@@ -169,9 +169,11 @@ fn duplicate_residue_positions_never_coalesce() {
     }
 }
 
-/// A to-`Ter` member keeps the whole allele out of scope (the spec forbids
+/// A run containing a to-`Ter` member never coalesces (the spec forbids
 /// listing residues after the stop, `protein/substitution.md:20` /
-/// `protein/delins.md:45`), in either input order.
+/// `protein/delins.md:45`), in either input order. The decline is scoped to
+/// the run, not the allele — see `issue_1125_ter_scoped_coalesce` for a run
+/// that is 5′ of an unrelated `Ter` and does coalesce.
 #[test]
 fn a_to_ter_run_never_coalesces_in_either_order() {
     all_permutations_normalize_to(
