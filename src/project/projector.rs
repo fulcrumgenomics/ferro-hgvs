@@ -13110,7 +13110,7 @@ mod tests {
         // NOT merged into a single delins (delins.md:21).
         assert_eq!(
             format!("{}", proj.protein.expect("protein expected")),
-            "NP_SEP.1(SEPGENE):p.[(Asp2del);(Cys4del)]"
+            "NP_SEP.1:p.[(Asp2del);(Cys4del)]"
         );
     }
 
@@ -13489,10 +13489,7 @@ mod tests {
         // Separated subs stay an Allele; the Allele Display hoists the shared gene
         // symbol (unchanged pre-existing behavior). The point of this guard is that
         // they are NOT merged into a single delins.
-        assert_eq!(
-            format!("{protein}"),
-            "NP_SEP.1(SEPGENE):p.[(Asp2Tyr);(Cys4Tyr)]"
-        );
+        assert_eq!(format!("{protein}"), "NP_SEP.1:p.[(Asp2Tyr);(Cys4Tyr)]");
     }
 
     #[test]

@@ -113,20 +113,15 @@ fn three_consecutive_silent_codons_render_as_one_range() {
 /// Silent codons separated by an untouched codon stay individual, bracketed —
 /// the same rule `delins.md` applies to separated *changed* residues.
 ///
-/// The `(GENE1099)` selector is not part of what this fix decides: a protein
-/// *allele* renders its gene symbol while a single protein variant suppresses it
-/// (#310, "no parenthesized selector position" in the p. grammar), so the
-/// bracket here matches what the sibling renderer already emits for separated
-/// changed residues (`txp(GENE1099):p.[(Leu2Gln);(Ala5Asp)]`, measured). The
-/// asymmetry is pre-existing and out of scope; see
-/// `gene_symbol_rendering_matches_the_changed_residue_sibling` below, which
-/// pins both halves so this fix cannot be blamed for either.
+/// The accession renders bare: the `p.` axis takes no gene-symbol selector in
+/// any shape (#1142), so an allele drops it exactly as a single protein variant
+/// always has.
 #[test]
 fn separated_silent_codons_render_as_a_bracket() {
     let vp = projector_for(ISSUE_CDS);
     assert_eq!(
         protein_of(&vp, "REF:g.[6G>A;15C>A]"),
-        "txp(GENE1099):p.[(Leu2=);(Ala5=)]"
+        "txp:p.[(Leu2=);(Ala5=)]"
     );
 }
 
@@ -144,29 +139,30 @@ fn the_codon_level_combiner_also_brackets_separated_codons() {
     let vp = projector_for(ISSUE_CDS);
     assert_eq!(
         protein_of(&vp, "REF:g.[4C>T;6G>A;15C>A]"),
-        "txp(GENE1099):p.[(Leu2=);(Ala5=)]"
+        "txp:p.[(Leu2=);(Ala5=)]"
     );
 }
 
-/// Silent and changed residues render their gene symbol the same way, so the
+/// Silent and changed residues render their accession the same way, so the
 /// identity renderer cannot drift from the substitution renderer it mirrors.
 ///
-/// Single protein variants suppress the symbol on both sides; bracketed alleles
-/// carry it on both sides. (Whether an allele *should* emit a selector the p.
-/// grammar has no production for is #310's question, not this fix's.)
+/// Both suppress the gene-symbol selector, in both the bracketed-allele and the
+/// single-variant shape — the `p.` axis takes none (#310/#1142). The transcript
+/// fixture does set a gene symbol (`GENE1099`), so these assertions would catch
+/// it leaking back into either renderer.
 #[test]
 fn gene_symbol_rendering_matches_the_changed_residue_sibling() {
     let vp = projector_for(ISSUE_CDS);
-    // Separated: bracket, symbol on both.
+    // Separated: bracket, selector suppressed on both.
     assert_eq!(
         protein_of(&vp, "REF:g.[6G>A;15C>A]"),
-        "txp(GENE1099):p.[(Leu2=);(Ala5=)]"
+        "txp:p.[(Leu2=);(Ala5=)]"
     );
     assert_eq!(
         protein_of(&vp, "REF:g.[5T>A;14C>A]"),
-        "txp(GENE1099):p.[(Leu2Gln);(Ala5Asp)]"
+        "txp:p.[(Leu2Gln);(Ala5Asp)]"
     );
-    // Consecutive: single variant, symbol suppressed on both.
+    // Consecutive: single variant, selector suppressed on both.
     assert_eq!(protein_of(&vp, "REF:g.[6G>A;9T>C]"), "txp:p.(Leu2_Arg3=)");
     assert_eq!(
         protein_of(&vp, "REF:g.[5T>A;8G>A]"),
@@ -221,7 +217,7 @@ fn an_unchanged_interior_codon_is_not_named() {
     let vp = projector_for(RUN_CDS);
     assert_eq!(
         protein_of(&vp, "REF:g.4_12delinsCTACGTCTT"),
-        "txp(GENE1099):p.[(Leu2=);(Leu4=)]"
+        "txp:p.[(Leu2=);(Leu4=)]"
     );
 }
 

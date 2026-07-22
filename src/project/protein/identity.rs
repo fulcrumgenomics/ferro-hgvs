@@ -359,9 +359,6 @@ mod tests {
             &parse_accession("NP_000001.1"),
             &Some("GENE1".to_string()),
         );
-        assert_eq!(
-            bracketed.to_string(),
-            "NP_000001.1(GENE1):p.[(Leu2=);(Ala5=)]"
-        );
+        assert_eq!(bracketed.to_string(), "NP_000001.1:p.[(Leu2=);(Ala5=)]");
     }
 }

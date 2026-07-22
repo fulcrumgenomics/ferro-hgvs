@@ -445,11 +445,19 @@ impl Accession {
     /// reference needs no such specification at all (bare `NM_…:c.…` is the
     /// canonical form). So when the reference is itself a transcript, the
     /// gene-symbol selector is disallowed and Display drops it. Genomic
-    /// (`NC`/`NG`/`NT`/`NW`/`ENSG`/bare `LRG_<N>`), mitochondrial, protein, and
+    /// (`NC`/`NG`/`NT`/`NW`/`ENSG`/bare `LRG_<N>`), mitochondrial, and
     /// unclassifiable (custom) references are **not** transcript references:
     /// there the selector is either the spec-sanctioned exception (a gene with
     /// no transcript, e.g. mitochondrial) or a value ferro cannot safely drop,
     /// so Display preserves it.
+    ///
+    /// **This predicate answers only the transcript-vs-not question.** It is not
+    /// the whole selector policy: the `p.` axis takes no gene-symbol selector on
+    /// **any** accession (#310/#1142), which the render sites enforce by
+    /// coordinate type rather than by reference class. The two rules can
+    /// disagree — a mitochondrial `m.` description keeps its selector while a
+    /// mitochondrial *protein* (`YP_…:p.…`) does not — so do not read a `false`
+    /// here as "the selector is emitted".
     ///
     /// The check is on `self` only — a compound reference such as
     /// `NC_(NM_)(GENE)` stores the transcript (`NM`) as `self` with the genomic
@@ -1418,8 +1426,14 @@ fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt:
     write!(f, "{}", accession)?;
     if let Some(gene) = first.gene_symbol() {
         // Same reference-type gate as `write_accession_with_optional_gene`
-        // (#1051): a transcript reference takes no gene-symbol selector.
-        if !accession.is_transcript_reference() {
+        // (#1051): a transcript reference takes no gene-symbol selector. The
+        // `p.` axis takes none either, on any accession (#310/#1142) — keyed on
+        // the rendered coordinate type rather than the accession prefix so it
+        // covers `NP`/`XP`/`YP`/`ENSP`/`LRG_<n>p<m>`/UniProt and unclassifiable
+        // protein references alike. Without this, a protein *allele* emitted a
+        // selector its single-variant sibling has always dropped, because
+        // `ProteinVariant`'s own Display never reaches this function.
+        if !accession.is_transcript_reference() && first.variant_type() != "p" {
             write!(f, "({})", gene)?;
         }
     }
