@@ -16,9 +16,10 @@ use crate::project::accession::parse_accession;
 use crate::project::edit::transform_edit_for_strand;
 use crate::project::protein::{
     build_initiator_unknown, build_whole_protein_unknown, cds_has_recognized_start,
-    cds_has_valid_start, combined_cis_residue_changes, edit_reaches_initiation_codon,
-    edit_spans_cds_into_3utr, predict_indel_protein, predict_stop_region_extension,
-    predict_substitution_protein, read_cds_start_codon, try_project_cis_combined_inframe,
+    cds_has_valid_start, codon_residues, combined_cis_residue_changes,
+    edit_reaches_initiation_codon, edit_spans_cds_into_3utr, group_consecutive_by,
+    predict_indel_protein, predict_stop_region_extension, predict_substitution_protein,
+    read_cds_start_codon, render_silent_identity, try_project_cis_combined_inframe,
     whole_exon_deletion_span, CisCombined, RefProteinBundle,
 };
 use crate::project::result::VariantProjection;
@@ -373,15 +374,11 @@ fn render_cis_substitution_groups(
 
 /// Group changed residues (distinct, ascending) into runs of consecutive
 /// positions. Residues separated by an unchanged residue land in different runs.
+///
+/// Shares [`group_consecutive_by`] with the identity renderer so changed and
+/// unchanged residues are grouped by one rule (#1099).
 fn group_consecutive_residues(spans: Vec<SubSpan>) -> Vec<Vec<SubSpan>> {
-    let mut groups: Vec<Vec<SubSpan>> = Vec::new();
-    for s in spans {
-        match groups.last_mut() {
-            Some(g) if s.pos == g.last().expect("non-empty group").pos + 1 => g.push(s),
-            _ => groups.push(vec![s]),
-        }
-    }
-    groups
+    group_consecutive_by(spans, |s| s.pos)
 }
 
 /// Combine the per-member protein consequences of an **in-cis** allele into a
@@ -518,10 +515,7 @@ fn combine_cis_substitutions_by_codon(
     members: &[(i64, crate::hgvs::edit::Base)],
     protein_accession: &str,
 ) -> Option<HgvsVariant> {
-    use crate::hgvs::edit::ProteinEdit;
-    use crate::hgvs::interval::ProtInterval;
-    use crate::hgvs::location::{AminoAcid, ProtPos};
-    use crate::hgvs::variant::{LocEdit, ProteinVariant};
+    use crate::hgvs::location::AminoAcid;
     use crate::project::protein::{apply_substitution, read_ref_codon, translate};
     use std::collections::BTreeMap;
 
@@ -554,10 +548,15 @@ fn combine_cis_substitutions_by_codon(
     let gene_symbol = transcript.gene_symbol.clone();
 
     // Per codon: apply all member base changes to the reference codon, translate
-    // once, and keep the residues whose amino acid actually changes. Track the
-    // first affected residue so an all-synonymous result still names a position.
+    // once, and keep the residues whose amino acid actually changes. Also record
+    // the codons whose reference triplet the members actually rewrote, which is
+    // what an all-synonymous result is described by (#1099). That set is derived
+    // by comparing triplets — the same rule `rewritten_codons` applies to a whole
+    // mutated CDS, applied one codon at a time here because this path never
+    // builds one — and NOT from `by_codon` membership, which is member-derived:
+    // a member whose alternative base equals the reference rewrites nothing.
     let mut changed: Vec<SubSpan> = Vec::new();
-    let mut first_affected: Option<(u64, AminoAcid)> = None;
+    let mut rewritten: Vec<(u64, AminoAcid)> = Vec::new();
     for (codon_index, subs) in &by_codon {
         let codon_first_cds_pos = codon_index * 3 + 1;
         let (ref_codon, _frame) = read_ref_codon(transcript, codon_first_cds_pos).ok()?;
@@ -584,8 +583,8 @@ fn combine_cis_substitutions_by_codon(
         if ref_aa == AminoAcid::Ter && alt_aa != AminoAcid::Ter {
             return None;
         }
-        if first_affected.is_none() {
-            first_affected = Some((pos, ref_aa));
+        if alt_codon != ref_codon {
+            rewritten.push((pos, ref_aa));
         }
         if ref_aa != alt_aa {
             changed.push(SubSpan {
@@ -596,21 +595,22 @@ fn combine_cis_substitutions_by_codon(
         }
     }
 
-    // No residue changed: the combined product is synonymous → p.(RefNNN=) at the
-    // first affected residue (substitution.md: silent changes are `p.Cys123=`).
+    // No residue changed: the combined product is synonymous, so name every codon
+    // the members rewrote — `p.(Leu2=)`, the range `p.(Leu2_Arg3=)`, or the
+    // bracket `p.[(Leu2=);(Ala5=)]` when an untouched codon separates them
+    // (#1099). The shared renderer keeps this in step with the residue-level
+    // combiner, which reaches the same shapes from a whole mutated CDS.
     if changed.is_empty() {
-        let (pos, ref_aa) = first_affected?;
-        return Some(HgvsVariant::Protein(ProteinVariant {
-            accession,
-            gene_symbol,
-            loc_edit: LocEdit::new_predicted(
-                ProtInterval::point(ProtPos::new(ref_aa, pos)),
-                ProteinEdit::Identity {
-                    predicted: false,
-                    whole_protein: false,
-                },
-            ),
-        }));
+        // No translated protein is in scope on this path: it reads one
+        // reference codon at a time. The whole-molecule anchor is unreachable
+        // here anyway — an empty set needs every member to leave its triplet
+        // byte-identical, which `cis_substitution_members` does not produce.
+        return Some(render_silent_identity(
+            rewritten,
+            None,
+            &accession,
+            &gene_symbol,
+        ));
     }
 
     let groups = group_consecutive_residues(changed);
@@ -638,8 +638,10 @@ fn combine_cis_substitutions_by_codon(
 /// The changed residues come from [`combined_cis_residue_changes`] (a
 /// residue-wise diff of the combined product against the reference protein) and
 /// are rendered by the shared [`render_cis_substitution_groups`]: one changed
-/// residue → a substitution, a contiguous run → one delins, no change → the
-/// silent `p.(Xxx{N}=)` at the first affected residue.
+/// residue → a substitution, a contiguous run → one delins. When nothing
+/// changed, the same diff's rewritten codons are rendered by
+/// [`render_silent_identity`] — `p.(Leu2=)`, `p.(Leu2_Arg3=)` or
+/// `p.[(Leu2=);(Ala5=)]` (#1099).
 ///
 /// Returns `None` — the caller keeps its existing (bracketed / per-member)
 /// behavior — when the combined product is not a length-preserving residue-wise
@@ -653,35 +655,26 @@ fn combine_cis_members_by_residue(
     members: &[(i64, i64, &NaEdit)],
     protein_accession: &str,
 ) -> Option<HgvsVariant> {
-    use crate::hgvs::edit::ProteinEdit;
-    use crate::hgvs::interval::ProtInterval;
-    use crate::hgvs::location::ProtPos;
-    use crate::hgvs::variant::{LocEdit, ProteinVariant};
-
-    let changed = combined_cis_residue_changes(transcript, bundle, members)?;
+    let diff = combined_cis_residue_changes(transcript, bundle, members)?;
     let accession = parse_accession(protein_accession);
     let gene_symbol = transcript.gene_symbol.clone();
 
-    // Nothing changed: the combined product is silent → `p.(Xxx{N}=)` at the
-    // 5'-most residue any member touches (substitution.md: `p.Cys123=`).
-    if changed.is_empty() {
-        let lo_min = members.iter().map(|(lo, _, _)| *lo).min()?;
-        let pos = ((lo_min - 1) / 3 + 1) as u64;
-        let ref_aa = *bundle.ref_protein.get((pos - 1) as usize)?;
-        return Some(HgvsVariant::Protein(ProteinVariant {
-            accession,
-            gene_symbol,
-            loc_edit: LocEdit::new_predicted(
-                ProtInterval::point(ProtPos::new(ref_aa, pos)),
-                ProteinEdit::Identity {
-                    predicted: false,
-                    whole_protein: false,
-                },
-            ),
-        }));
+    // Nothing changed: the combined product is silent, so describe the codons the
+    // members rewrote — grouped into runs, never the 5'-most member's residue
+    // alone, and never `p.(=)` while a codon can be named (#1099).
+    if diff.changed.is_empty() {
+        let residues = codon_residues(&diff.rewritten_codons, &bundle.ref_protein_with_stop)?;
+        let initiator = bundle.ref_protein_with_stop.first().copied();
+        return Some(render_silent_identity(
+            residues,
+            initiator,
+            &accession,
+            &gene_symbol,
+        ));
     }
 
-    let spans: Vec<SubSpan> = changed
+    let spans: Vec<SubSpan> = diff
+        .changed
         .into_iter()
         .map(|(pos, ref_aa, alt_aa)| SubSpan {
             pos,
@@ -12755,6 +12748,40 @@ mod tests {
         assert_eq!(s.as_deref(), Some("NP_X.1:p.(Arg2=)"));
     }
 
+    /// #1099 (unit): consecutive silent codons on the CODON-LEVEL path render as
+    /// one range identity. CDS `ATGCGACGCTAA`; `c.6A>G` (`CGA`→`CGG`, Arg) and
+    /// `c.9C>T` (`CGC`→`CGT`, Arg) rewrite codons 2 and 3, both silent.
+    #[test]
+    fn combine_by_codon_consecutive_silent_codons_form_a_range() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGCGACGCTAA", &[(6, Base::G), (9, Base::T)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Arg2_Arg3=)"));
+    }
+
+    /// #1099 (unit): silent codons separated by an untouched codon stay
+    /// individual and are bracketed, on the codon-level path as on the
+    /// residue-level one. CDS `ATGCGATGGCGCTAA` (Met-Arg-Trp-Arg-Ter): `c.6A>G`
+    /// rewrites codon 2 and `c.12C>T` rewrites codon 4; codon 3 (`TGG`, Trp) is
+    /// untouched.
+    #[test]
+    fn combine_by_codon_separated_silent_codons_are_bracketed() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGCGATGGCGCTAA", &[(6, Base::G), (12, Base::T)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.[(Arg2=);(Arg4=)]"));
+    }
+
+    /// #1099 (unit): a member whose alternative base equals the reference
+    /// rewrites no triplet, so it contributes no codon. This is the codon-level
+    /// twin of `combine_by_residue_ignores_a_member_that_rewrites_nothing`, and
+    /// the direct test of the `alt_codon != ref_codon` derivation: keying off
+    /// `by_codon` membership instead would wrongly name codon 3.
+    #[test]
+    fn combine_by_codon_ignores_a_member_that_rewrites_nothing() {
+        use crate::hgvs::edit::Base;
+        let s = combine_by_codon_str("ATGCGACGCTAA", &[(6, Base::G), (9, Base::C)]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Arg2=)"));
+    }
+
     /// #1076 (unit): substitutions in ADJACENT codons combine to one delins, not a
     /// bracketed list (delins.md). codon 2 `GAT`→`TAT` (Asp2Tyr), codon 3
     /// `TAT`→`TGT` (Tyr3Cys); `c.4G>T` + `c.8A>G` → `p.(Asp2_Tyr3delinsTyrCys)`.
@@ -12848,13 +12875,26 @@ mod tests {
         assert_eq!(s.as_deref(), Some("NP_X.1:p.(Trp3Cys)"));
     }
 
-    /// #1079 (unit): an all-silent combination is `p.(Xxx{N}=)` at the 5'-most
-    /// residue any member touches (substitution.md `p.Cys123=`), not a bracketed
-    /// pair of `(=)` members (alleles.md). CDS `ATGCGACGCTAA`: `c.6A>G`
-    /// (`CGA`→`CGG`, Arg) and `c.9C>T` (`CGC`→`CGT`, Arg) are both silent.
+    /// #1099 (unit): an all-silent combination names **every** codon it rewrote,
+    /// grouped into runs — not the 5'-most touched residue alone, which is what
+    /// #1079 originally emitted and what this issue was filed on. CDS
+    /// `ATGCGACGCTAA`: `c.6A>G` (`CGA`→`CGG`, Arg) rewrites codon 2 and `c.9C>T`
+    /// (`CGC`→`CGT`, Arg) rewrites codon 3; both are silent and consecutive, so
+    /// they render as one range identity (`DNA/other.md:29-37`).
     #[test]
-    fn combine_by_residue_all_silent_is_identity_at_first_residue() {
+    fn combine_by_residue_all_silent_names_every_rewritten_codon() {
         let s = combine_by_residue_str("ATGCGACGCTAA", &[(6, 6, "G"), (9, 9, "T")]);
+        assert_eq!(s.as_deref(), Some("NP_X.1:p.(Arg2_Arg3=)"));
+    }
+
+    /// #1099 (unit): a member whose alternative base equals the reference
+    /// rewrites no triplet, so it contributes no codon — the discriminator
+    /// against deriving the affected set from member spans or `by_codon`
+    /// membership. Same CDS as above; `c.9C>C` leaves codon 3 byte-identical, so
+    /// only codon 2 is named.
+    #[test]
+    fn combine_by_residue_ignores_a_member_that_rewrites_nothing() {
+        let s = combine_by_residue_str("ATGCGACGCTAA", &[(6, 6, "G"), (9, 9, "C")]);
         assert_eq!(s.as_deref(), Some("NP_X.1:p.(Arg2=)"));
     }
 
