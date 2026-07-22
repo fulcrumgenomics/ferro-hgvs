@@ -444,6 +444,60 @@ mod tests {
         assert_eq!(out.to_string(), "NM_000001.1:r.(677_704del)");
     }
 
+    /// Multi-exon whole-exon skip (#1111): a base range whose start offset is
+    /// negative (anchored on the first base of one exon) and end offset is
+    /// positive (anchored on the last base of a *later* exon) brackets a whole
+    /// number of exons. `exonic_span` keys purely off the offset *signs* — the
+    /// exon count is not a distinct code path — so a span across two
+    /// consecutive exons reduces to plain exonic positions exactly like the
+    /// single-exon case above. This pins that data point directly.
+    #[test]
+    fn multi_exon_whole_exon_span_reduces_to_its_exonic_positions() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::interval::CdsInterval;
+        use crate::hgvs::location::CdsPos;
+        use crate::hgvs::variant::{Accession, CdsVariant, LocEdit};
+
+        // Three contiguous exons in transcript space: exon 1 = tx 1..100,
+        // exon 2 = tx 101..200, exon 3 = tx 201..300. CDS = whole transcript
+        // (cds_start = 1), so c.pos == tx.pos. `c.101-5_300+5del` anchors its
+        // start on the first base of exon 2 (negative offset) and its end on
+        // the last base of exon 3 (positive offset) — bracketing exons 2 and 3
+        // in full. The deletion ends at the transcript's last base, so there is
+        // no room for a 3′ shift and the offsets drop to `r.(101_300del)`.
+        let seq = vec![b'A'; 300];
+        let tx = Transcript {
+            id: "NM_000005.1".to_string(),
+            strand: Strand::Plus,
+            sequence: Some(String::from_utf8(seq).unwrap()),
+            cds_start: Some(1),
+            cds_end: Some(300),
+            exons: vec![
+                Exon::new(1, 1, 100),
+                Exon::new(2, 101, 200),
+                Exon::new(3, 201, 300),
+            ],
+            ..Default::default()
+        };
+        let iv = CdsInterval::new(
+            CdsPos::with_offset(101, -5), // c.101-5 (first base of exon 2)
+            CdsPos::with_offset(300, 5),  // c.300+5 (last base of exon 3)
+        );
+        let cds = CdsVariant {
+            accession: Accession::new("NM", "000005", Some(1)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                iv,
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        };
+        let out = predict_rna(&HgvsVariant::Cds(cds), &tx).expect("some");
+        assert_eq!(out.to_string(), "NM_000005.1:r.(101_300del)");
+    }
+
     #[test]
     fn partial_exon_span_with_intronic_endpoints_declines() {
         use crate::hgvs::edit::NaEdit;
