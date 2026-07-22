@@ -114,6 +114,7 @@ mod issue_1120_cis_coalesce_sub_del;
 mod issue_1125_ter_scoped_coalesce;
 mod issue_1126_reference_free_delins_to_ins;
 mod issue_1129_trailing_ter_delins;
+mod issue_1130_scoped_coalesce_declines;
 mod issue_1131_provider_accession_fallback;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
