@@ -1213,6 +1213,17 @@ fn build_naedit<P>(
 /// spec pins that exact non-example (`protein/delins.md:63`: `p.[Ser44Arg;Trp46Arg]`
 /// is *not* described as `p.Ser44_Trp46delinsArgLeuArg`).
 ///
+/// Member **input order** does not affect the result (#1116): the members are
+/// sorted into ascending residue order before runs are detected, so every
+/// permutation of one member set coalesces identically. Reordering is
+/// meaning-preserving here because every member has already been established to
+/// be a plain single-residue substitution on one shared accession — and the
+/// post-normalize display sort (#1098/#1101) puts cis members into exactly that
+/// residue order anyway, so an allele that does *not* coalesce still renders
+/// ascending. This is the protein-axis counterpart of #1103's sort-before-merge
+/// on the nucleotide axis; without it a descending-order allele fell through to
+/// the bracket form `protein/substitution.md:23` calls "not correct".
+///
 /// Returns `Some` only when at least one run of ≥2 adjacent substitutions is
 /// merged; a fully-merged allele collapses to a bare [`HgvsVariant::Protein`],
 /// a partial merge to a smaller [`HgvsVariant::Allele`]. Returns `None` — leave
@@ -1220,9 +1231,8 @@ fn build_naedit<P>(
 ///   - the phase is not cis (trans / unknown / mosaic / … are independent),
 ///   - any member is not a single-residue protein substitution (mixed edit
 ///     kinds are out of scope for this narrow rule),
-///   - members are not in ascending, duplicate-free residue order (a `n,n`
-///     pair is the contradictory same-residue case, not a delins; an
-///     out-of-order allele is left as the author wrote it), or
+///   - two members share a residue position (a `n,n` pair is the contradictory
+///     same-residue case, not a delins), or
 ///   - a run would mix predicted `( )` and certain members (ambiguous).
 pub(crate) fn coalesce_protein_adjacent_substitutions(
     allele: &crate::hgvs::variant::AlleleVariant,
@@ -1236,12 +1246,15 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
         return None;
     }
 
-    /// One member reduced to a single-residue substitution.
+    /// One member reduced to a single-residue substitution. `source` is the
+    /// member's index in `allele.variants`, kept so a substitution that ends up
+    /// in no run is re-emitted verbatim even after the residue-order sort.
     struct Sub {
         pos: u64,
         reference: AminoAcid,
         alternative: AminoAcid,
         predicted: bool,
+        source: usize,
     }
 
     let first = match &allele.variants[0] {
@@ -1252,7 +1265,7 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
     let gene_symbol = first.gene_symbol.clone();
 
     let mut subs: Vec<Sub> = Vec::with_capacity(allele.variants.len());
-    for v in &allele.variants {
+    for (source, v) in allele.variants.iter().enumerate() {
         let HgvsVariant::Protein(pv) = v else {
             return None;
         };
@@ -1291,13 +1304,19 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
             reference: s.aa,
             alternative,
             predicted,
+            source,
         });
     }
 
-    // Require ascending, duplicate-free residue order. A descending or
-    // duplicate (`n,n`) allele is out of scope — do not reorder the author's
-    // description, and the same-residue pair is a contradiction, not a delins.
-    if subs.windows(2).any(|w| w[1].pos <= w[0].pos) {
+    // Sort into ascending residue order so run detection — and therefore the
+    // coalesced `delins` payload — is independent of the author's member order
+    // (#1116). The sort is stable, so members sharing a residue stay adjacent
+    // in input order and are caught by the duplicate check below.
+    subs.sort_by_key(|s| s.pos);
+
+    // Two members at the same residue are a contradiction, not a delins: the
+    // allele states two different changes to one amino acid. Leave it untouched.
+    if subs.windows(2).any(|w| w[1].pos == w[0].pos) {
         return None;
     }
 
@@ -1336,8 +1355,10 @@ pub(crate) fn coalesce_protein_adjacent_substitutions(
             }));
             changed = true;
         } else {
-            // A lone substitution keeps its original member verbatim.
-            merged.push(allele.variants[i].clone());
+            // A lone substitution keeps its original member verbatim (indexed
+            // through `source`, since `subs` is in residue order, not input
+            // order).
+            merged.push(allele.variants[subs[i].source].clone());
         }
         i = j + 1;
     }

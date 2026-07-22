@@ -287,24 +287,22 @@ fn protein_to_ter_run_is_not_coalesced() {
     );
 }
 
-/// Members authored in descending residue order are reordered to ascending
-/// residue order by #1098's cis-member sort.
+/// Members authored in descending residue order coalesce to the same delins as
+/// the ascending order.
 ///
-/// KNOWN LIMITATION (protein axis): the descending input reorders to the bracket
-/// `p.[Arg76Ser;Cys77Trp]` but is *not* re-merged into the delins
-/// `protein/substitution.md:23` requires (`p.Arg76_Cys77delinsSerTrp`). #1103/#1106
-/// makes the *nucleotide* merge input-order-independent by sorting before the
-/// `merge_consecutive_edits` pipeline, but the protein delins-canonicalization
-/// (`coalesce_protein_adjacent_substitutions`) is a separate pass that still runs
-/// before the sort, so this protein order-dependence persists after #1106 — a
-/// candidate follow-up (re-run the protein coalesce after the sort). The sort is
-/// nonetheless the machinery that makes the ascending delins reachable at all.
+/// #1116 sorts members into ascending residue order inside the protein
+/// delins-canonicalization (`coalesce_protein_adjacent_substitutions`), which
+/// used to decline outright on non-ascending members. Before it, the descending
+/// input only picked up #1098/#1101's post-normalize display sort and came out
+/// as the bracket `p.[Arg76Ser;Cys77Trp]` — a form `protein/substitution.md:23`
+/// explicitly calls "not correct". This is the protein-axis counterpart of
+/// #1103/#1106, which does the same for the nucleotide merge.
 #[test]
-fn protein_descending_order_members_reorder_to_residue_order() {
+fn protein_descending_order_members_coalesce_to_the_same_delins() {
     pin_canonicalizes_to(
         "NP_003997.1:p.[Cys77Trp;Arg76Ser]",
-        "NP_003997.1:p.[Arg76Ser;Cys77Trp]",
-        "#1098 orders cis members; protein delins-canonicalization does not re-run after the sort",
+        "NP_003997.1:p.Arg76_Cys77delinsSerTrp",
+        "protein/substitution.md:23 — #1116 sorts members before the protein coalesce",
     );
 }
 
