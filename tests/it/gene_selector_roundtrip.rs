@@ -356,6 +356,34 @@ fn display_compound_ref_without_selector_unchanged() {
     assert_eq!(v.to_string(), input);
 }
 
+#[test]
+fn display_drops_gene_selector_with_compound_ref_whose_inner_is_not_a_transcript() {
+    // #1139: the drop is driven by the compound reference having already spent
+    // its one permitted specification (`refseq.md:40-41`), NOT by the inner
+    // accession being a transcript. `NG_012232.1` is a genomic reference, so the
+    // #1051 `is_transcript_reference` gate alone would keep `(BRCA1)` and render
+    // a doubled `(...)(...)` specification. The symbol stays on the struct.
+    let v = parse_hgvs("NC_000013.11(NG_012232.1)(BRCA1):c.100A>G").unwrap();
+    assert_eq!(gene_symbol_of(&v), Some("BRCA1"));
+    assert_eq!(
+        v.to_string(),
+        "NC_000013.11(NG_012232.1):c.100A>G",
+        "a compound reference already carries its one specification; the gene selector is dropped",
+    );
+}
+
+#[test]
+fn compound_ref_with_nontranscript_inner_display_is_idempotent() {
+    // The dropped form must be a fixed point — re-parsing the rendered string
+    // has to reproduce it byte-identically (this repo is output-stability
+    // critical, and #1058 turns a non-idempotent Display into a real bug).
+    let once = parse_hgvs("NC_000013.11(NG_012232.1)(BRCA1):c.100A>G")
+        .unwrap()
+        .to_string();
+    let twice = parse_hgvs(&once).unwrap().to_string();
+    assert_eq!(once, twice);
+}
+
 // =============================================================================
 // Allele compound-form matrix. On a transcript reference the per-sub-variant
 // selector is dropped (#1051), so the compact/expanded prefix loses `(GENE)`.
