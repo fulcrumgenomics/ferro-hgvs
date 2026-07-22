@@ -1705,15 +1705,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok((HgvsVariant::Allele(preserved), all_warnings));
         }
 
-        // Protein-axis adjacency (protein/substitution.md:23): two or more
-        // consecutive-residue substitutions in one cis allele describe a single
-        // delins (`p.[Arg76Ser;Cys77Trp]` → `p.Arg76_Cys77delinsSerTrp`). The
-        // positional nucleotide merge below never fires on protein members, so
+        // Protein-axis adjacency (protein/substitution.md:23, delins.md:18):
+        // two or more consecutive-residue changes (substitutions and/or
+        // single-residue deletions) in one cis allele describe a single delins
+        // (`p.[Arg76Ser;Cys77Trp]` → `p.Arg76_Cys77delinsSerTrp`;
+        // `p.[Arg76Ser;Cys77del]` → `p.Arg76_Cys77delinsSer`), or a pure range
+        // deletion when every member is a deletion. The positional nucleotide
+        // merge below never fires on protein members, so
         // coalesce the protein axis here and re-dispatch the result (a bare
         // `Protein` when fully merged, else a smaller `Allele`) through the
         // normal pipeline. The helper is a no-op once no adjacent run remains,
         // so the re-dispatch cannot loop.
-        if let Some(coalesced) = merge::coalesce_protein_adjacent_substitutions(allele) {
+        if let Some(coalesced) = merge::coalesce_protein_adjacent_changes(allele) {
             let (normalized, mut warnings) = self.normalize_dispatch(&coalesced)?;
             all_warnings.append(&mut warnings);
             return Ok((normalized, all_warnings));
