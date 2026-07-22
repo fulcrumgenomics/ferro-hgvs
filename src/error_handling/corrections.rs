@@ -693,6 +693,39 @@ pub fn correct_single_letter_aa_in_protein(input: &str) -> (Cow<'_, str>, Vec<De
     while i < len {
         let c = bytes[i];
 
+        // A member separator may be followed by the NEXT member's reference —
+        // `;NP_000788.2(DRD4):p.` — which is not amino-acid text and must be
+        // copied verbatim. Without this the scan, which starts at the FIRST
+        // `:p.` and runs to the end of the input, expands that accession's
+        // letters as one-letter codes and rewrites `NP_000788.2` into
+        // `AsnPro_000788.2` — a reference sequence that does not exist (#1143).
+        //
+        // The set is every separator that can precede a fresh member reference:
+        // cis/trans `;`, products `,`, mosaic `/` and chimeric `//` (both open
+        // with `/`), and/or `^`, and the `[` opening an expanded bracket. `|` is
+        // deliberately absent: in HGVS it is the *methylation* marker
+        // (`|gom`/`|lom`/`|met=`, `parse_methylation`), not a member separator,
+        // so nothing accession-shaped ever follows it here.
+        if matches!(c, b';' | b',' | b'/' | b'^' | b'[') {
+            out.push(c as char);
+            i += 1;
+            if let Some((skip, axis)) = member_reference_len(&body[i..]) {
+                out.push_str(&body[i..i + skip]);
+                i += skip;
+                // A non-protein member's payload is nucleotide/other text, never
+                // amino acids: `NM_2:c.5G>A` would otherwise have its bases `G`
+                // and `A` expanded to `Gly`/`Ala`. Copy the whole payload
+                // verbatim up to the next top-level boundary; only a `p.`
+                // member's payload is left for the scan to expand (#1143).
+                if axis != b'p' {
+                    let span = member_payload_len(&body[i..]);
+                    out.push_str(&body[i..i + span]);
+                    i += span;
+                }
+            }
+            continue;
+        }
+
         // Skip three-letter canonical AA tokens already in place.
         if c.is_ascii_uppercase() && i + 3 <= len {
             let token = &body[i..i + 3];
@@ -735,6 +768,76 @@ pub fn correct_single_letter_aa_in_protein(input: &str) -> (Cow<'_, str>, Vec<De
     } else {
         (Cow::Owned(out), corrections)
     }
+}
+
+/// Length of the reference prefix that opens an allele member at the start of
+/// `rest` — `NP_000788.2(DRD4):p.` — including the coordinate marker, plus the
+/// coordinate letter itself; or `None` when `rest` does not begin with one.
+///
+/// Used to step the one-letter expansion over a later member's accession and
+/// gene selector, which are not amino-acid text. The shape is deliberately
+/// strict so it cannot swallow edit content: an accession-shaped run
+/// (`[A-Za-z0-9_.]`), an optional parenthesised selector, then `:`, then a
+/// single coordinate letter and `.`. A `;` *inside* a compact bracket
+/// (`p.[(Phe41Cys);(Gly47Arg)]`) is followed by `(`, which fails the run at its
+/// first character, so the members of a compact allele keep being scanned.
+///
+/// The coordinate letter is returned so the caller can tell a `p.` member
+/// (whose payload the scan should keep expanding) from a non-protein one (whose
+/// payload must be copied verbatim — see [`member_payload_len`]).
+fn member_reference_len(rest: &str) -> Option<(usize, u8)> {
+    let b = rest.as_bytes();
+    let mut i = 0;
+    while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_' || b[i] == b'.') {
+        i += 1;
+    }
+    if i == 0 {
+        return None; // not accession-shaped
+    }
+    // Optional `(SELECTOR)`.
+    if i < b.len() && b[i] == b'(' {
+        let close = rest[i..].find(')')? + i;
+        i = close + 1;
+    }
+    // Require `:<axis>.` where the axis is one HGVS actually defines. Accepting
+    // any lowercase letter would let a malformed `FOO:x.` pass as a member
+    // reference, so its payload would be skipped verbatim instead of scanned.
+    if i + 2 < b.len() && b[i] == b':' && is_hgvs_axis(b[i + 1]) && b[i + 2] == b'.' {
+        Some((i + 3, b[i + 1]))
+    } else {
+        None
+    }
+}
+
+/// The HGVS coordinate-type letters: genomic, coding, non-coding, RNA, protein,
+/// mitochondrial, and circular.
+fn is_hgvs_axis(b: u8) -> bool {
+    matches!(b, b'c' | b'g' | b'm' | b'n' | b'o' | b'p' | b'r')
+}
+
+/// Byte length of a non-protein member's payload at the start of `rest`, up to
+/// (not including) the next **top-level** member boundary or the input's end.
+///
+/// A boundary is a member separator (`;`, `,`, `/`, `^`) or a bracket close
+/// (`]`) seen at paren/bracket depth zero, so a member's own nested edit
+/// (`c.[5G>A;6C>T]`) is copied whole rather than split at its interior `;`.
+/// This keeps a nucleotide/other payload verbatim, so its uppercase bases are
+/// never mistaken for one-letter amino-acid codes (#1143).
+fn member_payload_len(rest: &str) -> usize {
+    let b = rest.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'(' | b'[' => depth += 1,
+            b')' | b']' if depth > 0 => depth -= 1,
+            b']' => break, // closes the enclosing allele bracket
+            b';' | b',' | b'/' | b'^' if depth == 0 => break,
+            _ => {}
+        }
+        i += 1;
+    }
+    i
 }
 
 /// Find the byte offset *within `input`* at which the protein description
@@ -4247,6 +4350,170 @@ mod tests {
             correct_single_letter_aa_in_protein("NP_000079.2:p.V600_E601delinsK");
         assert_eq!(corrected, "NP_000079.2:p.Val600_Glu601delinsLys");
         assert_eq!(corrections.len(), 3);
+    }
+
+    /// #1143: the expansion must not run past the end of the member it is
+    /// correcting and eat the NEXT member's accession.
+    ///
+    /// `find_protein_segment_start` locates the first `:p.` and the scan then
+    /// runs to the end of the input, so in an expanded allele the second
+    /// member's `NP_000788.2` fell inside the "protein segment" and its `N`/`P`
+    /// were expanded as Asn/Pro — rewriting the reference sequence identifier
+    /// into `AsnPro_000788.2`, an accession that does not exist.
+    #[test]
+    fn single_letter_expansion_stops_at_the_next_member_accession() {
+        let input = "[NP_003997.2:p.(Phe41Cys);NP_000788.2:p.(Gly47Arg)]";
+        let (corrected, corrections) = correct_single_letter_aa_in_protein(input);
+        assert_eq!(corrected, input, "accessions must survive verbatim");
+        assert!(
+            corrections.is_empty(),
+            "nothing to expand; got {corrections:?}"
+        );
+    }
+
+    /// The gene-symbol selector of a later member is equally off-limits.
+    #[test]
+    fn single_letter_expansion_leaves_a_later_gene_selector_alone() {
+        let input = "[NP_003997.2(DMD):p.(Phe41Cys);NP_000788.2(DRD4):p.(Gly47Arg)]";
+        let (corrected, corrections) = correct_single_letter_aa_in_protein(input);
+        assert_eq!(corrected, input);
+        assert!(corrections.is_empty(), "got {corrections:?}");
+    }
+
+    /// The real expansion still has to work in a later member — the fix must
+    /// resume scanning at each member's own `p.`, not stop at the first one.
+    #[test]
+    fn single_letter_expansion_still_reaches_every_member() {
+        let (corrected, corrections) =
+            correct_single_letter_aa_in_protein("[NP_003997.2:p.(F41C);NP_000788.2:p.(G47R)]");
+        assert_eq!(
+            corrected,
+            "[NP_003997.2:p.(Phe41Cys);NP_000788.2:p.(Gly47Arg)]"
+        );
+        assert_eq!(corrections.len(), 4);
+    }
+
+    /// Three members, so the skip must *repeat* rather than fire once. A fix
+    /// that stopped scanning at the first boundary would expand only the first
+    /// member; one that skipped only once would corrupt the third accession.
+    /// `|` is the methylation marker, not a member separator, so the scan must
+    /// NOT treat it as a boundary — it has no following reference to protect,
+    /// and skipping past it would corrupt an actual methylation edit. Rejecting
+    /// a CodeRabbit suggestion to add `|` to the separator set (#1143 review).
+    /// A non-protein member *after* a protein one must have its payload copied
+    /// verbatim: `NM_2:c.5G>A` would otherwise become `NM_2:c.5Gly>Ala`, its
+    /// nucleotide bases expanded as amino acids. The earlier tests only placed
+    /// the nucleotide member *first* (in the untouched pre-`:p.` region), so
+    /// they missed this. (#1143 review.)
+    #[test]
+    fn single_letter_expansion_leaves_a_trailing_nucleotide_member_alone() {
+        for (input, want) in [
+            (
+                "[NP_1:p.(V1E);NM_2:c.5G>A]",
+                "[NP_1:p.(Val1Glu);NM_2:c.5G>A]",
+            ),
+            (
+                "[NP_1:p.(V1E);NC_000001.11:g.100A>G]",
+                "[NP_1:p.(Val1Glu);NC_000001.11:g.100A>G]",
+            ),
+        ] {
+            let (corrected, _) = correct_single_letter_aa_in_protein(input);
+            assert_eq!(corrected, want, "nucleotide payload corrupted for {input}");
+        }
+    }
+
+    /// A nucleotide member's own bracketed edit is copied whole — the boundary
+    /// scan must not split at the interior `;` inside `c.[5G>A;6C>T]`.
+    #[test]
+    fn single_letter_expansion_copies_a_nested_nucleotide_edit_whole() {
+        let (corrected, _) =
+            correct_single_letter_aa_in_protein("[NP_1:p.(V1E);NM_2:c.[5G>A;6C>T]]");
+        assert_eq!(corrected, "[NP_1:p.(Val1Glu);NM_2:c.[5G>A;6C>T]]");
+    }
+
+    /// The scan resumes correctly for a protein member that *follows* a skipped
+    /// nucleotide one: all three members are handled, only the two `p.` ones
+    /// expand.
+    #[test]
+    fn single_letter_expansion_resumes_after_a_nucleotide_member() {
+        let (corrected, corrections) =
+            correct_single_letter_aa_in_protein("[NP_1:p.(V1E);NM_2:c.5G>A;NP_3:p.(D2G)]");
+        assert_eq!(corrected, "[NP_1:p.(Val1Glu);NM_2:c.5G>A;NP_3:p.(Asp2Gly)]");
+        assert_eq!(corrections.len(), 4);
+    }
+
+    /// Every member separator, not just `;`: products `,`, mosaic `/`, chimeric
+    /// `//`, and and/or `^`. Each must skip the later accession (leaving it
+    /// verbatim) while still expanding both members' `p.` one-letter codes — the
+    /// `matches!(c, b';' | b',' | b'/' | b'^' | b'[')` set exercised end to end.
+    #[test]
+    fn single_letter_expansion_handles_each_member_separator() {
+        for (input, expected) in [
+            ("NP_1:p.V1E,NP_2:p.G2D", "NP_1:p.Val1Glu,NP_2:p.Gly2Asp"),
+            ("NP_1:p.V1E/NP_2:p.G2D", "NP_1:p.Val1Glu/NP_2:p.Gly2Asp"),
+            ("NP_1:p.V1E//NP_2:p.G2D", "NP_1:p.Val1Glu//NP_2:p.Gly2Asp"),
+            ("NP_1:p.V1E^NP_2:p.G2D", "NP_1:p.Val1Glu^NP_2:p.Gly2Asp"),
+            // `[` opens an expanded bracket, and is in the same separator set.
+            ("NP_1:p.V1E;[NP_2:p.G2D]", "NP_1:p.Val1Glu;[NP_2:p.Gly2Asp]"),
+        ] {
+            let (corrected, _) = correct_single_letter_aa_in_protein(input);
+            assert_eq!(corrected, expected, "separator handling for {input}");
+        }
+    }
+
+    /// Only real HGVS axes open a member. A malformed `FOO:x.` is not a member
+    /// reference, so the scan keeps treating what follows as protein text
+    /// rather than skipping it verbatim (#1143 review).
+    #[test]
+    fn a_bogus_axis_letter_is_not_a_member_boundary() {
+        // `:p.` IS an axis, so the later member's accession is protected and its
+        // payload expanded.
+        let (ok, _) = correct_single_letter_aa_in_protein("NP_1:p.V1E;NP_2:p.G2D");
+        assert_eq!(ok, "NP_1:p.Val1Glu;NP_2:p.Gly2Asp");
+
+        // `:x.` is not, so nothing is skipped on its account.
+        let (bogus, _) = correct_single_letter_aa_in_protein("NP_1:p.V1E;FOO:x.G2D");
+        assert_ne!(
+            bogus, "NP_1:p.Val1Glu;FOO:x.G2D",
+            "a bogus axis must not be treated as a member reference"
+        );
+    }
+
+    #[test]
+    fn a_pipe_is_not_a_member_boundary() {
+        // A methylation edit whose payload is left of a one-letter code: the
+        // code before the `|` still expands, the `|met=` after it is untouched.
+        let (corrected, _) = correct_single_letter_aa_in_protein("NP_1:p.V1|met=");
+        assert_eq!(corrected, "NP_1:p.Val1|met=");
+    }
+
+    #[test]
+    fn single_letter_expansion_handles_more_than_two_members() {
+        let (corrected, corrections) = correct_single_letter_aa_in_protein(
+            "[NP_003997.2:p.(V600E);NP_000788.2:p.(G12D);NP_004006.1:p.(R1H)]",
+        );
+        assert_eq!(
+            corrected,
+            "[NP_003997.2:p.(Val600Glu);NP_000788.2:p.(Gly12Asp);NP_004006.1:p.(Arg1His)]"
+        );
+        assert_eq!(corrections.len(), 6);
+    }
+
+    /// A `;` *inside* a compact bracket is not a member boundary: it is followed
+    /// by `(`, which fails the accession-shaped run at its first character, so
+    /// both members keep being scanned.
+    #[test]
+    fn single_letter_expansion_still_scans_inside_a_compact_bracket() {
+        let (corrected, _) = correct_single_letter_aa_in_protein("NP_003997.2:p.[(V600E);(G12D)]");
+        assert_eq!(corrected, "NP_003997.2:p.[(Val600Glu);(Gly12Asp)]");
+    }
+
+    /// A non-protein member ahead of the protein one is equally off-limits.
+    #[test]
+    fn single_letter_expansion_leaves_a_non_protein_member_alone() {
+        let (corrected, _) =
+            correct_single_letter_aa_in_protein("[NM_000088.3:c.100A>G;NP_000788.2:p.(G12D)]");
+        assert_eq!(corrected, "[NM_000088.3:c.100A>G;NP_000788.2:p.(Gly12Asp)]");
     }
 
     #[test]
