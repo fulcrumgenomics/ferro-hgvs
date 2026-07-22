@@ -310,6 +310,106 @@ fn divergence_budget_is_unchanged() {
     );
 }
 
+/// Known passing/expected statuses that are deliberately **not** part of the
+/// divergence budget: every row in one of these is a conformant outcome, not a
+/// recorded spec divergence, so `divergence_budget_is_unchanged` rightly ignores
+/// them. Keeping the list explicit is the point of issue #1107 — a *new* status
+/// the generator starts emitting is then neither budgeted nor allowlisted, so
+/// `every_observed_status_is_accounted_for` fails and names it, turning "a new
+/// status category appeared" into a deliberate, reviewed decision instead of a
+/// silent pass. Regenerate the roster of observed statuses with:
+///   `cargo run --features dev --example generate_spec_enumeration -- --census`
+/// and read `by_status` in the generated fixture.
+const KNOWN_PASSING_STATUSES: &[&str] = &[
+    // Spec-forbidden string that ferro rejected outright (parse error) — the
+    // conformant counterpart of the budgeted `false-acceptance`.
+    "correctly-rejected",
+    // Bad string repaired to the canonical form the spec names — the ideal
+    // outcome of a repair.
+    "repaired",
+    // Grammar example that parses into the coordinate axis the spec declares.
+    "form-axis-ok",
+    // Grammar example whose axis the spec does not state; ferro's parsed axis is
+    // pinned as a baseline (not a spec matter). Emittable but currently 0 rows.
+    "form-axis-pinned",
+    // Projection that matches the form the spec states — the conformant
+    // counterpart of the budgeted `projection-diverges`.
+    "preserved",
+    // Projection with no spec-stated expectation, pinned as a baseline: ferro
+    // rendered a form, declined/unavailable, or errored. None is a spec
+    // divergence — the spec mandates no expectation for these.
+    "projection-pinned",
+    "projection-unavailable-pinned",
+    "projection-error-pinned",
+    // Error-mode outcome pinned as ferro policy: the spec says nothing about
+    // ferro's error modes, so a per-mode divergence is never a spec expectation.
+    "mode-divergence-pinned",
+];
+
+/// A status is accounted for if it is either budgeted (a tracked divergence in
+/// `DIVERGENCE_BUDGET`) or allowlisted (a known passing outcome in
+/// `KNOWN_PASSING_STATUSES`).
+fn status_is_accounted_for(status: &str) -> bool {
+    DIVERGENCE_BUDGET.iter().any(|(s, _)| *s == status) || KNOWN_PASSING_STATUSES.contains(&status)
+}
+
+/// Returns the distinct observed statuses that are neither budgeted (a tracked
+/// spec divergence in `DIVERGENCE_BUDGET`) nor allowlisted (a known passing
+/// outcome in `KNOWN_PASSING_STATUSES`), sorted for a stable message. Such a
+/// status is a new, unreviewed category — `divergence_budget_is_unchanged` is
+/// blind to it, so this is what `every_observed_status_is_accounted_for` gates
+/// on.
+fn unaccounted_statuses<'a>(statuses: impl IntoIterator<Item = &'a str>) -> Vec<&'a str> {
+    let mut unknown: Vec<&str> = statuses
+        .into_iter()
+        .filter(|status| !status_is_accounted_for(status))
+        .collect();
+    unknown.sort_unstable();
+    unknown.dedup();
+    unknown
+}
+
+#[test]
+fn unaccounted_statuses_flags_a_new_status() {
+    // A budgeted status is accounted for; a status neither budgeted nor
+    // allowlisted (e.g. a future `projection panicked` defect indicator) must
+    // be surfaced by name so it becomes a deliberate decision, not a silent
+    // pass. This holds independent of the allowlist's contents.
+    let observed = ["false-acceptance", "projection panicked"];
+    assert_eq!(unaccounted_statuses(observed), vec!["projection panicked"]);
+}
+
+#[test]
+fn budget_and_allowlist_are_disjoint() {
+    // `DIVERGENCE_BUDGET` = tracked divergences, `KNOWN_PASSING_STATUSES` =
+    // conformant outcomes: the two carve the status vocabulary into disjoint
+    // halves. A status in both would blur that intent (and be double-classified),
+    // so guard the split explicitly.
+    let overlap: Vec<&str> = KNOWN_PASSING_STATUSES
+        .iter()
+        .copied()
+        .filter(|s| DIVERGENCE_BUDGET.iter().any(|(b, _)| b == s))
+        .collect();
+    assert!(
+        overlap.is_empty(),
+        "a status is in both DIVERGENCE_BUDGET and KNOWN_PASSING_STATUSES: {overlap:?}"
+    );
+}
+
+#[test]
+fn every_observed_status_is_accounted_for() {
+    let fx = load();
+    let unknown = unaccounted_statuses(fx.rows.iter().map(|row| row.status.as_str()));
+    assert!(
+        unknown.is_empty(),
+        "the enumeration emitted status(es) that are neither in DIVERGENCE_BUDGET \
+         nor KNOWN_PASSING_STATUSES: {unknown:?}. A new status category appeared — \
+         classify it deliberately: budget it in DIVERGENCE_BUDGET if it records a \
+         spec divergence, or add it to KNOWN_PASSING_STATUSES if it is a conformant \
+         outcome. (`divergence_budget_is_unchanged` alone would not have caught this.)"
+    );
+}
+
 /// The acceptance gate from the conformance design: the output-invariant
 /// catalog must produce **zero** MUST-level violations over the outputs the
 /// repo already blesses. Every MUST violation must trace back to a
