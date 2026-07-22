@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.9.1...v0.10.0) - 2026-07-22
+
+### Fixed
+
+- *(normalize)* scope the remaining protein coalesce declines to the affected members ([#1134](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1134))
+- *(normalize)* coalesce a protein cis run whose to-Ter member is last ([#1133](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1133))
+- *(normalize)* fall back to named endpoints when a provider lacks the accession ([#1132](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1132))
+- *(normalize)* scope the protein coalesce to-Ter decline to the affected run ([#1127](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1127))
+- *(normalize)* minimize a named-flank pure insertion reference-free ([#1128](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1128))
+- *(project)* retain a genomic input's accession as c./n. context ([#1115](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1115))
+- *(normalize)* canonicalize protein delins to its minimal form (reference-free) ([#1122](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1122))
+- *(normalize)* coalesce mixed sub+del protein cis runs into one delins ([#1121](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1121))
+- *(parser)* accept the '*' stop-codon glyph in strict mode ([#1118](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1118))
+- *(normalize)* sort protein cis members before the delins coalesce ([#1117](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1117))
+- *(tooling)* make mutalyzer refresh merge fully non-destructive ([#1110](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1110))
+- *(normalize)* sort cis-allele members before merge so merges are input-order-independent ([#1106](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1106))
+- *(normalize)* render cis-allele members in genomic order ([#1101](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1101))
+- *(service)* validate HGVS format via the parser, not a regex gate ([#1104](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1104))
+- *(parser)* reject a frameshift anchored at an unchanged residue ([#1096](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1096))
+- *(normalize)* canonicalize consecutive-residue protein cis substitutions to delins ([#1095](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1095))
+- *(tests)* make the failure-expectations blesser merge instead of regenerate ([#1093](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1093))
+- *(project)* retain the input's genomic context on the c./n. axis ([#1090](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1090))
+- *(project)* decline the r. axis for intronic spans; emit genuine n. for r. inputs ([#1089](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1089))
+- *(project)* decline unknown intronic offsets instead of overflowing ([#1088](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1088))
+- *(project)* describe a decomposed delins as one protein consequence ([#1083](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1083))
+- *(spec-fixture)* drop prose position references from the harvester and repoint the tracker ([#1082](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1082))
+- *(parser)* reject six classes of spec-forbidden variant description ([#1091](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1091))
+
+### Other
+
+- *(audit)* scan corrections.rs and ignore #[cfg(test)] in the emission-site check ([#1124](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1124))
+- *(project)* cover cross-axis r.→n. reframe in PR CI ([#1112](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1112))
+- *(conformance)* type spec-enumeration row vocabularies ([#1113](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1113))
+- *(spec)* gate every enumeration status against budget or allowlist ([#1108](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1108))
+- *(spec)* exhaustive non-redundant HGVS spec test enumeration ([#1085](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1085))
+- *(conformance)* grow the hermetic differential protein corpus ([#1084](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1084))
+- *(normalize)* guard RefSeqMismatch=Reject across all substitution syntaxes ([#1100](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1100))
+
 ## [0.9.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.9.0...v0.9.1) - 2026-07-20
 
 ### Fixed
