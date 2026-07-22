@@ -203,6 +203,28 @@ mod tests {
             validate_hgvs("NM_000001.1:x.123A>G"),
             Err(ValidationError::InvalidFormat)
         ));
+
+        // Trailing garbage after an otherwise-valid variant. The parser is
+        // anchored — it must consume the WHOLE string — so a valid prefix
+        // followed by junk is rejected (the security-relevant property this
+        // gate relies on now that the regex is gone).
+        assert!(matches!(
+            validate_hgvs("NM_000001.1:c.123A>G junk"),
+            Err(ValidationError::InvalidFormat)
+        ));
+        assert!(matches!(
+            validate_hgvs("NM_000001.1:c.123A>Gxyzzy"),
+            Err(ValidationError::InvalidFormat)
+        ));
+    }
+
+    #[test]
+    fn test_validate_hgvs_accepts_surrounding_whitespace() {
+        // The parser-based gate trims surrounding whitespace (lenient mode),
+        // matching how the downstream `ferro` tool parses the same input, so a
+        // padded-but-valid variant is accepted. The old regex gate (anchored
+        // `^…$`) rejected it — pin the intended behavior of the swap.
+        assert!(validate_hgvs("  NM_000001.1:c.123A>G  ").is_ok());
     }
 
     #[test]
