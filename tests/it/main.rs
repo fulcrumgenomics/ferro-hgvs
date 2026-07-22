@@ -118,6 +118,7 @@ mod issue_1129_trailing_ter_delins;
 mod issue_1130_scoped_coalesce_declines;
 mod issue_1131_provider_accession_fallback;
 mod issue_1135_self_cancelling_merge;
+mod issue_1139_gene_symbol_specification;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;

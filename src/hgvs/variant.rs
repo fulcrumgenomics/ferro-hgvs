@@ -438,18 +438,20 @@ impl Accession {
     /// `ENSRNOT`, … — any species, per #1057), or an LRG transcript
     /// (`LRG_<N>t<M>`).
     ///
-    /// This is the discriminator for the gene-symbol selector's Display policy
-    /// (#1051). Per HGVS Nomenclature (`refseq.md`), the parenthetical after a
-    /// reference sequence is a *specification* whose accepted values are
-    /// transcript/protein **accessions**, not gene symbols — and a transcript
-    /// reference needs no such specification at all (bare `NM_…:c.…` is the
-    /// canonical form). So when the reference is itself a transcript, the
-    /// gene-symbol selector is disallowed and Display drops it. Genomic
-    /// (`NC`/`NG`/`NT`/`NW`/`ENSG`/bare `LRG_<N>`), mitochondrial, and
-    /// unclassifiable (custom) references are **not** transcript references:
-    /// there the selector is either the spec-sanctioned exception (a gene with
-    /// no transcript, e.g. mitochondrial) or a value ferro cannot safely drop,
-    /// so Display preserves it.
+    /// This is **one of several** conditions behind the gene-symbol selector's
+    /// Display policy (#1051); [`Self::admits_gene_selector`] is the
+    /// accession-level predicate, and it also suppresses the selector on a
+    /// compound reference (#1139). Per HGVS Nomenclature (`refseq.md`), the
+    /// parenthetical after a reference sequence is a *specification* whose
+    /// accepted values are transcript/protein **accessions**, not gene symbols —
+    /// and a transcript reference needs no such specification at all (bare
+    /// `NM_…:c.…` is the canonical form). So when the reference is itself a
+    /// transcript, the gene-symbol selector is disallowed and Display drops it.
+    /// Genomic (`NC`/`NG`/`NT`/`NW`/`ENSG`/bare `LRG_<N>`), mitochondrial,
+    /// protein, and unclassifiable (custom) references are **not** transcript
+    /// references: for them this check alone does not drop the selector — it is
+    /// either the spec-sanctioned exception (a gene with no transcript, e.g.
+    /// mitochondrial) or a value ferro cannot safely drop.
     ///
     /// **This predicate answers only the transcript-vs-not question.** It is not
     /// the whole selector policy: the `p.` axis takes no gene-symbol selector on
@@ -462,8 +464,10 @@ impl Accession {
     /// The check is on `self` only — a compound reference such as
     /// `NC_(NM_)(GENE)` stores the transcript (`NM`) as `self` with the genomic
     /// parent in `genomic_context`, so it is correctly classified as a
-    /// transcript reference (the redundant `(GENE)` is dropped, leaving the
-    /// spec-correct `NC_(NM_)` form).
+    /// transcript reference. Note that a compound reference drops the selector
+    /// regardless of what its inner accession is: `NC_(NG_)(GENE)` renders as
+    /// `NC_(NG_)` even though `NG_` is not a transcript reference, because
+    /// [`Self::admits_gene_selector`] also rejects a spent specification slot.
     pub fn is_transcript_reference(&self) -> bool {
         match &*self.prefix {
             "NM" | "NR" | "XM" | "XR" => true,
@@ -473,6 +477,44 @@ impl Accession {
             p if Self::is_lrg_prefix(p) => Self::lrg_inferred_variant_type(&self.number) == "c",
             _ => false,
         }
+    }
+
+    /// Returns true if a gene-symbol selector set alongside this accession is
+    /// rendered by `Display`.
+    ///
+    /// Per `refseq.md:40-41` a reference sequence admits **one** parenthesised
+    /// specification, and a gene symbol is not an accepted value for it. ferro
+    /// therefore emits the selector only where it is the accession's *sole*
+    /// specification and cannot be dropped safely — which rules out two cases:
+    ///
+    /// - a **transcript reference** ([`Self::is_transcript_reference`]), which
+    ///   is fully specified on its own and takes no specification (#1051);
+    /// - an accession that already carries a `genomic_context`, i.e. a compound
+    ///   `genomic(transcript)` reference (#1139). It has already spent its one
+    ///   permitted specification, so a selector would render as a second,
+    ///   stacked group — `Template(Template-gene.1)(GENE1):c.…` — which is both
+    ///   non-conformant and unparseable by ferro's own parser. The
+    ///   [`Self::is_transcript_reference`] check alone does not cover this: it
+    ///   is a prefix whitelist, so a **custom** (non-RefSeq, non-Ensembl) inner
+    ///   accession falls through it.
+    ///
+    /// Everything else preserves the selector: genomic references where the gene
+    /// stands in for a transcript, the spec-sanctioned mitochondrial exception,
+    /// and unclassifiable custom references. The value always remains on the
+    /// struct for programmatic access, independent of Display.
+    ///
+    /// **Assembly references keep their selector, by design.** An
+    /// assembly/chromosome reference ([`Self::is_assembly_ref`], e.g.
+    /// `GRCh38(chr1)`) renders its parenthesised group from the
+    /// `assembly`/`chromosome` fields, and that group is part of the *reference
+    /// identifier* — an assembly alone names no sequence — not a specification
+    /// in the `refseq.md:38` sense. So `GRCh38(chr1)(BRCA1):g.…` is
+    /// `<identifier>(<selector>)`: one specification, the structural analogue of
+    /// the preserved `NC_000023.10(DMD):c.…`, and **not** a stacked
+    /// `(...)(...)`. Testing `genomic_context` rather than the rendered parens is
+    /// what keeps the two apart.
+    pub(crate) fn admits_gene_selector(&self) -> bool {
+        !self.is_transcript_reference() && self.genomic_context.is_none()
     }
 
     /// Returns true if this is a known human mitochondrial reference accession.
@@ -1263,11 +1305,12 @@ fn use_compact_form(variants: &[HgvsVariant]) -> bool {
 /// compact form).
 ///
 /// The leaves must also agree on their gene-symbol selector — but only when
-/// that selector is actually displayed. On a **transcript** reference the
-/// selector is suppressed from Display (#1051), so a differing (invisible)
-/// selector must not block compaction; enforcing it there made Display
-/// non-idempotent (#1058). The gene agreement is therefore required only for a
-/// non-transcript (selector-visible) reference.
+/// that selector is actually displayed, which is exactly what
+/// [`gene_selector_visible`] answers: a **transcript** reference (#1051), a
+/// compound `genomic(transcript)` reference (#1139), and the `p.` axis on any
+/// accession (#310/#1142) all suppress it. A differing but invisible selector
+/// must not block compaction; enforcing it there made Display non-idempotent
+/// (#1058).
 fn trans_compact_anchor(variants: &[HgvsVariant]) -> Option<&HgvsVariant> {
     let mut anchor: Option<&HgvsVariant> = None;
     for member in variants {
@@ -1295,12 +1338,12 @@ fn trans_compact_anchor(variants: &[HgvsVariant]) -> Option<&HgvsVariant> {
                     }
                     // Accessions are equal here, so testing either is
                     // equivalent. Only enforce gene-symbol agreement when the
-                    // selector is displayed — a transcript reference suppresses
-                    // it (#1051), and blocking compaction on an invisible
+                    // selector is displayed — `gene_selector_visible` owns that
+                    // rule — because blocking compaction on an invisible
                     // mismatch breaks Display idempotency (#1058).
                     let selector_visible = a
                         .accession()
-                        .is_some_and(|acc| !acc.is_transcript_reference());
+                        .is_some_and(|acc| gene_selector_visible(acc, a.variant_type()));
                     if selector_visible && leaf.gene_symbol() != a.gene_symbol() {
                         return None;
                     }
@@ -1425,19 +1468,41 @@ fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt:
         .expect("compact form requires an accession; guarded by all_share_accession_and_type");
     write!(f, "{}", accession)?;
     if let Some(gene) = first.gene_symbol() {
-        // Same reference-type gate as `write_accession_with_optional_gene`
-        // (#1051): a transcript reference takes no gene-symbol selector. The
-        // `p.` axis takes none either, on any accession (#310/#1142) — keyed on
-        // the rendered coordinate type rather than the accession prefix so it
-        // covers `NP`/`XP`/`YP`/`ENSP`/`LRG_<n>p<m>`/UniProt and unclassifiable
-        // protein references alike. Without this, a protein *allele* emitted a
-        // selector its single-variant sibling has always dropped, because
-        // `ProteinVariant`'s own Display never reaches this function.
-        if !accession.is_transcript_reference() && first.variant_type() != "p" {
+        // `gene_selector_visible` owns the rule (#1051/#1139 accession-level,
+        // #310/#1142 protein-axis). Without the `p.` half a protein *allele*
+        // emitted a selector its single-variant sibling has always dropped,
+        // because `ProteinVariant`'s own Display never reaches this function.
+        if gene_selector_visible(accession, first.variant_type()) {
             write!(f, "({})", gene)?;
         }
     }
     write!(f, ":{}.", first.variant_type())
+}
+
+/// True when a gene-symbol selector set on a variant of `variant_type` with
+/// `accession` is actually rendered by `Display`.
+///
+/// This is the **single** answer to "is the selector visible?", and every site
+/// that needs it — the compact-prefix writer and both allele-compaction gates —
+/// must use it. Two independent rules compose here:
+///
+/// - the accession-level [`Accession::admits_gene_selector`] (a transcript
+///   reference, #1051; a compound reference whose one specification is already
+///   spent, #1139);
+/// - the coordinate-level `p.` rule: the protein axis takes no gene-symbol
+///   selector on **any** accession (#310/#1142), keyed on the rendered type
+///   rather than the accession prefix so it covers
+///   `NP`/`XP`/`YP`/`ENSP`/`LRG_<n>p<m>`/UniProt and unclassifiable protein
+///   references alike.
+///
+/// Keeping the two rules in one place is what the compaction gates need. A gate
+/// that enforces gene agreement on a selector Display does not emit makes
+/// `Display` non-idempotent: the expanded form re-parses to all-`None` genes and
+/// then compacts (#1058). That bit both the compound case (#1139) and the
+/// protein-allele case — `[NP_…(GENE1):p.(…);NP_…(GENE2):p.(…)]` rendered
+/// expanded but re-parsed and compacted — when the rules lived apart.
+fn gene_selector_visible(accession: &Accession, variant_type: &str) -> bool {
+    accession.admits_gene_selector() && variant_type != "p"
 }
 
 /// Write `accession(gene):` when a gene-symbol selector is set *and* the
@@ -1446,15 +1511,14 @@ fn write_compact_prefix(f: &mut fmt::Formatter<'_>, first: &HgvsVariant) -> fmt:
 /// Per HGVS Nomenclature (`refseq.md`), the gene-symbol selector is a
 /// specification whose accepted values are transcript/protein accessions, not
 /// gene symbols; a **transcript** reference is fully specified on its own and
-/// takes no selector at all. ferro therefore:
-/// - **drops** the gene symbol when the reference is a transcript
-///   ([`Accession::is_transcript_reference`]) — the `NM_…(GENE):c.…` →
-///   `NM_…:c.…` normalization of #1051, mirroring the earlier `p.` drop (#310);
-/// - **preserves** it otherwise — genomic references where the gene stands in
-///   for a transcript (resolved elsewhere), the spec-sanctioned mitochondrial
-///   exception, and unclassifiable custom references. The value always remains
-///   on the struct for programmatic access (`variant.<X>.gene_symbol`),
-///   independent of whether Display emits it.
+/// takes no selector at all, and no reference admits more than one
+/// specification. Which references admit the selector is decided by
+/// [`Accession::admits_gene_selector`] — it drops the symbol on a transcript
+/// reference (#1051, mirroring the earlier `p.` drop of #310) and on a compound
+/// `genomic(transcript)` reference whose one specification is already spent
+/// (#1139), and preserves it everywhere else. The value always remains on the
+/// struct for programmatic access (`variant.<X>.gene_symbol`), independent of
+/// whether Display emits it.
 fn write_accession_with_optional_gene(
     f: &mut fmt::Formatter<'_>,
     accession: &Accession,
@@ -1462,7 +1526,7 @@ fn write_accession_with_optional_gene(
 ) -> fmt::Result {
     write!(f, "{}", accession)?;
     if let Some(gene) = gene_symbol {
-        if !accession.is_transcript_reference() {
+        if accession.admits_gene_selector() {
             write!(f, "({})", gene)?;
         }
     }
@@ -2294,12 +2358,12 @@ impl HgvsVariant {
     /// sub-variant emits its own selector via per-variant `Display`.
     ///
     /// This gene agreement is required only when the selector is actually
-    /// displayed. On a **transcript** reference the selector is suppressed from
-    /// Display (#1051), so a differing (invisible) selector cannot appear in
-    /// either form; blocking compaction on it there made Display non-idempotent
-    /// (the expanded form reparses to all-`None` genes and then compacts,
-    /// #1058). So gene agreement is enforced only for a non-transcript
-    /// (selector-visible) reference.
+    /// displayed, which is exactly what [`gene_selector_visible`] answers: a
+    /// **transcript** reference (#1051), a compound `genomic(transcript)`
+    /// reference (#1139), and the `p.` axis on any accession (#310/#1142) all
+    /// suppress it, so a differing (invisible) selector cannot appear in either
+    /// form. Blocking compaction on it there made Display non-idempotent (the
+    /// expanded form reparses to all-`None` genes and then compacts, #1058).
     pub(crate) fn all_share_accession_and_type(variants: &[HgvsVariant]) -> bool {
         let Some(first) = variants.first() else {
             return true;
@@ -2316,10 +2380,10 @@ impl HgvsVariant {
             return false;
         }
 
-        // Only require matching gene symbols when the selector is displayed.
-        // A transcript reference suppresses it (#1051); all members share
-        // `first_acc`, so the first accession decides visibility for all.
-        let selector_visible = first_acc.is_some_and(|acc| !acc.is_transcript_reference());
+        // Only require matching gene symbols when the selector is displayed;
+        // `gene_selector_visible` owns that rule. All members share `first_acc`
+        // and `first_type`, so the first variant decides visibility for all.
+        let selector_visible = first_acc.is_some_and(|acc| gene_selector_visible(acc, first_type));
 
         variants[1..].iter().all(|v| {
             v.variant_type() == first_type
@@ -4117,6 +4181,114 @@ mod tests {
         assert_eq!(variant.gene_symbol, Some("COL1A1".to_string()));
         let display = format!("{}", variant);
         assert_eq!(display, "NM_000088.3:c.100A>G");
+    }
+
+    /// Build the `c.<position>A>G` substitution carrying `accession` and
+    /// `gene_symbol`, for the selector-visibility tests below.
+    fn cds_sub_with_gene(accession: Accession, gene_symbol: &str, position: i64) -> CdsVariant {
+        use crate::hgvs::location::CdsPos;
+
+        CdsVariant {
+            accession,
+            gene_symbol: Some(gene_symbol.to_string()),
+            loc_edit: LocEdit::new(
+                CdsInterval::point(CdsPos::new(position)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        }
+    }
+
+    #[test]
+    fn test_gene_selector_suppressed_on_compound_reference_with_custom_transcript() {
+        // #1139: a compound `genomic(transcript)` accession already carries the
+        // single specification `refseq.md:40-41` permits. Appending the gene
+        // symbol would stack a second group — non-conformant, and rejected by
+        // ferro's own parser. The custom inner accession (`Template-gene.1`) is
+        // the case the `is_transcript_reference` prefix whitelist misses.
+        let accession = Accession::with_style("Template-gene", "", Some(1), true)
+            .with_genomic_context(Accession::with_style("Template", "", None, true));
+        let variant = cds_sub_with_gene(accession, "GENE1", 5);
+
+        assert_eq!(variant.gene_symbol, Some("GENE1".to_string()));
+        assert_eq!(format!("{}", variant), "Template(Template-gene.1):c.5A>G");
+    }
+
+    #[test]
+    fn test_gene_selector_suppressed_on_compound_reference_with_nontranscript_inner() {
+        // The suppression is a property of the *spent specification slot*, not
+        // of the inner accession's type: `NG_` is not a transcript reference, so
+        // the `is_transcript_reference` gate alone would emit `(GENE)` and stack
+        // a second group.
+        let accession = Accession::new("NG", "012232", Some(1))
+            .with_genomic_context(Accession::new("NC", "000013", Some(11)));
+        let variant = cds_sub_with_gene(accession, "BRCA1", 100);
+        assert_eq!(format!("{}", variant), "NC_000013.11(NG_012232.1):c.100A>G");
+    }
+
+    #[test]
+    fn test_protein_allele_with_gene_mismatch_compacts() {
+        // #1142 made the `p.` selector invisible in `write_compact_prefix` but
+        // left the compaction gates keyed on the accession alone, so a protein
+        // allele whose members disagree on an *invisible* selector rendered
+        // expanded — and its reparse (all-`None` genes) then compacted, making
+        // Display non-idempotent (#1058). `gene_selector_visible` carries the
+        // `p.` rule into the gates, so the mismatch no longer blocks compaction.
+        use crate::hgvs::edit::ProteinEdit;
+        use crate::hgvs::interval::ProtInterval;
+        use crate::hgvs::location::{AminoAcid, ProtPos};
+
+        let member = |gene: &str, pos: u64| {
+            HgvsVariant::Protein(ProteinVariant {
+                accession: Accession::new("NP", "003997", Some(2)),
+                gene_symbol: Some(gene.to_string()),
+                loc_edit: LocEdit::new_predicted(
+                    ProtInterval::point(ProtPos::new(AminoAcid::Phe, pos)),
+                    ProteinEdit::Identity {
+                        predicted: true,
+                        whole_protein: false,
+                    },
+                ),
+            })
+        };
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![
+            member("GENE1", 41),
+            member("GENE2", 47),
+        ]));
+        assert_eq!(
+            allele.to_string(),
+            "NP_003997.2:p.[(Phe41(=));(Phe47(=))]",
+            "an invisible selector mismatch must not block compaction",
+        );
+    }
+
+    #[test]
+    fn test_gene_selector_preserved_on_bare_genomic_reference() {
+        // The spec-sanctioned form where the gene stands in for a transcript on
+        // a genomic reference is untouched: no genomic context is present, so
+        // the selector is the accession's only specification.
+        let variant = cds_sub_with_gene(Accession::new("NC", "000023", Some(10)), "DMD", 5);
+        assert_eq!(format!("{}", variant), "NC_000023.10(DMD):c.5A>G");
+    }
+
+    #[test]
+    fn test_allele_compact_form_compound_custom_ref_compacts_despite_gene_mismatch() {
+        // Display idempotency (#1058) for the #1139 case: the selector is
+        // invisible on a compound reference, so a differing selector must not
+        // block compaction — otherwise the expanded form reparses to all-`None`
+        // genes and then compacts, making Display non-idempotent.
+        let accession = Accession::with_style("Template-gene", "", Some(1), true)
+            .with_genomic_context(Accession::with_style("Template", "", None, true));
+        let cis = AlleleVariant::cis(vec![
+            HgvsVariant::Cds(cds_sub_with_gene(accession.clone(), "GENE1", 100)),
+            HgvsVariant::Cds(cds_sub_with_gene(accession, "GENE2", 200)),
+        ]);
+        assert_eq!(
+            format!("{}", HgvsVariant::Allele(cis)),
+            "Template(Template-gene.1):c.[100A>G;200A>G]"
+        );
     }
 
     #[test]
