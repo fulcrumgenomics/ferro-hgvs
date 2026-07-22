@@ -105,6 +105,7 @@ mod issue_1086_cross_axis_projection;
 mod issue_1092_stated_substitution_reference;
 mod issue_1097_range_sub_refseq_reject;
 mod issue_1103_cis_merge_order_independence;
+mod issue_1111_rna_noncoding_reframe;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;
