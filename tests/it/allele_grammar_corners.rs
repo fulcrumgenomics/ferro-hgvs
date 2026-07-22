@@ -181,8 +181,9 @@ fn allele_adjacent_two_variants_must_be_delins() {
 fn protein_consecutive_aa_changes_must_be_delins() {
     pin_canonicalizes_to(
         "NP_003997.1:p.[Arg76Ser;Cys77Trp]",
-        "NP_003997.1:p.[Arg76Ser;Cys77Trp]",
-        "protein/delins.md:62-64 — spec says delins; ferro currently keeps the allele (divergence)",
+        "NP_003997.1:p.Arg76_Cys77delinsSerTrp",
+        "protein/substitution.md:23 + delins.md:62-64 — two consecutive-residue cis \
+         substitutions canonicalize to a single delins",
     );
     // The spec-canonical delins form itself round-trips unchanged.
     pin_round_trip(
@@ -199,6 +200,100 @@ fn protein_separated_changes_stay_as_allele() {
     pin_accept(
         "NP_003997.1:p.[Ser44Arg;Trp46Arg]",
         "protein/delins.md:62-64 — stays as allele (separated by unchanged res)",
+    );
+}
+
+/// A predicted (`( )`) cis pair of consecutive-residue substitutions
+/// canonicalizes to a predicted delins — the wrapper is carried onto the
+/// combined form (protein/substitution.md:23).
+#[test]
+fn protein_predicted_consecutive_changes_canonicalize_to_predicted_delins() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[(Arg76Ser);(Cys77Trp)]",
+        "NP_003997.1:p.(Arg76_Cys77delinsSerTrp)",
+        "protein/substitution.md:23 — predicted consecutive subs → predicted delins",
+    );
+}
+
+/// A run of three or more consecutive-residue substitutions merges into one
+/// delins spanning the whole run.
+#[test]
+fn protein_three_consecutive_changes_merge_into_one_delins() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[Arg76Ser;Cys77Trp;Gly78Asp]",
+        "NP_003997.1:p.Arg76_Gly78delinsSerTrpAsp",
+        "protein/substitution.md:23 — a maximal adjacent run collapses to one delins",
+    );
+}
+
+/// A partial allele — one adjacent run plus a separated member — merges only
+/// the run and keeps the distant member as its own allele arm.
+#[test]
+fn protein_partial_run_merges_only_the_adjacent_pair() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[Arg76Ser;Cys77Trp;Gly90Asp]",
+        "NP_003997.1:p.[Arg76_Cys77delinsSerTrp;Gly90Asp]",
+        "protein/substitution.md:23 — only the strictly-adjacent 76_77 run coalesces",
+    );
+}
+
+/// Separated changes survive **normalization** unchanged — the coalescing
+/// pass must not reach across the unchanged residue at 45 (delins.md:63).
+#[test]
+fn protein_separated_changes_survive_normalization() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[Ser44Arg;Trp46Arg]",
+        "NP_003997.1:p.[Ser44Arg;Trp46Arg]",
+        "protein/delins.md:63 — a one-residue gap keeps the members separate",
+    );
+}
+
+/// Two substitutions at the **same** residue are contradictory (one residue
+/// cannot be two things in cis), not a consecutive-residue delins — the allele
+/// survives normalization untouched rather than coalescing.
+#[test]
+fn protein_same_residue_changes_are_not_coalesced() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[Asp2His;Asp2Glu]",
+        "NP_003997.1:p.[Asp2His;Asp2Glu]",
+        "protein/substitution.md:23 — same-residue pair is not a consecutive delins",
+    );
+}
+
+/// A `trans` allele (`];[`) describes two different physical alleles, so its
+/// members are never coalesced into one cis delins.
+#[test]
+fn protein_trans_consecutive_changes_stay_separate() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[Arg76Ser];[Cys77Trp]",
+        "NP_003997.1:p.[Arg76Ser];[Cys77Trp]",
+        "protein/substitution.md:23 — trans members are independent, never a cis delins",
+    );
+}
+
+/// A run containing a nonsense (to-`Ter`) substitution must NOT coalesce: the
+/// spec forbids listing residues after the stop, so `delins…Ter…` would be
+/// spec-invalid AND unparseable (a round-trip break). The allele is left as
+/// authored. Asserting the output equals the (parseable) input also pins that
+/// normalize does not emit a string it cannot re-read.
+#[test]
+fn protein_to_ter_run_is_not_coalesced() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[Arg76Ter;Cys77Trp]",
+        "NP_003997.1:p.[Arg76Ter;Cys77Trp]",
+        "protein/substitution.md:20, protein/delins.md:45 — no residues after Ter; do not merge",
+    );
+}
+
+/// Members authored in descending residue order are left untouched (the rule
+/// only merges strictly-ascending runs; it never reorders the author's
+/// description — #395 preserve-authored-order).
+#[test]
+fn protein_descending_order_members_stay_as_authored() {
+    pin_canonicalizes_to(
+        "NP_003997.1:p.[Cys77Trp;Arg76Ser]",
+        "NP_003997.1:p.[Cys77Trp;Arg76Ser]",
+        "ascending-only: a descending allele is not reordered into a delins",
     );
 }
 
