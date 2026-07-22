@@ -4242,7 +4242,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// - residual single AA, del single AA → substitution
     /// - residual non-empty, del empty → route through
     ///   `try_protein_ins_to_dup` (anchored at the flanking
-    ///   positions of the trimmed range)
+    ///   positions of the trimmed range); reference-free, emit the
+    ///   plain `<X>_<Y>ins<residual>` when both flanking residues are
+    ///   named by the input's endpoints (#1126)
     /// - otherwise → smaller delins (caller falls back; the helper
     ///   returns `None` for the no-progress case)
     fn try_protein_delins_canonicalize(
@@ -4363,13 +4365,37 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ));
         }
         if residual_del.is_empty() {
-            // Trimmed to a pure insertion. The ins→dup search and the flanking
-            // residue lookups below both need the protein sequence, so without
-            // it (the reference-free ≤2-residue path) bail and keep the input
-            // delins rather than emit an insertion we cannot dup-canonicalize
-            // (#1119).
+            // Trimmed to a pure insertion. The ins→dup search below needs the
+            // protein sequence; without it, emit the minimal insertion when —
+            // and only when — the AST names the residue on BOTH sides of the
+            // insertion point (#1126).
+            //
+            // `ref_aas[k]` is the residue at 1-based position
+            // `start_pos.number + k`, so the insertion point's flanks —
+            // `new_start - 1` and `new_start`, i.e. `start_pos.number + lcp - 1`
+            // and `start_pos.number + lcp` — are `ref_aas[lcp - 1]` and
+            // `ref_aas[lcp]`. Both are in range exactly when
+            // `1 <= lcp < ref_aas.len()`: a leading trim that consumed nothing
+            // puts the point 5′ of the named window, one that consumed all of it
+            // puts the point 3′ of it, and in either case the missing flank
+            // residue is only knowable from the reference — so keep the input
+            // delins (#1119's conservative default).
+            //
+            // The ins→dup refinement stays reference-gated: a protein-backed
+            // provider may reduce this same insertion further to a `dup`, which
+            // only the reference can establish.
             if !self.provider.has_protein_data() {
-                return None;
+                if lcp == 0 || lcp >= ref_aas.len() {
+                    return None;
+                }
+                let ins_start = ProtPos::new(ref_aas[lcp - 1], new_start - 1);
+                let ins_end = ProtPos::new(ref_aas[lcp], new_start);
+                return Some((
+                    ProteinEdit::Insertion {
+                        sequence: ProteinInsSeq::Literal(residual_seq),
+                    },
+                    Interval::new(ins_start, ins_end),
+                ));
             }
             let accession = variant.accession.transcript_accession();
             // Zero-width del + non-empty ins → route through the
