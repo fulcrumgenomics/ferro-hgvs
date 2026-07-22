@@ -108,6 +108,7 @@ mod issue_1103_cis_merge_order_independence;
 mod issue_1111_rna_noncoding_reframe;
 mod issue_1114_star_ter_strict;
 mod issue_1116_protein_coalesce_order_independence;
+mod issue_1119_protein_delins_canonical;
 mod issue_1120_cis_coalesce_sub_del;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;

@@ -4232,8 +4232,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///
     /// Returns `Some((edit, interval))` when the rewrite applied;
     /// `None` to fall back to the input delins (used for genuine
-    /// delins with no shared affix, uncertain endpoints, or
-    /// missing provider data).
+    /// delins with no shared affix, uncertain endpoints, or a
+    /// ≥3-residue range with no provider data — the ≤2-residue
+    /// cases are trimmed reference-free from the named endpoints).
     ///
     /// Branches (per HGVS Prioritization `general.md:56-57`):
     /// - residual empty + del empty → identity `p.<X>_<Y>=`
@@ -4269,17 +4270,31 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if start_pos.number == 0 {
             return None;
         }
-        if !self.provider.has_protein_data() {
-            return None;
-        }
-
-        let accession = variant.accession.transcript_accession();
         let expected_len = (end_pos.number - start_pos.number + 1) as usize;
-        let ref_aas =
-            self.fetch_protein_window(&accession, start_pos.number - 1, end_pos.number)?;
-        if ref_aas.len() != expected_len {
-            return None;
-        }
+
+        // Obtain the deleted reference residues. Prefer the provider's protein
+        // sequence (works for any range length); without it, fall back to the
+        // residues NAMED in the `delins` location endpoints. That fallback is
+        // valid only when *every* deleted residue is named — i.e. the range
+        // spans ≤ 2 residues (start and/or end). A ≥ 3-residue range has
+        // unnamed interior residues and cannot be trimmed reference-free
+        // (#1119). This mirrors the nucleotide axis's reference-driven
+        // `canonicalize_delins`, restricted here to the AST-derivable cases.
+        let ref_aas: Vec<AminoAcid> = if self.provider.has_protein_data() {
+            let accession = variant.accession.transcript_accession();
+            let aas =
+                self.fetch_protein_window(&accession, start_pos.number - 1, end_pos.number)?;
+            if aas.len() != expected_len {
+                return None;
+            }
+            aas
+        } else {
+            match expected_len {
+                1 => vec![start_pos.aa],
+                2 => vec![start_pos.aa, end_pos.aa],
+                _ => return None,
+            }
+        };
 
         // Affix-trim: longest common prefix then longest common suffix.
         let mut lcp = 0usize;
@@ -4309,12 +4324,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Vec::new()
         };
 
-        // No progress — caller falls back to the unchanged delins.
-        // Do NOT route through an ins→dup search here: the deleted
-        // window is still non-empty, so any tandem-match rewrite
-        // would emit a bare `dup` that silently drops the deletion
-        // side of the edit and returns a non-equivalent variant.
-        if lcp == 0 && lcs == 0 {
+        // No affix trimmed. A 1→1 delins is still a substitution (sub > delins
+        // priority, `delins.md`) even with no shared affix, so let that single
+        // case fall through to the reduction below; otherwise there is no
+        // rewrite to make. Do NOT route the non-1→1 case through an ins→dup
+        // search here: the deleted window is still non-empty, so any
+        // tandem-match rewrite would emit a bare `dup` that silently drops the
+        // deletion side of the edit and returns a non-equivalent variant.
+        if lcp == 0 && lcs == 0 && !(residual_del.len() == 1 && residual_seq.0.len() == 1) {
             return None;
         }
 
@@ -4346,6 +4363,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ));
         }
         if residual_del.is_empty() {
+            // Trimmed to a pure insertion. The ins→dup search and the flanking
+            // residue lookups below both need the protein sequence, so without
+            // it (the reference-free ≤2-residue path) bail and keep the input
+            // delins rather than emit an insertion we cannot dup-canonicalize
+            // (#1119).
+            if !self.provider.has_protein_data() {
+                return None;
+            }
+            let accession = variant.accession.transcript_accession();
             // Zero-width del + non-empty ins → route through the
             // existing ins→dup helper anchored at the flanking
             // positions of the trimmed range.
