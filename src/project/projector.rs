@@ -1780,27 +1780,50 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// transcripts — the `n.` axis — at `refseq.md:157`; the parenthesised
     /// rendering is specified at `refseq.md:138-140`.)
     ///
-    /// The rule applied is **preserve the caller's framing**: retain the parent
-    /// whenever the input supplied one, render bare whenever it did not. This is
-    /// a superset of the spec's mandatory (intronic / flanking) case, so the
-    /// "not correct" bare-intronic form can never be produced from a parented
-    /// input; and it is what `refseq.md:138-140` prescribes for *any* `c.`
-    /// description "based on a genomic reference sequence", with no exonic
-    /// carve-out. It also matches the framing `ferro normalize` and the `r.`
-    /// axis ([`Self::reframe_rna_from_input`]) already preserve, so the axes of
-    /// one projection agree on their reference.
+    /// The rule applied is **preserve (or, for a genomic input, supply) the
+    /// reference framing**: a transcript input keeps whatever parent it
+    /// supplied and renders bare when it supplied none; a **genomic** (`g.`)
+    /// input, which carries no explicit parent, contributes its OWN accession
+    /// as the parent (#1086 D3) — a `g.` accession *is* a reference context.
+    /// This is a superset of the spec's mandatory (intronic / flanking) case,
+    /// so the "not correct" bare-intronic form can never be produced; and it is
+    /// what `refseq.md:138-140` prescribes for *any* `c.` description "based on
+    /// a genomic reference sequence", with no exonic carve-out. It also matches
+    /// the framing `ferro normalize` and the `r.` axis
+    /// ([`Self::reframe_rna_from_input`]) already preserve, so the axes of one
+    /// projection agree on their reference.
     ///
-    /// A parent is never fabricated: a bare input stays bare (#121). Unlike the
-    /// `r.` path this deliberately leaves `gene_symbol` alone — the `c.`/`n.`
-    /// symbol is already the input's own on every site that calls this.
+    /// A parent is never fabricated for a bare *transcript* input — it stays
+    /// bare (#121); only a genomic input's own accession is stamped. A genomic
+    /// **allele** is handled member-by-member: [`Self::project_allele_inner`]
+    /// projects each member through this path, so each genomic member is
+    /// stamped individually. Unlike the `r.` path this deliberately leaves
+    /// `gene_symbol` alone — the `c.`/`n.` symbol is already the input's own on
+    /// every site that calls this.
     fn reframe_transcript_axis_from_input(
         axis: Option<HgvsVariant>,
         input: &HgvsVariant,
     ) -> Option<HgvsVariant> {
         let mut axis = axis?;
-        let context = input
-            .accession()
-            .and_then(|a| a.genomic_context.as_deref().cloned());
+        let context = match input {
+            // A genomic (`g.`) input IS its own reference context. Stamp its
+            // accession so a c./n. projection reads `NC_(NM_):c.…` rather than
+            // the spec's "not correct" bare intronic form — `refseq.md:47-49`
+            // forbids a bare intronic `c.`, and `refseq.md:138-140` endorses
+            // the parenthesised form whenever a `c.` is based on a genomic
+            // reference sequence (#1086 D3, genomic-input half).
+            //
+            // Caveat (LRG): for an `LRG_` genomic input the spec-preferred form
+            // is the `t`-suffixed `LRG_Nt1:c.…`, not this parenthesised form,
+            // and a bare `LRG_N:c.…` is likewise "not correct" — so no bare
+            // fallback would be more correct. This is expected to be unreachable
+            // here (build inference declines a bare `LRG_` accession upstream of
+            // projection); the exact `LRG_Nt1` rendering is left as a follow-up.
+            HgvsVariant::Genome(g) => Some(g.accession.clone()),
+            _ => input
+                .accession()
+                .and_then(|a| a.genomic_context.as_deref().cloned()),
+        };
         Self::apply_transcript_axis_framing(&mut axis, context.as_ref());
         Some(axis)
     }

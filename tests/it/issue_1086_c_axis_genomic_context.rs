@@ -25,9 +25,12 @@
 //! ## The rule pinned here
 //!
 //! **The `c.`/`n.` axis retains the genomic context whenever the *input*
-//! supplied one, and stays bare whenever it did not** — i.e. the projector
-//! preserves the caller's reference framing rather than classifying the
-//! position.
+//! supplied one, and a bare *genomic* (`g.`) input is treated as supplying its
+//! own accession as that context** — i.e. the projector preserves (or, for a
+//! genomic input, supplies) the reference framing rather than classifying the
+//! position. Only a bare transcript input (`NM_…:c.…`, no parent) stays bare.
+//! The genomic-input half closes the last route to the spec's "not correct"
+//! bare intronic string; see `issue_1086_genomic_input_context.rs`.
 //!
 //! Why this rule and not "wrap only intronic/flanking positions":
 //!
@@ -103,6 +106,20 @@ fn manifest_projector() -> Option<VariantProjector<ArcProvider>> {
 fn project(vp: &VariantProjector<ArcProvider>, input: &str, axis: Axis) -> AxisOutcome {
     let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse({input}) failed: {e}"));
     project_axis(vp, &v, axis, None)
+        .unwrap_or_else(|e| panic!("project_axis({input}, {}) failed: {e}", axis.code()))
+}
+
+/// Project a bare genomic `input` onto `axis` via a named `transcript` (a
+/// genomic input carries no transcript of its own), as
+/// `ferro project --axis <axis> --transcript <transcript>` does.
+fn project_via(
+    vp: &VariantProjector<ArcProvider>,
+    input: &str,
+    transcript: &str,
+    axis: Axis,
+) -> AxisOutcome {
+    let v = parse_hgvs(input).unwrap_or_else(|e| panic!("parse({input}) failed: {e}"));
+    project_axis(vp, &v, axis, Some(transcript))
         .unwrap_or_else(|e| panic!("project_axis({input}, {}) failed: {e}", axis.code()))
 }
 
@@ -347,4 +364,38 @@ fn echo_paths_genomic_axis_is_unchanged() {
             "g. axis for {input}: expected {expected}, got {output}"
         );
     }
+}
+
+/// Issue #1086, genomic-input half: a bare genomic input at an *intronic*
+/// position, projected onto the `c.` axis via a named transcript, must carry
+/// the genomic accession as context — `NC_(NM_):c.357+1G>A` — never the spec's
+/// literal "not correct" bare `NM_:c.357+1G>A` (`refseq.md:47-49`).
+/// `NC_000023.11:g.32823294` is the intronic `c.357+1` of NM_004006.2.
+#[test]
+fn genomic_intronic_input_retains_context_on_c() {
+    skip_without_manifest!(vp);
+    let AxisOutcome::Rendered { output, .. } = project_via(
+        &vp,
+        "NC_000023.11:g.32823294C>T",
+        "NM_004006.2",
+        Axis::Coding,
+    ) else {
+        panic!("c. axis unexpectedly unavailable");
+    };
+    assert_eq!(output, "NC_000023.11(NM_004006.2):c.357+1G>A");
+}
+
+/// Same for the non-coding axis: the intronic genomic input keeps its context.
+#[test]
+fn genomic_intronic_input_retains_context_on_n() {
+    skip_without_manifest!(vp);
+    let AxisOutcome::Rendered { output, .. } = project_via(
+        &vp,
+        "NC_000023.11:g.32823294C>T",
+        "NM_004006.2",
+        Axis::Noncoding,
+    ) else {
+        panic!("n. axis unexpectedly unavailable");
+    };
+    assert_eq!(output, "NC_000023.11(NM_004006.2):n.601+1G>A");
 }
