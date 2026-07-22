@@ -112,6 +112,7 @@ mod issue_1116_protein_coalesce_order_independence;
 mod issue_1119_protein_delins_canonical;
 mod issue_1120_cis_coalesce_sub_del;
 mod issue_1126_reference_free_delins_to_ins;
+mod issue_1131_provider_accession_fallback;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;
