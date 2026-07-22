@@ -37,12 +37,30 @@ fn rejects_unchanged_anchor_frameshift() {
     for input in [
         "NP_003997.1:p.His150HisfsTer10",
         "NP_003997.1:p.His150HisfsTer?",
+        // 1-letter spelling: `AminoAcid` is a normalized enum, so `H` == `His`.
+        "NP_003997.1:p.H150HfsTer10",
+        // Predicted `( )` wraps the edit; the anchor is still unchanged.
+        "NP_003997.1:p.(His150HisfsTer10)",
+        // `FrameshiftAlternatives` where *every* alternative equals the
+        // reference — no reading is a change, so it is an unchanged anchor.
+        "NP_003997.1:p.His150(His^His)fsTer23",
     ] {
         assert!(
             parse_hgvs(input).is_err(),
             "frameshift.md:47-49 forbids the unchanged anchor in {input:?}"
         );
     }
+}
+
+#[test]
+fn rejects_uncertain_position_unchanged_anchor() {
+    // The anchor validator must read the position through `.inner()`, not gate
+    // on `Mu::Certain`, so an *uncertain-position* unchanged anchor is caught
+    // too rather than silently slipping through.
+    assert!(
+        parse_hgvs("NP_003997.1:p.(His150)HisfsTer10").is_err(),
+        "an uncertain-position unchanged anchor is still spec-invalid"
+    );
 }
 
 #[test]
@@ -63,6 +81,10 @@ fn changed_anchor_frameshift_still_parses() {
         "NP_003997.1:p.Gln151ThrfsTer9",
         "NP_003997.1:p.Arg97ProfsTer23",
         "NP_003997.1:p.Tyr4ValfsTer2",
+        // `FrameshiftAlternatives` with at least one changed reading is a valid
+        // frameshift — only an all-unchanged set is rejected.
+        "NP_003997.1:p.His150(His^Ala)fsTer23",
+        "NP_003997.1:p.Gly719(Ala^Ser)fsTer23",
     ] {
         assert!(
             parse_hgvs(input).is_ok(),

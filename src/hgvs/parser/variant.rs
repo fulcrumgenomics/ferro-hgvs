@@ -8234,7 +8234,13 @@ fn validate_no_unchanged_anchor_frameshift(variant: &HgvsVariant) -> Result<(), 
 
     match variant {
         HgvsVariant::Protein(v) => {
-            if let Some(Mu::Certain(pos)) = v.loc_edit.location.start.as_single() {
+            // Read the anchor position through `.inner()` so an *uncertain*
+            // position (`p.(His150)HisfsTer10`) is validated too, not only a
+            // certain one — mirroring how `names_unchanged_anchor` reads the
+            // edit. Gating on `Mu::Certain` here would silently let an
+            // uncertain-position unchanged anchor slip through.
+            let anchor = v.loc_edit.location.start.as_single();
+            if let Some(pos) = anchor.as_ref().and_then(|mu| mu.inner()) {
                 if names_unchanged_anchor(&v.loc_edit.edit, pos.aa) {
                     return Err(FerroError::parse_with_diagnostic(
                         0,
