@@ -321,34 +321,12 @@ pub fn verify_reference_identity(
         return Ok(IdentityStatus::Unstamped);
     };
     // Artifact-missing is a distinct, actionable error — never folded into the
-    // hash (a removed/transient file must not masquerade as content drift).
-    for &field in crate::prepare::identity::CONTENT_STAMPED_ARTIFACTS {
-        if let Some(rel) = manifest.get(field).and_then(|v| v.as_str()) {
-            let p = {
-                let rp = Path::new(rel);
-                if rp.is_absolute() {
-                    rp.to_path_buf()
-                } else {
-                    reference_dir.join(rp)
-                }
-            };
-            // Openability, not just existence: an artifact that exists but is
-            // unreadable (permission-denied) would otherwise pass here, then
-            // `inject_content_stamps`'s `if let Ok(bytes)` silently drops its
-            // stamp — surfacing as a false DRIFT warning rather than this
-            // distinct error. `File::open` fails on both missing AND unreadable
-            // and does not read the ~MB contents.
-            if let Err(e) = std::fs::File::open(&p) {
-                return Err(FerroError::Io {
-                    msg: format!(
-                        "manifest references `{field}` at {} but it could not be opened ({e}); \
-                         the reference is incomplete or unreadable — re-run `ferro prepare`",
-                        p.display()
-                    ),
-                });
-            }
-        }
-    }
+    // hash (a removed/transient file must not masquerade as content drift). This
+    // is the SAME pre-check `ReferenceManifest::save` runs before stamping, so the
+    // writer and reader agree on what "readable" means; see
+    // [`crate::prepare::identity::ensure_stamped_artifacts_readable`] for why both
+    // sides must reject a wired-but-unreadable artifact before hashing.
+    crate::prepare::identity::ensure_stamped_artifacts_readable(reference_dir, manifest)?;
     let actual = crate::prepare::identity::reference_identity(reference_dir, manifest);
     if actual == expected {
         Ok(IdentityStatus::Verified)

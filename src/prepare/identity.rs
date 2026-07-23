@@ -101,6 +101,44 @@ pub fn inject_content_stamps(manifest: &mut serde_json::Value, base_dir: &Path) 
     }
 }
 
+/// Ensure every stamped artifact the manifest wires is present and openable.
+///
+/// The content-stamps silently drop an unreadable artifact (see
+/// [`inject_content_stamps`]'s `if let Ok(bytes) = fs::read`), so both the stamp
+/// writer (`ReferenceManifest::save`) and the load-time verifier must reject a
+/// wired-but-unreadable artifact BEFORE hashing. Otherwise `save()` would mint a
+/// stamp over an artifact it couldn't read that the loader then hard-rejects — an
+/// internal asymmetry whose "re-run `ferro prepare`" remedy does not resolve it.
+/// `File::open` (not a full read) fails on both a missing and a permission-denied
+/// file without paying the artifact's bytes.
+pub fn ensure_stamped_artifacts_readable(
+    reference_dir: &Path,
+    manifest: &serde_json::Value,
+) -> Result<(), crate::error::FerroError> {
+    for &field in CONTENT_STAMPED_ARTIFACTS {
+        if let Some(rel) = manifest.get(field).and_then(|v| v.as_str()) {
+            let p = {
+                let rp = Path::new(rel);
+                if rp.is_absolute() {
+                    rp.to_path_buf()
+                } else {
+                    reference_dir.join(rp)
+                }
+            };
+            if let Err(e) = fs::File::open(&p) {
+                return Err(crate::error::FerroError::Io {
+                    msg: format!(
+                        "manifest references `{field}` at {} but it could not be opened ({e}); \
+                         the reference is incomplete or unreadable",
+                        p.display()
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Compute the reference identity (#764) from a parsed manifest value.
 ///
 /// Builds a canonical, path-independent content signature and FNV-1a hashes it.
@@ -491,6 +529,33 @@ mod tests {
         assert!(
             m3.get("derived_artifact_stamps").is_none(),
             "an absent artifact must not add a stamps map"
+        );
+    }
+
+    #[test]
+    fn ensure_stamped_artifacts_readable_rejects_a_wired_but_missing_artifact() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path();
+
+        // A manifest that wires no stamped artifact passes trivially.
+        let empty = serde_json::json!({ "transcript_count": 1 });
+        assert!(ensure_stamped_artifacts_readable(base, &empty).is_ok());
+
+        // Wiring an artifact that exists passes.
+        let present = base.join("derived_transcript_placements.json");
+        std::fs::write(&present, b"{}").unwrap();
+        let ok = serde_json::json!({
+            "derived_transcript_placements": "derived_transcript_placements.json",
+        });
+        assert!(ensure_stamped_artifacts_readable(base, &ok).is_ok());
+
+        // Wiring an artifact that is absent is a hard error (symmetric with the
+        // loader), whereas `inject_content_stamps` would have silently dropped it.
+        let missing = serde_json::json!({ "derived_transcript_placements": "missing.json" });
+        let err = ensure_stamped_artifacts_readable(base, &missing).unwrap_err();
+        assert!(
+            matches!(err, crate::error::FerroError::Io { .. }),
+            "a wired-but-missing artifact must be an Io error, got {err:?}"
         );
     }
 }

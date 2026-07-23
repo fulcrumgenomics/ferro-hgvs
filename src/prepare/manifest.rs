@@ -328,6 +328,15 @@ impl ReferenceManifest {
         let on_disk_value = serde_json::to_value(&on_disk).map_err(|e| FerroError::Io {
             msg: format!("Failed to serialize manifest for identity stamp: {e}"),
         })?;
+        // Reject a wired-but-unreadable stamped artifact BEFORE hashing, so the
+        // writer is symmetric with the load-time verifier: `inject_content_stamps`
+        // silently drops an unreadable artifact, so without this pre-check `save()`
+        // could mint a stamp over an artifact it couldn't read that the loader then
+        // hard-rejects (an asymmetry the "re-run ferro prepare" remedy can't fix).
+        crate::prepare::identity::ensure_stamped_artifacts_readable(
+            &self.reference_dir,
+            &on_disk_value,
+        )?;
         let id = crate::prepare::identity::reference_identity(&self.reference_dir, &on_disk_value);
         on_disk.reference_identity = Some(id.clone());
         self.reference_identity = Some(id);
@@ -719,6 +728,25 @@ mod tests {
             reference_dir: ref_dir.to_path_buf(),
         };
 
+        // The content-stamped artifacts must exist on disk: `save()` now rejects a
+        // wired-but-unreadable stamped artifact before hashing. (The bulk artifacts
+        // — cdot/genome/transcript FASTAs — are not stamped, so they need not
+        // exist for this path-roundtrip test.)
+        for stamped in [
+            "refseqgene_alignments.gff3",
+            "refseqgene_alignments_grch37.gff3",
+            "LRG_RefSeqGene",
+            "lrg_mapping.txt",
+            "legacy.fa",
+            "legacy.json",
+            "genbank.fa",
+            "genbank.json",
+        ] {
+            File::create(ref_dir.join(stamped)).unwrap();
+        }
+        std::fs::create_dir_all(ref_dir.join("backfill")).unwrap();
+        File::create(ref_dir.join("backfill/backfill_transcripts.fna")).unwrap();
+
         // Save the manifest (which should make paths relative)
         manifest.save().unwrap();
 
@@ -937,6 +965,11 @@ mod tests {
             assembly_report_grch37: Some(ref_dir.join("genome/GRCh37.assembly_report.txt")),
             ..Default::default()
         };
+        // The stamped artifacts must exist on disk: `save()` now rejects a
+        // wired-but-unreadable stamped artifact before hashing.
+        std::fs::create_dir_all(ref_dir.join("genome")).unwrap();
+        std::fs::File::create(ref_dir.join("genome/GRCh38.assembly_report.txt")).unwrap();
+        std::fs::File::create(ref_dir.join("genome/GRCh37.assembly_report.txt")).unwrap();
         manifest.save().unwrap();
 
         // On-disk JSON must store the report paths relative to reference_dir.
@@ -965,6 +998,9 @@ mod tests {
             ng_hosted_transcripts: Some(ref_dir.join("ng_hosted_transcripts.json")),
             ..Default::default()
         };
+        // The stamped artifact must exist on disk: `save()` now rejects a
+        // wired-but-unreadable stamped artifact before hashing.
+        std::fs::File::create(ref_dir.join("ng_hosted_transcripts.json")).unwrap();
         m.save().unwrap();
         let raw = std::fs::read_to_string(ref_dir.join("manifest.json")).unwrap();
         assert!(raw.contains("ng_hosted_transcripts.json"));
@@ -985,6 +1021,10 @@ mod tests {
             backfill_transcripts_fasta: Some(ref_dir.join("backfill/backfill_transcripts.fna")),
             ..Default::default()
         };
+        // The stamped artifact must exist on disk: `save()` now rejects a
+        // wired-but-unreadable stamped artifact before hashing.
+        std::fs::create_dir_all(ref_dir.join("backfill")).unwrap();
+        std::fs::File::create(ref_dir.join("backfill/backfill_transcripts.fna")).unwrap();
         m.save().unwrap();
         // On-disk JSON stores the path relative to reference_dir.
         let raw = std::fs::read_to_string(ref_dir.join("manifest.json")).unwrap();
@@ -1281,5 +1321,27 @@ mod tests {
             crate::prepare::identity::reference_identity(dir.path(), &saved),
             id
         );
+    }
+
+    #[test]
+    fn save_rejects_a_wired_but_unreadable_stamped_artifact() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        // Wire a stamped artifact that does not exist on disk. Previously `save()`
+        // would silently drop its stamp (via `inject_content_stamps`) and mint an
+        // identity the loader then hard-rejects; now it must fail at stamp time.
+        let mut m = ReferenceManifest {
+            reference_dir: dir.path().to_path_buf(),
+            transcript_count: 1,
+            derived_transcript_placements: Some(dir.path().join("missing.json")),
+            ..Default::default()
+        };
+        let err = m.save().unwrap_err();
+        assert!(
+            matches!(err, FerroError::Io { .. }),
+            "save() must reject a wired-but-unreadable artifact with an Io error, got {err:?}"
+        );
+        // And it must not have written a manifest with an inconsistent stamp.
+        assert!(!dir.path().join("manifest.json").exists());
     }
 }

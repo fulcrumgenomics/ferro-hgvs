@@ -3349,7 +3349,12 @@ fn run_check(
                 ferro_hgvs::prepare::manifest::ReferenceManifest::load_or_default(reference_dir)?;
             m.reference_dir = reference_dir.to_path_buf();
             m.save()?;
-            println!("Wrote reference identity: {computed}");
+            // Report exactly what `save()` persisted (it recomputes and writes its
+            // own stamp), not the separately-computed drift-guard value above.
+            println!(
+                "Wrote reference identity: {}",
+                m.reference_identity.as_deref().unwrap_or("<none>")
+            );
         } else {
             match verify_reference_identity(&v, reference_dir)? {
                 IdentityStatus::Verified => println!("Reference identity: verified"),
