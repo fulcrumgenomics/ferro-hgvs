@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub mod backfill;
+pub mod identity;
 pub mod manifest;
 pub use manifest::{check_references, ReferenceManifest};
 
