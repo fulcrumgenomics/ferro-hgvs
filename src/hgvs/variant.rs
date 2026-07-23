@@ -503,7 +503,7 @@ impl Accession {
     /// and unclassifiable custom references. The value always remains on the
     /// struct for programmatic access, independent of Display.
     ///
-    /// **Assembly references keep their selector, by design.** An
+    /// **Assembly references keep their selector, by design** (#1145). An
     /// assembly/chromosome reference ([`Self::is_assembly_ref`], e.g.
     /// `GRCh38(chr1)`) renders its parenthesised group from the
     /// `assembly`/`chromosome` fields, and that group is part of the *reference
@@ -512,7 +512,9 @@ impl Accession {
     /// `<identifier>(<selector>)`: one specification, the structural analogue of
     /// the preserved `NC_000023.10(DMD):c.…`, and **not** a stacked
     /// `(...)(...)`. Testing `genomic_context` rather than the rendered parens is
-    /// what keeps the two apart.
+    /// what keeps the two apart. (The form itself is a ferro extension for
+    /// tolerated legacy input; the spec declines genome-build references outright
+    /// — `refseq.md:222-231`.)
     pub(crate) fn admits_gene_selector(&self) -> bool {
         !self.is_transcript_reference() && self.genomic_context.is_none()
     }
