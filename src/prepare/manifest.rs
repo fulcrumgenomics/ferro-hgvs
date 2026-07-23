@@ -23,7 +23,7 @@ use std::path::{Component, Path, PathBuf};
 /// than an opaque serde "unknown field" error. A future `MIN_SUPPORTED` floor
 /// (currently unneeded — there is no older incompatible schema yet) would refuse
 /// references older than this build can safely read.
-pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 2;
 
 /// Manifest of prepared reference data.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -146,6 +146,11 @@ pub struct ReferenceManifest {
     pub transcript_count: usize,
     /// List of available accession prefixes
     pub available_prefixes: Vec<String>,
+    /// Content fingerprint (#1001), written by [`ReferenceManifest::save`].
+    /// Absent on references prepared before content-hashing; verified fail-soft
+    /// at load (warn by default, hard-fail under `--strict-reference`).
+    #[serde(default)]
+    pub reference_identity: Option<String>,
     /// Schema version of this manifest, written by [`ReferenceManifest::save`].
     /// Absent on references prepared before schema versioning; a value greater
     /// than [`CURRENT_MANIFEST_SCHEMA_VERSION`] means the reference was prepared
@@ -192,6 +197,7 @@ impl Default for ReferenceManifest {
             backfill_transcripts_fasta: None,
             transcript_count: 0,
             available_prefixes: Vec::new(),
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: PathBuf::new(),
         }
@@ -694,6 +700,7 @@ mod tests {
             backfill_transcripts_fasta: Some(ref_dir.join("backfill/backfill_transcripts.fna")),
             transcript_count: 100,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: ref_dir.to_path_buf(),
         };
@@ -1218,5 +1225,22 @@ mod tests {
             format!("{err}").contains("Failed to parse manifest"),
             "a duplicate key must surface as a parse error: {err}"
         );
+    }
+
+    #[test]
+    fn reference_identity_field_round_trips() {
+        let m = ReferenceManifest {
+            reference_identity: Some("aa8b3246d83055cc".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["reference_identity"], "aa8b3246d83055cc");
+        let back: ReferenceManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(back.reference_identity.as_deref(), Some("aa8b3246d83055cc"));
+    }
+
+    #[test]
+    fn current_schema_version_is_two() {
+        assert_eq!(CURRENT_MANIFEST_SCHEMA_VERSION, 2);
     }
 }

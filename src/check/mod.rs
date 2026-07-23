@@ -587,6 +587,7 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
@@ -645,6 +646,7 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
@@ -705,6 +707,7 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
@@ -765,6 +768,7 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
@@ -825,6 +829,7 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
@@ -885,6 +890,7 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
@@ -945,6 +951,7 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
@@ -1005,6 +1012,7 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
