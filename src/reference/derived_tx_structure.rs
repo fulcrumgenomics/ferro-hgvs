@@ -89,7 +89,7 @@ pub struct DerivedTxStructure {
 /// artifact. Bump when the shape changes incompatibly.
 pub const DERIVED_TX_STRUCTURES_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DerivedTxStructures {
     /// On-disk schema version (#1001). Absent on artifacts written before
@@ -104,22 +104,37 @@ pub struct DerivedTxStructures {
     pub structures: Vec<DerivedTxStructure>,
 }
 
+/// Hand-written (not `#[derive(Default)]`) so a freshly constructed value is
+/// stamped with the **current** schema version, following the in-repo precedent
+/// of [`crate::reference::authoritative::CanonicalOverrides`]. `u32::default()`
+/// would be `0`, which is the reserved "legacy, pre-versioning" marker — a
+/// producer built via `..Default::default()` would silently write an artifact
+/// claiming to predate versioning.
+///
+/// This does not affect legacy *acceptance*: serde's field-level
+/// `#[serde(default)]` on `schema_version` calls `u32::default()` (`0`), not
+/// this impl, so an on-disk artifact with no `schema_version` key still
+/// deserializes to `0` and is still accepted.
+impl Default for DerivedTxStructures {
+    fn default() -> Self {
+        Self {
+            schema_version: DERIVED_TX_STRUCTURES_SCHEMA_VERSION,
+            description: String::new(),
+            structures: Vec::new(),
+        }
+    }
+}
+
 impl DerivedTxStructures {
     pub fn from_json_path<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
         let content = std::fs::read_to_string(path.as_ref())?;
         let parsed: Self = serde_json::from_str(&content)?;
-        if parsed.schema_version > DERIVED_TX_STRUCTURES_SCHEMA_VERSION {
-            return Err(FerroError::Io {
-                msg: format!(
-                    "derived_transcript_placements artifact at {} has schema_version {}, \
-                     which is newer than this build supports (maximum {}). Upgrade ferro, or \
-                     re-derive the artifact.",
-                    path.as_ref().display(),
-                    parsed.schema_version,
-                    DERIVED_TX_STRUCTURES_SCHEMA_VERSION
-                ),
-            });
-        }
+        crate::reference::check_artifact_schema_version(
+            "derived_transcript_placements",
+            parsed.schema_version,
+            DERIVED_TX_STRUCTURES_SCHEMA_VERSION,
+            path.as_ref(),
+        )?;
         Ok(parsed)
     }
 

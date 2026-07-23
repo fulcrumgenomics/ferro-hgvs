@@ -3372,12 +3372,11 @@ fn run_check(
         }
 
         // Recorded cdot data-release provenance (#1001): surface which pinned
-        // cdot release this reference's cdot artifacts came from, or say so
-        // plainly when the reference predates this being tracked.
-        match v.get("cdot_data_version").and_then(|x| x.as_str()) {
-            Some(ver) => println!("cdot data version: {ver}"),
-            None => println!("cdot data version: not recorded (prepared before this was tracked)"),
-        }
+        // cdot release this reference's cdot artifacts came from. When it is
+        // absent, distinguish the two very different reasons — a reference
+        // legitimately prepared with no cdot at all (`--no-cdot`) is not an old
+        // reference, and saying so would be a falsehood.
+        println!("{}", cdot_data_version_line(&v));
     }
 
     if validate_cds {
@@ -3412,6 +3411,39 @@ fn run_check(
     }
 
     Ok(())
+}
+
+/// Whether a manifest wires **any** cdot artifact (RefSeq GRCh38/GRCh37,
+/// Ensembl GRCh38/GRCh37). Mirrors `prepare::any_cdot_recorded`, but reads the
+/// manifest as raw JSON because `ferro check` inspects it that way (so an
+/// older/newer manifest still reports rather than failing to deserialize).
+///
+/// Used to tell "prepared with `--no-cdot`, so there is nothing to version"
+/// apart from "has cdot but predates version tracking" (#1001).
+/// The `ferro check` line reporting a reference's recorded cdot data-release
+/// provenance (#1001). Split out of `run_check` so each branch is directly
+/// testable: when the version is absent, the two reasons are very different — a
+/// reference legitimately prepared with no cdot at all (`--no-cdot`) is not an
+/// old reference, and saying so would be a falsehood.
+fn cdot_data_version_line(manifest: &serde_json::Value) -> String {
+    match manifest.get("cdot_data_version").and_then(|x| x.as_str()) {
+        Some(ver) => format!("cdot data version: {ver}"),
+        None if !manifest_has_cdot_artifact(manifest) => {
+            "cdot data version: n/a (no cdot artifacts in this reference)".to_string()
+        }
+        None => "cdot data version: not recorded (prepared before this was tracked)".to_string(),
+    }
+}
+
+fn manifest_has_cdot_artifact(manifest: &serde_json::Value) -> bool {
+    [
+        "cdot_json",
+        "cdot_grch37_json",
+        "ensembl_cdot_json",
+        "ensembl_cdot_grch37_json",
+    ]
+    .iter()
+    .any(|key| manifest.get(key).is_some_and(|x| !x.is_null()))
 }
 
 /// Scan every coding transcript in the prepared reference set for CDS
@@ -3582,4 +3614,72 @@ fn run_build_transcript(
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn manifest_without_any_cdot_field_has_no_cdot_artifact() {
+        // A reference prepared with `--no-cdot` is not an *old* reference, so
+        // `ferro check` must not claim it "predates" version tracking (#1001).
+        let manifest = serde_json::json!({ "prepared_at": "2026-07-23" });
+        assert!(!manifest_has_cdot_artifact(&manifest));
+    }
+
+    #[test]
+    fn explicit_null_cdot_fields_do_not_count_as_wired() {
+        let manifest = serde_json::json!({
+            "cdot_json": serde_json::Value::Null,
+            "ensembl_cdot_grch37_json": serde_json::Value::Null,
+        });
+        assert!(!manifest_has_cdot_artifact(&manifest));
+    }
+
+    #[test]
+    fn cdot_data_version_line_reports_a_recorded_version() {
+        let manifest = serde_json::json!({
+            "cdot_json": "cdot/cdot-0.2.32.refseq.GRCh38.json.gz",
+            "cdot_data_version": "data_v0.2.32",
+        });
+        assert_eq!(
+            cdot_data_version_line(&manifest),
+            "cdot data version: data_v0.2.32"
+        );
+    }
+
+    #[test]
+    fn cdot_data_version_line_distinguishes_no_cdot_from_untracked() {
+        // No cdot at all: nothing to version — not an old reference.
+        let no_cdot = serde_json::json!({ "prepared_at": "2026-07-23" });
+        assert_eq!(
+            cdot_data_version_line(&no_cdot),
+            "cdot data version: n/a (no cdot artifacts in this reference)"
+        );
+
+        // Has cdot but no recorded version: prepared before version tracking.
+        let untracked =
+            serde_json::json!({ "cdot_json": "cdot/cdot-0.2.28.refseq.GRCh38.json.gz" });
+        assert_eq!(
+            cdot_data_version_line(&untracked),
+            "cdot data version: not recorded (prepared before this was tracked)"
+        );
+    }
+
+    #[test]
+    fn any_wired_cdot_field_counts_as_a_cdot_artifact() {
+        for key in [
+            "cdot_json",
+            "cdot_grch37_json",
+            "ensembl_cdot_json",
+            "ensembl_cdot_grch37_json",
+        ] {
+            let manifest = serde_json::json!({ key: "cdot/some-cdot.json.gz" });
+            assert!(
+                manifest_has_cdot_artifact(&manifest),
+                "{key} should count as a wired cdot artifact"
+            );
+        }
+    }
 }
