@@ -265,6 +265,7 @@ pub const FERRO_NO_MUTALYZER_EQUIV: &[&str] = &[
     "Json",
     "ProteinReferenceNotAvailable",
     "ProteinSequenceUnavailable",
+    "ReferenceIdentityMismatch",
     "TranscriptNotOverlapping",
     "TranscriptSequenceUnreconstructable",
     "TranscriptVersionNotExact",
@@ -413,7 +414,8 @@ pub fn ferro_to_mutalyzer(err: &FerroError) -> &'static [&'static str] {
         | FerroError::TranscriptSequenceUnreconstructable { .. }
         | FerroError::ReducedReferenceCapability { .. }
         | FerroError::Io { .. }
-        | FerroError::Json { .. } => &[],
+        | FerroError::Json { .. }
+        | FerroError::ReferenceIdentityMismatch { .. } => &[],
     }
 }
 
@@ -584,6 +586,10 @@ mod tests {
             FerroError::Json {
                 msg: "sample".to_string(),
             },
+            FerroError::ReferenceIdentityMismatch {
+                expected: "aa8b3246d83055cc".to_string(),
+                actual: "0123456789abcdef".to_string(),
+            },
         ]
     }
 
@@ -618,6 +624,7 @@ mod tests {
             FerroError::VariantExceedsReference { .. } => "VariantExceedsReference",
             FerroError::Io { .. } => "Io",
             FerroError::Json { .. } => "Json",
+            FerroError::ReferenceIdentityMismatch { .. } => "ReferenceIdentityMismatch",
         }
     }
 
