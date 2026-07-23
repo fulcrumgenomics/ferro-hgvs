@@ -23,6 +23,9 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::path::Path;
+
+use crate::error::FerroError;
 
 /// The authoritative facts about a transcript at an exact accession version,
 /// taken from its canonical RefSeq (GenBank) record.
@@ -275,6 +278,40 @@ impl CanonicalOverrides {
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
     }
+
+    /// Load from a JSON file, enforcing the schema-version handshake (#1001
+    /// follow-up).
+    ///
+    /// Mirrors [`crate::reference::derived_placement::DerivedPlacements::from_json_path`]
+    /// and
+    /// [`crate::reference::derived_tx_structure::DerivedTxStructures::from_json_path`]:
+    /// an absent `schema_version` (a pre-versioning on-disk file) deserializes
+    /// to `0` and is accepted as legacy; a version newer than
+    /// [`CANONICAL_OVERRIDES_SCHEMA_VERSION`] is a hard error rather than a
+    /// silently-dropped artifact.
+    /// Read and parse failures name the offending file: this is now a hard
+    /// error at provider construction, and the bare `io`/`serde` message alone
+    /// ("No such file or directory", "expected value at line 1 column 3") does
+    /// not say which artifact to fix.
+    pub fn from_json_path<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
+        let path = path.as_ref();
+        let content = std::fs::read_to_string(path).map_err(|e| FerroError::Io {
+            msg: format!("Failed to read canonical overrides {}: {e}", path.display()),
+        })?;
+        let parsed: Self = serde_json::from_str(&content).map_err(|e| FerroError::Json {
+            msg: format!(
+                "Failed to parse canonical overrides {}: {e}",
+                path.display()
+            ),
+        })?;
+        crate::reference::check_artifact_schema_version(
+            "canonical_overrides",
+            parsed.schema_version,
+            CANONICAL_OVERRIDES_SCHEMA_VERSION,
+            path,
+        )?;
+        Ok(parsed)
+    }
 }
 
 /// Build a [`CanonicalOverrides`] for `accessions` by fetching and parsing each
@@ -442,6 +479,54 @@ ORIGIN
         let ov = CanonicalOverrides::from_json(r#"{"records":{}}"#).unwrap();
         assert_eq!(ov.schema_version, 0);
         assert!(ov.is_empty());
+    }
+
+    #[test]
+    fn legacy_overrides_file_without_schema_version_loads_via_path() {
+        // Mirrors DerivedPlacements::from_json_path /
+        // DerivedTxStructures::from_json_path: a pre-versioning on-disk file (no
+        // `schema_version` key at all) must still load, not be rejected.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("overrides.json");
+        std::fs::write(&p, br#"{"records":{}}"#).unwrap();
+        let loaded =
+            CanonicalOverrides::from_json_path(&p).expect("legacy overrides file must load");
+        assert_eq!(loaded.schema_version, 0, "absent version reads as 0");
+        assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn current_schema_version_overrides_file_loads_via_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("overrides.json");
+        std::fs::write(
+            &p,
+            format!(
+                r#"{{"schema_version":{},"records":{{}}}}"#,
+                CANONICAL_OVERRIDES_SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+        assert!(CanonicalOverrides::from_json_path(&p).is_ok());
+    }
+
+    #[test]
+    fn newer_schema_version_overrides_file_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("overrides.json");
+        std::fs::write(
+            &p,
+            format!(
+                r#"{{"schema_version":{},"records":{{}}}}"#,
+                CANONICAL_OVERRIDES_SCHEMA_VERSION + 1
+            ),
+        )
+        .unwrap();
+        let err = CanonicalOverrides::from_json_path(&p).unwrap_err();
+        assert!(
+            format!("{err}").contains("newer than this build"),
+            "expected an actionable version error, got: {err}"
+        );
     }
 
     #[test]
