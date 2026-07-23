@@ -318,6 +318,20 @@ impl ReferenceManifest {
         let mut on_disk = self.clone();
         on_disk.make_paths_relative();
 
+        // Stamp the content identity (#1001) onto the on-disk (relative-path)
+        // view. Computed from a throwaway Value with the derived-artifact
+        // content-stamps injected (reading the small artifacts from
+        // reference_dir). The signature excludes `reference_identity` and
+        // `prepared_at`, so this is self-consistent and idempotent on a re-bless
+        // of byte-identical data. `derived_artifact_stamps` is NOT persisted —
+        // it lives only in the throwaway value the hash consumes.
+        let on_disk_value = serde_json::to_value(&on_disk).map_err(|e| FerroError::Io {
+            msg: format!("Failed to serialize manifest for identity stamp: {e}"),
+        })?;
+        let id = crate::prepare::identity::reference_identity(&self.reference_dir, &on_disk_value);
+        on_disk.reference_identity = Some(id.clone());
+        self.reference_identity = Some(id);
+
         let manifest_path = self.reference_dir.join("manifest.json");
         let file = File::create(&manifest_path).map_err(|e| FerroError::Io {
             msg: format!("Failed to create manifest: {}", e),
@@ -1242,5 +1256,30 @@ mod tests {
     #[test]
     fn current_schema_version_is_two() {
         assert_eq!(CURRENT_MANIFEST_SCHEMA_VERSION, 2);
+    }
+
+    #[test]
+    fn save_stamps_a_reference_identity() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let mut m = ReferenceManifest {
+            reference_dir: dir.path().to_path_buf(),
+            transcript_count: 1,
+            available_prefixes: vec!["NM_".to_string()],
+            ..Default::default()
+        };
+        m.save().unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).unwrap())
+                .unwrap();
+        let id = saved["reference_identity"]
+            .as_str()
+            .expect("identity stamped");
+        assert_eq!(id.len(), 16); // 16-hex FNV-1a digest
+                                  // Recompute matches what was written (excludes reference_identity itself).
+        assert_eq!(
+            crate::prepare::identity::reference_identity(dir.path(), &saved),
+            id
+        );
     }
 }
