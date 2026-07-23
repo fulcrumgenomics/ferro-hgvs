@@ -259,6 +259,11 @@ enum Commands {
         /// Number of parallel workers (default: 1)
         #[arg(short = 'j', long, default_value = "1")]
         workers: usize,
+
+        /// Hard-fail if the reference's content does not match its recorded
+        /// identity (drifted in place). Default: warn and proceed (#1001).
+        #[arg(long)]
+        strict_reference: bool,
     },
 
     /// Project an HGVS variant onto a chosen output axis (g/c/n/p/r)
@@ -289,6 +294,11 @@ enum Commands {
         /// Reference directory (with manifest.json from 'ferro prepare')
         #[arg(long, required = true)]
         reference: PathBuf,
+
+        /// Hard-fail if the reference's content does not match its recorded
+        /// identity (drifted in place). Default: warn and proceed (#1001).
+        #[arg(long)]
+        strict_reference: bool,
     },
 
     /// Parse HGVS variants (validation only)
@@ -756,6 +766,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             reject,
             timing,
             workers,
+            strict_reference,
         } => {
             let config = build_error_config(&error_mode, &ignore, &reject);
             run_normalize(
@@ -768,6 +779,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 timing.as_ref(),
                 workers,
                 &config,
+                strict_reference,
             )
         }
         Commands::Project {
@@ -778,6 +790,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
             format,
             reference,
+            strict_reference,
         } => run_project(
             variant.as_deref(),
             &axis,
@@ -786,6 +799,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output.as_ref(),
             &format,
             &reference,
+            strict_reference,
         ),
         Commands::Parse {
             variant,
@@ -1432,6 +1446,7 @@ fn run_normalize(
     timing: Option<&PathBuf>,
     workers: usize,
     error_config: &ErrorConfig,
+    strict_reference: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::commands::create_reference_provider;
     use std::time::Instant;
@@ -1440,7 +1455,7 @@ fn run_normalize(
     let config = NormalizeConfig::default().with_direction(parse_shuffle_direction(direction));
 
     // Create reference provider from directory
-    let provider = create_reference_provider(reference.map(|p| p.as_path()))?;
+    let provider = create_reference_provider(reference.map(|p| p.as_path()), strict_reference)?;
     let normalizer = Normalizer::with_config(provider, config);
 
     // Print capability summary
@@ -1624,6 +1639,7 @@ fn run_normalize(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_project(
     variant: Option<&str>,
     axis: &str,
@@ -1632,13 +1648,14 @@ fn run_project(
     output: Option<&PathBuf>,
     format: &str,
     reference: &Path,
+    strict_reference: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::cli::format::{output_project_error, output_projection};
     use ferro_hgvs::cli::{project_axis, Axis, OutputFormat};
     use ferro_hgvs::data::cdot::CdotMapper;
     use ferro_hgvs::data::projection::Projector;
     use ferro_hgvs::project::VariantProjector;
-    use ferro_hgvs::reference::multi_fasta::MultiFastaProvider;
+    use ferro_hgvs::reference::multi_fasta::{LoadOptions, MultiFastaProvider};
     use std::sync::Arc;
 
     let axis = Axis::parse(axis).expect("clap value_parser guarantees a valid axis");
@@ -1653,7 +1670,13 @@ fn run_project(
     // build the concrete provider, extract the owned cdot, then project through
     // an Arc.
     let manifest_path = reference.join("manifest.json");
-    let provider = MultiFastaProvider::from_manifest(&manifest_path)?;
+    let provider = MultiFastaProvider::from_manifest_with_options(
+        &manifest_path,
+        LoadOptions {
+            strict_identity: strict_reference,
+            ..Default::default()
+        },
+    )?;
     // Extract owned cdot BEFORE moving the provider into the Arc.
     let cdot = provider
         .cdot_mapper()
@@ -3293,7 +3316,7 @@ fn run_check(
         use ferro_hgvs::commands::create_reference_provider;
         eprintln!("Building/refreshing reference cache (one-time)...");
         let started = std::time::Instant::now();
-        let _provider = create_reference_provider(Some(reference_dir))?;
+        let _provider = create_reference_provider(Some(reference_dir), false)?;
         eprintln!("Reference cache ready in {:.1?}.", started.elapsed());
     }
 
