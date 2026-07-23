@@ -605,6 +605,18 @@ enum Commands {
         /// transcripts with a legitimate non-`ATG` start codon.
         #[arg(long, value_name = "FILE")]
         cds_allowlist: Option<PathBuf>,
+
+        /// Compute and write the content identity into the manifest without a
+        /// full re-prepare (#1001). Refuses to overwrite a differing existing
+        /// stamp unless `--force`.
+        #[arg(long)]
+        write_identity: bool,
+
+        /// Allow `--write-identity` to overwrite an existing, differing stamp.
+        /// Only meaningful with `--write-identity`, so clap requires it — alone
+        /// it would be silently ignored.
+        #[arg(long, requires = "write_identity")]
+        force: bool,
     },
 
     /// Build a transcripts.json from a FASTA + CDS coordinates (single-exon).
@@ -939,11 +951,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             build_cache,
             validate_cds,
             cds_allowlist,
+            write_identity,
+            force,
         } => run_check(
             &reference,
             build_cache,
             validate_cds,
             cds_allowlist.as_deref(),
+            write_identity,
+            force,
         ),
         Commands::BuildTranscript {
             fasta,
@@ -3229,6 +3245,8 @@ fn run_check(
     build_cache: bool,
     validate_cds: bool,
     cds_allowlist: Option<&Path>,
+    write_identity: bool,
+    force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::check::{
         check_reference, check_transcripts_json, print_check_summary,
@@ -3260,6 +3278,8 @@ fn run_check(
             ("--validate-cds", validate_cds),
             ("--build-cache", build_cache),
             ("--cds-allowlist", cds_allowlist.is_some()),
+            ("--write-identity", write_identity),
+            ("--force", force),
         ]
         .iter()
         .filter(|(_, set)| *set)
@@ -3303,6 +3323,48 @@ fn run_check(
 
     if !result.valid {
         return Err("Reference data check failed".into());
+    }
+
+    // Content-identity status (#1001): report drift/unstamped/verified, or
+    // (with `--write-identity`) stamp the reference in place without a full
+    // re-prepare.
+    let manifest_path = reference_dir.join("manifest.json");
+    if manifest_path.exists() {
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+        use ferro_hgvs::reference::multi_fasta::{verify_reference_identity, IdentityStatus};
+        if write_identity {
+            let computed = ferro_hgvs::prepare::identity::reference_identity(reference_dir, &v);
+            if let Some(existing) = v.get("reference_identity").and_then(|x| x.as_str()) {
+                if existing != computed && !force {
+                    return Err(format!(
+                        "reference already stamped {existing} but content computes to \
+                         {computed} (drift). Re-run with --force to overwrite."
+                    )
+                    .into());
+                }
+            }
+            // Load typed, set the directory, and save — `save()` recomputes
+            // and writes the stamp from the artifacts under `reference_dir`.
+            let mut m =
+                ferro_hgvs::prepare::manifest::ReferenceManifest::load_or_default(reference_dir)?;
+            m.reference_dir = reference_dir.to_path_buf();
+            m.save()?;
+            println!("Wrote reference identity: {computed}");
+        } else {
+            match verify_reference_identity(&v, reference_dir)? {
+                IdentityStatus::Verified => println!("Reference identity: verified"),
+                IdentityStatus::Unstamped => println!(
+                    "Reference identity: unstamped (run `--write-identity` to enable drift detection)"
+                ),
+                IdentityStatus::Mismatch { expected, actual } => {
+                    return Err(format!(
+                        "Reference identity: MISMATCH (recorded {expected}, computed {actual}) — \
+                         reference drifted; re-prepare or `--write-identity` if intentional"
+                    )
+                    .into());
+                }
+            }
+        }
     }
 
     if validate_cds {
