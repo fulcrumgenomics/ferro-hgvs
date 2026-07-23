@@ -18,6 +18,7 @@ use clap::Parser;
 
 use ferro_hgvs::reference::derived_tx_structure::{
     derive_transcript_structure, DerivedTxStructure, DerivedTxStructures, GenomeSlice,
+    DERIVED_TX_STRUCTURES_SCHEMA_VERSION,
 };
 use ferro_hgvs::reference::multi_fasta::MultiFastaProvider;
 use ferro_hgvs::reference::ReferenceProvider;
@@ -166,6 +167,7 @@ fn run(cli: &Cli) -> anyhow::Result<ExitCode> {
          cdot version and validated by genome readback."
         .to_string();
     let artifact = DerivedTxStructures {
+        schema_version: DERIVED_TX_STRUCTURES_SCHEMA_VERSION,
         description,
         structures,
     };

@@ -85,9 +85,20 @@ pub struct DerivedTxStructure {
     pub mismatch_fraction: f64,
 }
 
+/// Current on-disk schema version for the `derived_transcript_placements`
+/// artifact. Bump when the shape changes incompatibly.
+pub const DERIVED_TX_STRUCTURES_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DerivedTxStructures {
+    /// On-disk schema version (#1001). Absent on artifacts written before
+    /// versioning — those deserialize to `0` and are accepted as legacy. A
+    /// value newer than [`DERIVED_TX_STRUCTURES_SCHEMA_VERSION`] is rejected at
+    /// load, so a forward-incompatible artifact fails loudly instead of being
+    /// silently misread.
+    #[serde(default)]
+    pub schema_version: u32,
     #[serde(default)]
     pub description: String,
     pub structures: Vec<DerivedTxStructure>,
@@ -96,7 +107,20 @@ pub struct DerivedTxStructures {
 impl DerivedTxStructures {
     pub fn from_json_path<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
         let content = std::fs::read_to_string(path.as_ref())?;
-        Ok(serde_json::from_str(&content)?)
+        let parsed: Self = serde_json::from_str(&content)?;
+        if parsed.schema_version > DERIVED_TX_STRUCTURES_SCHEMA_VERSION {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "derived_transcript_placements artifact at {} has schema_version {}, \
+                     which is newer than this build supports (maximum {}). Upgrade ferro, or \
+                     re-derive the artifact.",
+                    path.as_ref().display(),
+                    parsed.schema_version,
+                    DERIVED_TX_STRUCTURES_SCHEMA_VERSION
+                ),
+            });
+        }
+        Ok(parsed)
     }
 
     /// Pretty JSON + trailing newline (stable for a `--check` diff).
@@ -320,8 +344,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_artifact_without_schema_version_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.json");
+        // No `schema_version` key at all — the pre-versioning on-disk shape.
+        std::fs::write(&p, br#"{"description":"legacy","structures":[]}"#).unwrap();
+        let loaded = DerivedTxStructures::from_json_path(&p).expect("legacy artifact must load");
+        assert_eq!(loaded.schema_version, 0, "absent version reads as 0");
+    }
+
+    #[test]
+    fn current_schema_version_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.json");
+        std::fs::write(
+            &p,
+            format!(
+                r#"{{"schema_version":{},"description":"","structures":[]}}"#,
+                DERIVED_TX_STRUCTURES_SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+        assert!(DerivedTxStructures::from_json_path(&p).is_ok());
+    }
+
+    #[test]
+    fn newer_schema_version_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.json");
+        std::fs::write(
+            &p,
+            format!(
+                r#"{{"schema_version":{},"description":"","structures":[]}}"#,
+                DERIVED_TX_STRUCTURES_SCHEMA_VERSION + 1
+            ),
+        )
+        .unwrap();
+        let err = DerivedTxStructures::from_json_path(&p).unwrap_err();
+        assert!(
+            format!("{err}").contains("newer than this build"),
+            "expected an actionable version error, got: {err}"
+        );
+    }
+
+    #[test]
     fn round_trips_through_json() {
         let s = DerivedTxStructures {
+            schema_version: DERIVED_TX_STRUCTURES_SCHEMA_VERSION,
             description: "test".to_string(),
             structures: vec![DerivedTxStructure {
                 accession: "NM_003002.2".to_string(),
