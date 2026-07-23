@@ -1756,8 +1756,17 @@ fn write_bare_edit(f: &mut fmt::Formatter<'_>, variant: &HgvsVariant) -> fmt::Re
     }
 }
 
-impl fmt::Display for AlleleVariant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl AlleleVariant {
+    /// The single implementation of allele rendering, parameterized by protein
+    /// render style. `Display` delegates with `None`; `to_styled_string`
+    /// delegates with `Some(style)` so a caller's amino-acid preferences reach
+    /// the members — the members are what carry the amino acids, so rendering
+    /// them unstyled silently ignored the request.
+    fn fmt_with_style(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        style: Option<crate::hgvs::location::ProteinRenderStyle>,
+    ) -> fmt::Result {
         // Per HGVS spec, `[var]` denotes a multi-variant allele; a singleton
         // is just the inner variant. (Mosaic/chimeric already emit bare via
         // their separator-only loops; this unifies cis/trans/unknown.)
@@ -1767,7 +1776,7 @@ impl fmt::Display for AlleleVariant {
         // also guards `allele.uncertain` before collapsing a cis allele to a
         // singleton, keeping this invariant intact through the normalize path.
         if self.variants.len() == 1 {
-            return self.variants[0].fmt(f);
+            return fmt_member_full(f, &self.variants[0], style);
         }
         match self.phase {
             AllelePhase::Cis => {
@@ -1782,7 +1791,7 @@ impl fmt::Display for AlleleVariant {
                         if i > 0 {
                             write!(f, ";")?;
                         }
-                        v.fmt_loc_edit(f)?;
+                        fmt_member_loc_edit(f, v, style)?;
                     }
                     write!(f, "{}]", rp)
                 } else {
@@ -1792,7 +1801,7 @@ impl fmt::Display for AlleleVariant {
                         if i > 0 {
                             write!(f, ";")?;
                         }
-                        write!(f, "{}", v)?;
+                        fmt_member_full(f, v, style)?;
                     }
                     write!(f, "{}]", rp)
                 }
@@ -1811,7 +1820,7 @@ impl fmt::Display for AlleleVariant {
                         if i > 0 {
                             write!(f, ",")?;
                         }
-                        v.fmt_loc_edit(f)?;
+                        fmt_member_loc_edit(f, v, style)?;
                     }
                     write!(f, "{}]", rp)
                 } else {
@@ -1820,7 +1829,7 @@ impl fmt::Display for AlleleVariant {
                         if i > 0 {
                             write!(f, ",")?;
                         }
-                        write!(f, "{}", v)?;
+                        fmt_member_full(f, v, style)?;
                     }
                     write!(f, "{}]", rp)
                 }
@@ -1867,7 +1876,7 @@ impl fmt::Display for AlleleVariant {
                     // group has no nested-cis members, so it is disjoint from
                     // the `has_nested_group` arm above.
                     write_compact_prefix(f, &self.variants[0])?;
-                    self.variants[0].fmt_loc_edit(f)?;
+                    fmt_member_loc_edit(f, &self.variants[0], style)?;
                     for v in &self.variants[1..] {
                         write!(f, ";")?;
                         // `repeat_count_of` cannot be `None` here: every member
@@ -1892,7 +1901,7 @@ impl fmt::Display for AlleleVariant {
                             write!(f, ";")?;
                         }
                         write!(f, "[")?;
-                        v.fmt_loc_edit(f)?;
+                        fmt_member_loc_edit(f, v, style)?;
                         write!(f, "]")?;
                     }
                     Ok(())
@@ -1918,7 +1927,7 @@ impl fmt::Display for AlleleVariant {
                         if i > 0 {
                             write!(f, "(;)")?;
                         }
-                        v.fmt_loc_edit(f)?;
+                        fmt_member_loc_edit(f, v, style)?;
                     }
                     Ok(())
                 } else {
@@ -1928,7 +1937,7 @@ impl fmt::Display for AlleleVariant {
                         if i > 0 {
                             write!(f, "(;)")?;
                         }
-                        write!(f, "{}", v)?;
+                        fmt_member_full(f, v, style)?;
                     }
                     write!(f, "]")
                 }
@@ -1948,7 +1957,7 @@ impl fmt::Display for AlleleVariant {
                         if i > 0 {
                             write!(f, "^")?;
                         }
-                        v.fmt_loc_edit(f)?;
+                        fmt_member_loc_edit(f, v, style)?;
                     }
                     write!(f, ")")
                 } else if self.uncertain {
@@ -1959,7 +1968,7 @@ impl fmt::Display for AlleleVariant {
                         if i > 0 {
                             write!(f, "^")?;
                         }
-                        write!(f, "{}", v)?;
+                        fmt_member_full(f, v, style)?;
                     }
                     write!(f, ")")
                 } else if andor_alleles_share_accession(&self.variants) {
@@ -1991,12 +2000,44 @@ impl fmt::Display for AlleleVariant {
                         if i > 0 {
                             write!(f, "^")?;
                         }
-                        write!(f, "{}", v)?;
+                        fmt_member_full(f, v, style)?;
                     }
                     Ok(())
                 }
             }
         }
+    }
+}
+
+impl fmt::Display for AlleleVariant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fmt_with_style(f, None)
+    }
+}
+
+/// Render an allele member's position+edit, honouring `style` on the `p.` axis.
+fn fmt_member_loc_edit(
+    f: &mut fmt::Formatter<'_>,
+    v: &HgvsVariant,
+    style: Option<crate::hgvs::location::ProteinRenderStyle>,
+) -> fmt::Result {
+    match (v, style) {
+        (HgvsVariant::Protein(p), Some(s)) => p.fmt_loc_edit_styled(f, s),
+        _ => v.fmt_loc_edit(f),
+    }
+}
+
+/// Render a full allele member (accession included), honouring `style` on the
+/// `p.` axis and recursing so a nested allele keeps it too.
+fn fmt_member_full(
+    f: &mut fmt::Formatter<'_>,
+    v: &HgvsVariant,
+    style: Option<crate::hgvs::location::ProteinRenderStyle>,
+) -> fmt::Result {
+    match (v, style) {
+        (HgvsVariant::Protein(p), Some(s)) => p.fmt_styled(f, s),
+        (HgvsVariant::Allele(a), _) => a.fmt_with_style(f, style),
+        _ => write!(f, "{}", v),
     }
 }
 
@@ -2279,16 +2320,28 @@ impl HgvsVariant {
     /// are affected; every other coordinate system renders identically to
     /// [`Display`](Self) (the style has no meaning there).
     ///
-    /// Styles only a single `HgvsVariant::Protein`; compound/allele forms
-    /// fall through to `to_string()` unstyled. That is acceptable — the
-    /// projector's `.protein` field is always a single
-    /// `HgvsVariant::Protein(ProteinVariant)`, never an allele, so `p_name`
-    /// styling is unaffected.
+    /// Styles a single `HgvsVariant::Protein` **and** an allele of protein
+    /// members; every other coordinate system renders identically to `Display`,
+    /// since the style has no meaning off the `p.` axis.
+    ///
+    /// The allele arm is not an edge case. This method used to excuse skipping
+    /// it on the grounds that "the projector's `.protein` field is always a
+    /// single `HgvsVariant::Protein`, never an allele" — no longer true:
+    /// separated residues render as a cis allele (#1095 for changed residues,
+    /// #1099 for silent ones), so a `.protein` is routinely bracketed and the
+    /// caller's amino-acid preferences were silently dropped for it.
     pub fn to_styled_string(&self, style: crate::hgvs::location::ProteinRenderStyle) -> String {
-        match self {
-            HgvsVariant::Protein(v) => v.to_styled_string(style),
-            other => other.to_string(),
+        struct Styled<'a>(&'a HgvsVariant, crate::hgvs::location::ProteinRenderStyle);
+        impl fmt::Display for Styled<'_> {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                match self.0 {
+                    HgvsVariant::Protein(v) => v.fmt_styled(f, self.1),
+                    HgvsVariant::Allele(a) => a.fmt_with_style(f, Some(self.1)),
+                    other => write!(f, "{}", other),
+                }
+            }
         }
+        format!("{}", Styled(self, style))
     }
 
     /// Format just the position+edit portion (without accession and coordinate prefix).
