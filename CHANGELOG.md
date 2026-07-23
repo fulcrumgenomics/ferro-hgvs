@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.10.0...v0.10.1) - 2026-07-23
+
+### Fixed
+
+- *(lenient)* stop the one-letter AA expansion at the next member's accession ([#1150](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1150))
+- *(render)* apply the protein render style to an allele's members ([#1149](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1149))
+- *(parser)* accept a specification on custom and assembly references ([#1148](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1148))
+- *(hgvs)* single-source the gene-symbol selector's Display rule ([#1141](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1141))
+- *(render)* drop the gene-symbol selector on every protein allele ([#1144](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1144))
+- *(project)* name the codons an all-silent change rewrote ([#1140](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1140))
+- *(normalize)* describe a self-cancelling del+ins merge as an identity ([#1136](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1136))
+
+### Other
+
+- *(hgvs)* pin that an assembly reference keeps its gene-symbol selector ([#1147](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1147))
+
 ## [0.10.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.9.1...v0.10.0) - 2026-07-22
 
 ### Fixed
