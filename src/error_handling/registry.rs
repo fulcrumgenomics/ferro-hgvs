@@ -582,8 +582,8 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
             explanation: "Edit type keywords should be lowercase (del, ins, dup, etc.). \
                 Mixed case like 'Del' or 'INS' is auto-corrected in lenient/silent modes.",
             category: CodeCategory::Case,
-            bad_examples: &["c.100Del", "c.100_101INS"],
-            good_examples: &["c.100del", "c.100_101ins"],
+            bad_examples: &["c.100Del", "c.100_101INSA"],
+            good_examples: &["c.100del", "c.100_101insA"],
             mode_behavior: Some(ModeBehavior::standard_correctable()),
             hgvs_spec_url: None,
             related_codes: &[],

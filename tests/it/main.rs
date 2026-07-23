@@ -118,6 +118,7 @@ mod issue_1129_trailing_ter_delins;
 mod issue_1130_scoped_coalesce_declines;
 mod issue_1131_provider_accession_fallback;
 mod issue_1135_self_cancelling_merge;
+mod issue_1137_reject_bare_ins;
 mod issue_1139_gene_symbol_specification;
 mod issue_1146_custom_compound_accession;
 mod issue_129_mt_circular_wraparound;
