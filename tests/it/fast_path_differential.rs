@@ -165,7 +165,68 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     "NM_000088.3:p.Arg100Gly",
     "ENST00000357033.8:p.Arg100Gly",
     "LRG_1:p.Arg100Gly",
+    // --- compound references on custom and assembly outers (#1146). The generic
+    // parser now admits a specification on every accession family, so the fast
+    // path must still agree — either by recognizing the form or (as today) by
+    // deferring. The assembly fast path requires a `:` immediately after its
+    // `(chrom)` group, so `GRCh38(chr1)(NM_…)` falls back; these pin that the
+    // fallback keeps producing an identical `HgvsVariant`. The unversioned-inner
+    // rows pin the gene-symbol reading the version suffix disambiguates. ---
+    "MYSEQ.1(MYTX.1):c.100A>G",
+    "MYSEQ.1(MYTX.1)(GENE1):c.100A>G",
+    "Template(Template-gene.1):c.5A>G",
+    "Template(Template-gene.1)(GENE1):c.5A>G",
+    "GRCh38(chr1)(NM_004006.2):c.100A>G",
+    "GRCh38(chr1)(BRCA1):g.100A>G",
+    "GRCh38(chr1):g.100A>G",
+    "MYREF_SEQ(GENE1):c.100A>G",
+    "NC_000023.10(DMD):c.100A>G",
+    "NC_000013.11(MYTX.1):c.100A>G",
+    "ENSG00000139618.15(MYTX.1):c.100A>G",
+    "AC_000001.1(NM_004006.2):c.100A>G",
+    "NZ_CP007265.1(NM_004006.2):c.100A>G",
+    "LRG_199(NM_004006.2):c.100A>G",
+    "LRG_199(MYTX.1):c.100A>G",
+    // Version-suffix edge cases, so the fast path and the generic parser agree on
+    // which digit runs are versions: `u32::MAX` is representable, one past it is
+    // not, and a zero-padded run cannot round-trip through a `u32`. All three
+    // must parse identically through both, not merely through `parse_hgvs`.
+    "MYSEQ.1(MYTX.4294967295):c.100A>G",
+    "MYSEQ.1(MYTX.4294967296):c.100A>G",
+    "MYTX.4294967296:c.100A>G",
+    "MYTX.007:c.100A>G",
+    "MYSEQ.1(MYTX.007):c.100A>G",
+    "MYTX.0:c.100A>G",
+    // both must reject (the inner-is-compound rejection, which the #1151 nesting
+    // cap preserves)
+    "NC_000013.11(NC_000013.11(NM_004119.3)):c.100A>G",
 ];
+
+/// The nested-compound form must be **rejected**, not merely agreed upon.
+///
+/// `divergence` returns `None` for `(Ok(a), Ok(b)) if a == b`, so the
+/// `DIFFERENTIAL_CASES` row alone would keep passing if both parsers started
+/// *accepting* nested compounds — the agreement it checks is orthogonal to the
+/// rejection the comment there claims. This asserts the disposition directly, so
+/// the #1151 nesting cap and the inner-is-compound rejection cannot regress into
+/// acceptance unnoticed.
+#[test]
+fn nested_compound_reference_is_rejected_by_both_parsers() {
+    for input in [
+        "NC_000013.11(NC_000013.11(NM_004119.3)):c.100A>G",
+        "MYSEQ.1(MYSEQ.1(MYTX.1)):c.100A>G",
+        "GRCh38(chr1)(GRCh38(chr1)):c.100A>G",
+    ] {
+        assert!(
+            parse_variant(input).is_err(),
+            "generic parser accepted the nested compound {input:?}"
+        );
+        assert!(
+            parse_hgvs(input).is_err(),
+            "fast path accepted the nested compound {input:?}"
+        );
+    }
+}
 
 #[test]
 fn fast_path_matches_standard_on_table() {
@@ -201,6 +262,36 @@ fn accession() -> impl Strategy<Value = &'static str> {
         Just("LRG_1t1"),
         Just("GRCh38(chr1)"),
         Just("GRCh37(chrX)"),
+        // Compound references, including the custom and assembly outers #1146
+        // made parseable, and a stacked selector the #1139 Display drops. The
+        // fast path recognizes none of these, so they exercise its `Fallback`
+        // branch against the generic parser across every generated edit shape —
+        // not just the fixed rows in `DIFFERENTIAL_CASES`.
+        Just("NC_000013.11(NM_004119.3)"),
+        Just("MYSEQ.1(MYTX.1)"),
+        Just("MYSEQ.1(MYTX.1)(GENE1)"),
+        Just("Template(Template-gene.1)"),
+        Just("GRCh38(chr1)(NM_004006.2)"),
+        Just("MYREF_SEQ(GENE1)"),
+        // Every outer dispatch path paired with a custom versioned inner, plus
+        // the `AC_`/`NZ_` outers `is_valid_compound_outer` admits explicitly.
+        Just("NC_000013.11(MYTX.1)"),
+        Just("ENSG00000139618.15(MYTX.1)"),
+        Just("AC_000001.1(NM_004006.2)"),
+        Just("NZ_CP007265.1(NM_004006.2)"),
+        Just("LRG_199(NM_004006.2)"),
+        Just("LRG_199(MYTX.1)"),
+        // The second assembly outer, so the `(chrom)` fast path is exercised on
+        // both generated assemblies rather than only `GRCh38`.
+        Just("GRCh37(chrX)(NM_004006.2)"),
+        // Transcript/protein outers, which `is_valid_compound_outer` rejects as
+        // backwards pairings (#963). Both parsers must agree on *rejecting*
+        // these, so they exercise the rejection branch across every generated
+        // edit shape — the accepting rows above never reach it.
+        Just("NM_000088.3(MYTX.1)"),
+        Just("NR_003051.3(MYTX.1)"),
+        Just("ENST00000357033.8(MYTX.1)"),
+        Just("LRG_1t1(MYTX.1)"),
     ]
 }
 

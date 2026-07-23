@@ -48,7 +48,15 @@ fn is_valid_compound_outer(outer: &Accession) -> bool {
     // bare `LRG_<N>` as genomic (`g`). Also accept the RefSeq genomic prefixes it does not
     // classify — `AC_` (alternate-assembly) and `NZ_` (WGS) — so a valid genomic outer is
     // never falsely rejected.
-    outer.inferred_variant_type() == Some("g") || matches!(&*outer.prefix, "AC" | "NZ")
+    if outer.inferred_variant_type() == Some("g") || matches!(&*outer.prefix, "AC" | "NZ") {
+        return true;
+    }
+    // An assembly/chromosome reference (`GRCh38(chr1)`) names a genomic sequence, and a
+    // custom (SAM-refname) accession is unclassifiable — ferro cannot call either pairing
+    // backwards, and rejecting them would leave a custom or assembly reference unable to
+    // carry a specification at all (#1146). Only a *known* transcript/protein outer
+    // (`NM_`, `ENST`, `NP_`, `LRG_<N>t<M>`, …) is a genuine backwards pairing (#963).
+    outer.is_assembly_ref() || outer.inferred_variant_type().is_none()
 }
 
 /// Dispatch an accession parse on the first byte(s), avoiding trying all alternatives.
@@ -69,7 +77,7 @@ fn parse_accession_dispatch(input: &str) -> IResult<&str, Accession> {
         b'N' | b'X' => {
             // Check for underscore pattern (standard accession)
             if bytes.len() > 2 && bytes[2] == b'_' {
-                if let Ok(result) = parse_standard_accession(input) {
+                if let Ok(result) = parse_standard_accession(input, ALLOW_COMPOUND) {
                     return Ok(result);
                 }
             }
@@ -79,7 +87,7 @@ fn parse_accession_dispatch(input: &str) -> IResult<&str, Accession> {
         // Ensembl accessions: ENST, ENSG, ENSP, ENSE, ENSR
         b'E' => {
             if bytes.len() >= 4 && bytes[1] == b'N' && bytes[2] == b'S' {
-                if let Ok(result) = parse_ensembl_accession(input) {
+                if let Ok(result) = parse_ensembl_accession(input, ALLOW_COMPOUND) {
                     return Ok(result);
                 }
             }
@@ -106,7 +114,7 @@ fn parse_accession_dispatch(input: &str) -> IResult<&str, Accession> {
         // LRG accessions: LRG_XXX
         b'L' => {
             if bytes.len() >= 4 && bytes[1] == b'R' && bytes[2] == b'G' && bytes[3] == b'_' {
-                if let Ok(result) = parse_standard_accession(input) {
+                if let Ok(result) = parse_standard_accession(input, ALLOW_COMPOUND) {
                     return Ok(result);
                 }
             }
@@ -122,7 +130,7 @@ fn parse_accession_dispatch(input: &str) -> IResult<&str, Accession> {
             }
             // Try standard accession for other letter prefixes (like AC_)
             if bytes.len() > 2 && bytes[2] == b'_' {
-                if let Ok(result) = parse_standard_accession(input) {
+                if let Ok(result) = parse_standard_accession(input, ALLOW_COMPOUND) {
                     return Ok(result);
                 }
             }
@@ -141,6 +149,27 @@ fn parse_accession_dispatch(input: &str) -> IResult<&str, Accession> {
 /// Per SAM spec v1, reference names may contain printable ASCII `[!-~]` except:
 /// `\ , " ' ( ) [ ] { } < >`
 /// Additionally, they cannot start with `*` or `=` (handled separately).
+/// A version suffix is a non-empty all-digit run that is **canonical** and fits
+/// `u32`.
+///
+/// Both conditions are part of the definition, not implementation details:
+/// `Accession::version` is a `u32`, so anything it cannot represent *exactly*
+/// is dropped from `Display` and silently renames the reference —
+/// `MYTX.4294967296` → `MYTX` on overflow, `MYTX.007` → `MYTX.7` on
+/// zero-padding. Callers therefore treat `None` as "this token is not
+/// versioned" and keep the text verbatim, which is lossless.
+///
+/// Canonical means no leading zeros; a bare `0` is itself canonical.
+fn parse_version_suffix(digits: &str) -> Option<u32> {
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if digits.len() > 1 && digits.starts_with('0') {
+        return None; // zero-padded: not representable without rewriting the text
+    }
+    digits.parse::<u32>().ok()
+}
+
 fn is_sam_refname_char(c: char) -> bool {
     // Printable ASCII range: ! (33) to ~ (126)
     let code = c as u32;
@@ -239,23 +268,34 @@ fn parse_simple_accession(input: &str) -> IResult<&str, Accession> {
         )));
     }
 
-    // Check for optional version suffix: ".N" at the end where N is digits
+    // Check for optional version suffix: ".N" at the end where N is digits.
+    //
+    // A digit run that does not fit `u32` is NOT a version: splitting it off and
+    // storing `None` would drop it from `Display`, silently rewriting
+    // `MYTX.4294967296` into `MYTX` — a different reference sequence. Keep the
+    // whole token as the name instead, so the accession round-trips verbatim.
     let (name, version) = if let Some(dot_pos) = accession_str.rfind('.') {
         let potential_version = &accession_str[dot_pos + 1..];
-        if !potential_version.is_empty() && potential_version.chars().all(|c| c.is_ascii_digit()) {
-            let version_num = potential_version.parse::<u32>().ok();
-            (&accession_str[..dot_pos], version_num)
-        } else {
-            (accession_str, None)
+        match parse_version_suffix(potential_version) {
+            Some(version_num) => (&accession_str[..dot_pos], Some(version_num)),
+            None => (accession_str, None),
         }
     } else {
         (accession_str, None)
     };
 
-    Ok((
-        &input[accession_end..],
-        Accession::with_style(name, "", version, true),
-    ))
+    let outer = Accession::with_style(name, "", version, true);
+    let remaining = &input[accession_end..];
+
+    // A custom accession can carry a specification too (#1146): the compound
+    // branch used to be reachable only for RefSeq/Ensembl/LRG outers, so
+    // `Template(Template-gene.1):c.…` — the form the projector emits — re-parsed
+    // with the transcript id sitting in `gene_symbol`.
+    if let Some(result) = try_compound_suffix(remaining, &outer) {
+        return Ok(result);
+    }
+
+    Ok((remaining, outer))
 }
 
 /// Parse a UniProt-style accession (e.g., "P54802", "Q8TAM1", "A0A024R1R8")
@@ -389,12 +429,21 @@ fn parse_assembly_accession(input: &str) -> IResult<&str, Accession> {
     let (input, chromosome) = take_while1(|c: char| c.is_ascii_alphanumeric()).parse(input)?;
     let (input, _) = tag(")").parse(input)?;
 
-    Ok((input, Accession::from_assembly(assembly, chromosome)))
+    let outer = Accession::from_assembly(assembly, chromosome);
+
+    // An assembly/chromosome reference can carry a specification too (#1146),
+    // e.g. `GRCh38(chr1)(NM_004006.2):c.…`; without this the transcript was
+    // modelled as a gene symbol (found while resolving #1145).
+    if let Some(result) = try_compound_suffix(input, &outer) {
+        return Ok(result);
+    }
+
+    Ok((input, outer))
 }
 
 /// Parse a standard RefSeq-style accession with underscore (e.g., "NM_000088.3")
 /// Also handles compound reference syntax: NC_000013.11(NM_004119.3)
-fn parse_standard_accession(input: &str) -> IResult<&str, Accession> {
+fn parse_standard_accession(input: &str, allow_compound: bool) -> IResult<&str, Accession> {
     let (input, prefix) = parse_prefix(input)?;
     let (input, _) = tag("_").parse(input)?;
     let (input, number) = parse_number(input)?;
@@ -402,23 +451,69 @@ fn parse_standard_accession(input: &str) -> IResult<&str, Accession> {
 
     let outer = Accession::with_style(prefix, number, version, false);
 
-    // Check for compound reference syntax: outer(inner)
-    // Only attempt if the next char is '(' and the content looks like an accession
-    // (starts with a letter pattern that could be a RefSeq/Ensembl/LRG accession)
-    if let Some(rest) = input.strip_prefix('(') {
-        if looks_like_accession_start(rest) {
-            if let Ok((after_inner, inner)) = parse_compound_inner(rest) {
-                // Reject nested compound refs: inner must not already have a genomic_context
-                if inner.genomic_context.is_none() {
-                    if let Some(after_close) = after_inner.strip_prefix(')') {
-                        return Ok((after_close, inner.with_genomic_context(outer)));
-                    }
-                }
-            }
+    // Compound reference syntax: outer(inner). See `try_compound_suffix`.
+    if allow_compound {
+        if let Some(result) = try_compound_suffix(input, &outer) {
+            return Ok(result);
         }
     }
 
     Ok((input, outer))
+}
+
+/// Attempt the compound-reference suffix `(inner)` at the head of `input`,
+/// given the already-parsed `outer` accession.
+///
+/// On success returns the remaining input (past the closing paren) and the
+/// compound accession — the **inner** becomes the primary accession and `outer`
+/// becomes its `genomic_context`, so `Accession::transcript_accession` resolves
+/// the inner. This is the single implementation of the rule; every accession
+/// family's parser calls it (#1146), so `NC_`, Ensembl, custom, and
+/// assembly/chromosome outers all admit a specification on the same terms.
+///
+/// Returns `None` — leaving the parens for the caller's gene-symbol selector
+/// parse — when the token is not accession-shaped, when it is already compound
+/// (nested compound refs are rejected), or when the parens are unbalanced.
+fn try_compound_suffix<'a>(input: &'a str, outer: &Accession) -> Option<(&'a str, Accession)> {
+    let rest = input.strip_prefix('(')?;
+    if !looks_like_accession_start(rest) && versioned_inner_span(rest).is_none() {
+        return None;
+    }
+    let (after_inner, inner) = parse_compound_inner(rest).ok()?;
+    // Reject nested compound refs: inner must not already have a genomic_context.
+    if inner.genomic_context.is_some() {
+        return None;
+    }
+    let after_close = after_inner.strip_prefix(')')?;
+    Some((after_close, inner.with_genomic_context(outer.clone())))
+}
+
+/// Locate a **custom** accession carrying a `.<digits>` version in the token up
+/// to the closing `)`, e.g. `MYTX.1` or `Template-gene.1`. Returns
+/// `(close_paren_index, version_dot_index)`, or `None` when the token is not
+/// accession-shaped.
+///
+/// This is the disambiguator between a compound reference's inner accession and
+/// a gene-symbol selector for accession families that no prefix whitelist can
+/// recognise (#1146). HGNC gene symbols do not carry a version suffix, so
+/// `MYREF_SEQ(GENE1)` keeps its gene-symbol reading (PR #70) while
+/// `MYREF_SEQ(MYTX.1)` is read as a specification. The version must follow at
+/// least one character, so a bare `(.1)` is not accession-shaped.
+///
+/// Returning the indices rather than a bool lets [`parse_compound_inner`] build
+/// the accession without re-scanning and without `expect`ing invariants this
+/// function already established.
+fn versioned_inner_span(input: &str) -> Option<(usize, usize)> {
+    let close = memchr(b')', input.as_bytes())?;
+    let token = &input[..close];
+    if token.is_empty() || !token.chars().all(is_sam_refname_char) {
+        return None;
+    }
+    let dot = token.rfind('.')?;
+    if dot == 0 || parse_version_suffix(&token[dot + 1..]).is_none() {
+        return None;
+    }
+    Some((close, dot))
 }
 
 /// Check if the input starts with something that looks like an accession
@@ -453,11 +548,31 @@ pub(crate) fn looks_like_accession_start(input: &str) -> bool {
 }
 
 /// Parse the inner accession of a compound reference (after the opening paren)
+/// Nesting cap for compound references (#1146/#1151). The parse cycle is
+/// `try_compound_suffix` → [`parse_compound_inner`] → an accession parser →
+/// `try_compound_suffix`, which is unbounded on input like
+/// `NC_1(NC_1(NC_1(…)))`. Callers at the top level pass `ALLOW_COMPOUND`;
+/// [`parse_compound_inner`] passes `FORBID_COMPOUND`, capping the nesting at a
+/// single level and terminating the recursion.
+///
+/// This is behavior-preserving, not a new restriction: `try_compound_suffix`
+/// already rejects an inner that is itself compound
+/// (`inner.genomic_context.is_some()`), so a nested form never parsed as a
+/// compound reference anyway — it fell back to a bare outer accession, which is
+/// exactly what the cap produces.
+const ALLOW_COMPOUND: bool = true;
+
+/// See [`ALLOW_COMPOUND`].
+const FORBID_COMPOUND: bool = false;
+
+/// Parse the inner accession of a compound reference (after the opening paren).
+/// Called only from `try_compound_suffix`; it passes [`FORBID_COMPOUND`] to its
+/// callees so the mutual recursion is capped at one level.
 fn parse_compound_inner(input: &str) -> IResult<&str, Accession> {
     let bytes = input.as_bytes();
     // Try standard 2-letter-prefix accession (NC_, NM_, NG_, etc.)
     if bytes.len() > 2 && bytes[2] == b'_' {
-        if let Ok(result) = parse_standard_accession(input) {
+        if let Ok(result) = parse_standard_accession(input, FORBID_COMPOUND) {
             return Ok(result);
         }
     }
@@ -471,15 +586,27 @@ fn parse_compound_inner(input: &str) -> IResult<&str, Accession> {
         && bytes[2] == b'G'
         && bytes[3] == b'_'
     {
-        if let Ok(result) = parse_standard_accession(input) {
+        if let Ok(result) = parse_standard_accession(input, FORBID_COMPOUND) {
             return Ok(result);
         }
     }
     // Try Ensembl
     if bytes.len() >= 4 && bytes[0] == b'E' && bytes[1] == b'N' && bytes[2] == b'S' {
-        if let Ok(result) = parse_ensembl_accession(input) {
+        if let Ok(result) = parse_ensembl_accession(input, FORBID_COMPOUND) {
             return Ok(result);
         }
+    }
+    // Custom (SAM-refname) accession carrying a version, e.g. `MYTX.1` or
+    // `Template-gene.1` (#1146). Built exactly as `parse_simple_accession`
+    // builds a versioned custom accession, so Display renders it back verbatim.
+    if let Some((close, dot)) = versioned_inner_span(input) {
+        let token = &input[..close];
+        // `versioned_inner_span` already established this fits `u32`.
+        let version = parse_version_suffix(&token[dot + 1..]);
+        return Ok((
+            &input[close..],
+            Accession::with_style(&token[..dot], "", version, true),
+        ));
     }
     Err(nom::Err::Error(nom::error::Error::new(
         input,
@@ -496,25 +623,18 @@ fn parse_compound_inner(input: &str) -> IResult<&str, Accession> {
 /// [`parse_standard_accession`]: the inner transcript becomes the primary
 /// accession and the outer gene becomes its `genomic_context`, so
 /// `Accession::transcript_accession` resolves the inner `ENST` (not the gene).
-fn parse_ensembl_accession(input: &str) -> IResult<&str, Accession> {
+fn parse_ensembl_accession(input: &str, allow_compound: bool) -> IResult<&str, Accession> {
     let (input, prefix) = parse_ensembl_prefix(input)?;
     let (input, number) = digit1.parse(input)?;
     let (input, version) = opt(preceded(tag("."), parse_version)).parse(input)?;
 
     let outer = Accession::with_style(prefix, number, version, true);
 
-    // Compound reference syntax: outer(inner), e.g. `ENSG…(ENST…)`. Only attempt
-    // when the next char is '(' and the content looks like an accession start.
-    if let Some(rest) = input.strip_prefix('(') {
-        if looks_like_accession_start(rest) {
-            if let Ok((after_inner, inner)) = parse_compound_inner(rest) {
-                // Reject nested compound refs: inner must not already be compound.
-                if inner.genomic_context.is_none() {
-                    if let Some(after_close) = after_inner.strip_prefix(')') {
-                        return Ok((after_close, inner.with_genomic_context(outer)));
-                    }
-                }
-            }
+    // Compound reference syntax: outer(inner), e.g. `ENSG…(ENST…)`. See
+    // `try_compound_suffix`.
+    if allow_compound {
+        if let Some(result) = try_compound_suffix(input, &outer) {
+            return Ok(result);
         }
     }
 
