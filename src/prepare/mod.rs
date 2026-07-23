@@ -166,6 +166,12 @@ pub mod urls {
     pub const REFSEQGENE_SUMMARY_URL: &str =
         "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/RefSeqGene/LRG_RefSeqGene";
 
+    /// The pinned cdot data release these URLs point at. Recorded in the manifest
+    /// (`cdot_data_version`) so the reference's cdot provenance is legible without
+    /// parsing a URL or a filename. Kept in sync with the `CDOT_*` URLs by
+    /// `cdot_urls_embed_the_pinned_data_version`.
+    pub const CDOT_DATA_VERSION: &str = "data_v0.2.32";
+
     /// cdot transcript database (contains CDS metadata, exon coordinates, etc.)
     /// From https://github.com/SACGF/cdot/releases
     pub const CDOT_REFSEQ_GRCH38: &str = "https://github.com/SACGF/cdot/releases/download/data_v0.2.32/cdot-0.2.32.refseq.GRCh38.json.gz";
@@ -913,6 +919,14 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         }
     }
 
+    // Record the pinned cdot release whenever any cdot artifact was actually
+    // downloaded above — not just the GRCh38 RefSeq path. A GRCh37-only
+    // (`--genome grch37`) or Ensembl-only (`--ensembl`) prepare run downloads
+    // cdot data too, and its provenance must be just as legible (#1001).
+    if any_cdot_recorded(&manifest) {
+        manifest.cdot_data_version = Some(urls::CDOT_DATA_VERSION.to_string());
+    }
+
     // Fetch missing transcripts from ClinVar or pattern files (requires benchmark feature)
     #[cfg(feature = "benchmark")]
     if config.clinvar_file.is_some() || config.patterns_file.is_some() {
@@ -1061,6 +1075,20 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         manifest.reference_dir.join("manifest.json").display()
     );
     Ok(manifest)
+}
+
+/// Whether any of the four cdot artifacts (RefSeq GRCh38/GRCh37, Ensembl
+/// GRCh38/GRCh37) ended up recorded in the manifest. Used to decide whether
+/// to stamp `cdot_data_version` (#1001): gated on the manifest's own recorded
+/// paths rather than the `PrepareConfig` download flags, so it stays correct
+/// for any flag combination that ends up downloading cdot data — e.g. a
+/// GRCh37-only (`--genome grch37`) or Ensembl-only (`--ensembl`) prepare run,
+/// neither of which sets `download_cdot`.
+fn any_cdot_recorded(manifest: &ReferenceManifest) -> bool {
+    manifest.cdot_json.is_some()
+        || manifest.cdot_grch37_json.is_some()
+        || manifest.ensembl_cdot_json.is_some()
+        || manifest.ensembl_cdot_grch37_json.is_some()
 }
 
 /// Genome-build names to derive placements for, from the `--genome` selection.
@@ -2283,6 +2311,59 @@ pub fn detect_clinvar_from_ferro_reference(ferro_ref: &Path) -> Option<PathBuf> 
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn any_cdot_recorded_true_when_only_grch37_refseq_is_set() {
+        // Regression guard: `ferro prepare --genome grch37` sets
+        // `download_cdot=false, download_cdot_grch37=true` (src/bin/ferro.rs),
+        // so `cdot_data_version` must not depend on the GRCh38 RefSeq path
+        // alone, or a GRCh37-only (or Ensembl-only) prepare run would
+        // silently leave it unrecorded despite downloading cdot data.
+        let manifest = ReferenceManifest {
+            cdot_grch37_json: Some(PathBuf::from("cdot37.json")),
+            ..Default::default()
+        };
+        assert!(any_cdot_recorded(&manifest));
+    }
+
+    #[test]
+    fn any_cdot_recorded_true_when_only_ensembl_grch38_is_set() {
+        let manifest = ReferenceManifest {
+            ensembl_cdot_json: Some(PathBuf::from("ensembl_cdot.json")),
+            ..Default::default()
+        };
+        assert!(any_cdot_recorded(&manifest));
+    }
+
+    #[test]
+    fn any_cdot_recorded_true_when_only_ensembl_grch37_is_set() {
+        let manifest = ReferenceManifest {
+            ensembl_cdot_grch37_json: Some(PathBuf::from("ensembl_cdot37.json")),
+            ..Default::default()
+        };
+        assert!(any_cdot_recorded(&manifest));
+    }
+
+    #[test]
+    fn any_cdot_recorded_false_when_no_cdot_artifact_is_present() {
+        assert!(!any_cdot_recorded(&ReferenceManifest::default()));
+    }
+
+    #[test]
+    fn cdot_urls_embed_the_pinned_data_version() {
+        for url in [
+            urls::CDOT_REFSEQ_GRCH38,
+            urls::CDOT_REFSEQ_GRCH37,
+            urls::CDOT_ENSEMBL_GRCH38,
+            urls::CDOT_ENSEMBL_GRCH37,
+        ] {
+            assert!(
+                url.contains(urls::CDOT_DATA_VERSION),
+                "cdot URL {url} does not embed CDOT_DATA_VERSION {}",
+                urls::CDOT_DATA_VERSION
+            );
+        }
+    }
 
     #[test]
     fn test_build_fasta_index() {

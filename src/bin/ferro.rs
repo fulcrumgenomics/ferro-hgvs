@@ -3370,6 +3370,14 @@ fn run_check(
                 }
             }
         }
+
+        // Recorded cdot data-release provenance (#1001): surface which pinned
+        // cdot release this reference's cdot artifacts came from, or say so
+        // plainly when the reference predates this being tracked.
+        match v.get("cdot_data_version").and_then(|x| x.as_str()) {
+            Some(ver) => println!("cdot data version: {ver}"),
+            None => println!("cdot data version: not recorded (prepared before this was tracked)"),
+        }
     }
 
     if validate_cds {

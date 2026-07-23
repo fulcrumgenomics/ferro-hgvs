@@ -23,7 +23,7 @@ use std::path::{Component, Path, PathBuf};
 /// than an opaque serde "unknown field" error. A future `MIN_SUPPORTED` floor
 /// (currently unneeded — there is no older incompatible schema yet) would refuse
 /// references older than this build can safely read.
-pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 2;
+pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 3;
 
 /// Manifest of prepared reference data.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -146,6 +146,12 @@ pub struct ReferenceManifest {
     pub transcript_count: usize,
     /// List of available accession prefixes
     pub available_prefixes: Vec<String>,
+    /// The pinned cdot data release the reference's cdot artifacts came from
+    /// (e.g. `"data_v0.2.32"`), recorded by `ferro prepare` (#1001). Provenance
+    /// only — not verified at load and deliberately NOT part of the reference
+    /// identity (the cdot basename, which is hashed, already encodes it).
+    #[serde(default)]
+    pub cdot_data_version: Option<String>,
     /// Content fingerprint (#1001), written by [`ReferenceManifest::save`].
     /// Absent on references prepared before content-hashing; verified fail-soft
     /// at load (warn by default, hard-fail under `--strict-reference`).
@@ -197,6 +203,7 @@ impl Default for ReferenceManifest {
             backfill_transcripts_fasta: None,
             transcript_count: 0,
             available_prefixes: Vec::new(),
+            cdot_data_version: None,
             reference_identity: None,
             manifest_schema_version: None,
             reference_dir: PathBuf::new(),
@@ -723,6 +730,7 @@ mod tests {
             backfill_transcripts_fasta: Some(ref_dir.join("backfill/backfill_transcripts.fna")),
             transcript_count: 100,
             available_prefixes: vec!["NM".to_string()],
+            cdot_data_version: None,
             reference_identity: None,
             manifest_schema_version: None,
             reference_dir: ref_dir.to_path_buf(),
@@ -1294,8 +1302,38 @@ mod tests {
     }
 
     #[test]
-    fn current_schema_version_is_two() {
-        assert_eq!(CURRENT_MANIFEST_SCHEMA_VERSION, 2);
+    fn current_schema_version_is_three() {
+        assert_eq!(CURRENT_MANIFEST_SCHEMA_VERSION, 3);
+    }
+
+    #[test]
+    fn cdot_data_version_field_round_trips() {
+        let m = ReferenceManifest {
+            cdot_data_version: Some("data_v0.2.32".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["cdot_data_version"], "data_v0.2.32");
+        let back: ReferenceManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(back.cdot_data_version.as_deref(), Some("data_v0.2.32"));
+    }
+
+    #[test]
+    fn cdot_data_version_is_excluded_from_the_identity() {
+        let base = serde_json::json!({
+            "transcript_count": 3,
+            "cdot_json": "cdot-0.2.32.refseq.GRCh38.json",
+            "available_prefixes": ["NM_"],
+        });
+        let id = crate::prepare::identity::reference_identity_from_manifest(&base);
+        let mut with_version = base.clone();
+        with_version["cdot_data_version"] = serde_json::json!("data_v0.2.32");
+        with_version["manifest_schema_version"] = serde_json::json!(3);
+        assert_eq!(
+            crate::prepare::identity::reference_identity_from_manifest(&with_version),
+            id,
+            "cdot_data_version and schema version must not enter the identity hash"
+        );
     }
 
     #[test]
