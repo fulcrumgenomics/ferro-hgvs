@@ -503,6 +503,17 @@ pub enum FerroError {
     #[error("JSON error: {msg}")]
     Json { msg: String },
 
+    /// A stamped reference's recomputed content identity did not match its
+    /// recorded value (#1001) — the reference drifted in place or is corrupt.
+    /// Only raised under `--strict-reference`; the default path warns instead.
+    #[error(
+        "reference content does not match its recorded identity \
+         (recorded {expected}, computed {actual}) — it was modified in place or is \
+         corrupt. Re-run `ferro prepare`, or `ferro check --reference <dir> \
+         --write-identity` if the change was intentional."
+    )]
+    ReferenceIdentityMismatch { expected: String, actual: String },
+
     /// A genome-requiring normalization step (intronic / boundary-spanning /
     /// exon-junction 3'-shuffle) could not run because the reference provider
     /// carries no genomic data. In lenient/silent mode this surfaces as the

@@ -259,6 +259,11 @@ enum Commands {
         /// Number of parallel workers (default: 1)
         #[arg(short = 'j', long, default_value = "1")]
         workers: usize,
+
+        /// Hard-fail if the reference's content does not match its recorded
+        /// identity (drifted in place). Default: warn and proceed (#1001).
+        #[arg(long)]
+        strict_reference: bool,
     },
 
     /// Project an HGVS variant onto a chosen output axis (g/c/n/p/r)
@@ -289,6 +294,11 @@ enum Commands {
         /// Reference directory (with manifest.json from 'ferro prepare')
         #[arg(long, required = true)]
         reference: PathBuf,
+
+        /// Hard-fail if the reference's content does not match its recorded
+        /// identity (drifted in place). Default: warn and proceed (#1001).
+        #[arg(long)]
+        strict_reference: bool,
     },
 
     /// Parse HGVS variants (validation only)
@@ -595,6 +605,18 @@ enum Commands {
         /// transcripts with a legitimate non-`ATG` start codon.
         #[arg(long, value_name = "FILE")]
         cds_allowlist: Option<PathBuf>,
+
+        /// Compute and write the content identity into the manifest without a
+        /// full re-prepare (#1001). Refuses to overwrite a differing existing
+        /// stamp unless `--force`.
+        #[arg(long)]
+        write_identity: bool,
+
+        /// Allow `--write-identity` to overwrite an existing, differing stamp.
+        /// Only meaningful with `--write-identity`, so clap requires it — alone
+        /// it would be silently ignored.
+        #[arg(long, requires = "write_identity")]
+        force: bool,
     },
 
     /// Build a transcripts.json from a FASTA + CDS coordinates (single-exon).
@@ -756,6 +778,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             reject,
             timing,
             workers,
+            strict_reference,
         } => {
             let config = build_error_config(&error_mode, &ignore, &reject);
             run_normalize(
@@ -768,6 +791,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 timing.as_ref(),
                 workers,
                 &config,
+                strict_reference,
             )
         }
         Commands::Project {
@@ -778,6 +802,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output,
             format,
             reference,
+            strict_reference,
         } => run_project(
             variant.as_deref(),
             &axis,
@@ -786,6 +811,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             output.as_ref(),
             &format,
             &reference,
+            strict_reference,
         ),
         Commands::Parse {
             variant,
@@ -925,11 +951,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             build_cache,
             validate_cds,
             cds_allowlist,
+            write_identity,
+            force,
         } => run_check(
             &reference,
             build_cache,
             validate_cds,
             cds_allowlist.as_deref(),
+            write_identity,
+            force,
         ),
         Commands::BuildTranscript {
             fasta,
@@ -1432,6 +1462,7 @@ fn run_normalize(
     timing: Option<&PathBuf>,
     workers: usize,
     error_config: &ErrorConfig,
+    strict_reference: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::commands::create_reference_provider;
     use std::time::Instant;
@@ -1440,7 +1471,7 @@ fn run_normalize(
     let config = NormalizeConfig::default().with_direction(parse_shuffle_direction(direction));
 
     // Create reference provider from directory
-    let provider = create_reference_provider(reference.map(|p| p.as_path()))?;
+    let provider = create_reference_provider(reference.map(|p| p.as_path()), strict_reference)?;
     let normalizer = Normalizer::with_config(provider, config);
 
     // Print capability summary
@@ -1624,6 +1655,7 @@ fn run_normalize(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_project(
     variant: Option<&str>,
     axis: &str,
@@ -1632,13 +1664,14 @@ fn run_project(
     output: Option<&PathBuf>,
     format: &str,
     reference: &Path,
+    strict_reference: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::cli::format::{output_project_error, output_projection};
     use ferro_hgvs::cli::{project_axis, Axis, OutputFormat};
     use ferro_hgvs::data::cdot::CdotMapper;
     use ferro_hgvs::data::projection::Projector;
     use ferro_hgvs::project::VariantProjector;
-    use ferro_hgvs::reference::multi_fasta::MultiFastaProvider;
+    use ferro_hgvs::reference::multi_fasta::{LoadOptions, MultiFastaProvider};
     use std::sync::Arc;
 
     let axis = Axis::parse(axis).expect("clap value_parser guarantees a valid axis");
@@ -1653,7 +1686,13 @@ fn run_project(
     // build the concrete provider, extract the owned cdot, then project through
     // an Arc.
     let manifest_path = reference.join("manifest.json");
-    let provider = MultiFastaProvider::from_manifest(&manifest_path)?;
+    let provider = MultiFastaProvider::from_manifest_with_options(
+        &manifest_path,
+        LoadOptions {
+            strict_identity: strict_reference,
+            ..Default::default()
+        },
+    )?;
     // Extract owned cdot BEFORE moving the provider into the Arc.
     let cdot = provider
         .cdot_mapper()
@@ -3206,6 +3245,8 @@ fn run_check(
     build_cache: bool,
     validate_cds: bool,
     cds_allowlist: Option<&Path>,
+    write_identity: bool,
+    force: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::check::{
         check_reference, check_transcripts_json, print_check_summary,
@@ -3237,6 +3278,8 @@ fn run_check(
             ("--validate-cds", validate_cds),
             ("--build-cache", build_cache),
             ("--cds-allowlist", cds_allowlist.is_some()),
+            ("--write-identity", write_identity),
+            ("--force", force),
         ]
         .iter()
         .filter(|(_, set)| *set)
@@ -3282,6 +3325,53 @@ fn run_check(
         return Err("Reference data check failed".into());
     }
 
+    // Content-identity status (#1001): report drift/unstamped/verified, or
+    // (with `--write-identity`) stamp the reference in place without a full
+    // re-prepare.
+    let manifest_path = reference_dir.join("manifest.json");
+    if manifest_path.exists() {
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+        use ferro_hgvs::reference::multi_fasta::{verify_reference_identity, IdentityStatus};
+        if write_identity {
+            let computed = ferro_hgvs::prepare::identity::reference_identity(reference_dir, &v);
+            if let Some(existing) = v.get("reference_identity").and_then(|x| x.as_str()) {
+                if existing != computed && !force {
+                    return Err(format!(
+                        "reference already stamped {existing} but content computes to \
+                         {computed} (drift). Re-run with --force to overwrite."
+                    )
+                    .into());
+                }
+            }
+            // Load typed, set the directory, and save — `save()` recomputes
+            // and writes the stamp from the artifacts under `reference_dir`.
+            let mut m =
+                ferro_hgvs::prepare::manifest::ReferenceManifest::load_or_default(reference_dir)?;
+            m.reference_dir = reference_dir.to_path_buf();
+            m.save()?;
+            // Report exactly what `save()` persisted (it recomputes and writes its
+            // own stamp), not the separately-computed drift-guard value above.
+            println!(
+                "Wrote reference identity: {}",
+                m.reference_identity.as_deref().unwrap_or("<none>")
+            );
+        } else {
+            match verify_reference_identity(&v, reference_dir)? {
+                IdentityStatus::Verified => println!("Reference identity: verified"),
+                IdentityStatus::Unstamped => println!(
+                    "Reference identity: unstamped (run `--write-identity` to enable drift detection)"
+                ),
+                IdentityStatus::Mismatch { expected, actual } => {
+                    return Err(format!(
+                        "Reference identity: MISMATCH (recorded {expected}, computed {actual}) — \
+                         reference drifted; re-prepare or `--write-identity` if intentional"
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+
     if validate_cds {
         run_cds_consistency_check(reference_dir, cds_allowlist)?;
     }
@@ -3293,7 +3383,7 @@ fn run_check(
         use ferro_hgvs::commands::create_reference_provider;
         eprintln!("Building/refreshing reference cache (one-time)...");
         let started = std::time::Instant::now();
-        let _provider = create_reference_provider(Some(reference_dir))?;
+        let _provider = create_reference_provider(Some(reference_dir), false)?;
         eprintln!("Reference cache ready in {:.1?}.", started.elapsed());
     }
 

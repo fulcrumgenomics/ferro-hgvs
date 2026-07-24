@@ -108,15 +108,26 @@ impl Default for NormalizeConfig {
 /// - Directory with manifest.json → MultiFastaProvider::from_manifest
 /// - Directory without manifest → MultiFastaProvider::from_directory
 /// - Falls back to MockProvider with test data
+///
+/// `strict_identity` controls whether a stamped-but-drifted reference (its
+/// recomputed content identity no longer matches the recorded one) hard-fails
+/// at load rather than warning and proceeding (`--strict-reference`, #1001).
 pub fn create_reference_provider(
     reference_dir: Option<&Path>,
+    strict_identity: bool,
 ) -> Result<Box<dyn ReferenceProvider + Send + Sync>, FerroError> {
     match reference_dir {
         Some(ref_path) => {
             let manifest_path = ref_path.join("manifest.json");
             if manifest_path.exists() {
                 eprintln!("Using reference data from {}", ref_path.display());
-                let provider = MultiFastaProvider::from_manifest(&manifest_path)?;
+                let provider = MultiFastaProvider::from_manifest_with_options(
+                    &manifest_path,
+                    crate::reference::multi_fasta::LoadOptions {
+                        strict_identity,
+                        ..Default::default()
+                    },
+                )?;
                 Ok(Box::new(provider))
             } else if ref_path.is_dir() {
                 eprintln!("Using reference data from directory {}", ref_path.display());
@@ -200,8 +211,10 @@ pub fn normalize_batch<P: AsRef<Path>>(
 ) -> Result<BatchResults, FerroError> {
     let input = input.as_ref();
 
-    // Create normalizer with appropriate reference provider
-    let provider = create_reference_provider(config.reference_dir.as_deref())?;
+    // Create normalizer with appropriate reference provider. Batch normalize
+    // has no CLI-facing strict toggle of its own, so this always uses the
+    // default (warn, don't hard-fail) path.
+    let provider = create_reference_provider(config.reference_dir.as_deref(), false)?;
     let normalizer = Normalizer::new(provider);
 
     // Read variants

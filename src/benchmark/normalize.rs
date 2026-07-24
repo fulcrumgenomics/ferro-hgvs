@@ -149,7 +149,7 @@ pub fn normalize_ferro_parallel<P: AsRef<Path>>(
     // create_reference_provider now returns Box<dyn ReferenceProvider + Send + Sync>,
     // so Arc::from is a safe coercion — no unsafe required.
     let raw_provider: Box<dyn crate::reference::ReferenceProvider + Send + Sync> =
-        commands::create_reference_provider(reference_dir.as_deref())?;
+        commands::create_reference_provider(reference_dir.as_deref(), false)?;
     // Wrap the single provider in an Arc so all rayon workers share one copy
     // via cheap pointer clones.  The Box<T: Send+Sync> blanket impl in
     // provider.rs makes Arc<dyn ReferenceProvider + Send + Sync> usable as a

@@ -587,6 +587,7 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
@@ -645,11 +646,17 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
 
+        // Create the artifact so `save()` (which now rejects a wired-but-
+        // unreadable stamped artifact) succeeds, then remove it to reproduce the
+        // "artifact went missing after prepare" state that `check` must warn on.
+        File::create(&missing_alignments).unwrap();
         manifest.save().unwrap();
+        std::fs::remove_file(&missing_alignments).unwrap();
 
         let result = check_reference(dir.path());
         assert!(
@@ -705,11 +712,17 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
 
+        // Create the artifact so `save()` (which now rejects a wired-but-
+        // unreadable stamped artifact) succeeds, then remove it to reproduce the
+        // "artifact went missing after prepare" state that `check` must warn on.
+        File::create(&missing_alignments).unwrap();
         manifest.save().unwrap();
+        std::fs::remove_file(&missing_alignments).unwrap();
 
         let result = check_reference(dir.path());
         assert!(
@@ -765,11 +778,17 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
 
+        // Create the artifact so `save()` (which now rejects a wired-but-
+        // unreadable stamped artifact) succeeds, then remove it to reproduce the
+        // "artifact went missing after prepare" state that `check` must warn on.
+        File::create(&missing_report).unwrap();
         manifest.save().unwrap();
+        std::fs::remove_file(&missing_report).unwrap();
 
         let result = check_reference(dir.path());
         assert!(
@@ -825,11 +844,17 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
 
+        // Create the artifact so `save()` (which now rejects a wired-but-
+        // unreadable stamped artifact) succeeds, then remove it to reproduce the
+        // "artifact went missing after prepare" state that `check` must warn on.
+        File::create(&missing_report).unwrap();
         manifest.save().unwrap();
+        std::fs::remove_file(&missing_report).unwrap();
 
         let result = check_reference(dir.path());
         assert!(
@@ -885,11 +910,17 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
 
+        // Create the artifact so `save()` (which now rejects a wired-but-
+        // unreadable stamped artifact) succeeds, then remove it to reproduce the
+        // "artifact went missing after prepare" state that `check` must warn on.
+        File::create(&missing_summary).unwrap();
         manifest.save().unwrap();
+        std::fs::remove_file(&missing_summary).unwrap();
 
         let result = check_reference(dir.path());
         assert!(
@@ -945,11 +976,17 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
 
+        // Create the artifact so `save()` (which now rejects a wired-but-
+        // unreadable stamped artifact) succeeds, then remove it to reproduce the
+        // "artifact went missing after prepare" state that `check` must warn on.
+        File::create(&missing_placements).unwrap();
         manifest.save().unwrap();
+        std::fs::remove_file(&missing_placements).unwrap();
 
         let result = check_reference(dir.path());
         assert!(
@@ -1005,11 +1042,17 @@ mod tests {
             backfill_transcripts_fasta: None,
             transcript_count: 1,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: dir.path().to_path_buf(),
         };
 
+        // Create the artifact so `save()` (which now rejects a wired-but-
+        // unreadable stamped artifact) succeeds, then remove it to reproduce the
+        // "artifact went missing after prepare" state that `check` must warn on.
+        File::create(&missing_ng_hosted).unwrap();
         manifest.save().unwrap();
+        std::fs::remove_file(&missing_ng_hosted).unwrap();
 
         let result = check_reference(dir.path());
         assert!(

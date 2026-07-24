@@ -23,7 +23,7 @@ use std::path::{Component, Path, PathBuf};
 /// than an opaque serde "unknown field" error. A future `MIN_SUPPORTED` floor
 /// (currently unneeded — there is no older incompatible schema yet) would refuse
 /// references older than this build can safely read.
-pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 2;
 
 /// Manifest of prepared reference data.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -146,6 +146,11 @@ pub struct ReferenceManifest {
     pub transcript_count: usize,
     /// List of available accession prefixes
     pub available_prefixes: Vec<String>,
+    /// Content fingerprint (#1001), written by [`ReferenceManifest::save`].
+    /// Absent on references prepared before content-hashing; verified fail-soft
+    /// at load (warn by default, hard-fail under `--strict-reference`).
+    #[serde(default)]
+    pub reference_identity: Option<String>,
     /// Schema version of this manifest, written by [`ReferenceManifest::save`].
     /// Absent on references prepared before schema versioning; a value greater
     /// than [`CURRENT_MANIFEST_SCHEMA_VERSION`] means the reference was prepared
@@ -192,6 +197,7 @@ impl Default for ReferenceManifest {
             backfill_transcripts_fasta: None,
             transcript_count: 0,
             available_prefixes: Vec::new(),
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: PathBuf::new(),
         }
@@ -311,6 +317,29 @@ impl ReferenceManifest {
         // Serialize a relative-path view without mutating the in-memory absolute paths.
         let mut on_disk = self.clone();
         on_disk.make_paths_relative();
+
+        // Stamp the content identity (#1001) onto the on-disk (relative-path)
+        // view. Computed from a throwaway Value with the derived-artifact
+        // content-stamps injected (reading the small artifacts from
+        // reference_dir). The signature excludes `reference_identity` and
+        // `prepared_at`, so this is self-consistent and idempotent on a re-bless
+        // of byte-identical data. `derived_artifact_stamps` is NOT persisted —
+        // it lives only in the throwaway value the hash consumes.
+        let on_disk_value = serde_json::to_value(&on_disk).map_err(|e| FerroError::Io {
+            msg: format!("Failed to serialize manifest for identity stamp: {e}"),
+        })?;
+        // Reject a wired-but-unreadable stamped artifact BEFORE hashing, so the
+        // writer is symmetric with the load-time verifier: `inject_content_stamps`
+        // silently drops an unreadable artifact, so without this pre-check `save()`
+        // could mint a stamp over an artifact it couldn't read that the loader then
+        // hard-rejects (an asymmetry the "re-run ferro prepare" remedy can't fix).
+        crate::prepare::identity::ensure_stamped_artifacts_readable(
+            &self.reference_dir,
+            &on_disk_value,
+        )?;
+        let id = crate::prepare::identity::reference_identity(&self.reference_dir, &on_disk_value);
+        on_disk.reference_identity = Some(id.clone());
+        self.reference_identity = Some(id);
 
         let manifest_path = self.reference_dir.join("manifest.json");
         let file = File::create(&manifest_path).map_err(|e| FerroError::Io {
@@ -694,9 +723,29 @@ mod tests {
             backfill_transcripts_fasta: Some(ref_dir.join("backfill/backfill_transcripts.fna")),
             transcript_count: 100,
             available_prefixes: vec!["NM".to_string()],
+            reference_identity: None,
             manifest_schema_version: None,
             reference_dir: ref_dir.to_path_buf(),
         };
+
+        // The content-stamped artifacts must exist on disk: `save()` now rejects a
+        // wired-but-unreadable stamped artifact before hashing. (The bulk artifacts
+        // — cdot/genome/transcript FASTAs — are not stamped, so they need not
+        // exist for this path-roundtrip test.)
+        for stamped in [
+            "refseqgene_alignments.gff3",
+            "refseqgene_alignments_grch37.gff3",
+            "LRG_RefSeqGene",
+            "lrg_mapping.txt",
+            "legacy.fa",
+            "legacy.json",
+            "genbank.fa",
+            "genbank.json",
+        ] {
+            File::create(ref_dir.join(stamped)).unwrap();
+        }
+        std::fs::create_dir_all(ref_dir.join("backfill")).unwrap();
+        File::create(ref_dir.join("backfill/backfill_transcripts.fna")).unwrap();
 
         // Save the manifest (which should make paths relative)
         manifest.save().unwrap();
@@ -916,6 +965,11 @@ mod tests {
             assembly_report_grch37: Some(ref_dir.join("genome/GRCh37.assembly_report.txt")),
             ..Default::default()
         };
+        // The stamped artifacts must exist on disk: `save()` now rejects a
+        // wired-but-unreadable stamped artifact before hashing.
+        std::fs::create_dir_all(ref_dir.join("genome")).unwrap();
+        std::fs::File::create(ref_dir.join("genome/GRCh38.assembly_report.txt")).unwrap();
+        std::fs::File::create(ref_dir.join("genome/GRCh37.assembly_report.txt")).unwrap();
         manifest.save().unwrap();
 
         // On-disk JSON must store the report paths relative to reference_dir.
@@ -944,6 +998,9 @@ mod tests {
             ng_hosted_transcripts: Some(ref_dir.join("ng_hosted_transcripts.json")),
             ..Default::default()
         };
+        // The stamped artifact must exist on disk: `save()` now rejects a
+        // wired-but-unreadable stamped artifact before hashing.
+        std::fs::File::create(ref_dir.join("ng_hosted_transcripts.json")).unwrap();
         m.save().unwrap();
         let raw = std::fs::read_to_string(ref_dir.join("manifest.json")).unwrap();
         assert!(raw.contains("ng_hosted_transcripts.json"));
@@ -964,6 +1021,10 @@ mod tests {
             backfill_transcripts_fasta: Some(ref_dir.join("backfill/backfill_transcripts.fna")),
             ..Default::default()
         };
+        // The stamped artifact must exist on disk: `save()` now rejects a
+        // wired-but-unreadable stamped artifact before hashing.
+        std::fs::create_dir_all(ref_dir.join("backfill")).unwrap();
+        std::fs::File::create(ref_dir.join("backfill/backfill_transcripts.fna")).unwrap();
         m.save().unwrap();
         // On-disk JSON stores the path relative to reference_dir.
         let raw = std::fs::read_to_string(ref_dir.join("manifest.json")).unwrap();
@@ -1218,5 +1279,69 @@ mod tests {
             format!("{err}").contains("Failed to parse manifest"),
             "a duplicate key must surface as a parse error: {err}"
         );
+    }
+
+    #[test]
+    fn reference_identity_field_round_trips() {
+        let m = ReferenceManifest {
+            reference_identity: Some("aa8b3246d83055cc".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_value(&m).unwrap();
+        assert_eq!(json["reference_identity"], "aa8b3246d83055cc");
+        let back: ReferenceManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(back.reference_identity.as_deref(), Some("aa8b3246d83055cc"));
+    }
+
+    #[test]
+    fn current_schema_version_is_two() {
+        assert_eq!(CURRENT_MANIFEST_SCHEMA_VERSION, 2);
+    }
+
+    #[test]
+    fn save_stamps_a_reference_identity() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        let mut m = ReferenceManifest {
+            reference_dir: dir.path().to_path_buf(),
+            transcript_count: 1,
+            available_prefixes: vec!["NM_".to_string()],
+            ..Default::default()
+        };
+        m.save().unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).unwrap())
+                .unwrap();
+        let id = saved["reference_identity"]
+            .as_str()
+            .expect("identity stamped");
+        assert_eq!(id.len(), 16); // 16-hex FNV-1a digest
+                                  // Recompute matches what was written (excludes reference_identity itself).
+        assert_eq!(
+            crate::prepare::identity::reference_identity(dir.path(), &saved),
+            id
+        );
+    }
+
+    #[test]
+    fn save_rejects_a_wired_but_unreadable_stamped_artifact() {
+        use tempfile::TempDir;
+        let dir = TempDir::new().unwrap();
+        // Wire a stamped artifact that does not exist on disk. Previously `save()`
+        // would silently drop its stamp (via `inject_content_stamps`) and mint an
+        // identity the loader then hard-rejects; now it must fail at stamp time.
+        let mut m = ReferenceManifest {
+            reference_dir: dir.path().to_path_buf(),
+            transcript_count: 1,
+            derived_transcript_placements: Some(dir.path().join("missing.json")),
+            ..Default::default()
+        };
+        let err = m.save().unwrap_err();
+        assert!(
+            matches!(err, FerroError::Io { .. }),
+            "save() must reject a wired-but-unreadable artifact with an Io error, got {err:?}"
+        );
+        // And it must not have written a manifest with an inconsistent stamp.
+        assert!(!dir.path().join("manifest.json").exists());
     }
 }

@@ -272,6 +272,72 @@ fn new_transcript_cache() -> TranscriptCache {
     Mutex::new(LruCache::new(capacity))
 }
 
+/// Options controlling how a manifest is loaded (#1001).
+#[derive(Debug, Clone, Copy)]
+pub struct LoadOptions {
+    /// Inject the manifest's `derived_transcript_placements` into cdot (#790).
+    pub inject_derived_tx: bool,
+    /// Hard-fail (rather than warn) on a reference-identity mismatch (#1001).
+    pub strict_identity: bool,
+}
+
+impl Default for LoadOptions {
+    fn default() -> Self {
+        Self {
+            inject_derived_tx: true,
+            strict_identity: false,
+        }
+    }
+}
+
+/// Outcome of verifying a stamped reference identity (#1001).
+///
+/// Public so a separate `ferro check` binary (Task 6) can call
+/// [`verify_reference_identity`] directly and branch on the result.
+#[derive(Debug)]
+pub enum IdentityStatus {
+    /// No `reference_identity` recorded (legacy reference) — nothing to verify.
+    Unstamped,
+    /// Recomputed identity matches the recorded one.
+    Verified,
+    /// Recomputed identity differs from the recorded one.
+    Mismatch { expected: String, actual: String },
+}
+
+/// Verify a stamped reference's content identity against the on-disk artifacts.
+///
+/// First ensures every referenced stamped artifact is present and readable — a
+/// missing/unreadable one is its own hard error, never folded into the hash
+/// (else a transient read failure would masquerade as content drift). Then
+/// recomputes the identity and compares. Returns `Unstamped` when no identity
+/// is recorded (the caller decides warn-vs-nothing); this is the drift check,
+/// not a security boundary. Public so a separate `ferro check` binary (Task 6)
+/// can reuse the exact load-time verification.
+pub fn verify_reference_identity(
+    manifest: &serde_json::Value,
+    reference_dir: &Path,
+) -> Result<IdentityStatus, FerroError> {
+    let Some(expected) = manifest.get("reference_identity").and_then(|v| v.as_str()) else {
+        return Ok(IdentityStatus::Unstamped);
+    };
+    // Artifact-missing is a distinct, actionable error — never folded into the
+    // hash (a removed/transient file must not masquerade as content drift). This
+    // is the SAME pre-check `ReferenceManifest::save` runs before stamping, so the
+    // writer and reader agree on what "readable" means; see
+    // [`crate::prepare::identity::ensure_stamped_artifacts_readable`] for why both
+    // sides must reject a wired-but-unreadable artifact before hashing.
+    crate::prepare::identity::ensure_stamped_artifacts_readable(reference_dir, manifest)?;
+    let actual = crate::prepare::identity::reference_identity(reference_dir, manifest);
+    if actual == expected {
+        Ok(IdentityStatus::Verified)
+    } else {
+        Ok(IdentityStatus::Mismatch {
+            expected: expected.to_string(),
+            actual,
+        })
+    }
+}
+
 impl MultiFastaProvider {
     /// Create a new multi-FASTA provider from a directory of FASTA files
     ///
@@ -496,7 +562,19 @@ impl MultiFastaProvider {
     /// (`derived_transcript_placements`, #790) into the cdot mapper so projection
     /// resolves cdot-absent old versions with real exons.
     pub fn from_manifest<P: AsRef<Path>>(manifest_path: P) -> Result<Self, FerroError> {
-        Self::from_manifest_inner(manifest_path, true)
+        Self::from_manifest_inner(manifest_path, LoadOptions::default())
+    }
+
+    /// Create a provider from a manifest file with explicit [`LoadOptions`].
+    ///
+    /// Lets a caller opt into strict reference-identity verification
+    /// (`strict_identity`, #1001) or suppress the derived-transcript injection
+    /// (`inject_derived_tx`). [`Self::from_manifest`] uses the defaults.
+    pub fn from_manifest_with_options<P: AsRef<Path>>(
+        manifest_path: P,
+        options: LoadOptions,
+    ) -> Result<Self, FerroError> {
+        Self::from_manifest_inner(manifest_path, options)
     }
 
     /// Like [`Self::from_manifest`], but skips injecting the manifest's
@@ -521,16 +599,22 @@ impl MultiFastaProvider {
     pub fn from_manifest_without_derived_tx<P: AsRef<Path>>(
         manifest_path: P,
     ) -> Result<Self, FerroError> {
-        Self::from_manifest_inner(manifest_path, false)
+        Self::from_manifest_inner(
+            manifest_path,
+            LoadOptions {
+                inject_derived_tx: false,
+                ..Default::default()
+            },
+        )
     }
 
     /// Shared body of [`Self::from_manifest`] /
-    /// [`Self::from_manifest_without_derived_tx`]. When `inject_derived_tx` is
-    /// false, the `derived_transcript_placements` injection block is skipped; all
-    /// other manifest keys load identically.
+    /// [`Self::from_manifest_without_derived_tx`]. When `options.inject_derived_tx`
+    /// is false, the `derived_transcript_placements` injection block is skipped;
+    /// all other manifest keys load identically.
     fn from_manifest_inner<P: AsRef<Path>>(
         manifest_path: P,
-        inject_derived_tx: bool,
+        options: LoadOptions,
     ) -> Result<Self, FerroError> {
         let manifest_path = manifest_path.as_ref();
 
@@ -563,6 +647,32 @@ impl MultiFastaProvider {
         // field reads below, which would otherwise silently treat a renamed,
         // removed, or wrong-typed field as absent (#1001).
         crate::prepare::manifest::validate_loaded_manifest(&manifest)?;
+
+        // Verify the recorded content identity (#1001). Unstamped references get
+        // a notice and proceed; a mismatch warns by default and hard-fails only
+        // under `strict_identity`; a referenced-but-missing stamped artifact is
+        // its own error (raised inside the helper), never folded into the hash.
+        match verify_reference_identity(&manifest, &base_dir)? {
+            IdentityStatus::Verified => {}
+            IdentityStatus::Unstamped => {
+                eprintln!(
+                    "note: reference has no recorded identity; run \
+                     `ferro check --reference <dir> --write-identity` or re-run \
+                     `ferro prepare` to enable drift detection."
+                );
+            }
+            IdentityStatus::Mismatch { expected, actual } => {
+                if options.strict_identity {
+                    return Err(FerroError::ReferenceIdentityMismatch { expected, actual });
+                }
+                eprintln!(
+                    "warning: reference content does not match its recorded identity \
+                     (recorded {expected}, computed {actual}) — it drifted in place. \
+                     If intentional, run `ferro check --reference <dir> --write-identity`; \
+                     pass `--strict-reference` to make this an error."
+                );
+            }
+        }
 
         let mut dirs = Vec::new();
 
@@ -1040,7 +1150,7 @@ impl MultiFastaProvider {
         // (`from_manifest_without_derived_tx`) so it derives structures over real
         // cdot records only — see #800. `inject_derived_tx` is true for the
         // runtime `from_manifest` path, so runtime projection is unchanged.
-        if inject_derived_tx {
+        if options.inject_derived_tx {
             if let Some(rel) = manifest
                 .get("derived_transcript_placements")
                 .and_then(|v| v.as_str())
@@ -7202,5 +7312,80 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             suppressed_cdot.has_transcript_exact("NM_REAL.3"),
             "real sibling record must still be present after injection is suppressed"
         );
+    }
+
+    // --- reference-identity verification at load (#1001) ---------------------
+
+    /// Write a minimal reference dir with a stamped manifest and one small stamped
+    /// artifact (`ng_hosted_transcripts.json`), returning the temp dir.
+    fn stamped_reference() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("ng_hosted_transcripts.json"),
+            b"{\"schema_version\":1}",
+        )
+        .unwrap();
+        let mut m = crate::prepare::manifest::ReferenceManifest {
+            reference_dir: dir.path().to_path_buf(),
+            transcript_count: 1,
+            available_prefixes: vec!["NM_".to_string()],
+            ng_hosted_transcripts: Some(std::path::PathBuf::from("ng_hosted_transcripts.json")),
+            ..Default::default()
+        };
+        m.save().unwrap();
+        dir
+    }
+
+    #[test]
+    fn load_verifies_a_matching_stamped_reference() {
+        let dir = stamped_reference();
+        // A minimal load path: just the manifest validation + identity verify.
+        // (Full provider construction needs cdot/FASTA; assert the verify helper.)
+        let bytes = std::fs::read(dir.path().join("manifest.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let status = verify_reference_identity(&v, dir.path());
+        assert!(matches!(status, Ok(IdentityStatus::Verified)));
+    }
+
+    #[test]
+    fn load_flags_a_mutated_stamped_reference() {
+        let dir = stamped_reference();
+        // Mutate a stamped artifact in place after stamping.
+        std::fs::write(
+            dir.path().join("ng_hosted_transcripts.json"),
+            b"{\"schema_version\":1,\"x\":1}",
+        )
+        .unwrap();
+        let v: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).unwrap())
+                .unwrap();
+        assert!(matches!(
+            verify_reference_identity(&v, dir.path()),
+            Ok(IdentityStatus::Mismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn load_reports_unstamped_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let v = serde_json::json!({
+            "prepared_at": "", "transcript_fastas": [], "genome_fasta": null,
+            "cdot_json": null, "transcript_count": 0, "available_prefixes": [],
+            "manifest_schema_version": crate::prepare::manifest::CURRENT_MANIFEST_SCHEMA_VERSION
+        });
+        assert!(matches!(
+            verify_reference_identity(&v, dir.path()),
+            Ok(IdentityStatus::Unstamped)
+        ));
+    }
+
+    #[test]
+    fn load_errors_on_a_missing_stamped_artifact() {
+        let dir = stamped_reference();
+        std::fs::remove_file(dir.path().join("ng_hosted_transcripts.json")).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).unwrap())
+                .unwrap();
+        assert!(verify_reference_identity(&v, dir.path()).is_err());
     }
 }
