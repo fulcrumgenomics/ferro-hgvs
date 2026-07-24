@@ -287,9 +287,21 @@ fn parse_deletion(input: &str) -> IResult<&str, NaEdit> {
 
 /// Parse an insertion (e.g., insA, insATG, ins10, ins(10), ins(10_20), insA[10], ins[A[10];T])
 fn parse_insertion(input: &str, allow_special_positions: bool) -> IResult<&str, NaEdit> {
-    let (input, _) = tag("ins").parse(input)?;
-    let (input, sequence) = parse_inserted_sequence(input, allow_special_positions)?;
-    Ok((input, NaEdit::Insertion { sequence }))
+    let (rest, _) = tag("ins").parse(input)?;
+    let (rest, sequence) = parse_inserted_sequence(rest, allow_special_positions)?;
+    // An insertion is defined by what it inserts (`DNA/insertion.md:22`); the
+    // spec offers no production for a bare `ins` (#1137). Reject an empty
+    // inserted sequence rather than mint a `NaEdit::Insertion { sequence: Empty }`
+    // that asserts no change. `delins` with an empty insert is a distinct case
+    // (it collapses to `del`, handled by the preprocessor) and is unaffected —
+    // this guard only fires on the `ins` edit itself.
+    if sequence.is_empty() {
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
+    }
+    Ok((rest, NaEdit::Insertion { sequence }))
 }
 
 /// Parse an inserted sequence in any format

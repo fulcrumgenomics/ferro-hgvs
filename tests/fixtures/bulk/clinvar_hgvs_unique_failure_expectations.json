@@ -339,6 +339,11 @@
       "category": "rejected_by_design",
       "reason": "Insertion anchored on two positions that are not flanking (adjacent). HGVS DNA/insertion.md:15 requires the `positions flanking` to be `123_124`, not `123_125`, and line 16 requires them listed 5' to 3'; syntax.yaml `dna.ins` restates it as `range` must be specified using adjacent positions. Sibling rule to `[single_position_insertion]`, and rejected for the same reason: the intended flanking pair is not recoverable, so no repair is derivable. A wide anchor is a deletion-insertion (`delins`), not an insertion.",
       "tracking": "#1079"
+    },
+    "[insertion_without_inserted_sequence]": {
+      "category": "rejected_by_design",
+      "reason": "Bare `ins` with no inserted sequence. An insertion is defined by what it inserts (HGVS DNA/insertion.md:22); every form the spec offers supplies a payload (literal bases, a same-reference range, or another reference) and syntax.yaml `dna.ins` has no production for a payload-less `ins`. A bare `ins` asserts no change and has no derivable repair, so it is rejected in every error mode.",
+      "tracking": "#1137"
     }
   },
   "expected_failures": {
@@ -552,6 +557,7 @@
     "NM_003977.2:c.878_879AG>GT": "[multibase_substitution]",
     "NC_000011.10:g.5238138_5153222insTATTT": "[non_flanking_insertion_anchor]",
     "NM_000061.3:c.418_424insSVA": "[non_flanking_insertion_anchor]",
-    "NM_000548.3:c.[4621_4629del9;4621_4634ins14]": "[non_flanking_insertion_anchor]"
+    "NM_000548.3:c.[4621_4629del9;4621_4634ins14]": "[non_flanking_insertion_anchor]",
+    "NM_001134407.3:c.(414+1_415-1)_(1007+1_1008-1)ins": "[insertion_without_inserted_sequence]"
   }
 }
