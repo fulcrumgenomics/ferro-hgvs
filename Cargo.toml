@@ -61,6 +61,7 @@ superintervals = "0.3"
 rkyv = "0.8"
 rustc-hash = "2"
 lru = "0.12.5"
+elsa = "1.11.2"
 
 [features]
 default = []
