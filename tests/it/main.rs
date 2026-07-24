@@ -124,6 +124,7 @@ mod issue_1139_gene_symbol_specification;
 mod issue_1146_custom_compound_accession;
 mod issue_1157_delins_reduction_shift;
 mod issue_1158_equivalence_resulting_sequence;
+mod issue_1162_bare_ins_diagnostic;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;

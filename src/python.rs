@@ -3494,6 +3494,10 @@ pub enum PyErrorType {
     // (cds_start_NF); strict mode rejects, lenient warns + preserves the
     // input unchanged, silent preserves without warning (#972).
     IncompleteCdsStartReference = 44,
+    // 45 is W3027 InsertionWithoutInsertedSequence — a bare `ins` (an
+    // insertion with no inserted sequence); rejected in every mode, since the
+    // missing bases are not recoverable from the description (#1162).
+    InsertionWithoutInsertedSequence = 45,
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -3545,6 +3549,9 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::TranscriptFlankNotDescribable => PyErrorType::TranscriptFlankNotDescribable,
             ErrorType::IntronicOnBareTranscript => PyErrorType::IntronicOnBareTranscript,
             ErrorType::IncompleteCdsStartReference => PyErrorType::IncompleteCdsStartReference,
+            ErrorType::InsertionWithoutInsertedSequence => {
+                PyErrorType::InsertionWithoutInsertedSequence
+            }
         }
     }
 }
@@ -3598,6 +3605,9 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::TranscriptFlankNotDescribable => ErrorType::TranscriptFlankNotDescribable,
             PyErrorType::IntronicOnBareTranscript => ErrorType::IntronicOnBareTranscript,
             PyErrorType::IncompleteCdsStartReference => ErrorType::IncompleteCdsStartReference,
+            PyErrorType::InsertionWithoutInsertedSequence => {
+                ErrorType::InsertionWithoutInsertedSequence
+            }
         }
     }
 }
@@ -3790,15 +3800,16 @@ fn parse_lenient(
         .unwrap_or_else(ErrorConfig::lenient);
 
     let preprocessor = config.preprocessor();
-    let preprocess_result = preprocessor.preprocess(hgvs_string);
+    let mut preprocess_result = preprocessor.preprocess(hgvs_string);
 
-    if !preprocess_result.success {
-        return Err(ferro_exception(
-            "ParseError",
-            format!("Preprocessing failed: {:?}", preprocess_result.warnings),
-            None,
-            &[],
-        ));
+    if let Some(rejection) = preprocess_result.take_rejection_error() {
+        // Surface the rejecting phase's own diagnosis. A rejection records its
+        // message and structured code in `error` and leaves `warnings` empty,
+        // so the old `{:?}` of the warning list printed `Preprocessing failed:
+        // []` and dropped the reason entirely (#1162).
+        // `FerroError::Parse`'s Display already opens with "Parse error at
+        // position N", so it is passed through unprefixed.
+        return Err(ferro_typed("ParseError", rejection.to_string(), &rejection));
     }
 
     let variant = parse_hgvs(&preprocess_result.preprocessed)

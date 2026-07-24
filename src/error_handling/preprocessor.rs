@@ -11,9 +11,11 @@ use super::corrections::{
     correct_point_del_size_suffix, correct_protein_arrow, correct_quote_characters,
     correct_redundant_repeat_label, correct_rna_thymine, correct_single_letter_aa_in_protein,
     correct_single_position_range, correct_swapped_positions, correct_whitespace,
-    detect_del_size_suffix, detect_deprecated_ivs, detect_dup_size_suffix, detect_length_mismatch,
+    detect_del_size_suffix, detect_deprecated_ivs, detect_dup_size_suffix,
+    detect_insertion_without_inserted_sequence, detect_length_mismatch,
     detect_length_mismatch_with_provider, detect_missing_versions, detect_position_zero,
-    detect_protein_bracketed_aa_insertion, strip_trailing_annotation, DetectedCorrection,
+    detect_protein_bracketed_aa_insertion, insertion_without_inserted_sequence_hint,
+    insertion_without_inserted_sequence_message, strip_trailing_annotation, DetectedCorrection,
 };
 use super::types::{ErrorType, ResolvedAction};
 use super::ErrorConfig;
@@ -116,6 +118,37 @@ impl PreprocessResult {
             success: false,
             error: Some(error),
         }
+    }
+
+    /// The error to surface for a rejected input.
+    ///
+    /// A rejecting phase records its diagnosis in [`Self::error`] and leaves
+    /// [`Self::warnings`] empty, so a caller that reports only the warnings
+    /// prints an empty reason and throws away the structured
+    /// `Diagnostic.code` — which is how a bare `ins` reached the user as
+    /// `"Input contains errors that are rejected in strict mode: "` (#1162).
+    /// Prefer the recorded error; fall back to the warnings only when a
+    /// result was built without one.
+    ///
+    /// Returns `None` for a successful result. Takes the error out of the
+    /// result so callers can keep using the (now rejected) result afterwards
+    /// without needing `FerroError: Clone`.
+    pub fn take_rejection_error(&mut self) -> Option<FerroError> {
+        if self.success {
+            return None;
+        }
+        Some(self.error.take().unwrap_or_else(|| {
+            let reasons = self
+                .warnings
+                .iter()
+                .map(|w| w.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            FerroError::parse(
+                0,
+                format!("Input contains errors that are rejected in strict mode: {reasons}"),
+            )
+        }))
     }
 
     /// Returns true if there were any corrections made.
@@ -1346,6 +1379,46 @@ impl InputPreprocessor {
                                 .with_span(SourceSpan::new(first.start, first.end))
                                 .with_source(input)
                                 .with_hint(hint),
+                        ),
+                    );
+                }
+                ResolvedAction::Accept => {}
+            }
+        }
+
+        // Phase 18: Reject an insertion with no inserted sequence — a bare
+        // `ins` (W3027 — closes #1162, diagnostics follow-up to #1137). An
+        // insertion is defined by what it inserts (DNA/insertion.md:22) and
+        // `syntax.yaml` has no payload-less production, so the shape is
+        // invalid; the missing bases are not recoverable from the description,
+        // so the W3027 mode behavior is always_reject and only
+        // `ErrorOverride::Accept` lets the input through (to the parser, which
+        // rejects it too — `parse_variant` runs the same detector as a
+        // pre-parse check so callers bypassing the preprocessor get an
+        // identical diagnostic).
+        //
+        // Scan the *original* `input`: the diagnostic below uses `input` as
+        // its source, so spans must be in the caller's coordinates. No earlier
+        // phase rewrites an `ins` keyword or its anchor, so `current` would
+        // detect the same set either way.
+        let detections = detect_insertion_without_inserted_sequence(input);
+        if !detections.is_empty() {
+            let action = self.action_for(ErrorType::InsertionWithoutInsertedSequence);
+            match action {
+                ResolvedAction::Reject
+                | ResolvedAction::WarnCorrect
+                | ResolvedAction::SilentCorrect => {
+                    let first = &detections[0];
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            insertion_without_inserted_sequence_message(),
+                            Diagnostic::new()
+                                .with_code(ErrorCode::InsertionWithoutInsertedSequence)
+                                .with_span(SourceSpan::new(first.start, first.end))
+                                .with_source(input)
+                                .with_hint(insertion_without_inserted_sequence_hint()),
                         ),
                     );
                 }
