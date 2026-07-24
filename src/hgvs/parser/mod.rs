@@ -137,17 +137,11 @@ pub fn parse_hgvs_with_config(
 
     // Create preprocessor and preprocess input
     let preprocessor = InputPreprocessor::new(config);
-    let preprocess_result = preprocessor.preprocess(input);
+    let mut preprocess_result = preprocessor.preprocess(input);
 
     // Check if preprocessing failed
-    if !preprocess_result.success {
-        return Err(preprocess_result
-            .error
-            .unwrap_or_else(|| FerroError::Parse {
-                pos: 0,
-                msg: "Preprocessing failed without error details".to_string(),
-                diagnostic: None,
-            }));
+    if let Some(rejection) = preprocess_result.take_rejection_error() {
+        return Err(rejection);
     }
 
     // Parse the preprocessed input

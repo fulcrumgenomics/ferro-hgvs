@@ -7126,6 +7126,15 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // same code as the lenient/silent preprocessor paths.
     reject_protein_bracketed_aa_insertion(input)?;
 
+    // Pre-parse rejection for an insertion with no inserted sequence — a bare
+    // `ins` — W3027 InsertionWithoutInsertedSequence (#1162). #1137 already
+    // rejects the shape inside `parse_insertion`, but only as a bare nom
+    // failure whose message is indistinguishable from unrecognized garbage.
+    // Detecting it here names the class for the bare `parse_hgvs` path, which
+    // never reaches the preprocessor; the `parse_insertion` guard stays as the
+    // structural backstop for shapes this textual scan does not reach.
+    reject_insertion_without_inserted_sequence(input)?;
+
     // W3019 detector A: `[a/b]` / `[a//b]` — slash *inside* a bracket
     // pair. HGVS does not define this form. Reject up-front with a
     // targeted diagnostic so users get the spec alternatives instead
@@ -8475,6 +8484,44 @@ fn reject_protein_bracketed_aa_insertion(input: &str) -> Result<(), FerroError> 
             .with_span(SourceSpan::new(first.start, first.end))
             .with_source(input)
             .with_hint(hint),
+    ))
+}
+
+/// Reject an insertion with no inserted sequence — a bare `ins` such as
+/// `NC_000001.11:g.100_101ins` — with the structured W3027 diagnostic
+/// (#1162).
+///
+/// An insertion is defined by what it inserts (`DNA/insertion.md:22`), and
+/// `syntax.yaml` offers no payload-less production. `parse_insertion` already
+/// refuses to mint a `NaEdit::Insertion { sequence: Empty }` (#1137), but that
+/// rejection surfaces as a generic nom failure — byte-for-byte what
+/// unrecognized garbage produces. Bare `parse_hgvs` callers do not go through
+/// the preprocessor, so the same detector runs here and yields the same
+/// message and code as the preprocessor's Phase 18.
+fn reject_insertion_without_inserted_sequence(input: &str) -> Result<(), FerroError> {
+    use crate::error::{Diagnostic, ErrorCode, SourceSpan};
+    use crate::error_handling::corrections::{
+        detect_insertion_without_inserted_sequence, insertion_without_inserted_sequence_hint,
+        insertion_without_inserted_sequence_message,
+    };
+
+    let detections = detect_insertion_without_inserted_sequence(input);
+    let Some(first) = detections.first() else {
+        return Ok(());
+    };
+    // Bind the SVA `ErrorType::*` so the audit's emission-site scan (see
+    // `tests/it/error_code_audit.rs`) sees a real reference for W3027 on the
+    // parser path.
+    let _w3027 = ErrorType::InsertionWithoutInsertedSequence;
+
+    Err(FerroError::parse_with_diagnostic(
+        first.start,
+        insertion_without_inserted_sequence_message(),
+        Diagnostic::new()
+            .with_code(ErrorCode::InsertionWithoutInsertedSequence)
+            .with_span(SourceSpan::new(first.start, first.end))
+            .with_source(input)
+            .with_hint(insertion_without_inserted_sequence_hint()),
     ))
 }
 

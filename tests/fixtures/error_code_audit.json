@@ -470,6 +470,14 @@
       "spec_section_notes": "Applied post-parse on the AST in apply_bracket_cardinality_rule (src/hgvs/parser/mod.rs) — a top-level HgvsVariant::Allele with exactly one member is the uniform non-conformant signal across all seven coordinate systems (c/g/n/m/o/r/p). Strict rejects with a W3026 parse error; lenient unwraps the singleton to its sole member and emits W3026; silent unwraps without a warning. AlleleVariant::Display already renders a singleton bracket-free, so the corrected output is produced for free; the bare parse_hgvs path stays permissive and preserves the wrapper for programmatic callers (test_singleton_cis_allele_preserves_wrapper). Conformant multi-member brackets ([a;b], [a];[b]) pass through untouched. See #493."
     },
     {
+      "code": "W3027",
+      "description": "InsertionWithoutInsertedSequence — a bare 'ins' (an insertion with no inserted sequence), e.g. 'c.100_101ins'.",
+      "spec_section": "recommendations/DNA/insertion.md:22 (the inserted_sequence is given as the nucleotides inserted, a range of the same reference sequence, or a range of another reference) plus docs/syntax.yaml dna.ins / protein.ins, neither of which has a payload-less production",
+      "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/insertion/",
+      "status": "enforced",
+      "spec_section_notes": "An insertion of nothing asserts no change, and the missing bases are not recoverable from the description, so there is no derivable repair: the registry uses always_reject() and strict / lenient / silent all reject with the dedicated W3027 code on the structured Diagnostic.code channel. detect_insertion_without_inserted_sequence runs as InputPreprocessor Phase 18, and reject_insertion_without_inserted_sequence runs as a pre-parse check inside parse_variant so the bare parse_hgvs path (which never reaches the preprocessor) produces the same diagnostic; the #1137 guard inside parse_insertion remains the structural backstop. Sibling class W3012 EmptyDelinsInsert is deliberately not swept up — a delins with no insert collapses to a plain del and therefore does have a canonical repair. Closes #1162 (diagnostics follow-up to #1137)."
+    },
+    {
       "code": "W4001",
       "description": "SwappedPositions — 'c.200_100del' corrected to 'c.100_200del'.",
       "spec_section": "recommendations/general.md line 65 (range semantics: start <= end implied by underscore range syntax)",

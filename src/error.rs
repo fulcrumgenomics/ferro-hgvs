@@ -101,6 +101,8 @@ pub enum ErrorCode {
     AlleleFractionAnnotation = 0x8000 | 3017,
     /// W3018 — ClinVar prose multi-allelic shorthand `m.<pos><ref>><alt>/<alt2>`
     ClinVarProseMultiAllelic = 0x8000 | 3018,
+    /// W3027 — insertion with no inserted sequence (a bare `ins`)
+    InsertionWithoutInsertedSequence = 0x8000 | 3027,
 }
 
 impl ErrorCode {
@@ -167,6 +169,9 @@ impl ErrorCode {
             }
             ErrorCode::ClinVarProseMultiAllelic => {
                 "ClinVar prose multi-allelic shorthand m.<pos><ref>><alt>/<alt2>"
+            }
+            ErrorCode::InsertionWithoutInsertedSequence => {
+                "insertion with no inserted sequence (a bare `ins`)"
             }
         }
     }

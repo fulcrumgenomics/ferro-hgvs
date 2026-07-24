@@ -460,6 +460,25 @@ pub enum ErrorType {
     /// genuinely surfaces nothing. Input-side counterpart to Task 4's
     /// projection-side decline (#972).
     IncompleteCdsStartReference,
+
+    /// An insertion with no inserted sequence — a bare `ins` (e.g.
+    /// `c.100_101ins`).
+    ///
+    /// An insertion is defined by what it inserts (`DNA/insertion.md:22`):
+    /// every form the spec offers supplies a payload — literal bases
+    /// (`insAGC`), a same-reference range (`c.849_850ins858_895`), or another
+    /// reference (`g.100_101ins[NC_000022.10:g.35788169_35788352]`) — and
+    /// `syntax.yaml`'s `dna.ins` / `protein.ins` productions both make the
+    /// inserted sequence mandatory. A bare `ins` asserts no change and has no
+    /// derivable repair (the bases are simply absent), so it is rejected in
+    /// every mode.
+    ///
+    /// Sibling rule to `EmptyDelinsInsert` (W3012), which is deliberately
+    /// *not* swept up here: a `delins` with no insert collapses to a plain
+    /// `del`, so it does have a canonical repair. #1137 made the shape a parse
+    /// error; this code (#1162) gives that rejection a named diagnosis in
+    /// place of the generic nom fall-through.
+    InsertionWithoutInsertedSequence,
 }
 
 impl ErrorType {
@@ -510,6 +529,7 @@ impl ErrorType {
             ErrorType::NonConformantBracketCardinality => "W3026",
             ErrorType::IntronicOnBareTranscript => "W4007",
             ErrorType::IncompleteCdsStartReference => "W5004",
+            ErrorType::InsertionWithoutInsertedSequence => "W3027",
         }
     }
 
@@ -556,6 +576,7 @@ impl ErrorType {
         ErrorType::DupExplicitSeq,
         ErrorType::DelExplicitSeq,
         ErrorType::NonConformantBracketCardinality,
+        ErrorType::InsertionWithoutInsertedSequence,
         ErrorType::SwappedPositions,
         ErrorType::SinglePositionRange,
         ErrorType::PositionPastEnd,
@@ -665,6 +686,9 @@ impl ErrorType {
             ErrorType::IncompleteCdsStartReference => {
                 "transcript has an incomplete (unconfirmed ATG) CDS start (cds_start_NF)"
             }
+            ErrorType::InsertionWithoutInsertedSequence => {
+                "insertion with no inserted sequence (a bare `ins`)"
+            }
         }
     }
 
@@ -762,6 +786,9 @@ impl ErrorType {
             // transcript; there is no coordinate to re-number to. The fix is
             // to use the genomic (g.) or non-coding (n.) representation.
             ErrorType::IncompleteCdsStartReference => false,
+            // The inserted bases are simply absent; ferro cannot invent them,
+            // and an insertion of nothing is not a variant. All modes reject.
+            ErrorType::InsertionWithoutInsertedSequence => false,
         }
     }
 
@@ -852,6 +879,10 @@ impl ErrorType {
             ErrorType::IncompleteCdsStartReference => (
                 "ENST00000381176.3:c.10A>G (transcript is cds_start_NF)",
                 "(no auto-correct; use the genomic g. or non-coding n. representation)",
+            ),
+            ErrorType::InsertionWithoutInsertedSequence => (
+                "c.100_101ins",
+                "c.100_101insA (or a range: c.849_850ins858_895)",
             ),
         }
     }
@@ -1277,6 +1308,7 @@ mod tests {
             ErrorType::NonConformantBracketCardinality,
             ErrorType::IntronicOnBareTranscript,
             ErrorType::IncompleteCdsStartReference,
+            ErrorType::InsertionWithoutInsertedSequence,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
         // this match fails to compile until `every_variant` is extended.
@@ -1327,7 +1359,8 @@ mod tests {
                 | ErrorType::TranscriptFlankNotDescribable
                 | ErrorType::NonConformantBracketCardinality
                 | ErrorType::IntronicOnBareTranscript
-                | ErrorType::IncompleteCdsStartReference => {}
+                | ErrorType::IncompleteCdsStartReference
+                | ErrorType::InsertionWithoutInsertedSequence => {}
             }
             assert!(
                 ErrorType::ALL.contains(&v),

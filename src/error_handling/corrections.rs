@@ -3999,6 +3999,115 @@ pub fn correct_rna_thymine(input: &str) -> (Cow<'_, str>, Vec<DetectedCorrection
     }
 }
 
+/// Bytes that can legitimately *precede* the `ins` keyword: the last byte of
+/// the position anchor the insertion is described against. A digit closes a
+/// plain or offset position (`100`, `100+1`, `*101`), `)` closes an uncertain
+/// range (`(414+1_415-1)`), and `?` closes an unknown endpoint (`100_?`).
+///
+/// This set is also what keeps `delins` and `dupins` out of the detector: they
+/// end in `l` / `p`, so the `ins` inside them is never anchor-adjacent.
+fn ends_position_anchor(byte: u8) -> bool {
+    byte.is_ascii_digit() || byte == b')' || byte == b'?'
+}
+
+/// Special-position tokens that can close a genomic anchor in place of a
+/// number (`g.100_qterins`). Checked as a suffix of the text before `ins`.
+const SPECIAL_POSITION_ANCHORS: &[&str] = &["pter", "qter", "cen"];
+
+/// Bytes that terminate an edit, and therefore mark the `ins` keyword as
+/// carrying no inserted sequence: the allele separators (`;`, `]`, `,`, `/`),
+/// the close of an uncertainty wrapper (`)`), and whitespace. End of input is
+/// handled separately by the caller.
+///
+/// Every byte that can *start* an inserted sequence is deliberately absent:
+/// IUPAC bases and amino-acid letters, digits (a same-reference range), `(`
+/// (an uncertain count), `[` (a composite or another reference), and `?`.
+fn terminates_edit(byte: u8) -> bool {
+    matches!(byte, b';' | b']' | b')' | b',' | b'/') || (byte as char).is_whitespace()
+}
+
+/// Detect an insertion with no inserted sequence — a bare `ins` (#1162).
+///
+/// An insertion is defined by what it inserts (`DNA/insertion.md:22`), and
+/// neither `syntax.yaml`'s `dna.ins` nor its `protein.ins` production has a
+/// payload-less alternative. #1137 already made the shape a parse error inside
+/// `parse_insertion`, but that rejection is a bare nom failure; this detector
+/// gives it a named diagnosis (W3027) on both the preprocessor path and the
+/// pre-parse check in `parse_variant`.
+///
+/// An `ins` is bare when it is immediately preceded by the close of a position
+/// anchor ([`ends_position_anchor`] or a special-position token) and
+/// immediately followed by an edit terminator ([`terminates_edit`]) or the end
+/// of input. Anchoring on both sides is what keeps the scan off the shapes
+/// that merely *contain* the three letters:
+///
+///   - `delins` / `dupins` — preceded by `l` / `p`, not by an anchor. A bare
+///     `delins` is W3012's case (it collapses to a plain `del`), not this one.
+///   - a payloaded insertion (`insA`, `ins858_895`, `ins[NM_…:c.1_10]`) —
+///     followed by the payload, not by a terminator.
+///   - the `INS` (insulin) gene symbol — uppercase, and never anchor-adjacent.
+///
+/// Returns one `DetectedCorrection` per offending `ins`, spanning just the
+/// keyword. `corrected` is always empty: there is no derivable repair, since
+/// the bases the user meant to insert are simply absent from the input.
+pub fn detect_insertion_without_inserted_sequence(input: &str) -> Vec<DetectedCorrection> {
+    let bytes = input.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 3 <= bytes.len() {
+        if &bytes[i..i + 3] != b"ins" {
+            i += 1;
+            continue;
+        }
+        let preceded_by_anchor = i > 0
+            && (ends_position_anchor(bytes[i - 1])
+                || SPECIAL_POSITION_ANCHORS
+                    .iter()
+                    .any(|token| input[..i].ends_with(token)));
+        let followed_by_terminator = bytes
+            .get(i + 3)
+            .map(|&b| terminates_edit(b))
+            .unwrap_or(true);
+        if preceded_by_anchor && followed_by_terminator {
+            out.push(DetectedCorrection::new(
+                ErrorType::InsertionWithoutInsertedSequence,
+                "ins",
+                "",
+                i,
+                i + 3,
+            ));
+        }
+        i += 3;
+    }
+    out
+}
+
+/// The user-facing message for a bare `ins` (W3027), shared by the
+/// preprocessor phase and the `parse_variant` pre-parse check so both entry
+/// points produce byte-identical text.
+///
+/// `FerroError::Parse`'s `Display` renders only `msg` (the `Diagnostic` hint is
+/// reserved for the richer `format_diagnostic` rendering), so the remediation
+/// is carried in the message itself rather than left to the hint.
+pub fn insertion_without_inserted_sequence_message() -> String {
+    "Insertion with no inserted sequence: `ins` must state what it inserts \
+     (DNA/insertion.md:22; syntax.yaml's `dna.ins` has no payload-less production). \
+     Supply the inserted bases (e.g. `g.100_101insA`), a range of the same reference \
+     (e.g. `c.849_850ins858_895`), or a range of another reference \
+     (e.g. `g.100_101ins[NC_000022.10:g.35788169_35788352]`)."
+        .to_string()
+}
+
+/// The hint accompanying [`insertion_without_inserted_sequence_message`].
+///
+/// Names the one neighbouring class users most often mean instead, so a
+/// `delins` typo is not re-diagnosed as a missing payload.
+pub fn insertion_without_inserted_sequence_hint() -> &'static str {
+    "An insertion of nothing is not a variant, and the missing bases cannot be \
+     recovered from the description — supply them, or describe the intended edit \
+     directly (`del` if the range is removed, `delins<seq>` if it is replaced)"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6192,5 +6301,108 @@ mod tests {
         let (rewritten, hits) = correct_del_explicit_seq("NP_000079.2:p.Val7del");
         assert_eq!(rewritten, "NP_000079.2:p.Val7del");
         assert!(hits.is_empty());
+    }
+
+    // --- W3027: insertion with no inserted sequence (#1162) ---
+
+    /// Assert the detector reports exactly the spans given, each covering the
+    /// `ins` keyword.
+    fn assert_bare_ins_spans(input: &str, expected: &[(usize, usize)]) {
+        let hits = detect_insertion_without_inserted_sequence(input);
+        let spans: Vec<(usize, usize)> = hits.iter().map(|h| (h.start, h.end)).collect();
+        assert_eq!(spans, expected, "detector spans for {input:?}");
+        for hit in &hits {
+            assert_eq!(hit.error_type, ErrorType::InsertionWithoutInsertedSequence);
+            assert_eq!(&input[hit.start..hit.end], "ins");
+            assert!(
+                hit.corrected.is_empty(),
+                "there is no derivable repair for a bare `ins`"
+            );
+        }
+    }
+
+    #[test]
+    fn test_detect_bare_ins_at_end_of_input() {
+        assert_bare_ins_spans("NC_000001.11:g.100_101ins", &[(22, 25)]);
+    }
+
+    #[test]
+    fn test_detect_bare_ins_after_uncertain_and_unknown_anchors() {
+        // `)` closes an uncertain range; `?` closes an unknown endpoint.
+        assert_bare_ins_spans(
+            "NM_001134407.3:c.(100+1_101-1)_(200+1_201-1)ins",
+            &[(44, 47)],
+        );
+        assert_bare_ins_spans("NM_000088.3:c.100_?ins", &[(19, 22)]);
+    }
+
+    #[test]
+    fn test_detect_bare_ins_after_special_position_anchor() {
+        assert_bare_ins_spans("NC_000001.11:g.100_qterins", &[(23, 26)]);
+    }
+
+    #[test]
+    fn test_detect_bare_ins_reports_every_member_of_an_allele() {
+        // Terminated by `;` and by `]` respectively.
+        assert_bare_ins_spans(
+            "NM_000088.3:c.[100_101ins;200_201ins]",
+            &[(22, 25), (33, 36)],
+        );
+    }
+
+    #[test]
+    fn test_detect_bare_ins_ignores_payloaded_insertions() {
+        for input in [
+            "NC_000001.11:g.100_101insA",
+            "NC_000001.11:g.100_101insATG",
+            "NC_000001.11:g.849_850ins858_895",
+            "NM_000088.3:c.100_101insN[10]",
+            "NM_000088.3:c.100_101ins[NM_004006.2:c.1_10]",
+            "NC_000001.11:g.100_101ins(50)",
+            "NP_000079.2:p.Arg97_Trp98insAlaPro",
+        ] {
+            assert_bare_ins_spans(input, &[]);
+        }
+    }
+
+    #[test]
+    fn test_detect_bare_ins_ignores_delins_and_dupins() {
+        // W3012's case (a `delins` collapsing to `del`) and the `dupins`
+        // rejection both keep their own diagnoses — the `ins` inside them is
+        // preceded by `l` / `p`, never by a position anchor.
+        for input in [
+            "NC_000001.11:g.100_102delins",
+            "NC_000001.11:g.100_102delinsAT",
+            "NC_000001.11:g.100_101dupins",
+            "NC_000001.11:g.100_101dupinsAT",
+        ] {
+            assert_bare_ins_spans(input, &[]);
+        }
+    }
+
+    #[test]
+    fn test_detect_bare_ins_ignores_the_ins_gene_symbol() {
+        // The insulin gene symbol is uppercase and sits inside a selector, so
+        // it is neither anchor-preceded nor spelled like the edit keyword.
+        for input in [
+            "NM_000207.3(INS):c.100A>G",
+            "NC_000011.10(INS):g.2159830A>G",
+            "NM_000207.3(INS):c.100_101insA",
+        ] {
+            assert_bare_ins_spans(input, &[]);
+        }
+    }
+
+    #[test]
+    fn test_detect_bare_ins_ignores_truncated_keywords() {
+        // `in` is not `ins`, and a trailing `sni` shares no prefix — neither
+        // may be widened into the bare-`ins` class.
+        for input in [
+            "NC_000001.11:g.100_101in",
+            "NM_000088.3:c.100_101sni",
+            "NC_000001.11:g.100_101zzz",
+        ] {
+            assert_bare_ins_spans(input, &[]);
+        }
     }
 }

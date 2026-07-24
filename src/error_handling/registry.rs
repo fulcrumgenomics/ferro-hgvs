@@ -1307,6 +1307,44 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3027",
+        CodeInfo {
+            code: "W3027",
+            name: "InsertionWithoutInsertedSequence",
+            summary: "Insertion with no inserted sequence (a bare `ins`).",
+            explanation: "An insertion is defined by what it inserts (DNA/insertion.md:22). \
+                Every form the spec offers supplies a payload: the nucleotides inserted \
+                (`c.100_101insA`), a range of the same reference sequence \
+                (`c.849_850ins858_895`), or a range of another reference \
+                (`g.100_101ins[NC_000022.10:g.35788169_35788352]`); the protein axis \
+                concatenates 3-letter codes (`p.Arg97_Trp98insAlaPro`). Neither \
+                syntax.yaml's `dna.ins` nor its `protein.ins` production has a \
+                payload-less alternative, so a bare `ins` is not a description of a \
+                variant — it asserts no change. There is no derivable repair (the bases \
+                are simply absent, and ferro will not invent them), so this is rejected \
+                in every error mode. Sibling rule to W3012 EmptyDelinsInsert, which is \
+                deliberately not swept up here: a `delins` with no insert collapses to a \
+                plain `del` and therefore does have a canonical repair.",
+            category: CodeCategory::Format,
+            bad_examples: &[
+                "NC_000001.11:g.100_101ins",
+                "NM_000088.3:c.100_101ins",
+                "NP_000079.2:p.Arg97_Trp98ins",
+            ],
+            good_examples: &[
+                "NC_000001.11:g.100_101insA",
+                "NM_004006.2:c.849_850ins858_895",
+                "NP_000079.2:p.Arg97_Trp98insAlaPro",
+            ],
+            mode_behavior: Some(ModeBehavior::always_reject()),
+            hgvs_spec_url: Some(
+                "https://hgvs-nomenclature.org/stable/recommendations/DNA/insertion/",
+            ),
+            related_codes: &["W3012", "W3021"],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(
