@@ -250,6 +250,15 @@ jobs:
         run: cargo run --features dev --example generate_spec_enumeration
       - name: Run Rust tests
         run: cargo nextest run --features dev
+      - name: Run Rust tests with normalization idempotency self-check
+        # Re-run the suite with the opt-in boundary-level idempotency oracle
+        # enabled (`FERRO_ASSERT_IDEMPOTENT`), turning every reference-backed
+        # test into an assertion that `norm(norm(x)) == norm(x)`. The gate is
+        # `#[cfg(debug_assertions)]`, which is on in the test profile even with
+        # `CARGO_PROFILE_TEST_DEBUG=0` (that strips debuginfo, not assertions).
+        # Reuses the binaries built by the step above, so this is only re-run
+        # cost, no recompile. See src/normalize/mod.rs::normalize.
+        run: FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev
       - name: Verify conformance summary docs are up to date
         run: cargo run --features dev --example generate_conformance_summary -- --check
       - name: Tool-support tables up to date

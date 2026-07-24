@@ -32,6 +32,23 @@ cargo test --features dev            # Alternative
 cargo nextest run -E 'test(parse)'   # Run specific tests by name pattern
 ```
 
+#### Normalization idempotency oracle
+
+`FERRO_ASSERT_IDEMPOTENT=1` turns every `Normalizer::normalize` call into an
+assertion that `norm(norm(x)) == norm(x)`, so any test that normalizes becomes an
+idempotency check:
+
+```bash
+FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev
+```
+
+It is compiled out in release builds (`#[cfg(debug_assertions)]`) and read once
+into a `OnceLock`, so a disabled run pays only one atomic load. CI runs the suite
+a second time with it set; the nightly reference-aware job sets it too, which is
+where the manifest-backed conformance corpora are actually covered. Coverage is
+limited to `normalize()` — `VariantProjector` calls `normalize_core_checked`
+directly and is not checked.
+
 ### Generated spec fixture (not committed)
 
 `tests/fixtures/grammar/hgvs_spec_normalization.json` is a **generated build artifact** — it is `.gitignore`d, not committed. It is produced by the `generate_spec_fixture` example from the HGVS spec submodule, the parser's behavior, and the curated `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`. (Committing it made every parser PR a merge-conflict magnet, since each PR regenerated the whole file.)
