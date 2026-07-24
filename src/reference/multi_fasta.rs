@@ -1182,21 +1182,14 @@ impl MultiFastaProvider {
         // derived old version is applied to the injected record.
         if let Some(overrides_ref) = manifest.get("canonical_overrides").and_then(|v| v.as_str()) {
             let path = resolve_path(overrides_ref);
-            match std::fs::read_to_string(&path) {
-                Ok(text) => match CanonicalOverrides::from_json(&text) {
-                    Ok(ov) => {
-                        eprintln!("Loaded {} canonical override records", ov.len());
-                        provider.canonical_overrides = ov;
-                        provider.reconcile_cdot_with_overrides();
-                    }
-                    Err(e) => eprintln!("Warning: Failed to parse canonical overrides: {}", e),
-                },
-                Err(e) => eprintln!(
-                    "Warning: Failed to read canonical overrides {}: {}",
-                    path.display(),
-                    e
-                ),
-            }
+            // A wired canonical_overrides entry is a promise that these
+            // corrections apply; a read/parse/schema failure here must be a
+            // hard error (not a warning), else the provider would silently
+            // serve un-corrected CDS/protein metadata (#1001 follow-up).
+            let ov = CanonicalOverrides::from_json_path(&path)?;
+            eprintln!("Loaded {} canonical override records", ov.len());
+            provider.canonical_overrides = ov;
+            provider.reconcile_cdot_with_overrides();
         }
 
         Ok(provider)
@@ -7391,5 +7384,83 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
             serde_json::from_slice(&std::fs::read(dir.path().join("manifest.json")).unwrap())
                 .unwrap();
         assert!(verify_reference_identity(&v, dir.path()).is_err());
+    }
+
+    // --- canonical-overrides schema version enforced at load (follow-up to #1001) ---
+
+    /// A wired-but-unusable `canonical_overrides` artifact must now fail
+    /// provider construction outright, rather than being warned-and-dropped so
+    /// the provider silently serves un-corrected CDS/protein metadata.
+    #[test]
+    fn from_manifest_fails_on_a_newer_schema_canonical_overrides() {
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        fs::write(d.join("tx.fna"), ">NM_000088.4\nAAAA\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000088.4\t4\t13\t4\t5\n").unwrap();
+        fs::write(
+            d.join("overrides.json"),
+            format!(
+                r#"{{"schema_version":{},"records":{{}}}}"#,
+                crate::reference::authoritative::CANONICAL_OVERRIDES_SCHEMA_VERSION + 1
+            ),
+        )
+        .unwrap();
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["tx.fna"],
+                "canonical_overrides": "overrides.json",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        match MultiFastaProvider::from_manifest(d.join("manifest.json")) {
+            Ok(_) => panic!("expected a schema-version load failure"),
+            Err(err) => assert!(
+                format!("{err}").contains("newer than this build"),
+                "expected a schema-version load failure, got: {err}"
+            ),
+        }
+    }
+
+    /// A corrupt (unparseable) `canonical_overrides` artifact must likewise fail
+    /// provider construction rather than being warned-and-dropped.
+    #[test]
+    fn from_manifest_fails_on_a_corrupt_canonical_overrides() {
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        fs::write(d.join("tx.fna"), ">NM_000088.4\nAAAA\n").unwrap();
+        fs::write(d.join("tx.fna.fai"), "NM_000088.4\t4\t13\t4\t5\n").unwrap();
+        fs::write(d.join("overrides.json"), b"{ not valid json").unwrap();
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["tx.fna"],
+                "canonical_overrides": "overrides.json",
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        let err = MultiFastaProvider::from_manifest(d.join("manifest.json"))
+            .err()
+            .expect("a corrupt canonical_overrides artifact must fail provider construction");
+        // The failure is fatal now, so it must name the file to fix — a bare
+        // serde message ("expected value at line 1 column 3") would not.
+        assert!(
+            format!("{err}").contains("overrides.json"),
+            "the error must name the offending artifact, got: {err}"
+        );
     }
 }
