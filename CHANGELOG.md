@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.10.1...v0.11.0) - 2026-07-24
+
+### Added
+
+- *(reference)* per-artifact schema handshake + recorded cdot data version (#1001 item 3) ([#1154](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1154))
+- *(reference)* stamp & verify a reference content identity (#1001 items 2+4) ([#1153](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1153))
+
+### Fixed
+
+- compare resulting sequence in EquivalenceChecker for complex indels ([#1158](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1158)) ([#1161](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1161))
+- *(reference)* enforce the canonical-overrides schema version at load ([#1155](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1155))
+- 3'-shift delins that reduces to a deletion or duplication ([#1157](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1157)) ([#1160](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1160))
+- *(parser)* reject an insertion with no inserted sequence (bare `ins`) ([#1152](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1152))
+
 ## [0.10.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.10.0...v0.10.1) - 2026-07-23
 
 ### Fixed
