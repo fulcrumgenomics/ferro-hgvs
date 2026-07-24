@@ -4,6 +4,7 @@
 //! that tracks all prepared reference data files.
 
 use crate::FerroError;
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
 
@@ -23,7 +24,7 @@ use std::path::{Component, Path, PathBuf};
 /// than an opaque serde "unknown field" error. A future `MIN_SUPPORTED` floor
 /// (currently unneeded — there is no older incompatible schema yet) would refuse
 /// references older than this build can safely read.
-pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 3;
+pub const CURRENT_MANIFEST_SCHEMA_VERSION: u32 = 4;
 
 /// Manifest of prepared reference data.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -146,11 +147,30 @@ pub struct ReferenceManifest {
     pub transcript_count: usize,
     /// List of available accession prefixes
     pub available_prefixes: Vec<String>,
-    /// The pinned cdot data release the reference's cdot artifacts came from
-    /// (e.g. `"data_v0.2.32"`), recorded by `ferro prepare` (#1001). Provenance
-    /// only — not verified at load and deliberately NOT part of the reference
-    /// identity (the cdot basename, which is hashed, already encodes it).
-    #[serde(default)]
+    /// The pinned cdot data release each cdot artifact came from, keyed by the
+    /// manifest field naming that artifact (e.g.
+    /// `{"cdot_json": "data_v0.2.32"}`), recorded by `ferro prepare` (#1001).
+    ///
+    /// Per-artifact rather than a single value because a prepare run can
+    /// refresh *some* cdot artifacts and inherit others: `ferro prepare
+    /// --ensembl` on an existing reference re-downloads only the Ensembl cdot,
+    /// leaving the RefSeq cdot at whatever release the previous run used. One
+    /// scalar cannot describe that reference truthfully — it either names a
+    /// release the RefSeq artifact did not come from, or must be dropped,
+    /// discarding provenance that is perfectly well-defined per artifact.
+    ///
+    /// Provenance only — not verified at load and deliberately NOT part of the
+    /// reference identity (the cdot basenames, which are hashed, already encode
+    /// the releases).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cdot_data_versions: BTreeMap<String, String>,
+    /// Legacy single-release stamp, superseded by [`Self::cdot_data_versions`].
+    ///
+    /// Read so a manifest written by an earlier build still loads (the typed
+    /// deserialize uses `deny_unknown_fields`, so simply deleting the field
+    /// would make those manifests unloadable) and so `ferro check` can still
+    /// report what they recorded. Never written by this build.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cdot_data_version: Option<String>,
     /// Content fingerprint (#1001), written by [`ReferenceManifest::save`].
     /// Absent on references prepared before content-hashing; verified fail-soft
@@ -203,6 +223,7 @@ impl Default for ReferenceManifest {
             backfill_transcripts_fasta: None,
             transcript_count: 0,
             available_prefixes: Vec::new(),
+            cdot_data_versions: BTreeMap::new(),
             cdot_data_version: None,
             reference_identity: None,
             manifest_schema_version: None,
@@ -730,6 +751,7 @@ mod tests {
             backfill_transcripts_fasta: Some(ref_dir.join("backfill/backfill_transcripts.fna")),
             transcript_count: 100,
             available_prefixes: vec!["NM".to_string()],
+            cdot_data_versions: BTreeMap::new(),
             cdot_data_version: None,
             reference_identity: None,
             manifest_schema_version: None,
@@ -1302,24 +1324,50 @@ mod tests {
     }
 
     #[test]
-    fn current_schema_version_is_three() {
-        assert_eq!(CURRENT_MANIFEST_SCHEMA_VERSION, 3);
+    fn current_schema_version_is_four() {
+        assert_eq!(CURRENT_MANIFEST_SCHEMA_VERSION, 4);
     }
 
     #[test]
-    fn cdot_data_version_field_round_trips() {
+    fn cdot_data_versions_field_round_trips() {
         let m = ReferenceManifest {
-            cdot_data_version: Some("data_v0.2.32".to_string()),
+            cdot_data_versions: BTreeMap::from([(
+                "cdot_json".to_string(),
+                "data_v0.2.32".to_string(),
+            )]),
             ..Default::default()
         };
         let json = serde_json::to_value(&m).unwrap();
-        assert_eq!(json["cdot_data_version"], "data_v0.2.32");
+        assert_eq!(json["cdot_data_versions"]["cdot_json"], "data_v0.2.32");
+        // The superseded scalar is not written by this build.
+        assert!(json.get("cdot_data_version").is_none());
         let back: ReferenceManifest = serde_json::from_value(json).unwrap();
-        assert_eq!(back.cdot_data_version.as_deref(), Some("data_v0.2.32"));
+        assert_eq!(back.cdot_data_versions, m.cdot_data_versions);
     }
 
     #[test]
-    fn cdot_data_version_is_excluded_from_the_identity() {
+    fn a_manifest_carrying_the_legacy_scalar_still_loads() {
+        // `deny_unknown_fields` means dropping the superseded field outright
+        // would make every manifest an earlier build wrote unloadable. It stays
+        // deserializable (and reportable) even though nothing writes it.
+        let json = serde_json::json!({
+            "prepared_at": "2026-07-23",
+            "transcript_fastas": [],
+            "genome_fasta": null,
+            "cdot_json": "cdot/cdot-0.2.32.refseq.GRCh38.json.gz",
+            "transcript_count": 1,
+            "available_prefixes": ["NM_"],
+            "cdot_data_version": "data_v0.2.32",
+            "manifest_schema_version": 3,
+        });
+        let back: ReferenceManifest =
+            serde_json::from_value(json).expect("a schema-3 manifest must still load");
+        assert_eq!(back.cdot_data_version.as_deref(), Some("data_v0.2.32"));
+        assert!(back.cdot_data_versions.is_empty());
+    }
+
+    #[test]
+    fn cdot_data_provenance_is_excluded_from_the_identity() {
         let base = serde_json::json!({
             "transcript_count": 3,
             "cdot_json": "cdot-0.2.32.refseq.GRCh38.json",
@@ -1327,12 +1375,17 @@ mod tests {
         });
         let id = crate::prepare::identity::reference_identity_from_manifest(&base);
         let mut with_version = base.clone();
+        with_version["cdot_data_versions"] = serde_json::json!({
+            "cdot_json": "data_v0.2.32",
+            "ensembl_cdot_json": "data_v0.2.28",
+        });
         with_version["cdot_data_version"] = serde_json::json!("data_v0.2.32");
-        with_version["manifest_schema_version"] = serde_json::json!(3);
+        with_version["manifest_schema_version"] = serde_json::json!(4);
         assert_eq!(
             crate::prepare::identity::reference_identity_from_manifest(&with_version),
             id,
-            "cdot_data_version and schema version must not enter the identity hash"
+            "cdot data-release provenance and the schema version must not enter \
+             the identity hash (the hashed cdot basenames already encode the release)"
         );
     }
 
