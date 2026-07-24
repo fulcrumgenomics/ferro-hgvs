@@ -7083,6 +7083,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 anchored_by: "NM_TEST.3".to_string(),
                 mismatch_fraction: 0.0,
             }],
+            ..Default::default()
         };
         provider.inject_derived_tx_structures(&derived);
         let cdot = provider.cdot_mapper().expect("cdot mapper present");
@@ -7120,6 +7121,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 anchored_by: "NM_TEST.3".to_string(),
                 mismatch_fraction: 0.0,
             }],
+            ..Default::default()
         };
         provider.inject_derived_tx_structures(&derived);
         let cdot = provider.cdot_mapper().expect("cdot mapper present");
@@ -7151,6 +7153,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 anchored_by: "NM_BAD.2".to_string(),
                 mismatch_fraction: 0.0,
             }],
+            ..Default::default()
         };
         provider.inject_derived_tx_structures(&derived);
         let cdot = provider.cdot_mapper().expect("cdot mapper present");
@@ -7196,6 +7199,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
                 anchored_by: "NM_REAL.2".to_string(),
                 mismatch_fraction: 0.0,
             }],
+            ..Default::default()
         };
         provider.inject_derived_tx_structures(&derived);
         // The real cdot record must not be overwritten.

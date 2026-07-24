@@ -12,7 +12,7 @@ use crate::hgvs::parser::accession::parse_accession;
 use crate::hgvs::variant::Accession;
 use crate::reference::derived_placement::{
     derive_ng_placement, parse_ng_gene_transcripts, DerivedPlacement, DerivedPlacements,
-    GenomeSlice, NcExonSource,
+    GenomeSlice, NcExonSource, DERIVED_PLACEMENTS_SCHEMA_VERSION,
 };
 use crate::reference::multi_fasta::MultiFastaProvider;
 use crate::reference::{GenomicPlacement, ReferenceProvider, Strand};
@@ -242,6 +242,7 @@ pub fn derive_placements_for_accessions(
     let declined_count = out.declined.len();
     Ok(DeriveOutput {
         artifact: DerivedPlacements {
+            schema_version: DERIVED_PLACEMENTS_SCHEMA_VERSION,
             description,
             placements: out.placements,
         },

@@ -166,6 +166,12 @@ pub mod urls {
     pub const REFSEQGENE_SUMMARY_URL: &str =
         "https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/RefSeqGene/LRG_RefSeqGene";
 
+    /// The pinned cdot data release these URLs point at. Recorded in the manifest
+    /// (`cdot_data_version`) so the reference's cdot provenance is legible without
+    /// parsing a URL or a filename. Kept in sync with the `CDOT_*` URLs by
+    /// `cdot_urls_embed_the_pinned_data_version`.
+    pub const CDOT_DATA_VERSION: &str = "data_v0.2.32";
+
     /// cdot transcript database (contains CDS metadata, exon coordinates, etc.)
     /// From https://github.com/SACGF/cdot/releases
     pub const CDOT_REFSEQ_GRCH38: &str = "https://github.com/SACGF/cdot/releases/download/data_v0.2.32/cdot-0.2.32.refseq.GRCh38.json.gz";
@@ -913,6 +919,16 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         }
     }
 
+    // Record the pinned cdot release, but only when it truthfully describes
+    // EVERY cdot artifact the manifest wires (#1001).
+    match cdot_version_stamp(config, &manifest) {
+        CdotVersionStamp::Current => {
+            manifest.cdot_data_version = Some(urls::CDOT_DATA_VERSION.to_string());
+        }
+        CdotVersionStamp::Clear => manifest.cdot_data_version = None,
+        CdotVersionStamp::Inherit => {}
+    }
+
     // Fetch missing transcripts from ClinVar or pattern files (requires benchmark feature)
     #[cfg(feature = "benchmark")]
     if config.clinvar_file.is_some() || config.patterns_file.is_some() {
@@ -1061,6 +1077,85 @@ pub fn prepare_references(config: &PrepareConfig) -> Result<ReferenceManifest, F
         manifest.reference_dir.join("manifest.json").display()
     );
     Ok(manifest)
+}
+
+/// Whether any of the four cdot artifacts (RefSeq GRCh38/GRCh37, Ensembl
+/// GRCh38/GRCh37) ended up recorded in the manifest. Deliberately keyed on the
+/// manifest's own recorded paths rather than the `PrepareConfig` download flags
+/// alone, so it stays correct for any flag combination that ends up downloading
+/// cdot data — e.g. a GRCh37-only (`--genome grch37`) or Ensembl-only
+/// (`--ensembl`) prepare run, neither of which sets `download_cdot`.
+fn any_cdot_recorded(manifest: &ReferenceManifest) -> bool {
+    manifest.cdot_json.is_some()
+        || manifest.cdot_grch37_json.is_some()
+        || manifest.ensembl_cdot_json.is_some()
+        || manifest.ensembl_cdot_grch37_json.is_some()
+}
+
+/// What this prepare run should do to `manifest.cdot_data_version` (#1001).
+///
+/// The manifest is read back via `ReferenceManifest::load_or_default`, so its
+/// cdot paths may have been recorded by a **previous** prepare run against an
+/// older pin. `cdot_data_version` names ONE release, so it is only truthful when
+/// every cdot artifact the manifest wires came from that release.
+#[derive(Debug, PartialEq, Eq)]
+enum CdotVersionStamp {
+    /// Every recorded cdot artifact was downloaded by this run — stamp this
+    /// build's pinned [`urls::CDOT_DATA_VERSION`].
+    Current,
+    /// This run downloaded no cdot at all — e.g.
+    /// `ferro prepare --output-dir <ref> --no-cdot --backfill-transcripts …`, a
+    /// first-class workflow. Every recorded artifact is inherited untouched, so
+    /// whatever version a previous run recorded still describes them: leave it
+    /// alone. Stamping here would make the manifest contradict its own (hashed)
+    /// cdot basenames while `ferro check` printed the falsehood.
+    Inherit,
+    /// A partial refresh: this run re-downloaded some cdot artifacts but left
+    /// others inherited from an older pin. The manifest now genuinely mixes
+    /// releases, so no single value is true — clear the field rather than name
+    /// one release for artifacts that came from two.
+    Clear,
+}
+
+/// Decide the [`CdotVersionStamp`] for this run.
+///
+/// Each recorded cdot artifact is matched against the switch that downloads it:
+/// `cdot_json` ← `download_cdot`, `cdot_grch37_json` ← `download_cdot_grch37`,
+/// `ensembl_cdot_json` ← `download_ensembl`, and `ensembl_cdot_grch37_json` ←
+/// `download_ensembl && download_cdot_grch37` (the Ensembl GRCh37 metadata is
+/// nested under both). Those three switches are the complete set of
+/// cdot-downloading switches.
+fn cdot_version_stamp(config: &PrepareConfig, manifest: &ReferenceManifest) -> CdotVersionStamp {
+    let downloaded_any =
+        config.download_cdot || config.download_cdot_grch37 || config.download_ensembl;
+    if !downloaded_any {
+        return CdotVersionStamp::Inherit;
+    }
+    // Every recorded artifact must have been refreshed by this run for a single
+    // version to describe them all.
+    let all_recorded_refreshed = [
+        (manifest.cdot_json.is_some(), config.download_cdot),
+        (
+            manifest.cdot_grch37_json.is_some(),
+            config.download_cdot_grch37,
+        ),
+        (
+            manifest.ensembl_cdot_json.is_some(),
+            config.download_ensembl,
+        ),
+        (
+            manifest.ensembl_cdot_grch37_json.is_some(),
+            config.download_ensembl && config.download_cdot_grch37,
+        ),
+    ]
+    .iter()
+    .all(|&(recorded, refreshed)| !recorded || refreshed);
+
+    if all_recorded_refreshed && any_cdot_recorded(manifest) {
+        CdotVersionStamp::Current
+    } else {
+        CdotVersionStamp::Clear
+    }
 }
 
 /// Genome-build names to derive placements for, from the `--genome` selection.
@@ -2283,6 +2378,193 @@ pub fn detect_clinvar_from_ferro_reference(ferro_ref: &Path) -> Option<PathBuf> 
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn any_cdot_recorded_true_when_only_grch37_refseq_is_set() {
+        // Regression guard: `ferro prepare --genome grch37` sets
+        // `download_cdot=false, download_cdot_grch37=true` (src/bin/ferro.rs),
+        // so `cdot_data_version` must not depend on the GRCh38 RefSeq path
+        // alone, or a GRCh37-only (or Ensembl-only) prepare run would
+        // silently leave it unrecorded despite downloading cdot data.
+        let manifest = ReferenceManifest {
+            cdot_grch37_json: Some(PathBuf::from("cdot37.json")),
+            ..Default::default()
+        };
+        assert!(any_cdot_recorded(&manifest));
+    }
+
+    #[test]
+    fn any_cdot_recorded_true_when_only_grch38_refseq_is_set() {
+        let manifest = ReferenceManifest {
+            cdot_json: Some(PathBuf::from("cdot38.json")),
+            ..Default::default()
+        };
+        assert!(any_cdot_recorded(&manifest));
+    }
+
+    #[test]
+    fn any_cdot_recorded_true_when_only_ensembl_grch38_is_set() {
+        let manifest = ReferenceManifest {
+            ensembl_cdot_json: Some(PathBuf::from("ensembl_cdot.json")),
+            ..Default::default()
+        };
+        assert!(any_cdot_recorded(&manifest));
+    }
+
+    #[test]
+    fn any_cdot_recorded_true_when_only_ensembl_grch37_is_set() {
+        let manifest = ReferenceManifest {
+            ensembl_cdot_grch37_json: Some(PathBuf::from("ensembl_cdot37.json")),
+            ..Default::default()
+        };
+        assert!(any_cdot_recorded(&manifest));
+    }
+
+    #[test]
+    fn any_cdot_recorded_false_when_no_cdot_artifact_is_present() {
+        assert!(!any_cdot_recorded(&ReferenceManifest::default()));
+    }
+
+    #[test]
+    fn no_cdot_download_this_run_does_not_stamp_inherited_cdot_fields() {
+        // `ferro prepare --output-dir <ref> --no-cdot --backfill-transcripts …`
+        // re-opens an existing manifest whose cdot paths were recorded by an
+        // earlier run (possibly against an older pin). Stamping this build's
+        // `CDOT_DATA_VERSION` there would make the manifest contradict its own
+        // cdot basenames, so the gate must be closed (#1001).
+        let config = PrepareConfig {
+            download_cdot: false,
+            download_cdot_grch37: false,
+            download_ensembl: false,
+            ..Default::default()
+        };
+        let manifest = ReferenceManifest {
+            cdot_json: Some(PathBuf::from("cdot/cdot-0.2.28.refseq.GRCh38.json.gz")),
+            ..Default::default()
+        };
+        assert!(any_cdot_recorded(&manifest), "inherited cdot field is set");
+        assert_eq!(
+            cdot_version_stamp(&config, &manifest),
+            CdotVersionStamp::Inherit,
+            "a no-download run must leave the inherited version untouched"
+        );
+    }
+
+    #[test]
+    fn cdot_download_this_run_stamps_the_pinned_data_version() {
+        let config = PrepareConfig {
+            download_cdot: true,
+            ..Default::default()
+        };
+        let manifest = ReferenceManifest {
+            cdot_json: Some(PathBuf::from("cdot/cdot-0.2.32.refseq.GRCh38.json.gz")),
+            ..Default::default()
+        };
+        assert_eq!(
+            cdot_version_stamp(&config, &manifest),
+            CdotVersionStamp::Current
+        );
+    }
+
+    #[test]
+    fn a_partial_cdot_refresh_clears_the_data_version() {
+        // `ferro prepare --ensembl --no-cdot` on an existing reference refreshes
+        // only the Ensembl cdot; the RefSeq cdot stays inherited from whatever
+        // pin the previous run used. One version cannot describe both, so the
+        // field must be cleared rather than name this build's release for an
+        // artifact that did not come from it (#1001).
+        let config = PrepareConfig {
+            download_cdot: false,
+            download_cdot_grch37: false,
+            download_ensembl: true,
+            ..Default::default()
+        };
+        let manifest = ReferenceManifest {
+            cdot_json: Some(PathBuf::from("cdot/cdot-0.2.28.refseq.GRCh38.json.gz")),
+            ensembl_cdot_json: Some(PathBuf::from("cdot/cdot-0.2.32.ensembl.GRCh38.json.gz")),
+            ..Default::default()
+        };
+        assert_eq!(
+            cdot_version_stamp(&config, &manifest),
+            CdotVersionStamp::Clear
+        );
+    }
+
+    #[test]
+    fn refreshing_every_recorded_cdot_artifact_stamps_the_pinned_version() {
+        // The full-refresh counterpart: each recorded artifact is covered by the
+        // switch that downloads it, including the doubly-gated Ensembl GRCh37.
+        let config = PrepareConfig {
+            download_cdot: true,
+            download_cdot_grch37: true,
+            download_ensembl: true,
+            ..Default::default()
+        };
+        let manifest = ReferenceManifest {
+            cdot_json: Some(PathBuf::from("cdot/cdot-0.2.32.refseq.GRCh38.json.gz")),
+            cdot_grch37_json: Some(PathBuf::from("cdot/cdot-0.2.32.refseq.GRCh37.json.gz")),
+            ensembl_cdot_json: Some(PathBuf::from("cdot/cdot-0.2.32.ensembl.GRCh38.json.gz")),
+            ensembl_cdot_grch37_json: Some(PathBuf::from(
+                "cdot/cdot-0.2.32.ensembl.GRCh37.json.gz",
+            )),
+            ..Default::default()
+        };
+        assert_eq!(
+            cdot_version_stamp(&config, &manifest),
+            CdotVersionStamp::Current
+        );
+    }
+
+    #[test]
+    fn ensembl_grch37_left_stale_by_a_grch38_only_ensembl_refresh_clears_the_version() {
+        // `ensembl_cdot_grch37_json` is downloaded only when BOTH `--ensembl`
+        // and the GRCh37 switch are set, so an Ensembl-only refresh leaves a
+        // recorded GRCh37 Ensembl artifact stale — a mixed manifest.
+        let config = PrepareConfig {
+            download_cdot: true,
+            download_cdot_grch37: false,
+            download_ensembl: true,
+            ..Default::default()
+        };
+        let manifest = ReferenceManifest {
+            cdot_json: Some(PathBuf::from("cdot/cdot-0.2.32.refseq.GRCh38.json.gz")),
+            ensembl_cdot_json: Some(PathBuf::from("cdot/cdot-0.2.32.ensembl.GRCh38.json.gz")),
+            ensembl_cdot_grch37_json: Some(PathBuf::from(
+                "cdot/cdot-0.2.28.ensembl.GRCh37.json.gz",
+            )),
+            ..Default::default()
+        };
+        assert_eq!(
+            cdot_version_stamp(&config, &manifest),
+            CdotVersionStamp::Clear
+        );
+    }
+
+    #[test]
+    fn cdot_urls_embed_the_pinned_data_version() {
+        // The pinned release appears twice in every cdot URL: as the release
+        // *path* segment (`data_v0.2.32/`) and inside the *basename*
+        // (`cdot-0.2.32.…`). Asserting both catches the drift the path-only
+        // check would miss — a release bump that leaves the file name stale.
+        let numeric = urls::CDOT_DATA_VERSION.trim_start_matches("data_v");
+        for url in [
+            urls::CDOT_REFSEQ_GRCH38,
+            urls::CDOT_REFSEQ_GRCH37,
+            urls::CDOT_ENSEMBL_GRCH38,
+            urls::CDOT_ENSEMBL_GRCH37,
+        ] {
+            assert!(
+                url.contains(urls::CDOT_DATA_VERSION),
+                "cdot URL {url} does not embed CDOT_DATA_VERSION {}",
+                urls::CDOT_DATA_VERSION
+            );
+            let basename = url.rsplit('/').next().unwrap();
+            assert!(
+                basename.contains(numeric),
+                "cdot URL basename {basename} does not embed the CDOT_DATA_VERSION tail {numeric}"
+            );
+        }
+    }
 
     #[test]
     fn test_build_fasta_index() {

@@ -423,19 +423,51 @@ pub fn derive_ng_placement(
 // On-disk artifact (produced at prepare time, consumed at load)
 // ----------------------------------------------------------------------------
 
+/// Current on-disk schema version for the `derived_refseqgene_placements`
+/// artifact. Bump when the shape changes incompatibly.
+pub const DERIVED_PLACEMENTS_SCHEMA_VERSION: u32 = 1;
+
 /// The committed/manifest artifact of derived `NG_`/`LRG_` placements: the
 /// output of the prepare-time derivation, loaded by `MultiFastaProvider` and
 /// merged into its `refseqgene_placements` map. Self-describing (strand as
 /// `"+"`/`"-"`, per-entry provenance) so it is auditable independent of the
 /// runtime [`GenomicPlacement`] (which is not serializable).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DerivedPlacements {
+    /// On-disk schema version (#1001). Absent on artifacts written before
+    /// versioning — those deserialize to `0` and are accepted as legacy. A
+    /// value newer than [`DERIVED_PLACEMENTS_SCHEMA_VERSION`] is rejected at
+    /// load, so a forward-incompatible artifact fails loudly instead of being
+    /// silently misread.
+    #[serde(default)]
+    pub schema_version: u32,
     /// Human-facing provenance note (generator command, source manifest).
     #[serde(default)]
     pub description: String,
     /// One entry per derived placement.
     pub placements: Vec<DerivedPlacement>,
+}
+
+/// Hand-written (not `#[derive(Default)]`) so a freshly constructed value is
+/// stamped with the **current** schema version, following the in-repo precedent
+/// of [`crate::reference::authoritative::CanonicalOverrides`]. `u32::default()`
+/// would be `0`, which is the reserved "legacy, pre-versioning" marker — a
+/// producer built via `..Default::default()` would silently write an artifact
+/// claiming to predate versioning.
+///
+/// This does not affect legacy *acceptance*: serde's field-level
+/// `#[serde(default)]` on `schema_version` calls `u32::default()` (`0`), not
+/// this impl, so an on-disk artifact with no `schema_version` key still
+/// deserializes to `0` and is still accepted.
+impl Default for DerivedPlacements {
+    fn default() -> Self {
+        Self {
+            schema_version: DERIVED_PLACEMENTS_SCHEMA_VERSION,
+            description: String::new(),
+            placements: Vec::new(),
+        }
+    }
 }
 
 /// One derived placement entry, keyed to its versioned parent accession.
@@ -466,7 +498,14 @@ impl DerivedPlacements {
     /// Load from a JSON file.
     pub fn from_json_path<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
         let content = std::fs::read_to_string(path.as_ref())?;
-        Ok(serde_json::from_str(&content)?)
+        let parsed: Self = serde_json::from_str(&content)?;
+        crate::reference::check_artifact_schema_version(
+            "derived_refseqgene_placements",
+            parsed.schema_version,
+            DERIVED_PLACEMENTS_SCHEMA_VERSION,
+            path.as_ref(),
+        )?;
+        Ok(parsed)
     }
 
     /// Serialize to pretty JSON with a trailing newline (stable for `--check`).
@@ -516,6 +555,50 @@ impl DerivedPlacements {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_artifact_without_schema_version_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.json");
+        // No `schema_version` key at all — the pre-versioning on-disk shape.
+        std::fs::write(&p, br#"{"description":"legacy","placements":[]}"#).unwrap();
+        let loaded = DerivedPlacements::from_json_path(&p).expect("legacy artifact must load");
+        assert_eq!(loaded.schema_version, 0, "absent version reads as 0");
+    }
+
+    #[test]
+    fn current_schema_version_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.json");
+        std::fs::write(
+            &p,
+            format!(
+                r#"{{"schema_version":{},"description":"","placements":[]}}"#,
+                DERIVED_PLACEMENTS_SCHEMA_VERSION
+            ),
+        )
+        .unwrap();
+        assert!(DerivedPlacements::from_json_path(&p).is_ok());
+    }
+
+    #[test]
+    fn newer_schema_version_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("a.json");
+        std::fs::write(
+            &p,
+            format!(
+                r#"{{"schema_version":{},"description":"","placements":[]}}"#,
+                DERIVED_PLACEMENTS_SCHEMA_VERSION + 1
+            ),
+        )
+        .unwrap();
+        let err = DerivedPlacements::from_json_path(&p).unwrap_err();
+        assert!(
+            format!("{err}").contains("newer than this build"),
+            "expected an actionable version error, got: {err}"
+        );
+    }
 
     // ---- parse_ng_gene_transcripts ----
 
@@ -936,6 +1019,7 @@ mod tests {
     #[test]
     fn derived_placements_json_round_trips() {
         let dp = DerivedPlacements {
+            schema_version: DERIVED_PLACEMENTS_SCHEMA_VERSION,
             description: "test".to_string(),
             placements: vec![sample_entry()],
         };
@@ -956,6 +1040,7 @@ mod tests {
         let dp = DerivedPlacements {
             description: String::new(),
             placements: vec![sample_entry()],
+            ..Default::default()
         };
         let out = dp.to_placements();
         assert_eq!(out.len(), 1);
@@ -975,6 +1060,7 @@ mod tests {
         let dp = DerivedPlacements {
             description: String::new(),
             placements: vec![e],
+            ..Default::default()
         };
         assert_eq!(dp.to_placements()[0].1.strand, Strand::Minus);
     }
@@ -989,6 +1075,7 @@ mod tests {
         let dp = DerivedPlacements {
             description: String::new(),
             placements: vec![bad_strand, inverted],
+            ..Default::default()
         };
         // Both invalid entries are skipped rather than mis-placed.
         assert!(dp.to_placements().is_empty());

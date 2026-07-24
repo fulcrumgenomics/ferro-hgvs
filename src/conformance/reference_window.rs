@@ -137,6 +137,7 @@ impl WindowFixture {
         let resolved = DerivedPlacements {
             description: String::new(),
             placements: self.placements.clone(),
+            ..Default::default()
         };
         for (parent, placement) in resolved.to_placements() {
             placements.entry(parent).or_default().push(placement);
