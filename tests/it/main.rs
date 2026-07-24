@@ -122,6 +122,7 @@ mod issue_1135_self_cancelling_merge;
 mod issue_1137_reject_bare_ins;
 mod issue_1139_gene_symbol_specification;
 mod issue_1146_custom_compound_accession;
+mod issue_1157_delins_reduction_shift;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;

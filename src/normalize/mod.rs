@@ -6955,15 +6955,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         DelinsCanonical::Deletion { start: s0, end: e0 } => {
                             // c.2_5delinsAT (ref ACGT) -> c.3_4del. Range fields
                             // are the trimmed half-open 0-indexed interval.
-                            return Ok((
-                                index_to_hgvs_pos(s0),
-                                e0 as u64,
-                                NaEdit::Deletion {
-                                    sequence: None,
-                                    length: None,
-                                },
-                                warnings.clone(),
-                            ));
+                            //
+                            // Recurse into `normalize_na_edit` with the reduced
+                            // deletion so the full del pipeline (3'-shift
+                            // `shuffle()` + repeat contraction) runs — exactly as
+                            // the `Insertion` arm below already does. Returning
+                            // the trimmed deletion directly skipped the shift,
+                            // making the output non-idempotent and non-confluent
+                            // with the same edit written as a plain `del`:
+                            // `g.257_259delinsT` emitted the unshifted
+                            // `g.258_259del`, while a direct `g.258_259del`
+                            // 3'-shifts (and contracts) to `g.258_262A[3]`, so
+                            // `norm(norm(x)) != norm(x)`. Issue #1157.
+                            let new_edit = NaEdit::Deletion {
+                                sequence: None,
+                                length: None,
+                            };
+                            let (new_start, new_end, new_edit, mut child_warnings) = self
+                                .normalize_na_edit(
+                                    ref_seq,
+                                    &new_edit,
+                                    index_to_hgvs_pos(s0),
+                                    e0 as u64,
+                                    boundaries,
+                                    is_coding,
+                                )?;
+                            let mut merged = warnings.clone();
+                            merged.append(&mut child_warnings);
+                            return Ok((new_start, new_end, new_edit, merged));
                         }
                         DelinsCanonical::Insertion {
                             after_index,
@@ -7044,16 +7063,31 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             // c.5delinsGG where ref[5]=G  ->  c.5dup. Duplication
                             // is detected before trimming, so the range matches
                             // the input.
-                            return Ok((
-                                index_to_hgvs_pos(s0),
-                                e0 as u64,
-                                NaEdit::Duplication {
-                                    sequence: None,
-                                    length: None,
-                                    uncertain_extent: None,
-                                },
-                                warnings.clone(),
-                            ));
+                            //
+                            // Recurse so the reduced duplication takes the same
+                            // 3'-shift `shuffle()` a plain `dup` receives, mirror
+                            // of the Deletion/Insertion arms. Direct-return here
+                            // skipped the shift, so `g.258delinsGG` in a G-tract
+                            // emitted the unshifted `g.258dup` while a direct
+                            // `g.258dup` shifts to `g.262dup` — non-idempotent and
+                            // non-confluent. Issue #1157.
+                            let new_edit = NaEdit::Duplication {
+                                sequence: None,
+                                length: None,
+                                uncertain_extent: None,
+                            };
+                            let (new_start, new_end, new_edit, mut child_warnings) = self
+                                .normalize_na_edit(
+                                    ref_seq,
+                                    &new_edit,
+                                    index_to_hgvs_pos(s0),
+                                    e0 as u64,
+                                    boundaries,
+                                    is_coding,
+                                )?;
+                            let mut merged = warnings.clone();
+                            merged.append(&mut child_warnings);
+                            return Ok((new_start, new_end, new_edit, merged));
                         }
                         DelinsCanonical::KeepAsDelins {
                             start: s0,
