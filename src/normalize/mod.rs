@@ -3249,111 +3249,62 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // left-saturation, and fire the clamp the same way the
         // non-degenerate case does.
         //
-        // The degenerate shape is keyed on `new_edit` (the OUTPUT), not
-        // just `edit` (the INPUT): a `delins` input at `cds_start` whose
-        // shared-affix trim reduces it to an insertion (e.g. `c.1delinsACA`
-        // -> trim prefix `A` -> `insCA`) recurses through the SAME
-        // insertion 5'-shuffle and produces the SAME degenerate saturated
-        // `new_edit`, but arrives here with `edit == Delins`. Keying only on
-        // the input `edit` missed that path, so the clamp fired for the
-        // insertion spelling (`c.1_2insCA` -> `c.1delinsACA`) but not the
-        // delins spelling, which then leaked the degenerate `c.1insCA` —
-        // making the blessed `c.1delinsACA` a non-fixed-point (the
-        // `NaEdit::Delins` restore arm below already handles it once
-        // reached). Adding the `new_edit` disjunct makes the gate fire for
-        // both spellings, so they converge on the same fixed point. Issue
-        // #1157 follow-up (idempotency campaign). Keeping the `edit`
-        // disjunct too is strictly additive over prior behavior.
-        let cds_start_left_saturated = (matches!(edit, NaEdit::Insertion { .. })
-            || matches!(new_edit, NaEdit::Insertion { .. }))
-            && new_tx_start == cds_start
-            && new_tx_end == cds_start;
+        // Rewrite via an exact coordinate identity keyed on the POST-shuffle
+        // edit (`new_edit`), not the input `edit`. After shuffling, an
+        // insertion of the (rotated) sequence `A'` that has come to rest
+        // immediately 5' of `cds_start` occupies flanks
+        // `(cds_start-1, cds_start)` [`c.-1_1`] when a 5'UTR exists, or the
+        // degenerate `(cds_start, cds_start)` when it does not (the 0-based-0
+        // shuffle result clamps back to HGVS 1). "Insert `A'` between
+        // `cds_start-1` and `cds_start`" is *identically* "delete
+        // `ref[cds_start]`, insert `A' ++ ref[cds_start]`" — moving the delete
+        // boundary one base, exact for ANY `A'`, no equivalence check needed.
+        //
+        // Keying on `new_edit` unifies three inputs that all reach here as the
+        // same shuffled `A'`: a directly-written insertion, a codon-gated
+        // `dup` (routed through the shuffle in `normalize_na_edit`), and any
+        // start position — so every spelling of one haplotype collapses to a
+        // single minimal, idempotent `c.<cds_start>delins<A' ++ ref[cds_start]>`
+        // (confluence; supersedes the earlier width-varying `k`-widened form).
+        let insertion_rests_at_cds_start = matches!(new_edit, NaEdit::Insertion { .. })
+            && new_tx_end == cds_start
+            && (new_tx_start == cds_start || new_tx_start + 1 == cds_start);
         if matches!(start_axis, boundary::AxisRegion::Cds)
-            && (new_tx_start < cds_start || cds_start_left_saturated)
             && !spanning_dup_exception
+            && (insertion_rests_at_cds_start || new_tx_start < cds_start)
         {
-            match edit {
-                NaEdit::Insertion {
-                    sequence: InsertedSequence::Literal(in_lit),
-                } => {
-                    let alt_bytes: Vec<u8> = in_lit.bases().iter().map(|b| *b as u8).collect();
-                    let x = (tx_start.saturating_sub(cds_start) + 1) as usize;
+            if matches!(edit, NaEdit::Delins { .. }) {
+                // A Delins input whose canonicalisation pushed the residual
+                // past the boundary restores to its own form (#383): the
+                // shared-affix trim is what drove it past `cds_start`.
+                new_edit = edit.clone();
+                new_tx_start = tx_start;
+                new_tx_end = tx_end;
+            } else if insertion_rests_at_cds_start {
+                if let NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(a_prime),
+                } = &new_edit
+                {
                     let cds_start_0b = (cds_start as usize).saturating_sub(1);
-                    let prefix_end = cds_start_0b + x;
-                    // k = max(1, x - L). For x <= L+1 this is 1 (the
-                    // original 1-base-anchor formula); for the long-
-                    // shift homopolymer case (x > L+1) this widens the
-                    // delete window enough to give us a non-negative
-                    // alt_take.
-                    let k = x.saturating_sub(alt_bytes.len()).max(1);
-                    let alt_take = (alt_bytes.len() + k).saturating_sub(x);
-                    let delete_end_0b = cds_start_0b + k;
-                    if x >= 1
-                        && prefix_end <= seq.len()
-                        && delete_end_0b <= seq.len()
-                        && alt_take <= alt_bytes.len()
-                    {
-                        let prefix = &seq[cds_start_0b..prefix_end];
-                        let alt_part = &alt_bytes[..alt_take];
-                        let mut new_alt: Vec<u8> = prefix.to_vec();
-                        new_alt.extend_from_slice(alt_part);
-                        // Equivalence check: the clamped delins
-                        //   delete ref[cds_start_0b..cds_start_0b+k]
-                        //   insert new_alt (length L+k)
-                        // must yield the same final sequence as the
-                        // input
-                        //   insert alt at tx_start (length L)
-                        //   = between bytes tx_start_0b and
-                        //     tx_start_0b+1 (tx_start_0b = cds_start_0b+x-1).
-                        // After cancelling the shared prefix at
-                        // `cds_start_0b` and the shared suffix from
-                        // `cds_start_0b+x` onward, equivalence reduces
-                        // to:
-                        //   alt[..alt_take] ++ ref[cds_start_0b+k..
-                        //                          cds_start_0b+x]
-                        //       == alt
-                        // i.e. the last (x - k) bytes of `alt` must
-                        // equal the corresponding ref window. For the
-                        // x <= L+1 case (k = 1) this collapses to the
-                        // pre-existing single-base-anchor formula and
-                        // always holds because the canonicalisation
-                        // shifted past that ref window in the first
-                        // place. For x > L+1 (k = x - L) the check
-                        // accepts homopolymer / tandem-repeat cases
-                        // and rejects anything else, so we never emit
-                        // a delins that disagrees with the input.
-                        let ref_tail = &seq[delete_end_0b..prefix_end];
-                        let alt_tail_start = alt_take;
-                        let equivalent = ref_tail.len() == alt_bytes.len() - alt_tail_start
-                            && ref_tail == &alt_bytes[alt_tail_start..];
-                        if equivalent {
-                            let bases: Vec<Base> = new_alt
-                                .iter()
-                                .filter_map(|b| Base::from_char(*b as char))
-                                .collect();
-                            if bases.len() == new_alt.len() {
-                                new_edit = NaEdit::Delins {
-                                    sequence: InsertedSequence::Literal(Sequence::new(bases)),
-                                    deleted: None,
-                                    deleted_length: None,
-                                    substitution_reference: None,
-                                };
-                                new_tx_start = cds_start;
-                                new_tx_end = cds_start + (k as u64) - 1;
-                            }
+                    if cds_start_0b < seq.len() {
+                        let mut new_alt: Vec<u8> =
+                            a_prime.bases().iter().map(|b| *b as u8).collect();
+                        new_alt.push(seq[cds_start_0b]);
+                        let bases: Vec<Base> = new_alt
+                            .iter()
+                            .filter_map(|b| Base::from_char(*b as char))
+                            .collect();
+                        if bases.len() == new_alt.len() {
+                            new_edit = NaEdit::Delins {
+                                sequence: InsertedSequence::Literal(Sequence::new(bases)),
+                                deleted: None,
+                                deleted_length: None,
+                                substitution_reference: None,
+                            };
+                            new_tx_start = cds_start;
+                            new_tx_end = cds_start;
                         }
                     }
-                }
-                NaEdit::Delins { .. } => {
-                    new_edit = edit.clone();
-                    new_tx_start = tx_start;
-                    new_tx_end = tx_end;
-                }
-                _ => {
-                    // Other edit types (Deletion, Duplication directly
-                    // as input, Inversion, …) do not currently produce
-                    // 5'UTR-resident rewrites from CDS-interior inputs
-                    // in this canonicalisation path.
                 }
             }
         }
@@ -3406,64 +3357,52 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `Duplication` whose end reaches CDS — but both have the same
         // intent: preserve spanning duplications, clamp everything
         // else.
+        //
+        // Rewrite via the mirror of the CDS-start identity, keyed on the
+        // POST-shuffle `new_edit`. After shuffling, an insertion of the
+        // (rotated) sequence `A'` resting immediately 3' of `cds_end` occupies
+        // flanks `(cds_end, cds_end+1)` [`c.<cds_end>_*1`]. "Insert `A'` between
+        // `cds_end` and `cds_end+1`" is *identically* "delete `ref[cds_end]`,
+        // insert `ref[cds_end] ++ A'`" — exact for ANY `A'`. This keeps a
+        // CDS-interior edit on the CDS axis instead of drifting onto the 3'UTR
+        // (`c.*1`) axis, and (keyed on `new_edit`) unifies dup- and
+        // insertion-spelled inputs and every start position into one minimal,
+        // idempotent `c.<cds_end>delins<ref[cds_end] ++ A'>` (confluence;
+        // resolves the #387 CDS-end saturation latent). Spanning *duplications*
+        // (`new_edit` = Duplication, e.g. `c.9171_*1dup`) are the spec-canonical
+        // form and are NOT clamped.
         if let Some(cds_end_tx) = transcript.cds_end {
-            if matches!(start_axis, boundary::AxisRegion::Cds)
-                && new_tx_end > cds_end_tx
-                && matches!(new_edit, NaEdit::Insertion { .. })
-            {
-                match edit {
-                    NaEdit::Insertion {
-                        sequence: InsertedSequence::Literal(in_lit),
-                    } => {
-                        let alt_bytes: Vec<u8> = in_lit.bases().iter().map(|b| *b as u8).collect();
-                        // Y_c = cds_end_c. - X = cds_end_tx - tx_start
-                        // (both 1-based tx; the cds_start offsets cancel
-                        // because the input start in c.-axis 1-based is
-                        // `tx_start - cds_start + 1`).
-                        let y_c = cds_end_tx.saturating_sub(tx_start);
-                        // y_c >= 1 here (else `new_tx_end > cds_end_tx`
-                        // could not have fired for an Insertion that
-                        // started strictly inside CDS proper). Bound the
-                        // alt-tail offset on the alt length too, so a
-                        // pathological state (`y_c > |alt| + 1`) leaves
-                        // the result untouched rather than panicking.
-                        let alt_take_start = y_c.saturating_sub(1) as usize;
-                        let suffix_start = (tx_end as usize).saturating_sub(1);
-                        let suffix_end = cds_end_tx as usize;
-                        if y_c >= 1
-                            && alt_take_start <= alt_bytes.len()
-                            && suffix_start <= suffix_end
-                            && suffix_end <= seq.len()
-                        {
-                            let alt_part = &alt_bytes[alt_take_start..];
-                            let suffix = &seq[suffix_start..suffix_end];
-                            let mut new_alt: Vec<u8> = alt_part.to_vec();
-                            new_alt.extend_from_slice(suffix);
-                            let bases: Vec<Base> = new_alt
-                                .iter()
-                                .filter_map(|b| Base::from_char(*b as char))
-                                .collect();
-                            if bases.len() == new_alt.len() {
-                                new_edit = NaEdit::Delins {
-                                    sequence: InsertedSequence::Literal(Sequence::new(bases)),
-                                    deleted: None,
-                                    deleted_length: None,
-                                    substitution_reference: None,
-                                };
-                                new_tx_start = cds_end_tx;
-                                new_tx_end = cds_end_tx;
-                            }
+            let insertion_rests_at_cds_end = matches!(new_edit, NaEdit::Insertion { .. })
+                && new_tx_start == cds_end_tx
+                && (new_tx_end == cds_end_tx || new_tx_end == cds_end_tx + 1);
+            if matches!(start_axis, boundary::AxisRegion::Cds) && insertion_rests_at_cds_end {
+                if matches!(edit, NaEdit::Delins { .. }) {
+                    // Delins input restores to its own form (mirror #383/#387).
+                    new_edit = edit.clone();
+                    new_tx_start = tx_start;
+                    new_tx_end = tx_end;
+                } else if let NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(a_prime),
+                } = &new_edit
+                {
+                    let cds_end_0b = (cds_end_tx as usize).saturating_sub(1);
+                    if cds_end_0b < seq.len() {
+                        let mut new_alt: Vec<u8> = vec![seq[cds_end_0b]];
+                        new_alt.extend(a_prime.bases().iter().map(|b| *b as u8));
+                        let bases: Vec<Base> = new_alt
+                            .iter()
+                            .filter_map(|b| Base::from_char(*b as char))
+                            .collect();
+                        if bases.len() == new_alt.len() {
+                            new_edit = NaEdit::Delins {
+                                sequence: InsertedSequence::Literal(Sequence::new(bases)),
+                                deleted: None,
+                                deleted_length: None,
+                                substitution_reference: None,
+                            };
+                            new_tx_start = cds_end_tx;
+                            new_tx_end = cds_end_tx;
                         }
-                    }
-                    NaEdit::Delins { .. } => {
-                        new_edit = edit.clone();
-                        new_tx_start = tx_start;
-                        new_tx_end = tx_end;
-                    }
-                    _ => {
-                        // Other edit types do not currently produce
-                        // 3'UTR-resident rewrites from CDS-interior
-                        // inputs in this canonicalisation path.
                     }
                 }
             }
@@ -7777,7 +7716,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 let ins_edit = NaEdit::Insertion {
                                     sequence: InsertedSequence::Literal(Sequence::new(bases)),
                                 };
-                                return Ok((ins_start, ins_end, ins_edit, warnings));
+                                // The rule layer anchors the gated insertion at
+                                // the tract's 3' flank regardless of shuffle
+                                // direction. Re-enter `normalize_na_edit` on the
+                                // derived insertion so it shuffles to the
+                                // direction-appropriate boundary and reaches the
+                                // same CDS-start/-end boundary clamps a directly
+                                // written insertion does — otherwise a
+                                // `dup`-spelled homopolymer edit and its
+                                // insertion-spelled twin normalize to different
+                                // (and, at a coding boundary, invalid) forms.
+                                // Terminates: the derived edit is an Insertion,
+                                // which never re-enters this Duplication arm.
+                                let (rec_start, rec_end, rec_edit, mut rec_warnings) = self
+                                    .normalize_na_edit(
+                                        ref_seq, &ins_edit, ins_start, ins_end, boundaries,
+                                        is_coding,
+                                    )?;
+                                let mut merged = warnings;
+                                merged.append(&mut rec_warnings);
+                                return Ok((rec_start, rec_end, rec_edit, merged));
                             }
                             // Defensive fallback: rule layer returned a base
                             // byte that doesn't fit the Base alphabet (e.g.
