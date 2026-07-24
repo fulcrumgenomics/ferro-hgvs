@@ -94,7 +94,13 @@ use crate::sequence::reverse_complement;
 const MAX_REPEAT_EXPANSION_BASES: usize = 100_000;
 
 /// Error type for conversion failures.
+///
+/// Marked `#[non_exhaustive]` so a new conversion-failure case is additive
+/// rather than breaking for downstream crates matching on it — the same
+/// treatment [`crate::FerroError`] and [`crate::error::ErrorCode`] received in
+/// #1033.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ConversionError {
     /// The variant type is not supported for conversion.
     UnsupportedVariantType {

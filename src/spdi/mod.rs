@@ -66,7 +66,14 @@ use std::str::FromStr;
 /// | Deletion | `NC:99:ATG:` | Delete ATG starting at position 100 |
 /// | Insertion | `NC:100::ATG` | Insert ATG after position 100 |
 /// | Delins | `NC:99:ATG:TCA` | Replace ATG with TCA |
+///
+/// Marked `#[non_exhaustive]` so a future field is additive rather than
+/// breaking. Build it with [`SpdiVariant::new`] rather than a struct literal;
+/// the fields stay `pub`, so they remain readable and individually assignable.
+/// Mirrors the attribute on [`crate::project::VariantProjection`], the
+/// analogous all-`pub`-field output type #1033 marked.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SpdiVariant {
     /// Reference sequence identifier (e.g., "NC_000001.11").
     pub sequence: String,

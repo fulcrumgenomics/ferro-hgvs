@@ -80,7 +80,15 @@ pub struct BatchResults {
 }
 
 /// Configuration for batch normalization.
+///
+/// Marked `#[non_exhaustive]` so adding a batch knob is additive rather than
+/// breaking. Build it from [`Default`] and assign the fields you need (they
+/// stay `pub`) rather than using a struct literal. Distinct from
+/// [`crate::normalize::NormalizeConfig`], which configures the normalization
+/// itself; this one configures the batch run around it, and is marked for the
+/// same reason.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct NormalizeConfig {
     /// Reference directory (with manifest.json)
     pub reference_dir: Option<std::path::PathBuf>,

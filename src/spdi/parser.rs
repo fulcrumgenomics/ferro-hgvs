@@ -6,7 +6,12 @@ use super::SpdiVariant;
 use std::fmt;
 
 /// Error type for SPDI parsing failures.
+///
+/// Marked `#[non_exhaustive]` so a new parse-failure case is additive rather
+/// than breaking for downstream crates matching on it — the same treatment
+/// [`crate::FerroError`] and [`crate::error::ErrorCode`] received in #1033.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum SpdiParseError {
     /// Not enough colons in the input (expected exactly 3).
     NotEnoughParts {
