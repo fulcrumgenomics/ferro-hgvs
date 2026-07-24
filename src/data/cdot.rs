@@ -36,6 +36,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use superintervals::IntervalMap;
 
 /// rkyv-archivable mirror of the cdot cache. Kept fully separate from the
@@ -201,7 +202,6 @@ mod rkyv_cache {
 
     /// Owned cdot maps materialized directly from an archive (one pass).
     pub(super) struct CdotMaps {
-        pub transcripts: FxHashMap<String, CdotTranscript>,
         pub contig_index: FxHashMap<String, Vec<String>>,
         pub contig_alias_to_canonical: FxHashMap<String, String>,
         pub base_to_versioned: FxHashMap<String, String>,
@@ -210,13 +210,9 @@ mod rkyv_cache {
         pub alt_build_transcripts: FxHashMap<String, FxHashMap<String, CdotTranscript>>,
     }
 
-    pub(super) fn version_of(a: &ArchivedRkyvSnapshot) -> u32 {
-        a.format_version.to_native()
-    }
-
     /// Materialize owned cdot maps from a validated archive in a single pass.
     /// Returns an error if any transcript carries an out-of-range enum tag.
-    pub(super) fn maps_from_archived(a: &ArchivedRkyvSnapshot) -> Result<CdotMaps, FerroError> {
+    fn derived_maps_from_archived_inner(a: &ArchivedRkyvSnapshot) -> Result<CdotMaps, FerroError> {
         // Pre-size each runtime map to the archive's known entry count. The
         // `ArchivedHashMap` iterators do not report an exact `size_hint`, so a
         // plain `collect()` under-reserves and rehashes repeatedly while
@@ -257,7 +253,6 @@ mod rkyv_cache {
             alt_build_transcripts.insert(b.as_str().to_string(), txs(m)?);
         }
         Ok(CdotMaps {
-            transcripts: txs(&a.transcripts)?,
             contig_index,
             contig_alias_to_canonical: str_map(&a.contig_alias_to_canonical),
             base_to_versioned: str_map(&a.base_to_versioned),
@@ -267,16 +262,254 @@ mod rkyv_cache {
         })
     }
 
+    /// A memory-mapped cdot archive that serves transcripts on demand (#974).
+    ///
+    /// The eager path (`maps_from_archived`) deep-copies every transcript into
+    /// owned maps before the first lookup: measured at ~621 MB and ~207 ms for
+    /// the production RefSeq GRCh38 archive, of which a typical CLI run touches
+    /// a handful of records. This type keeps the mapping instead and
+    /// materializes one transcript at a time, caching each in an append-only
+    /// map so repeat lookups are free and the returned `&CdotTranscript` stays
+    /// valid for the archive's lifetime.
+    ///
+    /// The cache is deliberately unbounded: it converges to the eager path's
+    /// footprint in the worst case (a whole-corpus sweep), so this can never
+    /// regress memory relative to the old behavior, and it avoids the
+    /// borrow-invalidation that eviction would impose on the ~183 call sites
+    /// that hold `&CdotTranscript`.
+    pub(super) struct CdotArchive {
+        /// Backing mapping. The archived root borrows from this, so the two are
+        /// never stored together — see [`Self::root`].
+        mmap: memmap2::Mmap,
+        /// Transcripts materialized so far, keyed by accession. Append-only:
+        /// entries are boxed (stable address) and never removed or mutated, so
+        /// handing out `&CdotTranscript` that outlives the internal lock is
+        /// sound. `elsa` encapsulates that reasoning.
+        cache: elsa::sync::FrozenMap<String, Box<CdotTranscript>>,
+        /// Accessions whose archived record failed tag validation. Prevents a
+        /// corrupt record from being re-decoded (and re-warned) on every lookup.
+        poisoned: std::sync::Mutex<std::collections::HashSet<String>>,
+    }
+
+    impl std::fmt::Debug for CdotArchive {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("CdotArchive")
+                .field("bytes", &self.mmap.len())
+                .finish_non_exhaustive()
+        }
+    }
+
+    impl CdotArchive {
+        /// Map `path` and accept it as a current, structurally plausible archive.
+        ///
+        /// Unlike the eager path this does NOT run rkyv's whole-archive
+        /// validation: that walk faults in the entire file (measured ~347 MB
+        /// resident, 44 ms) purely to prove pointer integrity, which would
+        /// defeat the point of mapping it lazily. The archive is produced by
+        /// `ferro prepare` and installed with a rename, and it sits in the same
+        /// prepared-reference directory as the FASTA/`.fai` files we already
+        /// read without validation — so it is inside the same trust boundary.
+        ///
+        /// The cheap checks below still reject the failure modes that actually
+        /// occur (truncation, schema drift, a stale format version), and
+        /// per-transcript tag validation still runs at materialization, so a
+        /// corrupt *record* is rejected rather than mis-read.
+        pub(super) fn open(path: &std::path::Path) -> Result<Self, FerroError> {
+            let file = std::fs::File::open(path).map_err(|e| FerroError::Io {
+                msg: format!("Failed to open cdot rkyv file: {}", e),
+            })?;
+            // SAFETY: concurrent writers use `rename` (new inode) so an active
+            // mapping is never invalidated by a parallel cache refresh; external
+            // truncation of the file is not guarded against.
+            let mmap = unsafe {
+                memmap2::Mmap::map(&file).map_err(|e| FerroError::Io {
+                    msg: format!("Failed to mmap cdot rkyv file: {}", e),
+                })?
+            };
+            let archive = Self {
+                mmap,
+                cache: elsa::sync::FrozenMap::new(),
+                poisoned: std::sync::Mutex::new(std::collections::HashSet::new()),
+            };
+            archive.validate_shallow()?;
+            Ok(archive)
+        }
+
+        /// Reject an archive that is too small to hold a root, carries a
+        /// different `format_version`, or whose root map lengths are absurd.
+        ///
+        /// This is the whole safety gate for the unchecked access in
+        /// [`Self::root`], so it runs before any other method may be called.
+        fn validate_shallow(&self) -> Result<(), FerroError> {
+            // rkyv writes the root at the tail of the buffer; a file shorter
+            // than the root record cannot be accessed at all.
+            if self.mmap.len() < std::mem::size_of::<ArchivedRkyvSnapshot>() {
+                return Err(FerroError::Io {
+                    msg: format!("cdot rkyv archive is truncated ({} bytes)", self.mmap.len()),
+                });
+            }
+            let root = self.root();
+            let version = root.format_version.to_native();
+            if version != RKYV_FORMAT_VERSION {
+                return Err(FerroError::Io {
+                    msg: format!(
+                        "cdot rkyv schema version {} != expected {}",
+                        version, RKYV_FORMAT_VERSION
+                    ),
+                });
+            }
+            // An entry can't be smaller than a byte, so a map claiming more
+            // entries than the file has bytes indicates a corrupt/foreign root.
+            let bytes = self.mmap.len();
+            if root.transcripts.len() > bytes || root.contig_index.len() > bytes {
+                return Err(FerroError::Io {
+                    msg: "cdot rkyv archive root has implausible map lengths".to_string(),
+                });
+            }
+            Ok(())
+        }
+
+        /// The archived root, re-derived per call.
+        ///
+        /// `access_unchecked` is an O(1) pointer computation at the buffer tail
+        /// (measured at 0-42 ns), so re-deriving is cheaper than the
+        /// self-referential machinery that storing the borrow would require.
+        ///
+        /// SAFETY: the buffer is a live mapping owned by `self` that outlives
+        /// the returned borrow, and [`Self::validate_shallow`] has confirmed it
+        /// is large enough and carries the expected `format_version`.
+        pub(super) fn root(&self) -> &ArchivedRkyvSnapshot {
+            unsafe { rkyv::access_unchecked::<ArchivedRkyvSnapshot>(&self.mmap[..]) }
+        }
+
+        /// Is `accession` present, without materializing it?
+        pub(super) fn contains(&self, accession: &str) -> bool {
+            self.root().transcripts.get(accession).is_some()
+        }
+
+        /// Number of transcripts in the primary build.
+        pub(super) fn len(&self) -> usize {
+            self.root().transcripts.len()
+        }
+
+        /// Every primary-build accession, borrowed from the archive.
+        pub(super) fn accessions(&self) -> impl Iterator<Item = &str> {
+            self.root().transcripts.keys().map(|k| k.as_str())
+        }
+
+        /// Fetch `accession`, materializing and caching it on first use.
+        ///
+        /// Returns `None` when absent, and also when the archived record fails
+        /// tag validation — the accession is then poisoned so the failed decode
+        /// is not retried on every subsequent lookup.
+        pub(super) fn get(&self, accession: &str) -> Option<&CdotTranscript> {
+            if let Some(hit) = self.cache.get(accession) {
+                return Some(hit);
+            }
+            if self
+                .poisoned
+                .lock()
+                .is_ok_and(|set| set.contains(accession))
+            {
+                return None;
+            }
+            let archived = self.root().transcripts.get(accession)?;
+            match tx_from_archived(archived) {
+                Ok(tx) => Some(self.cache.insert(accession.to_string(), Box::new(tx))),
+                Err(e) => {
+                    if let Ok(mut set) = self.poisoned.lock() {
+                        // Warn once per accession, on the transition into the set.
+                        if set.insert(accession.to_string()) {
+                            eprintln!(
+                                "Warning: cdot archive record for {} is invalid and was skipped: {}",
+                                accession, e
+                            );
+                        }
+                    }
+                    None
+                }
+            }
+        }
+
+        /// Genomic extent `(min_exon_start, max_exon_end)` of `accession`, read
+        /// straight from the archived exon table.
+        ///
+        /// This is what keeps the derived stab-query and genome-span indexes
+        /// from defeating laziness: building them needs only each transcript's
+        /// bounds, so they are folded from the archive without materializing
+        /// (and permanently caching) every `CdotTranscript`.
+        pub(super) fn exon_bounds(&self, accession: &str) -> Option<(u64, u64)> {
+            let archived = self.root().transcripts.get(accession)?;
+            bounds_of_archived(archived)
+        }
+
+        /// `(accession, min, max)` for every transcript that has exons.
+        pub(super) fn iter_exon_bounds(&self) -> impl Iterator<Item = (&str, u64, u64)> {
+            self.root()
+                .transcripts
+                .iter()
+                .filter_map(|(k, v)| bounds_of_archived(v).map(|(lo, hi)| (k.as_str(), lo, hi)))
+        }
+
+        /// How many transcripts have been materialized so far. The laziness
+        /// guarantee is only meaningful if it can be observed.
+        #[cfg(test)]
+        pub(super) fn materialized_len(&self) -> usize {
+            self.cache.len()
+        }
+
+        /// Materialize every transcript, for the write paths that must observe
+        /// the whole corpus (`to_rkyv_file`, `to_bincode_file`).
+        pub(super) fn materialize_all(
+            &self,
+        ) -> Result<FxHashMap<String, CdotTranscript>, FerroError> {
+            let root = self.root();
+            let mut out =
+                FxHashMap::with_capacity_and_hasher(root.transcripts.len(), Default::default());
+            for (k, v) in root.transcripts.iter() {
+                out.insert(k.as_str().to_string(), tx_from_archived(v)?);
+            }
+            Ok(out)
+        }
+    }
+
+    /// Exon-span bounds of an archived transcript, or `None` when it has no
+    /// exons or the span is degenerate.
+    fn bounds_of_archived(a: &ArchivedRkyvTx) -> Option<(u64, u64)> {
+        let mut lo = u64::MAX;
+        let mut hi = 0u64;
+        for e in a.exons.iter() {
+            lo = lo.min(e[0].to_native());
+            hi = hi.max(e[1].to_native());
+        }
+        (hi > lo).then_some((lo, hi))
+    }
+
+    /// Build every owned map EXCEPT the primary transcripts, which the
+    /// lazy path serves from the archive instead (#974).
+    ///
+    /// These derived maps are kept eager because they are cheap: measured at
+    /// ~21 MB in total against ~621 MB for the transcripts they accompany. The
+    /// simplicity of leaving them owned is worth 3% of the footprint.
+    pub(super) fn derived_maps_from_archived(
+        a: &ArchivedRkyvSnapshot,
+    ) -> Result<CdotMaps, FerroError> {
+        derived_maps_from_archived_inner(a)
+    }
+
     /// Build the rkyv snapshot mirror from a populated mapper (serialize side).
-    pub(super) fn snapshot_from_mapper(m: &CdotMapper) -> RkyvSnapshot {
+    /// Fallible because an archive-backed mapper must materialize its corpus
+    /// here, which can surface a corrupt archived record (#974).
+    pub(super) fn snapshot_from_mapper(m: &CdotMapper) -> Result<RkyvSnapshot, FerroError> {
         let map = |src: &FxHashMap<String, CdotTranscript>| -> HashMap<String, RkyvTx> {
             src.iter()
                 .map(|(k, v)| (k.clone(), tx_to_rkyv(v)))
                 .collect()
         };
-        RkyvSnapshot {
+        let all_transcripts = m.all_primary_transcripts()?;
+        Ok(RkyvSnapshot {
             format_version: RKYV_FORMAT_VERSION,
-            transcripts: map(&m.transcripts),
+            transcripts: map(&all_transcripts),
             // Re-collect the runtime `FxHashMap`s into plain `HashMap`s so the
             // archived (on-disk) layout is unchanged by the runtime hasher swap.
             contig_index: m
@@ -305,7 +538,7 @@ mod rkyv_cache {
                 .iter()
                 .map(|(b, txs)| (b.clone(), map(txs)))
                 .collect(),
-        }
+        })
     }
 
     /// Serialize a current-version archive carrying a single transcript whose
@@ -1498,13 +1731,26 @@ pub enum CdotLoadSource {
 }
 
 /// Coordinate mapper using cdot data.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CdotMapper {
-    /// Transcripts indexed by accession. Entries are populated from whatever
-    /// genome build was passed at load time (the "primary build"). Use
-    /// [`get_transcript_on_build`](Self::get_transcript_on_build) to fetch a
-    /// non-primary build's view of a transcript.
+    /// Transcripts indexed by accession, for the primary build.
+    ///
+    /// When [`Self::archive`] is set this is an *overlay*: it holds only
+    /// transcripts contributed at runtime (`add_transcript`, `merge_*`, the
+    /// #790 derived-structure injection), and is consulted before the archive
+    /// so a runtime record shadows its archived namesake. Otherwise (JSON /
+    /// bincode / `from_transcripts` loads) it holds the whole corpus, exactly
+    /// as before.
+    ///
+    /// Use [`get_transcript_on_build`](Self::get_transcript_on_build) to fetch
+    /// a non-primary build's view of a transcript.
     transcripts: FxHashMap<String, CdotTranscript>,
+    /// Memory-mapped archive serving primary-build transcripts on demand (#974).
+    ///
+    /// `None` for every non-rkyv load path, which therefore behaves exactly as
+    /// it did before. Shared (not copied) by `clone`, so cloning a mapper — as
+    /// `ferro project` does — no longer duplicates the corpus.
+    archive: Option<Arc<rkyv_cache::CdotArchive>>,
     /// Index from contig to transcript IDs that overlap.
     contig_index: FxHashMap<String, Vec<String>>,
     /// Alias-to-canonical contig name mapping (e.g., "chr7" -> "NC_000007.14").
@@ -1616,7 +1862,123 @@ struct AltBuildContigStab {
     index: IntervalMap<u32>,
 }
 
+/// Hand-written because the memory-mapped archive is shared rather than
+/// copied, which `derive(Clone)` cannot express.
+///
+/// Sharing is safe and invisible: the archive is immutable and its transcript
+/// cache is append-only and content-derived, so two clones observing the same
+/// cache can never disagree. Runtime mutations land in the per-clone
+/// `transcripts` overlay, so clones stay independent where it matters. The
+/// lazily-derived query indexes are deliberately NOT copied — a clone rebuilds
+/// them on demand, exactly as a freshly-loaded mapper does.
+impl Clone for CdotMapper {
+    fn clone(&self) -> Self {
+        Self {
+            transcripts: self.transcripts.clone(),
+            archive: self.archive.clone(),
+            contig_index: self.contig_index.clone(),
+            contig_alias_to_canonical: self.contig_alias_to_canonical.clone(),
+            base_to_versioned: self.base_to_versioned.clone(),
+            lrg_to_refseq: self.lrg_to_refseq.clone(),
+            alt_build_transcripts: self.alt_build_transcripts.clone(),
+            primary_build: self.primary_build.clone(),
+            contig_query_index: OnceCell::new(),
+            alt_build_query_index: OnceCell::new(),
+            transcript_genome_spans: OnceCell::new(),
+            deferred_alt_sources: self.deferred_alt_sources.clone(),
+            lazy_alt_mappers: self
+                .deferred_alt_sources
+                .keys()
+                .map(|b| (b.clone(), OnceCell::new()))
+                .collect(),
+            deferred_ensembl_source: self.deferred_ensembl_source.clone(),
+            lazy_ensembl_mapper: OnceCell::new(),
+        }
+    }
+}
+
 impl CdotMapper {
+    /// Look up `accession` in the primary build: the runtime overlay first,
+    /// then the memory-mapped archive (materializing on first touch).
+    ///
+    /// Every primary-build read goes through here so the overlay-shadows-archive
+    /// rule is stated once rather than at each call site.
+    fn primary_transcript(&self, accession: &str) -> Option<&CdotTranscript> {
+        if let Some(tx) = self.transcripts.get(accession) {
+            return Some(tx);
+        }
+        self.archive.as_ref()?.get(accession)
+    }
+
+    /// Is `accession` present in the primary build? Avoids materializing the
+    /// record when it lives only in the archive.
+    fn primary_contains(&self, accession: &str) -> bool {
+        self.transcripts.contains_key(accession)
+            || self.archive.as_ref().is_some_and(|a| a.contains(accession))
+    }
+
+    /// Number of distinct primary-build accessions across overlay and archive.
+    fn primary_len(&self) -> usize {
+        match &self.archive {
+            // Overlay entries that shadow an archived accession must not be
+            // double-counted.
+            Some(a) => a.len() + self.transcripts.keys().filter(|k| !a.contains(k)).count(),
+            None => self.transcripts.len(),
+        }
+    }
+
+    /// Every primary-build accession, overlay first then archive-only entries.
+    fn primary_accessions(&self) -> impl Iterator<Item = &str> {
+        self.transcripts.keys().map(|s| s.as_str()).chain(
+            self.archive
+                .iter()
+                .flat_map(|a| a.accessions())
+                .filter(|acc| !self.transcripts.contains_key(*acc)),
+        )
+    }
+
+    /// How many archived transcripts have been materialized so far, or `None`
+    /// for a mapper with no archive. Test-only observability for the #974
+    /// laziness guarantee.
+    #[cfg(test)]
+    fn materialized_len(&self) -> Option<usize> {
+        self.archive.as_ref().map(|a| a.materialized_len())
+    }
+
+    /// The complete primary-build transcript map, materializing every archived
+    /// record and layering the runtime overlay on top.
+    ///
+    /// This is the one place that deliberately defeats laziness, because the
+    /// serialization paths (`to_rkyv_file`, `to_bincode_file`) must observe the
+    /// whole corpus to write it out. Borrowed when there is no archive, so the
+    /// common non-archive case still copies nothing.
+    fn all_primary_transcripts(
+        &self,
+    ) -> Result<std::borrow::Cow<'_, FxHashMap<String, CdotTranscript>>, FerroError> {
+        let Some(archive) = &self.archive else {
+            return Ok(std::borrow::Cow::Borrowed(&self.transcripts));
+        };
+        let mut all = archive.materialize_all()?;
+        for (acc, tx) in &self.transcripts {
+            all.insert(acc.clone(), tx.clone());
+        }
+        Ok(std::borrow::Cow::Owned(all))
+    }
+
+    /// Genomic extent of `accession` without materializing it when it is
+    /// archive-only — the archived exon table is folded in place.
+    fn primary_exon_bounds(&self, accession: &str) -> Option<(u64, u64)> {
+        if let Some(tx) = self.transcripts.get(accession) {
+            if tx.exons.is_empty() {
+                return None;
+            }
+            let lo = tx.exons.iter().map(|e| e[0]).min()?;
+            let hi = tx.exons.iter().map(|e| e[1]).max()?;
+            return (hi > lo).then_some((lo, hi));
+        }
+        self.archive.as_ref()?.exon_bounds(accession)
+    }
+
     /// Create a new empty mapper (primary build defaults to GRCh38).
     pub fn new() -> Self {
         Self {
@@ -1627,6 +1989,7 @@ impl CdotMapper {
             lrg_to_refseq: FxHashMap::default(),
             alt_build_transcripts: FxHashMap::default(),
             primary_build: Some("GRCh38".to_string()),
+            archive: None,
             contig_query_index: OnceCell::new(),
             alt_build_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
@@ -1826,6 +2189,7 @@ impl CdotMapper {
             // that pre-date this field surface as `None` rather than
             // claiming a fabricated GRCh38 (#389 follow-up).
             primary_build: snapshot.primary_build,
+            archive: None,
             contig_query_index: OnceCell::new(),
             alt_build_query_index: OnceCell::new(),
             transcript_genome_spans: OnceCell::new(),
@@ -1854,12 +2218,11 @@ impl CdotMapper {
 
     /// Write the mapper to a bincode file for fast subsequent loading.
     pub fn to_bincode_file<P: AsRef<Path>>(&self, path: P) -> Result<(), FerroError> {
+        // Materialize the archive-backed corpus first: the overlay alone would
+        // silently write out an almost-empty cache (#974).
+        let all_transcripts = self.all_primary_transcripts()?;
         let snapshot = CdotMapperSnapshotRef {
-            transcripts: self
-                .transcripts
-                .iter()
-                .map(|(k, v)| (k, v.into()))
-                .collect(),
+            transcripts: all_transcripts.iter().map(|(k, v)| (k, v.into())).collect(),
             contig_index: &self.contig_index,
             contig_alias_to_canonical: &self.contig_alias_to_canonical,
             base_to_versioned: &self.base_to_versioned,
@@ -1919,50 +2282,26 @@ impl CdotMapper {
 
     /// `mmap`-backed load from a pre-serialized rkyv archive.
     ///
-    /// Maps the archive file into memory (one `unsafe` `memmap2::Mmap::map`
-    /// call) then validates and deserializes it in a single pass, rejects stale
-    /// or corrupt archives so [`load`](Self::load) can regenerate them, and is
-    /// ~3-4x faster than the bincode path because rkyv's layout skips the
-    /// byte-stream decode.
+    /// Maps the archive and builds only the small derived indexes, leaving the
+    /// transcripts themselves in the mapping to be materialized per lookup
+    /// (#974). For the production RefSeq GRCh38 archive this avoids ~621 MB of
+    /// copying that a typical CLI run — which touches a handful of accessions —
+    /// never needed.
+    ///
+    /// A stale or structurally implausible archive is rejected here so
+    /// [`load`](Self::load) can regenerate it; see
+    /// [`CdotArchive::open`](rkyv_cache::CdotArchive::open) for the trust
+    /// boundary this trades against, and note that per-transcript tag
+    /// validation now happens at materialization rather than at load.
     pub fn from_rkyv_file<P: AsRef<Path>>(path: P) -> Result<Self, FerroError> {
-        use rkyv::rancor::Error as RkyvError;
+        let archive = Arc::new(rkyv_cache::CdotArchive::open(path.as_ref())?);
 
-        let file = std::fs::File::open(path.as_ref()).map_err(|e| FerroError::Io {
-            msg: format!("Failed to open cdot rkyv file: {}", e),
-        })?;
-        // mmap (page-aligned, satisfies rkyv's alignment) so the 260MB+ archive
-        // isn't read+copied up front — pages fault in lazily as `deserialize`
-        // touches them. The mapping is dropped once we own the data below.
-        // SAFETY: concurrent writers use `rename` (new inode) so an active
-        // mapping is never invalidated by a parallel cache refresh; external
-        // truncation of the file is not guarded against.
-        let mmap = unsafe {
-            memmap2::Mmap::map(&file).map_err(|e| FerroError::Io {
-                msg: format!("Failed to mmap cdot rkyv file: {}", e),
-            })?
-        };
-
-        let archived = rkyv::access::<rkyv_cache::ArchivedRkyvSnapshot, RkyvError>(&mmap[..])
-            .map_err(|e| FerroError::Io {
-                msg: format!("cdot rkyv archive failed validation: {}", e),
-            })?;
-        let version = rkyv_cache::version_of(archived);
-        if version != rkyv_cache::RKYV_FORMAT_VERSION {
-            return Err(FerroError::Io {
-                msg: format!(
-                    "cdot rkyv schema version {} != expected {}",
-                    version,
-                    rkyv_cache::RKYV_FORMAT_VERSION
-                ),
-            });
-        }
-
-        // Materialize owned cdot maps directly from the archive (single pass).
-        // Rejects (rather than coerces) any out-of-range enum tag, so a corrupt
-        // archive surfaces as an error and is regenerated by the caller.
-        let maps = rkyv_cache::maps_from_archived(archived)?;
+        // Build only the derived maps (~21 MB); the ~621 MB of transcripts stay
+        // in the mapping and materialize per lookup (#974).
+        let maps = rkyv_cache::derived_maps_from_archived(archive.root())?;
         Ok(Self {
-            transcripts: maps.transcripts,
+            transcripts: FxHashMap::default(),
+            archive: Some(archive),
             contig_index: maps.contig_index,
             contig_alias_to_canonical: maps.contig_alias_to_canonical,
             base_to_versioned: maps.base_to_versioned,
@@ -2001,7 +2340,7 @@ impl CdotMapper {
 
     /// Write the mapper to an rkyv archive (atomically), for fast loading.
     pub fn to_rkyv_file<P: AsRef<Path>>(&self, path: P) -> Result<(), FerroError> {
-        let snapshot = rkyv_cache::snapshot_from_mapper(self);
+        let snapshot = rkyv_cache::snapshot_from_mapper(self)?;
         let bytes =
             rkyv::to_bytes::<rkyv::rancor::Error>(&snapshot).map_err(|e| FerroError::Io {
                 msg: format!("Failed to serialize cdot rkyv: {}", e),
@@ -2622,7 +2961,7 @@ impl CdotMapper {
         // must probe `true`, or this presence check would return a false negative
         // that disagrees with the resolving lookup. Exact (no version fallback);
         // ENS*-gated so a RefSeq probe never materializes the Ensembl mapper.
-        self.transcripts.contains_key(accession)
+        self.primary_contains(accession)
             || (accession.starts_with("ENS")
                 && self
                     .deferred_ensembl_mapper()
@@ -2652,14 +2991,14 @@ impl CdotMapper {
     /// exists, the latter will be returned.
     pub fn get_transcript(&self, accession: &str) -> Option<&CdotTranscript> {
         // First try direct lookup
-        if let Some(tx) = self.transcripts.get(accession) {
+        if let Some(tx) = self.primary_transcript(accession) {
             return Some(tx);
         }
 
         // Try version fallback (e.g., NM_000088.2 -> NM_000088.3)
         if let Some(base) = accession.split('.').next() {
             if let Some(versioned) = self.base_to_versioned.get(base) {
-                if let Some(tx) = self.transcripts.get(versioned) {
+                if let Some(tx) = self.primary_transcript(versioned) {
                     return Some(tx);
                 }
             }
@@ -2669,13 +3008,13 @@ impl CdotMapper {
         if accession.starts_with("LRG_") {
             if let Some(refseq) = self.lrg_to_refseq.get(accession) {
                 // Try direct lookup of RefSeq
-                if let Some(tx) = self.transcripts.get(refseq) {
+                if let Some(tx) = self.primary_transcript(refseq) {
                     return Some(tx);
                 }
                 // Try version fallback for RefSeq too
                 if let Some(base) = refseq.split('.').next() {
                     if let Some(versioned) = self.base_to_versioned.get(base) {
-                        if let Some(tx) = self.transcripts.get(versioned) {
+                        if let Some(tx) = self.primary_transcript(versioned) {
                             return Some(tx);
                         }
                     }
@@ -2707,12 +3046,12 @@ impl CdotMapper {
     /// The LRG → RefSeq mapping is honored exactly (it is an alias to a specific
     /// `accession.version`, not a version fuzz).
     pub fn get_transcript_exact(&self, accession: &str) -> Option<&CdotTranscript> {
-        if let Some(tx) = self.transcripts.get(accession) {
+        if let Some(tx) = self.primary_transcript(accession) {
             return Some(tx);
         }
         if accession.starts_with("LRG_") {
             if let Some(refseq) = self.lrg_to_refseq.get(accession) {
-                return self.transcripts.get(refseq);
+                return self.primary_transcript(refseq);
             }
         }
         // Deferred Ensembl (#964): version-exact ENS* lookup via the lazy mapper.
@@ -3109,7 +3448,7 @@ impl CdotMapper {
                 .into_iter()
                 .filter_map(|idx| {
                     let acc = accessions.get(idx as usize)?;
-                    let tx = self.transcripts.get(acc)?;
+                    let tx = self.primary_transcript(acc)?;
                     Some((acc.as_str(), tx))
                 })
                 .collect();
@@ -3224,8 +3563,15 @@ impl CdotMapper {
     /// `build_query_index` so the two views can't disagree about what
     /// "transcript span" means.
     fn build_transcript_genome_spans(&self) -> FxHashMap<String, (u64, u64)> {
-        let mut out =
-            FxHashMap::with_capacity_and_hasher(self.transcripts.len(), Default::default());
+        let mut out = FxHashMap::with_capacity_and_hasher(self.primary_len(), Default::default());
+        // Archive first, so an overlay entry below overwrites its shadowed
+        // archived namesake. Bounds are folded straight from the archived exon
+        // tables, so building this index does NOT materialize the corpus (#974).
+        if let Some(archive) = &self.archive {
+            for (acc, min, max) in archive.iter_exon_bounds() {
+                out.insert(acc.to_string(), (min, max));
+            }
+        }
         for (acc, tx) in &self.transcripts {
             if tx.exons.is_empty() {
                 continue;
@@ -3249,17 +3595,12 @@ impl CdotMapper {
         for (contig, accessions) in &self.contig_index {
             let mut im: IntervalMap<u32> = IntervalMap::new();
             for (idx, acc) in accessions.iter().enumerate() {
-                let Some(tx) = self.transcripts.get(acc) else {
+                // Reads archived exon bounds in place when the transcript is
+                // archive-only, so the stab index can be built without
+                // materializing (and permanently caching) the corpus (#974).
+                let Some((min, max)) = self.primary_exon_bounds(acc) else {
                     continue;
                 };
-                if tx.exons.is_empty() {
-                    continue;
-                }
-                let min = tx.exons.iter().map(|e| e[0]).min().unwrap();
-                let max = tx.exons.iter().map(|e| e[1]).max().unwrap();
-                if max <= min {
-                    continue;
-                }
                 let (Ok(s), Ok(e)) = (i32::try_from(min), i32::try_from(max - 1)) else {
                     continue;
                 };
@@ -3396,12 +3737,12 @@ impl CdotMapper {
 
     /// Get the number of transcripts loaded.
     pub fn transcript_count(&self) -> usize {
-        self.transcripts.len()
+        self.primary_len()
     }
 
     /// Get all transcript accessions.
     pub fn transcript_ids(&self) -> impl Iterator<Item = &str> {
-        self.transcripts.keys().map(|s| s.as_str())
+        self.primary_accessions()
     }
 
     /// All transcript `accession.version` keys known to this mapper, across the
@@ -3418,7 +3759,7 @@ impl CdotMapper {
     /// accession may appear on multiple builds; callers that need uniqueness
     /// should dedup (the backfill collects into a `HashSet`).
     pub fn all_build_transcript_ids(&self) -> impl Iterator<Item = &str> {
-        self.transcripts.keys().map(|s| s.as_str()).chain(
+        self.primary_accessions().chain(
             self.alt_build_transcripts
                 .values()
                 .flat_map(|by_acc| by_acc.keys().map(|s| s.as_str())),
@@ -5165,8 +5506,13 @@ mod tests {
     #[test]
     fn test_rkyv_rejects_invalid_strand_tag() {
         // A structurally valid, current-version archive whose strand byte is out
-        // of range must be rejected (not coerced to Strand::Unknown), so a
-        // corrupt cache is regenerated rather than materialized with wrong data.
+        // of range must never be coerced to Strand::Unknown and served as if it
+        // were real data.
+        //
+        // Since #974 the transcript corpus is materialized lazily, so the
+        // rejection surfaces when the record is *touched* rather than when the
+        // archive is opened: the load succeeds and the bad accession simply does
+        // not resolve.
         let temp = tempfile::TempDir::new().unwrap();
         let p = temp.path().join("cdot.rkyv");
         let bytes = rkyv_cache::archive_bytes_with_tags(7, 0);
@@ -5174,10 +5520,10 @@ mod tests {
 
         // The archive itself is current — rejection comes from the tag check.
         assert!(CdotMapper::rkyv_is_current(&p));
-        let err = CdotMapper::from_rkyv_file(&p).unwrap_err();
+        let mapper = CdotMapper::from_rkyv_file(&p).expect("lazy load defers tag validation");
         assert!(
-            err.to_string().contains("invalid strand tag"),
-            "expected invalid-strand rejection, got: {err}"
+            mapper.get_transcript("NM_000088.3").is_none(),
+            "a transcript with an out-of-range strand tag must not resolve"
         );
     }
 
@@ -5190,11 +5536,268 @@ mod tests {
         std::fs::write(&p, &bytes).unwrap();
 
         assert!(CdotMapper::rkyv_is_current(&p));
-        let err = CdotMapper::from_rkyv_file(&p).unwrap_err();
+        let mapper = CdotMapper::from_rkyv_file(&p).expect("lazy load defers tag validation");
         assert!(
-            err.to_string().contains("invalid cigar op tag"),
-            "expected invalid-cigar-op rejection, got: {err}"
+            mapper.get_transcript("NM_000088.3").is_none(),
+            "a transcript with an out-of-range cigar op tag must not resolve"
         );
+    }
+
+    #[test]
+    fn test_rkyv_invalid_tag_is_only_reported_once() {
+        // The poison set exists so a corrupt record is not re-decoded (and
+        // re-warned about) on every lookup. Probing repeatedly must stay
+        // consistently unresolved.
+        let temp = tempfile::TempDir::new().unwrap();
+        let p = temp.path().join("cdot.rkyv");
+        std::fs::write(&p, rkyv_cache::archive_bytes_with_tags(7, 0)).unwrap();
+
+        let mapper = CdotMapper::from_rkyv_file(&p).unwrap();
+        for _ in 0..3 {
+            assert!(mapper.get_transcript("NM_000088.3").is_none());
+        }
+    }
+
+    /// Two transcripts on the same contig, so laziness and the derived indexes
+    /// can both be exercised.
+    #[cfg(test)]
+    fn two_transcript_cdot_json() -> &'static str {
+        r#"
+        {
+            "transcripts": {
+                "NM_000088.3": {
+                    "gene_name": "COL1A1",
+                    "genome_builds": {
+                        "GRCh38": {
+                            "contig": "NC_000017.11",
+                            "strand": "-",
+                            "exons": [[50184096, 50184169, 1, 0, 73, "M73"]]
+                        }
+                    },
+                    "start_codon": 10,
+                    "stop_codon": 60
+                },
+                "NM_000089.4": {
+                    "gene_name": "COL1A2",
+                    "genome_builds": {
+                        "GRCh38": {
+                            "contig": "NC_000017.11",
+                            "strand": "+",
+                            "exons": [[50284096, 50284169, 1, 0, 73, "M73"]]
+                        }
+                    },
+                    "start_codon": 5,
+                    "stop_codon": 55
+                }
+            }
+        }
+        "#
+    }
+
+    /// Write `json` out as an rkyv archive and return (tempdir, path).
+    #[cfg(test)]
+    fn archive_from_json(json: &str) -> (tempfile::TempDir, PathBuf) {
+        let temp = tempfile::TempDir::new().unwrap();
+        let p = temp.path().join("cdot.rkyv");
+        CdotMapper::from_reader(json.as_bytes())
+            .unwrap()
+            .to_rkyv_file(&p)
+            .unwrap();
+        (temp, p)
+    }
+
+    #[test]
+    fn lazy_archive_materializes_only_touched_transcripts() {
+        // The whole point of #974: opening an archive must not decode its
+        // corpus, and each lookup must decode exactly one record, once.
+        let (_t, p) = archive_from_json(two_transcript_cdot_json());
+        let mapper = CdotMapper::from_rkyv_file(&p).unwrap();
+
+        assert_eq!(
+            mapper.materialized_len(),
+            Some(0),
+            "opening an archive must decode nothing"
+        );
+
+        mapper.get_transcript("NM_000088.3").unwrap();
+        assert_eq!(
+            mapper.materialized_len(),
+            Some(1),
+            "a lookup must decode only the requested transcript"
+        );
+
+        mapper.get_transcript("NM_000088.3").unwrap();
+        assert_eq!(
+            mapper.materialized_len(),
+            Some(1),
+            "a repeat lookup must be served from the cache"
+        );
+
+        mapper.get_transcript("NM_000089.4").unwrap();
+        assert_eq!(mapper.materialized_len(), Some(2));
+    }
+
+    #[test]
+    fn lazy_archive_reports_counts_without_materializing() {
+        // Presence and cardinality are answerable from the archive's index
+        // alone; answering them by decoding would defeat the point.
+        let (_t, p) = archive_from_json(two_transcript_cdot_json());
+        let mapper = CdotMapper::from_rkyv_file(&p).unwrap();
+
+        assert_eq!(mapper.transcript_count(), 2);
+        assert!(mapper.has_transcript_exact("NM_000088.3"));
+        assert!(!mapper.has_transcript_exact("NM_999999.1"));
+        let mut ids: Vec<&str> = mapper.transcript_ids().collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["NM_000088.3", "NM_000089.4"]);
+
+        assert_eq!(
+            mapper.materialized_len(),
+            Some(0),
+            "counting and presence checks must not decode records"
+        );
+    }
+
+    #[test]
+    fn lazy_archive_builds_stab_index_without_materializing() {
+        // The stab-query and genome-span indexes need only exon bounds. If they
+        // were built by materializing transcripts, the first genomic query
+        // would silently decode the entire corpus (#974).
+        let (_t, p) = archive_from_json(two_transcript_cdot_json());
+        let mapper = CdotMapper::from_rkyv_file(&p).unwrap();
+
+        // Exons are stored in the HGVS convention (genome 1-based), so the
+        // archived bounds are the source JSON's 0-based values plus one.
+        let span = mapper.transcript_genome_span("NM_000088.3").unwrap();
+        assert_eq!(span, (50184097, 50184170));
+        assert_eq!(
+            mapper.materialized_len(),
+            Some(0),
+            "genome spans must be folded from the archive, not decoded"
+        );
+
+        let hits = mapper.transcripts_at_position("NC_000017.11", 50184100);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, "NM_000088.3");
+        // The hit itself is returned as &CdotTranscript, so exactly the one
+        // overlapping record is decoded — not the whole contig.
+        assert_eq!(mapper.materialized_len(), Some(1));
+    }
+
+    #[test]
+    fn lazy_archive_agrees_with_eager_json_load() {
+        // Equivalence is the real contract: an archive-backed mapper must be
+        // indistinguishable from one built directly from the same source.
+        let json = two_transcript_cdot_json();
+        let eager = CdotMapper::from_reader(json.as_bytes()).unwrap();
+        let (_t, p) = archive_from_json(json);
+        let lazy = CdotMapper::from_rkyv_file(&p).unwrap();
+
+        assert_eq!(eager.transcript_count(), lazy.transcript_count());
+        for acc in ["NM_000088.3", "NM_000089.4", "NM_999999.1"] {
+            let want = eager.get_transcript(acc);
+            let got = lazy.get_transcript(acc);
+            assert_eq!(
+                want.map(|t| (&t.contig, t.strand, t.cds_start, &t.exons)),
+                got.map(|t| (&t.contig, t.strand, t.cds_start, &t.exons)),
+                "lazy and eager must agree for {acc}"
+            );
+            assert_eq!(
+                eager.transcript_genome_span(acc),
+                lazy.transcript_genome_span(acc),
+                "spans must agree for {acc}"
+            );
+        }
+        assert_eq!(
+            eager
+                .transcripts_at_position("NC_000017.11", 50184100)
+                .len(),
+            lazy.transcripts_at_position("NC_000017.11", 50184100).len(),
+        );
+    }
+
+    #[test]
+    fn overlay_transcript_shadows_the_archived_one() {
+        // `add_transcript` on an archive-backed mapper must win over the
+        // archived record of the same accession, or runtime injections (#790)
+        // would be silently ignored.
+        let (_t, p) = archive_from_json(two_transcript_cdot_json());
+        let mut mapper = CdotMapper::from_rkyv_file(&p).unwrap();
+
+        let mut replacement = mapper.get_transcript("NM_000088.3").unwrap().clone();
+        replacement.gene_name = Some("OVERLAY".to_string());
+        mapper.add_transcript("NM_000088.3".to_string(), replacement);
+
+        assert_eq!(
+            mapper.get_transcript("NM_000088.3").unwrap().gene_name,
+            Some("OVERLAY".to_string())
+        );
+        // Shadowing must not inflate the corpus size.
+        assert_eq!(mapper.transcript_count(), 2);
+        let mut ids: Vec<&str> = mapper.transcript_ids().collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["NM_000088.3", "NM_000089.4"]);
+    }
+
+    #[test]
+    fn clone_shares_the_archive_rather_than_copying_it() {
+        // `ferro project` clones the mapper; sharing is what stops that from
+        // duplicating the corpus. Observable via the shared decode cache.
+        let (_t, p) = archive_from_json(two_transcript_cdot_json());
+        let original = CdotMapper::from_rkyv_file(&p).unwrap();
+        let copy = original.clone();
+
+        assert_eq!(original.materialized_len(), Some(0));
+        copy.get_transcript("NM_000088.3").unwrap();
+        assert_eq!(
+            original.materialized_len(),
+            Some(1),
+            "clones must share one decode cache, not copy the corpus"
+        );
+    }
+
+    #[test]
+    fn clone_keeps_overlays_independent() {
+        // Sharing the immutable archive must not make runtime mutations leak
+        // between clones.
+        let (_t, p) = archive_from_json(two_transcript_cdot_json());
+        let original = CdotMapper::from_rkyv_file(&p).unwrap();
+        let mut copy = original.clone();
+
+        let mut replacement = original.get_transcript("NM_000088.3").unwrap().clone();
+        replacement.gene_name = Some("ONLY_ON_COPY".to_string());
+        copy.add_transcript("NM_000088.3".to_string(), replacement);
+
+        assert_eq!(
+            copy.get_transcript("NM_000088.3").unwrap().gene_name,
+            Some("ONLY_ON_COPY".to_string())
+        );
+        assert_eq!(
+            original.get_transcript("NM_000088.3").unwrap().gene_name,
+            Some("COL1A1".to_string()),
+            "a clone's overlay must not mutate the original"
+        );
+    }
+
+    #[test]
+    fn rewriting_an_archive_backed_mapper_preserves_the_whole_corpus() {
+        // The transcripts map is an overlay once an archive is attached, so a
+        // write path that only serialized it would emit a near-empty cache.
+        let (_t, p) = archive_from_json(two_transcript_cdot_json());
+        let mapper = CdotMapper::from_rkyv_file(&p).unwrap();
+
+        let out = tempfile::TempDir::new().unwrap();
+        let rkyv_out = out.path().join("rewritten.rkyv");
+        mapper.to_rkyv_file(&rkyv_out).unwrap();
+        let reloaded = CdotMapper::from_rkyv_file(&rkyv_out).unwrap();
+        assert_eq!(reloaded.transcript_count(), 2);
+        assert!(reloaded.get_transcript("NM_000089.4").is_some());
+
+        let bin_out = out.path().join("rewritten.bin");
+        mapper.to_bincode_file(&bin_out).unwrap();
+        let from_bin = CdotMapper::from_bincode_file(&bin_out).unwrap();
+        assert_eq!(from_bin.transcript_count(), 2);
+        assert!(from_bin.get_transcript("NM_000089.4").is_some());
     }
 
     #[test]
