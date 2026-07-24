@@ -126,6 +126,14 @@ jobs:
         continue-on-error: true
         env:
           FERRO_MANIFEST: ${{ github.workspace }}/benchmark-output/manifest.json
+          # This is the only job that provisions a manifest, so it is the only
+          # place the idempotency oracle sees the reference-backed corpora at
+          # all (PR CI's copy of this gate runs manifest-free — see the
+          # "reference-aware tests are skipped without a manifest" annotation
+          # in ci.yml). The corpus runner wraps normalization in
+          # `catch_panics`, so an oracle panic surfaces as that case FAILing
+          # its axis tally and landing in the xfail report, not as a lost run.
+          FERRO_ASSERT_IDEMPOTENT: "1"
         run: |
           cargo nextest run --features dev \
             -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/) | test(/hgvs_rs_projection_tests::/)'

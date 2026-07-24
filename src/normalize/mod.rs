@@ -1124,6 +1124,23 @@ fn sort_cis_members_by_genomic_order(members: &mut [HgvsVariant]) {
     }
 }
 
+/// Whether the opt-in normalization idempotency self-check is active.
+///
+/// Enabled when the `FERRO_ASSERT_IDEMPOTENT` environment variable is set to
+/// anything other than `0`/empty. Read once and cached, so the per-`normalize`
+/// cost when disabled is a single relaxed atomic load. Only compiled in debug
+/// builds; see the call site in [`Normalizer::normalize`].
+#[cfg(debug_assertions)]
+fn idempotency_self_check_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("FERRO_ASSERT_IDEMPOTENT")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
 impl<P: ReferenceProvider> Normalizer<P> {
     /// Create a new normalizer with the given reference provider
     pub fn new(provider: P) -> Self {
@@ -1157,7 +1174,39 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // normalization AND the strict-mode rejection ladder live in
         // `normalize_core_checked`, so a strict config rejects identically
         // whether a variant is normalized directly or through the projector.
-        Ok(self.normalize_core_checked(variant)?.0)
+        let normalized = self.normalize_core_checked(variant)?.0;
+
+        // Opt-in idempotency self-check (issue #1157 follow-up): a normalizer
+        // must satisfy `norm(norm(x)) == norm(x)`. When enabled it re-normalizes
+        // the output and panics on any drift, so every test that reaches THIS
+        // method becomes an idempotency oracle for the cost of one gated check
+        // — including the `axis_normalized` conformance corpora, which call
+        // `normalize()` directly. Coverage stops at this entry point:
+        // `VariantProjector` deliberately calls `normalize_core_checked`
+        // instead (see projector.rs), so the projection-driven axes
+        // (genomic/coding/protein) are NOT checked. The second pass goes through
+        // `normalize_core_checked` — the same computation this method performs —
+        // NOT the public `normalize`, so there is no re-entrancy (internal
+        // normalization recurses via `normalize_core`, never through this
+        // method) and no guard is needed. Compiled out entirely in release
+        // (`debug_assertions`), so production is untouched and zero-cost.
+        #[cfg(debug_assertions)]
+        if idempotency_self_check_enabled() {
+            match self.normalize_core_checked(&normalized) {
+                Ok((again, _)) => assert_eq!(
+                    normalized.to_string(),
+                    again.to_string(),
+                    "FERRO_ASSERT_IDEMPOTENT: normalize is not idempotent\n  \
+                     input: {variant}\n  once:  {normalized}\n  twice: {again}",
+                ),
+                Err(e) => panic!(
+                    "FERRO_ASSERT_IDEMPOTENT: normalized output failed to re-normalize\n  \
+                     input: {variant}\n  once:  {normalized}\n  error: {e}",
+                ),
+            }
+        }
+
+        Ok(normalized)
     }
 
     /// Normalize a variant, apply the strict-mode rejection ladder, and return
@@ -3199,7 +3248,24 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // (start == end) Insertion shape that only arises from
         // left-saturation, and fire the clamp the same way the
         // non-degenerate case does.
-        let cds_start_left_saturated = matches!(edit, NaEdit::Insertion { .. })
+        //
+        // The degenerate shape is keyed on `new_edit` (the OUTPUT), not
+        // just `edit` (the INPUT): a `delins` input at `cds_start` whose
+        // shared-affix trim reduces it to an insertion (e.g. `c.1delinsACA`
+        // -> trim prefix `A` -> `insCA`) recurses through the SAME
+        // insertion 5'-shuffle and produces the SAME degenerate saturated
+        // `new_edit`, but arrives here with `edit == Delins`. Keying only on
+        // the input `edit` missed that path, so the clamp fired for the
+        // insertion spelling (`c.1_2insCA` -> `c.1delinsACA`) but not the
+        // delins spelling, which then leaked the degenerate `c.1insCA` —
+        // making the blessed `c.1delinsACA` a non-fixed-point (the
+        // `NaEdit::Delins` restore arm below already handles it once
+        // reached). Adding the `new_edit` disjunct makes the gate fire for
+        // both spellings, so they converge on the same fixed point. Issue
+        // #1157 follow-up (idempotency campaign). Keeping the `edit`
+        // disjunct too is strictly additive over prior behavior.
+        let cds_start_left_saturated = (matches!(edit, NaEdit::Insertion { .. })
+            || matches!(new_edit, NaEdit::Insertion { .. }))
             && new_tx_start == cds_start
             && new_tx_end == cds_start;
         if matches!(start_axis, boundary::AxisRegion::Cds)
