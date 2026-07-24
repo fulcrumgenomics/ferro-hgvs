@@ -342,7 +342,7 @@
     },
     "[insertion_without_inserted_sequence]": {
       "category": "rejected_by_design",
-      "reason": "Bare `ins` with no inserted sequence. An insertion is defined by what it inserts (HGVS DNA/insertion.md:22); every form the spec offers supplies a payload (literal bases, a same-reference range, or another reference) and syntax.yaml `dna.ins` has no production for a payload-less `ins`. A bare `ins` asserts no change and has no derivable repair, so it is rejected in every error mode.",
+      "reason": "Bare `ins` with no inserted sequence. An insertion is defined by what it inserts (HGVS DNA/insertion.md:22); every form the spec offers supplies a payload (literal bases, a same-reference range, or another reference) and syntax.yaml `dna.ins` has no production for a payload-less `ins`. A bare `ins` asserts no change and has no derivable repair, so it is rejected in every error mode. Surfaced to the user as W3027 InsertionWithoutInsertedSequence (#1162).",
       "tracking": "#1137"
     }
   },
