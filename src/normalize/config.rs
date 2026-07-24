@@ -4,7 +4,14 @@ use crate::error_handling::{ErrorConfig, ErrorMode, ErrorOverride, ErrorType, Re
 use serde::{Deserialize, Serialize};
 
 /// Direction for variant shuffling during normalization
+///
+/// Marked `#[non_exhaustive]` so a future shuffling direction is additive. It
+/// is carried as a `pub` field of [`crate::normalize::NormalizationInfo`]'s
+/// `ShuffleApplied` variant, which is already `#[non_exhaustive]` — without
+/// this the protection there was only half applied, since downstream still had
+/// to match the direction exhaustively.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
 pub enum ShuffleDirection {
     /// Shuffle towards 3' end (default for HGVS)
     #[default]
@@ -35,7 +42,18 @@ impl std::str::FromStr for ShuffleDirection {
 }
 
 /// Configuration for variant normalization
+///
+/// Marked `#[non_exhaustive]` so adding a normalization knob is additive rather
+/// than breaking. Build it with [`NormalizeConfig::new`] (or the
+/// [`NormalizeConfig::strict`] / [`NormalizeConfig::lenient`] /
+/// [`NormalizeConfig::silent`] presets) plus the `with_*` builders, or from
+/// [`Default`], rather than a struct literal; the fields stay `pub`, so
+/// anything the builders do not cover is still reachable by assigning to the
+/// field directly. Mirrors the attribute on its result-side counterpart
+/// [`crate::normalize::NormalizeResult`], which #1033 marked for the same
+/// reason.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NormalizeConfig {
     /// Direction to shuffle variants (default: 3')
     pub shuffle_direction: ShuffleDirection,
