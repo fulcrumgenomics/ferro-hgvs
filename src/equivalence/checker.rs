@@ -1,9 +1,17 @@
 //! Equivalence checker implementation.
 
 use crate::error::FerroError;
-use crate::hgvs::variant::HgvsVariant;
+use crate::hgvs::variant::{AllelePhase, HgvsVariant};
 use crate::normalize::{NormalizeConfig, Normalizer};
 use crate::reference::ReferenceProvider;
+use crate::spdi::{hgvs_to_spdi, SpdiVariant};
+
+/// Largest reference window (in bases) the sequence-level equivalence rung will
+/// reconstruct. Two variants whose edited spans are farther apart than this
+/// cannot describe the same local edit, so declining beyond the cap only ever
+/// leaves the pre-existing `NotEquivalent` verdict in place while bounding the
+/// cost of a reference fetch.
+const MAX_SEQUENCE_COMPARE_WINDOW: u64 = 100_000;
 
 /// Level of equivalence between two variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -12,6 +20,11 @@ pub enum EquivalenceLevel {
     Identical,
     /// Equivalent after normalization (e.g., shifted to same position).
     NormalizedMatch,
+    /// Equivalent by resulting reference sequence: the two variants normalize
+    /// to different HGVS strings but, when applied to the reference, produce the
+    /// same edited sequence (e.g. a length-changing `delins` vs a decomposed
+    /// cis allele of the same edit). See issue #1158.
+    SequenceMatch,
     /// Same variant but different accession versions (e.g., NM_000088.3 vs NM_000088.4).
     AccessionVersionDifference,
     /// Not equivalent - represent different changes.
@@ -29,6 +42,7 @@ impl EquivalenceLevel {
         match self {
             EquivalenceLevel::Identical => "Identical representation",
             EquivalenceLevel::NormalizedMatch => "Equivalent after normalization",
+            EquivalenceLevel::SequenceMatch => "Equivalent by resulting sequence",
             EquivalenceLevel::AccessionVersionDifference => {
                 "Same variant, different accession versions"
             }
@@ -197,6 +211,21 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                 return Ok(result.with_note("Equivalent after normalization, different versions"));
             }
 
+            // Sequence-level equivalence (issue #1158): two variants may
+            // normalize to different HGVS strings yet produce the same edited
+            // reference sequence — e.g. a length-changing `delins` vs a
+            // decomposed cis allele of the same edit, which ferro deliberately
+            // keeps in distinct canonical forms. Reconstruct each edited window
+            // from SPDI triples and compare. This is best-effort: any variant
+            // that cannot be projected (unsupported edit, missing reference,
+            // mixed accessions, or a multi-molecule allele) simply declines, so
+            // the rung only ever upgrades a `NotEquivalent` verdict.
+            if self.same_resulting_sequence(&norm1, &norm2) {
+                return Ok(EquivalenceResult::new(EquivalenceLevel::SequenceMatch)
+                    .with_normalized(norm_str1, norm_str2)
+                    .with_note("Variants produce the same resulting sequence"));
+            }
+
             Ok(EquivalenceResult::new(EquivalenceLevel::NotEquivalent)
                 .with_normalized(norm_str1, norm_str2)
                 .with_note("Variants do not normalize to the same form"))
@@ -255,6 +284,113 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
         }
 
         None
+    }
+
+    /// Decide whether two variants, applied to their (shared) reference, produce
+    /// the same edited sequence.
+    ///
+    /// Best-effort and side-effect free: returns `false` (declines) for any
+    /// variant that cannot be projected to SPDI triples on a single shared
+    /// accession, or when the reference window needed to compare them exceeds
+    /// [`MAX_SEQUENCE_COMPARE_WINDOW`]. Callers use this only to *upgrade* a
+    /// `NotEquivalent` verdict, so a decline is always safe.
+    fn same_resulting_sequence(&self, v1: &HgvsVariant, v2: &HgvsVariant) -> bool {
+        let (acc1, triples1) = match self.edit_triples(v1) {
+            Some(t) => t,
+            None => return false,
+        };
+        let (acc2, triples2) = match self.edit_triples(v2) {
+            Some(t) => t,
+            None => return false,
+        };
+        // A resulting sequence is only comparable on the same reference.
+        if acc1 != acc2 {
+            return false;
+        }
+
+        // The union window covering every edit of both variants. SPDI positions
+        // are 0-based interbase; a triple spans `[position, position + del_len)`.
+        let all = triples1.iter().chain(triples2.iter());
+        let (mut win_start, mut win_end) = (u64::MAX, u64::MIN);
+        for t in all {
+            win_start = win_start.min(t.position);
+            win_end = win_end.max(t.position + t.deletion.len() as u64);
+        }
+        if win_start > win_end || win_end - win_start > MAX_SEQUENCE_COMPARE_WINDOW {
+            return false;
+        }
+
+        let reference = match self.fetch_window(&acc1, win_start, win_end) {
+            Some(r) => r,
+            None => return false,
+        };
+
+        match (
+            apply_triples(&reference, win_start, &triples1),
+            apply_triples(&reference, win_start, &triples2),
+        ) {
+            // Case-insensitive, like the deletion check in `apply_triples`:
+            // reference FASTAs are often soft-masked (repeats lower-cased), so
+            // case carries no biological meaning here and must not split two
+            // otherwise-identical resulting sequences.
+            (Some(a), Some(b)) => a.eq_ignore_ascii_case(&b),
+            _ => false,
+        }
+    }
+
+    /// Project a variant to the SPDI primitive edits that make up its resulting
+    /// sequence, together with the single accession they act on.
+    ///
+    /// Returns `None` when a single resulting sequence is undefined or cannot be
+    /// derived: multi-molecule alleles (trans / mosaic / chimeric / and-or /
+    /// products / unknown phase), null/unknown alleles, edits SPDI cannot
+    /// represent, or members that span more than one accession.
+    fn edit_triples(&self, v: &HgvsVariant) -> Option<(String, Vec<SpdiVariant>)> {
+        let members: Vec<&HgvsVariant> = match v {
+            HgvsVariant::Allele(allele) => {
+                // A single resulting sequence is only well-defined for a cis
+                // allele — all edits applied to the same molecule.
+                if allele.phase != AllelePhase::Cis {
+                    return None;
+                }
+                allele.variants.iter().collect()
+            }
+            HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => return None,
+            single => vec![single],
+        };
+        if members.is_empty() {
+            return None;
+        }
+
+        let mut accession: Option<String> = None;
+        let mut triples = Vec::with_capacity(members.len());
+        for member in members {
+            let spdi = hgvs_to_spdi(member, self.normalizer.provider()).ok()?;
+            match &accession {
+                None => accession = Some(spdi.sequence.clone()),
+                Some(acc) if *acc != spdi.sequence => return None,
+                Some(_) => {}
+            }
+            triples.push(spdi);
+        }
+        accession.map(|acc| (acc, triples))
+    }
+
+    /// Fetch reference bases for the 0-based half-open interval
+    /// `[start, end)` on `accession`, trying the genomic provider first and
+    /// falling back to the transcript-sequence provider (mirroring the SPDI
+    /// converter's own fetch). Returns `None` on any provider error or short
+    /// read.
+    fn fetch_window(&self, accession: &str, start: u64, end: u64) -> Option<String> {
+        let provider = self.normalizer.provider();
+        let bases = provider
+            .get_genomic_sequence(accession, start, end)
+            .or_else(|_| provider.get_sequence(accession, start, end))
+            .ok()?;
+        if bases.len() as u64 != end - start {
+            return None;
+        }
+        Some(bases)
     }
 
     /// Check if multiple variants are all equivalent to each other.
@@ -337,6 +473,40 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
 
         Ok(groups)
     }
+}
+
+/// Apply SPDI triples to `reference` — the bases spanning the interbase
+/// interval that begins at `win_start` — and return the edited sequence.
+///
+/// Triples are applied from the 3' end (descending position) so that an earlier
+/// splice never shifts the coordinates of a later one. Each triple's stated
+/// deleted bases are validated against the actual reference bases at that span;
+/// if they disagree (a ref-mismatched input — e.g. `c.5A>G` where the reference
+/// base is not `A`), we cannot faithfully reconstruct the edit, so we decline
+/// (`None`) rather than assert a sequence equivalence we cannot trust. Also
+/// returns `None` if any triple falls outside the window (a defensive guard;
+/// callers build the window to cover every triple).
+fn apply_triples(reference: &str, win_start: u64, triples: &[SpdiVariant]) -> Option<String> {
+    let ref_bytes = reference.as_bytes();
+    let mut bytes = ref_bytes.to_vec();
+    let mut ordered: Vec<&SpdiVariant> = triples.iter().collect();
+    ordered.sort_by_key(|t| std::cmp::Reverse(t.position));
+    for t in ordered {
+        let rel = t.position.checked_sub(win_start)? as usize;
+        let end = rel.checked_add(t.deletion.len())?;
+        if end > ref_bytes.len() {
+            return None;
+        }
+        // Validate the stated deletion against the original reference span.
+        // (Checked against `ref_bytes`, not the mutated `bytes`: descending
+        // order means every already-applied splice sits strictly 3' of `rel`,
+        // so this span is untouched either way.)
+        if !ref_bytes[rel..end].eq_ignore_ascii_case(t.deletion.as_bytes()) {
+            return None;
+        }
+        bytes.splice(rel..end, t.insertion.bytes());
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// Extract the variant part from an HGVS string (everything after the colon).
@@ -425,6 +595,7 @@ mod tests {
     fn test_equivalence_level_is_equivalent() {
         assert!(EquivalenceLevel::Identical.is_equivalent());
         assert!(EquivalenceLevel::NormalizedMatch.is_equivalent());
+        assert!(EquivalenceLevel::SequenceMatch.is_equivalent());
         assert!(EquivalenceLevel::AccessionVersionDifference.is_equivalent());
         assert!(!EquivalenceLevel::NotEquivalent.is_equivalent());
     }
@@ -433,6 +604,7 @@ mod tests {
     fn test_equivalence_level_description() {
         assert!(!EquivalenceLevel::Identical.description().is_empty());
         assert!(!EquivalenceLevel::NormalizedMatch.description().is_empty());
+        assert!(!EquivalenceLevel::SequenceMatch.description().is_empty());
         assert!(!EquivalenceLevel::AccessionVersionDifference
             .description()
             .is_empty());
