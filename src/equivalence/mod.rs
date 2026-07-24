@@ -27,8 +27,15 @@
 //!
 //! - **Identical**: Same string representation
 //! - **NormalizedMatch**: Same after normalization (e.g., different positions in repeat region)
+//! - **SequenceMatch**: Different normalized strings, same resulting sequence when
+//!   applied to the reference (e.g. a length-changing `delins` vs a decomposed
+//!   cis allele of the same edit)
 //! - **AccessionVersionDifference**: Same variant, different accession versions
 //! - **NotEquivalent**: Represent different changes
+//!
+//! The list is open-ended — [`EquivalenceLevel`] is `#[non_exhaustive]`, so
+//! recognizing a new class of equivalence adds a level without breaking
+//! downstream matches.
 //!
 //! # References
 //!
