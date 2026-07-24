@@ -1143,6 +1143,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self.config
     }
 
+    /// Get a reference to the underlying reference provider.
+    pub fn provider(&self) -> &P {
+        &self.provider
+    }
+
     /// Normalize a variant
     ///
     /// In strict mode (default), rejects variants with reference mismatches.

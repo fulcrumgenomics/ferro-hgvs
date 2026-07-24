@@ -2423,6 +2423,9 @@ pub enum PyEquivalenceLevel {
     AccessionVersionDifference = 2,
     /// Not equivalent - represent different changes
     NotEquivalent = 3,
+    /// Equivalent by resulting reference sequence (different normalized strings,
+    /// same edited sequence)
+    SequenceMatch = 4,
 }
 
 impl From<EquivalenceLevel> for PyEquivalenceLevel {
@@ -2430,6 +2433,7 @@ impl From<EquivalenceLevel> for PyEquivalenceLevel {
         match level {
             EquivalenceLevel::Identical => PyEquivalenceLevel::Identical,
             EquivalenceLevel::NormalizedMatch => PyEquivalenceLevel::NormalizedMatch,
+            EquivalenceLevel::SequenceMatch => PyEquivalenceLevel::SequenceMatch,
             EquivalenceLevel::AccessionVersionDifference => {
                 PyEquivalenceLevel::AccessionVersionDifference
             }
@@ -2444,6 +2448,7 @@ impl PyEquivalenceLevel {
         match self {
             PyEquivalenceLevel::Identical => "Identical",
             PyEquivalenceLevel::NormalizedMatch => "NormalizedMatch",
+            PyEquivalenceLevel::SequenceMatch => "SequenceMatch",
             PyEquivalenceLevel::AccessionVersionDifference => "AccessionVersionDifference",
             PyEquivalenceLevel::NotEquivalent => "NotEquivalent",
         }
@@ -2459,6 +2464,7 @@ impl PyEquivalenceLevel {
         match self {
             PyEquivalenceLevel::Identical => "Identical representation",
             PyEquivalenceLevel::NormalizedMatch => "Equivalent after normalization",
+            PyEquivalenceLevel::SequenceMatch => "Equivalent by resulting sequence",
             PyEquivalenceLevel::AccessionVersionDifference => {
                 "Same variant, different accession versions"
             }

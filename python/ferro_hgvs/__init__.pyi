@@ -802,6 +802,7 @@ class EquivalenceLevel(IntEnum):
     NormalizedMatch = 1
     AccessionVersionDifference = 2
     NotEquivalent = 3
+    SequenceMatch = 4
 
     def is_equivalent(self) -> bool:
         """Returns true if the variants are considered equivalent."""
