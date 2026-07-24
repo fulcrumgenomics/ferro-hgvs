@@ -7576,16 +7576,33 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             }
                         };
                         let dup_len = rotated_seq.len() as u64;
+                        // 3'-side anchor is derived from `pos_idx` (the 0-based
+                        // matched-tract start `ref[pos_idx..pos_idx+L]`), NOT from
+                        // `new_start`: when a 5'-shuffled insertion comes to rest
+                        // at the transcript start (`result.start == 0`), the
+                        // insertion coordinate adjust-back `saturating_sub(1)`
+                        // collapses `new_start` to c.1, breaking the usual
+                        // `new_start == pos_idx + 1` relation and mislabelling the
+                        // dup one position 3' (e.g. `c.2_3insGA` in `G[A..]` →
+                        // `c.2_3dup` = a different haplotype instead of the correct
+                        // `c.1_2dup`). `pos_idx` is unaffected by that clamp, and
+                        // `index_to_hgvs_pos(pos_idx) == new_start + 1` whenever no
+                        // saturation occurred, so this is identical off-boundary.
+                        let three_prime_anchor = index_to_hgvs_pos(pos_idx);
                         let (dup_start, dup_end) = if prefer_three_prime {
-                            if dup_len == 1 {
-                                (new_start + 1, new_start + 1)
-                            } else {
-                                (new_start + 1, new_start + dup_len)
-                            }
+                            (three_prime_anchor, three_prime_anchor + dup_len - 1)
                         } else if dup_len == 1 {
                             (new_start, new_start)
                         } else {
-                            (new_start - dup_len + 1, new_start)
+                            // `saturating_sub` for parity with the 3' arm above: that
+                            // arm switched off `new_start` precisely because the
+                            // insertion adjust-back clamp can collapse it to c.1. A
+                            // 5'-side match needs a tract 5' of the insertion point,
+                            // which cannot exist at the transcript start, so this is
+                            // believed unreachable — but plain `-` on `u64` would
+                            // panic in debug / wrap in release if it ever were, and
+                            // the rest of this path guards the same way.
+                            (new_start.saturating_sub(dup_len - 1).max(1), new_start)
                         };
                         (
                             dup_start,
