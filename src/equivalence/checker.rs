@@ -14,7 +14,15 @@ use crate::spdi::{hgvs_to_spdi, SpdiVariant};
 const MAX_SEQUENCE_COMPARE_WINDOW: u64 = 100_000;
 
 /// Level of equivalence between two variants.
+///
+/// This enum is open-ended: the checker gains rungs as new classes of
+/// equivalence become decidable (`SequenceMatch` was added in #1158 for two
+/// encodings that produce the same edited sequence). Marked `#[non_exhaustive]`
+/// so downstream callers must include a wildcard arm when matching — adding a
+/// rung is therefore not a breaking change. Mirrors the same attribute on
+/// [`EquivalenceResult`] and on the error/projection API (#1033).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum EquivalenceLevel {
     /// Exactly identical (same string representation).
     Identical,
@@ -58,7 +66,14 @@ impl std::fmt::Display for EquivalenceLevel {
 }
 
 /// Result of an equivalence check with additional details.
+///
+/// Marked `#[non_exhaustive]` so a future detail field (the checker has grown
+/// one per new rung) is not a breaking change. Construct it with
+/// [`EquivalenceResult::new`] plus the `with_*` builders rather than a struct
+/// literal. Mirrors the same attribute on [`EquivalenceLevel`] and
+/// `NormalizeResult` (#1033).
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct EquivalenceResult {
     /// The determined equivalence level.
     pub level: EquivalenceLevel,
