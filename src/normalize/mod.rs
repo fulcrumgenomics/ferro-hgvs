@@ -3248,7 +3248,24 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // (start == end) Insertion shape that only arises from
         // left-saturation, and fire the clamp the same way the
         // non-degenerate case does.
-        let cds_start_left_saturated = matches!(edit, NaEdit::Insertion { .. })
+        //
+        // The degenerate shape is keyed on `new_edit` (the OUTPUT), not
+        // just `edit` (the INPUT): a `delins` input at `cds_start` whose
+        // shared-affix trim reduces it to an insertion (e.g. `c.1delinsACA`
+        // -> trim prefix `A` -> `insCA`) recurses through the SAME
+        // insertion 5'-shuffle and produces the SAME degenerate saturated
+        // `new_edit`, but arrives here with `edit == Delins`. Keying only on
+        // the input `edit` missed that path, so the clamp fired for the
+        // insertion spelling (`c.1_2insCA` -> `c.1delinsACA`) but not the
+        // delins spelling, which then leaked the degenerate `c.1insCA` —
+        // making the blessed `c.1delinsACA` a non-fixed-point (the
+        // `NaEdit::Delins` restore arm below already handles it once
+        // reached). Adding the `new_edit` disjunct makes the gate fire for
+        // both spellings, so they converge on the same fixed point. Issue
+        // #1157 follow-up (idempotency campaign). Keeping the `edit`
+        // disjunct too is strictly additive over prior behavior.
+        let cds_start_left_saturated = (matches!(edit, NaEdit::Insertion { .. })
+            || matches!(new_edit, NaEdit::Insertion { .. }))
             && new_tx_start == cds_start
             && new_tx_end == cds_start;
         if matches!(start_axis, boundary::AxisRegion::Cds)

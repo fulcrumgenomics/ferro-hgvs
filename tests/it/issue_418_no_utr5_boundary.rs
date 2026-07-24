@@ -184,3 +184,53 @@ fn delins_cds_interior_no_utr5_unaffected() {
         "NM_TEST418.1:c.10delinsCA",
     );
 }
+
+// --------------------------------------------------------------------------
+// Issue #1157 follow-up: the clamped delins must be a stable FIXED POINT.
+// --------------------------------------------------------------------------
+//
+// The #418 clamp turns a 5'-saturated boundary insertion into the blessed
+// `c.1delinsACA`, but feeding that delins back in used to drift to `c.1insCA`:
+// its shared-affix trim reduces it to `insCA`, which re-enters the same 5'
+// saturation but arrived with `edit == Delins`, so the saturation gate (which
+// keyed only on the INPUT edit type) missed it and leaked the degenerate
+// insertion. The saturation gate now also keys on the OUTPUT (`new_edit`) shape,
+// so both spellings converge. These lock `norm(norm(x)) == norm(x)` at the
+// blessed value.
+
+#[test]
+fn clamped_delins_at_c1_is_a_fixed_point_five_prime() {
+    // The blessed clamp output must re-normalize to itself, not drift to the
+    // degenerate `c.1insCA`.
+    assert_eq!(
+        normalize_with(ShuffleDirection::FivePrime, "NM_TEST418.1:c.1delinsACA"),
+        "NM_TEST418.1:c.1delinsACA",
+    );
+    // And the insertion spelling and the delins spelling now agree (confluence).
+    assert_eq!(
+        normalize_with(ShuffleDirection::FivePrime, "NM_TEST418.1:c.1_2insCA"),
+        normalize_with(ShuffleDirection::FivePrime, "NM_TEST418.1:c.1delinsACA"),
+    );
+}
+
+#[test]
+fn clamped_two_base_delins_at_c1_is_a_fixed_point_five_prime() {
+    assert_eq!(
+        normalize_with(ShuffleDirection::FivePrime, "NM_TEST418.1:c.1delinsATCA"),
+        "NM_TEST418.1:c.1delinsATCA",
+    );
+}
+
+#[test]
+fn clamped_delins_three_prime_stays_the_insertion_and_is_idempotent() {
+    // Under 3' the same delins reduces to the (stable) insertion form — not
+    // the clamp — and that is itself a fixed point. Pins that the new gate
+    // disjunct stays OFF for 3' (where `new_tx_end != cds_start`).
+    let once = normalize_with(ShuffleDirection::ThreePrime, "NM_TEST418.1:c.1delinsACA");
+    assert_eq!(once, "NM_TEST418.1:c.1_2insCA");
+    assert_eq!(
+        normalize_with(ShuffleDirection::ThreePrime, &once),
+        once,
+        "norm(norm(x)) must equal norm(x)",
+    );
+}
