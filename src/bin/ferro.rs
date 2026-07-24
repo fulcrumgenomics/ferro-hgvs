@@ -1493,21 +1493,12 @@ fn run_normalize(
     // by the batch driver, so parallel output is byte-identical to serial.
     let process = |v: &str, out: &mut dyn Write, err: &mut dyn Write| -> Result<(), FerroError> {
         // Preprocess input according to error mode
-        let preprocess_result = preprocessor.preprocess(v);
-        if !preprocess_result.success {
-            // Preprocessing failed (strict mode rejection)
-            return Err(FerroError::parse(
-                0,
-                format!(
-                    "Input contains errors that are rejected in strict mode: {}",
-                    preprocess_result
-                        .warnings
-                        .iter()
-                        .map(|w| w.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-            ));
+        let mut preprocess_result = preprocessor.preprocess(v);
+        if let Some(rejection) = preprocess_result.take_rejection_error() {
+            // Preprocessing rejected the input: surface the phase's own
+            // diagnosis (message, span, and structured code), not a summary
+            // built from the — deliberately empty — warning list (#1162).
+            return Err(rejection);
         }
 
         let parsed = parse_hgvs(&preprocess_result.preprocessed)?;
@@ -1809,21 +1800,12 @@ fn run_parse(
     // `err` receives text-mode warnings. Mirrors `run_normalize`'s `process`.
     let process = |v: &str, out: &mut dyn Write, err: &mut dyn Write| -> Result<(), FerroError> {
         // Preprocess input according to error mode
-        let preprocess_result = preprocessor.preprocess(v);
-        if !preprocess_result.success {
-            // Preprocessing failed (strict mode rejection)
-            return Err(FerroError::parse(
-                0,
-                format!(
-                    "Input contains errors that are rejected in strict mode: {}",
-                    preprocess_result
-                        .warnings
-                        .iter()
-                        .map(|w| w.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; ")
-                ),
-            ));
+        let mut preprocess_result = preprocessor.preprocess(v);
+        if let Some(rejection) = preprocess_result.take_rejection_error() {
+            // Preprocessing rejected the input: surface the phase's own
+            // diagnosis (message, span, and structured code), not a summary
+            // built from the — deliberately empty — warning list (#1162).
+            return Err(rejection);
         }
 
         let parsed = parse_hgvs(&preprocess_result.preprocessed)?;

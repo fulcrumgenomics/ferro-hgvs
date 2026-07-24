@@ -1250,6 +1250,7 @@ class ErrorType(IntEnum):
     TranscriptFlankNotDescribable = 42
     IntronicOnBareTranscript = 43
     IncompleteCdsStartReference = 44
+    InsertionWithoutInsertedSequence = 45
 
 class ErrorOverride(IntEnum):
     """Override behavior for a specific error type."""
