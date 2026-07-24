@@ -7455,18 +7455,33 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     // Check for simple duplication (single-base or matching adjacent)
                     // When shifting an insertion through a repeat region, the effective sequence
                     // rotates. For example, shifting "GGC" by 1 position gives "GCG".
-                    let shift_amount =
-                        (result.start as usize).saturating_sub(shuffle_start as usize);
-                    // Defence in depth. `build_naedit` no longer merges a
-                    // cancelling del+ins into an empty insertion (#1135), which
-                    // was the reachable producer here — but the *type* still
-                    // permits one (the parser accepts a bare `ins`), so a
-                    // future path must not be able to turn that into a process
-                    // abort. Nothing to rotate means no rotation.
+                    //
+                    // The rotation must be direction-aware. A 3' (rightward)
+                    // shuffle moves the insertion point up (`result.start >=
+                    // shuffle_start`) and rotates the alt LEFT by the shift `k`.
+                    // A 5' (leftward) shuffle moves it down (`result.start <
+                    // shuffle_start`) and must rotate the alt RIGHT by `k` —
+                    // expressed here as an equivalent left-rotation of
+                    // `(L - k mod L)` so the shared rotate-left below applies to
+                    // both. The previous code computed the shift with
+                    // `saturating_sub`, which clamped every leftward shift to 0,
+                    // so 5' multi-base insertions were emitted UNROTATED at the
+                    // shifted position — a different haplotype than the input,
+                    // and non-idempotent (e.g. `g.260_261insCA` in an A-tract ->
+                    // `g.259_260insCA` instead of the correct `g.259_260insAC`).
+                    // Issue #1157 follow-up (idempotency proptest campaign).
+                    //
+                    // Empty-alt guard is defence in depth: `build_naedit` no
+                    // longer merges a cancelling del+ins into an empty insertion
+                    // (#1135), but the type still permits one (the parser accepts
+                    // a bare `ins`), so nothing-to-rotate means no rotation.
                     let rotation = if seq_bytes.is_empty() {
                         0
+                    } else if result.start >= shuffle_start {
+                        (result.start as usize - shuffle_start as usize) % seq_bytes.len()
                     } else {
-                        shift_amount % seq_bytes.len()
+                        let k = (shuffle_start as usize - result.start as usize) % seq_bytes.len();
+                        (seq_bytes.len() - k) % seq_bytes.len()
                     };
                     let rotated_seq: Vec<u8> = if rotation > 0 {
                         seq_bytes[rotation..]
