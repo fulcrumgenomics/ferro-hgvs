@@ -7,9 +7,12 @@
 //! actually 3'-shift) across the genomic and CDS (both strands) coordinate
 //! systems, and every edit type, asserting `norm(norm(x)) == norm(x)`.
 //!
-//! Two properties are fuzzed:
+//! Three properties are fuzzed:
 //!   * `norm(norm(x)) == norm(x)` (idempotency), covering the full edit/coord
 //!     matrix in the **3' (default, HGVS-canonical)** direction;
+//!   * the same idempotency property in the **5'** direction — the mirror of the
+//!     3' property, enabled once the campaign's pre-existing 5' bugs were fixed
+//!     (see the 5' scope note below);
 //!   * multiple spellings of ONE homopolymer-boundary haplotype normalize to ONE
 //!     form (confluence), in **both** directions. Idempotency is necessary but
 //!     NOT sufficient — a mode can be idempotent yet non-confluent (each spelling
@@ -19,13 +22,15 @@
 //!     clamps + the dup-routing recursion in `normalize_na_edit`) so those
 //!     spellings now converge.
 //!
-//! Scope note: a *general* 5' idempotency fuzz is intentionally NOT run here yet.
-//! The 5' direction still has separate, pre-existing bugs outside the boundary
-//! rework — a `convert-to-dup` step that selects the wrong tract for
-//! heterogeneous content, and a tandem-repeat `dup` whose repeat unit rotates on
-//! re-normalization — each tracked as its own follow-up. The confluence property
-//! plus the explicit `five_prime_boundary_delins_unification` regression tests
-//! cover the 5' classes this change actually fixes.
+//! 5' scope note: the general 5' idempotency fuzz is now enabled. Reaching green
+//! required fixing three separate pre-existing 5' bugs the fuzzer surfaced, all
+//! outside the boundary rework: the boundary dup/insertion→delins family, an
+//! insertion→dup step that selected the wrong tract for heterogeneous content
+//! (#7), a tandem-repeat `dup` whose `unit[N]` phase rotated on re-normalization
+//! (#8, `normalize_repeat` now direction-aware), and the ins→dup sibling of #8 —
+//! a single-copy dup over a dinucleotide tract that under-shifted by one when the
+//! run continued off-phase 5' (fixed by mirroring the 3' branch's tract
+//! alignment). Each has an explicit regression test alongside this fuzz.
 //!
 //! Cases are generated **valid by construction** (edit endpoints derived from
 //! the core length), so there is no skip path at all: an unparseable render or a
@@ -201,10 +206,18 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(4000))]
 
     /// 3' (default, HGVS-canonical) direction, fully general edit content.
-    /// (5' general idempotency is deferred — see the module-level scope note.)
     #[test]
     fn normalization_is_idempotent_three_prime(case in case_strategy()) {
         check_idempotent(&case, ShuffleDirection::ThreePrime)?;
+    }
+
+    /// 5' direction, fully general edit content — the mirror of the 3' property.
+    /// Enabled once the three pre-existing 5' bugs the campaign chased down
+    /// (boundary dup/insertion→delins, insertion→dup tract selection, and the
+    /// tandem-repeat `dup` unit rotation) were fixed.
+    #[test]
+    fn normalization_is_idempotent_five_prime(case in case_strategy()) {
+        check_idempotent(&case, ShuffleDirection::FivePrime)?;
     }
 }
 

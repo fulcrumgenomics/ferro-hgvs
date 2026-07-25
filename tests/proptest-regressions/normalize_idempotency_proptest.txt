@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc bf332dd0e9d843159242ec546b6e1eb7518b888030fe9438d344dd93044a7394 # shrinks to case = Case { core: "GTGTGTGTGTGCTCC", sys: Genomic, hgvs: "NC_TEST.1:g.267_268insTG" }
