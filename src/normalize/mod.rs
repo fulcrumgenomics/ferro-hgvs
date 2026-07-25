@@ -2635,6 +2635,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             rel_end,
             &Boundaries::new(0, ref_seq.len() as u64),
             false, // genomic context: codon-frame gate does not apply
+            None,  // codon-frame gate does not apply here
         )?;
 
         // Adjust back to genomic coordinates
@@ -3283,8 +3284,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(cds_end) => tx_start >= cds_start && tx_end <= cds_end,
             None => false,
         };
-        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, is_coding)?;
+        // The same bounds, un-collapsed, so a gate site deciding about a span
+        // other than the input can evaluate it there instead (#1185).
+        let cds_span = transcript.cds_end.map(|cds_end| (cds_start, cds_end));
+        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) = self
+            .normalize_na_edit(
+                seq,
+                edit,
+                tx_start,
+                tx_end,
+                &boundaries,
+                is_coding,
+                cds_span,
+            )?;
 
         // Substitutions are validated-then-returned-unchanged by
         // `normalize_na_edit`'s `Substitution` arm; nothing downstream (axis
@@ -3396,8 +3408,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ShuffleDirection::ThreePrime => cheap_right,
             };
             let (left_clamp_fired, right_clamp_fired) = if direction_could_clamp {
-                let (exon_only_start, exon_only_end, _exon_only_edit, _exon_only_warnings) =
-                    self.normalize_na_edit(seq, edit, tx_start, tx_end, &exon_only, is_coding)?;
+                let (exon_only_start, exon_only_end, _exon_only_edit, _exon_only_warnings) = self
+                    .normalize_na_edit(
+                    seq, edit, tx_start, tx_end, &exon_only, is_coding, cds_span,
+                )?;
                 let exon_only_start_0 = exon_only_start.saturating_sub(1);
                 (
                     cheap_left && exon_only_start_0 < boundaries.left,
@@ -3897,8 +3911,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(s) => s.as_bytes(),
             None => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
         };
+        // `mut` bindings are #1202's (its transcript-bound clamp rewrites these
+        // in place); the trailing `None` is #1185's `cds_span`. `n.` has no
+        // reading frame, so there is no CDS span to re-check a shuffled tract
+        // against — unlike `r.` below, which does pass real bounds.
         let (mut new_start, mut new_end, mut new_edit, mut warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
+            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false, None)?;
 
         // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
         // substitutions are validated-then-returned-unchanged by
@@ -5382,8 +5400,23 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some((cds_start, cds_end)) => tx_start >= cds_start && tx_end <= cds_end,
             None => false,
         };
-        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, is_coding)?;
+        // `mut` bindings are #1202's (its transcript-bound clamp rewrites these
+        // in place). `cds_info` (not `None`) is the #1185 companion to #1192's
+        // `is_coding`: the codon-frame gate applies on `r.` exactly as on `c.`,
+        // so the shuffled-tract re-check must be able to run here too. Passing
+        // `None` would make that verdict unconditionally "exempt" and silently
+        // re-open the divergence #1192 closed — `issue_1192`'s
+        // `rna_homopolymer_expansion_inside_cds_is_gated` fails if you try it.
+        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) = self
+            .normalize_na_edit(
+                seq,
+                edit,
+                tx_start,
+                tx_end,
+                &boundaries,
+                is_coding,
+                cds_info,
+            )?;
 
         // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
         // substitutions are validated-then-returned-unchanged by
@@ -5933,6 +5966,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             rel_end,
             &Boundaries::new(0, ref_seq.len() as u64),
             false,
+            None, // codon-frame gate does not apply here
         )?;
 
         let new_start = new_rel_start + window_start;
@@ -6202,6 +6236,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_end,
             &work_boundaries,
             false,
+            None, // codon-frame gate does not apply here
         )?;
 
         // Map the result positions back to the genomic-strand frame
@@ -6385,6 +6420,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_end,
             &work_boundaries,
             false,
+            None, // codon-frame gate does not apply here
         )?;
 
         // Map the result positions back to the genomic-strand frame
@@ -6552,6 +6588,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_end,
             &work_boundaries,
             false,
+            None, // codon-frame gate does not apply here
         )?;
 
         let (new_rel_start, new_rel_end) = unflip_intronic_positions(
@@ -7001,6 +7038,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_end,
             &work_boundaries,
             false,
+            None, // codon-frame gate does not apply here
         )?;
 
         let (new_rel_start, new_rel_end) = unflip_intronic_positions(
@@ -7037,6 +7075,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Core normalization for nucleic acid edits
     ///
     /// Returns (new_start, new_end, new_edit, warnings)
+    // Already at clippy's 7-argument limit before #1185 added `cds_span`. The
+    // right cleanup is to fold `is_coding` + `cds_span` into one `CodonGate`
+    // value — they are two views of the same question — but that is a mechanical
+    // rename across every call site in this function and is deliberately left
+    // out of a behaviour fix. Suppressed rather than papered over with a tuple.
+    #[allow(clippy::too_many_arguments)]
     fn normalize_na_edit(
         &self,
         ref_seq: &[u8],
@@ -7045,6 +7089,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
         end: u64,
         boundaries: &Boundaries,
         is_coding: bool,
+        // Transcript-frame CDS bounds (1-based, inclusive), or `None` where the
+        // codon-frame gate does not apply (genomic / `n.`). **`r.` passes real
+        // bounds**, not `None`: #1192 established that the gate applies on the
+        // `r.` axis too, since `r.` on a coding transcript IS the `c.` axis
+        // (`RNA/repeated.md` L24-27). `is_coding`
+        // is this same verdict precomputed for the INPUT span; `cds_span` lets a
+        // site that decides about a DIFFERENT span ask about that span instead
+        // (#1185). Deliberately additive: every existing site keeps reading
+        // `is_coding`, so only the one site below changes behaviour.
+        cds_span: Option<(u64, u64)>,
     ) -> Result<(u64, u64, NaEdit, Vec<NormalizationWarning>), FerroError> {
         let mut warnings = Vec::new();
 
@@ -7155,7 +7209,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         };
                         let (new_start, new_end, new_edit, mut child_warnings) = self
                             .normalize_na_edit(
-                                ref_seq, &literal, start, end, boundaries, is_coding,
+                                ref_seq, &literal, start, end, boundaries, is_coding, cds_span,
                             )?;
                         warnings.append(&mut child_warnings);
                         return Ok((new_start, new_end, new_edit, warnings));
@@ -7214,8 +7268,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         sequence: None,
                         length: None,
                     };
-                    return self
-                        .normalize_na_edit(ref_seq, &del, start, end, boundaries, is_coding);
+                    return self.normalize_na_edit(
+                        ref_seq, &del, start, end, boundaries, is_coding, cds_span,
+                    );
                 }
 
                 // HGVS spec: delins should NOT be 3' shifted like del/dup/ins,
@@ -7300,6 +7355,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     e0 as u64,
                                     boundaries,
                                     is_coding,
+                                    cds_span,
                                 )?;
                             let mut merged = warnings.clone();
                             merged.append(&mut child_warnings);
@@ -7360,6 +7416,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     (after_index + 1) as u64,
                                     boundaries,
                                     is_coding,
+                                    cds_span,
                                 )?;
                             let mut merged = warnings.clone();
                             merged.append(&mut child_warnings);
@@ -7405,6 +7462,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     e0 as u64,
                                     boundaries,
                                     is_coding,
+                                    cds_span,
                                 )?;
                             let mut merged = warnings.clone();
                             merged.append(&mut child_warnings);
@@ -7988,9 +8046,33 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 // Check if duplication should become repeat notation
                 // Use the shuffled positions (result.start, result.end) which are 0-based
                 // This applies to both single-base dups in homopolymers and multi-base tandem dups
-                if let Some(dup_result) =
-                    rules::duplication_to_repeat(ref_seq, result.start, result.end, is_coding)
-                {
+                if let Some(dup_result) = rules::duplication_to_repeat(
+                    ref_seq,
+                    result.start,
+                    result.end,
+                    // #1185: this call decides about the SHUFFLED tract
+                    // (`result.*`), so the codon-frame gate must be asked
+                    // about that tract — not about the input span, which is
+                    // what `is_coding` holds.
+                    //
+                    // A dup whose 3'-shifted tract runs out of the CDS into
+                    // the 3'UTR is exempt from the multiple-of-3 rule:
+                    // "This restriction only applies to the coding sequence,
+                    // which does not include the introns or the UTR
+                    // sequence." (DNA/repeated.md) — the added copies land
+                    // past `cds_end` and so cannot move the reading frame.
+                    // Keyed on the input span it was gated to an `ins`
+                    // literal on pass 1 and collapsed to repeat notation only
+                    // on pass 2, once the straddling tract had made the input
+                    // span itself non-coding.
+                    matches!(
+                        cds_span,
+                        Some((cds_s, cds_e))
+                            if index_to_hgvs_pos(result.start as usize) >= cds_s
+                                && index_to_hgvs_pos(result.end.saturating_sub(1) as usize)
+                                    <= cds_e
+                    ),
+                ) {
                     match dup_result {
                         rules::DupToRepeatResult::Homopolymer {
                             base,
@@ -8058,10 +8140,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 // (and, at a coding boundary, invalid) forms.
                                 // Terminates: the derived edit is an Insertion,
                                 // which never re-enters this Duplication arm.
+                                // `cds_span` is threaded through unchanged: the
+                                // recursion stays on the same transcript, so the
+                                // CDS bounds are identical, and the derived
+                                // insertion covers a DIFFERENT span than the
+                                // input — exactly the case `cds_span` exists for
+                                // (#1185). Passing `None` here would silently
+                                // switch the codon-frame gate off for the derived
+                                // insertion. This call site postdates #1185's
+                                // base, so it is threaded on rebase rather than
+                                // in the original commit.
                                 let (rec_start, rec_end, rec_edit, mut rec_warnings) = self
                                     .normalize_na_edit(
                                         ref_seq, &ins_edit, ins_start, ins_end, boundaries,
-                                        is_coding,
+                                        is_coding, cds_span,
                                     )?;
                                 let mut merged = warnings;
                                 merged.append(&mut rec_warnings);

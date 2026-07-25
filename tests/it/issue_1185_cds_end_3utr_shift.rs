@@ -139,10 +139,18 @@ fn control_plain_deletion_crosses_cds_end_in_one_pass() {
     );
 }
 
-/// The decisive control: the SAME edit over the BYTE-IDENTICAL transcript,
-/// differing only in the axis it is spelled on. On a coding transcript `r.` is
-/// the CDS-relative axis — the same axis as `c.` (#469) — so both spellings
-/// name the same bases and must shift identically.
+/// The SAME edit over the BYTE-IDENTICAL transcript, differing only in the axis
+/// it is spelled on. On a coding transcript `r.` is the CDS-relative axis — the
+/// same axis as `c.` (#469) — so both spellings name the same bases.
+///
+/// **Scope, deliberately narrow.** This is a valid control for the *shuffle*
+/// (this test), because no repeat notation is involved. It is **not** a valid
+/// control for the codon-frame gate exercised by the `dup` tests below:
+/// `normalize_rna` passes no CDS span at all, so the gate never applies on the
+/// `r.` axis — even though `RNA/repeated.md:24-27` imposes the same
+/// multiple-of-3 restriction as the DNA page. That gap is a separate defect and
+/// is deliberately not addressed here; treating `r.` as an oracle for the gate
+/// would have "confirmed" whatever `r.` happened to do.
 #[test]
 fn control_same_edit_on_r_axis_shifts_in_one_pass() {
     assert_one_pass(
@@ -172,5 +180,67 @@ fn control_delins_reduction_staying_inside_cds_is_one_pass() {
         utr3_ac_tandem(Strand::Plus),
         "NM_UTR3.1:c.3_5delinsA",
         "NM_UTR3.1:c.7_8del",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Site 2 — the codon-frame gate must be evaluated against the tract the repeat
+// description will NAME (the shuffled tract), not the input span.
+//
+// `DNA/repeated.md`: "using a coding DNA reference sequence ("c." description),
+// a repeated sequence variant description can be used only for repeat units
+// with a length which is a multiple of 3, i.e. which can not affect the reading
+// frame. … **This restriction only applies to the coding sequence, which does
+// not include the introns or the UTR sequence.** As such,
+// `NM_024312.4:c.-6_-3G[6]` is valid as the reading frame is not affected."
+//
+// So a tract that 3'-shifts out of the CDS into the 3'UTR is exempt: the added
+// copies land past `cds_end` and cannot move the reading frame.
+// ---------------------------------------------------------------------------
+
+/// CDS `GAAAAAACAC` (`c.1..c.10`) + an `ACGT` 3'UTR puts an `AC[3]` tract at
+/// `c.7_*2`, bounded by the `G` at `*3`.
+fn utr3_acgt_bounded() -> MockProvider {
+    coding_transcript("GAAAAAACAC", &"ACGT".repeat(10), Strand::Plus)
+}
+
+/// `c.7_10dup` duplicates `ACAC`, expanding the `AC[3]` tract at `c.7_*2` to
+/// `AC[5]`. The unit is 2 nt — not a multiple of 3 — but the tract runs out of
+/// the CDS into the 3'UTR, so the codon-frame restriction does not apply and
+/// repeat notation is correct.
+///
+/// Before the fix the gate was keyed on the input span (`c.7_10`, entirely
+/// CDS-resident), so pass 1 emitted the `ins` literal `c.*2_*3insACAC` and only
+/// pass 2 — by then seeing a straddling span — collapsed it to `AC[5]`.
+#[test]
+fn dup_whose_shifted_tract_leaves_the_cds_gets_repeat_notation_in_one_pass() {
+    assert_one_pass(
+        utr3_acgt_bounded(),
+        "NM_UTR3.1:c.7_10dup",
+        "NM_UTR3.1:c.7_*2AC[5]",
+    );
+}
+
+/// The control that proves the gate was narrowed, not disabled. A non-triplet
+/// unit whose tract stays **entirely inside** the CDS must still be refused
+/// repeat notation and rendered as an `ins` literal — the spec's own remedy
+/// ("use `NM_024312.4:c.1741_1742insTATATATA` and **not** `c.1738TA[6]`").
+#[test]
+fn control_non_triplet_dup_inside_the_cds_still_renders_as_ins_literal() {
+    assert_one_pass(
+        coding_transcript("GACACACACGGGTTT", &"GGGTTT".repeat(4), Strand::Plus),
+        "NM_UTR3.1:c.2_5dup",
+        "NM_UTR3.1:c.9_10insACAC",
+    );
+}
+
+/// And a codon-aligned unit inside the CDS still gets repeat notation, so the
+/// gate is discriminating on unit length rather than blanket-refusing.
+#[test]
+fn control_codon_aligned_dup_inside_the_cds_gets_repeat_notation() {
+    assert_one_pass(
+        coding_transcript("GCAGCAGCAGTTT", &"GGGTTT".repeat(4), Strand::Plus),
+        "NM_UTR3.1:c.2_7dup",
+        "NM_UTR3.1:c.2_10CAG[5]",
     );
 }
