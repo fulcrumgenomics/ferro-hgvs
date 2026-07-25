@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc bf332dd0e9d843159242ec546b6e1eb7518b888030fe9438d344dd93044a7394 # shrinks to case = Case { core: "GTGTGTGTGTGCTCC", sys: Genomic, hgvs: "NC_TEST.1:g.267_268insTG" }
+cc ddec17ccae74300ac0056191f141ead3b469a70af2b335c064a8300fd22ad3fc # shrinks to case = Case { core: "CCCAAACCC", sys: CdsPlus, hgvs: "NM_TEST.1:c.4A[5]" }, dir = FivePrime

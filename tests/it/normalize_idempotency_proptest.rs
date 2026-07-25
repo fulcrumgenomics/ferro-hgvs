@@ -105,6 +105,73 @@ fn core_strategy() -> impl Strategy<Value = String> {
         .prop_map(|body| format!("G{body}C"))
 }
 
+/// A core carrying ONE cleanly-bounded tandem tract, plus a `unit[N]` input
+/// spelled against it — the input class `case_strategy` cannot reach (it only
+/// emits `del`/`dup`/`ins`/`delins`), which is how the 5' repeat del/dup
+/// non-idempotency hid.
+///
+/// The tract is `unit` repeated `ref_copies` times, flanked on both sides by a
+/// run of a single **breaker** base chosen so it can continue the unit's
+/// rotation on neither side: `breaker != unit.first()` blocks the 3' phase walk
+/// (`three_prime_align_tract` slides while `ref[end] == rotated[0]`) and
+/// `breaker != unit.last()` blocks the 5' one (`five_prime_align_tract` slides
+/// while `ref[start-1] == rotated.last()`). A 1-3bp unit constrains at most 2 of
+/// the 4 bases, so a breaker always exists.
+///
+/// This matters more than the usual "break the pad run" guard: `SyntheticBuilder`
+/// pads with `ACGT…`, and a *rotational* (multi-base) unit can keep cycling into
+/// that pad even where a homopolymer run would stop — e.g. a core ending `…CAGC`
+/// continues the `CAG` cycle into the pad's leading `A`. Flanking by unit-derived
+/// exclusion is what keeps the tract's extent equal to what the test intends.
+fn repeat_case_strategy() -> impl Strategy<Value = Case> {
+    const FLANK: usize = 3;
+    (dna(1..=3), 2usize..=6)
+        .prop_flat_map(|(unit, ref_copies)| {
+            let ub = unit.as_bytes();
+            let (first, last) = (ub[0] as char, ub[ub.len() - 1] as char);
+            let breakers: Vec<char> = ['A', 'C', 'G', 'T']
+                .into_iter()
+                .filter(|&b| b != first && b != last)
+                .collect();
+            (
+                Just(unit),
+                Just(ref_copies),
+                prop::sample::select(breakers),
+                prop::sample::select(vec![Sys::Genomic, Sys::CdsPlus, Sys::CdsMinus]),
+            )
+        })
+        .prop_flat_map(|(unit, ref_copies, breaker, sys)| {
+            // count 0..=ref_copies+3 spans every normalize_repeat arm:
+            // contraction to zero / with survivors, identity, +1 (dup), expansion.
+            (
+                Just(unit),
+                Just(ref_copies),
+                Just(breaker),
+                Just(sys),
+                0u64..=(ref_copies as u64 + 3),
+            )
+        })
+        .prop_map(|(unit, ref_copies, breaker, sys, count)| {
+            let flank: String = std::iter::repeat_n(breaker, FLANK).collect();
+            let core = format!("{flank}{}{flank}", unit.repeat(ref_copies));
+            // 1-based position of the tract's first base within the core.
+            let tract_start_in_core = FLANK + 1;
+            let (prefix, acc) = match sys {
+                Sys::Genomic => ("g.", "NC_TEST.1"),
+                _ => ("c.", "NM_TEST.1"),
+            };
+            let pos = match sys {
+                Sys::Genomic => PAD_OFFSET as usize + tract_start_in_core,
+                _ => tract_start_in_core, // cds_start == 1 => c.p maps to core p
+            };
+            Case {
+                core,
+                sys,
+                hgvs: format!("{acc}:{prefix}{pos}{unit}[{count}]"),
+            }
+        })
+}
+
 fn case_strategy() -> impl Strategy<Value = Case> {
     core_strategy().prop_flat_map(move |core| {
         let len = core.len();
@@ -218,6 +285,15 @@ proptest! {
     #[test]
     fn normalization_is_idempotent_five_prime(case in case_strategy()) {
         check_idempotent(&case, ShuffleDirection::FivePrime)?;
+    }
+
+    /// Repeat-notation (`unit[N]`) **inputs**, both directions. `case_strategy`
+    /// never emits these, so `normalize_repeat`'s own result arms were only ever
+    /// reached as an *output* of a del/dup/ins — never re-entered as an input.
+    /// That gap hid the 5' del/dup arms naming the 3'-most copy (non-idempotent).
+    #[test]
+    fn repeat_input_is_idempotent(case in repeat_case_strategy(), dir in both_directions()) {
+        check_idempotent(&case, dir)?;
     }
 }
 
