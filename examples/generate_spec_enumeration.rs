@@ -39,6 +39,10 @@ use serde::{Deserialize, Serialize};
 #[path = "common/spec_harvest.rs"]
 mod spec_harvest;
 
+#[path = "common/generated_artifact.rs"]
+mod generated_artifact;
+
+use generated_artifact::check_up_to_date;
 use spec_harvest::{negatives, prefix, sources};
 
 #[derive(ClapParser, Debug)]
@@ -78,7 +82,10 @@ struct Cli {
     )]
     output: PathBuf,
 
-    /// Regenerate in memory and exit non-zero if the on-disk file differs.
+    /// Is the local enumeration current? Exits 1 when an existing file differs
+    /// from a fresh render, leaving it in place for inspection. An absent file is
+    /// generated, not treated as a failure: it is gitignored, so "never built"
+    /// is a cold cache rather than drift.
     #[arg(long)]
     check: bool,
 
@@ -122,16 +129,12 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     }
 
     if cli.check {
-        let on_disk = std::fs::read_to_string(&cli.output)
-            .map_err(|e| anyhow::anyhow!("read {}: {e}", cli.output.display()))?;
-        if on_disk != rendered {
-            eprintln!(
-                "enumeration {} is out of date; rerun: \
-                 cargo run --features dev --example generate_spec_enumeration",
-                cli.output.display()
-            );
-            return Err(anyhow::anyhow!("enumeration out of date"));
-        }
+        check_up_to_date(
+            &cli.output,
+            &rendered,
+            "enumeration",
+            "generate_spec_enumeration",
+        )?;
     } else {
         std::fs::write(&cli.output, rendered)?;
     }
