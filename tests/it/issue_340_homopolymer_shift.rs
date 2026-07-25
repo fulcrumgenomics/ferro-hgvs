@@ -219,34 +219,146 @@ fn delins_to_dup_canonicalizes_multibase_dup_on_genome() {
     );
 }
 
+/// Normalize `input` against `provider` in `dir`, rendered.
+fn norm_with(provider: MockProvider, input: &str, dir: ShuffleDirection) -> String {
+    let normalizer =
+        Normalizer::with_config(provider, NormalizeConfig::default().with_direction(dir));
+    let variant = parse_hgvs(input).expect("parse");
+    format!("{}", normalizer.normalize(&variant).expect("normalize"))
+}
+
+/// #357: `insertion_to_repeat` on an **unambiguously-phased** tract is
+/// direction-invariant.
+///
+/// 2-copy insertion `AA` extends the n.4-n.6 `AAA` tract to 5 copies. The
+/// canonical repeat form covers the full tract, and for a homopolymer the
+/// 3'-most and 5'-most phases are the same window, so both directions must
+/// render identically.
+///
+/// Scope, stated precisely because the original name (`..._is_direction_invariant_...`)
+/// over-promised: this pins invariance ONLY where the tract's phase is
+/// unambiguous. It is not a general direction-invariance guarantee — a tract
+/// whose flanking base continues the unit's rotation phases to the
+/// direction-appropriate end, which the companion test below pins. Before that
+/// companion existed, a homopolymer was the only case under test, so this test
+/// would have kept passing even if multi-base-unit direction handling broke
+/// entirely.
 #[test]
-fn insertion_to_repeat_output_is_direction_invariant_on_n_axis() {
-    // 2-copy insertion `AA` extends the n.4-n.6 AAA tract to 5 copies.
-    // The canonical repeat form covers the full tract; output must be
-    // identical under both shuffle directions. If `insertion_to_repeat`
-    // ever becomes direction-dependent in a way that affects the
-    // displayed range, this test will start failing and trigger a
-    // semantic decision per #357.
+fn insertion_to_repeat_is_direction_invariant_for_unambiguous_tract_on_n_axis() {
     let input = "NR_REPAUDIT.1:n.6_7insAA";
-    let five_prime = {
-        let normalizer = Normalizer::with_config(
-            provider_with_aaa_tract_noncoding(),
-            NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
-        );
-        let variant = parse_hgvs(input).expect("parse");
-        format!("{}", normalizer.normalize(&variant).expect("normalize"))
-    };
-    let three_prime = {
-        let normalizer = Normalizer::with_config(
-            provider_with_aaa_tract_noncoding(),
-            NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
-        );
-        let variant = parse_hgvs(input).expect("parse");
-        format!("{}", normalizer.normalize(&variant).expect("normalize"))
-    };
+    let five_prime = norm_with(
+        provider_with_aaa_tract_noncoding(),
+        input,
+        ShuffleDirection::FivePrime,
+    );
+    let three_prime = norm_with(
+        provider_with_aaa_tract_noncoding(),
+        input,
+        ShuffleDirection::ThreePrime,
+    );
+    // Assert the canonical value on each direction independently, not merely that
+    // the two agree: two identically-wrong renderings would satisfy a mutual-
+    // equality check. The window names the REFERENCE tract (n.4-n.6, 3 copies of
+    // `A`), and the count is the post-edit total (3 ref + 2 inserted = 5).
+    const CANONICAL: &str = "NR_REPAUDIT.1:n.4_6A[5]";
+    assert_eq!(three_prime, CANONICAL, "3' canonical form");
+    assert_eq!(five_prime, CANONICAL, "5' canonical form");
     assert_eq!(
         five_prime, three_prime,
-        "insertion_to_repeat output should be direction-invariant for multi-copy \
-         inserts on the n. axis: 5prime={five_prime} 3prime={three_prime}",
+        "a homopolymer tract has one phase, so insertion_to_repeat must render \
+         identically in both directions: 5prime={five_prime} 3prime={three_prime}",
     );
+}
+
+/// An `n.` transcript whose n.3-n.11 is the odd alternating run `GAGAGAGAG`.
+///
+/// Odd length is what makes the phase ambiguous: read as `GA` the run starts at
+/// n.3, read as `AG` it starts at n.4, and each flanking base continues the
+/// other reading's rotation. That is the shape a homopolymer fixture cannot
+/// express, and the one where direction actually decides the window.
+fn provider_with_ambiguous_ag_tract_noncoding() -> MockProvider {
+    let mut provider = MockProvider::new();
+    //                       1234567890123
+    let sequence = "CCGAGAGAGAGCC".to_string();
+    //                ^^^^^^^^^ n.3-n.11 = GAGAGAGAG
+    let len = sequence.len() as u64;
+    let transcript = Transcript::new(
+        "NR_REPAUDIT.1".to_string(),
+        Some("REPAUDIT".to_string()),
+        Strand::Plus,
+        sequence,
+        None,
+        None,
+        vec![Exon::new(1, 1, len)],
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_transcript(transcript);
+    provider
+}
+
+/// #357 companion: on an **ambiguously-phased** tract the repeat form phases to
+/// the direction-canonical end, so the two directions deliberately differ.
+///
+/// This is the case the homopolymer test above cannot reach. Inserting `AGAG`
+/// against the odd `GAGAGAGAG` run yields one haplotype with two equally-valid
+/// spellings; 3' names the 3'-most phase (`AG[6]` at n.4) and 5' the 5'-most
+/// (`GA[6]` at n.3). Asserting the *difference* is what keeps a future change
+/// from silently collapsing 5' back onto the 3' phase — the defect class fixed
+/// in the repeat/dup direction-awareness work.
+#[test]
+fn insertion_to_repeat_phases_to_direction_canonical_end_for_ambiguous_tract() {
+    let input = "NR_REPAUDIT.1:n.11_12insAGAG";
+    let three_prime = norm_with(
+        provider_with_ambiguous_ag_tract_noncoding(),
+        input,
+        ShuffleDirection::ThreePrime,
+    );
+    let five_prime = norm_with(
+        provider_with_ambiguous_ag_tract_noncoding(),
+        input,
+        ShuffleDirection::FivePrime,
+    );
+    assert_eq!(three_prime, "NR_REPAUDIT.1:n.4_11AG[6]", "3'-most phase");
+    assert_eq!(five_prime, "NR_REPAUDIT.1:n.3_10GA[6]", "5'-most phase");
+    assert_ne!(
+        three_prime, five_prime,
+        "an ambiguous tract must phase to the direction-canonical end",
+    );
+}
+
+/// Both directions stay confluent on the ambiguous tract: other spellings of the
+/// same haplotype (a 5'-side insertion, and the equivalent `dup`) reach the same
+/// direction-canonical form as the 3'-side insertion above.
+#[test]
+fn ambiguous_tract_spellings_are_confluent_within_each_direction() {
+    for input in [
+        "NR_REPAUDIT.1:n.2_3insGAGA",
+        "NR_REPAUDIT.1:n.3_6dup",
+        "NR_REPAUDIT.1:n.11_12insAGAG",
+    ] {
+        assert_eq!(
+            norm_with(
+                provider_with_ambiguous_ag_tract_noncoding(),
+                input,
+                ShuffleDirection::ThreePrime
+            ),
+            "NR_REPAUDIT.1:n.4_11AG[6]",
+            "3' confluence for {input}",
+        );
+        assert_eq!(
+            norm_with(
+                provider_with_ambiguous_ag_tract_noncoding(),
+                input,
+                ShuffleDirection::FivePrime
+            ),
+            "NR_REPAUDIT.1:n.3_10GA[6]",
+            "5' confluence for {input}",
+        );
+    }
 }
