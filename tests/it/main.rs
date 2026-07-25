@@ -130,6 +130,7 @@ mod issue_1157_delins_reduction_shift;
 mod issue_1157_five_prime_insertion_rotation;
 mod issue_1158_equivalence_resulting_sequence;
 mod issue_1162_bare_ins_diagnostic;
+mod issue_1177_rna_axis_cds_relative;
 mod issue_1183_rna_axis_ins_expansion;
 mod issue_1192_rna_codon_frame_gate;
 mod issue_129_mt_circular_wraparound;

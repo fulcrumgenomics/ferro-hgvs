@@ -230,6 +230,17 @@ fn exonic_edit_still_projects_to_rna_axis() {
 /// `LRG_199t1:r.11u>g` (the spec's own example, `background/refseq.md`) must
 /// yield a real `n.` description on the non-coding axis. Before the fix the
 /// field held the `r.` input verbatim.
+///
+/// **Coordinates re-blessed by #1177.** This test previously expected
+/// `n.11T>G` / `c.-234T>G`, which pinned a defect: `LRG_199t1` is *coding*
+/// (`NM_004006.2`, `cds_start = 245`), and on a coding transcript the `r.` axis
+/// is CDS-relative, so `r.11` describes the same base as `c.11` — not `n.11`
+/// (`background/numbering.md`: "nucleotide `r.123` relates to `c.123` or
+/// `n.123`", and "in a coding RNA reference sequence, nucleotide numbering …
+/// follow[s] that of a coding DNA reference sequence"). #1086 correctly fixed
+/// the *shape* of this field (it had held the `r.` input verbatim) but carried
+/// the input's number across unchanged, so the value stayed off by `cds_start`.
+/// The spec-correct pair is `n.255T>G` (`245 + 11 - 1`) and `c.11T>G`.
 #[test]
 fn rna_input_noncoding_axis_is_an_n_description() {
     let Some(vp) = manifest_projector() else {
@@ -242,11 +253,11 @@ fn rna_input_noncoding_axis_is_an_n_description() {
         matches!(noncoding, ferro_hgvs::HgvsVariant::Tx(_)),
         "noncoding axis must hold an n. (Tx) variant, got {noncoding}",
     );
-    assert_eq!(noncoding.to_string(), "LRG_199t1:n.11T>G");
-    // The c. axis already handled this input and must stay correct.
+    assert_eq!(noncoding.to_string(), "LRG_199t1:n.255T>G");
+    // The c. axis must agree with the r. input it was derived from: r.11 is c.11.
     assert_eq!(
         proj.coding.expect("coding axis").to_string(),
-        "LRG_199t1:c.-234T>G",
+        "LRG_199t1:c.11T>G",
     );
 }
 
