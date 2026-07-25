@@ -302,12 +302,16 @@ pub fn find_homopolymer_at(ref_seq: &[u8], pos: usize) -> Option<RepeatAnalysis>
 ///
 /// Unlike `insertion_to_duplication` (which picks an explicit
 /// direction-aligned slot), `insertion_to_repeat` returns the canonical
-/// `unit[N+k]` window spanning the full reference tract, anchored at
-/// `ref_start`. The returned window covers the entire tract regardless
-/// of where shuffle would have placed the original insertion, so the
-/// output is invariant under `ShuffleDirection`. A direction-parameter
-/// audit was performed in #357 and locked in by
-/// `insertion_to_repeat_output_is_direction_invariant_on_n_axis`.
+/// `unit[N+k]` window spanning the full reference tract. The window covers the
+/// entire tract regardless of where shuffle would have placed the original
+/// insertion; only the tract's *phase* is direction-dependent, delegated to
+/// [`normalize_repeat`] (see below). For a homopolymer or a tract bounded by
+/// non-unit bases the 3'- and 5'-most phases coincide, so the displayed range is
+/// still direction-invariant there (#357,
+/// `insertion_to_repeat_output_is_direction_invariant_on_n_axis`); an ambiguous
+/// alternating tract, by contrast, is phased to the direction-appropriate end of
+/// the tract (#8), which is what makes the emitted repeat a fixed point under
+/// re-normalization.
 ///
 /// This function owns only the insertion-specific work: rotation-aware
 /// discovery of the adjacent tandem tract (`find_tandem_extent`) and the #882
@@ -324,6 +328,7 @@ pub fn insertion_to_repeat(
     pos: u64,
     inserted_seq: &[u8],
     is_coding: bool,
+    direction: crate::normalize::config::ShuffleDirection,
 ) -> Option<(u8, u64, u64, u64, Vec<u8>)> {
     if inserted_seq.is_empty() {
         return None;
@@ -366,34 +371,42 @@ pub fn insertion_to_repeat(
     // expand it by the inserted copies. Because `find_tandem_extent` and
     // `count_tandem_repeats` walk the tract identically, `normalize_repeat`
     // re-discovers the same tract, absorbs no flanks, and applies the SAME
-    // `three_prime_align_tract` + codon gate — so the emitted window/unit/count
-    // equal today's inline computation. `added_copies >= 2` ⇒ the target is
+    // direction-aware phase alignment + codon gate — so the emitted
+    // window/unit/count agree with `normalize_repeat` on the same reference tract
+    // in the same direction. `added_copies >= 2` ⇒ the target is
     // `>= ref_count + 2`, so only `Repeat` (or the codon-gated `Insertion` → None)
     // is reachable; `Deletion`/`Duplication`/`Unchanged` cannot occur.
     let target = ref_count + added_copies;
     let end_pos_incl = ref_end_excl - 1;
-    let (start_idx, emitted_end_hgvs, rotated_unit, total_count) =
-        match normalize_repeat(ref_seq, ref_start, end_pos_incl, &unit, target, is_coding) {
-            RepeatNormResult::Repeat {
-                start,
-                end,
-                sequence,
-                count,
-            } => (hgvs_pos_to_index(start), end, sequence, count),
-            // Codon gate (c. + non-codon unit) reroutes the expansion to `Insertion`;
-            // the caller then emits the literal `ins` form. Matches the pre-#866 gate.
-            RepeatNormResult::Insertion { .. } => return None,
-            // `added_copies >= 2` ⇒ `target = ref_count + added_copies >= ref_count + 2`,
-            // so a contraction / one-copy-expansion / identity result cannot arise here.
-            // Assert it loudly rather than silently returning `None`, so a future change
-            // that relaxes the `added_copies >= 2` guard is caught at test time.
-            RepeatNormResult::Deletion { .. }
-            | RepeatNormResult::Duplication { .. }
-            | RepeatNormResult::Unchanged => unreachable!(
-                "insertion_to_repeat delegates with added_copies >= 2, so target >= \
+    let (start_idx, emitted_end_hgvs, rotated_unit, total_count) = match normalize_repeat(
+        ref_seq,
+        ref_start,
+        end_pos_incl,
+        &unit,
+        target,
+        is_coding,
+        direction,
+    ) {
+        RepeatNormResult::Repeat {
+            start,
+            end,
+            sequence,
+            count,
+        } => (hgvs_pos_to_index(start), end, sequence, count),
+        // Codon gate (c. + non-codon unit) reroutes the expansion to `Insertion`;
+        // the caller then emits the literal `ins` form. Matches the pre-#866 gate.
+        RepeatNormResult::Insertion { .. } => return None,
+        // `added_copies >= 2` ⇒ `target = ref_count + added_copies >= ref_count + 2`,
+        // so a contraction / one-copy-expansion / identity result cannot arise here.
+        // Assert it loudly rather than silently returning `None`, so a future change
+        // that relaxes the `added_copies >= 2` guard is caught at test time.
+        RepeatNormResult::Deletion { .. }
+        | RepeatNormResult::Duplication { .. }
+        | RepeatNormResult::Unchanged => unreachable!(
+            "insertion_to_repeat delegates with added_copies >= 2, so target >= \
                  ref_count + 2; only Repeat or the codon-gated Insertion are reachable"
-            ),
-        };
+        ),
+    };
     // `emitted_end_hgvs` is a 1-based INCLUSIVE HGVS position, numerically equal to
     // the 0-based EXCLUSIVE aligned end; recover the exclusive end for the #882 gate
     // with no double correction.
@@ -575,7 +588,22 @@ pub(crate) fn insertion_to_duplication(
             unit = aligned_unit;
             aligned_end - unit.len()
         }
-        ShuffleDirection::FivePrime => ref_start,
+        ShuffleDirection::FivePrime => {
+            // Mirror of the 3' branch: push to the *true* 5'-most slot, crossing
+            // any off-phase tract extension. `ref_start` only 5'-aligns within the
+            // abutting rotation's phase; when the run continues one base further 5'
+            // in the opposite phase (e.g. inserting `TG` at the 3' edge of a
+            // `GTGTGTG` run — the abutting `TG` tract starts one base short of the
+            // run's true 5' end), stopping there under-shifts by one and is not a
+            // fixed point (the emitted `dup` re-shuffles one base further 5').
+            // `five_prime_align_tract` walks the remaining 5' flank while
+            // `ref[start-1] == rotated.last()` — the mirror duplication slide rule
+            // — rotating the unit to the run's 5' phase (#8's dup-path sibling).
+            let (aligned_start, _, aligned_unit) =
+                five_prime_align_tract(ref_seq, ref_start, tract_end_idx, &unit);
+            unit = aligned_unit;
+            aligned_start
+        }
     };
     let dup_end_idx = dup_start_idx + unit.len() - 1;
 
@@ -1582,6 +1610,39 @@ fn three_prime_align_tract(
     (start, end, rotated)
 }
 
+/// 5' mirror of [`three_prime_align_tract`] for `ShuffleDirection::FivePrime`.
+///
+/// While the base immediately 5' of the tract equals the rotating unit's *tail*,
+/// the window slides one base 5' and the unit rotates right by one — the
+/// direction-mirrored re-phasing that preserves the copy count. Returns the
+/// rotated `(start, end_exclusive, rotated_unit)`.
+///
+/// This is what keeps a `FivePrime` repeat idempotent AND confluent over an
+/// ambiguous alternating tract: `AG[4]` anchored at the tract's 3' phase and
+/// `GA[4]` anchored at its 5' phase both re-anchor to the single 5'-most form
+/// (#8, the tandem-repeat mirror of the #403 direction tie-break). `ThreePrime`
+/// keeps [`three_prime_align_tract`], so 3' output is unchanged.
+fn five_prime_align_tract(
+    ref_seq: &[u8],
+    ref_start: usize,
+    ref_end: usize,
+    unit: &[u8],
+) -> (usize, usize, Vec<u8>) {
+    let mut start = ref_start;
+    let mut end = ref_end;
+    let mut rotated = unit.to_vec();
+    while start > 0
+        && rotated
+            .last()
+            .is_some_and(|&tail| ref_seq[start - 1] == tail)
+    {
+        rotated.rotate_right(1);
+        start -= 1;
+        end -= 1;
+    }
+    (start, end, rotated)
+}
+
 /// Normalize a repeat variant
 ///
 /// Given a repeat notation like CAT[1], determines the appropriate
@@ -1613,6 +1674,7 @@ pub fn normalize_repeat(
     repeat_unit: &[u8],
     specified_count: u64,
     is_coding: bool,
+    direction: crate::normalize::config::ShuffleDirection,
 ) -> RepeatNormResult {
     // Match `count_tandem_repeats`'s pre-refactor contract: an empty unit
     // is meaningless and falls through to `Unchanged`. Without this guard,
@@ -1702,13 +1764,22 @@ pub fn normalize_repeat(
         specified_count += absorbed;
     }
 
-    // 3'-rule unit rotation (repeated.md L44: "applying the 3'rule, the repeat
-    // has to be described as an AGC repeat") via the shared helper, so
-    // `insertion_to_repeat` reaches the identical 3'-most phase (idempotency;
-    // #852). `ref_end` stays exclusive (the later `index_to_hgvs_pos(ref_end - 1)`
-    // is unchanged).
-    let (ns, ne, rotated_unit) =
-        three_prime_align_tract(ref_seq, ref_start, ref_end, canonical_unit);
+    // Direction-aware unit rotation. For `ThreePrime`, repeated.md L44 ("applying
+    // the 3'rule, the repeat has to be described as an AGC repeat") — slide to the
+    // 3'-most phase via the shared helper, so `insertion_to_repeat` reaches the
+    // identical phase (idempotency; #852). For `FivePrime`, slide to the mirror
+    // 5'-most phase so a `dup`→`unit[N]` emission (which the shuffle stage already
+    // 5'-anchors) is a fixed point rather than drifting 3' (#8). `ref_end` stays
+    // exclusive (the later `index_to_hgvs_pos(ref_end - 1)` is unchanged).
+    use crate::normalize::config::ShuffleDirection;
+    let (ns, ne, rotated_unit) = match direction {
+        ShuffleDirection::ThreePrime => {
+            three_prime_align_tract(ref_seq, ref_start, ref_end, canonical_unit)
+        }
+        ShuffleDirection::FivePrime => {
+            five_prime_align_tract(ref_seq, ref_start, ref_end, canonical_unit)
+        }
+    };
     ref_start = ns;
     ref_end = ne;
     let canonical_unit: &[u8] = &rotated_unit;
@@ -2896,7 +2967,8 @@ mod tests {
         // 2-copy reference window. Hand-verified: unit GT, count 5, 1-based 3_6.
         let r = b"CTGTGTT";
         let (base, count, start, end, unit) =
-            insertion_to_repeat(r, 4, b"TGTGTG", false).expect("repeat");
+            insertion_to_repeat(r, 4, b"TGTGTG", false, ShuffleDirection::ThreePrime)
+                .expect("repeat");
         assert_eq!(base, b'G');
         assert_eq!(count, 5);
         assert_eq!((start, end), (3, 6));
@@ -2911,7 +2983,7 @@ mod tests {
         // the rotation retry `normalize_repeat` bails to `Unchanged`. It must
         // instead find the GT tract and emit the entire-range 3'-form.
         let r = b"CTGTGTT";
-        let got = normalize_repeat(r, 2, 2, b"TG", 5, false);
+        let got = normalize_repeat(r, 2, 2, b"TG", 5, false, ShuffleDirection::ThreePrime);
         assert_eq!(
             got,
             RepeatNormResult::Repeat {
@@ -2930,7 +3002,7 @@ mod tests {
         // the last base (idx 4) — a boundary-anchored count undercounts, so the
         // offset search must recover the full 2-copy tract (the `c.3GC[5]` shape).
         let r = b"TGCGCA";
-        let got = normalize_repeat(r, 4, 4, b"GC", 5, false);
+        let got = normalize_repeat(r, 4, 4, b"GC", 5, false, ShuffleDirection::ThreePrime);
         assert_eq!(
             got,
             RepeatNormResult::Repeat {
@@ -2947,7 +3019,7 @@ mod tests {
         // The already-phase-aligned unit takes the direct path and yields the same
         // result (phase-independence / idempotency).
         let r = b"CTGTGTT";
-        let got = normalize_repeat(r, 2, 2, b"GT", 5, false);
+        let got = normalize_repeat(r, 2, 2, b"GT", 5, false, ShuffleDirection::ThreePrime);
         assert_eq!(
             got,
             RepeatNormResult::Repeat {
@@ -3040,10 +3112,23 @@ mod tests {
             },
         ];
         for c in cases {
-            let (_b, _c, ins_start, ins_end, ins_unit) =
-                insertion_to_repeat(c.ref_seq, c.ins_pos, c.ins_seq, false)
-                    .unwrap_or_else(|| panic!("insertion_to_repeat None for {:?}", c.ref_seq));
-            match normalize_repeat(c.ref_seq, c.nr_pos, c.nr_end, c.nr_unit, c.nr_count, false) {
+            let (_b, _c, ins_start, ins_end, ins_unit) = insertion_to_repeat(
+                c.ref_seq,
+                c.ins_pos,
+                c.ins_seq,
+                false,
+                ShuffleDirection::ThreePrime,
+            )
+            .unwrap_or_else(|| panic!("insertion_to_repeat None for {:?}", c.ref_seq));
+            match normalize_repeat(
+                c.ref_seq,
+                c.nr_pos,
+                c.nr_end,
+                c.nr_unit,
+                c.nr_count,
+                false,
+                ShuffleDirection::ThreePrime,
+            ) {
                 RepeatNormResult::Repeat {
                     start,
                     end,
@@ -3067,10 +3152,18 @@ mod tests {
         // `normalize_repeat` routes the expansion to `Insertion`. Kept out of the shared
         // loop above (which unwraps a `Repeat`) since this case is intentionally None.
         assert!(
-            insertion_to_repeat(b"CAAAAAC", 5, b"AA", true).is_none(),
+            insertion_to_repeat(b"CAAAAAC", 5, b"AA", true, ShuffleDirection::ThreePrime).is_none(),
             "coding non-codon-aligned expansion must not be repeat notation"
         );
-        match normalize_repeat(b"CAAAAAC", 1, 5, b"A", 7, true) {
+        match normalize_repeat(
+            b"CAAAAAC",
+            1,
+            5,
+            b"A",
+            7,
+            true,
+            ShuffleDirection::ThreePrime,
+        ) {
             RepeatNormResult::Insertion {
                 start,
                 end,
@@ -3499,7 +3592,7 @@ mod tests {
         // insertion point. pos=7 means insert between index 7 and 8 — i.e.,
         // immediately after the last A in the homopolymer. Inserting AA here
         // should become A[7] (5 ref + 2 inserted).
-        let result = insertion_to_repeat(ref_seq, 7, b"AA", false);
+        let result = insertion_to_repeat(ref_seq, 7, b"AA", false, ShuffleDirection::ThreePrime);
         assert!(result.is_some());
         let (base, count, start, end, _unit) = result.unwrap();
         assert_eq!(base, b'A');
@@ -3508,15 +3601,15 @@ mod tests {
         assert_eq!(end, 8); // 1-indexed end of A region in reference (per HGVS, positions refer to reference tract)
 
         // Single-copy inserts (added_copies < 2) are duplications, not repeats.
-        let result = insertion_to_repeat(ref_seq, 7, b"A", false);
+        let result = insertion_to_repeat(ref_seq, 7, b"A", false, ShuffleDirection::ThreePrime);
         assert!(result.is_none());
 
         // Inserting T (non-matching) should return None
-        let result = insertion_to_repeat(ref_seq, 7, b"T", false);
+        let result = insertion_to_repeat(ref_seq, 7, b"T", false, ShuffleDirection::ThreePrime);
         assert!(result.is_none());
 
         // Inserting mixed bases should return None
-        let result = insertion_to_repeat(ref_seq, 7, b"AT", false);
+        let result = insertion_to_repeat(ref_seq, 7, b"AT", false, ShuffleDirection::ThreePrime);
         assert!(result.is_none());
 
         // Multi-base tandem unit: insert ACAC into ACAC tract → AC[4].
@@ -3524,7 +3617,7 @@ mod tests {
         // (pos=3, between A at index 3 and base at index 4). Expected:
         // 2 ref AC units + 2 inserted AC units = AC[4] at ref indices 0..3.
         let ref_ac = b"ACACGGG";
-        let result = insertion_to_repeat(ref_ac, 3, b"ACAC", false);
+        let result = insertion_to_repeat(ref_ac, 3, b"ACAC", false, ShuffleDirection::ThreePrime);
         assert!(result.is_some());
         let (base, count, start, end, unit) = result.unwrap();
         assert_eq!(base, b'A');
@@ -3648,7 +3741,15 @@ mod tests {
         // Specifying CAT[1]: ref_count=4, specified=1, k=3 >= 2, post=1 >= 1 → B2 → Repeat
         let ref_seq = b"GGGCATCATCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, 3, b"CAT", 1, false);
+        let result = normalize_repeat(
+            ref_seq,
+            3,
+            3,
+            b"CAT",
+            1,
+            false,
+            ShuffleDirection::ThreePrime,
+        );
         match result {
             RepeatNormResult::Repeat {
                 sequence, count, ..
@@ -3666,7 +3767,15 @@ mod tests {
         // Specifying CAT[3] (ref is 2, so 2+1=3) should become duplication
         let ref_seq = b"GGGCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, 3, b"CAT", 3, false);
+        let result = normalize_repeat(
+            ref_seq,
+            3,
+            3,
+            b"CAT",
+            3,
+            false,
+            ShuffleDirection::ThreePrime,
+        );
         match result {
             RepeatNormResult::Duplication {
                 start,
@@ -3686,7 +3795,15 @@ mod tests {
         // Specifying CAT[5] (ref is 2, 5 > 2+1) should stay as repeat
         let ref_seq = b"GGGCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, 3, b"CAT", 5, false);
+        let result = normalize_repeat(
+            ref_seq,
+            3,
+            3,
+            b"CAT",
+            5,
+            false,
+            ShuffleDirection::ThreePrime,
+        );
         match result {
             RepeatNormResult::Repeat {
                 count, sequence, ..
@@ -3704,7 +3821,15 @@ mod tests {
         // Specifying CAT[2] (same as ref) should be unchanged
         let ref_seq = b"GGGCATCATGGG";
 
-        let result = normalize_repeat(ref_seq, 3, 3, b"CAT", 2, false);
+        let result = normalize_repeat(
+            ref_seq,
+            3,
+            3,
+            b"CAT",
+            2,
+            false,
+            ShuffleDirection::ThreePrime,
+        );
         assert!(matches!(result, RepeatNormResult::Unchanged));
     }
 
@@ -3718,7 +3843,7 @@ mod tests {
         // canonical_unit.len()` unless we guard up front. This test pins the
         // pre-refactor contract.
         let ref_seq = b"GGGCATCATGGG";
-        let result = normalize_repeat(ref_seq, 3, 3, b"", 1, false);
+        let result = normalize_repeat(ref_seq, 3, 3, b"", 1, false, ShuffleDirection::ThreePrime);
         assert!(matches!(result, RepeatNormResult::Unchanged));
     }
 
@@ -3730,7 +3855,15 @@ mod tests {
         // this would fall to a 1-unit (ATAT) reduction → deletion (k<2).
         let ref_seq = b"GGGATATATATGGG"; // AT-tract at indices 3..11 (4 AT)
 
-        let result = normalize_repeat(ref_seq, 3, 3, b"ATAT", 1, false);
+        let result = normalize_repeat(
+            ref_seq,
+            3,
+            3,
+            b"ATAT",
+            1,
+            false,
+            ShuffleDirection::ThreePrime,
+        );
         match result {
             RepeatNormResult::Repeat {
                 start,
@@ -4114,7 +4247,7 @@ mod tests {
         // emit A[7], but unit_len=1 is not a multiple of 3 in c. context,
         // so the gate returns None.
         let ref_seq = b"CAAAAAC";
-        let result = insertion_to_repeat(ref_seq, 5, b"AA", true);
+        let result = insertion_to_repeat(ref_seq, 5, b"AA", true, ShuffleDirection::ThreePrime);
         assert!(
             result.is_none(),
             "is_coding=true + unit_len=1 must return None"
@@ -4126,7 +4259,7 @@ mod tests {
         // Reference: AT[3] tandem flanked by Cs. Insert ATAT → unit_len=2,
         // gate blocks in coding context.
         let ref_seq = b"CATATATC";
-        let result = insertion_to_repeat(ref_seq, 6, b"ATAT", true);
+        let result = insertion_to_repeat(ref_seq, 6, b"ATAT", true, ShuffleDirection::ThreePrime);
         assert!(
             result.is_none(),
             "is_coding=true + unit_len=2 must return None"
@@ -4138,7 +4271,7 @@ mod tests {
         // Reference: CAG[3] tandem. Insert CAGCAG → unit_len=3, codon-aligned,
         // gate passes; result is Some(...) carrying CAG[5].
         let ref_seq = b"CCAGCAGCAGT";
-        let result = insertion_to_repeat(ref_seq, 9, b"CAGCAG", true);
+        let result = insertion_to_repeat(ref_seq, 9, b"CAGCAG", true, ShuffleDirection::ThreePrime);
         assert!(
             result.is_some(),
             "is_coding=true + unit_len=3 must allow rewrite"
@@ -4153,7 +4286,7 @@ mod tests {
         // Same A-homopolymer case as the blocking test, but is_coding=false
         // → gate is a no-op, repeat rewrite proceeds.
         let ref_seq = b"CAAAAAC";
-        let result = insertion_to_repeat(ref_seq, 5, b"AA", false);
+        let result = insertion_to_repeat(ref_seq, 5, b"AA", false, ShuffleDirection::ThreePrime);
         assert!(result.is_some(), "is_coding=false must not gate");
     }
 
@@ -4215,7 +4348,7 @@ mod tests {
     fn test_normalize_repeat_codon_frame_gate_routes_contraction_to_deletion() {
         // 5-A tract, specified A[3] in coding → must NOT emit Repeat; emits Deletion.
         let ref_seq = b"CAAAAAC";
-        let result = normalize_repeat(ref_seq, 1, 1, b"A", 3, true);
+        let result = normalize_repeat(ref_seq, 1, 1, b"A", 3, true, ShuffleDirection::ThreePrime);
         match result {
             RepeatNormResult::Deletion { .. } => {}
             other => panic!("expected Deletion under gate, got {:?}", other),
@@ -4226,7 +4359,7 @@ mod tests {
     fn test_normalize_repeat_codon_frame_gate_routes_expansion_to_insertion() {
         // 5-A tract, specified A[8] in coding → must NOT emit Repeat; emits Insertion.
         let ref_seq = b"CAAAAAC";
-        let result = normalize_repeat(ref_seq, 1, 1, b"A", 8, true);
+        let result = normalize_repeat(ref_seq, 1, 1, b"A", 8, true, ShuffleDirection::ThreePrime);
         match result {
             RepeatNormResult::Insertion { sequence, .. } => {
                 assert_eq!(sequence, b"AAA", "3 extra A's");
@@ -4239,7 +4372,7 @@ mod tests {
     fn test_normalize_repeat_codon_frame_gate_passes_through_dup_branch() {
         // 5-A tract, specified A[6] in coding → +1 copy = dup, gate doesn't change this.
         let ref_seq = b"CAAAAAC";
-        let result = normalize_repeat(ref_seq, 1, 1, b"A", 6, true);
+        let result = normalize_repeat(ref_seq, 1, 1, b"A", 6, true, ShuffleDirection::ThreePrime);
         match result {
             RepeatNormResult::Duplication { .. } => {}
             other => panic!("expected Duplication, got {:?}", other),
@@ -5047,12 +5180,57 @@ mod tests {
         assert_eq!(got.end, 8);
     }
 
+    /// Regression for the `FivePrime` branch of `insertion_to_duplication`: the
+    /// odd-length off-phase partial flank that `five_prime_align_tract` exists to
+    /// cross.
+    ///
+    /// In `ACTGTGTGTGTAC` the alternating run spans indices 2..=10
+    /// (`T G T G T G T G T`). The `GT` tract abutting the cut starts at index 3,
+    /// but the run continues ONE base further 5' in the *opposite* phase — the
+    /// stray `T` at index 2. Stopping at `ref_start` would emit HGVS 4_5, which
+    /// is not a fixed point (the dup re-shuffles one base further 5' on the next
+    /// pass). The aligner must rotate `GT` → `TG` and land on 3_4.
+    #[test]
+    fn insertion_to_duplication_five_prime_crosses_off_phase_partial_flank() {
+        let r = b"ACTGTGTGTGTAC";
+        let got = insertion_to_duplication(r, 10, b"GT", ShuffleDirection::FivePrime)
+            .expect("5' insGT inside the GT run must convert to a dup");
+        assert_eq!(
+            got.unit, b"TG",
+            "unit rotates right as the window slides one base 5'"
+        );
+        assert_eq!(
+            (got.start, got.end),
+            (3, 4),
+            "the 5'-most slot lies across the off-phase T at index 2"
+        );
+
+        // The emitted dup must describe the SAME haplotype as the input insertion.
+        let inserted = {
+            let mut s = r.to_vec();
+            s.splice(11..11, b"GT".iter().copied());
+            s
+        };
+        let duplicated = {
+            let (s, e) = (got.start as usize - 1, got.end as usize); // 1-based incl → 0-based excl
+            let mut v = r.to_vec();
+            let copy = r[s..e].to_vec();
+            v.splice(e..e, copy);
+            v
+        };
+        assert_eq!(
+            String::from_utf8_lossy(&inserted),
+            String::from_utf8_lossy(&duplicated),
+            "dup and insertion spellings must reconstruct byte-identical sequences"
+        );
+    }
+
     #[test]
     fn insertion_to_repeat_rejects_out_of_phase_882() {
         // TGCGCA: insGCGC at the G|C cut (pos=1) is out of phase with the GC
         // tract; today it wrongly becomes GC[4]. Must be None now.
         let r = b"TGCGCA";
-        assert!(insertion_to_repeat(r, 1, b"GCGC", false).is_none());
+        assert!(insertion_to_repeat(r, 1, b"GCGC", false, ShuffleDirection::ThreePrime).is_none());
     }
 
     #[test]
@@ -5060,7 +5238,8 @@ mod tests {
         // In-phase rotation insCGCG reaches the same GC[4] window and is preserved.
         let r = b"TGCGCA";
         let (_b, count, start, end, unit) =
-            insertion_to_repeat(r, 1, b"CGCG", false).expect("in-phase should convert");
+            insertion_to_repeat(r, 1, b"CGCG", false, ShuffleDirection::ThreePrime)
+                .expect("in-phase should convert");
         assert_eq!(count, 4);
         assert_eq!((start, end), (2, 5));
         assert_eq!(unit, b"GC");

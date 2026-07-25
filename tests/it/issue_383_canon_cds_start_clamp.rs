@@ -234,23 +234,26 @@ fn five_prime_insertion_long_homopolymer_shift_clamps_at_cds_start() {
     // `c.-1_1insAA` — strictly inside 5'UTR even though the input was
     // CDS-interior.
     //
-    // Spec-canonical clamp for the homopolymer case is a delins anchored
-    // at c.1 that absorbs the boundary positions: `c.1_3delinsAAAAA`
-    // (= delete c.1..c.3 = "AAA", insert 5 A's). Applying this to the
-    // ref `GGG | AAAAAAAAAAAAAAAAAAAA | G...` yields `GGG + AAAAA +
-    // ref[c.4..]` = `GGG + 22*A + G...`, the same total as the input
-    // `c.5_6insAA` (insert 2 A's into the 20-A tract).
+    // Clamp form is the MINIMAL, single-base-anchored delins at c.1:
+    // `c.1delinsAAA` (= delete c.1 = "A", insert 3 A's = net +2). Applying
+    // this to the ref `GGG | AAAAAAAAAAAAAAAAAAAA | G...` yields
+    // `GGG + AAA + ref[c.2..]` = `GGG + 22*A + G...`, the same total as the
+    // input `c.5_6insAA` (insert 2 A's into the 20-A tract).
     //
-    // The exact form here is the *implementation's* spec-canonical
-    // emission; assert it precisely so any future regression to
-    // c.-N_… or to a different delete window is caught immediately.
+    // (Re-blessed from the earlier width-varying `c.1_3delinsAAAAA`: the
+    // boundary clamp now rewrites via the exact coordinate identity
+    // `delete ref[cds_start], insert A' ++ ref[cds_start]` keyed on the
+    // shuffled `A'`, so every start position of the same haplotype collapses
+    // to ONE minimal, idempotent form — confluence. The `k`-widened form was
+    // equivalent but non-confluent, e.g. `c.6_7insAA` gave a different
+    // `c.1_4delinsAAAAAA`.)
     assert_eq!(
         normalize_with_provider(
             provider_homopolymer(),
             ShuffleDirection::FivePrime,
             "NM_TEST383HP.1:c.5_6insAA",
         ),
-        "NM_TEST383HP.1:c.1_3delinsAAAAA",
+        "NM_TEST383HP.1:c.1delinsAAA",
     );
 }
 
@@ -261,15 +264,16 @@ fn five_prime_insertion_far_interior_homopolymer_shift_clamps() {
     // and alt.len() = 3, so x = 20 >> alt.len() + 1 = 4 — the buggy
     // branch was silently no-op'ing on inputs of this shape.
     //
-    // Clamp form: delete c.1..c.{x-L} = c.1..c.17 (17 A's), insert
-    // x A's = 20 A's. Equivalent to extending the 20-A tract by 3
-    // bases (the alt length).
+    // Minimal single-base-anchored clamp form: delete c.1 = "A", insert
+    // 4 A's (net +3), extending the 20-A tract by the alt length. Re-blessed
+    // from the earlier width-varying `c.1_17delinsAAAAAAAAAAAAAAAAAAAA` for
+    // confluence (see the sibling long-homopolymer test).
     assert_eq!(
         normalize_with_provider(
             provider_homopolymer(),
             ShuffleDirection::FivePrime,
             "NM_TEST383HP.1:c.20_21insAAA",
         ),
-        "NM_TEST383HP.1:c.1_17delinsAAAAAAAAAAAAAAAAAAAA",
+        "NM_TEST383HP.1:c.1delinsAAAA",
     );
 }

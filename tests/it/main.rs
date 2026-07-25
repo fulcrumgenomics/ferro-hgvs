@@ -12,6 +12,9 @@
 //! (`it::<module>::<test>`); filters by test name are unaffected.
 
 mod common;
+mod five_prime_boundary_delins_unification;
+mod five_prime_insertion_dup_boundary_anchor;
+mod five_prime_tandem_repeat_dup_rotation;
 
 mod allele_grammar_corners;
 mod allele_trans_phase;

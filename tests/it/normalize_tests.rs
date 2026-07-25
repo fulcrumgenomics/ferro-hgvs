@@ -2863,6 +2863,7 @@ mod insertion_rotation_tests {
 #[cfg(test)]
 mod repeat_position_tests {
     use ferro_hgvs::normalize::rules::{count_tandem_repeats, normalize_repeat, RepeatNormResult};
+    use ferro_hgvs::ShuffleDirection;
 
     /// Test what happens when the repeat unit doesn't match at the specified position
     /// but exists nearby. This simulates c.4261_4262CA[1] where:
@@ -2895,7 +2896,7 @@ mod repeat_position_tests {
         );
 
         // Test normalize_repeat - should return Unchanged
-        let result = normalize_repeat(ref_seq, 6, 6, b"CA", 1, false);
+        let result = normalize_repeat(ref_seq, 6, 6, b"CA", 1, false, ShuffleDirection::ThreePrime);
         assert!(
             matches!(result, RepeatNormResult::Unchanged),
             "Should return Unchanged when repeat unit not found at position. Got {:?}",
@@ -2919,7 +2920,7 @@ mod repeat_position_tests {
         );
 
         // normalize_repeat with count=1 should produce deletion
-        let result = normalize_repeat(ref_seq, 0, 0, b"CA", 1, false);
+        let result = normalize_repeat(ref_seq, 0, 0, b"CA", 1, false, ShuffleDirection::ThreePrime);
         match result {
             RepeatNormResult::Deletion { start, end } => {
                 // Should delete one copy (2 bases) from the 3' end
