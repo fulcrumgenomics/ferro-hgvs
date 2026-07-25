@@ -45,9 +45,13 @@ FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev
 It is compiled out in release builds (`#[cfg(debug_assertions)]`) and read once
 into a `OnceLock`, so a disabled run pays only one atomic load. CI runs the suite
 a second time with it set; the nightly reference-aware job sets it too, which is
-where the manifest-backed conformance corpora are actually covered. Coverage is
-limited to `normalize()` — `VariantProjector` calls `normalize_core_checked`
-directly and is not checked.
+where the manifest-backed conformance corpora are actually covered.
+
+The check sits at the single shared exit of `normalize_core_checked`, so it covers
+both `normalize()` and every `VariantProjector` path (the projection-driven
+genomic/coding/protein axes). Its verification pass re-enters that same method, so
+a thread-local `IN_IDEMPOTENCY_CHECK` guard breaks the recursion — the inner call
+skips its own check.
 
 ### Generated spec fixture (not committed)
 
