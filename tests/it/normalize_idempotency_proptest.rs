@@ -85,15 +85,32 @@ fn dna(n: std::ops::RangeInclusive<usize>) -> impl Strategy<Value = String> {
 /// homopolymers and short tandems dominate. Length (of the body) clamped to
 /// 6..=40.
 ///
-/// The body is wrapped in fixed `G…C` breaker flanks. `SyntheticBuilder` pads
+/// The body is wrapped in homopolymer breaker flanks. `SyntheticBuilder` pads
 /// the genomic contig with a perfect `ACGT…` tandem, and its base immediately
-/// 5' of the core is `T`, immediately 3' is `A`. A body that starts with `A` or
-/// ends with `T` (common for `ACG`-ish cores) would *continue* that pad tandem,
-/// creating a 256bp+ repeat an edit can 3'-shift into — but only ~100bp per pass
-/// (the normalizer window), which is a window-limited-tandem artifact of the
-/// harness, not a shuffle-logic bug. `G` (!= `A`, and `T`+`G` is no run) and `C`
-/// (!= `T`, and `C`+`A` is no run) break the pad period on both sides, so all
-/// shuffling stays inside the <=42bp core, well within the window.
+/// 5' of the core is `T`, immediately 3' is `A`. Without a breaker, a tract at
+/// the core's edge *continues* that pad tandem, creating a 256bp+ repeat an edit
+/// can shift into — but only ~100bp per pass (the normalizer window), which is a
+/// window-limited-tandem artifact of the harness, not a shuffle-logic bug.
+///
+/// The flanks are `CCCC…` / `…GGGG` (was a single `G`…`C`). The single-base
+/// version only broke a *homopolymer* run against the pad (`T`+`G` is no run,
+/// `C`+`A` is no run) and did NOT stop a **rotational** multi-base unit from
+/// cycling straight through it: a body ending `…CAG` plus the old `C` flank
+/// gives `…CAGC`, and the pad's leading `A` continues the `CAG` cycle. A
+/// debugging session lost real time to exactly that — a "3' non-idempotency"
+/// that turned out to be the normalizer correctly following a tract which had
+/// genuinely leaked into the padding.
+///
+/// A 4-base homopolymer flank closes it: for a phase walk to cross `GGGG` with a
+/// unit of length <= 3, every rotation it visits there must be `G`, i.e. the
+/// minimal unit is the homopolymer `G` — which then stops at the pad's leading
+/// `A`. Symmetrically `CCCC` stops against the pad's trailing `T`. So no tract
+/// of any unit length this strategy can build reaches the padding, and a failure
+/// reported against a generated core is always about the normalizer.
+///
+/// (`repeat_case_strategy` below needs the same property and gets it a different
+/// way — it knows its tract's unit, so it derives the breaker from that unit
+/// directly rather than relying on a fixed flank.)
 fn core_strategy() -> impl Strategy<Value = String> {
     prop::collection::vec((dna(1..=3), 1usize..=5), 2..=5)
         .prop_map(|runs| {
@@ -102,7 +119,7 @@ fn core_strategy() -> impl Strategy<Value = String> {
                 .collect::<String>()
         })
         .prop_filter("body length 6..=40", |s| s.len() >= 6 && s.len() <= 40)
-        .prop_map(|body| format!("G{body}C"))
+        .prop_map(|body| format!("CCCC{body}GGGG"))
 }
 
 /// A core carrying ONE cleanly-bounded tandem tract, plus a `unit[N]` input
@@ -295,6 +312,33 @@ proptest! {
     fn repeat_input_is_idempotent(case in repeat_case_strategy(), dir in both_directions()) {
         check_idempotent(&case, dir)?;
     }
+}
+
+/// Explicit pin for the #1169 multi-base 5'-shift rotation bug (`insCA` emitted
+/// unrotated at the shifted position — a *different haplotype*, not merely a
+/// non-canonical spelling).
+///
+/// Its only coverage was the `bf332dd0…` seed in
+/// `tests/proptest-regressions/normalize_idempotency_proptest.txt`, recorded as
+/// `core: "GTGTGTGTGTGCTCC"`. **Seeds are replayed through the *current*
+/// strategy, not stored cases** — and this PR rewrites `core_strategy`'s flanks
+/// to `CCCC…GGGG`, so no core it can now generate equals that string. The seed
+/// therefore silently stops reproducing this case. Pinning it as a concrete test
+/// makes the coverage immune to any future strategy change.
+///
+/// The odd 11-base `GTGTGTGTGTG` run is the ambiguous-phase shape that made the
+/// rotation matter: inserting `TG` has two equally-valid spellings, and the 5'
+/// path must rotate the inserted bases as it slides rather than carry them
+/// verbatim.
+#[test]
+fn issue_1169_multibase_five_prime_rotation_is_idempotent() {
+    let case = Case {
+        core: "GTGTGTGTGTGCTCC".to_string(),
+        sys: Sys::Genomic,
+        hgvs: "NC_TEST.1:g.267_268insTG".to_string(),
+    };
+    check_idempotent(&case, ShuffleDirection::FivePrime)
+        .expect("#1169 regression: 5' multi-base insertion rotation must be a fixed point");
 }
 
 /// A homopolymer confluence case: a run of `base` of length `run_len`, embedded
