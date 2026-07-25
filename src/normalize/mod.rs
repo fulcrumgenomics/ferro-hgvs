@@ -3210,9 +3210,27 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //   - only when BOTH endpoints are CDS-resident (`start_axis` /
         //     `end_axis` == Cds) so we never reinterpret a variant that already
         //     straddles an axis (those keep the #350 bail above);
-        //   - only del/dup (the spec-clear "most-3' of the reference sequence"
-        //     shapes). Insertions keep the clamp — their re-axing into the 3'UTR
-        //     is governed by the dedicated #387 CDS-end clamp;
+        //   - only del/dup/delins (the spec-clear "most-3' of the reference
+        //     sequence" shapes). Insertions keep the clamp — their re-axing into
+        //     the 3'UTR is governed by the dedicated #387 CDS-end clamp;
+        //
+        //     `Delins` is included because gating on the input's edit-kind
+        //     *spelling* made this relaxation miss its own case (#1185). A
+        //     `delins` whose ref and alt share a prefix or suffix reduces to a
+        //     pure deletion during normalization — `c.7_9delinsA` over ref `AAC`
+        //     is a deletion of `AC` at `c.8_9` — and that deletion is exactly
+        //     the shape this relaxation exists for. Clamped, it stopped at
+        //     `cds_end` on the first pass and shifted only on a second, so
+        //     normalization was not idempotent. The `r.` spelling of the
+        //     byte-identical edit already shifted in one pass, which is what
+        //     showed the clamp (not the shuffle) was at fault.
+        //
+        //     This also relaxes the bound for a `delins` that does NOT reduce,
+        //     which is a slightly wider change than the non-idempotency strictly
+        //     required. That is deliberate and consistent: the 3' rule is stated
+        //     "for all descriptions", and the single-contiguous-sequence argument
+        //     above does not depend on the edit kind. It is also what keeps the
+        //     rule from depending on how a caller happened to spell an edit.
         //   - only the 3'-direction shuffle;
         //   - the bound is relaxed to the **exon** bound, not seq_len, so the
         //     spec's exon/exon exception stays enforced: a 3'UTR intron still
@@ -3222,7 +3240,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if self.config.shuffle_direction == ShuffleDirection::ThreePrime
             && matches!(start_axis, boundary::AxisRegion::Cds)
             && matches!(end_axis, boundary::AxisRegion::Cds)
-            && matches!(edit, NaEdit::Deletion { .. } | NaEdit::Duplication { .. })
+            && matches!(
+                edit,
+                NaEdit::Deletion { .. } | NaEdit::Duplication { .. } | NaEdit::Delins { .. }
+            )
         {
             boundaries = Boundaries::new(boundaries.left, exon_only.right);
         }
