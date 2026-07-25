@@ -440,6 +440,7 @@ fn vps13d_cli_axis_c_and_p_unavailable_n_rendered() {
             AxisOutcome::Unavailable {
                 transcript_id,
                 reason,
+                ..
             } => {
                 assert_eq!(transcript_id.as_deref(), Some(VPS13D_TX));
                 assert!(!reason.is_empty());

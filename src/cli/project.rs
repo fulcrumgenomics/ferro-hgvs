@@ -4,6 +4,7 @@
 
 use crate::error::FerroError;
 use crate::hgvs::variant::HgvsVariant;
+use crate::normalize::NormalizationWarning;
 use crate::project::{VariantProjection, VariantProjector};
 use crate::reference::ReferenceProvider;
 
@@ -42,6 +43,36 @@ impl Axis {
     }
 }
 
+/// A normalization warning raised while projecting, flattened for reporting.
+///
+/// [`NormalizationWarning`] is `#[non_exhaustive]` and implements neither
+/// `PartialEq` nor `Eq`, so it cannot be embedded in [`AxisOutcome`] (which
+/// derives both, and whose equality several tests rely on). Flattening to the
+/// code plus the rendered message keeps those derives and is all the CLI needs
+/// — the code for machine consumers, the message for humans. #1182.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionWarning {
+    /// The warning's stable code (e.g. `POSITION_PAST_END`).
+    pub code: String,
+    /// The rendered, human-readable message.
+    pub message: String,
+}
+
+impl ProjectionWarning {
+    /// Flatten a normalizer warning for reporting.
+    pub fn from_normalization(warning: &NormalizationWarning) -> Self {
+        Self {
+            code: warning.code().to_string(),
+            message: warning.to_string(),
+        }
+    }
+
+    /// Flatten a whole set, in the order the normalizer raised them.
+    pub fn from_normalization_set(warnings: &[NormalizationWarning]) -> Vec<Self> {
+        warnings.iter().map(Self::from_normalization).collect()
+    }
+}
+
 /// The result of selecting one axis from a projection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AxisOutcome {
@@ -49,12 +80,20 @@ pub enum AxisOutcome {
     Rendered {
         transcript_id: String,
         output: String,
+        /// Warnings raised while normalizing the input for this projection.
+        /// Empty when it normalized cleanly. Previously discarded outright, so
+        /// diagnostics such as W4004 (position past the end of the reference)
+        /// could not reach the user from `ferro project` in any configuration.
+        warnings: Vec<ProjectionWarning>,
     },
     /// The axis is legitimately not available (exit 0); carries a reason and,
     /// when known, the transcript the projection was attempted on.
     Unavailable {
         transcript_id: Option<String>,
         reason: String,
+        /// Warnings raised before the axis turned out to be unavailable. An
+        /// unavailable axis can still have produced diagnostics worth showing.
+        warnings: Vec<ProjectionWarning>,
     },
 }
 
@@ -98,14 +137,21 @@ pub fn select_axis(projection: &VariantProjection, axis: Axis) -> AxisOutcome {
         Axis::Rna => &projection.rna,
     };
     let tx = projection.transcript_id.clone();
+    // #1182: the projection's normalization warnings were read off nowhere and
+    // dropped here, which is what made W4004 (and every other normalizer
+    // diagnostic) structurally unreachable from `ferro project`. Carry them onto
+    // both outcomes.
+    let warnings = ProjectionWarning::from_normalization_set(&projection.normalization_warnings);
     match field {
         Some(v) => AxisOutcome::Rendered {
             transcript_id: tx,
             output: v.to_string(),
+            warnings,
         },
         None => AxisOutcome::Unavailable {
             transcript_id: Some(tx),
             reason: format!("no {}. representation for this variant", axis.code()),
+            warnings,
         },
     }
 }
@@ -152,6 +198,8 @@ pub fn project_axis<P: ReferenceProvider + Clone>(
         Err(e) if engine_error_is_unavailable(&e) => Ok(AxisOutcome::Unavailable {
             transcript_id: Some(input_tx),
             reason: e.to_string(),
+            // The projection never completed, so there is no warning set to carry.
+            warnings: Vec::new(),
         }),
         Err(e) => Err(ProjectCliError(e.to_string())),
     }
@@ -188,6 +236,8 @@ fn project_axis_genomic<P: ReferenceProvider + Clone>(
         Err(e) if engine_error_is_unavailable(&e) => Ok(AxisOutcome::Unavailable {
             transcript_id: Some(requested.to_string()),
             reason: e.to_string(),
+            // The projection never completed, so there is no warning set to carry.
+            warnings: Vec::new(),
         }),
         Err(e) => Err(ProjectCliError(e.to_string())),
     }
@@ -275,6 +325,60 @@ mod tests {
         }
     }
 
+    /// #1182: `select_axis` must carry the projection's normalization warnings
+    /// onto the outcome. They were previously read by nobody, which is what made
+    /// W4004 structurally unreachable from `ferro project`.
+    #[test]
+    fn select_axis_carries_warnings_onto_a_rendered_outcome() {
+        let mut proj = projection_with(Some("NC_000017.11:g.50198003C>A"), None);
+        proj.normalization_warnings = vec![NormalizationWarning::PositionPastEnd {
+            accession: "NM_000088.3".to_string(),
+            coordinate_system: "c".to_string(),
+            position: "c.-238".to_string(),
+            bound_kind: "5utr-start".to_string(),
+            bound_value: 237,
+        }];
+        match select_axis(&proj, Axis::Genomic) {
+            AxisOutcome::Rendered { warnings, .. } => {
+                assert_eq!(warnings.len(), 1, "the warning must survive selection");
+                assert_eq!(warnings[0].code, "POSITION_PAST_END");
+            }
+            other => panic!("expected Rendered, got {other:?}"),
+        }
+    }
+
+    /// The unavailable arm matters as much: an axis can be unavailable *because*
+    /// of what the warning describes, so dropping it there would discard the
+    /// explanation exactly when it is most useful.
+    #[test]
+    fn select_axis_carries_warnings_onto_an_unavailable_outcome() {
+        let mut proj = projection_with(None, None);
+        proj.normalization_warnings = vec![NormalizationWarning::PositionPastEnd {
+            accession: "NM_000088.3".to_string(),
+            coordinate_system: "c".to_string(),
+            position: "c.-238".to_string(),
+            bound_kind: "5utr-start".to_string(),
+            bound_value: 237,
+        }];
+        match select_axis(&proj, Axis::Genomic) {
+            AxisOutcome::Unavailable { warnings, .. } => {
+                assert_eq!(warnings.len(), 1);
+                assert_eq!(warnings[0].code, "POSITION_PAST_END");
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    /// A clean projection must not grow a spurious diagnostic.
+    #[test]
+    fn select_axis_carries_no_warnings_for_a_clean_projection() {
+        let proj = projection_with(Some("NC_000017.11:g.50198003C>A"), None);
+        match select_axis(&proj, Axis::Genomic) {
+            AxisOutcome::Rendered { warnings, .. } => assert!(warnings.is_empty()),
+            other => panic!("expected Rendered, got {other:?}"),
+        }
+    }
+
     #[test]
     fn select_axis_renders_present_field() {
         let proj = projection_with(Some("NC_000017.11:g.50198003C>A"), None);
@@ -284,6 +388,7 @@ mod tests {
             AxisOutcome::Rendered {
                 transcript_id: "NM_000088.3".to_string(),
                 output: "NC_000017.11:g.50198003C>A".to_string(),
+                warnings: Vec::new(),
             }
         );
     }
@@ -296,6 +401,7 @@ mod tests {
             AxisOutcome::Unavailable {
                 transcript_id,
                 reason,
+                ..
             } => {
                 assert_eq!(transcript_id.as_deref(), Some("NM_000088.3"));
                 assert!(reason.contains("protein") || reason.contains("p."));
@@ -362,6 +468,7 @@ mod tests {
             AxisOutcome::Rendered {
                 transcript_id,
                 output,
+                ..
             } => {
                 assert_eq!(transcript_id, "NM_TEST.1");
                 assert!(output.starts_with("NP_TEST.1:p."), "got {output}");
@@ -427,6 +534,7 @@ mod tests {
             AxisOutcome::Rendered {
                 transcript_id,
                 output,
+                ..
             } => {
                 assert_eq!(transcript_id, "NM_TEST.1");
                 assert!(output.contains(":c."), "got {output}");
