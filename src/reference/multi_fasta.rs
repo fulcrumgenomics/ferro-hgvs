@@ -77,8 +77,6 @@ use crate::reference::transcript::Transcript;
 struct FastaIndexEntry {
     /// Path to the FASTA file containing this sequence
     file_path: PathBuf,
-    /// Sequence name/accession
-    name: String,
     /// Length of the sequence
     length: u64,
     /// Byte offset to the start of sequence data
@@ -1335,6 +1333,7 @@ impl MultiFastaProvider {
     /// Get a sequence from the appropriate FASTA file
     fn get_sequence_from_index(
         &self,
+        name: &str,
         entry: &FastaIndexEntry,
         start: u64,
         end: u64,
@@ -1344,7 +1343,7 @@ impl MultiFastaProvider {
             return Err(FerroError::InvalidCoordinates {
                 msg: format!(
                     "Start position {} exceeds sequence length {} for {}",
-                    start, entry.length, entry.name
+                    start, entry.length, name
                 ),
             });
         }
@@ -1409,7 +1408,7 @@ impl MultiFastaProvider {
         // already-uppercase bytes. The `from_utf8` validity check is O(n)
         // but extremely fast for short-ASCII inputs and doesn't reallocate.
         let sequence = String::from_utf8(sequence_bytes).map_err(|e| FerroError::Io {
-            msg: format!("FASTA contains non-UTF8 bytes for {}: {}", entry.name, e),
+            msg: format!("FASTA contains non-UTF8 bytes for {}: {}", name, e),
         })?;
         Ok(sequence)
     }
@@ -2238,7 +2237,7 @@ impl MultiFastaProvider {
         if let Some(resolved) = self.resolve_name(id) {
             if let Some(entry) = self.index.get(&resolved) {
                 // Get the full sequence
-                let sequence = self.get_sequence_from_index(entry, 0, entry.length)?;
+                let sequence = self.get_sequence_from_index(&resolved, entry, 0, entry.length)?;
 
                 // Try to get metadata from cdot
                 let meta = if let Some(ref cdot) = self.cdot_mapper {
@@ -3074,7 +3073,7 @@ impl ReferenceProvider for MultiFastaProvider {
             .get(&resolved)
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })?;
 
-        self.get_sequence_from_index(entry, start, end)
+        self.get_sequence_from_index(&resolved, entry, start, end)
     }
 
     fn get_genomic_sequence(
@@ -3102,7 +3101,7 @@ impl ReferenceProvider for MultiFastaProvider {
                     end,
                 })?;
 
-        self.get_sequence_from_index(entry, start, end)
+        self.get_sequence_from_index(&resolved, entry, start, end)
     }
 
     fn has_genomic_data(&self) -> bool {
@@ -3144,7 +3143,7 @@ impl ReferenceProvider for MultiFastaProvider {
                 end,
             }
         })?;
-        self.get_sequence_from_index(entry, start, end)
+        self.get_sequence_from_index(accession, entry, start, end)
     }
 
     fn has_protein_data(&self) -> bool {
@@ -3230,7 +3229,6 @@ fn load_fai_index<P: AsRef<Path>>(
 
         let entry = FastaIndexEntry {
             file_path: fasta_path.clone(),
-            name: name.clone(),
             length,
             offset,
             line_bases,
@@ -5679,9 +5677,8 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
 
     #[test]
     fn build_base_to_versioned_picks_highest_version_deterministically() {
-        let entry = |name: &str| FastaIndexEntry {
+        let entry = |_name: &str| FastaIndexEntry {
             file_path: PathBuf::from("x.fna"),
-            name: name.to_string(),
             length: 1,
             offset: 0,
             line_bases: 1,
