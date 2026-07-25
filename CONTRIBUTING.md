@@ -88,23 +88,35 @@ cargo bench                              # Benchmarks
 `tests/fixtures/grammar/hgvs_spec_normalization.json` pins ferro's current
 `normalize()` output for every variant string in the HGVS v21.0 spec
 (vendored at `assets/hgvs-nomenclature/`). The companion test
-`tests/hgvs_spec_normalization_tests.rs` fails any time a row's observed
+`tests/it/hgvs_spec_normalization_tests.rs` fails any time a row's observed
 output drifts from the recorded `current`.
 
 If your PR changes any normalization output:
 
-1. Make sure the vendored spec submodule is checked out, then regenerate
-   the fixture:
+1. Make sure the vendored spec submodule is checked out, snapshot the current
+   fixture, then regenerate it:
 
    ```bash
    git submodule update --init assets/hgvs-nomenclature
+   # The fixture is a gitignored build artifact, so `git diff` will never show
+   # your change. Snapshot the existing copy first — it is the baseline step 2
+   # compares against. (On a fresh worktree there is nothing to snapshot;
+   # regenerate on `main` first if you want a baseline.)
+   cp tests/fixtures/grammar/hgvs_spec_normalization.json /tmp/spec-fixture-before.json
    cargo run --features dev --example generate_spec_fixture
    ```
 
-2. Inspect the diff. For each changed row, verify the new `current` against
-   the v21.0 spec text under `assets/hgvs-nomenclature/docs/recommendations/`.
-   When ferro's new output now matches the spec's canonical form, that row
-   should also have `current == spec_expected` after regen.
+2. Inspect the change against that snapshot — not `git diff`, which shows
+   nothing for an untracked file:
+
+   ```bash
+   diff -u /tmp/spec-fixture-before.json tests/fixtures/grammar/hgvs_spec_normalization.json
+   ```
+
+   For each changed row, verify the new `current` against the v21.0 spec text
+   under `assets/hgvs-nomenclature/docs/recommendations/`. When ferro's new
+   output now matches the spec's canonical form, that row should also have
+   `current == spec_expected` after regen.
 
 3. If a row's spec-canonical form differs from the input string (a "pair" — e.g.
    spec input `c.79GC>TT` is canonicalized to `c.79_80delinsTT`), record the
@@ -172,17 +184,32 @@ v21.0 spec. Re-validate them whenever bumping the spec submodule (see step 5).
 For a row that needs a different accession, set `input_prefixed` in the
 override file.
 
-4. CI verifies byte-identical regeneration via:
+4. CI regenerates the fixture rather than diffing it, because the fixture is a
+   gitignored build artifact with no committed baseline. The generation run is
+   itself the guard: it harvests the spec checkout and resolves every curated
+   override against it, so a stale override fails the build.
+
+   ```bash
+   cargo run --features dev --example generate_spec_fixture
+   ```
+
+   The pre-push hook runs the same command for the same reason. `--check` is a
+   local convenience answering a different question — "is my artifact current?"
+   — and is never a gate:
 
    ```bash
    cargo run --features dev --example generate_spec_fixture -- --check
    ```
 
+   (Contrast the tool-support tables below, whose outputs *are* committed. There
+   `--check` is the right gate, and CI uses it.)
+
 5. To bump the spec to a newer upstream version:
    - update the submodule pointer under `assets/hgvs-nomenclature/`
      (`git -C assets/hgvs-nomenclature checkout <new-tag>`)
    - re-validate the default-prefix table above against the new spec corpus
-   - regenerate the fixture and review the diff
+   - regenerate the fixture and review the change against a snapshot (step 2 —
+     the artifact is untracked, so `git diff` shows nothing)
 
 ## Tool-support comparison tables
 

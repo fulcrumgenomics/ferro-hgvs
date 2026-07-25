@@ -5,7 +5,10 @@
 //! diverges from `spec_expected` carry a `todo` link to the #83 audit.
 //!
 //! Regenerate the fixture: `cargo run --features dev --example generate_spec_fixture`.
-//! Verify byte-identical regen:    `cargo run --features dev --example generate_spec_fixture -- --check`.
+//! That run is also the guard on the committed overrides, and is what CI and the
+//! pre-push hook use. Adding `-- --check` instead asks only whether the local
+//! (gitignored) artifact is current — useful for spotting whether a code change
+//! moved the fixture, never a gate.
 
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::{parse_hgvs, Normalizer};

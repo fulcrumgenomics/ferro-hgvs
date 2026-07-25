@@ -58,7 +58,11 @@ cargo run --features dev --example generate_spec_fixture            # (re)genera
 cargo run --features dev --example generate_spec_fixture -- --output <path>   # write elsewhere
 ```
 
-The two tests that read it (`tests/idempotency_tests.rs`, `tests/hgvs_spec_normalization_tests.rs`) call a shared helper (`tests/common/spec_fixture.rs`) that regenerates it on demand if missing, so a fresh `cargo test` "just works" (one-time generation). CI regenerates it explicitly before the test run. Requires the `assets/hgvs-nomenclature` submodule (`git submodule update --init`); without it the generator errors with `overrides reference unknown inputs`.
+The tests that read it (`tests/it/hgvs_spec_normalization_tests.rs`, `tests/it/idempotency_tests.rs`, `tests/it/mito_circular_audit.rs`, `tests/it/protein_silent_eq.rs`, `tests/it/protein_unknown_roundtrip.rs`) call a shared helper (`tests/it/common/spec_fixture.rs`) that regenerates it on demand if missing, so a fresh `cargo test` "just works" (one-time generation). CI and the pre-push hook regenerate it explicitly before the test run — plain generation, not `--check`, because generation is what validates the committed overrides against the spec checkout.
+
+Requires the `assets/hgvs-nomenclature` submodule (`git submodule update --init assets/hgvs-nomenclature`); without it the generator fails with `no HGVS strings harvested from …`, naming that command.
+
+`--check` answers a different question — "is my local artifact current?" — and is not a gate: an absent artifact is generated rather than reported as drift, since a gitignored file has no committed baseline to drift from. Use it when you want to know whether a code change moved the fixture.
 
 Because the fixture is no longer in git, per-PR `parse-error → preserved` status transitions are reviewed via the PR description and the accompanying test/parser changes, not a committed diff.
 

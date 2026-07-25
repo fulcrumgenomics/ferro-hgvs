@@ -84,6 +84,29 @@ pub mod sources {
             }
         }
         all.extend(extract_from_syntax_yaml(spec_dir)?);
+
+        // Precondition, checked here so no caller can forget it: everything
+        // gathered so far came out of `spec_dir`, so an empty `all` means the
+        // spec checkout yielded nothing — in practice an uninitialised
+        // `assets/hgvs-nomenclature` submodule.
+        //
+        // This guard must sit BEFORE `ported_legacy_probes()`, which is
+        // compiled in rather than harvested and would otherwise mask the
+        // condition. Without it the failure surfaced much later and pointed at
+        // the wrong file: `build_rows` validates the curated overrides against
+        // the harvested inputs, so every override key looked unresolvable and
+        // the generator reported `overrides reference unknown inputs (typo or
+        // spec drift)` — accusing a committed, correct file of being stale when
+        // the real cause was an empty directory.
+        if all.is_empty() {
+            anyhow::bail!(
+                "no HGVS strings harvested from {} — the spec checkout is empty.\n\
+                 If that path is the vendored submodule, initialise it:\n    \
+                 git submodule update --init assets/hgvs-nomenclature",
+                spec_dir.display()
+            );
+        }
+
         all.extend(ported_legacy_probes());
         Ok(all)
     }

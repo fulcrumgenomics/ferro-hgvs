@@ -4,10 +4,15 @@
 //! extracts every HGVS string, runs each through ferro's `Normalizer`, merges
 //! hand overrides, and writes `tests/fixtures/grammar/hgvs_spec_normalization.json`.
 //!
-//! Two modes:
-//!   - default:  regenerate the fixture in-place
-//!   - --check:  regenerate in-memory and exit non-zero if the on-disk fixture
-//!     differs (used in CI to catch drift)
+//! Two modes, answering two different questions:
+//!   - default:  regenerate the fixture in-place. This is the run that
+//!     **validates the committed inputs** — it harvests the spec checkout and
+//!     resolves every curated override against it — which is why CI and the
+//!     pre-push hook use it rather than `--check`.
+//!   - --check:  is the *local* artifact current? Exits non-zero only when an
+//!     existing fixture differs from a fresh render. An absent fixture is a cold
+//!     cache, not drift (the file is gitignored, so there is no committed
+//!     baseline), and is simply generated.
 //!
 //! Run: `cargo run --features dev --example generate_spec_fixture`
 //! Check: `cargo run --features dev --example generate_spec_fixture -- --check`
@@ -42,8 +47,10 @@ struct Cli {
     )]
     output: PathBuf,
 
-    /// Check that the on-disk fixture is byte-identical to a fresh regeneration.
-    /// Exits 1 on mismatch. Does not modify the file.
+    /// Is the local fixture current? Exits 1 when an existing fixture differs
+    /// from a fresh render, leaving it in place for inspection. An absent
+    /// fixture is generated, not treated as a failure: the file is gitignored,
+    /// so "never built" is a cold cache rather than drift.
     #[arg(long)]
     check: bool,
 }
@@ -66,15 +73,7 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let rendered = render::render(&rows, &cli.spec_dir)?;
 
     if cli.check {
-        let on_disk = std::fs::read_to_string(&cli.output)
-            .map_err(|e| anyhow::anyhow!("read {}: {e}", cli.output.display()))?;
-        if on_disk != rendered {
-            eprintln!(
-                "fixture {} is out of date; rerun: cargo run --features dev --example generate_spec_fixture",
-                cli.output.display()
-            );
-            return Err(anyhow::anyhow!("fixture out of date"));
-        }
+        check_up_to_date(&cli.output, &rendered, "fixture", "generate_spec_fixture")?;
     } else {
         std::fs::write(&cli.output, rendered)?;
     }
@@ -84,6 +83,10 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
 #[path = "common/spec_harvest.rs"]
 mod spec_harvest;
 
+#[path = "common/generated_artifact.rs"]
+mod generated_artifact;
+
+use generated_artifact::check_up_to_date;
 use spec_harvest::{classify, prefix, sources};
 
 // ---------- overrides ----------

@@ -19,32 +19,42 @@ repos:
         types: [rust]
         pass_filenames: false
 
-      # Spec-fixture drift guard (#397 item 7). CI already runs this
-      # check (search for `generate_spec_fixture --check` in
-      # `.github/workflows/ci.yml`), but a push that drifts the
-      # fixture wastes a full CI cycle to discover the drift. The
-      # pre-push stage runs once per `git push` rather than per
-      # commit, so the build cost is paid only when actually pushing.
-      - id: generate-spec-fixture-check
-        name: generate_spec_fixture --check
-        entry: cargo run --features dev --example generate_spec_fixture -- --check
+      # Spec-input guard (#397 item 7). What is worth catching before a push is
+      # a change to the COMMITTED inputs — the spec submodule and the curated
+      # overrides files — since a broken override wastes a full CI cycle to
+      # discover. Plain generation is exactly that guard: it harvests the spec
+      # checkout and resolves every override against it. So these hooks run the
+      # same commands CI runs (see "Generate HGVS v21.0 spec fixture" in
+      # `.github/workflows/ci.yml`), not `--check`.
+      #
+      # `--check` is deliberately NOT used here. It answers a different
+      # question — "is my local artifact current?" — about a gitignored build
+      # artifact whose staleness has no bearing on what is being pushed, and CI
+      # regenerates it from scratch regardless. Gating a push on it also made a
+      # fresh worktree unpushable, because the artifact does not exist yet.
+      #
+      # The pre-push stage runs once per `git push` rather than per commit, so
+      # the build cost is paid only when actually pushing.
+      - id: generate-spec-fixture
+        name: generate_spec_fixture
+        entry: cargo run --features dev --example generate_spec_fixture
         language: system
         # always_run (not types: [rust]) — a push that only touches the
-        # spec submodule or test fixtures still needs the drift guard,
-        # and pre-commit otherwise skips type-filtered hooks when no
-        # matching files are staged in the push range.
+        # spec submodule or the overrides file still needs the guard, and
+        # pre-commit otherwise skips type-filtered hooks when no matching
+        # files are staged in the push range.
         always_run: true
         pass_filenames: false
         stages: [pre-push]
 
-      # Same drift guard for the spec test enumeration. The generator reads
-      # hgvs_spec_normalization.json (a gitignored build artifact, absent on a
-      # fresh checkout) for deduplication, so bootstrap that fixture first —
-      # otherwise --check aborts with "read ...: No such file" instead of a
-      # drift verdict. Generating it in-place is cheap and idempotent.
-      - id: generate-spec-enumeration-check
-        name: generate_spec_enumeration --check
-        entry: bash -c 'cargo run --features dev --example generate_spec_fixture && cargo run --features dev --example generate_spec_enumeration -- --check'
+      # Same guard for the spec test enumeration. Its generator reads
+      # hgvs_spec_normalization.json for deduplication; that input is satisfied
+      # by the hook above, because pre-commit runs hooks in declared order. The
+      # ordering IS the dependency declaration — previously it was hand-rolled
+      # as a `bash -c` chain that re-invoked the fixture generator.
+      - id: generate-spec-enumeration
+        name: generate_spec_enumeration
+        entry: cargo run --features dev --example generate_spec_enumeration
         language: system
         always_run: true
         pass_filenames: false
