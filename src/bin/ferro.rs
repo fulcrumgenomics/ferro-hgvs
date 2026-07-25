@@ -1468,7 +1468,14 @@ fn run_normalize(
     use std::time::Instant;
 
     let preprocessor = error_config.preprocessor();
-    let config = NormalizeConfig::default().with_direction(parse_shuffle_direction(direction));
+    // #1181: the error configuration must reach the *normalizer*, not just the
+    // preprocessor. `NormalizeConfig::default()` is lenient by construction, so
+    // without this every `--error-mode` (and every `--ignore`/`--reject`
+    // override, which `build_error_config` folds into the same `ErrorConfig`)
+    // was silently discarded and all modes behaved as lenient.
+    let config = NormalizeConfig::default()
+        .with_direction(parse_shuffle_direction(direction))
+        .with_error_config(error_config.clone());
 
     // Create reference provider from directory
     let provider = create_reference_provider(reference.map(|p| p.as_path()), strict_reference)?;
