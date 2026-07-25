@@ -352,6 +352,7 @@ impl MultiFastaProvider {
         }
 
         let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
+        let mut fai_files_parsed: usize = 0;
 
         // Find all FASTA files with indexes
         let entries = std::fs::read_dir(dir).map_err(|e| FerroError::Io {
@@ -391,6 +392,7 @@ impl MultiFastaProvider {
                     for (name, entry) in file_index {
                         index.insert(name, entry);
                     }
+                    fai_files_parsed += 1;
                 }
             }
         }
@@ -407,7 +409,7 @@ impl MultiFastaProvider {
         eprintln!(
             "Loaded {} sequences from {} FASTA files",
             index.len(),
-            count_unique_files(&index)
+            fai_files_parsed
         );
 
         Ok(Self {
@@ -3252,12 +3254,6 @@ fn is_bare_lrg_genomic_accession(name: &str) -> bool {
         Some(digits) => !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()),
         None => false,
     }
-}
-
-/// Count unique files in the index
-fn count_unique_files(index: &FxHashMap<String, FastaIndexEntry>) -> usize {
-    let files: std::collections::HashSet<_> = index.values().map(|e| &e.file_path).collect();
-    files.len()
 }
 
 /// Build chromosome name aliases
