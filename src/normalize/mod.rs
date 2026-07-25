@@ -5169,15 +5169,35 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Boundaries::new(0, transcript.sequence_length())
         };
 
-        // Perform normalization (RNA context: codon-frame gate does not apply;
-        // r. is not in the spec's accepted reference types for repeats).
         // Coordinate-only transcripts fall back to the canonicalize-only path.
         let seq = match transcript.sequence.as_deref() {
             Some(s) => s.as_bytes(),
             None => return Ok((HV::Rna(variant.clone()), vec![])),
         };
+
+        // #1192: the codon-frame gate applies on `r.` exactly as it does on
+        // `c.`. `RNA/repeated.md` L24-27 states the restriction for an RNA
+        // reference in the same terms `DNA/repeated.md` uses:
+        //   > using a coding RNA reference sequence, a repeated sequence
+        //   > variant description can be used only for repeat units with a
+        //   > length which is a multiple of 3 [...] This restriction only
+        //   > applies to the coding sequence, which does not include the UTR
+        //   > sequence.
+        // and gives `NM_024312.4:r.2686a[10]` as an explicit counter-example.
+        // (The previous comment here asserted that `r.` is not an accepted
+        // reference type for repeats, which that page contradicts.)
+        //
+        // The condition mirrors `normalize_cds` exactly — deliberately, since
+        // `r.` on a coding transcript is CDS-relative, i.e. the same axis as
+        // `c.` (#469). `cds_info` is `None` for a non-coding transcript, which
+        // has no reading frame to preserve, and a footprint touching either UTR
+        // falls outside `cds_start..=cds_end` and is exempt by the carve-out.
+        let is_coding = match cds_info {
+            Some((cds_start, cds_end)) => tx_start >= cds_start && tx_end <= cds_end,
+            None => false,
+        };
         let (new_tx_start, new_tx_end, new_edit, mut warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
+            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, is_coding)?;
 
         // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
         // substitutions are validated-then-returned-unchanged by
