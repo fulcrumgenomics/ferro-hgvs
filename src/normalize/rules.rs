@@ -1803,9 +1803,17 @@ pub fn normalize_repeat(
         } else {
             // 1-unit reduction, full tract removal, or codon-frame-gated → deletion
             // (HGVS prioritization: deletion outranks unranked repeat[0])
+            //
+            // Removing any `k` copies of a pure tandem unit yields the same
+            // haplotype, so the direction rule picks which copies are named: the
+            // 3'-most under `ThreePrime`, the 5'-most under `FivePrime`. Naming
+            // the 3'-most copies unconditionally made the emitted `del` a
+            // non-fixed-point under 5' (it re-shuffled to the 5'-most slot).
             let del_len = (k as usize) * unit_len as usize;
-            let del_end_idx = ref_end - 1;
-            let del_start_idx = ref_end - del_len;
+            let (del_start_idx, del_end_idx) = match direction {
+                ShuffleDirection::ThreePrime => (ref_end - del_len, ref_end - 1),
+                ShuffleDirection::FivePrime => (ref_start, ref_start + del_len - 1),
+            };
             RepeatNormResult::Deletion {
                 start: index_to_hgvs_pos(del_start_idx),
                 end: index_to_hgvs_pos(del_end_idx),
@@ -1814,10 +1822,17 @@ pub fn normalize_repeat(
     } else if specified_count == ref_count + 1 {
         // Convert to duplication - we're adding exactly one copy.
         // dup is always permitted; the spec exception only forbids `[N]`.
-        // The duplicated region is the last copy in the reference.
-        // ref_end is exclusive, so last position is ref_end - 1
-        let dup_end_idx = ref_end - 1;
-        let dup_start_idx = ref_end - canonical_unit.len();
+        //
+        // Duplicating any one copy of a pure tandem unit yields the same
+        // haplotype, so the direction rule picks which copy is named: the last
+        // (3'-most) under `ThreePrime`, the first (5'-most) under `FivePrime`.
+        // Naming the last copy unconditionally made the emitted `dup` a
+        // non-fixed-point under 5' (it re-shuffled to the 5'-most slot).
+        // `ref_end` is exclusive, so the tract's last position is `ref_end - 1`.
+        let (dup_start_idx, dup_end_idx) = match direction {
+            ShuffleDirection::ThreePrime => (ref_end - canonical_unit.len(), ref_end - 1),
+            ShuffleDirection::FivePrime => (ref_start, ref_start + canonical_unit.len() - 1),
+        };
         RepeatNormResult::Duplication {
             start: index_to_hgvs_pos(dup_start_idx),
             end: index_to_hgvs_pos(dup_end_idx),
@@ -1829,14 +1844,27 @@ pub fn normalize_repeat(
     } else if codon_blocks_repeat {
         // Expansion of >=2 copies in c. with non-codon-aligned unit: spec
         // mandates `ins<literal>` form (e.g., c.1741_1742insTATATATA), not
-        // `[N]`. Insertion point is between the last base of the reference
-        // tract (ref_end - 1, 0-based) and the next base (ref_end).
+        // `[N]`.
+        //
+        // Adding the copies at either end of a pure tandem tract yields the same
+        // haplotype, so the direction rule picks the flank the insertion is named
+        // against: the 3' flank (between `ref_end - 1` and `ref_end`) under
+        // `ThreePrime`, the 5' flank (between `ref_start - 1` and `ref_start`)
+        // under `FivePrime`. Naming the 3' flank unconditionally made the emitted
+        // `ins` a non-fixed-point under 5' (it re-shuffled to the 5' flank).
+        //
+        // A tract flush against the sequence start (`ref_start == 0`) has no 5'
+        // flank base to name, so it keeps the 3' flank; that is the transcript-
+        // start boundary case the CDS-start clamp in `normalize_na_edit` owns.
         let added_copies = specified_count - ref_count;
         let mut inserted = Vec::with_capacity((added_copies as usize) * canonical_unit.len());
         for _ in 0..added_copies {
             inserted.extend_from_slice(canonical_unit);
         }
-        let flank_left = index_to_hgvs_pos(ref_end - 1);
+        let flank_left = match direction {
+            ShuffleDirection::FivePrime if ref_start > 0 => index_to_hgvs_pos(ref_start - 1),
+            _ => index_to_hgvs_pos(ref_end - 1),
+        };
         let flank_right = flank_left + 1;
         RepeatNormResult::Insertion {
             start: flank_left,
