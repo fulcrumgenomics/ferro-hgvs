@@ -33,6 +33,7 @@ mod bracket_cardinality_conformance;
 mod breakpoint_insertion;
 mod build_transcript_library_parity;
 mod bulk_fixture_tests;
+mod cds_utr3_crossing_shift_idempotency;
 mod civic_validation;
 mod cli_build_transcript;
 mod cli_check_transcripts_json;

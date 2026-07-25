@@ -4,8 +4,20 @@
 //! The pre-existing idempotency coverage is reference-free (empty provider, so
 //! nothing shifts) or substitution-only (subs never shift). This fuzzes random
 //! **repeat-biased** cores (homopolymers + short tandems, where del/dup/ins
-//! actually 3'-shift) across the genomic and CDS (both strands) coordinate
-//! systems, and every edit type, asserting `norm(norm(x)) == norm(x)`.
+//! actually 3'-shift) across `g.`, `c.`, `n.`, and `r.` — the last on a coding
+//! *and* a non-coding transcript, which are two different axes — each
+//! transcript axis on both strands, and every edit kind (`del`, `dup`, `ins`,
+//! `delins`, `inv`, `con`), asserting `norm(norm(x)) == norm(x)`. `c.` likewise
+//! appears twice: once where the transcript *is* the CDS, and once on a
+//! UTR-bearing transcript, where alone a shift can cross `cds_end` into `*N`.
+//!
+//! `case_strategy_covers_every_system_and_edit_kind` is the non-vacuity guard:
+//! it samples the strategy and fails if any (coordinate system x edit kind)
+//! cell is empty, so the property above cannot quietly stop exercising an axis.
+//!
+//! Scope: **normalization only**. Nothing here goes through `VariantProjector`,
+//! which reads the `r.` axis as transcript-relative rather than CDS-relative
+//! (issue #1177) and would fail for that unrelated reason.
 //!
 //! Three properties are fuzzed:
 //!   * `norm(norm(x)) == norm(x)` (idempotency), covering the full edit/coord
@@ -37,9 +49,10 @@
 //! failing first-pass normalize is a bug in the generator or the normalizer and
 //! fails the test rather than silently shrinking the exercised set. Failure
 //! seeds are recorded by proptest under
-//! `tests/it/proptest-regressions/normalize_idempotency_proptest.txt`.
+//! `tests/proptest-regressions/normalize_idempotency_proptest.txt` (proptest
+//! anchors that directory at the crate's `tests/`, not at this module's dir).
 
-use crate::common::synthetic::{SyntheticBuilder, PAD_OFFSET};
+use crate::common::synthetic::{padded, SyntheticBuilder, PAD_OFFSET};
 use ferro_hgvs::reference::transcript::Strand;
 use ferro_hgvs::{parse_hgvs, MockProvider, NormalizeConfig, Normalizer, ShuffleDirection};
 use proptest::prelude::*;
@@ -59,14 +72,121 @@ fn both_directions() -> impl Strategy<Value = ShuffleDirection> {
     ])
 }
 
-/// Coordinate system under test. All use `cds_start == 1` / `cds_end == len`
-/// for the CDS cases so `c.k` maps directly to core position `k` and both
-/// transcript boundaries are exercised.
+/// Coordinate system under test.
+///
+/// Every variant is arranged so that **core position `p` is rendered as
+/// position `p`** on its own axis (genomic positions additionally carry
+/// [`PAD_OFFSET`]), which is what lets one generator emit valid coordinates for
+/// all of them from a single core length.
+///
+/// The `r.` axis appears twice on purpose, because its meaning depends on the
+/// transcript it sits on (HGVS `background/numbering.md` L58/L61, issue #469,
+/// pinned by `issue_291_rna_axis_convention`):
+///
+/// - on a **coding** transcript `r.` is **CDS-relative** — literally the same
+///   axis as `c.`, so `r.N` and `c.N` name the same base;
+/// - on a **non-coding** transcript there is no CDS, so `r.` coincides with
+///   `n.` (transcript-relative).
+///
+/// The `r.` systems therefore share fixtures with their same-axis twins:
+/// [`Sys::RnaNoncodingPlus`] uses the very `NR_TEST.1` provider
+/// [`Sys::NoncodingPlus`] uses, and [`Sys::RnaCodingPlus`] uses a coding
+/// `NM_TEST.1` provider whose `c.` spelling would be the same axis.
 #[derive(Debug, Clone, Copy)]
 enum Sys {
+    /// `g.` on the padded contig `NC_TEST.1`.
     Genomic,
+    /// `c.` on `NM_TEST.1` where the transcript *is* the CDS
+    /// (`cds_start == 1`), so the CDS translation is the identity and both
+    /// transcript boundaries are exercised.
     CdsPlus,
+    /// Minus-strand twin of [`Sys::CdsPlus`].
     CdsMinus,
+    /// `n.` on the non-coding `NR_TEST.1` — transcript-relative.
+    NoncodingPlus,
+    /// Minus-strand twin of [`Sys::NoncodingPlus`].
+    NoncodingMinus,
+    /// `r.` on a **coding** `NM_TEST.1` that carries a real
+    /// [`PAD_OFFSET`]-base 5'UTR *and* 3'UTR, so `cds_start == PAD_OFFSET + 1`:
+    /// CDS-relative, the same axis as `c.`. The 5'UTR is what gives this teeth
+    /// — with `cds_start == 1` the CDS-relative and transcript-relative
+    /// readings coincide and the axis would go untested — and the 3'UTR lets
+    /// a 3'-shift cross `cds_end` into `*N`, which does happen here and is
+    /// idempotent on this axis.
+    RnaCodingPlus,
+    /// Minus-strand twin of [`Sys::RnaCodingPlus`].
+    RnaCodingMinus,
+    /// `r.` on the **non-coding** `NR_TEST.1`: no CDS, so transcript-relative,
+    /// coinciding with [`Sys::NoncodingPlus`].
+    RnaNoncodingPlus,
+    /// Minus-strand twin of [`Sys::RnaNoncodingPlus`].
+    RnaNoncodingMinus,
+    /// `c.` on the same 5'UTR- *and* 3'UTR-bearing `NM_TEST.1` fixture
+    /// [`Sys::RnaCodingPlus`] uses — the `c.` spelling of that identical axis.
+    ///
+    /// Distinct from [`Sys::CdsPlus`], where `cds_start == 1` leaves no UTR on
+    /// either side: only here can a 3'-shift run off `cds_end` into `*N`. That
+    /// shape was non-idempotent until #1185/#1192 (fixed by #1189) and #1209
+    /// (fixed by #1211), which is why these two systems were held out until now.
+    CdsUtr3Plus,
+    /// Minus-strand twin of [`Sys::CdsUtr3Plus`].
+    CdsUtr3Minus,
+}
+
+/// Every coordinate system the generator draws from. Also drives the
+/// non-vacuity histogram in
+/// `case_strategy_covers_every_system_and_edit_kind`, so a system added here
+/// without the generator actually emitting it fails that test.
+///
+/// `CdsUtr3*` — `c.` on a transcript with a 3'UTR — was held out of this list
+/// while a 3'-shift crossing `cds_end` into `*N` was non-idempotent there. Two
+/// distinct defects caused that, both now fixed: the `dup`/`delins`/`con`
+/// family (#1185, fixed by #1189) and an insertion resting at `cds_end` that
+/// the #387 clamp rewrote instead of letting it shift on (#1209, fixed by
+/// #1211). Neither was a harness artifact — `r.` performed the identical shift
+/// over the byte-identical reference in one pass throughout, which is what
+/// localised both to the `c.` path. Minimal repros stay pinned in
+/// `tests/it/cds_utr3_crossing_shift_idempotency.rs` and
+/// `tests/it/issue_1209_cds_end_insertion_shift.rs`.
+const ALL_SYSTEMS: [Sys; 11] = [
+    Sys::Genomic,
+    Sys::CdsPlus,
+    Sys::CdsMinus,
+    Sys::NoncodingPlus,
+    Sys::NoncodingMinus,
+    Sys::RnaCodingPlus,
+    Sys::RnaCodingMinus,
+    Sys::RnaNoncodingPlus,
+    Sys::RnaNoncodingMinus,
+    Sys::CdsUtr3Plus,
+    Sys::CdsUtr3Minus,
+];
+
+impl Sys {
+    /// Accession and axis prefix this system renders under.
+    fn accession_and_prefix(self) -> (&'static str, &'static str) {
+        match self {
+            Sys::Genomic => ("NC_TEST.1", "g."),
+            Sys::CdsPlus | Sys::CdsMinus | Sys::CdsUtr3Plus | Sys::CdsUtr3Minus => {
+                ("NM_TEST.1", "c.")
+            }
+            Sys::RnaCodingPlus | Sys::RnaCodingMinus => ("NM_TEST.1", "r."),
+            Sys::NoncodingPlus | Sys::NoncodingMinus => ("NR_TEST.1", "n."),
+            Sys::RnaNoncodingPlus | Sys::RnaNoncodingMinus => ("NR_TEST.1", "r."),
+        }
+    }
+
+    /// True for the `r.` axes, whose literal base sequences must be written in
+    /// the RNA alphabet (`acgu`) rather than DNA.
+    fn is_rna(self) -> bool {
+        matches!(
+            self,
+            Sys::RnaCodingPlus
+                | Sys::RnaCodingMinus
+                | Sys::RnaNoncodingPlus
+                | Sys::RnaNoncodingMinus
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -111,6 +231,13 @@ fn dna(n: std::ops::RangeInclusive<usize>) -> impl Strategy<Value = String> {
 /// (`repeat_case_strategy` below needs the same property and gets it a different
 /// way — it knows its tract's unit, so it derives the breaker from that unit
 /// directly rather than relying on a fixed flank.)
+///
+/// Provenance, since the narrower single-base `G`/`C` flanks this replaced are
+/// referenced elsewhere: those let a 2-base rotation continue a few periods into
+/// the pad, and that leak is what originally surfaced the `cds_end`-crossing
+/// non-idempotency. That case is now pinned explicitly by
+/// `tests/it/cds_utr3_crossing_shift_idempotency.rs`, so widening the flanks
+/// does not lose it.
 fn core_strategy() -> impl Strategy<Value = String> {
     prop::collection::vec((dna(1..=3), 1usize..=5), 2..=5)
         .prop_map(|runs| {
@@ -189,49 +316,104 @@ fn repeat_case_strategy() -> impl Strategy<Value = Case> {
         })
 }
 
+/// Re-express a DNA literal in the RNA alphabet used by the `r.` axis
+/// (lowercase, `t` -> `u`). Feeding real `u` bases through the `r.` cases also
+/// exercises the U->T rewrite normalization applies before comparing an `r.`
+/// edit against the DNA-stored transcript (#736).
+fn to_rna(dna: &str) -> String {
+    dna.chars()
+        .map(|c| match c {
+            'T' | 't' => 'u',
+            other => other.to_ascii_lowercase(),
+        })
+        .collect()
+}
+
 fn case_strategy() -> impl Strategy<Value = Case> {
     core_strategy().prop_flat_map(move |core| {
         let len = core.len();
-        let sys = prop::sample::select(vec![Sys::Genomic, Sys::CdsPlus, Sys::CdsMinus]);
-        // kind: 0=del 1=dup 2=ins 3=delins
-        (sys, 0u8..=3, 1usize..=len, 0usize..=3, dna(1..=3)).prop_map(
-            move |(sys, kind, start, span, ins)| {
-                let end = (start + span).min(len);
-                let (s, e) = (start.min(end), start.max(end));
-                let render_pos = |p: usize| -> u64 {
-                    match sys {
-                        Sys::Genomic => (PAD_OFFSET as usize + p) as u64,
-                        _ => p as u64, // cds_start == 1 => c.p maps to core p
-                    }
-                };
-                let (prefix, acc) = match sys {
-                    Sys::Genomic => ("g.", "NC_TEST.1"),
-                    _ => ("c.", "NM_TEST.1"),
-                };
-                let range = |s: usize, e: usize| {
-                    if s == e {
-                        format!("{}", render_pos(s))
-                    } else {
-                        format!("{}_{}", render_pos(s), render_pos(e))
-                    }
-                };
-                let body = match kind {
-                    0 => format!("{}del", range(s, e)),
-                    1 => format!("{}dup", range(s, e)),
-                    2 => {
-                        // insertion sits between p and p+1; keep p in 1..len
-                        let p = s.min(len - 1);
-                        format!("{}_{}ins{}", render_pos(p), render_pos(p + 1), ins)
-                    }
-                    _ => format!("{}delins{}", range(s, e), ins),
-                };
-                Case {
-                    core: core.clone(),
-                    sys,
-                    hgvs: format!("{acc}:{prefix}{body}"),
-                }
-            },
+        let sys = prop::sample::select(ALL_SYSTEMS.to_vec());
+        // kind: 0=del 1=dup 2=ins 3=delins 4=inv 5=con
+        (
+            sys,
+            0u8..=5,
+            1usize..=len,
+            0usize..=3,
+            dna(1..=3),
+            // `con` donor interval, drawn from the same core so the donated
+            // bases are as short as an `ins` payload (1..=3) and the resulting
+            // delins cannot 3'-shift any further than the `ins`/`delins` cases
+            // already can.
+            1usize..=len,
+            0usize..=2,
         )
+            .prop_map(
+                move |(sys, kind, start, span, ins, donor_start, donor_span)| {
+                    let end = (start + span).min(len);
+                    let (s, e) = (start.min(end), start.max(end));
+                    // Every axis renders core position `p` as `p`; only the
+                    // genomic contig carries the padding offset. For the
+                    // 5'UTR-bearing coding fixture this holds because
+                    // `cds_start == PAD_OFFSET + 1`, so `c.p`/`r.p` translate
+                    // to transcript `PAD_OFFSET + p` = core position `p`.
+                    let render_pos = |p: usize| -> u64 {
+                        match sys {
+                            Sys::Genomic => (PAD_OFFSET as usize + p) as u64,
+                            _ => p as u64,
+                        }
+                    };
+                    let (acc, prefix) = sys.accession_and_prefix();
+                    let bases = if sys.is_rna() {
+                        to_rna(&ins)
+                    } else {
+                        ins.clone()
+                    };
+                    let range = |s: usize, e: usize| {
+                        if s == e {
+                            format!("{}", render_pos(s))
+                        } else {
+                            format!("{}_{}", render_pos(s), render_pos(e))
+                        }
+                    };
+                    let body = match kind {
+                        0 => format!("{}del", range(s, e)),
+                        1 => format!("{}dup", range(s, e)),
+                        2 => {
+                            // insertion sits between p and p+1; keep p in 1..len
+                            let p = s.min(len - 1);
+                            format!("{}_{}ins{}", render_pos(p), render_pos(p + 1), bases)
+                        }
+                        3 => format!("{}delins{}", range(s, e), bases),
+                        4 => {
+                            // "an inversion covers more than one nucleotide by
+                            // definition" (HGVS DNA/inversion.md:16) and the
+                            // parser enforces it, so widen a degenerate
+                            // interval to two bases instead of emitting an
+                            // input the generator knows is invalid.
+                            let (s, e) = match (s, e) {
+                                (s, e) if e > s => (s, e),
+                                (s, _) if s < len => (s, s + 1),
+                                (s, _) => (s - 1, s),
+                            };
+                            format!("{}inv", range(s, e))
+                        }
+                        _ => {
+                            // Always render the donor as an explicit `S_E`
+                            // pair, even when `S == E`: a bare `conN` parses
+                            // as an opaque cross-reference (`delins[N]`)
+                            // rather than a same-reference position range.
+                            let ds = donor_start;
+                            let de = (ds + donor_span).min(len);
+                            format!("{}con{}_{}", range(s, e), render_pos(ds), render_pos(de))
+                        }
+                    };
+                    Case {
+                        core: core.clone(),
+                        sys,
+                        hgvs: format!("{acc}:{prefix}{body}"),
+                    }
+                },
+            )
     })
 }
 
@@ -241,7 +423,100 @@ fn provider_for(core: &str, sys: Sys) -> MockProvider {
         Sys::Genomic => SyntheticBuilder::genomic(core).build(),
         Sys::CdsPlus => SyntheticBuilder::cds(core, 1, len, Strand::Plus).build(),
         Sys::CdsMinus => SyntheticBuilder::cds(core, 1, len, Strand::Minus).build(),
+        // A coding transcript of `PAD + core + PAD` whose CDS covers exactly
+        // the core, giving it both a 5'UTR and a 3'UTR.
+        // `cds_start == PAD_OFFSET + 1` makes the CDS translation a real offset
+        // (unlike `CdsPlus`/`CdsMinus`, where it is the identity), which is what
+        // makes "`r.` is CDS-relative" an observable claim; the padding doubles
+        // as the repeat-tract breaker on both sides.
+        // `CdsUtr3*` is the `c.` spelling of that same axis over the same
+        // fixture, so it shares the provider outright.
+        Sys::RnaCodingPlus | Sys::CdsUtr3Plus => SyntheticBuilder::cds(
+            &padded(core),
+            PAD_OFFSET + 1,
+            PAD_OFFSET + len,
+            Strand::Plus,
+        )
+        .build(),
+        Sys::RnaCodingMinus | Sys::CdsUtr3Minus => SyntheticBuilder::cds(
+            &padded(core),
+            PAD_OFFSET + 1,
+            PAD_OFFSET + len,
+            Strand::Minus,
+        )
+        .build(),
+        // `n.` and `r.` on a non-coding transcript are likewise the same axis
+        // (no CDS to be relative to), so they share the `NR_TEST.1` fixture.
+        Sys::NoncodingPlus | Sys::RnaNoncodingPlus => {
+            SyntheticBuilder::noncoding(core, Strand::Plus).build()
+        }
+        Sys::NoncodingMinus | Sys::RnaNoncodingMinus => {
+            SyntheticBuilder::noncoding(core, Strand::Minus).build()
+        }
     }
+}
+
+/// Edit-kind label recovered from a *rendered* case, so the histogram below
+/// observes what the generator actually emitted rather than a self-reported
+/// tag. Order matters: `delins` contains both `del` and `ins`.
+fn edit_kind_label(hgvs: &str) -> &'static str {
+    for kind in ["delins", "del", "dup", "inv", "con", "ins"] {
+        if hgvs.contains(kind) {
+            return kind;
+        }
+    }
+    "?"
+}
+
+/// Non-vacuity guard for [`case_strategy`].
+///
+/// A passing idempotency property proves nothing about a coordinate system or
+/// edit kind the strategy never emits, and a `prop_filter` or a mis-ordered
+/// `match` arm can silently drop a whole bucket without any test going red.
+/// This samples the strategy directly and asserts every
+/// (coordinate system x edit kind) cell is actually populated.
+#[test]
+fn case_strategy_covers_every_system_and_edit_kind() {
+    use proptest::strategy::{Strategy as _, ValueTree as _};
+    use proptest::test_runner::TestRunner;
+    use std::collections::BTreeMap;
+
+    const SAMPLES: usize = 4000;
+    const KINDS: [&str; 6] = ["del", "dup", "ins", "delins", "inv", "con"];
+    // Derived from the enum rather than spelled out, so adding a `Sys` variant
+    // to `ALL_SYSTEMS` without teaching the generator to emit it fails here.
+    let systems: Vec<String> = ALL_SYSTEMS.iter().map(|s| format!("{s:?}")).collect();
+
+    let strategy = case_strategy();
+    let mut runner = TestRunner::deterministic();
+    let mut histogram: BTreeMap<(String, &'static str), usize> = BTreeMap::new();
+    for _ in 0..SAMPLES {
+        let case = strategy
+            .new_tree(&mut runner)
+            .expect("case_strategy must always produce a value")
+            .current();
+        *histogram
+            .entry((format!("{:?}", case.sys), edit_kind_label(&case.hgvs)))
+            .or_default() += 1;
+    }
+
+    let mut report = String::new();
+    let mut missing = Vec::new();
+    for sys in &systems {
+        for kind in KINDS {
+            let n = histogram.get(&(sys.clone(), kind)).copied().unwrap_or(0);
+            report.push_str(&format!("  {sys:16} {kind:8} {n:5}\n"));
+            if n == 0 {
+                missing.push(format!("{sys}/{kind}"));
+            }
+        }
+    }
+    println!("case_strategy coverage over {SAMPLES} samples:\n{report}");
+    assert!(
+        missing.is_empty(),
+        "case_strategy never generated these (system, edit kind) cells: {missing:?}\n\
+         full histogram over {SAMPLES} samples:\n{report}"
+    );
 }
 
 /// `norm(norm(x)) == norm(x)` for one case in one direction, and the normalized
@@ -287,7 +562,25 @@ fn check_idempotent(case: &Case, dir: ShuffleDirection) -> Result<(), TestCaseEr
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(4000))]
+    // 12k cases rather than 4k: the case space is 11 coordinate systems x 6 edit
+    // kinds = 66 cells (it was 3 x 4 = 12), so 4k would leave only ~61 cases per
+    // cell. 12k restores ~182 per cell and still runs in ~1s.
+    //
+    // `max_local_rejects` is raised off its 65_536 default because
+    // `core_strategy`'s `body length 6..=40` filter rejects a steady ~6.7% of
+    // draws, so the *absolute* default cap is reached partway through any run
+    // over ~900k cases and aborts it with "Too many local rejects" — which looks
+    // like a failure but is purely the harness's own quota. 1M rejects covers
+    // ~14M cases while still aborting promptly if the generator ever degenerates
+    // into rejecting nearly everything. Both values are overridden by
+    // `PROPTEST_CASES` / `PROPTEST_MAX_LOCAL_REJECTS` (the `proptest!` macro
+    // re-applies the env vars over this config), so a soak is just
+    // `PROPTEST_CASES=1000000 cargo nextest run …`. 1M cases verified clean.
+    #![proptest_config(ProptestConfig {
+        cases: 12_000,
+        max_local_rejects: 1_000_000,
+        ..ProptestConfig::default()
+    })]
 
     /// 3' (default, HGVS-canonical) direction, fully general edit content.
     #[test]
