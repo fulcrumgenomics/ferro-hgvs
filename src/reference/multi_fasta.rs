@@ -337,80 +337,11 @@ pub fn verify_reference_identity(
 }
 
 impl MultiFastaProvider {
-    /// Create a new multi-FASTA provider from a directory of FASTA files
-    ///
-    /// Scans the directory for .fna and .fa files with accompanying .fai indexes.
-    pub fn from_directory<P: AsRef<Path>>(dir: P) -> Result<Self, FerroError> {
-        let dir = dir.as_ref();
-
-        if !dir.exists() {
-            return Err(FerroError::Io {
-                msg: format!("Reference directory not found: {}", dir.display()),
-            });
-        }
-
-        let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
-        let mut fai_files_parsed: usize = 0;
-
-        // Find all FASTA files with indexes
-        let entries = std::fs::read_dir(dir).map_err(|e| FerroError::Io {
-            msg: format!("Failed to read directory {}: {}", dir.display(), e),
-        })?;
-
-        for entry in entries {
-            let entry = entry.map_err(|e| FerroError::Io {
-                msg: format!("Failed to read directory entry: {}", e),
-            })?;
-
-            let path = entry.path();
-
-            // Skip hidden files and macOS AppleDouble sidecars (names beginning with '.', e.g.
-            // `._LRG_430.fasta`). These are not real FASTAs — an accompanying `._*.fasta.fai` is a
-            // binary extended-attribute blob, and attempting to parse it as a FAI index would abort
-            // the entire reference load with a "stream did not contain valid UTF-8" error. Such files
-            // are commonly introduced when a reference directory is copied through macOS tooling.
-            let is_hidden = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with('.'));
-            if is_hidden {
-                continue;
-            }
-
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-            // Look for .fna, .fa, or .fasta files
-            if ext == "fna" || ext == "fa" || ext == "fasta" {
-                let fai_path = PathBuf::from(format!("{}.fai", path.display()));
-
-                if fai_path.exists() {
-                    // Load index for this file
-                    let file_index = load_fai_index(&path, &fai_path)?;
-
-                    for (name, entry) in file_index {
-                        index.insert(name, entry);
-                    }
-                    fai_files_parsed += 1;
-                }
-            }
-        }
-
-        if index.is_empty() {
-            return Err(FerroError::Io {
-                msg: format!(
-                    "No indexed FASTA files found in {}. Run 'ferro-benchmark prepare' first.",
-                    dir.display()
-                ),
-            });
-        }
-
-        eprintln!(
-            "Loaded {} sequences from {} FASTA files",
-            index.len(),
-            fai_files_parsed
-        );
-
-        Ok(Self {
+    /// Build a provider from a fully populated index, computing the derived
+    /// maps exactly once. `from_directory`, `from_directories`, and
+    /// `with_cdot` all funnel through here.
+    fn from_index(index: FxHashMap<String, FastaIndexEntry>) -> Self {
+        Self {
             base_to_versioned: build_base_to_versioned(&index),
             has_genomic_data: index_has_genomic_data(&index),
             index,
@@ -427,47 +358,59 @@ impl MultiFastaProvider {
             legacy_gene_models: FxHashMap::default(),
             contig_aliases: None,
             ng_hosted: None,
-        })
+        }
+    }
+
+    /// Create a new multi-FASTA provider from a directory of FASTA files
+    ///
+    /// Scans the directory for .fna and .fa files with accompanying .fai indexes.
+    pub fn from_directory<P: AsRef<Path>>(dir: P) -> Result<Self, FerroError> {
+        let dir = dir.as_ref();
+
+        if !dir.exists() {
+            return Err(FerroError::Io {
+                msg: format!("Reference directory not found: {}", dir.display()),
+            });
+        }
+
+        let (index, fai_files_parsed) = load_index_from_dirs(&[dir])?;
+
+        if index.is_empty() {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "No indexed FASTA files found in {}. Run 'ferro-benchmark prepare' first.",
+                    dir.display()
+                ),
+            });
+        }
+
+        eprintln!(
+            "Loaded {} sequences from {} FASTA files",
+            index.len(),
+            fai_files_parsed
+        );
+
+        Ok(Self::from_index(index))
     }
 
     /// Create a provider from multiple directories (e.g., transcripts + genome)
     pub fn from_directories<P: AsRef<Path>>(dirs: &[P]) -> Result<Self, FerroError> {
-        let mut combined_index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
+        let paths: Vec<&Path> = dirs.iter().map(AsRef::as_ref).collect();
+        let (index, fai_files_parsed) = load_index_from_dirs(&paths)?;
 
-        for dir in dirs {
-            let dir = dir.as_ref();
-            if !dir.exists() {
-                continue;
-            }
-
-            let partial = Self::from_directory(dir)?;
-            combined_index.extend(partial.index);
-        }
-
-        if combined_index.is_empty() {
+        if index.is_empty() {
             return Err(FerroError::Io {
                 msg: "No indexed FASTA files found in any directory".to_string(),
             });
         }
 
-        Ok(Self {
-            base_to_versioned: build_base_to_versioned(&combined_index),
-            has_genomic_data: index_has_genomic_data(&combined_index),
-            index: combined_index,
-            aliases: build_chromosome_aliases(),
-            cdot_mapper: None,
-            supplemental_cds: SupplementalCdsInfo::default(),
-            canonical_overrides: CanonicalOverrides::default(),
-            protein_index: FxHashMap::default(),
-            transcript_cache: new_transcript_cache(),
-            open_files: Mutex::new(FxHashMap::default()),
-            lrg_xml_dir: None,
-            lrg_placement_cache: Mutex::new(FxHashMap::default()),
-            refseqgene_placements: FxHashMap::default(),
-            legacy_gene_models: FxHashMap::default(),
-            contig_aliases: None,
-            ng_hosted: None,
-        })
+        eprintln!(
+            "Loaded {} sequences from {} FASTA files",
+            index.len(),
+            fai_files_parsed
+        );
+
+        Ok(Self::from_index(index))
     }
 
     /// Defer loading the GRCh37 cdot referenced by `cdot_grch37_json` (if present)
@@ -686,7 +629,9 @@ impl MultiFastaProvider {
                 let path_str = first.strip_suffix(".gz").unwrap_or(first);
                 let path = resolve_path(path_str);
                 if let Some(transcript_dir) = path.parent() {
-                    dirs.push(transcript_dir.to_path_buf());
+                    if !dirs.contains(&transcript_dir.to_path_buf()) {
+                        dirs.push(transcript_dir.to_path_buf());
+                    }
                 }
             }
         }
@@ -695,7 +640,9 @@ impl MultiFastaProvider {
         if let Some(genome) = manifest.get("genome_fasta").and_then(|v| v.as_str()) {
             let path = resolve_path(genome);
             if let Some(genome_dir) = path.parent() {
-                dirs.push(genome_dir.to_path_buf());
+                if !dirs.contains(&genome_dir.to_path_buf()) {
+                    dirs.push(genome_dir.to_path_buf());
+                }
             }
         }
 
@@ -1248,22 +1195,8 @@ impl MultiFastaProvider {
         );
 
         Ok(Self {
-            base_to_versioned: build_base_to_versioned(&index),
-            has_genomic_data: index_has_genomic_data(&index),
-            index,
-            aliases: build_chromosome_aliases(),
             cdot_mapper: Some(cdot_mapper),
-            supplemental_cds: SupplementalCdsInfo::default(),
-            canonical_overrides: CanonicalOverrides::default(),
-            protein_index: FxHashMap::default(),
-            transcript_cache: new_transcript_cache(),
-            open_files: Mutex::new(FxHashMap::default()),
-            lrg_xml_dir: None,
-            lrg_placement_cache: Mutex::new(FxHashMap::default()),
-            refseqgene_placements: FxHashMap::default(),
-            legacy_gene_models: FxHashMap::default(),
-            contig_aliases: None,
-            ng_hosted: None,
+            ..Self::from_index(index)
         })
     }
 
@@ -3241,6 +3174,98 @@ fn load_fai_index<P: AsRef<Path>>(
     Ok(index)
 }
 
+/// Load and combine the FASTA indexes for `dirs`, in order.
+///
+/// Directories are processed in the order given and entries are inserted into a
+/// single map, so a later directory wins for an accession present in more than
+/// one — the same last-wins precedence the previous per-directory-then-`extend`
+/// construction had, and which real references depend on (`supplemental/`
+/// overlaps `transcripts/` on ~80k accessions).
+///
+/// Returns the combined index and the number of `.fai` files parsed.
+fn load_index_from_dirs(
+    dirs: &[&Path],
+) -> Result<(FxHashMap<String, FastaIndexEntry>, usize), FerroError> {
+    let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
+    let mut fai_files_parsed: usize = 0;
+
+    for dir in dirs {
+        if !dir.exists() {
+            continue;
+        }
+
+        let entries = std::fs::read_dir(dir).map_err(|e| FerroError::Io {
+            msg: format!("Failed to read directory {}: {}", dir.display(), e),
+        })?;
+
+        // Sort so file ordering — and therefore which file wins a within-directory
+        // duplicate — is deterministic. `read_dir` order is unspecified, and 65
+        // accessions appear in both genome/GRCh38.fna.fai and GRCh37.fna.fai.
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|e| FerroError::Io {
+                msg: format!("Failed to read directory entry: {}", e),
+            })?;
+            paths.push(entry.path());
+        }
+        paths.sort();
+
+        let mut entries_from_dir: usize = 0;
+
+        for path in paths {
+            // Skip hidden files and macOS AppleDouble sidecars (names beginning
+            // with '.', e.g. `._LRG_430.fasta`). These are not real FASTAs — an
+            // accompanying `._*.fasta.fai` is a binary extended-attribute blob,
+            // and parsing it as a FAI index would abort the entire reference
+            // load with a "stream did not contain valid UTF-8" error. Such files
+            // are commonly introduced when a reference directory is copied
+            // through macOS tooling.
+            let is_hidden = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'));
+            if is_hidden {
+                continue;
+            }
+
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext != "fna" && ext != "fa" && ext != "fasta" {
+                continue;
+            }
+
+            let fai_path = PathBuf::from(format!("{}.fai", path.display()));
+            if !fai_path.exists() {
+                continue;
+            }
+
+            let file_index = load_fai_index(&path, &fai_path)?;
+            for (name, entry) in file_index {
+                index.insert(name, entry);
+                entries_from_dir += 1;
+            }
+            fai_files_parsed += 1;
+        }
+
+        // A directory that exists but yields no indexed FASTA is an error, not a
+        // silent skip: `from_directory` errored on this before the refactor, and
+        // silently skipping it here would let a later directory's overlapping
+        // accessions be served from the wrong place (e.g. `transcripts/` winning
+        // accessions `supplemental/` was supposed to). Contrast with a
+        // non-existent directory above, which is legitimately optional and
+        // skipped without error.
+        if entries_from_dir == 0 {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "No indexed FASTA files found in {}. Run 'ferro-benchmark prepare' first.",
+                    dir.display()
+                ),
+            });
+        }
+    }
+
+    Ok((index, fai_files_parsed))
+}
+
 /// Returns `true` for a bare LRG genomic accession (`LRG_<N>` with `N` a
 /// non-empty run of ASCII digits and no trailing `t<k>`/`p<k>` selector). These
 /// denote the LRG genomic sequence, whose FASTA record is suffixed `g`
@@ -4529,6 +4554,53 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
         assert!(provider.has_sequence("NM_000001.1"));
         assert_eq!(provider.sequence_length("NM_000001.1"), Some(10));
+    }
+
+    /// A later directory must win for an accession present in both. Real
+    /// references depend on this: `supplemental/` overlaps `transcripts/` on
+    /// ~80k accessions and currently serves their bases.
+    #[test]
+    fn later_directory_wins_for_duplicate_accession() {
+        use crate::reference::ReferenceProvider;
+
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+
+        // Same accession, different bases, in two directories.
+        std::fs::write(dir_a.path().join("a.fna"), ">NM_000001.1\nAAAA\n").unwrap();
+        std::fs::write(dir_a.path().join("a.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+        std::fs::write(dir_b.path().join("b.fna"), ">NM_000001.1\nCCCC\n").unwrap();
+        std::fs::write(dir_b.path().join("b.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+
+        let provider = MultiFastaProvider::from_directories(&[dir_a.path(), dir_b.path()]).unwrap();
+
+        assert_eq!(provider.sequence_count(), 1);
+        assert_eq!(
+            provider.get_sequence("NM_000001.1", 0, 4).unwrap(),
+            "CCCC",
+            "the later directory must win"
+        );
+    }
+
+    /// A directory that exists but holds no indexed FASTA must fail the load
+    /// rather than being silently skipped — skipping it would change which file
+    /// serves the accessions that directory was supposed to win.
+    #[test]
+    fn existing_directory_with_no_indexed_fasta_is_an_error() {
+        let dir_a = tempfile::tempdir().unwrap();
+        let dir_b = tempfile::tempdir().unwrap();
+        std::fs::write(dir_a.path().join("a.fna"), ">NM_000001.1\nAAAA\n").unwrap();
+        std::fs::write(dir_a.path().join("a.fna.fai"), "NM_000001.1\t4\t13\t4\t5\n").unwrap();
+        // dir_b exists but its FASTA has no sibling .fai, so it contributes nothing.
+        std::fs::write(dir_b.path().join("b.fna"), ">NM_000002.1\nCCCC\n").unwrap();
+
+        match MultiFastaProvider::from_directories(&[dir_a.path(), dir_b.path()]) {
+            Ok(_) => panic!("an existing directory with no indexed FASTA must be an error"),
+            Err(err) => assert!(
+                err.to_string().contains("No indexed FASTA files found"),
+                "unexpected error: {err}"
+            ),
+        }
     }
 
     #[test]
