@@ -1,10 +1,36 @@
 //! Construction of the FASTA index a [`MultiFastaProvider`] serves from.
 //!
 //! This module owns index construction and nothing else. Every provider
-//! constructor will route through [`PreparedIndex::from_dirs`] (the routing
-//! lands in the next commit), so there will be exactly one producer of this
+//! constructor routes through [`PreparedIndex`] — [`PreparedIndex::from_dirs`]
+//! for the directory-scanning constructors (`from_directory`,
+//! `from_directories`, and `from_manifest_inner`, which calls
+//! `from_directories`), and [`PreparedIndex::from_index`] for `with_cdot`,
+//! which already has an explicit single FASTA + `.fai` pair in hand and must
+//! preserve its own fail-fast-on-missing-`.fai` behavior rather than adopt
+//! `from_dirs`' silent-skip-and-scan-the-whole-directory semantics. Either
+//! way, the derived maps (`base_to_versioned`, `has_genomic_data`) are built
+//! by exactly one pair of functions, so there is exactly one producer of this
 //! state — the property a future on-disk index artifact depends on, since an
 //! artifact loader would otherwise be a second, silently divergent producer.
+//! This claim covers the two derived maps and the initial `files`/`index`/
+//! `protein_index` produced by construction; [`PreparedIndex::add_protein_fasta`]
+//! is a deliberate exception, called *after* construction to extend `files`
+//! and `protein_index` in place for each `protein_fastas` manifest entry — a
+//! future artifact loader restoring a `PreparedIndex` wholesale would still
+//! need to either replay those calls or capture their result in the artifact
+//! itself, not just `from_dirs`'/`from_index`'s output.
+//!
+//! All five fields are private, and the struct has no public constructor that
+//! takes them directly (no `Default`, no field-literal access from outside
+//! this module) — the only ways to get a `PreparedIndex` are [`Self::from_dirs`]
+//! and [`Self::from_index`], both of which always recompute `base_to_versioned`
+//! and `has_genomic_data` from `index` rather than accept them as inputs. That
+//! is what makes "exactly one producer" true by construction rather than by
+//! convention: a future on-disk artifact loader must deserialize into a
+//! separate DTO carrying only `index` and `files`, then call
+//! [`Self::from_index`] on it — never construct or deserialize into a
+//! `PreparedIndex` directly — so the derived maps are always recomputed, never
+//! trusted from the artifact.
 //!
 //! [`MultiFastaProvider`]: crate::reference::multi_fasta::MultiFastaProvider
 
@@ -50,7 +76,7 @@ fn accession_version(accession: &str) -> Option<u32> {
 /// wins is fragile regardless). Keying on `(version, accession)` gives a stable
 /// total order: the newest version always wins, independent of insertion or
 /// iteration order.
-pub(super) fn build_base_to_versioned(
+fn build_base_to_versioned(
     index: &FxHashMap<String, FastaIndexEntry>,
 ) -> FxHashMap<String, String> {
     let mut map: FxHashMap<String, String> = FxHashMap::default();
@@ -74,54 +100,88 @@ pub(super) fn build_base_to_versioned(
 
 /// Whether `index` holds any genomic (chromosome) sequence, named either
 /// NCBI RefSeq style (`NC_*`) or UCSC style (`chr*`). Computed once at
-/// construction and cached in `MultiFastaProvider::has_genomic_data` — the
+/// construction and cached in [`PreparedIndex::has_genomic_data`] — the
 /// index can hold hundreds of thousands of keys and this predicate is hit on
 /// the per-variant normalization path.
-pub(super) fn index_has_genomic_data(index: &FxHashMap<String, FastaIndexEntry>) -> bool {
+fn index_has_genomic_data(index: &FxHashMap<String, FastaIndexEntry>) -> bool {
     index
         .keys()
         .any(|k| k.starts_with("NC_") || k.starts_with("chr"))
 }
 
 /// The FASTA index and everything derived from it.
-// Temporary: nothing constructs this until the provider is routed through it
-// in the next commit; this allow is removed there.
-#[allow(dead_code)]
-#[derive(Debug, Default)]
+///
+/// All fields are private: the derived fields (`base_to_versioned`,
+/// `has_genomic_data`) must never be constructed independently of `index` —
+/// see [`Self::from_dirs`] / [`Self::from_index`] and the module doc above.
+#[derive(Debug)]
 pub(crate) struct PreparedIndex {
     /// FASTA files backing the index, addressed by [`FastaIndexEntry::file_id`].
+    /// Interning the path here rather than cloning it into each of ~546k entries
+    /// removes an allocation per entry and makes the open-file cache an integer
+    /// keyed map.
     ///
     /// APPEND-ONLY: `file_id` is a positional index into this `Vec`, so an
     /// entry must never be reordered or removed once assigned. A future
     /// `sort()` or `retain()` here would silently repoint every existing
     /// `FastaIndexEntry` at the wrong FASTA — a correctness bug with no
     /// compiler signal and, absent a targeted test, no test signal either.
-    pub files: Vec<PathBuf>,
+    files: Vec<PathBuf>,
     /// Sequence accession -> location.
-    pub index: FxHashMap<String, FastaIndexEntry>,
+    ///
+    /// These index maps use [`FxHashMap`] (a fast, fixed-seed hasher) rather
+    /// than the default SipHash: the keys are internal reference accessions,
+    /// not attacker-controlled, so DoS resistance is unnecessary, and building
+    /// the ~400k+ entry indexes is a large slice of startup. The fixed seed
+    /// also makes iteration deterministic across runs.
+    index: FxHashMap<String, FastaIndexEntry>,
     /// Base accession (no version) -> highest-versioned accession present.
-    pub base_to_versioned: FxHashMap<String, String>,
-    /// Whether the index holds any genomic (chromosome) sequence.
-    pub has_genomic_data: bool,
+    base_to_versioned: FxHashMap<String, String>,
+    /// Whether the index contains any genomic (chromosome) sequences, computed
+    /// once at construction. `has_genomic_data` is queried on the per-variant
+    /// normalization path; computing it by scanning all ~270k index keys on
+    /// every call dominated the hot loop (~12% of normalize CPU). The index is
+    /// immutable after construction, so the answer is a build-time constant.
+    has_genomic_data: bool,
     /// Protein FASTA index (NP_/XP_), addressed into the same `files` table.
-    pub protein_index: FxHashMap<String, FastaIndexEntry>,
+    protein_index: FxHashMap<String, FastaIndexEntry>,
 }
 
-// Temporary: nothing constructs a `PreparedIndex` until the provider is
-// routed through it in the next commit; this allow is removed there.
-#[allow(dead_code)]
 impl PreparedIndex {
     /// Build from `dirs`, in order. A later directory wins for an accession
     /// present in more than one.
     pub(crate) fn from_dirs(dirs: &[&Path]) -> Result<Self, FerroError> {
         let (index, files) = load_index_from_dirs(dirs)?;
-        Ok(Self {
+        Ok(Self::from_index(index, files))
+    }
+
+    /// Build directly from an already-loaded index and file table, without a
+    /// directory scan.
+    ///
+    /// Used by [`MultiFastaProvider::with_cdot`], which already has an
+    /// explicit single FASTA + `.fai` pair in hand (canonicalized and parsed
+    /// by the caller). Routing that case through [`Self::from_dirs`] instead
+    /// would change behavior: `from_dirs` filters by extension, silently
+    /// skips a FASTA missing its `.fai` rather than failing fast, and scans
+    /// every matching file in the directory rather than just the one
+    /// requested — any of which could silently include unrelated files or
+    /// swallow a missing-`.fai` error `with_cdot` must surface immediately.
+    /// This constructor and [`Self::from_dirs`] both build the derived maps
+    /// via the same pair of functions, so despite the different entry
+    /// points there remains exactly one producer of that derived state.
+    ///
+    /// [`MultiFastaProvider::with_cdot`]: crate::reference::multi_fasta::MultiFastaProvider::with_cdot
+    pub(crate) fn from_index(
+        index: FxHashMap<String, FastaIndexEntry>,
+        files: Vec<PathBuf>,
+    ) -> Self {
+        Self {
             base_to_versioned: build_base_to_versioned(&index),
             has_genomic_data: index_has_genomic_data(&index),
             index,
             files,
             protein_index: FxHashMap::default(),
-        })
+        }
     }
 
     /// Index a protein FASTA (`NP_`/`XP_` accessions) into the same file-id
@@ -143,33 +203,40 @@ impl PreparedIndex {
     /// succeeds; pushing first (as `load_index_from_dirs` safely does, because
     /// its own failures propagate with `?` and unwind) would otherwise leave
     /// an orphan table slot referenced by no index entry.
-    pub(crate) fn add_protein_fasta(
-        &mut self,
-        fasta: &Path,
-        fai: &Path,
-    ) -> Result<usize, FerroError> {
-        let canonical = fasta.canonicalize().map_err(|e| FerroError::Io {
-            msg: format!(
-                "Failed to canonicalize protein FASTA '{}': {}",
-                fasta.display(),
-                e
-            ),
-        })?;
+    ///
+    /// None of the three failure messages (`canonicalize`, `u32` overflow,
+    /// `.fai` parse) embed `fasta`'s path — deliberately: a warn-and-continue
+    /// caller reporting this `Err` already has `fasta` in scope for its own
+    /// message, and embedding it here too would print it twice.
+    ///
+    /// Returns a plain `String`, not `FerroError`: the caller (a
+    /// warn-and-continue `eprintln!`) only ever displays this, and
+    /// `FerroError::Io`'s `Display` impl prepends `"IO error: "` — round-tripping
+    /// the canonicalize/overflow messages through `FerroError` would have added
+    /// that prefix where the pre-refactor inline code never had it. `.fai`
+    /// parse failures ARE converted from `FerroError` (`load_fai_index` returns
+    /// one), via `.to_string()`, which reproduces the "IO error: " prefix that
+    /// was already present pre-refactor (that error was always displayed with
+    /// `{}` there too).
+    pub(crate) fn add_protein_fasta(&mut self, fasta: &Path, fai: &Path) -> Result<usize, String> {
+        let canonical = fasta
+            .canonicalize()
+            .map_err(|e| format!("failed to canonicalize: {}", e))?;
         let existing_id =
             self.files.iter().position(|f| f == &canonical).map(|pos| {
                 u32::try_from(pos).expect("table index already bounded by u32 fits u32")
             });
         let file_id = match existing_id {
             Some(id) => id,
-            None => u32::try_from(self.files.len()).map_err(|_| FerroError::Io {
-                msg: "too many FASTA files in the reference (max 4294967296)".to_string(),
+            None => u32::try_from(self.files.len()).map_err(|_| {
+                "too many FASTA files in the reference (max 4294967296)".to_string()
             })?,
         };
         // Computed before the push below, and the push itself happens only
         // once `load_fai_index` has actually succeeded (see the doc comment
         // above) — a failure here propagates via `?` before any push occurs,
         // so `file_id` staying valid does not depend on the push happening.
-        let idx = load_fai_index(fai, file_id)?;
+        let idx = load_fai_index(fai, file_id).map_err(|e| e.to_string())?;
         let added = idx.len();
         if existing_id.is_none() {
             self.files.push(canonical);
@@ -186,6 +253,70 @@ impl PreparedIndex {
     /// Resolve a `file_id` to its FASTA path.
     pub(crate) fn path_for(&self, file_id: u32) -> Option<&Path> {
         self.files.get(file_id as usize).map(PathBuf::as_path)
+    }
+
+    /// Whether `index` contains this accession, at its exact stored form (no
+    /// version-flex, alias, or `chr`-prefix resolution — see `resolve_name` in
+    /// `multi_fasta.rs` for that).
+    pub(crate) fn contains(&self, name: &str) -> bool {
+        self.index.contains_key(name)
+    }
+
+    /// Number of sequences in `index`.
+    pub(crate) fn len(&self) -> usize {
+        self.index.len()
+    }
+
+    /// Whether `index` holds no sequences.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
+
+    /// Number of distinct physical FASTA files backing `index` (see the
+    /// `files` field doc for why this can be fewer than the number of
+    /// `.fai`s parsed).
+    pub(crate) fn file_count(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Resolve a base accession (no version) to the highest-versioned
+    /// accession present, per `build_base_to_versioned`.
+    pub(crate) fn versioned_for(&self, base: &str) -> Option<&str> {
+        self.base_to_versioned.get(base).map(String::as_str)
+    }
+
+    /// Whether `index` holds any genomic (chromosome) sequence — see the
+    /// `has_genomic_data` field doc for why this is a cached build-time
+    /// constant rather than computed per call.
+    pub(crate) fn has_genomic_data(&self) -> bool {
+        self.has_genomic_data
+    }
+
+    /// Look up a protein-FASTA sequence entry by exact accession.
+    pub(crate) fn protein_entry(&self, accession: &str) -> Option<FastaIndexEntry> {
+        self.protein_index.get(accession).copied()
+    }
+
+    /// Number of sequences in `protein_index`. Distinct from summing
+    /// [`Self::add_protein_fasta`]'s return values across calls — see that
+    /// method's doc for why those can overcount.
+    pub(crate) fn protein_count(&self) -> usize {
+        self.protein_index.len()
+    }
+
+    /// Whether any protein FASTA has been indexed.
+    pub(crate) fn has_protein_data(&self) -> bool {
+        !self.protein_index.is_empty()
+    }
+
+    /// Test-only seam for directly inserting a protein-index entry, without
+    /// going through [`Self::add_protein_fasta`]'s file-backed parsing. Used
+    /// by tests that fabricate a protein entry by cloning an existing
+    /// transcript entry (so a real file backs the bytes `get_sequence_from_index`
+    /// then reads) rather than writing a second `.fasta`/`.fai` pair to disk.
+    #[cfg(test)]
+    pub(crate) fn insert_protein_entry(&mut self, accession: String, entry: FastaIndexEntry) {
+        self.protein_index.insert(accession, entry);
     }
 }
 
@@ -278,7 +409,7 @@ pub(super) fn load_fai_index(
 /// means a FASTA reachable by two on-disk paths has its `.fai` parsed twice
 /// but occupies one table slot); entries are tagged with a `file_id` indexing
 /// into this table rather than each carrying a cloned path.
-pub(super) fn load_index_from_dirs(
+fn load_index_from_dirs(
     dirs: &[&Path],
 ) -> Result<(FxHashMap<String, FastaIndexEntry>, Vec<PathBuf>), FerroError> {
     let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
@@ -354,7 +485,7 @@ pub(super) fn load_index_from_dirs(
                 ),
             })?;
             // Pushed into `files` here, before `load_fai_index` runs — unlike
-            // the protein-FASTA loader below, which defers its push until
+            // `PreparedIndex::add_protein_fasta`, which defers its push until
             // parsing succeeds. The two are a deliberate pair, not a
             // contradiction: a parse failure here is propagated with `?`,
             // which unwinds the whole load, so no orphan table slot can ever
@@ -489,17 +620,50 @@ mod tests {
             "the canonical path is deduped against the existing table"
         );
 
-        // A parse failure (missing .fai) must not leave an orphan file-table slot.
+        // A parse failure (missing .fai) must not leave an orphan file-table slot,
+        // and must report the SAME text `load_fai_index`'s own `FerroError`
+        // `Display` produces (`.to_string()`, not a re-wrapped message) — this is
+        // the one of the three failure modes that already went through
+        // `FerroError` pre-refactor, so its "IO error: " prefix is not new.
         let other_protein_fasta = dir.path().join("p2.fasta");
         std::fs::write(&other_protein_fasta, ">NP_2.1\nMM\n").unwrap();
         let missing_fai = dir.path().join("does-not-exist.fai");
-        assert!(prepared
+        let err = prepared
             .add_protein_fasta(&other_protein_fasta, &missing_fai)
-            .is_err());
+            .unwrap_err();
+        assert!(
+            err.starts_with("IO error: Failed to open FAI file: "),
+            "unexpected message: {err}"
+        );
         assert_eq!(
             prepared.files.len(),
             2,
             "a parse failure must not push an orphan file-table slot"
+        );
+    }
+
+    /// #520 edge 3 / add_protein_fasta (review finding, Task 7 fix round):
+    /// the canonicalize-failure message must NOT be wrapped in `FerroError`
+    /// (whose `Display` prepends `"IO error: "`) — that would drift from the
+    /// pre-refactor inline `eprintln!`, which never went through `FerroError`
+    /// for this failure mode. `add_protein_fasta` returns a plain `String`
+    /// specifically so this message matches byte-for-byte.
+    #[test]
+    fn add_protein_fasta_canonicalize_failure_message_has_no_ferro_error_prefix() {
+        let dir = tempdir().unwrap();
+        let mut prepared = PreparedIndex::from_index(FxHashMap::default(), Vec::new());
+        let missing_fasta = dir.path().join("does-not-exist.fasta");
+        let missing_fai = dir.path().join("does-not-exist.fasta.fai");
+        let err = prepared
+            .add_protein_fasta(&missing_fasta, &missing_fai)
+            .unwrap_err();
+        assert!(
+            err.starts_with("failed to canonicalize: "),
+            "unexpected message: {err}"
+        );
+        assert!(
+            !err.starts_with("IO error:"),
+            "must not carry FerroError's Display prefix: {err}"
         );
     }
 
