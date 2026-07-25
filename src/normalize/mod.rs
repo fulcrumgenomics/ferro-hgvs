@@ -1127,9 +1127,9 @@ fn sort_cis_members_by_genomic_order(members: &mut [HgvsVariant]) {
 /// Whether the opt-in normalization idempotency self-check is active.
 ///
 /// Enabled when the `FERRO_ASSERT_IDEMPOTENT` environment variable is set to
-/// anything other than `0`/empty. Read once and cached, so the per-`normalize`
+/// anything other than `0`/empty. Read once and cached, so the per-normalization
 /// cost when disabled is a single relaxed atomic load. Only compiled in debug
-/// builds; see the call site in [`Normalizer::normalize`].
+/// builds; see the call site in [`Normalizer::normalize_core_checked`].
 #[cfg(debug_assertions)]
 fn idempotency_self_check_enabled() -> bool {
     use std::sync::OnceLock;
@@ -1139,6 +1139,17 @@ fn idempotency_self_check_enabled() -> bool {
             .map(|v| !v.is_empty() && v != "0")
             .unwrap_or(false)
     })
+}
+
+#[cfg(debug_assertions)]
+thread_local! {
+    /// Re-entrancy guard for the idempotency self-check.
+    ///
+    /// The check lives in `normalize_core_checked` so it covers the projector
+    /// too, but its verification pass re-enters that very method — without this
+    /// flag each check would recurse forever. Thread-local (not a global) so
+    /// concurrent normalizations on other threads stay checked.
+    static IN_IDEMPOTENCY_CHECK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl<P: ReferenceProvider> Normalizer<P> {
@@ -1174,39 +1185,65 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // normalization AND the strict-mode rejection ladder live in
         // `normalize_core_checked`, so a strict config rejects identically
         // whether a variant is normalized directly or through the projector.
-        let normalized = self.normalize_core_checked(variant)?.0;
+        // The opt-in idempotency self-check lives in `normalize_core_checked`
+        // (below), so it covers this method AND the projector.
+        Ok(self.normalize_core_checked(variant)?.0)
+    }
 
-        // Opt-in idempotency self-check (issue #1157 follow-up): a normalizer
-        // must satisfy `norm(norm(x)) == norm(x)`. When enabled it re-normalizes
-        // the output and panics on any drift, so every test that reaches THIS
-        // method becomes an idempotency oracle for the cost of one gated check
-        // — including the `axis_normalized` conformance corpora, which call
-        // `normalize()` directly. Coverage stops at this entry point:
-        // `VariantProjector` deliberately calls `normalize_core_checked`
-        // instead (see projector.rs), so the projection-driven axes
-        // (genomic/coding/protein) are NOT checked. The second pass goes through
-        // `normalize_core_checked` — the same computation this method performs —
-        // NOT the public `normalize`, so there is no re-entrancy (internal
-        // normalization recurses via `normalize_core`, never through this
-        // method) and no guard is needed. Compiled out entirely in release
-        // (`debug_assertions`), so production is untouched and zero-cost.
-        #[cfg(debug_assertions)]
-        if idempotency_self_check_enabled() {
-            match self.normalize_core_checked(&normalized) {
-                Ok((again, _)) => assert_eq!(
-                    normalized.to_string(),
-                    again.to_string(),
-                    "FERRO_ASSERT_IDEMPOTENT: normalize is not idempotent\n  \
-                     input: {variant}\n  once:  {normalized}\n  twice: {again}",
-                ),
-                Err(e) => panic!(
-                    "FERRO_ASSERT_IDEMPOTENT: normalized output failed to re-normalize\n  \
-                     input: {variant}\n  once:  {normalized}\n  error: {e}",
-                ),
+    /// Opt-in idempotency self-check (issue #1157 follow-up): a normalizer must
+    /// satisfy `norm(norm(x)) == norm(x)`. Re-normalizes `normalized` and panics
+    /// on any drift, so every test that normalizes becomes an idempotency oracle
+    /// for the cost of one gated check.
+    ///
+    /// Called from [`Normalizer::normalize_core_checked`] — the shared core
+    /// behind both `normalize()` and `VariantProjector` — so the projection-driven
+    /// axes (genomic/coding/protein) are covered too. It previously sat in
+    /// `normalize()` alone, which left every projector-only path unchecked.
+    ///
+    /// The verification pass re-enters `normalize_core_checked`, so
+    /// `IN_IDEMPOTENCY_CHECK` breaks the recursion: the inner call skips its own
+    /// check. The flag is cleared BEFORE asserting so a panic cannot leave it
+    /// stuck set for later normalizations on this thread.
+    ///
+    /// Compiled out entirely in release (`debug_assertions`), so production is
+    /// untouched and zero-cost.
+    #[cfg(debug_assertions)]
+    fn assert_idempotent(&self, variant: &HgvsVariant, normalized: &HgvsVariant) {
+        if !idempotency_self_check_enabled() || IN_IDEMPOTENCY_CHECK.with(|f| f.get()) {
+            return;
+        }
+        // RAII, not a bare `set(false)` after the call: if the verification pass
+        // panics (or unwinds for any reason) a manual reset is skipped, leaving
+        // the flag stuck `true` — which silently disables the oracle for every
+        // later normalization on this thread. A self-check that can quietly turn
+        // itself off is worse than one with a documented limit. The guard drops
+        // at the end of the block, i.e. BEFORE the assert below, so the flag is
+        // also clear on the ordinary non-idempotent-panic path.
+        struct ReentrancyGuard;
+        impl Drop for ReentrancyGuard {
+            fn drop(&mut self) {
+                IN_IDEMPOTENCY_CHECK.with(|f| f.set(false));
             }
         }
 
-        Ok(normalized)
+        let second = {
+            IN_IDEMPOTENCY_CHECK.with(|f| f.set(true));
+            let _guard = ReentrancyGuard;
+            self.normalize_core_checked(normalized)
+        };
+
+        match second {
+            Ok((again, _)) => assert_eq!(
+                normalized.to_string(),
+                again.to_string(),
+                "FERRO_ASSERT_IDEMPOTENT: normalize is not idempotent\n  \
+                 input: {variant}\n  once:  {normalized}\n  twice: {again}",
+            ),
+            Err(e) => panic!(
+                "FERRO_ASSERT_IDEMPOTENT: normalized output failed to re-normalize\n  \
+                 input: {variant}\n  once:  {normalized}\n  error: {e}",
+            ),
+        }
     }
 
     /// Normalize a variant, apply the strict-mode rejection ladder, and return
@@ -1486,6 +1523,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 return Err(err);
             }
         }
+
+        // Idempotency oracle. Placed at the single shared exit of the core so it
+        // covers `normalize()` AND every `VariantProjector` path; see
+        // `assert_idempotent` for the re-entrancy guard.
+        #[cfg(debug_assertions)]
+        self.assert_idempotent(variant, &result.result);
 
         Ok((result.result, result.warnings))
     }
