@@ -184,7 +184,7 @@ pub fn populate_mutalyzer_cache<P: AsRef<Path>>(
         let file = File::open(&manifest_path).map_err(|e| FerroError::Io {
             msg: format!("Failed to open manifest: {}", e),
         })?;
-        serde_json::from_reader(file).map_err(|e| FerroError::Json {
+        serde_json::from_reader(BufReader::new(file)).map_err(|e| FerroError::Json {
             msg: format!("Failed to parse manifest: {}", e),
         })?
     };
@@ -238,8 +238,8 @@ pub fn populate_mutalyzer_cache<P: AsRef<Path>>(
             let file = File::open(&metadata_path).map_err(|e| FerroError::Io {
                 msg: format!("Failed to open {}: {}", metadata_path.display(), e),
             })?;
-            let metadata: SupplementalMetadata =
-                serde_json::from_reader(file).map_err(|e| FerroError::Json {
+            let metadata: SupplementalMetadata = serde_json::from_reader(BufReader::new(file))
+                .map_err(|e| FerroError::Json {
                     msg: format!("Failed to parse {}: {}", metadata_path.display(), e),
                 })?;
             for (acc, info) in metadata.transcripts {
@@ -2001,7 +2001,7 @@ pub fn fetch_fasta_to_file(
         let file = File::open(&metadata_path).map_err(|e| FerroError::Io {
             msg: format!("Failed to open {}: {}", metadata_path.display(), e),
         })?;
-        serde_json::from_reader(file).unwrap_or_else(|_| SupplementalMetadata {
+        serde_json::from_reader(BufReader::new(file)).unwrap_or_else(|_| SupplementalMetadata {
             generated_at: chrono::Utc::now().to_rfc3339(),
             transcripts: std::collections::HashMap::new(),
         })
