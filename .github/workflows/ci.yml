@@ -3,8 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
+  # No `branches:` filter here on purpose. That filter matches the pull
+  # request's BASE, so `branches: [main]` silently skipped CI for every
+  # stacked PR (one whose base is another feature branch). Because the
+  # `pull_request` event never fired, such a PR had no CI runs at all, yet
+  # GitHub still rendered "All checks have passed" — a green badge that
+  # carried no information. Run on every pull request whatever it targets.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
