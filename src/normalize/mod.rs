@@ -7194,6 +7194,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     &repeat_unit,
                     *specified_count,
                     is_coding,
+                    self.config.shuffle_direction,
                 ) {
                     rules::RepeatNormResult::Deletion {
                         start: del_start,
@@ -7365,6 +7366,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 original_pos_idx,
                                 &seq_bytes,
                                 is_coding,
+                                self.config.shuffle_direction,
                             )
                         {
                             use crate::hgvs::edit::Base;
