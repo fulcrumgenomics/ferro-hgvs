@@ -1708,11 +1708,33 @@ pub fn normalize_repeat(
     // (`unit_len^2` probes). An explicit range is spelled unit-aligned by the
     // caller, so it keeps the literal unit (no search) — only length>=2 units on a
     // single anchor can be off-phase.
+    //
+    // The search is a MAXIMIZATION, not a fallback (it used to run only when the
+    // literal lookup returned `None`). A literal match that succeeds can still be
+    // the *shorter* phase: for `…ACTGAAGTGTTACTTT…` anchored at the tract's last
+    // base, literal `TG` tiles 1 copy while the `GT` rotation tiles 2 copies
+    // across the same anchor. Taking the literal hit unconditionally made
+    // normalization non-idempotent — pass 1 emitted a window covering only the
+    // short tract, and pass 2 read that as an explicit range, re-discovered the
+    // real (longer) tract and absorbed the extra copies into the count, so window
+    // AND count both grew (`r.-124ug[14]` → `r.-125_-124gu[14]` →
+    // `r.-127_-124gu[15]`). Seed `best` with the literal result and let a strictly
+    // longer spanning rotation displace it; ties keep the literal, so the only
+    // behavior change is preferring a genuinely larger tract.
     let mut working_unit = canonical_unit.to_vec();
-    let tract = match count_tandem_repeats(ref_seq, pos, &working_unit) {
-        Some(t) => Some(t),
-        None if end_pos == pos && working_unit.len() >= 2 => {
-            let mut best: Option<(u64, usize, usize, Vec<u8>)> = None;
+    let literal_tract = count_tandem_repeats(ref_seq, pos, &working_unit);
+    let tract = match literal_tract {
+        _ if end_pos == pos && working_unit.len() >= 2 => {
+            // Hold the literal seed to the SAME span test the rotations below
+            // must pass. `count_tandem_repeats` can return a tract lying entirely
+            // 5' of the anchor — e.g. `ref="ACACTT", pos=4, unit="AC"` back-scans
+            // to `start=0` and counts forward to `end=4`, so `pos < e` is false.
+            // Seeding `best` with such a tract would let a non-spanning literal
+            // out-count, and thereby suppress, a rotation that genuinely spans the
+            // anchor.
+            let mut best: Option<(u64, usize, usize, Vec<u8>)> = literal_tract
+                .filter(|&(_, s, e)| s <= pos && pos < e)
+                .map(|(c, s, e)| (c, s, e, canonical_unit.to_vec()));
             for a in 0..canonical_unit.len() {
                 let Some(anchor) = pos.checked_sub(a) else {
                     continue;
@@ -1737,7 +1759,9 @@ pub fn normalize_repeat(
                 None => None,
             }
         }
-        None => None,
+        // Explicit range, or a 1-base unit: the caller spelled it unit-aligned,
+        // so the literal lookup stands as-is.
+        other => other,
     };
     let Some((ref_count, mut ref_start, mut ref_end)) = tract else {
         return RepeatNormResult::Unchanged;
