@@ -57,6 +57,8 @@ mod convert_gff_library_parity;
 mod convert_tests;
 mod coordinate_boundary_tests;
 mod coverage_gap_tests;
+mod cross_doc_adjacent_changes;
+mod cross_doc_compliance;
 mod dbsnp_tests;
 mod del_shift_matrix;
 mod dup_shift_matrix;
