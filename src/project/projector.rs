@@ -2426,7 +2426,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         p: crate::hgvs::location::CdsPos,
         is_coding: bool,
         is_cds_input: bool,
-        input_is_transcript_coord: bool,
+        input_base_is_tx_relative: bool,
         build_hint: Option<&'static str>,
     ) -> Result<u64, FerroError> {
         use crate::hgvs::location::CdsPos;
@@ -2447,7 +2447,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             // position — feeding it to `cds_pos_from_tx_pos` would renumber it as a
             // transcript base. Leave such positions untouched so the downstream
             // CDS-aware mapping interprets the `*N` directly.
-            if !(input_is_transcript_coord && is_coding) || p.utr3 {
+            if !(input_base_is_tx_relative && is_coding) || p.utr3 {
                 return Ok(p);
             }
             if p.base < 1 {
@@ -2628,12 +2628,21 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         //    route through `data::mapping::CoordinateMapper::cds_to_genome`
         //    (which also handles intronic offsets and the `utr3` flag); the
         //    non-coding path uses `CdotTranscript::tx_to_genome` directly.
-        // `input_is_transcript_coord` distinguishes `n.`/`r.` inputs (whose
-        // `base` is a 1-based *transcript* position) from `c.` inputs (CDS
-        // coordinates). For a coding transcript an `n.`/`r.` base must be
-        // converted to a CDS coordinate before the CDS-aware genome mapping runs
-        // (#693) — without it, `n.204` is mapped as if it were `c.204`.
-        let (accession, gene_symbol, edit_mu, start_cds, end_cds, input_is_transcript_coord) =
+        // `input_base_is_tx_relative` marks the inputs whose `base` is a 1-based
+        // *transcript* position, which must be converted to a CDS coordinate
+        // before the CDS-aware genome mapping runs (#693) — without it, `n.204`
+        // is mapped as if it were `c.204`.
+        //
+        // That is `n.` only. A `c.` input is already CDS-relative, and so is an
+        // `r.` input: on a coding transcript the `r.` axis IS the `c.` axis
+        // (`r.N` describes the same base as `c.N`; HGVS
+        // `background/numbering.md` L58/L61, pinned by #469). Marking `r.` as
+        // tx-relative applied the CDS offset to a coordinate that never carried
+        // it, silently landing the genomic result `cds_start` bases away — which
+        // on a transcript with large introns is hundreds of kb (#1177). On a
+        // non-coding transcript `r.` and `n.` do coincide, but `to_cds_frame`
+        // self-gates on `is_coding`, so no conversion runs there either way.
+        let (accession, gene_symbol, edit_mu, start_cds, end_cds, input_base_is_tx_relative) =
             match variant {
                 HgvsVariant::Cds(v) => {
                     let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "c.", "start")?;
@@ -2668,7 +2677,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 HgvsVariant::Rna(v) => {
                     let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "r.", "start")?;
                     let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "r.", "end")?;
-                    // RnaPos shape mirrors CdsPos exactly.
+                    // RnaPos mirrors CdsPos in both shape AND numbering: on a
+                    // coding transcript `r.` is the `c.` axis, so this reshape is
+                    // the whole conversion and the position must NOT be rebased
+                    // again (`false` below, #1177).
                     let to_cds = |p: crate::hgvs::location::RnaPos| CdsPos {
                         base: p.base,
                         offset: p.offset,
@@ -2681,7 +2693,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                         v.loc_edit.edit.clone(),
                         to_cds(s),
                         to_cds(e),
-                        true,
+                        false,
                     )
                 }
                 _ => unreachable!("variant kind already filtered above"),
@@ -2805,7 +2817,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             start_cds,
             is_coding,
             is_cds_input,
-            input_is_transcript_coord,
+            input_base_is_tx_relative,
             build_hint,
         )?;
         let end_g = self.map_cnr_position_to_genome(
@@ -2814,7 +2826,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             end_cds,
             is_coding,
             is_cds_input,
-            input_is_transcript_coord,
+            input_base_is_tx_relative,
             build_hint,
         )?;
 
@@ -4187,51 +4199,56 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     ) -> Result<VariantProjection, FerroError> {
         use crate::reference::Strand as RefStrand;
 
-        // Pull the common pieces (accession, gene_symbol, edit, raw start/end
-        // as a transcript TxPos) out of the n. / r. input. RNA positions share
-        // the same `base`/`offset`/`utr3` shape as transcript positions, so we
-        // normalize both to `TxPos`. RNA edits carry `Base::U`; the protein
+        // Pull the common pieces (accession, gene_symbol, edit, raw start/end)
+        // out of the n. / r. input. `RnaPos` and `TxPos` share a
+        // `base`/`offset`/`utr3`↔`downstream` *shape*, so both reshape into
+        // `TxPos` — but they do NOT share an *origin*, so for an `r.` input the
+        // reshaped value is still CDS-relative and gets rebased below
+        // (`input_is_rna`, #1177). RNA edits carry `Base::U`; the protein
         // machinery reads the transcript's DNA CDS, so we translate U→T below.
-        let (accession, gene_symbol, edit_mu, axis_label, start_tx, end_tx) = match normalized {
-            HgvsVariant::Tx(v) => {
-                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "n.", "start")?;
-                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "n.", "end")?;
-                (
-                    v.accession.clone(),
-                    v.gene_symbol.clone(),
-                    v.loc_edit.edit.clone(),
-                    "n.",
-                    s,
-                    e,
-                )
-            }
-            HgvsVariant::Rna(v) => {
-                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "r.", "start")?;
-                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "r.", "end")?;
-                // RnaPos shape mirrors TxPos: base / offset / utr3↔downstream.
-                let to_tx = |p: crate::hgvs::location::RnaPos| TxPos {
-                    base: p.base,
-                    offset: p.offset,
-                    downstream: p.utr3,
-                };
-                (
-                    v.accession.clone(),
-                    v.gene_symbol.clone(),
-                    v.loc_edit.edit.clone(),
-                    "r.",
-                    to_tx(s),
-                    to_tx(e),
-                )
-            }
-            _ => {
-                return Err(FerroError::UnsupportedProjection {
-                    reason: format!(
-                        "project_noncoding_direct only accepts n./r. inputs, got {}",
-                        normalized.variant_type()
-                    ),
-                })
-            }
-        };
+        let (accession, gene_symbol, edit_mu, axis_label, raw_start, raw_end, input_is_rna) =
+            match normalized {
+                HgvsVariant::Tx(v) => {
+                    let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "n.", "start")?;
+                    let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "n.", "end")?;
+                    (
+                        v.accession.clone(),
+                        v.gene_symbol.clone(),
+                        v.loc_edit.edit.clone(),
+                        "n.",
+                        s,
+                        e,
+                        false,
+                    )
+                }
+                HgvsVariant::Rna(v) => {
+                    let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "r.", "start")?;
+                    let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "r.", "end")?;
+                    // Shape-only reshape; the numbering is still CDS-relative.
+                    let to_tx = |p: crate::hgvs::location::RnaPos| TxPos {
+                        base: p.base,
+                        offset: p.offset,
+                        downstream: p.utr3,
+                    };
+                    (
+                        v.accession.clone(),
+                        v.gene_symbol.clone(),
+                        v.loc_edit.edit.clone(),
+                        "r.",
+                        to_tx(s),
+                        to_tx(e),
+                        true,
+                    )
+                }
+                _ => {
+                    return Err(FerroError::UnsupportedProjection {
+                        reason: format!(
+                            "project_noncoding_direct only accepts n./r. inputs, got {}",
+                            normalized.variant_type()
+                        ),
+                    })
+                }
+            };
 
         // Mirror the genome path's transcript_id-mismatch guard: an n./r. input
         // must be projected against its own transcript.
@@ -4251,7 +4268,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // it up front to match the coding-path contract. (Transcript positions
         // cannot carry chromosome-arm markers — only `CdsPos` has a `special`
         // field — so there is no pter/qter/cen case to handle here.)
-        if start_tx.base == 0 || end_tx.base == 0 {
+        if raw_start.base == 0 || raw_end.base == 0 {
             return Err(FerroError::UnsupportedProjection {
                 reason: format!(
                     "cannot resolve `?` position sentinel on direct {axis_label}→p. projection"
@@ -4268,7 +4285,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // `downstream` into `CdsPos.utr3` (which `cds_to_genome` honors), but the
         // direct path has no exon-aware 3'UTR translation, so reject these up
         // front rather than mis-project them.
-        if start_tx.downstream || end_tx.downstream {
+        if raw_start.downstream || raw_end.downstream {
             return Err(FerroError::UnsupportedProjection {
                 reason: format!(
                     "cannot project 3'-downstream (`*N`) positions on direct {axis_label}→p. \
@@ -4309,6 +4326,39 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // one, else the metadata gene symbol; mirrors the coding path.
         let gene_symbol = gene_symbol.or(gene_symbol_meta);
 
+        // #1177: rebase an `r.` input onto the transcript axis. On a CODING
+        // transcript `r.` is CDS-relative — the same axis as `c.`, so `r.N`
+        // describes the same base as `c.N` (HGVS `background/numbering.md`
+        // L58/L61, pinned by #469) — whereas everything below this point works in
+        // 1-based transcript coordinates. Reshaping `RnaPos` into `TxPos` above
+        // matched the struct but not the origin, so without this step the CDS
+        // offset was applied to a coordinate that never carried it: every `r.`
+        // input came out shifted by `cds_start`, silently, on the c./n./r. axes
+        // and on the derived protein gate.
+        //
+        // On a NON-CODING transcript there is no CDS for `r.` to be relative to,
+        // so the two axes genuinely coincide and the reshape alone is already
+        // correct — hence the `is_coding` gate (and `cds_to_tx` would error
+        // there anyway, having no CDS bounds to work from).
+        let (start_tx, end_tx) = if input_is_rna && is_coding {
+            let mapper = crate::convert::mapper::CoordinateMapper::new(&tx);
+            // Re-label rather than convert: these values are already CDS-relative,
+            // and `cds_to_tx` is the exon-aware inverse of the `tx_to_cds` applied
+            // below. `utr3` is known false — the `*N` guard above rejected it.
+            let to_cds = |p: TxPos| CdsPos {
+                base: p.base,
+                offset: p.offset,
+                utr3: p.downstream,
+                special: None,
+            };
+            (
+                mapper.cds_to_tx(&to_cds(raw_start))?,
+                mapper.cds_to_tx(&to_cds(raw_end))?,
+            )
+        } else {
+            (raw_start, raw_end)
+        };
+
         let edit = edit_mu
             .inner()
             .cloned()
@@ -4326,12 +4376,12 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // For an `n.` input that IS the input; for an `r.` input the input is an
         // RNA description (`r.` prefix, lowercase RNA alphabet with `u`), and
         // returning it verbatim reports the wrong coordinate system on the `n.`
-        // axis. Numbering is shared between the two — `RnaPos` and `TxPos` have
-        // the same base/offset/downstream shape, which is exactly how
-        // `start_tx`/`end_tx` were derived above — so re-expressing an `r.` input
-        // as `n.` is a prefix + alphabet change only (`c_edit`'s U→T mapping).
-        // The edit's certainty is carried through so a predicted `r.(11u>g)`
-        // stays predicted on the `n.` axis.
+        // axis. Re-expressing it is a prefix + alphabet change (`c_edit`'s U→T
+        // mapping) **plus** a change of origin on a coding transcript, where `r.`
+        // is CDS-relative and `n.` is transcript-relative; `start_tx`/`end_tx`
+        // above already carry that rebase (#1177), so use them rather than the
+        // input's own positions. The edit's certainty is carried through so a
+        // predicted `r.(11u>g)` stays predicted on the `n.` axis.
         let noncoding_axis = match normalized {
             HgvsVariant::Rna(_) => HgvsVariant::Tx(TxVariant {
                 accession: accession.clone(),
