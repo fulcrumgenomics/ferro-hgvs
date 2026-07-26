@@ -313,6 +313,15 @@ pub fn find_homopolymer_at(ref_seq: &[u8], pos: usize) -> Option<RepeatAnalysis>
 /// the tract (#8), which is what makes the emitted repeat a fixed point under
 /// re-normalization.
 ///
+/// # The codon gate is answered for the tract, not the input (#1210)
+///
+/// `is_coding` is the caller's verdict for the *input* edit's span. Where
+/// `cds_span` is supplied it takes precedence, and the gate is re-answered for
+/// the tandem tract this function discovers — the span the emitted repeat
+/// actually occupies. The two differ exactly when the edit shifts across
+/// `cds_end`, which is where the non-idempotency lived. Pass `None` (genomic,
+/// `n.`, or any caller with no CDS context) to keep `is_coding` verbatim.
+///
 /// This function owns only the insertion-specific work: rotation-aware
 /// discovery of the adjacent tandem tract (`find_tandem_extent`) and the #882
 /// preservation gate. The canonicalization arithmetic — the 3'-phase
@@ -328,6 +337,7 @@ pub fn insertion_to_repeat(
     pos: u64,
     inserted_seq: &[u8],
     is_coding: bool,
+    cds_span: Option<(u64, u64)>,
     direction: crate::normalize::config::ShuffleDirection,
 ) -> Option<(u8, u64, u64, u64, Vec<u8>)> {
     if inserted_seq.is_empty() {
@@ -364,6 +374,37 @@ pub fn insertion_to_repeat(
     let (unit, ref_start, ref_count) = best?;
     let ref_end_excl = ref_start + ref_count as usize * unit.len();
 
+    // #1210: answer the codon gate for the span the REPEAT will occupy, not for
+    // the span the input insertion occupied.
+    //
+    // `is_coding` is precomputed by the caller for the *input* edit. That is the
+    // wrong question here: the discovered tandem tract is a different span, and a
+    // CDS-resident input can 3'-shift clean out of the CDS, so the two disagree
+    // precisely at the `cds_end` boundary. `r.15delinsgaa` on a transcript whose
+    // CDS ends at `r.15` reduces to an insertion that lands in the 3'UTR at
+    // `r.*1_*2`; gating it on the input's CDS-residency suppressed the repeat on
+    // pass 1, while pass 2 — whose input was by then UTR-resident — emitted
+    // `r.*1a[3]`, so normalization was not idempotent.
+    //
+    // `cds_span` exists for exactly this ("lets a site that decides about a
+    // DIFFERENT span ask about that span instead", #1185); this is the second
+    // site to need it. `None` keeps the caller's precomputed verdict, so callers
+    // with no CDS context (genomic / `n.`) and the unit tests below are
+    // unaffected.
+    //
+    // Frames line up: `ref_start` / `ref_end_excl` are 0-based indices into the
+    // transcript-frame `ref_seq`, and `cds_span` is 1-based inclusive in that
+    // same frame, so the 1-based inclusive tract is
+    // `(ref_start + 1) ..= ref_end_excl`.
+    let gate_is_coding = match cds_span {
+        Some((cds_start, cds_end)) => {
+            let tract_start = ref_start as u64 + 1;
+            let tract_end = ref_end_excl as u64;
+            tract_start >= cds_start && tract_end <= cds_end
+        }
+        None => is_coding,
+    };
+
     // #866: delegate the canonical-window + count + codon-gate decision to
     // `normalize_repeat` (the single source of truth for ins→repeat
     // canonicalization). Re-express the discovered tract as the well-formed
@@ -384,7 +425,7 @@ pub fn insertion_to_repeat(
         end_pos_incl,
         &unit,
         target,
-        is_coding,
+        gate_is_coding,
         direction,
     ) {
         RepeatNormResult::Repeat {
@@ -3054,7 +3095,7 @@ mod tests {
         // 2-copy reference window. Hand-verified: unit GT, count 5, 1-based 3_6.
         let r = b"CTGTGTT";
         let (base, count, start, end, unit) =
-            insertion_to_repeat(r, 4, b"TGTGTG", false, ShuffleDirection::ThreePrime)
+            insertion_to_repeat(r, 4, b"TGTGTG", false, None, ShuffleDirection::ThreePrime)
                 .expect("repeat");
         assert_eq!(base, b'G');
         assert_eq!(count, 5);
@@ -3204,6 +3245,7 @@ mod tests {
                 c.ins_pos,
                 c.ins_seq,
                 false,
+                None,
                 ShuffleDirection::ThreePrime,
             )
             .unwrap_or_else(|| panic!("insertion_to_repeat None for {:?}", c.ref_seq));
@@ -3239,7 +3281,15 @@ mod tests {
         // `normalize_repeat` routes the expansion to `Insertion`. Kept out of the shared
         // loop above (which unwraps a `Repeat`) since this case is intentionally None.
         assert!(
-            insertion_to_repeat(b"CAAAAAC", 5, b"AA", true, ShuffleDirection::ThreePrime).is_none(),
+            insertion_to_repeat(
+                b"CAAAAAC",
+                5,
+                b"AA",
+                true,
+                None,
+                ShuffleDirection::ThreePrime
+            )
+            .is_none(),
             "coding non-codon-aligned expansion must not be repeat notation"
         );
         match normalize_repeat(
@@ -3679,7 +3729,8 @@ mod tests {
         // insertion point. pos=7 means insert between index 7 and 8 — i.e.,
         // immediately after the last A in the homopolymer. Inserting AA here
         // should become A[7] (5 ref + 2 inserted).
-        let result = insertion_to_repeat(ref_seq, 7, b"AA", false, ShuffleDirection::ThreePrime);
+        let result =
+            insertion_to_repeat(ref_seq, 7, b"AA", false, None, ShuffleDirection::ThreePrime);
         assert!(result.is_some());
         let (base, count, start, end, _unit) = result.unwrap();
         assert_eq!(base, b'A');
@@ -3688,15 +3739,18 @@ mod tests {
         assert_eq!(end, 8); // 1-indexed end of A region in reference (per HGVS, positions refer to reference tract)
 
         // Single-copy inserts (added_copies < 2) are duplications, not repeats.
-        let result = insertion_to_repeat(ref_seq, 7, b"A", false, ShuffleDirection::ThreePrime);
+        let result =
+            insertion_to_repeat(ref_seq, 7, b"A", false, None, ShuffleDirection::ThreePrime);
         assert!(result.is_none());
 
         // Inserting T (non-matching) should return None
-        let result = insertion_to_repeat(ref_seq, 7, b"T", false, ShuffleDirection::ThreePrime);
+        let result =
+            insertion_to_repeat(ref_seq, 7, b"T", false, None, ShuffleDirection::ThreePrime);
         assert!(result.is_none());
 
         // Inserting mixed bases should return None
-        let result = insertion_to_repeat(ref_seq, 7, b"AT", false, ShuffleDirection::ThreePrime);
+        let result =
+            insertion_to_repeat(ref_seq, 7, b"AT", false, None, ShuffleDirection::ThreePrime);
         assert!(result.is_none());
 
         // Multi-base tandem unit: insert ACAC into ACAC tract → AC[4].
@@ -3704,7 +3758,14 @@ mod tests {
         // (pos=3, between A at index 3 and base at index 4). Expected:
         // 2 ref AC units + 2 inserted AC units = AC[4] at ref indices 0..3.
         let ref_ac = b"ACACGGG";
-        let result = insertion_to_repeat(ref_ac, 3, b"ACAC", false, ShuffleDirection::ThreePrime);
+        let result = insertion_to_repeat(
+            ref_ac,
+            3,
+            b"ACAC",
+            false,
+            None,
+            ShuffleDirection::ThreePrime,
+        );
         assert!(result.is_some());
         let (base, count, start, end, unit) = result.unwrap();
         assert_eq!(base, b'A');
@@ -4334,7 +4395,8 @@ mod tests {
         // emit A[7], but unit_len=1 is not a multiple of 3 in c. context,
         // so the gate returns None.
         let ref_seq = b"CAAAAAC";
-        let result = insertion_to_repeat(ref_seq, 5, b"AA", true, ShuffleDirection::ThreePrime);
+        let result =
+            insertion_to_repeat(ref_seq, 5, b"AA", true, None, ShuffleDirection::ThreePrime);
         assert!(
             result.is_none(),
             "is_coding=true + unit_len=1 must return None"
@@ -4346,7 +4408,14 @@ mod tests {
         // Reference: AT[3] tandem flanked by Cs. Insert ATAT → unit_len=2,
         // gate blocks in coding context.
         let ref_seq = b"CATATATC";
-        let result = insertion_to_repeat(ref_seq, 6, b"ATAT", true, ShuffleDirection::ThreePrime);
+        let result = insertion_to_repeat(
+            ref_seq,
+            6,
+            b"ATAT",
+            true,
+            None,
+            ShuffleDirection::ThreePrime,
+        );
         assert!(
             result.is_none(),
             "is_coding=true + unit_len=2 must return None"
@@ -4358,7 +4427,14 @@ mod tests {
         // Reference: CAG[3] tandem. Insert CAGCAG → unit_len=3, codon-aligned,
         // gate passes; result is Some(...) carrying CAG[5].
         let ref_seq = b"CCAGCAGCAGT";
-        let result = insertion_to_repeat(ref_seq, 9, b"CAGCAG", true, ShuffleDirection::ThreePrime);
+        let result = insertion_to_repeat(
+            ref_seq,
+            9,
+            b"CAGCAG",
+            true,
+            None,
+            ShuffleDirection::ThreePrime,
+        );
         assert!(
             result.is_some(),
             "is_coding=true + unit_len=3 must allow rewrite"
@@ -4373,7 +4449,8 @@ mod tests {
         // Same A-homopolymer case as the blocking test, but is_coding=false
         // → gate is a no-op, repeat rewrite proceeds.
         let ref_seq = b"CAAAAAC";
-        let result = insertion_to_repeat(ref_seq, 5, b"AA", false, ShuffleDirection::ThreePrime);
+        let result =
+            insertion_to_repeat(ref_seq, 5, b"AA", false, None, ShuffleDirection::ThreePrime);
         assert!(result.is_some(), "is_coding=false must not gate");
     }
 
@@ -5400,7 +5477,9 @@ mod tests {
         // TGCGCA: insGCGC at the G|C cut (pos=1) is out of phase with the GC
         // tract; today it wrongly becomes GC[4]. Must be None now.
         let r = b"TGCGCA";
-        assert!(insertion_to_repeat(r, 1, b"GCGC", false, ShuffleDirection::ThreePrime).is_none());
+        assert!(
+            insertion_to_repeat(r, 1, b"GCGC", false, None, ShuffleDirection::ThreePrime).is_none()
+        );
     }
 
     #[test]
@@ -5408,7 +5487,7 @@ mod tests {
         // In-phase rotation insCGCG reaches the same GC[4] window and is preserved.
         let r = b"TGCGCA";
         let (_b, count, start, end, unit) =
-            insertion_to_repeat(r, 1, b"CGCG", false, ShuffleDirection::ThreePrime)
+            insertion_to_repeat(r, 1, b"CGCG", false, None, ShuffleDirection::ThreePrime)
                 .expect("in-phase should convert");
         assert_eq!(count, 4);
         assert_eq!((start, end), (2, 5));

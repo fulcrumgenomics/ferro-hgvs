@@ -7833,6 +7833,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 original_pos_idx,
                                 &seq_bytes,
                                 is_coding,
+                                // #1210: `is_coding` is the INPUT span's verdict;
+                                // `cds_span` lets the helper re-ask about the tract
+                                // the repeat would actually occupy, which differs
+                                // whenever the edit shifts across `cds_end`.
+                                cds_span,
                                 self.config.shuffle_direction,
                             )
                         {
