@@ -6,3 +6,7 @@
 # everyone who runs the test benefits from these saved cases.
 cc bf332dd0e9d843159242ec546b6e1eb7518b888030fe9438d344dd93044a7394 # shrinks to case = Case { core: "GTGTGTGTGTGCTCC", sys: Genomic, hgvs: "NC_TEST.1:g.267_268insTG" }
 cc ddec17ccae74300ac0056191f141ead3b469a70af2b335c064a8300fd22ad3fc # shrinks to case = Case { core: "CCCAAACCC", sys: CdsPlus, hgvs: "NM_TEST.1:c.4A[5]" }, dir = FivePrime
+cc ce2247887cce1fd6f6e7f2854dccbb108e64e6aac1a4ae826d5403a5c2853f0e # shrinks to case = Case { core: "CCCCAAAAAAAGGGG", sys: NoncodingPlus, hgvs: "NR_TEST.1:n.1_2insGC" }
+cc 87f7c72196c50a21cb8322872c481d0e71cd9867a62d343a467e434d803c89eb # shrinks to case = Case { core: "CCCCAAAAAAGGGG", sys: RnaCodingPlus, hgvs: "NM_TEST.1:r.1_2dup" }
+cc 963ed918c565168dda03912561f65f99d0a3a5398c144fdd1dd0157e4c5563ae # shrinks to case = Case { core: "CCCCAAAAAAGGGG", sys: RnaCodingPlus, hgvs: "NM_TEST.1:r.11_12dup" }
+cc 8d1ceaa8eae1c6162271d431b2cb4395e0359a560661739dc5402acd0d9bdf33 # shrinks to case = Case { core: "CCCCAACACACGGGG", sys: RnaCodingPlus, hgvs: "NM_TEST.1:r.15delinsgaa" }

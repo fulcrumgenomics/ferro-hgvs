@@ -19,7 +19,21 @@ const TX_ACCESSION: &str = "NM_TEST.1";
 const NR_ACCESSION: &str = "NR_TEST.1";
 const TX_CONTIG: &str = "chr_synth";
 
-fn padded(core: &str) -> String {
+/// Wrap `core` in [`PAD_OFFSET`] bases of `ACGT…` padding on each side.
+///
+/// Used internally by every builder to keep the normalizer's 100bp window in
+/// bounds. It is also public so a caller can build a **transcript** out of the
+/// padded string and thereby give that transcript a real 5'UTR: passing
+/// `padded(core)` to [`SyntheticBuilder::cds`] with `cds_start = PAD_OFFSET + 1`
+/// puts core base `p` at CDS position `p`, while the CDS translation itself is
+/// non-trivial (offset by [`PAD_OFFSET`]) rather than the identity you get from
+/// `cds_start == 1`.
+///
+/// The padding is a perfect period-4 `ACGT` tandem: the base immediately 5' of
+/// the core is `T` and the base immediately 3' of it is `A`. A core whose first
+/// base is not `A` and whose last base is not `T` therefore cannot extend the
+/// pad's own rotation, which is what bounds a repeat tract to the core.
+pub fn padded(core: &str) -> String {
     format!("{}{}{}", PAD, core, PAD)
 }
 
