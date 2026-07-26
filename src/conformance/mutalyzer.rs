@@ -480,10 +480,21 @@ pub enum Policy {
     /// #486 errors axis: ferro rejects an HGVS-invalid input at *parse* time
     /// with a structured parse error — single-position insertion
     /// (`EINSERTIONRANGE`, also flanked by `EOVERLAP`), malformed concatenation,
-    /// missing axis prefix, or an incomplete edit — whereas mutalyzer rejects
+    /// missing axis prefix, an incomplete edit, or a **sized suffix on a
+    /// single-position anchor** (`c.45del4` / `c.45dup4`: naming one endpoint
+    /// leaves it undefined whether the edit starts at or after the anchor, so
+    /// `checklist.md:49` / `DNA/deletion.md:117` / `DNA/duplication.md:140`
+    /// decline the shape and ferro will not guess) — whereas mutalyzer rejects
     /// the same input downstream with a semantic code (`EINTRONIC`, `ENOCDS`,
-    /// `EREPEATUNSUPPORTED`, `EVARIANTNOTSUPPORTED`). Both reject the input;
-    /// only the error taxonomy differs, so the rejection is accepted.
+    /// `EREPEATUNSUPPORTED`, `EVARIANTNOTSUPPORTED`, `ELENGTHMISMATCH`). Both
+    /// reject the input; only the error taxonomy differs, so the rejection is
+    /// accepted.
+    ///
+    /// The boundary is narrow and worth stating: the *delins* form of the same
+    /// shape (`c.45del4insATC`) DOES parse in ferro — the sized `del4` is a
+    /// deleted-length there, not a lone endpoint — and then fails the
+    /// reference-length check, so it matches `ELENGTHMISMATCH` directly and
+    /// carries no annotation.
     #[serde(rename = "ferro-policy-486-parse-time-rejection-taxonomy")]
     ParseTimeRejectionTaxonomy486,
     /// #486 errors axis: ferro does not validate that a parenthesised transcript

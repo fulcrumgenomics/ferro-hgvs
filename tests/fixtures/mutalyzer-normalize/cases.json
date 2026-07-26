@@ -1995,7 +1995,12 @@
       "errors": [
         "ELENGTHMISMATCH"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "The spec forbids this FORM outright, so ferro rejects it at parse time (InvalidEdit) rather than parsing it and complaining about the length. Verified against the spec source: checklist.md:49 marks it invalid -- 'Descriptions like g.123del3 are not allowed, correct is g.123_125del' (the g.123del3 is tagged class=invalid); DNA/deletion.md repeats it under Discussion -- 'Can I use NG_012232.1:g.123del6 to describe a 6 nucleotide deletion? No, a deletion of more than one residue should mention the first and last residue deleted, separated using the range symbol'. Mutalyzer parses the shape and reports the semantic ELENGTHMISMATCH instead. BOTH REJECT the input -- ferro is the stricter of the two, not the more lenient -- and only the error taxonomy differs, which the spec does not legislate. That is why this is an accepted_divergence on taxonomy rather than a spec_citation: a spec_citation would assert mutalyzer is contrary to spec, and it is not (it rejects too). Note the delins form (NM_000143.3:c.45del4insATC) DOES parse in ferro -- the sized del4 is a deleted-length there, not a lone endpoint -- and hits the reference-length check, so it matches ELENGTHMISMATCH directly and needs no annotation."
+      }
     },
     {
       "keywords": [
@@ -2235,7 +2240,12 @@
       "errors": [
         "ELENGTHMISMATCH"
       ],
-      "to_test": true
+      "to_test": true,
+      "accepted_divergence": {
+        "axis": "errors",
+        "policy": "ferro-policy-486-parse-time-rejection-taxonomy",
+        "note": "The spec forbids this FORM outright, so ferro rejects it at parse time (InvalidEdit). Verified against the spec source, DNA/duplication.md:140 -- 'Can I use g.123dup6 to describe a 6 nucleotide duplication? No, a duplication of more than one nucleotide should give the position of the first and last nucleotide duplicated, separated using the range symbol' (the g.123dup6 is tagged class=invalid). Line 143 gives the reason ferro's diagnostic paraphrases: 'from the description g.123dup6 it is not clear whether the duplication starts AT position g.123 (so g.123_128dup) or AFTER position 123 (so g.124_129dup)' -- the shape is genuinely ambiguous, so ferro declines to guess an endpoint. Mutalyzer parses the shape and reports the semantic ELENGTHMISMATCH instead. BOTH REJECT the input -- ferro is the stricter of the two -- and only the error taxonomy differs, which the spec does not legislate. Same family as the c.45del4 row above; see it for why this is an accepted_divergence rather than a spec_citation."
+      }
     },
     {
       "keywords": [
