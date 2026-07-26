@@ -38,59 +38,101 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-/// Path to an already-built example binary, if the test profile produced one.
+/// Build the two generator examples exactly once per test binary, and return
+/// the path to the requested one.
 ///
-/// `cargo test` / `cargo nextest run` build the crate's examples alongside the
-/// test binaries, so by the time these tests execute, `target/<profile>/examples/`
-/// is populated **and current** — it was built from the same source tree in the
-/// same invocation. Locating it relative to the running test executable rather
-/// than to a hardcoded `debug/` keeps it correct under `--release` and under a
-/// nextest archive extracted into the workspace.
+/// # Why not just `cargo run --example`
 ///
-/// The test binary lives at `…/target/<profile>/deps/it-<hash>`, so the examples
-/// directory is two levels up plus `examples/`.
-fn prebuilt_example(example: &str) -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let candidate = exe
-        .parent()? // …/deps
-        .parent()? // …/<profile>
-        .join("examples")
-        .join(example);
-    candidate.is_file().then_some(candidate)
-}
+/// That is what this module did originally, and it was pathologically slow —
+/// but not for the reason it looks like. Cargo takes a **file lock on
+/// `target/`**, so the four tests here, which nextest runs concurrently,
+/// serialised behind one another: each reported ~25s even against a fully warm
+/// build tree, and in CI they blew past nextest's 60s SLOW threshold and made
+/// whichever shard held them the critical path of the whole test job.
+///
+/// # Why not just invoke `target/<profile>/examples/<name>` directly
+///
+/// Tried, and it is **wrong**. `cargo test` / `cargo nextest run` do *not*
+/// rebuild examples, so the binary sitting in `examples/` can be arbitrarily
+/// old. Observed directly: a `generate_spec_enumeration` binary from the
+/// previous day produced the pre-#1201 error message, and this module's test
+/// for #1201's guard failed against source that unmistakably contained it. A
+/// stale binary makes these tests assert things about code that is not the code
+/// under test — a far worse failure than being slow.
+///
+/// # What this does
+///
+/// One `cargo build` for both examples, behind a `Once`, then direct execution.
+/// The build is current by construction, and it happens exactly once no matter
+/// how many tests run concurrently — so the cargo lock is taken once rather
+/// than per test, which is where the speedup comes from.
+///
+/// `FERRO_PREBUILT_EXAMPLES` skips even that single build, for the one context
+/// where the binaries are known-current and cargo is unavailable: CI's sharded
+/// test jobs, which run from a nextest archive after `test-build` has already
+/// built and executed both generators.
+fn built_example(example: &str) -> PathBuf {
+    static BUILD: std::sync::Once = std::sync::Once::new();
+    static BUILD_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Run a `--features dev` example with `args`, returning its captured output.
-///
-/// Prefers the prebuilt binary over `cargo run`. This is a large speedup, and
-/// not for the reason it first appears: the cost of `cargo run` here was never
-/// mostly compilation. Cargo takes a **file lock on `target/`**, so the four
-/// tests in this module — which nextest runs concurrently — serialised behind
-/// one another, each reporting ~25s even against a fully warm build tree. In CI
-/// they exceeded 60s and tripped nextest's SLOW threshold, making whichever
-/// shard they landed in the critical path of the whole test job.
-///
-/// Falls back to `cargo run` when no prebuilt example exists, so a fresh
-/// worktree (the exact scenario this module was written to protect) still
-/// works.
-fn run_example(example: &str, args: &[&str]) -> Output {
-    let mut cmd = match prebuilt_example(example) {
-        Some(bin) => Command::new(bin),
-        None => {
-            let mut c = Command::new(env!("CARGO"));
-            c.args([
-                "run",
+    // CI builds both examples in the `test-build` job (it runs them to generate
+    // the spec artifacts) and sets this variable, so the sharded test jobs —
+    // which execute from a nextest archive and have no cargo build state at all
+    // — must not shell out to cargo. A cargo invocation there would rebuild the
+    // world per shard.
+    let prebuilt = std::env::var_os("FERRO_PREBUILT_EXAMPLES").is_some();
+
+    BUILD.call_once(|| {
+        if prebuilt {
+            BUILD_OK.store(true, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
+        let status = Command::new(env!("CARGO"))
+            .current_dir(manifest_dir())
+            .args([
+                "build",
                 "--quiet",
                 "--features",
                 "dev",
                 "--example",
-                example,
-                "--",
-            ]);
-            c
-        }
-    };
-    cmd.current_dir(manifest_dir()).args(args);
-    cmd.output()
+                "generate_spec_fixture",
+                "--example",
+                "generate_spec_enumeration",
+            ])
+            .status();
+        let ok = matches!(status, Ok(s) if s.success());
+        BUILD_OK.store(ok, std::sync::atomic::Ordering::SeqCst);
+    });
+    assert!(
+        BUILD_OK.load(std::sync::atomic::Ordering::SeqCst),
+        "failed to build the generator examples"
+    );
+
+    // The test binary lives at `…/target/<profile>/deps/it-<hash>`, so the
+    // examples directory is two levels up. Deriving it from `current_exe`
+    // rather than hardcoding `debug/` keeps this correct under `--release` and
+    // under a nextest archive extracted into the workspace.
+    let exe = std::env::current_exe().expect("current_exe");
+    let path = exe
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("target/<profile>")
+        .join("examples")
+        .join(example);
+    assert!(
+        path.is_file(),
+        "expected a freshly built example at {}",
+        path.display()
+    );
+    path
+}
+
+/// Run a `--features dev` example with `args`, returning its captured output.
+fn run_example(example: &str, args: &[&str]) -> Output {
+    Command::new(built_example(example))
+        .current_dir(manifest_dir())
+        .args(args)
+        .output()
         .unwrap_or_else(|e| panic!("failed to run `{example}`: {e}"))
 }
 
