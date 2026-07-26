@@ -187,20 +187,30 @@ mod cds_plus {
 
     #[rstest]
     fn multi_copy_ins_homopolymer_unit_blocks_in_cds() {
-        // unit_len=1 in c. → codon-frame gate forbids A[N]. Caller emits
-        // ins literal at the 3' tract flanking position.
+        // unit_len=1 in c. → the codon-frame gate forbids A[N]. The fallback is
+        // the `dup` the spec prescribes for this shape, not an `ins` literal
+        // (#1204, `repeated.md` L22: "use `c.2692_2693dup` and **not**
+        // `c.2686A[10]`"): the two added A's copy the 3'-most pair of the 4-A
+        // tract at c.3_6, so the 3'-rule dup is c.5_6.
         let p = provider("ACAAAACGTACGTACGTAC");
         let result = normalize_to_string(p, &hgvs("NM_TEST.1:c.{0}_{1}insAA", &[2, 3]));
-        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}insAA", &[6, 7]));
+        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}dup", &[5, 6]));
     }
 
     #[rstest]
     fn multi_copy_ins_dinucleotide_unit_blocks_in_cds() {
-        // unit_len=2 in c. → gate forbids AT[N]. Mirrors the spec's
-        // c.1741_1742insTATATATA example.
+        // unit_len=2 in c. → the gate forbids AT[N], and the fallback is a `dup`
+        // (#1204). Previously asserted as `c.7_8insATAT` and described as
+        // mirroring the spec's `c.1741_1742insTATATATA` example — it does not:
+        // there, four `TA` copies are added to a two-copy tract, so the added
+        // bases are longer than the whole tract and no `dup` describes them. Here
+        // the added `ATAT` sits inside a six-base `AT` tract (c.2_7) and copies
+        // c.4_7 exactly, which is the spec's FIRST replacement, the `dup` one.
+        // `ins_shift_matrix`'s case 2 covers the genuinely-longer-than-the-tract
+        // shape.
         let p = provider("CATATATCACGTACGTACGT");
         let result = normalize_to_string(p, &hgvs("NM_TEST.1:c.{0}_{1}insATAT", &[1, 2]));
-        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}insATAT", &[7, 8]));
+        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}dup", &[4, 7]));
     }
 
     #[rstest]
@@ -210,8 +220,11 @@ mod cds_plus {
         // `insertion_to_duplication`) emits `dup` at the tract-aligned 3'-most
         // position; the codon-frame gate does NOT block single-copy
         // additions, since the gate fires only when the alt itself is >=2
-        // copies of a non-codon-aligned unit. Regression lock-in for the
-        // codon_blocks_dup guard applied to the fast path.
+        // copies of a non-codon-aligned unit. Unaffected by #1204, which removed
+        // that gate from the dup paths entirely: it was provably dead on this
+        // one (`insertion_to_duplication` returns `Some` only for single-copy
+        // alts, where the gate's `smallest_unit.len() < alt.len()` clause is
+        // false), so this case pinned the fast path before and pins it now.
         let p = provider("CATATATCACGTACGTACGT");
         let result = normalize_to_string(p, &hgvs("NM_TEST.1:c.{0}_{1}insAT", &[1, 2]));
         assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}dup", &[6, 7]));
@@ -229,13 +242,17 @@ mod cds_plus {
     fn round_trip_dup_form_and_repeat_form_in_cds() {
         // Round-trip lock: dup-form and repeat-form of the same edit must
         // canonicalize identically under the codon-frame gate. 4-A ref,
-        // c.3_4dup vs c.3_6A[6] both → `c.6_7insAA`.
+        // c.3_4dup vs c.3_6A[6] both → `c.5_6dup` (#1204 re-blessed the shared
+        // target from `c.6_7insAA`; the agreement itself is what this locks, and
+        // #1204 is what made the `unit[N]` spelling reach the same
+        // canonicalization as the other two rather than short-circuiting to a raw
+        // `ins`).
         let p1 = provider("ACAAAACGTACGTACGTAC");
         let p2 = provider("ACAAAACGTACGTACGTAC");
         let r1 = normalize_to_string(p1, &hgvs("NM_TEST.1:c.{0}_{1}dup", &[3, 4]));
         let r2 = normalize_to_string(p2, &hgvs("NM_TEST.1:c.{0}_{1}A[6]", &[3, 6]));
         assert_eq!(r1, r2, "dup-form and repeat-form must agree");
-        assert_eq!(r1, hgvs("NM_TEST.1:c.{0}_{1}insAA", &[6, 7]));
+        assert_eq!(r1, hgvs("NM_TEST.1:c.{0}_{1}dup", &[5, 6]));
     }
 }
 
@@ -259,7 +276,7 @@ mod cds_minus {
     fn multi_copy_ins_homopolymer_unit_blocks_in_cds_minus() {
         let p = provider("ACAAAACGTACGTACGTAC");
         let result = normalize_to_string(p, &hgvs("NM_TEST.1:c.{0}_{1}insAA", &[2, 3]));
-        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}insAA", &[6, 7]));
+        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}dup", &[5, 6]));
     }
 
     #[rstest]
@@ -268,7 +285,7 @@ mod cds_minus {
         // Mirrors cds_plus::multi_copy_ins_dinucleotide_unit_blocks_in_cds.
         let p = provider("CATATATCACGTACGTACGT");
         let result = normalize_to_string(p, &hgvs("NM_TEST.1:c.{0}_{1}insATAT", &[1, 2]));
-        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}insATAT", &[7, 8]));
+        assert_eq!(result, hgvs("NM_TEST.1:c.{0}_{1}dup", &[4, 7]));
     }
 
     #[rstest]

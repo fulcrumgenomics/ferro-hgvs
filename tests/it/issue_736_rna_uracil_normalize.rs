@@ -67,12 +67,16 @@ fn rna_two_base_u_insertion_is_gated_like_the_c_axis() {
     // RNA reference for units whose length is not a multiple of 3, and a
     // homopolymer unit is length 1, so the codon-frame gate must fire. On the
     // same transcript and bases the three axes now read:
-    //   c.3_4insTT  -> c.5_6insTT   (gated: coding, unit not codon-aligned)
-    //   r.3_4insuu  -> r.5_6insuu   (must match c.; this assertion)
+    //   c.3_4insTT  -> c.4_5dup     (gated: coding, unit not codon-aligned)
+    //   r.3_4insuu  -> r.4_5dup     (must match c.; this assertion)
     //   n.3_4insTT  -> n.3_5T[5]    (no reading frame, so repeat notation is fine)
-    // The `u` spelling of the inserted bases — the point of #736 — survives the
-    // round trip, which is what this file exists to pin.
-    assert_eq!(normalize("NM_U.1:r.3_4insuu"), "NM_U.1:r.5_6insuu");
+    // Re-blessed again by #1204: the gate refuses repeat notation, and the
+    // fallback is the `dup` the same spec sentence prescribes rather than an `ins`
+    // literal — here over `r.4_5`, the 3'-most pair of the `TTT` run at r.3_5.
+    // Note the canonical `dup` carries no bases at all, so the `u`-spelling
+    // round trip that #736 is about is pinned by the single-`u` case above (which
+    // has always collapsed to `r.5dup`) and by the `insgg` case below, not here.
+    assert_eq!(normalize("NM_U.1:r.3_4insuu"), "NM_U.1:r.4_5dup");
 }
 
 /// The two sibling axes the re-blessing above is justified against. They were
@@ -86,8 +90,9 @@ fn rna_two_base_u_insertion_is_gated_like_the_c_axis() {
 fn c_and_n_axes_bracket_the_gated_r_axis_expectation() {
     assert_eq!(
         normalize("NM_U.1:c.3_4insTT"),
-        "NM_U.1:c.5_6insTT",
-        "c. is gated: coding footprint, unit length 1 is not codon-aligned",
+        "NM_U.1:c.4_5dup",
+        "c. is gated: coding footprint, unit length 1 is not codon-aligned, so \
+         repeat notation is refused and the fallback is the prescribed dup (#1204)",
     );
     assert_eq!(
         normalize("NM_U.1:n.3_4insTT"),

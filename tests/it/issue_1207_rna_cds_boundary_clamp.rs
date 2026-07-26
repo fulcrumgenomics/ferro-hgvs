@@ -1,5 +1,8 @@
 //! Issue #1207 — an `r.`-axis insertion that saturates at a CDS boundary must be
-//! clamped to a `delins`, exactly as the `c.` axis already does.
+//! clamped to a `delins`, exactly as the `c.` axis already does. (See the #1204
+//! note below: the `dup`-spelled repros this was filed with now resolve to a `dup`
+//! before reaching the clamp, so the clamp itself is pinned on the insertion
+//! shapes no duplication describes.)
 //!
 //! `normalize_cds` has rewritten a saturated insertion at `cds_start` since
 //! #1170 and at `cds_end` since #387. `normalize_rna` never got either, which
@@ -23,6 +26,24 @@
 //! Every expectation below is derived from the fixture by hand and asserted
 //! exactly, and each `r.` case is pinned against its `c.` sibling — the axis
 //! parity is the actual contract (#469: on a coding transcript `r.` IS `c.`).
+//!
+//! **Updated by #1204.** The `dup` inputs in the table above no longer reach the
+//! clamp at all: their added bases copy an adjacent same-length tract, so the
+//! gated fallback is the `dup` that `repeated.md` L22 prescribes, and a `dup` has
+//! two in-CDS anchors — there is no boundary to repair. The non-idempotency this
+//! file was filed for is fixed either way, and both regimes are now pinned side by
+//! side:
+//!
+//! | input | added vs. tract | result |
+//! |---|---|---|
+//! | `r.1_2dup` (5') | 2 added, `C[4]` tract | `r.1_2dup` — no clamp needed |
+//! | `r.2_3insccccc` (5') | 5 added, `C[4]` tract | `r.1delinscccccc` — clamped |
+//! | `r.13_14dup` (3') | 2 added, `G[4]` tract | `r.13_14dup` — no clamp needed |
+//! | `r.12_13insggggg` (3') | 5 added, `G[4]` tract | `r.14delinsgggggg` — clamped |
+//!
+//! The clamp rows are what keep this file's subject covered: an alt longer than
+//! the tract it lands in cannot be spelled as a duplication, so it stays an
+//! insertion, saturates the boundary, and must be rewritten.
 
 use crate::common::synthetic::{SyntheticBuilder, PAD_OFFSET};
 use ferro_hgvs::reference::transcript::Strand;
@@ -78,18 +99,54 @@ fn assert_canonical(input: &str, dir: ShuffleDirection, expected: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// The defect: 5' saturation at cds_start
+// The 5' boundary at cds_start
 // ---------------------------------------------------------------------------
 
-/// `r.1_2dup` duplicates `cc` at the CDS start. The 5' shuffle drives the
-/// resulting insertion to rest immediately 5' of `cds_start`, so the identity
-/// gives `delete ref[cds_start]` (= `c`), `insert cc ++ c`.
+/// `r.1_2dup` duplicates `cc` at the CDS start.
+///
+/// Re-blessed by #1204 from `r.1delinsccc`. The 5' shuffle still drives the
+/// derived insertion to rest immediately 5' of `cds_start`, but the two added
+/// `c`s copy `r.1_2` — the 5'-most pair of the `C[4]` tract — so the change is a
+/// duplication and `repeated.md` L22 prescribes `dup` for it. A `dup` needs no
+/// clamp: both its anchors are inside the CDS, which is exactly the boundary
+/// problem the clamp exists to repair. #1207's non-idempotency is fixed either
+/// way; the clamp regime it was filed against is pinned below, on the shape that
+/// no duplication describes.
 #[test]
-fn rna_five_prime_saturated_insertion_clamps_at_cds_start() {
+fn rna_five_prime_boundary_dup_resolves_without_clamping() {
     assert_canonical(
         "NM_TEST.1:r.1_2dup",
         ShuffleDirection::FivePrime,
-        "NM_TEST.1:r.1delinsccc",
+        "NM_TEST.1:r.1_2dup",
+    );
+}
+
+/// The `c.` sibling. Parity with `r.` is the contract; that both axes moved
+/// together under #1204 is what shows the re-blessing is not `r.`-only drift.
+#[test]
+fn cds_five_prime_boundary_dup_resolves_without_clamping() {
+    assert_canonical(
+        "NM_TEST.1:c.1_2dup",
+        ShuffleDirection::FivePrime,
+        "NM_TEST.1:c.1_2dup",
+    );
+}
+
+/// Five added `c`s against the four-base `C[4]` tract: there is no five-base `C`
+/// tract to copy, so no duplication describes this. It stays an insertion, the 5'
+/// shuffle saturates it at `cds_start`, and the clamp applies the identity
+/// `delete ref[cds_start]` (= `c`), `insert ccccc ++ c`.
+///
+/// This is #1207's actual contract — an `r.`-axis insertion saturated at a CDS
+/// boundary must be clamped, as the `c.` axis already did — restated on an input
+/// the dup promotion cannot absorb. Without a row of this shape #1204 would leave
+/// the clamp this file exists for with no direct coverage.
+#[test]
+fn rna_five_prime_saturated_insertion_clamps_at_cds_start() {
+    assert_canonical(
+        "NM_TEST.1:r.2_3insccccc",
+        ShuffleDirection::FivePrime,
+        "NM_TEST.1:r.1delinscccccc",
     );
 }
 
@@ -98,35 +155,56 @@ fn rna_five_prime_saturated_insertion_clamps_at_cds_start() {
 #[test]
 fn cds_five_prime_saturated_insertion_clamps_at_cds_start() {
     assert_canonical(
-        "NM_TEST.1:c.1_2dup",
+        "NM_TEST.1:c.2_3insCCCCC",
         ShuffleDirection::FivePrime,
-        "NM_TEST.1:c.1delinsCCC",
+        "NM_TEST.1:c.1delinsCCCCCC",
     );
 }
 
 // ---------------------------------------------------------------------------
-// The mirror: 3' saturation at cds_end
+// The mirror: the 3' boundary at cds_end
 // ---------------------------------------------------------------------------
 
-/// `r.13_14dup` duplicates `gg` at the CDS end. The 3' shuffle drives the
-/// insertion to rest immediately 3' of `cds_end`, so the identity gives
-/// `delete ref[cds_end]` (= `g`), `insert g ++ gg`.
+/// `r.13_14dup` duplicates `gg` at the CDS end; the added pair copies the
+/// 3'-most two bases of the `G[4]` tract, so this is the `dup` regime.
+/// Re-blessed by #1204 from `r.14delinsggg`.
 #[test]
-fn rna_three_prime_saturated_insertion_clamps_at_cds_end() {
+fn rna_three_prime_boundary_dup_resolves_without_clamping() {
     assert_canonical(
         "NM_TEST.1:r.13_14dup",
         ShuffleDirection::ThreePrime,
-        "NM_TEST.1:r.14delinsggg",
+        "NM_TEST.1:r.13_14dup",
     );
 }
 
 /// The `c.` sibling for the 3' boundary.
 #[test]
-fn cds_three_prime_saturated_insertion_clamps_at_cds_end() {
+fn cds_three_prime_boundary_dup_resolves_without_clamping() {
     assert_canonical(
         "NM_TEST.1:c.13_14dup",
         ShuffleDirection::ThreePrime,
-        "NM_TEST.1:c.14delinsGGG",
+        "NM_TEST.1:c.13_14dup",
+    );
+}
+
+/// The clamp regime at `cds_end`: five added `g`s against the `G[4]` tract give
+/// `delete ref[cds_end]` (= `g`), `insert g ++ ggggg`.
+#[test]
+fn rna_three_prime_saturated_insertion_clamps_at_cds_end() {
+    assert_canonical(
+        "NM_TEST.1:r.12_13insggggg",
+        ShuffleDirection::ThreePrime,
+        "NM_TEST.1:r.14delinsgggggg",
+    );
+}
+
+/// The `c.` sibling for the 3' clamp.
+#[test]
+fn cds_three_prime_saturated_insertion_clamps_at_cds_end() {
+    assert_canonical(
+        "NM_TEST.1:c.12_13insGGGGG",
+        ShuffleDirection::ThreePrime,
+        "NM_TEST.1:c.14delinsGGGGGG",
     );
 }
 
@@ -135,28 +213,46 @@ fn cds_three_prime_saturated_insertion_clamps_at_cds_end() {
 // ---------------------------------------------------------------------------
 
 /// The `r.` result must be the `c.` result re-rendered as RNA (lowercase, `u`
-/// for `T`) for both boundaries and both directions. Asserting the relationship
-/// rather than only the values keeps this honest if the canonical spelling of a
-/// boundary clamp ever changes: the two axes must move together.
+/// for `T`) for both boundaries, both directions, and both regimes. Asserting the
+/// relationship rather than only the values keeps this honest when the canonical
+/// spelling of a boundary result changes — as #1204 changed the `dup` rows here:
+/// the two axes must move together, whatever they move to.
+///
+/// Note the earlier version of this test required the `c.` answer to contain
+/// `delins` and panicked otherwise, which hard-coded the clamp regime into what is
+/// supposed to be a shape-agnostic parity property. It now finds whichever edit
+/// keyword the answer carries, so a `dup` row is compared the same way a `delins`
+/// row is.
 #[test]
 fn rna_and_cds_axes_agree_at_both_cds_boundaries() {
-    for (dir, positions) in [
-        (ShuffleDirection::FivePrime, "1_2"),
-        (ShuffleDirection::ThreePrime, "13_14"),
+    /// Re-render a `c.` description as its `r.` sibling: swap the axis, then
+    /// lowercase from the edit keyword on and map `t` to `u`. Positions are left
+    /// alone, so this is safe for keywords that carry no bases (`dup`, `del`).
+    fn as_rna(cds: &str) -> String {
+        let swapped = cds.replace(":c.", ":r.");
+        let split = ["delins", "dup", "ins", "del", "inv"]
+            .iter()
+            .filter_map(|kw| swapped.find(kw))
+            .min()
+            .unwrap_or_else(|| panic!("no edit keyword in {cds}"));
+        let (prefix, edit) = swapped.split_at(split);
+        format!("{prefix}{}", edit.to_lowercase().replace('t', "u"))
+    }
+
+    for (dir, input) in [
+        // the dup regime
+        (ShuffleDirection::FivePrime, "1_2dup"),
+        (ShuffleDirection::ThreePrime, "13_14dup"),
+        // the clamp regime
+        (ShuffleDirection::FivePrime, "2_3insCCCCC"),
+        (ShuffleDirection::ThreePrime, "12_13insGGGGG"),
     ] {
-        let rna = normalize(&format!("NM_TEST.1:r.{positions}dup"), dir);
-        let cds = normalize(&format!("NM_TEST.1:c.{positions}dup"), dir);
-        let as_rna = {
-            let swapped = cds.replace(":c.", ":r.");
-            let split = swapped.find("delins").unwrap_or_else(|| {
-                panic!("expected the c. answer for {positions} ({dir:?}) to be a delins; got {cds}")
-            });
-            let (prefix, edit) = swapped.split_at(split);
-            format!("{prefix}{}", edit.to_lowercase().replace('t', "u"))
-        };
+        let rna = normalize(&format!("NM_TEST.1:r.{}", input.to_lowercase()), dir);
+        let cds = normalize(&format!("NM_TEST.1:c.{input}"), dir);
         assert_eq!(
-            rna, as_rna,
-            "r. and c. must agree at the CDS boundary ({positions}, {dir:?})",
+            rna,
+            as_rna(&cds),
+            "r. and c. must agree at the CDS boundary ({input}, {dir:?})",
         );
     }
 }
@@ -165,11 +261,17 @@ fn rna_and_cds_axes_agree_at_both_cds_boundaries() {
 // Non-regression: the clamp must not fire away from the boundaries
 // ---------------------------------------------------------------------------
 
-/// An interior dup must be untouched by the new clamp. `r.5_6dup` sits in the
-/// `A`×6 tract (`r.5`..`r.10`), so the 3' shuffle rests the insertion just past
-/// the tract at `r.10_11` with payload `aa`; the codon-frame gate refuses repeat
-/// notation there (1-nt unit, wholly inside the CDS, #1192), and `r.10_11` is
-/// nowhere near `cds_end` (`r.14`), so the boundary clamp must not fire.
+/// An interior dup must be untouched by the clamp. `r.5_6dup` sits in the `A`×6
+/// tract (`r.5`..`r.10`), so the 3' shuffle rests the derived insertion just past
+/// the tract; the codon-frame gate refuses repeat notation there (1-nt unit,
+/// wholly inside the CDS, #1192), and the resting place is nowhere near `cds_end`
+/// (`r.14`), so the boundary clamp must not fire.
+///
+/// Re-blessed by #1204 from `r.10_11insaa` / `c.10_11insAA`: this row never had
+/// anything to do with the clamp, and its `ins` expectation was itself an instance
+/// of the #1204 defect — the added `aa` copies `r.9_10`, the 3'-most pair of the
+/// tract, so the gated fallback is a `dup`. The clamp still does not fire, which is
+/// what this test is for.
 ///
 /// Both axes are pinned, so this also shows the interior case keeps `r.`/`c.`
 /// parity — the property, not just "no delins appeared".
@@ -178,12 +280,12 @@ fn interior_dup_is_untouched_by_the_clamp() {
     assert_canonical(
         "NM_TEST.1:r.5_6dup",
         ShuffleDirection::ThreePrime,
-        "NM_TEST.1:r.10_11insaa",
+        "NM_TEST.1:r.9_10dup",
     );
     assert_canonical(
         "NM_TEST.1:c.5_6dup",
         ShuffleDirection::ThreePrime,
-        "NM_TEST.1:c.10_11insAA",
+        "NM_TEST.1:c.9_10dup",
     );
 }
 

@@ -119,23 +119,30 @@ fn normalize(provider: MockProvider, input: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// The `c.` spelling, pinning the behaviour the `r.` axis has to match: the
-/// gate fires and the expansion is rerouted to an `ins` literal rather than
-/// `A[8]`.
+/// gate fires, so `A[8]` is refused and the description stays a `dup`.
+///
+/// Re-blessed by #1204 from `c.9_10insAA`. What this test is for is unchanged —
+/// the absence of repeat notation is the assertion — but the *fallback* is now the
+/// form the same spec sentence prescribes: "use `NM_024312.4:c.2692_2693dup` and
+/// **not** `c.2686A[10]`", i.e. a `dup` over the tract's 3'-most pair, which here
+/// is `c.8_9` and makes the input its own canonical form.
 #[test]
 fn cds_homopolymer_expansion_inside_cds_is_gated() {
     assert_eq!(
         normalize(homopolymer_tract_in_cds(), "NM_RFRAME.1:c.8_9dup"),
-        "NM_RFRAME.1:c.9_10insAA",
+        "NM_RFRAME.1:c.8_9dup",
     );
 }
 
-/// The same bases on `r.`. Before the fix this rendered as `r.4_9a[8]` — the
-/// shape the spec explicitly forbids on a coding RNA reference.
+/// The same bases on `r.`. Before #1194 this rendered as `r.4_9a[8]` — the shape
+/// the spec explicitly forbids on a coding RNA reference — and before #1204 as
+/// `r.9_10insaa`. Both axes moved together at each step, which is this file's
+/// contract.
 #[test]
 fn rna_homopolymer_expansion_inside_cds_is_gated() {
     assert_eq!(
         normalize(homopolymer_tract_in_cds(), "NM_RFRAME.1:r.8_9dup"),
-        "NM_RFRAME.1:r.9_10insaa",
+        "NM_RFRAME.1:r.8_9dup",
     );
 }
 

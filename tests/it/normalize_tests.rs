@@ -707,32 +707,31 @@ mod output_tests {
     #[test]
     fn test_multi_insertion_in_homopolymer_codon_frame_blocks_repeat_in_cds() {
         // Per HGVS spec (repeated.md codon-frame exception): in c. context,
-        // repeat notation requires unit_len % 3 == 0. unit_len=1 (A) is
-        // forbidden, so the canonical form stays as `ins<literal>`, not A[N].
-        let seq = "GGGGAAAAAAAGGGG"; // 7 A's
+        // repeat notation requires unit_len % 3 == 0, so unit_len=1 (A) is
+        // forbidden. The same sentence names the replacement — "use
+        // `NM_024312.4:c.2692_2693dup`" — and the two added A's copy the 3'-most
+        // pair of the 7-A tract at c.5_11, so the canonical form is `c.10_11dup`
+        // (#1204; previously an `ins` literal). Asserted exactly rather than as
+        // "contains ins and not A[": the exact form implies the no-repeat-notation
+        // property this test is about, and also pins the dup's position.
+        let seq = "GGGGAAAAAAAGGGG"; // 7 A's at c.5..c.11
         let provider = provider_with_transcript("NM_TEST.1", seq);
         let result = normalize_to_string(provider, "NM_TEST.1:c.5_6insAA");
-        assert!(
-            result.contains("ins") && !result.contains("A["),
-            "c. + unit_len=1 must not emit A[N], got: {}",
-            result
-        );
+        assert_eq!(result, "NM_TEST.1:c.10_11dup");
     }
 
     #[test]
     fn test_multi_dup_in_homopolymer_codon_frame_blocks_repeat_in_cds() {
-        // 2-base dup in 7-A tract: per spec the structurally-canonical form
-        // is repeat notation A[9], but the c. codon-frame exception forbids
-        // it (unit_len=1). Falls back to literal `ins<dup_seq>` per the
-        // GatedInsertion path in duplication_to_repeat.
-        let seq = "GGGGAAAAAAAGGGG"; // 7 A's at pos 5-11
+        // 2-base dup in a 7-A tract: repeat notation A[9] would be the
+        // structurally-canonical form, but the c. codon-frame exception forbids it
+        // (unit_len=1). The GatedInsertion path in duplication_to_repeat reroutes
+        // it, and since the added pair copies c.10_11 the result is that `dup`
+        // (#1204) — the same answer as the `ins` spelling above, which is the
+        // spelling-independence #1204 also bought.
+        let seq = "GGGGAAAAAAAGGGG"; // 7 A's at c.5..c.11
         let provider = provider_with_transcript("NM_TEST.1", seq);
         let result = normalize_to_string(provider, "NM_TEST.1:c.5_6dup");
-        assert!(
-            result.contains("ins") && !result.contains("A["),
-            "c. + unit_len=1 dup must not emit A[N], got: {}",
-            result
-        );
+        assert_eq!(result, "NM_TEST.1:c.10_11dup");
     }
 }
 
@@ -3524,32 +3523,28 @@ mod comprehensive_normalization_tests {
         }
 
         #[test]
-        fn test_multiple_a_insertion_into_tract_in_cds_stays_as_ins() {
-            // Sequence: GGGAAAGGG (3 A's at positions 4-6).
-            // Per HGVS spec (repeated.md codon-frame exception): in c.
-            // context, repeat notation requires unit_len % 3 == 0. With
-            // unit_len=1 the canonical form is `ins<literal>`, not A[N].
+        fn test_multiple_a_insertion_into_tract_in_cds_becomes_the_prescribed_dup() {
+            // Sequence: GGGAAAGGG (3 A's at c.4_6). Per HGVS spec (repeated.md
+            // codon-frame exception): in c. context repeat notation requires
+            // unit_len % 3 == 0, so A[6] is forbidden. The three added A's are
+            // exactly a copy of the whole c.4_6 tract, so the prescribed
+            // replacement is `dup` over it (#1204), not the `ins` literal this
+            // asserted before.
             let seq = "GGGAAAGGG";
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.6_7insAAA");
-            assert!(
-                result.contains("insAAA") && !result.contains("A["),
-                "c. + unit_len=1 must emit insAAA literal, got: {}",
-                result
-            );
+            assert_eq!(result, "NM_TEST.1:c.4_6dup");
         }
 
         #[test]
-        fn test_t_insertion_in_t_tract_in_cds_stays_as_ins() {
-            // Sequence: AAATTTAAA (T's at positions 4-6). c. + unit_len=1.
+        fn test_t_insertion_in_t_tract_in_cds_becomes_the_prescribed_dup() {
+            // Sequence: AAATTTAAA (T's at c.4_6). c. + unit_len=1, so T[5] is
+            // forbidden; the two added T's copy c.5_6, the tract's 3'-most pair,
+            // so the fallback is that `dup` (#1204, re-blessed from `insTT`).
             let seq = "AAATTTAAA";
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.6_7insTT");
-            assert!(
-                result.contains("insTT") && !result.contains("T["),
-                "c. + unit_len=1 must emit insTT literal, got: {}",
-                result
-            );
+            assert_eq!(result, "NM_TEST.1:c.5_6dup");
         }
 
         #[test]
@@ -3567,18 +3562,17 @@ mod comprehensive_normalization_tests {
         }
 
         #[test]
-        fn test_large_homopolymer_expansion_in_cds_stays_as_ins() {
-            // Sequence: GGAAAAAGGG (5 A's at positions 3-7). Inserting 5 A's
-            // would normally produce A[10]; the c. codon-frame gate forbids
-            // A[N] (unit_len=1), so the canonical form is `ins<literal>`.
+        fn test_large_homopolymer_expansion_in_cds_becomes_the_prescribed_dup() {
+            // Sequence: GGAAAAAGGG (5 A's at c.3_7). Inserting 5 A's would
+            // normally produce A[10]; the c. codon-frame gate forbids A[N]
+            // (unit_len=1). The five added A's are exactly a copy of the whole
+            // c.3_7 tract, so the fallback is `dup` over it (#1204, re-blessed
+            // from `insAAAAA`). An alt LONGER than the tract has no such copy and
+            // does stay an `ins` — see `ins_shift_matrix`'s case 2.
             let seq = "GGAAAAAGGG";
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.7_8insAAAAA");
-            assert!(
-                result.contains("insAAAAA") && !result.contains("A["),
-                "c. + unit_len=1 must emit insAAAAA literal, got: {}",
-                result
-            );
+            assert_eq!(result, "NM_TEST.1:c.3_7dup");
         }
     }
 

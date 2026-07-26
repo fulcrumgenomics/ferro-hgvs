@@ -510,15 +510,16 @@ mod cds_proper_still_gates {
 
     #[test]
     fn cds_proper_homopolymer_dup_still_gated() {
-        // CDS-proper A[5] at c.4..c.8. Dup of "AA" at c.4_5 must
-        // emit `c.8_9insAA` (codon-frame gate fires because
-        // unit_len=1 in a coding context). Pins existing behavior
-        // identical to `tests/dup_shift_matrix.rs::cds_minus::
-        // multi_base_dup_of_multiple_units::case_1` (modulo strand)
-        // — locks in that the B4-remaining fix does NOT regress
-        // CDS-proper gating.
+        // CDS-proper A[5] at c.4..c.8. Dup of "AA" at c.4_5 is refused repeat
+        // notation (the codon-frame gate fires: unit_len=1 in a coding context)
+        // and falls back to the `dup` the spec prescribes, over the tract's
+        // 3'-most pair — `c.7_8dup`. Re-blessed from `c.8_9insAA` by #1204;
+        // still identical to `tests/dup_shift_matrix.rs::cds_minus::
+        // multi_base_dup_of_multiple_units::case_1` (modulo strand), and still
+        // locks in that the B4-remaining fix does NOT regress CDS-proper gating
+        // — the gate fires, it just no longer costs us the `dup` spelling.
         let p = make_provider();
-        assert_canonical_round_trip(p, "NM_CDSP.1:c.4_5dup", "NM_CDSP.1:c.8_9insAA");
+        assert_canonical_round_trip(p, "NM_CDSP.1:c.4_5dup", "NM_CDSP.1:c.7_8dup");
     }
 
     #[test]
