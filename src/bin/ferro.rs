@@ -299,6 +299,18 @@ enum Commands {
         /// identity (drifted in place). Default: warn and proceed (#1001).
         #[arg(long)]
         strict_reference: bool,
+
+        /// Error handling mode: strict, lenient, or silent
+        #[arg(long, default_value = "strict", value_parser = ["strict", "lenient", "silent"])]
+        error_mode: String,
+
+        /// Warning codes to ignore (comma-separated, e.g., W1001,W2001)
+        #[arg(long, value_delimiter = ',')]
+        ignore: Vec<String>,
+
+        /// Warning codes to always reject (comma-separated, e.g., W3003)
+        #[arg(long, value_delimiter = ',')]
+        reject: Vec<String>,
     },
 
     /// Parse HGVS variants (validation only)
@@ -803,16 +815,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             format,
             reference,
             strict_reference,
-        } => run_project(
-            variant.as_deref(),
-            &axis,
-            transcript.as_deref(),
-            input.as_ref(),
-            output.as_ref(),
-            &format,
-            &reference,
-            strict_reference,
-        ),
+            error_mode,
+            ignore,
+            reject,
+        } => {
+            let config = build_error_config(&error_mode, &ignore, &reject);
+            run_project(
+                variant.as_deref(),
+                &axis,
+                transcript.as_deref(),
+                input.as_ref(),
+                output.as_ref(),
+                &format,
+                &reference,
+                strict_reference,
+                &config,
+            )
+        }
         Commands::Parse {
             variant,
             input,
@@ -1663,8 +1682,10 @@ fn run_project(
     format: &str,
     reference: &Path,
     strict_reference: bool,
+    error_config: &ErrorConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use ferro_hgvs::cli::format::{output_project_error, output_projection};
+    use ferro_hgvs::cli::project::AxisOutcome;
     use ferro_hgvs::cli::{project_axis, Axis, OutputFormat};
     use ferro_hgvs::data::cdot::CdotMapper;
     use ferro_hgvs::data::projection::Projector;
@@ -1697,7 +1718,15 @@ fn run_project(
         .cloned()
         .unwrap_or_else(CdotMapper::new);
     let provider = Arc::new(provider);
-    let projector = VariantProjector::new(Projector::new(cdot), provider);
+    // #1182: `project` normalizes its input before projecting, so the error
+    // configuration has to reach that normalizer or every normalizer-level
+    // diagnostic (W4004 among them) is unreachable — the same defect #1181
+    // fixed on `normalize`. `NormalizeConfig::default()` is lenient by
+    // construction, so this is what makes `--error-mode strict` mean anything
+    // here.
+    let projector = VariantProjector::new(Projector::new(cdot), provider).with_normalize_config(
+        ferro_hgvs::normalize::NormalizeConfig::default().with_error_config(error_config.clone()),
+    );
 
     let mut writer: Box<dyn Write> = match output {
         Some(path) => Box::new(BufWriter::new(File::create(path)?)),
@@ -1715,6 +1744,22 @@ fn run_project(
         };
         match project_axis(&projector, &parsed, axis, transcript) {
             Ok(outcome) => {
+                // #1182: surface the normalization warnings the projection
+                // carried. Text mode sends them to stderr so the result stream
+                // stays one line per variant and pipelines are unaffected —
+                // matching how `run_normalize` reports its warnings. JSON mode
+                // carries them inside the object instead (see
+                // `output_projection`), so emitting them here too would
+                // duplicate them.
+                if out_format != OutputFormat::Json {
+                    let warnings = match &outcome {
+                        AxisOutcome::Rendered { warnings, .. } => warnings,
+                        AxisOutcome::Unavailable { warnings, .. } => warnings,
+                    };
+                    for w in warnings {
+                        let _ = writeln!(io::stderr(), "warning[{}]: {}", w.code, w.message);
+                    }
+                }
                 // A failed write to the result stream (e.g. a full or unwritable
                 // --output file) must not be reported as success; count it so the
                 // exit code reflects the truncated output. (A broken pipe from a

@@ -142,6 +142,7 @@ fn bare_genomic_with_transcript_renders_coding() {
         AxisOutcome::Rendered {
             transcript_id,
             output,
+            ..
         } => {
             assert_eq!(transcript_id, "NM_TEST.1");
             assert!(output.contains(":c."), "got {output}");

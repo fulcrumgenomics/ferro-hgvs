@@ -1090,6 +1090,14 @@ pub enum SpecSection {
     /// **and not** `NC_…(NM_…):c.-N-uM`"). ferro leaves the input verbatim and
     /// refuses the flank `c.` coordinate (#488 Phase 2b); mutalyzer's
     /// `c.-5059del` extrapolates into the flank, which HGVS forbids.
+    ///
+    /// Scope of "refuses", stated precisely (#1182): the verbatim-and-refuse
+    /// behavior above is the `pter`/`qter` *marker* path. A plain out-of-bounds
+    /// coordinate (`c.-238` on a 237-base 5'UTR) is caught by a different gate,
+    /// `check_cds_pos_past_end`, which raises W4004 — a *warning* under the
+    /// library's lenient default and a rejection only in strict mode. So this
+    /// policy describes the marker case; do not read it as a claim that every
+    /// flank-adjacent `c.` coordinate is refused in every configuration.
     #[serde(rename = "HGVS §Transcript flanking (not c.-numberable)")]
     TranscriptFlankNotNumberable,
     /// HGVS amino-acid glyph preference — three-letter codes (including `Ter`)

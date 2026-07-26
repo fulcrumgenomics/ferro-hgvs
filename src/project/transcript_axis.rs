@@ -39,6 +39,28 @@ pub(crate) fn noncoding_from_coding(
     let mapper = CoordinateMapper::new(transcript);
     let n_start = mapper.cds_to_tx(cds_start)?;
     let n_end = mapper.cds_to_tx(cds_end)?;
+    // #1182: a `c.` position 5' of the transcript's own first base maps to a
+    // non-positive transcript coordinate, which is not a position at all —
+    // `n.` numbering runs "from the first to the last nucleotide of the
+    // reference sequence" and there is no nucleotide `n.0`
+    // (`numbering.md:31,52`). Refuse rather than render it.
+    //
+    // This is deliberately unconditional, not error-mode-gated: `n.0` is
+    // rejected by ferro's own parser, so emitting it produces output ferro
+    // cannot read back, which is wrong in every mode. The negative cases are
+    // the more dangerous half — `n.-62` *parses* cleanly, so without this it
+    // propagates silently instead of failing loudly.
+    for (label, pos) in [("start", &n_start), ("end", &n_end)] {
+        if pos.base < 1 {
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "transcript position n.{} ({label}) is outside {}: `n.` numbering starts at 1, \
+                     so this c. position lies 5' of the transcript's first base",
+                    pos.base, transcript_id,
+                ),
+            });
+        }
+    }
     Ok(HgvsVariant::Tx(TxVariant {
         accession: parse_accession(transcript_id),
         gene_symbol,
@@ -133,6 +155,65 @@ mod tests {
         let mut pos = CdsPos::new(3);
         pos.offset = Some(5);
         assert_eq!(n_string(pos, &tx, "NM_TEST.1"), "NM_TEST.1:n.8+5A>G");
+    }
+
+    /// #1182: `cds_start = 6` means `c.-5` is the transcript's first base, so
+    /// `c.-6` maps to `n.0` and `c.-7` to `n.-1` — neither is a position. The
+    /// projector used to render them, emitting `n.0del` (which ferro's own
+    /// parser rejects) and `n.-1del` (which *parses*, so it propagated
+    /// silently — the more dangerous half).
+    #[test]
+    fn refuses_a_non_positive_transcript_position() {
+        let tx = make_test_transcript();
+        // The last in-bounds 5'UTR position still works — this must not
+        // over-reject.
+        let ok = noncoding_from_coding(
+            &CdsPos::new(-5),
+            &CdsPos::new(-5),
+            &tx,
+            &sub_a_g(),
+            "NM_TEST.1",
+            None,
+        )
+        .expect("c.-5 is the transcript's first base and must still render");
+        assert_eq!(format!("{ok}"), "NM_TEST.1:n.1A>G");
+
+        // One past it (n.0) and two past it (n.-1) must both refuse.
+        for base in [-6, -7] {
+            let err = noncoding_from_coding(
+                &CdsPos::new(base),
+                &CdsPos::new(base),
+                &tx,
+                &sub_a_g(),
+                "NM_TEST.1",
+                None,
+            )
+            .expect_err("a non-positive transcript position must be refused");
+            assert!(
+                matches!(err, FerroError::InvalidCoordinates { .. }),
+                "c.{base} should be InvalidCoordinates, got {err:?}"
+            );
+        }
+    }
+
+    /// The refusal fires on either endpoint, not just the start — a range whose
+    /// start is in bounds but whose end is not (and vice versa) is equally
+    /// unrenderable.
+    #[test]
+    fn refuses_when_only_one_endpoint_is_out_of_range() {
+        let tx = make_test_transcript();
+        for (start, end) in [(-6, -5), (-5, -6)] {
+            let err = noncoding_from_coding(
+                &CdsPos::new(start),
+                &CdsPos::new(end),
+                &tx,
+                &sub_a_g(),
+                "NM_TEST.1",
+                None,
+            )
+            .expect_err("either endpoint out of range must refuse");
+            assert!(matches!(err, FerroError::InvalidCoordinates { .. }));
+        }
     }
 
     #[test]

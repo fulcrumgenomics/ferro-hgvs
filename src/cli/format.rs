@@ -115,31 +115,35 @@ pub fn output_projection(
             AxisOutcome::Rendered {
                 transcript_id,
                 output,
+                warnings,
             },
         ) => writeln!(
             writer,
-            r#"{{"input": "{}", "axis": "{}", "transcript": "{}", "output": "{}", "status": "ok"}}"#,
+            r#"{{"input": "{}", "axis": "{}", "transcript": "{}", "output": "{}", "status": "ok", "warnings": {}}}"#,
             escape_json(input),
             axis.code(),
             escape_json(transcript_id),
-            escape_json(output)
+            escape_json(output),
+            warnings_json(warnings)
         ),
         (
             OutputFormat::Json,
             AxisOutcome::Unavailable {
                 transcript_id,
                 reason,
+                warnings,
             },
         ) => writeln!(
             writer,
-            r#"{{"input": "{}", "axis": "{}", "transcript": {}, "output": null, "status": "unavailable", "reason": "{}"}}"#,
+            r#"{{"input": "{}", "axis": "{}", "transcript": {}, "output": null, "status": "unavailable", "reason": "{}", "warnings": {}}}"#,
             escape_json(input),
             axis.code(),
             match transcript_id {
                 Some(t) => format!(r#""{}""#, escape_json(t)),
                 None => "null".to_string(),
             },
-            escape_json(reason)
+            escape_json(reason),
+            warnings_json(warnings)
         ),
         (_, AxisOutcome::Rendered { output, .. }) => writeln!(writer, "{}", output),
         (_, AxisOutcome::Unavailable { reason, .. }) => match line_number {
@@ -412,6 +416,28 @@ pub fn output_transcript_annotation<W: Write>(
     }
 }
 
+/// Render projection warnings as a JSON array of `{code, message}` objects.
+///
+/// Always emits an array — `[]` when there are none — so consumers can index
+/// `.warnings` unconditionally rather than branching on the key's presence.
+/// Hand-built for consistency with the surrounding hand-built JSON in this
+/// module (which is why `escape_json` exists at all). #1182.
+fn warnings_json(warnings: &[crate::cli::project::ProjectionWarning]) -> String {
+    let mut out = String::from("[");
+    for (i, w) in warnings.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!(
+            r#"{{"code": "{}", "message": "{}"}}"#,
+            escape_json(&w.code),
+            escape_json(&w.message)
+        ));
+    }
+    out.push(']');
+    out
+}
+
 /// Escape special characters for JSON strings
 ///
 /// Escapes backslashes, quotes, and control characters.
@@ -673,6 +699,7 @@ mod tests {
         let outcome = AxisOutcome::Rendered {
             transcript_id: "NM_000088.3".to_string(),
             output: "NP_000079.2:p.(Gly197Cys)".to_string(),
+            warnings: Vec::new(),
         };
         output_projection(
             &mut buf,
@@ -689,11 +716,18 @@ mod tests {
 
     #[test]
     fn output_projection_json_rendered_has_fields() {
-        use crate::cli::project::{Axis, AxisOutcome};
+        use crate::cli::project::{Axis, AxisOutcome, ProjectionWarning};
         let mut buf = Cursor::new(Vec::new());
+        // Non-empty on purpose: surfacing warnings is the point of #1182, and an
+        // empty vector cannot distinguish "serialised correctly" from "silently
+        // dropped" — `warnings_json` renders `[]` either way.
         let outcome = AxisOutcome::Rendered {
             transcript_id: "NM_000088.3".to_string(),
             output: "NP_000079.2:p.(Gly197Cys)".to_string(),
+            warnings: vec![ProjectionWarning {
+                code: "POSITION_PAST_END".to_string(),
+                message: "position 999 is past the end".to_string(),
+            }],
         };
         output_projection(
             &mut buf,
@@ -709,15 +743,25 @@ mod tests {
         assert!(out.contains(r#""transcript": "NM_000088.3""#));
         assert!(out.contains(r#""output": "NP_000079.2:p.(Gly197Cys)""#));
         assert!(out.contains(r#""status": "ok""#));
+        assert!(
+            out.contains(r#""warnings": [{"code": "POSITION_PAST_END", "message": "position 999 is past the end"}]"#),
+            "a rendered projection must serialise its warnings; got: {out}"
+        );
     }
 
     #[test]
     fn output_projection_json_unavailable_status() {
-        use crate::cli::project::{Axis, AxisOutcome};
+        use crate::cli::project::{Axis, AxisOutcome, ProjectionWarning};
         let mut buf = Cursor::new(Vec::new());
         let outcome = AxisOutcome::Unavailable {
             transcript_id: Some("NM_000088.3".to_string()),
             reason: "no p. representation for this variant".to_string(),
+            // See the note in the `rendered` test: the unavailable branch builds
+            // its JSON separately, so it needs its own non-empty case.
+            warnings: vec![ProjectionWarning {
+                code: "INTRONIC".to_string(),
+                message: "intronic offset dropped".to_string(),
+            }],
         };
         output_projection(
             &mut buf,
@@ -731,6 +775,12 @@ mod tests {
         let out = String::from_utf8(buf.into_inner()).unwrap();
         assert!(out.contains(r#""status": "unavailable""#));
         assert!(out.contains(r#""reason""#));
+        assert!(
+            out.contains(
+                r#""warnings": [{"code": "INTRONIC", "message": "intronic offset dropped"}]"#
+            ),
+            "an unavailable projection must serialise its warnings too; got: {out}"
+        );
     }
 
     #[test]
@@ -740,6 +790,7 @@ mod tests {
         let outcome = AxisOutcome::Unavailable {
             transcript_id: Some("NM_000088.3".to_string()),
             reason: "no p. representation for this variant".to_string(),
+            warnings: Vec::new(),
         };
         output_projection(
             &mut buf,
