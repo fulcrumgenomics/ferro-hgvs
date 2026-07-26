@@ -1673,6 +1673,32 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
+        // W3022 InitiatorMetCanonicalization is an advisory about ferro's own
+        // canonical output, so — unlike every other rung of this ladder — the
+        // base mode does not promote it; only an explicit `--reject W3022`
+        // does. See `NormalizeConfig::should_reject_initiator_met_canonicalization`
+        // for why, and #1196 for why the `--reject` direction has to do
+        // *something* rather than be silently inert.
+        if self.config.should_reject_initiator_met_canonicalization() {
+            if let Some(err) = result.warnings.iter().find_map(|w| match w {
+                NormalizationWarning::InitiatorMetCanonicalization {
+                    accession,
+                    location,
+                } => Some(FerroError::InvalidCoordinates {
+                    msg: format!(
+                        "{accession}: canonical form `p.{location}dup` includes the initiator \
+                         methionine, and this code was explicitly rejected \
+                         (InitiatorMetCanonicalization / W3022). The duplication is \
+                         HGVS-canonical; drop `--reject W3022` to accept it, or describe the \
+                         predicted consequence as `p.0?` / `p.(Met1?)` instead"
+                    ),
+                }),
+                _ => None,
+            }) {
+                return Err(err);
+            }
+        }
+
         // In strict mode, reject if there were reference mismatches.
         if self.config.should_reject_ref_mismatch() {
             if let Some(err) = result.warnings.iter().find_map(|w| match w {
@@ -4432,8 +4458,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
         // Met1 soft-warning: emit when the final edit is a dup whose
         // interval includes position 1. (#92 sub-item 3)
+        //
+        // Gated on the error configuration (#1196) — the push used to be
+        // unconditional, so `--error-mode silent` and `--ignore W3022` were
+        // both inert for this code. See
+        // `NormalizeConfig::should_warn_initiator_met_canonicalization` for
+        // why an advisory about ferro's own canonical output is surfaced
+        // rather than promoted to a rejection in strict mode.
         let mut warnings: Vec<NormalizationWarning> = Vec::new();
-        if matches!(output_edit, ProteinEdit::Duplication) {
+        if self.config.should_warn_initiator_met_canonicalization()
+            && matches!(output_edit, ProteinEdit::Duplication)
+        {
             if let (Some(s), Some(e)) = (
                 final_variant.loc_edit.location.start.inner(),
                 final_variant.loc_edit.location.end.inner(),

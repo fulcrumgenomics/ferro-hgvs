@@ -139,6 +139,7 @@ mod issue_1182_project_bounds_and_warnings;
 mod issue_1183_rna_axis_ins_expansion;
 mod issue_1185_cds_end_3utr_shift;
 mod issue_1192_rna_codon_frame_gate;
+mod issue_1196_error_config_reachability;
 mod issue_1202_transcript_bounds_insertion_clamp;
 mod issue_1204_gated_dup_fallback;
 mod issue_1205_genome_contig_bounds_clamp;

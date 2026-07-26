@@ -6592,7 +6592,6 @@ fn parse_phase_allele(input: &str, phase: AllelePhase) -> Result<HgvsVariant, Fe
                                         && is_prose_multi_allelic_rhs(chunk)
                                     {
                                         use crate::error::{Diagnostic, ErrorCode, SourceSpan};
-                                        let _w3018 = ErrorType::ClinVarProseMultiAllelic;
                                         let diag = Diagnostic::new()
                                             .with_code(ErrorCode::ClinVarProseMultiAllelic)
                                             .with_span(SourceSpan::new(0, chunk.len()));
@@ -6659,10 +6658,7 @@ pub(crate) fn non_spec_mosaic_form_error(input: &str, case: NonSpecCase) -> Ferr
                 `acc:c.X//acc:c.Y` (chimeric), or compact `acc:c.<pos>=/<edit>` \
                 / `acc:c.<pos>=//<edit>`";
     // Source the W-code + name from the `ErrorType` registry so the
-    // string stays in sync if the code ever moves. Using the variant
-    // here also satisfies the error-code audit's "enforced rows
-    // must reference ErrorType::<Variant> from emission-relevant
-    // src/ paths" rule (tests/error_code_audit.rs).
+    // string stays in sync if the code ever moves.
     let et = ErrorType::NonSpecMosaicForm;
     let msg = format!(
         "[{} {:?}] {} — HGVS v21 does not define this form; {}",
@@ -7073,10 +7069,6 @@ fn prose_multi_allelic_diagnostic_msg(rhs: &str) -> String {
 fn repeat_trans_or_trailing_error(input: &str, remaining: &str) -> FerroError {
     if is_allele_fraction_annotation(remaining) {
         use crate::error::{Diagnostic, ErrorCode, SourceSpan};
-        // Bind the SVA `ErrorType::*` here so the audit's emission-site scan
-        // (see tests/error_code_audit.rs) sees a real reference for this
-        // W-code in the parser path.
-        let _w3017 = ErrorType::AlleleFractionAnnotation;
         let pos = input.len() - remaining.len();
         let diag = Diagnostic::new()
             .with_code(ErrorCode::AlleleFractionAnnotation)

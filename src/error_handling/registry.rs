@@ -1182,11 +1182,18 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
                 the predicted protein consequence may also be described per the \
                 substitution rule for start-codon variants (substitution.md §45-65: \
                 p.0, p.0?, or p.(Met1?)). Consumers should consider both \
-                interpretations.",
+                interpretations. This is an advisory about the emitted form, \
+                not a defect in the input — the warning also fires when the \
+                input already was a Met1-covering dup and nothing was \
+                rewritten — so no *mode* rejects it: strict would otherwise \
+                refuse ferro's own canonical output. Silent mode and \
+                `--ignore W3022` suppress it; an explicit `--reject W3022` \
+                does promote it to an error, since that is an opt-in rather \
+                than a default (#1196).",
             category: CodeCategory::Format,
             bad_examples: &["NP_000088.3:p.Met1_Lys2insMet"],
             good_examples: &["NP_000088.3:p.Met1dup"],
-            mode_behavior: Some(ModeBehavior::warn_accept()),
+            mode_behavior: Some(ModeBehavior::advisory()),
             hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/recommendations/general/"),
             related_codes: &["W3021"],
         },

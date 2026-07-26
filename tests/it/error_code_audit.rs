@@ -12,7 +12,7 @@
 //!
 //! Tracking issue: fulcrumgenomics/ferro-hgvs#81 item L1.
 
-use ferro_hgvs::error_handling::list_all_codes;
+use ferro_hgvs::error_handling::{list_all_codes, ErrorType};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
@@ -39,6 +39,133 @@ const VALID_STATUSES: &[&str] = &["enforced", "partial", "registered", "missing"
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/error_code_audit.json")
+}
+
+/// Root of the source tree scanned for `ErrorConfig` *consult* sites.
+///
+/// Unlike [`EMISSION_SCAN_PATHS`] — which answers "is this variant named
+/// somewhere it could plausibly be emitted?" — the consult scan answers the
+/// stronger question the mode flags actually depend on: "does the resolved
+/// action for this variant ever get read?" A variant that is named but never
+/// consulted makes `--error-mode` and `--ignore` / `--reject` inert for it
+/// (#1196), so the whole tree is in scope, including the `NormalizeConfig`
+/// accessor shims in `src/normalize/config.rs` that the emission scan
+/// deliberately excludes.
+const CONFIG_CONSULT_SCAN_ROOT: &str = "src";
+
+/// The four `ErrorConfig` methods that turn a mode plus an override into a
+/// [`ResolvedAction`](ferro_hgvs::error_handling::ResolvedAction). Reaching one
+/// of these is what makes an error type mode-sensitive; see
+/// `src/error_handling/mod.rs`.
+const CONSULT_METHODS: &[&str] = &[
+    "action_for",
+    "should_reject",
+    "should_correct",
+    "should_warn",
+];
+
+/// Constructor whose first argument attaches an `ErrorType` to a detected
+/// correction. The preprocessor resolves those generically
+/// (`self.action_for(c.error_type)`, `src/error_handling/preprocessor.rs`), so
+/// a variant handed to this constructor *is* mode-sensitive even though it is
+/// never named at one of [`CONSULT_METHODS`].
+const CORRECTION_CONSTRUCTOR: &str = "DetectedCorrection::new";
+
+/// Scan [`CONFIG_CONSULT_SCAN_ROOT`] for variants whose resolved action is
+/// actually read — either passed directly to one of [`CONSULT_METHODS`] or
+/// attached to a [`CORRECTION_CONSTRUCTOR`] call.
+fn config_consulted_variants() -> BTreeSet<String> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(CONFIG_CONSULT_SCAN_ROOT);
+    let mut found = BTreeSet::new();
+    scan_for_consult_sites(&root, &mut found);
+    found
+}
+
+fn scan_for_consult_sites(path: &std::path::Path, out: &mut BTreeSet<String>) {
+    if !path.exists() {
+        return;
+    }
+    if path.is_file() {
+        if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                // Unit-test assertions such as
+                // `assert!(config.should_reject(ErrorType::Foo))` prove nothing
+                // about production reachability, so drop them the same way the
+                // emission scan does (#1123).
+                extract_consulted_variants(&strip_cfg_test_modules(&text), out);
+            }
+        }
+        return;
+    }
+    if let Ok(rd) = std::fs::read_dir(path) {
+        for entry in rd.flatten() {
+            scan_for_consult_sites(&entry.path(), out);
+        }
+    }
+}
+
+/// Extract every `ErrorType::<Variant>` that appears as the first argument of a
+/// consult method or of the correction constructor.
+fn extract_consulted_variants(text: &str, out: &mut BTreeSet<String>) {
+    for method in CONSULT_METHODS {
+        collect_first_error_type_argument(text, method, true, out);
+    }
+    collect_first_error_type_argument(text, CORRECTION_CONSTRUCTOR, false, out);
+}
+
+/// Find `<callee>(` occurrences whose first argument is an `ErrorType::` path
+/// and record the variant name.
+///
+/// `require_method_position` demands that the callee is not a suffix of a
+/// longer identifier (so `should_warn` does not match `xshould_warn`); it is
+/// disabled for the `Foo::bar` constructor form, whose `:` separator would
+/// otherwise fail the check.
+fn collect_first_error_type_argument(
+    text: &str,
+    callee: &str,
+    require_method_position: bool,
+    out: &mut BTreeSet<String>,
+) {
+    let mut i = 0usize;
+    while let Some(rel) = text[i..].find(callee) {
+        let start = i + rel;
+        let after = start + callee.len();
+        i = after;
+        if require_method_position {
+            let prev_ok = text[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_' && c != ':');
+            if !prev_ok {
+                continue;
+            }
+        }
+        if line_is_commented_out(text, start) {
+            continue;
+        }
+        let rest = text[after..].trim_start();
+        let Some(inner) = rest.strip_prefix('(') else {
+            continue;
+        };
+        let Some(variant) = inner.trim_start().strip_prefix("ErrorType::") else {
+            continue;
+        };
+        let end = variant
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .unwrap_or(variant.len());
+        if end > 0 && variant.as_bytes()[0].is_ascii_uppercase() {
+            out.insert(variant[..end].to_string());
+        }
+    }
+}
+
+/// True when `pos` sits on a line whose first non-whitespace characters are
+/// `//` — i.e. inside a line comment or a `///` doc comment. Doc comments carry
+/// runnable examples that name consult methods; counting them would let a
+/// documentation snippet stand in for a real consult site.
+fn line_is_commented_out(text: &str, pos: usize) -> bool {
+    let line_start = text[..pos].rfind('\n').map_or(0, |n| n + 1);
+    text[line_start..pos].trim_start().starts_with("//")
 }
 
 /// Source-tree subset where `ErrorType::<Variant>` or
@@ -311,6 +438,7 @@ fn scan_for_variants(path: &std::path::Path, out: &mut BTreeSet<String>) {
                 let production = strip_cfg_test_modules(&text);
                 extract_error_type_variants(&production, out);
                 extract_normalization_warning_variants(&production, out);
+                extract_error_code_variants(&production, out);
             }
         }
         return;
@@ -345,10 +473,41 @@ fn extract_normalization_warning_variants(text: &str, out: &mut BTreeSet<String>
     }
 }
 
+/// The third emission channel: a handful of W-codes are raised by the grammar
+/// as a structured parse `Diagnostic`, whose `code` field is an
+/// [`ErrorCode`](ferro_hgvs::error::ErrorCode) rather than an `ErrorType`
+/// (`ErrorCode` reserves discriminants with the `0x8000` bit for W-codes —
+/// see `src/error.rs`). Those sites have no `ErrorType::<Variant>` to find, so
+/// before #1196 they carried a discarded `let _w3017 = ErrorType::…;` binding
+/// purely to satisfy this scan. Recognising the real channel lets the binding
+/// go.
+///
+/// Only names that the registry maps to a **W**-code are recorded: the two
+/// enums share many variant names, and admitting E-code names could make an
+/// unrelated `registered` row look emitted.
+fn extract_error_code_variants(text: &str, out: &mut BTreeSet<String>) {
+    let warning_names: BTreeSet<&'static str> = list_all_codes()
+        .iter()
+        .filter(|c| c.code.starts_with('W'))
+        .map(|c| c.name)
+        .collect();
+    let mut found = BTreeSet::new();
+    extract_prefixed_variants(text, "ErrorCode::", &mut found);
+    for name in found {
+        if warning_names.contains(name.as_str()) {
+            out.insert(name);
+        }
+    }
+}
+
 fn extract_error_type_variants(text: &str, out: &mut BTreeSet<String>) {
-    // Match `ErrorType::<Variant>` where `<Variant>` starts with an ASCII
-    // uppercase letter and continues with alphanumerics or underscore.
-    let needle = "ErrorType::";
+    extract_prefixed_variants(text, "ErrorType::", out);
+}
+
+/// Record every `<needle><Variant>` path in `text`, where `<Variant>` starts
+/// with an ASCII uppercase letter and continues with alphanumerics or
+/// underscores.
+fn extract_prefixed_variants(text: &str, needle: &str, out: &mut BTreeSet<String>) {
     let mut i = 0;
     while let Some(pos) = text[i..].find(needle) {
         let start = i + pos + needle.len();
@@ -729,4 +888,94 @@ fn strip_handles_nested_block_comments() {
         !found.contains("TestOnly"),
         "test-module ref excluded despite nested block comments: {found:?}",
     );
+}
+
+// ---------------------------------------------------------------------------
+// #1196 — reachability of the error configuration
+// ---------------------------------------------------------------------------
+
+/// An `enforced` W-code that claims to be configurable must be *reachable from
+/// the error configuration*, not merely mentioned in an emission-relevant file.
+///
+/// `audit_enforced_warning_rows_have_emission_sites` proves only that the
+/// variant name appears somewhere plausible. That is satisfied by a binding
+/// that is immediately discarded, which is exactly what several call sites were
+/// doing — so `--error-mode`, `--ignore` and `--reject` were silently inert for
+/// those codes (#1196).
+///
+/// Codes that declare `consults_error_config() == false` are excluded here and
+/// pinned by [`audit_config_inert_declarations_have_no_consult_site`] instead,
+/// so the escape hatch cannot be used to hide a code that *does* consult.
+#[test]
+fn audit_enforced_warning_rows_reach_a_config_consult_site() {
+    let audit = load_fixture();
+    let consulted = config_consulted_variants();
+
+    let mut inert: Vec<(String, &'static str)> = Vec::new();
+    for entry in &audit.codes {
+        if !entry.code.starts_with('W') || entry.status != "enforced" {
+            continue;
+        }
+        let Some(error_type) = ErrorType::from_code(&entry.code) else {
+            continue; // covered by audit_fixture_has_no_stale_codes
+        };
+        if !error_type.consults_error_config() {
+            continue;
+        }
+        let name = registry_name(&entry.code);
+        if !consulted.contains(name) {
+            inert.push((entry.code.clone(), name));
+        }
+    }
+
+    assert!(
+        inert.is_empty(),
+        "audit rows classified `enforced` whose `ErrorType::<Variant>` never reaches an \
+         `ErrorConfig` consult site (`action_for` / `should_reject` / `should_correct` / \
+         `should_warn`, or `DetectedCorrection::new`). For these codes `--error-mode` and \
+         `--ignore`/`--reject` do nothing. Either wire a consult site, or — if the code is \
+         genuinely not configurable — declare it in `ErrorType::consults_error_config` so the \
+         CLI can say so:\n  {:?}",
+        inert
+    );
+}
+
+/// The other direction: a variant declared inert must really have no consult
+/// site.
+///
+/// Without this, `consults_error_config` would be a mute button — a future
+/// change could silence the audit for a code whose mode handling then quietly
+/// regressed, and the CLI would report a working override as inert.
+#[test]
+fn audit_config_inert_declarations_have_no_consult_site() {
+    let consulted = config_consulted_variants();
+
+    let mut lying: Vec<(&'static str, &'static str)> = Vec::new();
+    for error_type in ErrorType::ALL {
+        if error_type.consults_error_config() {
+            continue;
+        }
+        let name = registry_name(error_type.code());
+        if consulted.contains(name) {
+            lying.push((error_type.code(), name));
+        }
+    }
+
+    assert!(
+        lying.is_empty(),
+        "`ErrorType::consults_error_config` returns false for variants that DO reach an \
+         `ErrorConfig` consult site. The declaration drives the CLI's inert-override \
+         diagnostic, so it must match reality — flip these to `true`:\n  {:?}",
+        lying
+    );
+}
+
+/// Resolve a code to the registry's `name` field — the identifier the audit
+/// rows and the source scan both key on.
+fn registry_name(code: &str) -> &'static str {
+    list_all_codes()
+        .iter()
+        .find(|c| c.code == code)
+        .unwrap_or_else(|| panic!("code {code} is not in the runtime registry"))
+        .name
 }

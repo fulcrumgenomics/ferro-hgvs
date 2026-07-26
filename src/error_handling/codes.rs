@@ -85,6 +85,23 @@ impl ModeBehavior {
         Self::new(ModeAction::Accept, ModeAction::Accept, ModeAction::Accept)
     }
 
+    /// Warn and accept in strict and lenient, accept quietly in silent — for
+    /// an *advisory about ferro's own canonical output* rather than a defect
+    /// in the input.
+    ///
+    /// Such a code has nothing to reject: the described input is spec-valid
+    /// and the flagged form is what the normalizer itself emits, so promoting
+    /// it to an error in strict mode would refuse ferro's own output. The mode
+    /// therefore selects only whether the advisory is surfaced, and an
+    /// `--ignore` override suppresses it (#1196).
+    pub const fn advisory() -> Self {
+        Self::new(
+            ModeAction::WarnAndAccept,
+            ModeAction::WarnAndAccept,
+            ModeAction::Accept,
+        )
+    }
+
     /// Reject in strict, warn in lenient, warn in silent (always warn if not rejected).
     pub const fn always_warn_if_not_rejected() -> Self {
         Self::new(

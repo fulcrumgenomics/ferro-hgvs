@@ -154,6 +154,20 @@ impl ErrorConfig {
         override_.resolve(self.mode)
     }
 
+    /// The override explicitly set for `error_type`, or `None` when the base
+    /// mode alone decides.
+    ///
+    /// [`Self::action_for`] deliberately erases this distinction — strict mode
+    /// and `--reject <code>` both resolve to [`ResolvedAction::Reject`]. A
+    /// handful of codes need to tell them apart: an *advisory* about ferro's
+    /// own canonical output must not be promoted to an error just because the
+    /// base mode is strict (that would refuse the tool's own output), but an
+    /// operator who explicitly asks to reject it has opted in. See
+    /// `NormalizeConfig::should_reject_initiator_met_canonicalization` (#1196).
+    pub fn explicit_override(&self, error_type: ErrorType) -> Option<ErrorOverride> {
+        self.overrides.get(&error_type).copied()
+    }
+
     /// Returns true if the given error type should be rejected.
     pub fn should_reject(&self, error_type: ErrorType) -> bool {
         self.action_for(error_type).should_reject()

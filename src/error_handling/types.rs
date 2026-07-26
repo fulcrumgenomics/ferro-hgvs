@@ -792,6 +792,96 @@ impl ErrorType {
         }
     }
 
+    /// Returns true if some runtime site consults [`ErrorConfig`] for this
+    /// variant — i.e. whether `--error-mode` and the `--ignore` / `--reject`
+    /// overrides can change how the code is handled.
+    ///
+    /// A variant is config-reachable when it is passed to one of
+    /// `ErrorConfig::action_for` / `should_reject` / `should_correct` /
+    /// `should_warn`, or when it is attached to a `DetectedCorrection` (which
+    /// the preprocessor resolves generically through `action_for`).
+    ///
+    /// This is a *declaration*, and both directions of it are pinned by the
+    /// error-code audit (`tests/it/error_code_audit.rs`): a variant declared
+    /// reachable must have a consult site, and a variant declared inert must
+    /// have none. The CLI reads it so `--ignore`/`--reject` naming an inert
+    /// code produces a diagnostic instead of being accepted and silently doing
+    /// nothing (#1196).
+    ///
+    /// Explicit arms per variant — adding a new `ErrorType` triggers an
+    /// exhaustiveness error here so the decision is forced at the source.
+    ///
+    /// [`ErrorConfig`]: crate::error_handling::ErrorConfig
+    pub fn consults_error_config(&self) -> bool {
+        match self {
+            // ---- Never emitted, so there is nothing for a mode to act on.
+            // The variants are retained because they are exposed as stable
+            // Python discriminants; see the `registered` rows in
+            // `docs/spec/error_code_audit.md` (#1114).
+            //
+            // Non-ASCII inputs are covered by W2001 (dashes) and W2002
+            // (quotes); the generic catch-all has no detector of its own.
+            ErrorType::InvalidUnicodeCharacter => false,
+            // `*` and `fs*N` are spec-valid glyphs the parser accepts natively
+            // and Display canonicalizes, so no correction is ever detected.
+            ErrorType::DeprecatedStopCodonStar => false,
+            ErrorType::DeprecatedFrameshiftStar => false,
+
+            // ---- Hard parse rejections raised from the grammar, which runs
+            // below the error-configuration layer (`parse_variant` takes no
+            // `ErrorConfig`). None of the three has a meaningful
+            // auto-correction — see `is_correctable` above — so there is no
+            // lenient behavior for a mode to select: the only options are
+            // "reject" and "silently accept a description ferro cannot
+            // represent". They reject in every mode, and the CLI says so when
+            // an override names them (#1196).
+            ErrorType::AlleleFractionAnnotation => false,
+            ErrorType::ClinVarProseMultiAllelic => false,
+            ErrorType::NonSpecMosaicForm => false,
+
+            // ---- Everything else reaches a consult site.
+            ErrorType::LowercaseAminoAcid
+            | ErrorType::SingleLetterAminoAcid
+            | ErrorType::LowercaseAccessionPrefix
+            | ErrorType::MixedCaseEditType
+            | ErrorType::WrongDashCharacter
+            | ErrorType::WrongQuoteCharacter
+            | ErrorType::ExtraWhitespace
+            | ErrorType::MissingVersion
+            | ErrorType::ProteinSubstitutionArrow
+            | ErrorType::OldSubstitutionSyntax
+            | ErrorType::OldAlleleFormat
+            | ErrorType::TrailingAnnotation
+            | ErrorType::MissingCoordinatePrefix
+            | ErrorType::DeprecatedStopCodonX
+            | ErrorType::DeprecatedFrameshiftX
+            | ErrorType::DelSizeSuffix
+            | ErrorType::EmptyDelinsInsert
+            | ErrorType::RedundantRepeatLabel
+            | ErrorType::DeprecatedIvsNotation
+            | ErrorType::DeprecatedConSyntax
+            | ErrorType::LengthMismatch
+            | ErrorType::RnaThymineCanonicalized
+            | ErrorType::ProteinBracketedAaInsertion
+            | ErrorType::InitiatorMetCanonicalization
+            | ErrorType::DupSizeSuffix
+            | ErrorType::DupExplicitSeq
+            | ErrorType::DelExplicitSeq
+            | ErrorType::SwappedPositions
+            | ErrorType::SinglePositionRange
+            | ErrorType::PositionPastEnd
+            | ErrorType::RefSeqMismatch
+            | ErrorType::OverlapConflictingEdits
+            | ErrorType::VariantExceedsReference
+            | ErrorType::UnresolvableCentromere
+            | ErrorType::TranscriptFlankNotDescribable
+            | ErrorType::NonConformantBracketCardinality
+            | ErrorType::IntronicOnBareTranscript
+            | ErrorType::IncompleteCdsStartReference
+            | ErrorType::InsertionWithoutInsertedSequence => true,
+        }
+    }
+
     /// Returns an example of this error type for documentation.
     pub fn example(&self) -> (&'static str, &'static str) {
         match self {
