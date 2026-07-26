@@ -136,6 +136,7 @@ mod issue_1185_cds_end_3utr_shift;
 mod issue_1192_rna_codon_frame_gate;
 mod issue_1202_transcript_bounds_insertion_clamp;
 mod issue_1207_rna_cds_boundary_clamp;
+mod issue_1209_cds_end_insertion_shift;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;
