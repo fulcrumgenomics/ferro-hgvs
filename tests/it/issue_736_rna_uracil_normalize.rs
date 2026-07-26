@@ -58,9 +58,42 @@ fn rna_insertion_with_u_collapses_to_dup() {
 }
 
 #[test]
-fn rna_two_base_u_insertion_canonicalizes_to_repeat() {
-    // `n.3_4insTT` -> `n.3_5T[5]`; the `r.` analog renders the repeat unit as `u`.
-    assert_eq!(normalize("NM_U.1:r.3_4insuu"), "NM_U.1:r.3_5u[5]");
+fn rna_two_base_u_insertion_is_gated_like_the_c_axis() {
+    // Re-blessed by #1192. The original expectation here was `r.3_5u[5]`,
+    // justified as "the `r.` analog of `n.3_4insTT` -> `n.3_5T[5]`". That
+    // compared `r.` against the wrong axis: `NM_U.1` is coding
+    // (`cds_start = 1`), so `r.` is CDS-relative — the `c.` axis, not the `n.`
+    // axis (#469). `RNA/repeated.md` L24-27 forbids repeat notation on a coding
+    // RNA reference for units whose length is not a multiple of 3, and a
+    // homopolymer unit is length 1, so the codon-frame gate must fire. On the
+    // same transcript and bases the three axes now read:
+    //   c.3_4insTT  -> c.5_6insTT   (gated: coding, unit not codon-aligned)
+    //   r.3_4insuu  -> r.5_6insuu   (must match c.; this assertion)
+    //   n.3_4insTT  -> n.3_5T[5]    (no reading frame, so repeat notation is fine)
+    // The `u` spelling of the inserted bases — the point of #736 — survives the
+    // round trip, which is what this file exists to pin.
+    assert_eq!(normalize("NM_U.1:r.3_4insuu"), "NM_U.1:r.5_6insuu");
+}
+
+/// The two sibling axes the re-blessing above is justified against. They were
+/// asserted only in a comment, which is what let the original `r.3_5u[5]`
+/// expectation look defensible: nothing pinned the `c.` value it was supposed to
+/// match, or the `n.` value it was actually copied from. Pinning both makes the
+/// three-way relationship checkable — `r.` must track `c.` (CDS-relative on a
+/// coding transcript, so gated) and must *not* track `n.` (no reading frame, so
+/// repeat notation is legitimate there).
+#[test]
+fn c_and_n_axes_bracket_the_gated_r_axis_expectation() {
+    assert_eq!(
+        normalize("NM_U.1:c.3_4insTT"),
+        "NM_U.1:c.5_6insTT",
+        "c. is gated: coding footprint, unit length 1 is not codon-aligned",
+    );
+    assert_eq!(
+        normalize("NM_U.1:n.3_4insTT"),
+        "NM_U.1:n.3_5T[5]",
+        "n. has no reading frame, so repeat notation stays available",
+    );
 }
 
 #[test]
