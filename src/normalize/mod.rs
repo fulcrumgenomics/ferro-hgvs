@@ -2028,8 +2028,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// [`NormalizationWarning::InsertedSequenceExpanded`] for
     /// observability, or `None` when nothing was canonicalized.
     ///
-    /// The four `normalize_<axis>` methods wrap this helper to build the
-    /// per-axis variant struct. Splitting the warning construction here
+    /// The five `normalize_<axis>` methods — genome, cds, tx, rna (#1183), and
+    /// mt — wrap this helper to build the per-axis variant struct, one
+    /// `try_expand_<axis>_ins` each. Splitting the warning construction here
     /// keeps the original `[ATC]` / `[A;100_110]` rendering accessible
     /// before the edit is mutated.
     fn try_expand_ins_edit(
@@ -2155,6 +2156,36 @@ impl<P: ReferenceProvider> Normalizer<P> {
             return Ok(None);
         };
         let new_variant = TxVariant {
+            accession: variant.accession.clone(),
+            gene_symbol: variant.gene_symbol.clone(),
+            loc_edit: LocEdit::with_uncertainty(
+                variant.loc_edit.location.clone(),
+                variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
+            ),
+        };
+        Ok(Some((new_variant, warning)))
+    }
+
+    /// `normalize_rna` companion — `r.` numbering follows the associated DNA
+    /// reference, so it is CDS-relative (== `c.`) on a coding transcript and
+    /// transcript-relative (== `n.`) on a non-coding one. That split needs the
+    /// provider, so it is carried by `InsCoordKind::Rna` and resolved at fetch
+    /// time in `fetch_position_range_bases` — the same kind the `r.`
+    /// cross-reference *payload* path already uses (#773). No `U`→`T` step is
+    /// needed here: the payload resolves to DNA bases from the provider, and
+    /// `RnaVariant`'s Display renders `T`→`u` again on output. #1183.
+    fn try_expand_rna_ins(
+        &self,
+        variant: &crate::hgvs::variant::RnaVariant,
+        edit: &NaEdit,
+        accession: &str,
+    ) -> Result<Option<(crate::hgvs::variant::RnaVariant, NormalizationWarning)>, FerroError> {
+        let Some((new_edit, warning)) =
+            self.try_expand_ins_edit(edit, accession, InsCoordKind::Rna)?
+        else {
+            return Ok(None);
+        };
+        let new_variant = crate::hgvs::variant::RnaVariant {
             accession: variant.accession.clone(),
             gene_symbol: variant.gene_symbol.clone(),
             loc_edit: LocEdit::with_uncertainty(
@@ -4923,10 +4954,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         // SVD-WG009: rewrite `con` to `delins`. Re-run on the rewritten
-        // variant so downstream passes (3' shift, ins→dup, canonical
-        // split) all see the delins form. The RNA axis does not run the
-        // issue #333 ins[...] expansion step — that is wired only into
-        // the genome/cds/tx/mt axes.
+        // variant so downstream passes (the #333 `ins[...]` expansion below,
+        // 3' shift, ins→dup, canonical split) all see the delins form.
         if let Some(new_edit) = canonicalize_conversion_to_delins(edit) {
             let new_variant = RnaVariant {
                 accession: variant.accession.clone(),
@@ -4937,6 +4966,22 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ),
             };
             return self.normalize_rna(&new_variant);
+        }
+
+        // Issue #333 / #1183: expand bracketed / reference-range `ins[...]`
+        // payloads, mirroring the genome/cds/tx/mt axes. Runs here — after the
+        // u/T and con→delins rewrites, before the `needs_normalization` and
+        // intronic dispatches below — so the payload is already a literal by the
+        // time either the intronic (tx-delegating) or exonic path sees it, and so
+        // an out-of-scope payload is *refused* on `r.` exactly as it is on `c.`
+        // instead of passing through unvalidated.
+        let rna_accession = variant.accession.transcript_accession();
+        if let Some((new_variant, warning)) =
+            self.try_expand_rna_ins(variant, edit, &rna_accession)?
+        {
+            let (result, mut warnings) = self.normalize_rna(&new_variant)?;
+            warnings.insert(0, warning);
+            return Ok((result, warnings));
         }
 
         // Only normalize indels
