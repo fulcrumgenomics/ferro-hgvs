@@ -2463,6 +2463,12 @@ struct CrossReferenceParse {
     start: u64,
     /// One-based end position (equal to `start` for a single-position payload).
     end: u64,
+    /// Whether the payload range carried a trailing `inv`, meaning the fetched
+    /// bases are inserted reverse-complemented. Only ever set for a two-part
+    /// `A_Binv` range — a single position has no orientation to invert, matching
+    /// the same-reference parse paths, which likewise build an
+    /// `InsertedPart::PositionRangeInv` only from a range. #1184.
+    inv: bool,
     /// Whether the positions index the transcript (`c.`/`n.`/`r.`) rather than a
     /// genomic / absolute frame (`g./m./o.`). When set, a genomic-context
     /// compound accession (`NG_(NM_)`) must be reduced to its transcript before
@@ -2477,12 +2483,13 @@ struct CrossReferenceParse {
 /// `"NC_000022.10:g.42536337_42536382"`) into its components for
 /// provider lookup. Returns a `CrossReferenceParse` (the inner accession,
 /// the `InsCoordKind` used to fetch its bases, the one-based `start`/`end`,
-/// and the `transcript_relative` flag) on success.
+/// the `transcript_relative` flag, and the `inv` orientation) on success.
 ///
 /// Two payload forms are accepted:
 ///   - **Axis-qualified** (`<ACC>:<axis>.<range>`): supports g./m./o./c./n./r.
 ///     axes with simple positive-integer positions or ranges (no offsets,
-///     no `*N`, no `?`, no `pter`/`qter` markers).
+///     no `*N`, no `?`, no `pter`/`qter` markers). A range may carry a trailing
+///     `inv` (`A_Binv`), which inverts the fetched bases (#1184).
 ///   - **Axis-less native-frame** (`<ACC>:<range>`, #759): the bare positions
 ///     index the accession's *native frame* — the axis an explicit
 ///     description would default to for that accession
@@ -2558,10 +2565,24 @@ fn parse_cross_reference(reference: &str) -> Option<CrossReferenceParse> {
         let (kind, transcript_relative) = axisless_native_frame(acc_part)?;
         (kind, transcript_relative, after_colon)
     };
+    // A trailing `inv` inverts the payload (`A_Binv`). Strip it up front so the
+    // position parse below still sees a bare range, and record the orientation
+    // for `resolve_cross_reference_bases` to apply. `strip_suffix` anchors to the
+    // end, so an embedded `inv` (`1inv_3`) is left alone and still rejected by
+    // the digits-only checks. #1184.
+    let (range_str, inv) = match range_str.strip_suffix("inv") {
+        Some(stripped) => (stripped, true),
+        None => (range_str, false),
+    };
     // A payload may name a range (`A_B`) or a single position (`A`, a one-base
     // copy with start == end).
     let (start_str, end_str) = match range_str.split_once('_') {
         Some((s, e)) => (s, e),
+        // A single position has no orientation, so `Ainv` is not a meaningful
+        // shape — and it is unrepresentable in the same-reference form, where
+        // both parse paths build a `PositionRangeInv` only from a two-part
+        // range. Keep it out of scope rather than complement one base. #1184.
+        None if inv => return None,
         None => (range_str, range_str),
     };
     if start_str.is_empty() || end_str.is_empty() {
@@ -2569,7 +2590,8 @@ fn parse_cross_reference(reference: &str) -> Option<CrossReferenceParse> {
     }
     // Reject any decoration: offsets (`+`/`-`), UTR markers (`*`),
     // unknown markers (`?`), pter/qter/cen. Only positive-integer
-    // ranges in scope per the issue's acceptance criteria.
+    // ranges in scope per the issue's acceptance criteria — the one
+    // permitted suffix, a trailing `inv`, is already stripped above.
     if !start_str.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -2584,6 +2606,7 @@ fn parse_cross_reference(reference: &str) -> Option<CrossReferenceParse> {
         start,
         end,
         transcript_relative,
+        inv,
     })
 }
 
@@ -2610,10 +2633,10 @@ fn cross_reference_shape_error(reference: &str) -> FerroError {
         variant_type: format!(
             "ins[{}] cross-reference shape not yet supported. \
              Expansion currently covers g./m./o./c./n./r. axes with simple \
-             positive-integer positions or ranges. Out-of-scope: p. (protein — \
-             structurally invalid as DNA-insertion payload), offsets (+/-), UTR \
-             markers (*N), unknown markers (?), and pter/qter/cen \
-             decorations",
+             positive-integer positions or ranges, optionally with a trailing \
+             `inv` on a range. Out-of-scope: p. (protein — structurally invalid \
+             as DNA-insertion payload), offsets (+/-), UTR markers (*N), \
+             unknown markers (?), and pter/qter/cen decorations",
             reference,
         ),
     }
@@ -2629,6 +2652,7 @@ fn resolve_cross_reference_bases<P: ReferenceProvider>(
         start,
         end,
         transcript_relative,
+        inv,
     } = parse_cross_reference(reference).ok_or_else(|| cross_reference_shape_error(reference))?;
     // A transcript-relative payload (`c.`, `n.`, or `r.`) indexes the transcript, so a
     // genomic-context compound accession (`NG_(NM_)`) must be reduced to its
@@ -2641,7 +2665,17 @@ fn resolve_cross_reference_bases<P: ReferenceProvider>(
     } else {
         accession
     };
-    fetch_position_range_bases(&accession, start, end, kind, provider)
+    let bases = fetch_position_range_bases(&accession, start, end, kind, provider)?;
+    // A trailing `inv` on the payload range inserts the segment
+    // reverse-complemented, exactly as the same-reference
+    // `InsertedPart::PositionRangeInv` / `InsertedSequence::PositionRangeInv`
+    // arms do. Applied after the fetch so the axis-specific position
+    // translation is unaffected by the orientation. #1184.
+    if inv {
+        Ok(crate::sequence::reverse_complement(&bases))
+    } else {
+        Ok(bases)
+    }
 }
 
 /// Resolve the `(InsCoordKind, transcript_relative)` an axis-less cross-reference
@@ -2853,7 +2887,8 @@ pub(crate) fn expand_complex_parts<P: ReferenceProvider>(
 ///     decoration, etc.): error carries `"cross-reference"` and
 ///     describes the supported axis set. Simple positive-integer
 ///     ranges on g./m./o./c./n. (#422) and r. (#773) are now
-///     expanded and no longer surface as errors.
+///     expanded and no longer surface as errors, as is such a range
+///     carrying a trailing `inv` (#1184).
 /// - `Err(FerroError::...)` — genuine provider lookup failure
 ///   (`ReferenceNotFound`, `InvalidCoordinates`, etc.).
 pub fn expand_inserted_sequence<P: ReferenceProvider>(
@@ -4979,6 +5014,89 @@ mod tests {
         let bases = resolve_cross_reference_bases("NG_999999.9(NM_001234.1):r.2", &provider)
             .expect("genomic-context compound r. cross-reference should resolve");
         assert_eq!(bases, "T");
+    }
+
+    #[test]
+    fn resolve_cross_reference_inv_suffix_reverse_complements_the_payload() {
+        // #1184: a trailing `inv` on a cross-reference range inverts the fetched
+        // bases, mirroring the same-reference `PositionRangeInv` arm. `NM_000088.3`
+        // has cds_start=1 over "ATGCCCAAG…", so c.1_3 == "ATG" and c.1_3inv is its
+        // reverse complement "CAT".
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        let forward = resolve_cross_reference_bases("NM_000088.3:c.1_3", &provider)
+            .expect("forward c. cross-reference should resolve");
+        assert_eq!(forward, "ATG");
+        let inverted = resolve_cross_reference_bases("NM_000088.3:c.1_3inv", &provider)
+            .expect("inv-suffixed c. cross-reference should resolve");
+        assert_eq!(inverted, "CAT");
+        assert_eq!(
+            inverted,
+            crate::sequence::reverse_complement(&forward),
+            "inv payload must be the reverse complement of the forward payload"
+        );
+    }
+
+    #[test]
+    fn resolve_cross_reference_inv_suffix_applies_on_every_axis() {
+        // The suffix is stripped before axis-specific position translation, so it
+        // composes with each axis's frame rather than replacing it. NR_000123.1 is
+        // "ACGTACGTACGT" (non-coding: n./r. are transcript-relative), so 1_5 is
+        // "ACGTA" — deliberately NOT a palindrome, so this would fail if the
+        // suffix were stripped without inverting.
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        for reference in [
+            "NR_000123.1:n.1_5inv",
+            "NR_000123.1:r.1_5inv",
+            // Axis-less native frame (#759) — non-coding accession resolves to n.
+            "NR_000123.1:1_5inv",
+        ] {
+            let bases = resolve_cross_reference_bases(reference, &provider)
+                .unwrap_or_else(|e| panic!("{reference} should resolve, got {e:?}"));
+            assert_eq!(bases, "TACGT", "{reference} must reverse-complement ACGTA");
+        }
+    }
+
+    #[test]
+    fn resolve_cross_reference_inv_requires_a_two_part_range() {
+        // Both same-reference parse paths (`parse_external_ref_part`,
+        // `parse_simple_count`) only ever build a `PositionRangeInv` from an
+        // `A_Binv` range — a bare `Ainv` is a parse error there. The
+        // cross-reference form mirrors that: a single position with an `inv`
+        // suffix stays an out-of-scope shape rather than silently complementing
+        // one base.
+        let provider = crate::reference::mock::MockProvider::with_test_data();
+        assert!(parse_cross_reference("NM_000088.3:c.2inv").is_none());
+        let err = resolve_cross_reference_bases("NM_000088.3:c.2inv", &provider)
+            .expect_err("single-position inv must stay unsupported");
+        assert!(
+            matches!(err, FerroError::UnsupportedVariant { .. }),
+            "expected the shape error, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn resolve_cross_reference_inv_does_not_loosen_decoration_rejection() {
+        // Stripping `inv` must not become a general-purpose suffix strip: the
+        // decorations that were out of scope before are still out of scope with
+        // an `inv` on the end, and a lone/embedded `inv` is not a range.
+        for reference in [
+            // pter/qter keep their own rejection (these appear in the spec corpus).
+            "NC_000014.9:g.29745314_qterinv",
+            "NC_000011.10:g.pter_15825266inv",
+            // Offsets and UTR markers stay rejected.
+            "NM_000088.3:c.244-8_249inv",
+            "NM_000088.3:c.100_*200inv",
+            // Not a range / not a position at all.
+            "NM_000088.3:c.inv",
+            "NM_000088.3:c.1_inv",
+            // `inv` must be a *trailing* suffix, not matched mid-string.
+            "NM_000088.3:c.1inv_3",
+        ] {
+            assert!(
+                parse_cross_reference(reference).is_none(),
+                "{reference} must remain an out-of-scope cross-reference shape"
+            );
+        }
     }
 
     #[test]

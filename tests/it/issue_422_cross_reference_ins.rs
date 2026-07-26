@@ -340,3 +340,103 @@ fn unsupported_cross_reference_after_repeat_part_still_defers() {
         result.ok(),
     );
 }
+
+// =============================================================================
+// Issue #1184 — a trailing `inv` on a cross-reference range.
+//
+// `parse_external_ref_part` slurps the whole payload (including a trailing
+// `inv`) into an opaque `ExternalRef`, so the suffix used to reach
+// `parse_cross_reference` glued to the end position and fail its digits-only
+// test — rejecting `[ACC:g.A_Binv]` as an unsupported shape even though the
+// identical range without `inv` expanded fine. These pin the end-to-end
+// behavior through BOTH entry points (bare `Reference` and bracketed
+// `ExternalRef`), which matters because the `detect_deferred_part` pre-scan
+// gates on `parse_cross_reference` independently of the expansion itself.
+//
+// `NC_000011.10` is `"GGGGTTTTAAAACCCC"` repeated, so `g.1_6` is `GGGGTT` —
+// deliberately not a palindrome, so a bug that stripped the suffix without
+// inverting would fail these rather than pass by coincidence.
+// =============================================================================
+
+/// Provider for the `inv` tests. The outer accession's replaced range
+/// (`g.10_15` == `CTATAG`) is chosen so that **no** position matches either
+/// payload — forward `GGGGTT` or inverted `AACCCC` — and both are the same
+/// length as the range. Otherwise the normalizer's canonical split factors the
+/// coincidental matches out into an allele (e.g.
+/// `g.[10C>G;12_15delinsGGTT]`), which would hide the inserted literal this
+/// test is about.
+fn inv_payload_provider() -> MockProvider {
+    let mut p = MockProvider::new();
+    p.add_genomic_sequence(
+        "NC_000022.10",
+        format!("{}CTATAG{}", "G".repeat(9), "A".repeat(10)),
+    );
+    p.add_genomic_sequence("NC_000011.10", "GGGGTTTTAAAACCCC".repeat(10));
+    p
+}
+
+/// The forward control and the inverted form differ, and the inverted form is
+/// exactly the reverse complement of the forward one.
+#[test]
+fn cross_reference_inv_suffix_inserts_the_reverse_complement() {
+    let forward = normalize(
+        "NC_000022.10:g.10_15delins[NC_000011.10:g.1_6]",
+        inv_payload_provider(),
+    )
+    .expect("forward cross-reference must expand");
+    assert_eq!(
+        forward, "NC_000022.10:g.10_15delinsGGGGTT",
+        "forward payload must be the literal GGGGTT",
+    );
+
+    let inverted = normalize(
+        "NC_000022.10:g.10_15delins[NC_000011.10:g.1_6inv]",
+        inv_payload_provider(),
+    )
+    .expect("inv-suffixed cross-reference must expand (#1184)");
+    assert_eq!(
+        inverted, "NC_000022.10:g.10_15delinsAACCCC",
+        "inv payload must be the reverse complement of GGGGTT",
+    );
+    assert_ne!(
+        forward, inverted,
+        "inv must change the inserted sequence, not be silently ignored",
+    );
+}
+
+/// The bracketed `Complex` path (`ins[<literal>;<cross-ref>inv]`) resolves
+/// through `append_part_bases`' `ExternalRef` arm — a separate call site from
+/// the bare-`Reference` path above, so it needs its own pin.
+#[test]
+fn cross_reference_inv_suffix_expands_inside_a_complex_bracket() {
+    let out = normalize(
+        "NC_000022.10:g.10_15delins[A;NC_000011.10:g.1_6inv]",
+        inv_payload_provider(),
+    )
+    .expect("inv-suffixed cross-reference in a Complex bracket must expand (#1184)");
+    // Pin the whole description, not just the `delins…` tail: the replaced range
+    // (`g.10_15` == `CTATAG`) shares no base with the payload, so the canonical
+    // split cannot trim either endpoint and the anchor must stay `10_15`. The
+    // payload is the literal `A` followed by the reverse complement `AACCCC`,
+    // and the flattening leaves no bracket behind.
+    assert_eq!(
+        out, "NC_000022.10:g.10_15delinsAAACCCC",
+        "literal `A` then the reverse complement `AACCCC`, at the unshifted anchor",
+    );
+}
+
+/// A single position carries no orientation, and the same-reference form cannot
+/// express one either (both parse paths build a `PositionRangeInv` only from a
+/// two-part range). `Ainv` must therefore stay an out-of-scope shape rather
+/// than quietly complement one base.
+#[test]
+fn cross_reference_inv_on_a_single_position_is_still_unsupported() {
+    let result = normalize(
+        "NC_000022.10:g.10_15delins[NC_000011.10:g.5inv]",
+        inv_payload_provider(),
+    );
+    assert!(
+        matches!(result, Err(FerroError::UnsupportedVariant { .. })),
+        "single-position inv must stay unsupported; got {result:?}",
+    );
+}
