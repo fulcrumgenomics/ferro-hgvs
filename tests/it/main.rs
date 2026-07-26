@@ -141,6 +141,7 @@ mod issue_1185_cds_end_3utr_shift;
 mod issue_1192_rna_codon_frame_gate;
 mod issue_1202_transcript_bounds_insertion_clamp;
 mod issue_1204_gated_dup_fallback;
+mod issue_1205_genome_contig_bounds_clamp;
 mod issue_1207_rna_cds_boundary_clamp;
 mod issue_1209_cds_end_insertion_shift;
 mod issue_1210_repeat_gate_tract_span;

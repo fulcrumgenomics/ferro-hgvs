@@ -604,11 +604,40 @@ fn insertion_to_boundary_delins(
     })
 }
 
-/// Rewrite in place a post-shuffle insertion that has saturated at a
-/// **transcript** boundary, into the equivalent `delins` — the only spelling of
-/// that haplotype the `n.` / `r.` axes, and the `c.` axis outside the CDS, can
+/// Which ends of the `seq` slice handed to [`clamp_insertion_at_sequence_bounds`]
+/// are true boundaries of the underlying entity.
+///
+/// The transcript-axis callers pass the whole transcript, so both ends are real
+/// ([`SequenceEnds::WHOLE`]). `normalize_genome` passes a **window** into the
+/// contig, where an end is real only when the window happens to be flush with the
+/// contig there. Clamping at a window edge that is merely where the fetch stopped
+/// would assert a boundary that does not exist and rewrite a perfectly valid
+/// interior insertion into a `delins` at the wrong place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SequenceEnds {
+    /// `seq[0]` is the entity's first base.
+    five_prime: bool,
+    /// `seq[len-1]` is the entity's last base.
+    three_prime: bool,
+}
+
+impl SequenceEnds {
+    /// The slice is the entire entity, so both of its ends are real boundaries.
+    const WHOLE: Self = Self {
+        five_prime: true,
+        three_prime: true,
+    };
+}
+
+/// Rewrite in place a post-shuffle insertion that has saturated at a **sequence**
+/// boundary, into the equivalent `delins` — the only spelling of that haplotype
+/// the `n.` / `r.` axes, the `c.` axis outside the CDS, and the `g.` axis can
 /// express. Leaves `edit`/`start`/`end` untouched for anything that is not a
 /// boundary-saturated literal insertion.
+///
+/// Named for the *sequence* rather than the transcript since #1205: nothing in it
+/// is transcript-specific — it enforces `[1, seq.len()]`, which is equally the
+/// contig bounds — and `normalize_genome` is now a caller.
 ///
 /// `n.` and `r.` number the transcript directly: there is no position `0` and
 /// no `*`-suffixed overflow axis, so an insertion driven to rest immediately
@@ -652,33 +681,38 @@ fn insertion_to_boundary_delins(
 /// | `c.` (CDS region) | `cds_start` / `cds_end` | `normalize_cds` |
 /// | `c.` (UTR regions) | transcript `1` / `len` | this helper |
 /// | `n.`, `r.` | transcript `1` / `len` | this helper |
-/// | `g.` | contig `1` / `len` | **nobody — see #1205** |
+/// | `g.` | contig `1` / `len` | `normalize_genome` (#1205) |
 /// | `m.`, `o.` | circular, so position 1 has a valid 5' neighbour | n/a |
 ///
-/// The invariant is therefore **per-axis, not global**: `normalize_genome` has
-/// no clamp, so a 5'-saturated insertion at a contig start still escapes as
-/// `g.1ins<A'>` — the same unparseable shape, on the axis the spec uses for its
-/// own counter-example (`DNA/insertion.md:95-101` rejects `g.123insG`).
-/// Tracked in #1205 and deliberately not fixed here: the contig bounds are a
-/// different boundary, it changes output on the hottest axis, and `m.`/`o.`
-/// need a wraparound answer rather than this `delins` rewrite. Nothing in this
-/// helper is transcript-specific — it enforces `[1, seq.len()]` — so #1205 is
-/// expected to add a fourth caller rather than new logic.
-fn clamp_insertion_at_transcript_bounds(
+/// `normalize_genome` became the fourth caller in #1205, which closes the last
+/// non-circular gap: before it, a 5'-saturated insertion at a contig start
+/// escaped as `g.1ins<A\'>` — the same unparseable shape, on the axis the spec
+/// uses for its own counter-example (`DNA/insertion.md:95-101` rejects
+/// `g.123insG`) — and a 3'-saturated one as `g.<len>_<len+1>ins<A\'>`, whose
+/// second anchor is past the contig end.
+///
+/// `m.`/`o.` remain deliberately uncovered: a circular reference wraps, so
+/// position 1 HAS a valid 5\' neighbour (the last base) and the correct output
+/// there is a wraparound description, not this `delins` rewrite.
+///
+/// The genomic caller passes a **window** rather than the whole contig, so it
+/// must say which of its ends are real — see [`SequenceEnds`].
+fn clamp_insertion_at_sequence_bounds(
     seq: &[u8],
     edit: &mut NaEdit,
     start: &mut u64,
     end: &mut u64,
+    ends: SequenceEnds,
 ) {
     // Cheapest discriminating guard first: only two resting places qualify, and
-    // both are two register compares against values already in hand. `tx_len ==
+    // both are two register compares against values already in hand. `seq_len ==
     // 0` needs no separate guard — `insertion_to_boundary_delins` bails on an
     // anchor outside `seq`, which an empty `seq` always is.
-    let tx_len = seq.len() as u64;
-    let (anchor, side) = if *start == 1 && *end == 1 {
+    let seq_len = seq.len() as u64;
+    let (anchor, side) = if ends.five_prime && *start == 1 && *end == 1 {
         (1, BoundarySide::FivePrime)
-    } else if *start == tx_len && *end == tx_len + 1 {
-        (tx_len, BoundarySide::ThreePrime)
+    } else if ends.three_prime && *start == seq_len && *end == seq_len + 1 {
+        (seq_len, BoundarySide::ThreePrime)
     } else {
         return;
     };
@@ -2753,14 +2787,47 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let rel_end = end - window_start;
 
         // Perform normalization
-        let (new_rel_start, new_rel_end, new_edit, mut warnings) = self.normalize_na_edit(
+        let (mut new_rel_start, mut new_rel_end, mut new_edit, mut warnings) = self
+            .normalize_na_edit(
+                ref_seq.as_bytes(),
+                edit,
+                rel_start,
+                rel_end,
+                &Boundaries::new(0, ref_seq.len() as u64),
+                CodonGate::NotApplicable, // genomic context: no reading frame
+            )?;
+
+        // #1205: an insertion driven to rest against a contig end has no valid
+        // pair of adjacent anchors there, exactly as on the transcript axes
+        // (#1202) — 5' it escapes as the single-position `g.1ins<A'>`, which
+        // `DNA/insertion.md:95-101` rejects by name and ferro's own parser
+        // refuses; 3' as `g.<len>_<len+1>ins<A'>`, whose second anchor is past
+        // the contig end. Rewrite both to the equivalent `delins`.
+        //
+        // `ref_seq` is a WINDOW into the contig, not the whole thing, so its ends
+        // are contig boundaries only where the window is flush with the contig —
+        // otherwise the "boundary" is just where the fetch stopped, and clamping
+        // there would invent one. The 5' side is flush iff the window started at
+        // the contig's first base; the 3' side iff the window's last base is the
+        // contig's last. With no length available we cannot establish flushness,
+        // so we do not clamp — the same conservative choice
+        // `clamp_fetch_end_to_contig` makes on the read side.
+        //
+        // Runs on window-relative coordinates, before the conversion back to
+        // genomic ones, mirroring the ordering the three transcript callers hold
+        // (clamp in the frame `ref_seq` is indexed in, then convert).
+        let contig_len = self.provider.get_sequence_length(&accession).ok();
+        clamp_insertion_at_sequence_bounds(
             ref_seq.as_bytes(),
-            edit,
-            rel_start,
-            rel_end,
-            &Boundaries::new(0, ref_seq.len() as u64),
-            CodonGate::NotApplicable, // genomic context: no reading frame
-        )?;
+            &mut new_edit,
+            &mut new_rel_start,
+            &mut new_rel_end,
+            SequenceEnds {
+                five_prime: window_start == 0,
+                three_prime: contig_len
+                    .is_some_and(|len| window_start + ref_seq.len() as u64 >= len),
+            },
+        );
 
         // Adjust back to genomic coordinates
         let new_start = new_rel_start + window_start;
@@ -3795,11 +3862,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // either clamp above has already rewritten `new_edit` to a `Delins`, so
         // it is inert after them — no double-clamp. Runs before the CDS
         // conversion so the arithmetic stays in transcript space.
-        clamp_insertion_at_transcript_bounds(
+        clamp_insertion_at_sequence_bounds(
             seq,
             &mut new_edit,
             &mut new_tx_start,
             &mut new_tx_end,
+            SequenceEnds::WHOLE,
         );
 
         // Convert back to CDS coordinates
@@ -4144,7 +4212,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `new_end` from `len + 1` onto exactly `len` (== `boundaries.right`
         // for the insertion bounds), so clamping first would divert a saturated
         // insertion into the junction-crossing engine.
-        clamp_insertion_at_transcript_bounds(seq, &mut new_edit, &mut new_start, &mut new_end);
+        clamp_insertion_at_sequence_bounds(
+            seq,
+            &mut new_edit,
+            &mut new_start,
+            &mut new_end,
+            SequenceEnds::WHOLE,
+        );
 
         let new_variant = TxVariant {
             accession: variant.accession.clone(),
@@ -5664,7 +5738,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // The `c.` spelling of the same edit was already stable precisely
         // because this clamp exists there (`c.1delinsCCC`).
         //
-        // #1202's `clamp_insertion_at_transcript_bounds` below does NOT cover
+        // #1202's `clamp_insertion_at_sequence_bounds` below does NOT cover
         // this: it fires only at transcript `1` / `len`, whereas these saturate
         // at the CDS bounds, where the far side (`r.-1`, `r.*1`) is perfectly
         // representable. Two different boundaries, both needed.
@@ -5731,11 +5805,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // the CDS clamps above, mirroring `normalize_cds`'s ordering; either of
         // those has already rewritten `new_edit` to a `Delins`, so this is inert
         // after them.
-        clamp_insertion_at_transcript_bounds(
+        clamp_insertion_at_sequence_bounds(
             seq,
             &mut new_edit,
             &mut new_tx_start,
             &mut new_tx_end,
+            SequenceEnds::WHOLE,
         );
 
         // Convert each normalized tx position back to a CDS-relative `r.`
@@ -9674,6 +9749,101 @@ mod codon_gate_tests {
                 CodonGate::NotApplicable => panic!("{cds:?} should have produced a coding gate"),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod sequence_bounds_clamp_tests {
+    use super::*;
+    use crate::hgvs::edit::{Base, InsertedSequence, Sequence};
+
+    fn literal_insertion(bases: &str) -> NaEdit {
+        let bases: Vec<Base> = bases
+            .chars()
+            .map(|c| Base::from_char(c).expect("test bases must be A/C/G/T"))
+            .collect();
+        NaEdit::Insertion {
+            sequence: InsertedSequence::Literal(Sequence::new(bases)),
+        }
+    }
+
+    /// The 5'-saturated shape is rewritten when the slice's first base really is
+    /// the entity's first base.
+    #[test]
+    fn clamps_at_a_real_five_prime_bound() {
+        let (mut edit, mut start, mut end) = (literal_insertion("CG"), 1, 1);
+        clamp_insertion_at_sequence_bounds(
+            b"CCCCAAAA",
+            &mut edit,
+            &mut start,
+            &mut end,
+            SequenceEnds::WHOLE,
+        );
+        assert!(matches!(edit, NaEdit::Delins { .. }), "{edit:?}");
+        assert_eq!((start, end), (1, 1));
+    }
+
+    /// …and NOT when that end of the slice is merely where a fetch stopped.
+    ///
+    /// This is the guard `normalize_genome` needs and the transcript callers do
+    /// not: it passes a window into the contig, so an interior window edge is not
+    /// a contig bound, and clamping there would rewrite a valid insertion into a
+    /// `delins` asserting a boundary that does not exist. Unit-tested directly
+    /// because the end-to-end route to it is not currently constructible — on the
+    /// `g.` axis an alt has to be tandem-compatible with the reference to shuffle
+    /// at all, and such an alt becomes repeat notation or a `dup` long before it
+    /// could walk a whole window's width. The guard is therefore correctness by
+    /// construction rather than a fix for an observed output.
+    #[test]
+    fn does_not_clamp_at_a_window_edge_that_is_not_a_bound() {
+        for ends in [
+            SequenceEnds {
+                five_prime: false,
+                three_prime: true,
+            },
+            SequenceEnds {
+                five_prime: false,
+                three_prime: false,
+            },
+        ] {
+            let (mut edit, mut start, mut end) = (literal_insertion("CG"), 1, 1);
+            clamp_insertion_at_sequence_bounds(b"CCCCAAAA", &mut edit, &mut start, &mut end, ends);
+            assert!(
+                matches!(edit, NaEdit::Insertion { .. }),
+                "{ends:?}: {edit:?}"
+            );
+            assert_eq!((start, end), (1, 1));
+        }
+    }
+
+    /// The 3' side, both ways round.
+    #[test]
+    fn three_prime_bound_is_gated_the_same_way() {
+        let seq = b"CCCCAAAA"; // len 8, so the saturated shape is (8, 9)
+        let (mut edit, mut start, mut end) = (literal_insertion("CG"), 8, 9);
+        clamp_insertion_at_sequence_bounds(
+            seq,
+            &mut edit,
+            &mut start,
+            &mut end,
+            SequenceEnds::WHOLE,
+        );
+        assert!(matches!(edit, NaEdit::Delins { .. }), "{edit:?}");
+        assert_eq!((start, end), (8, 8));
+
+        let (mut edit, mut start, mut end) = (literal_insertion("CG"), 8, 9);
+        clamp_insertion_at_sequence_bounds(
+            seq,
+            &mut edit,
+            &mut start,
+            &mut end,
+            SequenceEnds {
+                five_prime: true,
+                three_prime: false,
+            },
+        );
+        assert!(matches!(edit, NaEdit::Insertion { .. }), "{edit:?}");
+        assert_eq!((start, end), (8, 9));
     }
 }
 
