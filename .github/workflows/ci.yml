@@ -260,10 +260,25 @@ jobs:
       - name: Build test archive
         # Compiles every test binary and packs them with their run metadata.
         run: cargo nextest archive --features dev --archive-file nextest.tar.zst
+      - name: Stage the generator examples for the shards
+        # `spec_generator_preconditions` executes these two binaries. nextest
+        # does NOT build examples, so the shards cannot rely on finding them,
+        # and they must not shell out to cargo either (they run from the
+        # archive with no build state). Both were already built and run by the
+        # generate steps above, so ship them alongside the archive.
+        run: |
+          mkdir -p staged-examples
+          cp target/debug/examples/generate_spec_fixture \
+             target/debug/examples/generate_spec_enumeration staged-examples/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: nextest-archive
           path: nextest.tar.zst
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: generator-examples
+          path: staged-examples/
           retention-days: 1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -300,6 +315,13 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: generator-examples
+          path: target/debug/examples/
+      - name: Restore the executable bit on the staged examples
+        # Artifact upload does not preserve the executable bit.
+        run: chmod +x target/debug/examples/generate_spec_fixture target/debug/examples/generate_spec_enumeration
       - name: "Note: reference-aware tests are skipped without a manifest"
         # `tests/mutalyzer_normalize_tests.rs` and the biocommons reference-aware
         # suite both silently no-op when `FERRO_MANIFEST` is unset (PR CI does
@@ -317,6 +339,11 @@ jobs:
         # in would run the same properties twice at strictly lower depth AND
         # wreck shard balance: measured locally, the shard holding them took
         # 66.6s against 8.8-13.5s for its siblings.
+        env:
+          # The staged binaries above are current by construction (built and run
+          # by `test-build` from this same commit), so the tests must use them
+          # rather than shelling out to cargo, which has no build state here.
+          FERRO_PREBUILT_EXAMPLES: "1"
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
@@ -350,6 +377,13 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: generator-examples
+          path: target/debug/examples/
+      - name: Restore the executable bit on the staged examples
+        # Artifact upload does not preserve the executable bit.
+        run: chmod +x target/debug/examples/generate_spec_fixture target/debug/examples/generate_spec_enumeration
       - name: Run Rust tests with normalization idempotency self-check
         # `FERRO_ASSERT_IDEMPOTENT` turns every reference-backed test into an
         # assertion that `norm(norm(x)) == norm(x)`. The gate is
@@ -358,6 +392,7 @@ jobs:
         # See src/normalize/mod.rs::normalize.
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
+          FERRO_PREBUILT_EXAMPLES: "1"
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
@@ -422,6 +457,13 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: generator-examples
+          path: target/debug/examples/
+      - name: Restore the executable bit on the staged examples
+        # Artifact upload does not preserve the executable bit.
+        run: chmod +x target/debug/examples/generate_spec_fixture target/debug/examples/generate_spec_enumeration
       - name: Soak 125k cases (seed ${{ matrix.seed }})
         env:
           # 8 shards x 125k = 1,000,000 cases per property.
@@ -431,6 +473,7 @@ jobs:
           # draws, so proptest's absolute 65_536 local-reject cap aborts a long
           # run with "Too many local rejects" — a harness quota, not a failure.
           PROPTEST_MAX_LOCAL_REJECTS: "1000000"
+          FERRO_PREBUILT_EXAMPLES: "1"
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite -E 'test(proptest)'
