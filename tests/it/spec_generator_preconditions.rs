@@ -38,20 +38,58 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
+/// Path to an already-built example binary, if the test profile produced one.
+///
+/// `cargo test` / `cargo nextest run` build the crate's examples alongside the
+/// test binaries, so by the time these tests execute, `target/<profile>/examples/`
+/// is populated **and current** — it was built from the same source tree in the
+/// same invocation. Locating it relative to the running test executable rather
+/// than to a hardcoded `debug/` keeps it correct under `--release` and under a
+/// nextest archive extracted into the workspace.
+///
+/// The test binary lives at `…/target/<profile>/deps/it-<hash>`, so the examples
+/// directory is two levels up plus `examples/`.
+fn prebuilt_example(example: &str) -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe
+        .parent()? // …/deps
+        .parent()? // …/<profile>
+        .join("examples")
+        .join(example);
+    candidate.is_file().then_some(candidate)
+}
+
 /// Run a `--features dev` example with `args`, returning its captured output.
+///
+/// Prefers the prebuilt binary over `cargo run`. This is a large speedup, and
+/// not for the reason it first appears: the cost of `cargo run` here was never
+/// mostly compilation. Cargo takes a **file lock on `target/`**, so the four
+/// tests in this module — which nextest runs concurrently — serialised behind
+/// one another, each reporting ~25s even against a fully warm build tree. In CI
+/// they exceeded 60s and tripped nextest's SLOW threshold, making whichever
+/// shard they landed in the critical path of the whole test job.
+///
+/// Falls back to `cargo run` when no prebuilt example exists, so a fresh
+/// worktree (the exact scenario this module was written to protect) still
+/// works.
 fn run_example(example: &str, args: &[&str]) -> Output {
-    let mut cmd = Command::new(env!("CARGO"));
-    cmd.current_dir(manifest_dir())
-        .args([
-            "run",
-            "--quiet",
-            "--features",
-            "dev",
-            "--example",
-            example,
-            "--",
-        ])
-        .args(args);
+    let mut cmd = match prebuilt_example(example) {
+        Some(bin) => Command::new(bin),
+        None => {
+            let mut c = Command::new(env!("CARGO"));
+            c.args([
+                "run",
+                "--quiet",
+                "--features",
+                "dev",
+                "--example",
+                example,
+                "--",
+            ]);
+            c
+        }
+    };
+    cmd.current_dir(manifest_dir()).args(args);
     cmd.output()
         .unwrap_or_else(|e| panic!("failed to run `{example}`: {e}"))
 }

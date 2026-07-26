@@ -117,9 +117,10 @@ jobs:
       # project, but a bare `uv run` re-installs it — and for this maturin
       # package that means a full Rust extension build. Measured: 158s of this
       # job's 169s was `Building ferro-hgvs`, to run ~9s of ruff and mypy over
-      # pure Python. Nothing here needs the compiled module: ruff is a static
-      # linter and mypy reads the checked-in `python/ferro_hgvs/__init__.pyi`
-      # stubs. The wheel is built and exercised for real in `python-wheel-test`.
+      # pure Python; with this set the job takes 10s. Nothing here needs the
+      # compiled module: ruff is a static linter and mypy reads the checked-in
+      # `python/ferro_hgvs/__init__.pyi` stubs. The wheel is built and
+      # exercised for real in `python-wheel-test`.
       UV_NO_SYNC: "1"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -158,30 +159,11 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          # Rotating key: `actions/cache` NEVER updates an entry it hit on
-          # its primary key, so a static key freezes whatever the first run
-          # for a given Cargo.lock produced. Observed directly: the
-          # `-release` entry was pinned at 0.17 GiB from an early near-empty
-          # build, so every run restored almost nothing and rebuilt from
-          # scratch (142s). The SHA forces a fresh save each run; the prefix
-          # restore-keys fall back to the newest entry for the same lockfile.
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-clippy-${{ github.sha }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-clippy
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-clippy-
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
       - run: cargo clippy --features dev --all-targets -- -D warnings
-      - name: Trim target/ before the cache is saved
-        # Rotating keys mint a new entry per run, and this repo's Actions cache
-        # measured 9.53 GiB against its 10 GiB limit — so entries must shrink as
-        # they get fresher, or LRU starts evicting other jobs' caches.
-        # Incremental state does not transfer between runners, and this crate's
-        # own artifacts are rebuilt every commit by definition; only dependency
-        # artifacts are worth carrying forward.
-        if: always()
-        run: |
-          rm -rf target/debug/incremental target/release/incremental
-          find target -maxdepth 3 -name '*ferro_hgvs*' -delete 2>/dev/null || true
-          find target -maxdepth 3 -name '*.d' -delete 2>/dev/null || true
 
   clippy-all-features:
     # Lints the feature-gated code that `--features dev` never compiles —
@@ -213,17 +195,10 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          # Rotating key: `actions/cache` NEVER updates an entry it hit on
-          # its primary key, so a static key freezes whatever the first run
-          # for a given Cargo.lock produced. Observed directly: the
-          # `-release` entry was pinned at 0.17 GiB from an early near-empty
-          # build, so every run restored almost nothing and rebuilt from
-          # scratch (142s). The SHA forces a fresh save each run; the prefix
-          # restore-keys fall back to the newest entry for the same lockfile.
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-clippy-all-features-${{ github.sha }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-clippy-all-features
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-clippy-all-features-
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
       - run: cargo clippy --all-features --all-targets -- -D warnings
 
   # Build the test binaries and the two generated spec artifacts ONCE, then fan
@@ -241,15 +216,6 @@ jobs:
   # exactly where those baked paths point. Verified locally by hiding
   # `target/debug/ferro` to reproduce the shard's condition: default extraction
   # gave 6 failures, `--extract-to .` gave 6 passes.
-      - name: Trim target/ before the cache is saved
-        # See the note in `clippy`: rotating keys plus a near-full Actions cache
-        # mean entries must shrink as they get fresher.
-        if: always()
-        run: |
-          rm -rf target/debug/incremental target/release/incremental
-          find target -maxdepth 3 -name '*ferro_hgvs*' -delete 2>/dev/null || true
-          find target -maxdepth 3 -name '*.d' -delete 2>/dev/null || true
-
   test-build:
     name: Build test archive
     runs-on: ubuntu-latest
@@ -280,17 +246,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          # Rotating key: `actions/cache` NEVER updates an entry it hit on
-          # its primary key, so a static key freezes whatever the first run
-          # for a given Cargo.lock produced. Observed directly: the
-          # `-release` entry was pinned at 0.17 GiB from an early near-empty
-          # build, so every run restored almost nothing and rebuilt from
-          # scratch (142s). The SHA forces a fresh save each run; the prefix
-          # restore-keys fall back to the newest entry for the same lockfile.
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug-${{ github.sha }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug-
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
       - name: Generate HGVS v21.0 spec fixture
         # Gitignored generated artifact, not committed. Generating it here also
         # validates the curated overrides file — the guard the old `--check`
@@ -319,19 +277,6 @@ jobs:
   # a shard by a hash of its name, so the split is deterministic and stays
   # stable as tests are added. Verified even on this suite: 8646 tests split
   # 2148 / 2181 / 2162 / 2155 across four shards.
-      - name: Trim target/ before the cache is saved
-        # Rotating keys mint a new entry per run, and this repo's Actions cache
-        # measured 9.53 GiB against its 10 GiB limit — so entries must shrink as
-        # they get fresher, or LRU starts evicting other jobs' caches.
-        # Incremental state does not transfer between runners, and this crate's
-        # own artifacts are rebuilt every commit by definition; only dependency
-        # artifacts are worth carrying forward.
-        if: always()
-        run: |
-          rm -rf target/debug/incremental target/release/incremental
-          find target -maxdepth 3 -name '*ferro_hgvs*' -delete 2>/dev/null || true
-          find target -maxdepth 3 -name '*.d' -delete 2>/dev/null || true
-
   test:
     name: Test (${{ matrix.shard }}/6)
     needs: test-build
@@ -514,17 +459,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          # Rotating key: `actions/cache` NEVER updates an entry it hit on
-          # its primary key, so a static key freezes whatever the first run
-          # for a given Cargo.lock produced. Observed directly: the
-          # `-release` entry was pinned at 0.17 GiB from an early near-empty
-          # build, so every run restored almost nothing and rebuilt from
-          # scratch (142s). The SHA forces a fresh save each run; the prefix
-          # restore-keys fall back to the newest entry for the same lockfile.
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug-${{ github.sha }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug-
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
       - name: Verify conformance summary docs are up to date
         run: cargo run --features dev --example generate_conformance_summary -- --check
       - name: Tool-support tables up to date
@@ -540,17 +477,16 @@ jobs:
   # Python Wheel Test, abi3 floor ↔ requires-python.
   #
   # Sharding renamed the old single `Test` job to `Test (K/6)`, so the required
-  # `Test` context stopped being reported and every PR would hang on "Expected —
-  # Waiting for status to be reported". This job restores that contract from
-  # inside the workflow, so no repository-settings change is needed and future
-  # re-shardings cannot break it again: it succeeds only when every job that the
-  # old monolithic `Test` job used to cover has succeeded.
+  # `Test` context stopped being reported and every PR hung on "Expected —
+  # Waiting for status to be reported" with no run to link to. This job restores
+  # the contract from inside the workflow, so no repository-settings change is
+  # needed and future re-shardings cannot break it again.
   test-required:
     name: Test
     runs-on: ubuntu-latest
     needs: [test, test-oracle, soak, generated-docs]
-    # `always()` so a failed/cancelled dependency still reports a conclusion
-    # rather than leaving the required context permanently pending.
+    # `always()` so a failed or cancelled dependency still reports a conclusion
+    # rather than leaving the required context pending forever.
     if: always()
     steps:
       - name: Verify every test job succeeded
@@ -571,15 +507,6 @@ jobs:
   # outside the source tree. This catches packaging issues (missing data files,
   # stale stubs, sys.path leakage) that the editable-mode install in the `test`
   # job above can hide.
-      - name: Trim target/ before the cache is saved
-        # See the note in `clippy`: rotating keys plus a near-full Actions cache
-        # mean entries must shrink as they get fresher.
-        if: always()
-        run: |
-          rm -rf target/debug/incremental target/release/incremental
-          find target -maxdepth 3 -name '*ferro_hgvs*' -delete 2>/dev/null || true
-          find target -maxdepth 3 -name '*.d' -delete 2>/dev/null || true
-
   python-wheel-test:
     name: Python Wheel Test
     runs-on: ubuntu-latest
@@ -602,17 +529,10 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          # Rotating key: `actions/cache` NEVER updates an entry it hit on
-          # its primary key, so a static key freezes whatever the first run
-          # for a given Cargo.lock produced. Observed directly: the
-          # `-release` entry was pinned at 0.17 GiB from an early near-empty
-          # build, so every run restored almost nothing and rebuilt from
-          # scratch (142s). The SHA forces a fresh save each run; the prefix
-          # restore-keys fall back to the newest entry for the same lockfile.
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-wheel-${{ github.sha }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-wheel
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-wheel-
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
       - name: Build release wheel
         run: |
           python -m pip install --upgrade pip
@@ -638,14 +558,6 @@ jobs:
           --import-mode=importlib
           --rootdir=/tmp
           "$GITHUB_WORKSPACE/tests/python/" -v
-      - name: Trim target/ before the cache is saved
-        # See the note in `clippy`: rotating keys plus a near-full Actions cache
-        # mean entries must shrink as they get fresher.
-        if: always()
-        run: |
-          rm -rf target/debug/incremental target/release/incremental
-          find target -maxdepth 3 -name '*ferro_hgvs*' -delete 2>/dev/null || true
-          find target -maxdepth 3 -name '*.d' -delete 2>/dev/null || true
 
   build:
     name: Build
@@ -666,17 +578,10 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          # Rotating key: `actions/cache` NEVER updates an entry it hit on
-          # its primary key, so a static key freezes whatever the first run
-          # for a given Cargo.lock produced. Observed directly: the
-          # `-release` entry was pinned at 0.17 GiB from an early near-empty
-          # build, so every run restored almost nothing and rebuilt from
-          # scratch (142s). The SHA forces a fresh save each run; the prefix
-          # restore-keys fall back to the newest entry for the same lockfile.
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-release-${{ github.sha }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-release
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-release-
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
+            ${{ runner.os }}-cargo-
       - run: cargo build --release
       - name: Check binary size
         run: |
@@ -687,15 +592,3 @@ jobs:
             echo "Error: Binary size exceeds 10MB limit"
             exit 1
           fi
-      - name: Trim target/ before the cache is saved
-        # Rotating keys mint a new entry per run, and this repo's Actions cache
-        # measured 9.53 GiB against its 10 GiB limit — so entries must shrink as
-        # they get fresher, or LRU starts evicting other jobs' caches.
-        # Incremental state does not transfer between runners, and this crate's
-        # own artifacts are rebuilt every commit by definition; only dependency
-        # artifacts are worth carrying forward.
-        if: always()
-        run: |
-          rm -rf target/debug/incremental target/release/incremental
-          find target -maxdepth 3 -name '*ferro_hgvs*' -delete 2>/dev/null || true
-          find target -maxdepth 3 -name '*.d' -delete 2>/dev/null || true
