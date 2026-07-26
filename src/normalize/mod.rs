@@ -418,6 +418,131 @@ fn edit_is_del_or_dup(edit: &NaEdit) -> bool {
     )
 }
 
+/// Everything the codon-frame gate needs for one [`Normalizer::normalize_na_edit`]
+/// call: whether the axis has a reading frame at all, and if so where the CDS is.
+///
+/// # The rule
+///
+/// `DNA/repeated.md` L21-24 (and `RNA/repeated.md` L24-27 in the same terms):
+///
+/// > **exception**: using a coding DNA reference sequence ("c." description), a
+/// > repeated sequence variant description can be used only for repeat units with
+/// > a length which is a multiple of 3 […] This restriction only applies to the
+/// > coding sequence, which does not include the introns or the UTR sequence.
+///
+/// So the gate needs two things: does this axis have a reading frame, and does the
+/// span under consideration lie inside the CDS proper.
+///
+/// # Why one type instead of two arguments
+///
+/// This replaces the pair `is_coding: bool` + `cds_span: Option<(u64, u64)>`
+/// (#1206). They encoded the same question at different scopes and had to agree
+/// per axis, which the type system did not enforce — the invalid third
+/// combination, "a coding verdict with no CDS bounds", was representable and
+/// silently disabled the gate for any site asking about a span other than the
+/// input's. Passing `None` on `r.` compiled, passed clippy, and reverted #1192
+/// (verified during #1185's rebase: `r.4_9a[8]`, the spec-forbidden form, instead
+/// of the gated answer). The parameter's own doc had already gone stale claiming
+/// `r.` should pass `None`.
+///
+/// Now an axis either has a frame — and therefore has bounds — or it does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodonGate {
+    /// The axis has no reading frame, so the multiple-of-3 rule never applies:
+    /// `g.`, `m.`/`o.` (genomic-style), `n.`, and every intronic / boundary-
+    /// spanning context that the spec's own carve-out exempts.
+    NotApplicable,
+    /// A coding axis — `c.`, and `r.` on a coding transcript, which IS the `c.`
+    /// axis (`background/numbering.md` L58/L61, #469).
+    Coding {
+        /// Precomputed verdict for the span the INPUT edit occupies: `true` when
+        /// it lies wholly inside the CDS proper.
+        input_span_is_coding: bool,
+        /// CDS bounds, 1-based inclusive, in the same (transcript) frame as the
+        /// positions handed to `normalize_na_edit` — so a site deciding about a
+        /// span *other* than the input's can re-answer the question for that span
+        /// (#1185) instead of reusing a verdict computed for the wrong one.
+        cds: (u64, u64),
+    },
+}
+
+impl CodonGate {
+    /// The gate for an edit occupying `input_start..=input_end` (1-based,
+    /// inclusive, transcript frame) on an axis whose CDS is `cds`.
+    ///
+    /// `cds == None` means the record carries no CDS end, so we cannot verify that
+    /// anything lies inside the CDS proper; the pre-#1206 code conservatively
+    /// treated that as UTR-touching and skipped the gate, which is exactly
+    /// [`CodonGate::NotApplicable`].
+    ///
+    /// `normalize_cds` and `normalize_rna` computed this verdict with two separate
+    /// copies of the same expression, which is how #1192's divergence became
+    /// possible in the first place; there is now one.
+    fn for_input_span(cds: Option<(u64, u64)>, input_start: u64, input_end: u64) -> Self {
+        match cds {
+            Some((cds_start, cds_end)) => CodonGate::Coding {
+                input_span_is_coding: input_start >= cds_start && input_end <= cds_end,
+                cds: (cds_start, cds_end),
+            },
+            None => CodonGate::NotApplicable,
+        }
+    }
+
+    /// Does the gate apply to the span the input edit occupies?
+    ///
+    /// This is the verdict the `rules` helpers take as their `is_coding` argument.
+    fn input_span_is_coding(self) -> bool {
+        match self {
+            CodonGate::NotApplicable => false,
+            CodonGate::Coding {
+                input_span_is_coding,
+                ..
+            } => input_span_is_coding,
+        }
+    }
+
+    /// The CDS bounds, or `None` on an axis with no reading frame.
+    ///
+    /// Prefer [`Self::span_is_coding`] — it answers the question rather than
+    /// handing out the raw bounds to re-pair with a separate verdict, which is the
+    /// shape this type exists to eliminate.
+    ///
+    /// The one caller is `rules::insertion_to_repeat` (#1210/#1212), which cannot
+    /// use `span_is_coding`: it *discovers* the tandem tract internally, so there
+    /// is no span to ask about until it is already inside the helper. Its
+    /// signature still takes the verdict and the bounds separately, so the pairing
+    /// is reconstructed here — but from a gate that is internally consistent by
+    /// construction, so the invalid combination cannot be produced. Pushing
+    /// `CodonGate` down into `rules` would close that last seam; it is left out of
+    /// this refactor because several of that helper\'s unit tests deliberately pass
+    /// a coding verdict with no bounds, so the conversion is not mechanical and
+    /// would change what they test.
+    fn cds_bounds(self) -> Option<(u64, u64)> {
+        match self {
+            CodonGate::NotApplicable => None,
+            CodonGate::Coding { cds, .. } => Some(cds),
+        }
+    }
+
+    /// Does the gate apply to `start..=end` (1-based, inclusive, transcript
+    /// frame)?
+    ///
+    /// Use this — not [`Self::input_span_is_coding`] — at any site deciding about
+    /// a span the input edit does not occupy, such as a tract a shuffle walked
+    /// into. A 3'-shifted tract that runs out of the CDS into the 3'UTR is exempt
+    /// by the spec's carve-out even though the input span was CDS-resident
+    /// (#1185).
+    fn span_is_coding(self, start: u64, end: u64) -> bool {
+        match self {
+            CodonGate::NotApplicable => false,
+            CodonGate::Coding {
+                cds: (cds_start, cds_end),
+                ..
+            } => start >= cds_start && end <= cds_end,
+        }
+    }
+}
+
 /// Which side of `anchor` a shuffled insertion payload came to rest on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BoundarySide {
@@ -2634,8 +2759,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             rel_start,
             rel_end,
             &Boundaries::new(0, ref_seq.len() as u64),
-            false, // genomic context: codon-frame gate does not apply
-            None,  // codon-frame gate does not apply here
+            CodonGate::NotApplicable, // genomic context: no reading frame
         )?;
 
         // Adjust back to genomic coordinates
@@ -3298,27 +3422,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // The variant is entirely within the CDS iff its transcript-
         // frame span sits between `cds_start` and `cds_end` (inclusive).
         // 5' UTR (`c.-N`) maps to `tx_start < cds_start`; 3' UTR
-        // (`c.*N`) maps to `tx_start > cds_end`. Pass `is_coding=false`
-        // for any variant whose footprint touches UTR. If `cds_end` is
-        // unset we cannot verify the variant lies within CDS proper, so
-        // we conservatively treat it as UTR-touching and skip the gate.
-        let is_coding = match transcript.cds_end {
-            Some(cds_end) => tx_start >= cds_start && tx_end <= cds_end,
-            None => false,
-        };
-        // The same bounds, un-collapsed, so a gate site deciding about a span
-        // other than the input can evaluate it there instead (#1185).
-        let cds_span = transcript.cds_end.map(|cds_end| (cds_start, cds_end));
-        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) = self
-            .normalize_na_edit(
-                seq,
-                edit,
-                tx_start,
-                tx_end,
-                &boundaries,
-                is_coding,
-                cds_span,
-            )?;
+        // (`c.*N`) maps to `tx_start > cds_end`. A footprint touching UTR is
+        // therefore not gated. If `cds_end` is unset we cannot verify the variant
+        // lies within CDS proper, so we conservatively treat it as UTR-touching
+        // and skip the gate — `CodonGate::for_input_span` owns both rules, and
+        // the same call in `normalize_rna` is what keeps the two axes in step
+        // (#469, #1192).
+        let gate = CodonGate::for_input_span(
+            transcript.cds_end.map(|cds_end| (cds_start, cds_end)),
+            tx_start,
+            tx_end,
+        );
+        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
+            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, gate)?;
 
         // Substitutions are validated-then-returned-unchanged by
         // `normalize_na_edit`'s `Substitution` arm; nothing downstream (axis
@@ -3430,10 +3546,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 ShuffleDirection::ThreePrime => cheap_right,
             };
             let (left_clamp_fired, right_clamp_fired) = if direction_could_clamp {
-                let (exon_only_start, exon_only_end, _exon_only_edit, _exon_only_warnings) = self
-                    .normalize_na_edit(
-                    seq, edit, tx_start, tx_end, &exon_only, is_coding, cds_span,
-                )?;
+                let (exon_only_start, exon_only_end, _exon_only_edit, _exon_only_warnings) =
+                    self.normalize_na_edit(seq, edit, tx_start, tx_end, &exon_only, gate)?;
                 let exon_only_start_0 = exon_only_start.saturating_sub(1);
                 (
                     cheap_left && exon_only_start_0 < boundaries.left,
@@ -3934,11 +4048,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
         };
         // `mut` bindings are #1202's (its transcript-bound clamp rewrites these
-        // in place); the trailing `None` is #1185's `cds_span`. `n.` has no
+        // in place). `CodonGate::NotApplicable`: `n.` has no
         // reading frame, so there is no CDS span to re-check a shuffled tract
         // against — unlike `r.` below, which does pass real bounds.
-        let (mut new_start, mut new_end, mut new_edit, mut warnings) =
-            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false, None)?;
+        let (mut new_start, mut new_end, mut new_edit, mut warnings) = self.normalize_na_edit(
+            seq,
+            edit,
+            tx_start,
+            tx_end,
+            &boundaries,
+            CodonGate::NotApplicable,
+        )?;
 
         // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
         // substitutions are validated-then-returned-unchanged by
@@ -5418,27 +5538,23 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `c.` (#469). `cds_info` is `None` for a non-coding transcript, which
         // has no reading frame to preserve, and a footprint touching either UTR
         // falls outside `cds_start..=cds_end` and is exempt by the carve-out.
-        let is_coding = match cds_info {
-            Some((cds_start, cds_end)) => tx_start >= cds_start && tx_end <= cds_end,
-            None => false,
-        };
+        // Built through the SAME constructor `normalize_cds` uses, which is the
+        // point: the two axes cannot drift apart again the way they had before
+        // #1192. `cds_info` is `None` for a non-coding transcript, which has no
+        // reading frame to preserve, so the gate is `NotApplicable` there; a
+        // footprint touching either UTR falls outside `cds_start..=cds_end` and is
+        // exempt by the carve-out.
+        //
+        // Passing the real bounds (rather than dropping them) is what lets the
+        // shuffled-tract re-check run on `r.` too. Before #1206 that was a
+        // separate `Option` argument, and passing `None` for it made the verdict
+        // unconditionally "exempt" and silently re-opened the divergence #1192
+        // closed; carrying the bounds inside the gate makes that unexpressible.
+        let gate = CodonGate::for_input_span(cds_info, tx_start, tx_end);
         // `mut` bindings are #1202's (its transcript-bound clamp rewrites these
-        // in place). `cds_info` (not `None`) is the #1185 companion to #1192's
-        // `is_coding`: the codon-frame gate applies on `r.` exactly as on `c.`,
-        // so the shuffled-tract re-check must be able to run here too. Passing
-        // `None` would make that verdict unconditionally "exempt" and silently
-        // re-open the divergence #1192 closed — `issue_1192`'s
-        // `rna_homopolymer_expansion_inside_cds_is_gated` fails if you try it.
-        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) = self
-            .normalize_na_edit(
-                seq,
-                edit,
-                tx_start,
-                tx_end,
-                &boundaries,
-                is_coding,
-                cds_info,
-            )?;
+        // in place).
+        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
+            self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, gate)?;
 
         // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
         // substitutions are validated-then-returned-unchanged by
@@ -5819,7 +5935,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///
     /// Mirrors `normalize_genome` for non-origin-crossing variants: fetch
     /// a sequence window around the variant, run `normalize_na_edit` with
-    /// `is_coding=false` (mito is genomic-style and not subject to the
+    /// `CodonGate::NotApplicable` (mito is genomic-style and not subject to the
     /// codon-frame restriction — `repeated.md` line 21 restricts the
     /// codon-frame gate exclusively to `c.` descriptions), then map
     /// positions back.
@@ -6056,15 +6172,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // codon-frame `unit_len % 3 == 0` restriction (the mito genome
         // has no canonical "CDS" exemption boundary in the same sense as
         // nuclear `c.`; the spec's mito chapter doesn't carry the
-        // codon-frame clause), so pass `is_coding=false`.
+        // codon-frame clause), so the gate is `NotApplicable`.
         let (new_rel_start, new_rel_end, new_edit, mut warnings) = self.normalize_na_edit(
             ref_seq.as_bytes(),
             edit,
             rel_start,
             rel_end,
             &Boundaries::new(0, ref_seq.len() as u64),
-            false,
-            None, // codon-frame gate does not apply here
+            CodonGate::NotApplicable,
         )?;
 
         let new_start = new_rel_start + window_start;
@@ -6323,7 +6438,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // exempt:
         //   > This restriction only applies to the coding sequence,
         //   > which does not include the introns or the UTR sequence.
-        // Pass `is_coding=false` so an intronic homopolymer dup/del
+        // Pass `CodonGate::NotApplicable` so an intronic homopolymer dup/del
         // can emit `[N±k]` repeat notation instead of falling back to
         // the gated `ins<literal>` / plain `del` forms.
         let seq_bytes = work_seq.as_bytes();
@@ -6333,8 +6448,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_start,
             work_rel_end,
             &work_boundaries,
-            false,
-            None, // codon-frame gate does not apply here
+            CodonGate::NotApplicable,
         )?;
 
         // Map the result positions back to the genomic-strand frame
@@ -6517,8 +6631,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_start,
             work_rel_end,
             &work_boundaries,
-            false,
-            None, // codon-frame gate does not apply here
+            CodonGate::NotApplicable,
         )?;
 
         // Map the result positions back to the genomic-strand frame
@@ -6674,7 +6787,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // only to bases inside the CDS proper. Boundary-spanning
         // variants cross an exon/intron boundary, so their footprint
         // is not entirely within coding sequence — pass
-        // `is_coding=false` to match the intronic exemption. (A
+        // `CodonGate::NotApplicable` to match the intronic exemption. (A
         // hypothetical purely-exonic-span variant won't enter this
         // function; the exonic CDS path in `normalize_cds` makes its
         // own UTR/CDS-aware choice.)
@@ -6685,8 +6798,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_start,
             work_rel_end,
             &work_boundaries,
-            false,
-            None, // codon-frame gate does not apply here
+            CodonGate::NotApplicable,
         )?;
 
         let (new_rel_start, new_rel_end) = unflip_intronic_positions(
@@ -7135,8 +7247,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             work_rel_start,
             work_rel_end,
             &work_boundaries,
-            false,
-            None, // codon-frame gate does not apply here
+            CodonGate::NotApplicable,
         )?;
 
         let (new_rel_start, new_rel_end) = unflip_intronic_positions(
@@ -7173,12 +7284,6 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Core normalization for nucleic acid edits
     ///
     /// Returns (new_start, new_end, new_edit, warnings)
-    // Already at clippy's 7-argument limit before #1185 added `cds_span`. The
-    // right cleanup is to fold `is_coding` + `cds_span` into one `CodonGate`
-    // value — they are two views of the same question — but that is a mechanical
-    // rename across every call site in this function and is deliberately left
-    // out of a behaviour fix. Suppressed rather than papered over with a tuple.
-    #[allow(clippy::too_many_arguments)]
     fn normalize_na_edit(
         &self,
         ref_seq: &[u8],
@@ -7186,17 +7291,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         start: u64,
         end: u64,
         boundaries: &Boundaries,
-        is_coding: bool,
-        // Transcript-frame CDS bounds (1-based, inclusive), or `None` where the
-        // codon-frame gate does not apply (genomic / `n.`). **`r.` passes real
-        // bounds**, not `None`: #1192 established that the gate applies on the
-        // `r.` axis too, since `r.` on a coding transcript IS the `c.` axis
-        // (`RNA/repeated.md` L24-27). `is_coding`
-        // is this same verdict precomputed for the INPUT span; `cds_span` lets a
-        // site that decides about a DIFFERENT span ask about that span instead
-        // (#1185). Deliberately additive: every existing site keeps reading
-        // `is_coding`, so only the one site below changes behaviour.
-        cds_span: Option<(u64, u64)>,
+        // See [`CodonGate`]. Ask it about the span you are deciding about:
+        // `input_span_is_coding()` for the input edit's own span,
+        // `span_is_coding(a, b)` for any other (a shuffled tract, say).
+        gate: CodonGate,
     ) -> Result<(u64, u64, NaEdit, Vec<NormalizationWarning>), FerroError> {
         let mut warnings = Vec::new();
 
@@ -7306,9 +7404,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             sequence: InsertedSequence::Literal(Sequence::new(expanded)),
                         };
                         let (new_start, new_end, new_edit, mut child_warnings) = self
-                            .normalize_na_edit(
-                                ref_seq, &literal, start, end, boundaries, is_coding, cds_span,
-                            )?;
+                            .normalize_na_edit(ref_seq, &literal, start, end, boundaries, gate)?;
                         warnings.append(&mut child_warnings);
                         return Ok((new_start, new_end, new_edit, warnings));
                     }
@@ -7366,9 +7462,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         sequence: None,
                         length: None,
                     };
-                    return self.normalize_na_edit(
-                        ref_seq, &del, start, end, boundaries, is_coding, cds_span,
-                    );
+                    return self.normalize_na_edit(ref_seq, &del, start, end, boundaries, gate);
                 }
 
                 // HGVS spec: delins should NOT be 3' shifted like del/dup/ins,
@@ -7452,8 +7546,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     index_to_hgvs_pos(s0),
                                     e0 as u64,
                                     boundaries,
-                                    is_coding,
-                                    cds_span,
+                                    gate,
                                 )?;
                             let mut merged = warnings.clone();
                             merged.append(&mut child_warnings);
@@ -7513,8 +7606,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     after_index as u64,
                                     (after_index + 1) as u64,
                                     boundaries,
-                                    is_coding,
-                                    cds_span,
+                                    gate,
                                 )?;
                             let mut merged = warnings.clone();
                             merged.append(&mut child_warnings);
@@ -7559,8 +7651,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     index_to_hgvs_pos(s0),
                                     e0 as u64,
                                     boundaries,
-                                    is_coding,
-                                    cds_span,
+                                    gate,
                                 )?;
                             let mut merged = warnings.clone();
                             merged.append(&mut child_warnings);
@@ -7660,7 +7751,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     end_idx,
                     &repeat_unit,
                     *specified_count,
-                    is_coding,
+                    gate.input_span_is_coding(),
                     self.config.shuffle_direction,
                 ) {
                     rules::RepeatNormResult::Deletion {
@@ -7723,12 +7814,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             //
                             // Terminates: the derived edit is an `Insertion`, and
                             // the `Insertion` arm never re-enters this `Repeat`
-                            // arm. `is_coding` / `cds_span` are threaded unchanged
-                            // — same transcript, same CDS bounds (#1185).
+                            // arm. The `gate` is threaded unchanged — same
+                            // transcript, so the same CDS bounds (#1185).
                             let (rec_start, rec_end, rec_edit, mut rec_warnings) = self
                                 .normalize_na_edit(
-                                    ref_seq, &ins_edit, ins_start, ins_end, boundaries, is_coding,
-                                    cds_span,
+                                    ref_seq, &ins_edit, ins_start, ins_end, boundaries, gate,
                                 )?;
                             warnings.append(&mut rec_warnings);
                             return Ok((rec_start, rec_end, rec_edit, warnings));
@@ -7860,12 +7950,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 ref_seq,
                                 original_pos_idx,
                                 &seq_bytes,
-                                is_coding,
-                                // #1210: `is_coding` is the INPUT span's verdict;
-                                // `cds_span` lets the helper re-ask about the tract
+                                gate.input_span_is_coding(),
+                                // #1210: the verdict above is the INPUT span's;
+                                // the bounds let the helper re-ask about the tract
                                 // the repeat would actually occupy, which differs
-                                // whenever the edit shifts across `cds_end`.
-                                cds_span,
+                                // whenever the edit shifts across `cds_end`. This
+                                // helper is the one place that still needs the two
+                                // separately — see `CodonGate::cds_bounds`.
+                                gate.cds_bounds(),
                                 self.config.shuffle_direction,
                             )
                         {
@@ -8185,9 +8277,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     result.start,
                     result.end,
                     // #1185: this call decides about the SHUFFLED tract
-                    // (`result.*`), so the codon-frame gate must be asked
-                    // about that tract — not about the input span, which is
-                    // what `is_coding` holds.
+                    // (`result.*`), so the codon-frame gate is asked about that
+                    // tract — NOT `gate.input_span_is_coding()`, which answers for
+                    // the span the input edit occupied.
                     //
                     // A dup whose 3'-shifted tract runs out of the CDS into
                     // the 3'UTR is exempt from the multiple-of-3 rule:
@@ -8199,12 +8291,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     // literal on pass 1 and collapsed to repeat notation only
                     // on pass 2, once the straddling tract had made the input
                     // span itself non-coding.
-                    matches!(
-                        cds_span,
-                        Some((cds_s, cds_e))
-                            if index_to_hgvs_pos(result.start as usize) >= cds_s
-                                && index_to_hgvs_pos(result.end.saturating_sub(1) as usize)
-                                    <= cds_e
+                    //
+                    // `result.*` are 0-based; the conversion to the 1-based
+                    // transcript frame `cds` lives in, and the inclusive-end
+                    // `saturating_sub(1)`, stay here — they are this caller's
+                    // frame, not the gate's.
+                    gate.span_is_coding(
+                        index_to_hgvs_pos(result.start as usize),
+                        index_to_hgvs_pos(result.end.saturating_sub(1) as usize),
                     ),
                 ) {
                     match dup_result {
@@ -8274,20 +8368,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 // (and, at a coding boundary, invalid) forms.
                                 // Terminates: the derived edit is an Insertion,
                                 // which never re-enters this Duplication arm.
-                                // `cds_span` is threaded through unchanged: the
+                                // The `gate` is threaded through unchanged: the
                                 // recursion stays on the same transcript, so the
                                 // CDS bounds are identical, and the derived
                                 // insertion covers a DIFFERENT span than the
-                                // input — exactly the case `cds_span` exists for
-                                // (#1185). Passing `None` here would silently
-                                // switch the codon-frame gate off for the derived
-                                // insertion. This call site postdates #1185's
-                                // base, so it is threaded on rebase rather than
-                                // in the original commit.
+                                // input — exactly the case the gate carries its
+                                // bounds for (#1185). Before #1206 this was a
+                                // `cds_span: Option<_>` argument and passing
+                                // `None` here would have silently switched the
+                                // codon-frame gate off for the derived insertion;
+                                // that mistake is no longer expressible.
                                 let (rec_start, rec_end, rec_edit, mut rec_warnings) = self
                                     .normalize_na_edit(
-                                        ref_seq, &ins_edit, ins_start, ins_end, boundaries,
-                                        is_coding, cds_span,
+                                        ref_seq, &ins_edit, ins_start, ins_end, boundaries, gate,
                                     )?;
                                 let mut merged = warnings;
                                 merged.append(&mut rec_warnings);
@@ -8330,7 +8423,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         ref_seq,
                         result.start as usize,
                         result.end as usize,
-                        is_coding,
+                        gate.input_span_is_coding(),
                     ) {
                         let bases: Option<Vec<Base>> = rep
                             .unit
@@ -9508,6 +9601,79 @@ fn wrap_allele_if_split(mut variants: Vec<HgvsVariant>, uncertain: bool) -> Hgvs
         HgvsVariant::Allele(AlleleVariant::new_uncertain(variants, AllelePhase::Cis))
     } else {
         HgvsVariant::Allele(AlleleVariant::new(variants, AllelePhase::Cis))
+    }
+}
+
+#[cfg(test)]
+mod codon_gate_tests {
+    use super::CodonGate;
+
+    /// A record with no CDS end yields the non-applicable gate, matching the
+    /// pre-#1206 `(is_coding = false, cds_span = None)` pairing: without bounds we
+    /// cannot verify anything lies inside the CDS proper, so we do not gate.
+    #[test]
+    fn no_cds_bounds_is_not_applicable() {
+        assert_eq!(
+            CodonGate::for_input_span(None, 10, 20),
+            CodonGate::NotApplicable
+        );
+    }
+
+    /// The input-span verdict is the inclusive containment test both
+    /// `normalize_cds` and `normalize_rna` used to compute separately.
+    #[test]
+    fn input_span_verdict_is_inclusive_containment() {
+        let cds = Some((10, 20));
+        // wholly inside, including flush against either bound
+        assert!(CodonGate::for_input_span(cds, 10, 20).input_span_is_coding());
+        assert!(CodonGate::for_input_span(cds, 12, 15).input_span_is_coding());
+        // one base into either UTR
+        assert!(!CodonGate::for_input_span(cds, 9, 20).input_span_is_coding());
+        assert!(!CodonGate::for_input_span(cds, 10, 21).input_span_is_coding());
+    }
+
+    /// The gate keeps its bounds, so a site deciding about a span the input edit
+    /// does not occupy can re-answer for that span (#1185) — the capability that
+    /// the old `Option` argument made optional, and therefore losable.
+    #[test]
+    fn a_coding_gate_can_re_answer_for_another_span() {
+        // Input span inside the CDS, so the input verdict is `true`…
+        let gate = CodonGate::for_input_span(Some((10, 20)), 12, 13);
+        assert!(gate.input_span_is_coding());
+        // …but a tract the shuffle walked into the 3'UTR is exempt.
+        assert!(gate.span_is_coding(12, 20));
+        assert!(!gate.span_is_coding(12, 21));
+        assert!(!gate.span_is_coding(9, 12));
+    }
+
+    /// Both questions are answered "not coding" when there is no reading frame,
+    /// so a `NotApplicable` axis can never be gated by either accessor.
+    #[test]
+    fn not_applicable_is_never_coding() {
+        assert!(!CodonGate::NotApplicable.input_span_is_coding());
+        assert!(!CodonGate::NotApplicable.span_is_coding(1, 1));
+        assert!(!CodonGate::NotApplicable.span_is_coding(u64::MIN, u64::MAX));
+    }
+
+    /// The property the type exists for: a coding gate always carries bounds.
+    ///
+    /// This cannot fail at runtime — `Coding` has no constructor that omits `cds`,
+    /// which is the whole point — so what this really pins is that the
+    /// constructor never produces the pairing the old two-argument form allowed
+    /// ("coding verdict, no bounds"). If a future change adds a way to build one,
+    /// this is where it should be caught.
+    #[test]
+    fn a_coding_gate_always_has_bounds() {
+        for (cds, start, end) in [
+            (Some((1, 3)), 1, 3),
+            (Some((1, 3)), 4, 9),
+            (Some((100, 100)), 100, 100),
+        ] {
+            match CodonGate::for_input_span(cds, start, end) {
+                CodonGate::Coding { cds: bounds, .. } => assert_eq!(Some(bounds), cds),
+                CodonGate::NotApplicable => panic!("{cds:?} should have produced a coding gate"),
+            }
+        }
     }
 }
 
