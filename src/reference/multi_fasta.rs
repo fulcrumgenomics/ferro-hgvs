@@ -20,7 +20,7 @@
 //! For type-safe coordinate handling, see [`crate::coords`].
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -69,23 +69,9 @@ fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> std::io::Result<()
 use crate::data::cdot::CdotMapper;
 use crate::error::FerroError;
 use crate::reference::authoritative::CanonicalOverrides;
+use crate::reference::prepared_index::{load_fai_index, FastaIndexEntry, PreparedIndex};
 use crate::reference::provider::{GenomicPlacement, ReferenceProvider};
 use crate::reference::transcript::Transcript;
-
-/// Index entry for a sequence in a FASTA file
-#[derive(Debug, Clone, Copy)]
-struct FastaIndexEntry {
-    /// Index into [`MultiFastaProvider::files`] of the FASTA holding this sequence
-    file_id: u32,
-    /// Length of the sequence
-    length: u64,
-    /// Byte offset to the start of sequence data
-    offset: u64,
-    /// Number of bases per line
-    line_bases: u64,
-    /// Number of bytes per line (including newline)
-    line_bytes: u64,
-}
 
 /// Supplemental transcript info for a single transcript.
 #[derive(Debug, Clone)]
@@ -104,57 +90,6 @@ pub struct SupplementalCdsInfo {
     pub transcripts: FxHashMap<String, SupplementalTranscriptInfo>,
 }
 
-/// Parse the integer version suffix of an accession (`"NM_003002.4"` -> `Some(4)`),
-/// or `None` when there is no trailing numeric `.<n>`.
-fn accession_version(accession: &str) -> Option<u32> {
-    accession
-        .rsplit_once('.')
-        .and_then(|(_, v)| v.parse::<u32>().ok())
-}
-
-/// Build the `base -> versioned` fallback map from a fully populated FASTA
-/// index, deterministically choosing the **highest** version per base
-/// accession.
-///
-/// Building this by iterating the index in hash order with last-writer-wins
-/// made version fallback nondeterministic across runs (the index uses a
-/// fixed-seed hasher now, but relying on iteration order for *which* version
-/// wins is fragile regardless). Keying on `(version, accession)` gives a stable
-/// total order: the newest version always wins, independent of insertion or
-/// iteration order.
-fn build_base_to_versioned(
-    index: &FxHashMap<String, FastaIndexEntry>,
-) -> FxHashMap<String, String> {
-    let mut map: FxHashMap<String, String> = FxHashMap::default();
-    for name in index.keys() {
-        let Some(base) = name.split('.').next() else {
-            continue;
-        };
-        let replace = match map.get(base) {
-            None => true,
-            Some(existing) => {
-                (accession_version(name), name.as_str())
-                    > (accession_version(existing), existing.as_str())
-            }
-        };
-        if replace {
-            map.insert(base.to_string(), name.clone());
-        }
-    }
-    map
-}
-
-/// Whether `index` holds any genomic (chromosome) sequence, named either
-/// NCBI RefSeq style (`NC_*`) or UCSC style (`chr*`). Computed once at
-/// construction and cached in [`MultiFastaProvider::has_genomic_data`] — the
-/// index can hold hundreds of thousands of keys and this predicate is hit on
-/// the per-variant normalization path.
-fn index_has_genomic_data(index: &FxHashMap<String, FastaIndexEntry>) -> bool {
-    index
-        .keys()
-        .any(|k| k.starts_with("NC_") || k.starts_with("chr"))
-}
-
 /// Multi-FASTA reference provider
 ///
 /// Provides efficient random access to sequences across multiple FASTA files.
@@ -169,27 +104,9 @@ fn index_has_genomic_data(index: &FxHashMap<String, FastaIndexEntry>) -> bool {
 /// let seq = provider.get_sequence("NM_000546.6", 0, 100)?;
 /// ```
 pub struct MultiFastaProvider {
-    /// Index mapping sequence names to their locations.
-    ///
-    /// These index maps use [`FxHashMap`] (a fast, fixed-seed hasher) rather
-    /// than the default SipHash: the keys are internal reference accessions,
-    /// not attacker-controlled, so DoS resistance is unnecessary, and building
-    /// the ~400k+ entry indexes is a large slice of startup. The fixed seed
-    /// also makes iteration deterministic across runs.
-    index: FxHashMap<String, FastaIndexEntry>,
-    /// FASTA files backing the index, addressed by [`FastaIndexEntry::file_id`].
-    /// Interning the path here rather than cloning it into each of ~546k entries
-    /// removes an allocation per entry and makes the open-file cache an integer
-    /// keyed map.
-    ///
-    /// APPEND-ONLY: `file_id` is a positional index into this `Vec`, so an
-    /// entry must never be reordered or removed once assigned. A future
-    /// `sort()` or `retain()` here would silently repoint every existing
-    /// `FastaIndexEntry` at the wrong FASTA — a correctness bug with no
-    /// compiler signal and, absent a targeted test, no test signal either.
-    files: Vec<PathBuf>,
-    /// Index mapping base accession (without version) to versioned accession
-    base_to_versioned: FxHashMap<String, String>,
+    /// The FASTA index and everything derived from it, built by exactly one
+    /// builder (see [`PreparedIndex`]).
+    prepared: PreparedIndex,
     /// Chromosome aliases (e.g., NC_000001 -> chr1)
     aliases: FxHashMap<String, String>,
     /// Optional cdot transcript metadata (CDS positions, exon coordinates)
@@ -198,8 +115,6 @@ pub struct MultiFastaProvider {
     supplemental_cds: SupplementalCdsInfo,
     /// Authoritative canonical overrides (issue #520), loaded from the manifest.
     canonical_overrides: CanonicalOverrides,
-    /// Protein FASTA index (NP_/XP_ accessions) for get_protein_sequence (#520).
-    protein_index: FxHashMap<String, FastaIndexEntry>,
     /// Bounded LRU memoizing resolved transcripts, keyed on the exact resolution
     /// inputs `(id, build_hint)`. Resolving a transcript materializes its full
     /// sequence from the FASTA and rebuilds cdot exon/CDS metadata — by far the
@@ -212,18 +127,12 @@ pub struct MultiFastaProvider {
     /// distinctly. See the resolve-cache perf work.
     transcript_cache: TranscriptCache,
     /// Cache of open FASTA file handles keyed by `file_id` (an index into
-    /// [`Self::files`]). Sequence reads use a positioned `read_exact_at` on a
-    /// reused handle (one syscall) instead of reopening the file on every read —
-    /// `File::open` per read was ~10 us and dominated `get_sequence`/transcript
-    /// resolution. There are only a handful of distinct FASTA files (genome,
-    /// transcripts, LRG), so this is bounded.
+    /// [`PreparedIndex::files`]). Sequence reads use a positioned `read_exact_at`
+    /// on a reused handle (one syscall) instead of reopening the file on every
+    /// read — `File::open` per read was ~10 us and dominated
+    /// `get_sequence`/transcript resolution. There are only a handful of
+    /// distinct FASTA files (genome, transcripts, LRG), so this is bounded.
     open_files: Mutex<FxHashMap<u32, Arc<File>>>,
-    /// Whether the index contains any genomic (chromosome) sequences, computed
-    /// once at construction. `has_genomic_data` is queried on the per-variant
-    /// normalization path; computing it by scanning all ~270k index keys on
-    /// every call dominated the hot loop (~12% of normalize CPU). The index is
-    /// immutable after construction, so the answer is a build-time constant.
-    has_genomic_data: bool,
     /// Directory holding the LRG XML records (`LRG_<n>.xml`), if the manifest
     /// listed `lrg_xmls`. Used to resolve an LRG parent's chromosomal placement
     /// on demand for #480 (the XML's `main_assembly` `<mapping>` element gives
@@ -349,20 +258,16 @@ pub fn verify_reference_identity(
 }
 
 impl MultiFastaProvider {
-    /// Build a provider from a fully populated index, computing the derived
-    /// maps exactly once. `from_directory`, `from_directories`, and
-    /// `with_cdot` all funnel through here.
-    fn from_index(index: FxHashMap<String, FastaIndexEntry>, files: Vec<PathBuf>) -> Self {
+    /// Build a provider from a fully populated [`PreparedIndex`].
+    /// `from_directory`, `from_directories`, and `with_cdot` all funnel
+    /// through here.
+    fn from_prepared(prepared: PreparedIndex) -> Self {
         Self {
-            base_to_versioned: build_base_to_versioned(&index),
-            has_genomic_data: index_has_genomic_data(&index),
-            index,
-            files,
+            prepared,
             aliases: build_chromosome_aliases(),
             cdot_mapper: None,
             supplemental_cds: SupplementalCdsInfo::default(),
             canonical_overrides: CanonicalOverrides::default(),
-            protein_index: FxHashMap::default(),
             transcript_cache: new_transcript_cache(),
             open_files: Mutex::new(FxHashMap::default()),
             lrg_xml_dir: None,
@@ -386,16 +291,16 @@ impl MultiFastaProvider {
             });
         }
 
-        let (index, files) = load_index_from_dirs(&[dir])?;
+        let prepared = PreparedIndex::from_dirs(&[dir])?;
 
-        // NOT dead code: `load_index_from_dirs` silently `continue`s past a
+        // NOT dead code: `PreparedIndex::from_dirs` silently `continue`s past a
         // directory that fails its OWN `dir.exists()` check (that check exists
         // for the legitimate multi-directory case, where a later directory may
         // not apply). So if `dir` is removed in the window between the
         // `exists()` check above and the loader's own check, the loader
-        // returns `Ok((empty, empty))` and this guard is the only thing
-        // standing between that race and a silently-empty provider.
-        if index.is_empty() {
+        // returns an empty index and this guard is the only thing standing
+        // between that race and a silently-empty provider.
+        if prepared.is_empty() {
             return Err(FerroError::Io {
                 msg: format!(
                     "No indexed FASTA files found in {}. Run 'ferro-benchmark prepare' first.",
@@ -406,19 +311,19 @@ impl MultiFastaProvider {
 
         eprintln!(
             "Loaded {} sequences from {} FASTA files",
-            index.len(),
-            files.len()
+            prepared.len(),
+            prepared.file_count()
         );
 
-        Ok(Self::from_index(index, files))
+        Ok(Self::from_prepared(prepared))
     }
 
     /// Create a provider from multiple directories (e.g., transcripts + genome)
     pub fn from_directories<P: AsRef<Path>>(dirs: &[P]) -> Result<Self, FerroError> {
         let paths: Vec<&Path> = dirs.iter().map(AsRef::as_ref).collect();
-        let (index, files) = load_index_from_dirs(&paths)?;
+        let prepared = PreparedIndex::from_dirs(&paths)?;
 
-        if index.is_empty() {
+        if prepared.is_empty() {
             return Err(FerroError::Io {
                 msg: "No indexed FASTA files found in any directory".to_string(),
             });
@@ -426,11 +331,11 @@ impl MultiFastaProvider {
 
         eprintln!(
             "Loaded {} sequences from {} FASTA files",
-            index.len(),
-            files.len()
+            prepared.len(),
+            prepared.file_count()
         );
 
-        Ok(Self::from_index(index, files))
+        Ok(Self::from_prepared(prepared))
     }
 
     /// Defer loading the GRCh37 cdot referenced by `cdot_grch37_json` (if present)
@@ -1093,75 +998,27 @@ impl MultiFastaProvider {
                     );
                     continue;
                 }
-                // Protein FASTAs are indexed into the same file table as the
-                // directory-scanned FASTAs, so their entries carry a `file_id`
-                // in the same address space — this block must reuse an id
-                // already assigned to a canonical path (`load_index_from_dirs`
-                // dedupes the same way) rather than pushing a duplicate, or two
-                // table slots would hold one physical file and the open-file
-                // cache would keep two handles for it. Canonicalize (and any
-                // resulting failure) is handled here, best-effort, matching the
-                // warn-and-skip semantics this block already had for a missing
-                // path/fai or a load_fai_index error.
-                let canonical = match path.canonicalize() {
-                    Ok(c) => c,
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: Failed to index protein FASTA {}: failed to canonicalize: {}",
-                            path.display(),
-                            e
-                        );
-                        continue;
-                    }
-                };
-                let existing_id = provider
-                    .files
-                    .iter()
-                    .position(|f| f == &canonical)
-                    .map(|pos| {
-                        u32::try_from(pos).expect("table index already bounded by u32 fits u32")
-                    });
-                let file_id = match existing_id {
-                    Some(id) => id,
-                    None => match u32::try_from(provider.files.len()) {
-                        Ok(id) => id,
-                        Err(_) => {
-                            eprintln!(
-                                "Warning: Failed to index protein FASTA {}: too many FASTA files in the reference (max 4294967296)",
-                                path.display()
-                            );
-                            continue;
-                        }
-                    },
-                };
-                // Push only once the parse has actually succeeded — the
-                // opposite order from `load_index_from_dirs`, and
-                // deliberately so (see the comment there): that loader
-                // propagates a parse failure with `?`, unwinding the whole
-                // load, so pushing before parsing is safe there. This block
-                // instead warns and `continue`s past a parse failure, so
-                // pushing `canonical` up front (as an earlier version of this
-                // block did) could leave an orphan table slot — referenced by
-                // no index entry — once `load_fai_index` failed.
-                // `provider.files.len()` cannot change between computing
-                // `file_id` and this push, so the id assigned above stays
-                // valid either way.
-                match load_fai_index(&fai, file_id) {
-                    Ok(idx) => {
-                        if existing_id.is_none() {
-                            provider.files.push(canonical);
-                        }
-                        provider.protein_index.extend(idx);
-                    }
-                    Err(e) => eprintln!(
+                // `add_protein_fasta` indexes the protein FASTA into the same
+                // file table the directory-scanned FASTAs use (reusing a
+                // `file_id` already assigned to this canonical path, rather
+                // than pushing a duplicate table slot). A failure here MUST
+                // be recoverable — warn and move on to the next protein
+                // FASTA, exactly as this block always has — never propagated
+                // with `?`, which would turn one bad protein FASTA into a
+                // hard failure of the whole reference load.
+                if let Err(e) = provider.prepared.add_protein_fasta(&path, &fai) {
+                    eprintln!(
                         "Warning: Failed to index protein FASTA {}: {}",
                         path.display(),
                         e
-                    ),
+                    );
                 }
             }
-            if !provider.protein_index.is_empty() {
-                eprintln!("Loaded {} protein sequences", provider.protein_index.len());
+            if provider.prepared.has_protein_data() {
+                eprintln!(
+                    "Loaded {} protein sequences",
+                    provider.prepared.protein_count()
+                );
             }
         }
 
@@ -1262,9 +1119,9 @@ impl MultiFastaProvider {
         }
 
         // Canonicalize once; the single entry set below all carry `file_id: 0`
-        // pointing at this one path (see `load_index_from_dirs` for why this
-        // symlink resolution matters — it keeps the open-file cache keyed on
-        // one identity per physical file).
+        // pointing at this one path (see `PreparedIndex::from_dirs` for why
+        // this symlink resolution matters — it keeps the open-file cache
+        // keyed on one identity per physical file).
         let canonical_fasta_path = fasta_path.canonicalize().map_err(|e| FerroError::Io {
             msg: format!(
                 "Failed to canonicalize FASTA path '{}': {}",
@@ -1283,16 +1140,22 @@ impl MultiFastaProvider {
             cdot_mapper.transcript_count()
         );
 
+        // `PreparedIndex::from_index`, not `from_dirs`: this is a single
+        // already-resolved FASTA + `.fai` pair, not a directory scan (see
+        // `PreparedIndex::from_index`'s doc comment for why routing this
+        // through `from_dirs` would change behavior).
+        let prepared = PreparedIndex::from_index(index, vec![canonical_fasta_path]);
+
         Ok(Self {
             cdot_mapper: Some(cdot_mapper),
-            ..Self::from_index(index, vec![canonical_fasta_path])
+            ..Self::from_prepared(prepared)
         })
     }
 
     /// Resolve a sequence name, trying various forms
     fn resolve_name(&self, name: &str) -> Option<String> {
         // Direct lookup
-        if self.index.contains_key(name) {
+        if self.prepared.contains(name) {
             return Some(name.to_string());
         }
 
@@ -1305,7 +1168,7 @@ impl MultiFastaProvider {
         // instead of silently no-op'ing (issue #487).
         if is_bare_lrg_genomic_accession(name) {
             let genomic = format!("{name}g");
-            if self.index.contains_key(&genomic) {
+            if self.prepared.contains(&genomic) {
                 return Some(genomic);
             }
         }
@@ -1313,7 +1176,7 @@ impl MultiFastaProvider {
         // Try chromosome alias FIRST (before version fallback)
         // This ensures NC_000001.11 maps to chr1 rather than falling back to NC_000001.10
         if let Some(aliased) = self.aliases.get(name) {
-            if self.index.contains_key(aliased) {
+            if self.prepared.contains(aliased) {
                 return Some(aliased.clone());
             }
         }
@@ -1325,15 +1188,15 @@ impl MultiFastaProvider {
             format!("chr{}", name)
         };
 
-        if self.index.contains_key(&alt_name) {
+        if self.prepared.contains(&alt_name) {
             return Some(alt_name);
         }
 
         // Try without version (e.g., NM_000546 -> NM_000546.6)
         // This is for transcript accessions, not chromosome accessions
         if !name.contains('.') {
-            if let Some(versioned) = self.base_to_versioned.get(name) {
-                return Some(versioned.clone());
+            if let Some(versioned) = self.prepared.versioned_for(name) {
+                return Some(versioned.to_string());
             }
         }
 
@@ -1343,8 +1206,8 @@ impl MultiFastaProvider {
             // Only use version fallback for transcript accessions, not chromosomes
             // Chromosome accessions (NC_*) should use aliases, not version fallback
             if !base.starts_with("NC_") {
-                if let Some(versioned) = self.base_to_versioned.get(base) {
-                    return Some(versioned.clone());
+                if let Some(versioned) = self.prepared.versioned_for(base) {
+                    return Some(versioned.to_string());
                 }
             }
         }
@@ -1390,8 +1253,8 @@ impl MultiFastaProvider {
         // reopening the file on every read.
         let file = {
             let path = self
-                .files
-                .get(entry.file_id as usize)
+                .prepared
+                .path_for(entry.file_id)
                 .ok_or_else(|| FerroError::Io {
                     msg: format!(
                         "index entry for {} names unknown file id {}",
@@ -1460,19 +1323,19 @@ impl MultiFastaProvider {
     /// (#645/#653), not a CDS-frame inconsistency, and checking its CDS against
     /// a *different* version's bytes would be a false positive.
     pub fn contains_exact_sequence(&self, name: &str) -> bool {
-        self.index.contains_key(name)
+        self.prepared.contains(name)
     }
 
     /// Get the length of a sequence
     pub fn sequence_length(&self, name: &str) -> Option<u64> {
         self.resolve_name(name)
-            .and_then(|n| self.index.get(&n))
+            .and_then(|n| self.prepared.entry(&n))
             .map(|e| e.length)
     }
 
     /// Get total number of sequences
     pub fn sequence_count(&self) -> usize {
-        self.index.len()
+        self.prepared.len()
     }
 
     /// Get the cdot mapper if one was loaded with this provider.
@@ -2129,7 +1992,7 @@ impl MultiFastaProvider {
                 // length matches the authoritative length, or when the override
                 // carries the canonical `sequence` (the served bases are
                 // replaced on read regardless).
-                let served_len = self.index.get(acc).map(|e| e.length).or_else(|| {
+                let served_len = self.prepared.entry(acc).map(|e| e.length).or_else(|| {
                     cdot.get_transcript(acc)
                         .and_then(cdot_synthesized_tx_length)
                 });
@@ -2266,9 +2129,9 @@ impl MultiFastaProvider {
         use std::sync::OnceLock;
 
         if let Some(resolved) = self.resolve_name(id) {
-            if let Some(entry) = self.index.get(&resolved) {
+            if let Some(entry) = self.prepared.entry(&resolved) {
                 // Get the full sequence
-                let sequence = self.get_sequence_from_index(&resolved, entry, 0, entry.length)?;
+                let sequence = self.get_sequence_from_index(&resolved, &entry, 0, entry.length)?;
 
                 // Try to get metadata from cdot
                 let meta = if let Some(ref cdot) = self.cdot_mapper {
@@ -2564,7 +2427,7 @@ impl MultiFastaProvider {
     /// and exposed for callers that want to spot-check version pinning without
     /// materializing a [`Transcript`]. See design pillar 3 (#471 / #478).
     pub fn has_transcript_exact(&self, id: &str) -> bool {
-        self.index.contains_key(id)
+        self.prepared.contains(id)
     }
 
     /// Resolve a transcript ONLY if its bases are directly available at the
@@ -3087,7 +2950,7 @@ impl ReferenceProvider for MultiFastaProvider {
         // before the version-fuzzy `resolve_name` fallback below so an absent
         // *exact* version is reconstructed rather than silently served a sibling
         // version's bases.
-        if !self.index.contains_key(id) {
+        if !self.prepared.contains(id) {
             if let Ok(("", acc)) = crate::hgvs::parser::accession::parse_accession(id) {
                 if let Some(placement) = self.genomic_placement(&acc) {
                     return self.synthesize_parent_sequence(&placement, start, end);
@@ -3100,11 +2963,11 @@ impl ReferenceProvider for MultiFastaProvider {
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })?;
 
         let entry = self
-            .index
-            .get(&resolved)
+            .prepared
+            .entry(&resolved)
             .ok_or_else(|| FerroError::ReferenceNotFound { id: id.to_string() })?;
 
-        self.get_sequence_from_index(&resolved, entry, start, end)
+        self.get_sequence_from_index(&resolved, &entry, start, end)
     }
 
     fn get_genomic_sequence(
@@ -3123,30 +2986,30 @@ impl ReferenceProvider for MultiFastaProvider {
                     end,
                 })?;
 
-        let entry =
-            self.index
-                .get(&resolved)
-                .ok_or_else(|| FerroError::GenomicReferenceNotAvailable {
-                    contig: contig.to_string(),
-                    start,
-                    end,
-                })?;
+        let entry = self.prepared.entry(&resolved).ok_or_else(|| {
+            FerroError::GenomicReferenceNotAvailable {
+                contig: contig.to_string(),
+                start,
+                end,
+            }
+        })?;
 
-        self.get_sequence_from_index(&resolved, entry, start, end)
+        self.get_sequence_from_index(&resolved, &entry, start, end)
     }
 
     fn has_genomic_data(&self) -> bool {
         // Precomputed at construction (the index is immutable afterward); see
-        // `index_has_genomic_data`. Previously this scanned every index key on
-        // each call, which dominated the per-variant normalize hot loop.
-        self.has_genomic_data
+        // `prepared_index::index_has_genomic_data`. Previously this scanned
+        // every index key on each call, which dominated the per-variant
+        // normalize hot loop.
+        self.prepared.has_genomic_data()
     }
 
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         // Mirror `get_sequence`: a placement-only parent (#728 derived `NG_`)
         // has no FASTA record, so its length is the placed span on the
         // chromosome. Checked before the version-fuzzy `sequence_length`.
-        if !self.index.contains_key(id) {
+        if !self.prepared.contains(id) {
             if let Ok(("", acc)) = crate::hgvs::parser::accession::parse_accession(id) {
                 if let Some(placement) = self.genomic_placement(&acc) {
                     return Ok(placement.nc_end - placement.nc_start + 1);
@@ -3167,230 +3030,19 @@ impl ReferenceProvider for MultiFastaProvider {
         // accession is version-specific and callers supply versioned accessions.
         // (`MockProvider` does an unversioned fallback for testing; this
         // provider deliberately does not.)
-        let entry = self.protein_index.get(accession).ok_or_else(|| {
+        let entry = self.prepared.protein_entry(accession).ok_or_else(|| {
             FerroError::ProteinReferenceNotAvailable {
                 accession: accession.to_string(),
                 start,
                 end,
             }
         })?;
-        self.get_sequence_from_index(accession, entry, start, end)
+        self.get_sequence_from_index(accession, &entry, start, end)
     }
 
     fn has_protein_data(&self) -> bool {
-        !self.protein_index.is_empty()
+        self.prepared.has_protein_data()
     }
-}
-
-/// Load a FASTA index (.fai) file, tagging every entry with `file_id`.
-///
-/// The caller owns path canonicalization (see [`load_index_from_dirs`]) — it
-/// happens once per FASTA file rather than once per entry.
-fn load_fai_index(
-    fai_path: &Path,
-    file_id: u32,
-) -> Result<FxHashMap<String, FastaIndexEntry>, FerroError> {
-    let file = File::open(fai_path).map_err(|e| FerroError::Io {
-        msg: format!("Failed to open FAI file: {}", e),
-    })?;
-    let reader = BufReader::new(file);
-
-    let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
-
-    for line in reader.lines() {
-        let line = line.map_err(|e| FerroError::Io {
-            msg: format!("Failed to read FAI line: {}", e),
-        })?;
-
-        let fields: Vec<&str> = line.split('\t').collect();
-        if fields.len() < 5 {
-            continue;
-        }
-
-        // Parse index values with proper error handling instead of silent defaults
-        let name = fields[0].to_string();
-        let length: u64 = fields[1].parse().map_err(|_| FerroError::Io {
-            msg: format!(
-                "Invalid length '{}' in FAI for sequence '{}'",
-                fields[1], name
-            ),
-        })?;
-        let offset: u64 = fields[2].parse().map_err(|_| FerroError::Io {
-            msg: format!(
-                "Invalid offset '{}' in FAI for sequence '{}'",
-                fields[2], name
-            ),
-        })?;
-        let line_bases: u64 = fields[3].parse().map_err(|_| FerroError::Io {
-            msg: format!(
-                "Invalid line_bases '{}' in FAI for sequence '{}'",
-                fields[3], name
-            ),
-        })?;
-        let line_bytes: u64 = fields[4].parse().map_err(|_| FerroError::Io {
-            msg: format!(
-                "Invalid line_bytes '{}' in FAI for sequence '{}'",
-                fields[4], name
-            ),
-        })?;
-
-        // Validate that critical fields are non-zero to prevent divide-by-zero
-        if line_bases == 0 || line_bytes == 0 {
-            return Err(FerroError::Io {
-                msg: format!(
-                    "Invalid FAI entry for '{}': line_bases={}, line_bytes={} (must be > 0)",
-                    name, line_bases, line_bytes
-                ),
-            });
-        }
-
-        let entry = FastaIndexEntry {
-            file_id,
-            length,
-            offset,
-            line_bases,
-            line_bytes,
-        };
-
-        index.insert(name, entry);
-    }
-
-    Ok(index)
-}
-
-/// Load and combine the FASTA indexes for `dirs`, in order.
-///
-/// Directories are processed in the order given and entries are inserted into a
-/// single map, so a later directory wins for an accession present in more than
-/// one — the same last-wins precedence the previous per-directory-then-`extend`
-/// construction had, and which real references depend on (`supplemental/`
-/// overlaps `transcripts/` on ~80k accessions).
-///
-/// Returns the combined index and the file table (`files.len()` is the number
-/// of distinct physical FASTA files backing the index — canonical-path dedupe
-/// means a FASTA reachable by two on-disk paths has its `.fai` parsed twice
-/// but occupies one table slot); entries are tagged with a `file_id` indexing
-/// into this table rather than each carrying a cloned path.
-fn load_index_from_dirs(
-    dirs: &[&Path],
-) -> Result<(FxHashMap<String, FastaIndexEntry>, Vec<PathBuf>), FerroError> {
-    let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
-    let mut files: Vec<PathBuf> = Vec::new();
-    // Reuses a `file_id` when the same physical file is reached by more than
-    // one on-disk path (e.g. a symlink, or the same FASTA listed under two
-    // manifest-scanned directories) — without this, two table slots holding
-    // one canonical path would get two distinct ids and therefore two cached
-    // handles for one physical file, breaking the invariant the canonicalize
-    // call below documents.
-    let mut file_ids_by_canonical_path: FxHashMap<PathBuf, u32> = FxHashMap::default();
-
-    for dir in dirs {
-        if !dir.exists() {
-            continue;
-        }
-
-        let entries = std::fs::read_dir(dir).map_err(|e| FerroError::Io {
-            msg: format!("Failed to read directory {}: {}", dir.display(), e),
-        })?;
-
-        // Sort so file ordering — and therefore which file wins a within-directory
-        // duplicate — is deterministic. `read_dir` order is unspecified, and 65
-        // accessions appear in both genome/GRCh38.fna.fai and GRCh37.fna.fai.
-        let mut paths: Vec<PathBuf> = Vec::new();
-        for entry in entries {
-            let entry = entry.map_err(|e| FerroError::Io {
-                msg: format!("Failed to read directory entry: {}", e),
-            })?;
-            paths.push(entry.path());
-        }
-        paths.sort();
-
-        let mut entries_from_dir: usize = 0;
-
-        for path in paths {
-            // Skip hidden files and macOS AppleDouble sidecars (names beginning
-            // with '.', e.g. `._LRG_430.fasta`). These are not real FASTAs — an
-            // accompanying `._*.fasta.fai` is a binary extended-attribute blob,
-            // and parsing it as a FAI index would abort the entire reference
-            // load with a "stream did not contain valid UTF-8" error. Such files
-            // are commonly introduced when a reference directory is copied
-            // through macOS tooling.
-            let is_hidden = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with('.'));
-            if is_hidden {
-                continue;
-            }
-
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "fna" && ext != "fa" && ext != "fasta" {
-                continue;
-            }
-
-            let fai_path = PathBuf::from(format!("{}.fai", path.display()));
-            if !fai_path.exists() {
-                continue;
-            }
-
-            // Canonicalized once per FASTA rather than cloned into every entry.
-            // Resolving symlinks here also keeps the open-file cache keyed on
-            // one identity per physical file, and — since the result is
-            // trusted as an absolute lookup path — resolves `..`/symlink
-            // components before that trust is extended, helping prevent path
-            // traversal.
-            let canonical = path.canonicalize().map_err(|e| FerroError::Io {
-                msg: format!(
-                    "Failed to canonicalize FASTA path '{}': {}",
-                    path.display(),
-                    e
-                ),
-            })?;
-            // Pushed into `files` here, before `load_fai_index` runs — unlike
-            // the protein-FASTA loader below, which defers its push until
-            // parsing succeeds. The two are a deliberate pair, not a
-            // contradiction: a parse failure here is propagated with `?`,
-            // which unwinds the whole load, so no orphan table slot can ever
-            // be observed; the protein loader instead warns and `continue`s
-            // past a parse failure, so it MUST defer the push or it would
-            // leave a slot referenced by nothing.
-            let file_id = match file_ids_by_canonical_path.get(&canonical) {
-                Some(&id) => id,
-                None => {
-                    let id = u32::try_from(files.len()).map_err(|_| FerroError::Io {
-                        msg: "too many FASTA files in the reference (max 4294967296)".to_string(),
-                    })?;
-                    file_ids_by_canonical_path.insert(canonical.clone(), id);
-                    files.push(canonical);
-                    id
-                }
-            };
-
-            let file_index = load_fai_index(&fai_path, file_id)?;
-            for (name, entry) in file_index {
-                index.insert(name, entry);
-                entries_from_dir += 1;
-            }
-        }
-
-        // A directory that exists but yields no indexed FASTA is an error, not a
-        // silent skip: `from_directory` errored on this before the refactor, and
-        // silently skipping it here would let a later directory's overlapping
-        // accessions be served from the wrong place (e.g. `transcripts/` winning
-        // accessions `supplemental/` was supposed to). Contrast with a
-        // non-existent directory above, which is legitimately optional and
-        // skipped without error.
-        if entries_from_dir == 0 {
-            return Err(FerroError::Io {
-                msg: format!(
-                    "No indexed FASTA files found in {}. Run 'ferro-benchmark prepare' first.",
-                    dir.display()
-                ),
-            });
-        }
-    }
-
-    Ok((index, files))
 }
 
 /// Returns `true` for a bare LRG genomic accession (`LRG_<N>` with `N` a
@@ -4234,30 +3886,6 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
     }
 
     #[test]
-    fn test_load_fai_index() {
-        let dir = tempdir().unwrap();
-        let fasta_path = dir.path().join("test.fna");
-        let fai_path = dir.path().join("test.fna.fai");
-
-        // Create FASTA file
-        let mut fasta_file = File::create(&fasta_path).unwrap();
-        writeln!(fasta_file, ">NM_000001.1").unwrap();
-        writeln!(fasta_file, "ATGCATGCAT").unwrap();
-
-        // Create FAI file
-        let mut fai_file = File::create(&fai_path).unwrap();
-        writeln!(fai_file, "NM_000001.1\t10\t13\t10\t11").unwrap();
-
-        let index = load_fai_index(&fai_path, 0).unwrap();
-
-        assert!(index.contains_key("NM_000001.1"));
-        let entry = index.get("NM_000001.1").unwrap();
-        assert_eq!(entry.file_id, 0);
-        assert_eq!(entry.length, 10);
-        assert_eq!(entry.offset, 13);
-    }
-
-    #[test]
     fn test_from_manifest_resolves_ensembl_sequence_and_cdot() {
         use crate::reference::ReferenceProvider;
         use std::fs;
@@ -4749,7 +4377,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
 
         assert_eq!(provider.get_sequence("NM_000001.1", 0, 4).unwrap(), "AAAA");
         assert_eq!(
-            provider.files.len(),
+            provider.prepared.file_count(),
             1,
             "the symlink and its target canonicalize to one path and must share a single \
              file_id, or the open-file cache keeps two handles for one physical file"
@@ -4818,7 +4446,7 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
     /// The branch's only intentional behavior change (Task 4 review item 1):
     /// within a SINGLE directory, which file wins a duplicate accession moved
     /// from unspecified `read_dir` order to lexicographically-last-filename-wins,
-    /// made deterministic by `paths.sort()` in `load_index_from_dirs`. Nothing
+    /// made deterministic by `paths.sort()` inside `PreparedIndex::from_dirs`. Nothing
     /// else in this module pins that: `reads_correct_bases_from_multiple_files_in_one_directory`
     /// uses two distinct accessions (no duplicate at all), and
     /// `later_directory_wins_for_duplicate_accession` exercises the
@@ -6014,29 +5642,6 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
     // ----------------------------------------------------------------------
 
     #[test]
-    fn build_base_to_versioned_picks_highest_version_deterministically() {
-        let entry = |_name: &str| FastaIndexEntry {
-            file_id: 0,
-            length: 1,
-            offset: 0,
-            line_bases: 1,
-            line_bytes: 2,
-        };
-        let mut index: FxHashMap<String, FastaIndexEntry> = FxHashMap::default();
-        for v in ["NM_000088.3", "NM_000088.4", "NM_000088.10", "NM_000088.2"] {
-            index.insert(v.to_string(), entry(v));
-        }
-        let map = build_base_to_versioned(&index);
-        // Highest *numeric* version wins (10 > 4 > 3 > 2) — not lexical, which
-        // would pick ".4" over ".10" — and the result is independent of the
-        // (hash) iteration order of the index.
-        assert_eq!(
-            map.get("NM_000088").map(String::as_str),
-            Some("NM_000088.10")
-        );
-    }
-
-    #[test]
     fn has_genomic_data_reflects_presence_of_chromosome_sequences() {
         // A transcript-only index (NM_*) has no genomic (NC_*/chr*) sequences.
         let (tx_only, _d1) = build_provider_with_transcripts(&[
@@ -6730,10 +6335,10 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         // build a FASTA entry, then move it into the protein index (a real file
         // on disk backs it, so get_sequence_from_index can read it).
         let (mut provider, _kept) = build_provider_with_transcripts(&[("NP_TEST.1", "MWAPLE")]);
-        let entry = *provider.index.get("NP_TEST.1").unwrap();
+        let entry = provider.prepared.entry("NP_TEST.1").unwrap();
         provider
-            .protein_index
-            .insert("NP_TEST.1".to_string(), entry);
+            .prepared
+            .insert_protein_entry("NP_TEST.1".to_string(), entry);
 
         assert!(provider.has_protein_data());
         // `0, u64::MAX` fetches the full protein (read clamps end to length).
@@ -6810,6 +6415,77 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         );
     }
 
+    /// #520 edge 3 / requirement (a), Task 7 fix round: a protein FASTA whose
+    /// `.fai` exists (so it clears the `path.exists() && fai.exists()`
+    /// pre-check) but fails to PARSE must not turn one bad `protein_fastas`
+    /// entry into a hard failure of the whole `from_manifest` load. Only
+    /// `add_protein_fasta`'s own tests (`add_protein_fasta_dedupes_and_defers_push_on_failure`)
+    /// proved the method itself returns `Err`; nothing previously proved the
+    /// *manifest loader* survives that `Err` rather than propagating it with
+    /// `?`. Two `protein_fastas` entries: the first has an unparseable `.fai`
+    /// (non-numeric length field), the second is well-formed and listed
+    /// AFTER the bad one, so a regression to `?` would also prevent it from
+    /// ever being indexed.
+    #[test]
+    fn from_manifest_survives_one_bad_protein_fasta_and_indexes_the_next() {
+        use std::fs;
+
+        let dir = tempdir().unwrap();
+        let d = dir.path();
+
+        // `from_manifest_inner` errors out before ever reaching the
+        // `protein_fastas` block if `dirs` (built from `transcript_fastas` /
+        // `genome_fasta` / etc.) ends up empty, so a minimal transcript FASTA
+        // is required here purely to clear that unrelated precondition.
+        let tx_dir = d.join("transcripts");
+        fs::create_dir_all(&tx_dir).unwrap();
+        fs::write(tx_dir.join("tx.fna"), ">NM_TEST.1\nAAAA\n").unwrap();
+        fs::write(tx_dir.join("tx.fna.fai"), "NM_TEST.1\t4\t11\t4\t5\n").unwrap();
+
+        let protein_dir = d.join("proteins");
+        fs::create_dir_all(&protein_dir).unwrap();
+
+        // First protein FASTA: `.fai` exists (clears the missing-file
+        // pre-check) but its length field is not a number, tripping
+        // `load_fai_index`'s "Invalid length" error.
+        fs::write(protein_dir.join("bad.faa"), ">NP_BAD.1\nMM\n").unwrap();
+        fs::write(
+            protein_dir.join("bad.faa.fai"),
+            "NP_BAD.1\tnotanumber\t10\t8\t9\n",
+        )
+        .unwrap();
+
+        // Second protein FASTA: well-formed, listed after the bad one.
+        fs::write(protein_dir.join("good.faa"), ">NP_GOOD.1\nQQ\n").unwrap();
+        fs::write(protein_dir.join("good.faa.fai"), "NP_GOOD.1\t2\t11\t2\t3\n").unwrap();
+
+        fs::write(
+            d.join("manifest.json"),
+            r#"{
+                "prepared_at": "test",
+                "transcript_fastas": ["transcripts/tx.fna"],
+                "protein_fastas": ["proteins/bad.faa", "proteins/good.faa"],
+                "transcript_count": 1,
+                "available_prefixes": []
+            }"#,
+        )
+        .unwrap();
+
+        // Must succeed: one bad protein FASTA is a warning, not a load failure.
+        let provider = MultiFastaProvider::from_manifest(d.join("manifest.json")).unwrap();
+
+        // The bad entry never made it into the protein index.
+        assert!(provider.get_protein_sequence("NP_BAD.1", 0, 2).is_err());
+
+        // The good entry, listed AFTER the bad one, still resolves through
+        // its own bases — proving the loop continued past the failure
+        // instead of aborting (or short-circuiting via `?`) on it.
+        assert_eq!(
+            provider.get_protein_sequence("NP_GOOD.1", 0, 2).unwrap(),
+            "QQ"
+        );
+    }
+
     #[test]
     fn validate_translations_flags_mismatch_end_to_end() {
         use crate::reference::authoritative::{AuthoritativeRecord, CanonicalOverrides};
@@ -6817,8 +6493,10 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         // NM_T.1 = ATG|TGG|TAA → "MW"; the canonical protein NP_T.1 = "MV".
         let (mut provider, _kept) =
             build_provider_with_transcripts(&[("NM_T.1", "ATGTGGTAA"), ("NP_T.1", "MV")]);
-        let np = *provider.index.get("NP_T.1").unwrap();
-        provider.protein_index.insert("NP_T.1".to_string(), np);
+        let np = provider.prepared.entry("NP_T.1").unwrap();
+        provider
+            .prepared
+            .insert_protein_entry("NP_T.1".to_string(), np);
         // The override gives NM_T.1 its CDS so the served transcript is coding.
         let mut ov = CanonicalOverrides::default();
         ov.insert(AuthoritativeRecord {
@@ -6848,8 +6526,10 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         // attribute the sibling's bases to the requested version (#505).
         let (mut provider, _kept) =
             build_provider_with_transcripts(&[("NM_T.4", "ATGTGGTAA"), ("NP_T.1", "MV")]);
-        let np = *provider.index.get("NP_T.1").unwrap();
-        provider.protein_index.insert("NP_T.1".to_string(), np);
+        let np = provider.prepared.entry("NP_T.1").unwrap();
+        provider
+            .prepared
+            .insert_protein_entry("NP_T.1".to_string(), np);
         let mut cdot = CdotMapper::new();
         cdot.add_transcript(
             "NM_T.4".to_string(),

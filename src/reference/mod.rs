@@ -13,6 +13,7 @@ pub mod mock;
 pub mod multi_fasta;
 pub mod ng_hosted_transcripts;
 pub mod ng_placement_builder;
+pub(crate) mod prepared_index;
 pub mod protein;
 pub mod provider;
 pub mod transcript;
