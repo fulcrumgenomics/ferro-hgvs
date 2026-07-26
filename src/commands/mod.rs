@@ -178,7 +178,7 @@ pub fn cdot_cache_load_source(
         msg: format!("Failed to open manifest {}: {}", manifest_path.display(), e),
     })?;
     let manifest: serde_json::Value =
-        serde_json::from_reader(file).map_err(|e| FerroError::Io {
+        serde_json::from_reader(BufReader::new(file)).map_err(|e| FerroError::Io {
             msg: format!(
                 "Failed to parse manifest {}: {}",
                 manifest_path.display(),

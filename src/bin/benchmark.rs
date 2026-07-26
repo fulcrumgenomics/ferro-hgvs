@@ -598,8 +598,10 @@ fn run_populate_cache(
                         msg: format!("Failed to open manifest: {}", e),
                     }
                 })?;
-                serde_json::from_reader(file).map_err(|e| ferro_hgvs::FerroError::Json {
-                    msg: format!("Failed to parse manifest: {}", e),
+                serde_json::from_reader(std::io::BufReader::new(file)).map_err(|e| {
+                    ferro_hgvs::FerroError::Json {
+                        msg: format!("Failed to parse manifest: {}", e),
+                    }
                 })?
             };
 

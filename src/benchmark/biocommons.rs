@@ -1446,8 +1446,8 @@ pub fn load_sequences_to_seqrepo(
                     e
                 ),
             })?;
-            let metadata: SupplementalMetadata =
-                serde_json::from_reader(file).map_err(|e| FerroError::Json {
+            let metadata: SupplementalMetadata = serde_json::from_reader(BufReader::new(file))
+                .map_err(|e| FerroError::Json {
                     msg: format!(
                         "Failed to parse {}: {}",
                         supplemental_metadata_path.display(),
@@ -2531,15 +2531,14 @@ pub fn run_biocommons_normalizer_parallel(
             )?;
 
             // Parse results
-            let output_data: serde_json::Value =
-                serde_json::from_reader(std::fs::File::open(output_temp.path()).map_err(|e| {
-                    FerroError::Io {
-                        msg: format!("Failed to read output: {}", e),
-                    }
-                })?)
-                .map_err(|e| FerroError::Io {
-                    msg: format!("Failed to parse JSON: {}", e),
-                })?;
+            let output_data: serde_json::Value = serde_json::from_reader(BufReader::new(
+                std::fs::File::open(output_temp.path()).map_err(|e| FerroError::Io {
+                    msg: format!("Failed to read output: {}", e),
+                })?,
+            ))
+            .map_err(|e| FerroError::Io {
+                msg: format!("Failed to parse JSON: {}", e),
+            })?;
 
             // Extract results
             let results_array =
