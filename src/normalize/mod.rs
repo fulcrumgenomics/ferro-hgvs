@@ -5513,10 +5513,86 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
+        // #1207: mirror `normalize_cds`'s CDS-boundary clamps — `cds_start`
+        // (#1170) and `cds_end` (#387) — on the `r.` axis.
+        //
+        // On a coding transcript `r.` IS the `c.` axis (`background/numbering.md`
+        // L58/L61, #469), so it needs the same rewrite for the same reason, and
+        // #1192 made that non-optional: once the codon-frame gate is active on
+        // `r.`, an unclamped saturated insertion is not merely ugly, it is
+        // **non-idempotent**. Pass 1 refuses repeat notation because the *input*
+        // span is CDS-resident and emits `r.-1_1ins<A'>`; pass 2 sees a span
+        // touching the 5'UTR, does not gate, and produces `r.1_4c[6]` instead.
+        // The `c.` spelling of the same edit was already stable precisely
+        // because this clamp exists there (`c.1delinsCCC`).
+        //
+        // #1202's `clamp_insertion_at_transcript_bounds` below does NOT cover
+        // this: it fires only at transcript `1` / `len`, whereas these saturate
+        // at the CDS bounds, where the far side (`r.-1`, `r.*1`) is perfectly
+        // representable. Two different boundaries, both needed.
+        //
+        // Keyed on the POST-shuffle `new_edit` and on a literal `Insertion`, so
+        // a spanning *duplication* — the spec-canonical form, deliberately not
+        // clamped on `c.` either (#401) — cannot reach this. Same identity as
+        // every other caller: moving the delete boundary one base is exact for
+        // any `A'`, so no equivalence check is needed.
+        if let Some((cds_start, cds_end)) = cds_info {
+            // Mirrors `normalize_cds`'s `AxisRegion::Cds` gate: the input's
+            // start sits in the CDS proper. Deliberately keyed on the input
+            // rather than on the shuffled result, so a UTR-region input keeps
+            // the transcript-bound behavior below.
+            let input_starts_in_cds = tx_start >= cds_start && tx_start <= cds_end;
+            if input_starts_in_cds {
+                let rests_at_cds_start = new_tx_end == cds_start
+                    && (new_tx_start == cds_start || new_tx_start + 1 == cds_start);
+                let rests_at_cds_end =
+                    new_tx_start == cds_end && (new_tx_end == cds_end || new_tx_end == cds_end + 1);
+                let anchor = if rests_at_cds_start {
+                    Some((cds_start, BoundarySide::FivePrime))
+                } else if rests_at_cds_end {
+                    Some((cds_end, BoundarySide::ThreePrime))
+                } else {
+                    None
+                };
+                // A `Delins` **input** whose shared-affix trim pushed the
+                // residual past a CDS boundary restores to its own form instead
+                // of being clamped — the #383 (5') / #387 (3') carve-out, which
+                // `normalize_cds` applies at both boundaries and
+                // `issue_387_canon_cds_end_clamp::three_prime_delins_at_cds_end_suppresses_rewrite`
+                // pins there (`c.5delinsAC` stays `c.5delinsAC`). Without this
+                // arm the clamp above would rewrite the reduced insertion into a
+                // boundary `delins`, so `r.` would newly diverge from `c.` for
+                // exactly the inputs that carve-out exists for — trading the
+                // divergence this PR fixes for a different one.
+                let escaped_five_prime = rests_at_cds_start || new_tx_start < cds_start;
+                if matches!(edit, NaEdit::Delins { .. }) && (escaped_five_prime || rests_at_cds_end)
+                {
+                    new_edit = edit.clone();
+                    new_tx_start = tx_start;
+                    new_tx_end = tx_end;
+                } else if let (
+                    Some((anchor, side)),
+                    NaEdit::Insertion {
+                        sequence: InsertedSequence::Literal(a_prime),
+                    },
+                ) = (anchor, &new_edit)
+                {
+                    if let Some(delins) = insertion_to_boundary_delins(seq, a_prime, anchor, side) {
+                        new_edit = delins;
+                        new_tx_start = anchor;
+                        new_tx_end = anchor;
+                    }
+                }
+            }
+        }
+
         // #1202: mirror of the `normalize_tx` clamp. Runs in transcript space
         // (before the `r.` mapping below) so it shares the helper verbatim, and
         // must stay AFTER the junction block above for the same
-        // `new_tx_end == boundaries.right` reason documented there.
+        // `new_tx_end == boundaries.right` reason documented there. Runs after
+        // the CDS clamps above, mirroring `normalize_cds`'s ordering; either of
+        // those has already rewritten `new_edit` to a `Delins`, so this is inert
+        // after them.
         clamp_insertion_at_transcript_bounds(
             seq,
             &mut new_edit,
