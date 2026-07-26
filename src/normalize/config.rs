@@ -334,6 +334,67 @@ impl NormalizeConfig {
     pub fn should_warn_incomplete_cds_start(&self) -> bool {
         self.incomplete_cds_start_action().should_warn()
     }
+
+    /// Get the resolved action for `InitiatorMetCanonicalization` (W3022) —
+    /// fires when the canonical protein duplication form covers position 1,
+    /// the initiator methionine. See #92.
+    pub fn initiator_met_canonicalization_action(&self) -> ResolvedAction {
+        self.error_config
+            .action_for(ErrorType::InitiatorMetCanonicalization)
+    }
+
+    /// Returns true if the `InitiatorMetCanonicalization` advisory should be
+    /// surfaced as a warning.
+    ///
+    /// W3022 is *advisory about ferro's own output*, not a defect in the input:
+    /// `p.Met1dup` is spec-canonical — HGVS prioritization requires a
+    /// duplicating insertion to be described as a duplication
+    /// (`general.md` §56-57, `protein/insertion.md` §20), and the initiator
+    /// carve-outs are scoped to *substitutions* that destroy the ATG
+    /// (`protein/substitution.md` §49, `checklist.md` §65), which a `dup` does
+    /// not. The normalizer emits the warning whenever the final edit is a
+    /// Met1-covering duplication, including when the input already was one and
+    /// nothing was rewritten.
+    ///
+    /// So the base mode must never promote it to an error: strict mode would
+    /// then refuse the very string strict mode emits, and normalization would
+    /// stop being idempotent. `Reject` from the base mode therefore maps to
+    /// "surface it", which also keeps strict from being *quieter* than lenient
+    /// (`ResolvedAction::should_warn` is true only for `WarnCorrect`, i.e.
+    /// lenient).
+    ///
+    /// Silent mode, and an override resolving to `Accept`/`SilentCorrect`
+    /// (`--ignore W3022`), suppress it. Before #1196 the push was
+    /// unconditional, so none of that worked.
+    /// An explicit `Reject` override also surfaces it, because the rejection
+    /// ladder in `normalize_core` promotes it *from* the warning list — the same
+    /// `should_warn_* || should_reject_*` emission shape the `PositionPastEnd`
+    /// and `IncompleteCdsStartReference` sites use.
+    pub fn should_warn_initiator_met_canonicalization(&self) -> bool {
+        let action = self.initiator_met_canonicalization_action();
+        action.should_warn() || action.should_reject()
+    }
+
+    /// Returns true if the `InitiatorMetCanonicalization` advisory should be
+    /// promoted to a hard error.
+    ///
+    /// Only an **explicit** `Reject` override does this — `--reject W3022` or
+    /// `[error-handling] reject = ["W3022"]`. The base mode never does, for the
+    /// reasons in [`Self::should_warn_initiator_met_canonicalization`].
+    ///
+    /// This is the one place the distinction matters. `action_for` collapses
+    /// strict-mode `Default` and an explicit `Reject` into the same
+    /// `ResolvedAction::Reject`, so without consulting
+    /// [`ErrorConfig::explicit_override`] the `--reject` direction of the knob
+    /// would be inert for this code — reintroducing, for W3022 alone, exactly
+    /// the defect #1196 exists to remove.
+    pub fn should_reject_initiator_met_canonicalization(&self) -> bool {
+        matches!(
+            self.error_config
+                .explicit_override(ErrorType::InitiatorMetCanonicalization),
+            Some(ErrorOverride::Reject)
+        )
+    }
 }
 
 #[cfg(test)]

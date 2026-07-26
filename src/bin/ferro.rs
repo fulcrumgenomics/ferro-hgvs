@@ -10,10 +10,9 @@ use ferro_hgvs::cli::{
     output_error as cli_output_error, output_error_with_context as cli_output_error_with_context,
     parse_genome_build, parse_shuffle_direction, parse_vcf_line, process_input_line, OutputFormat,
 };
-use ferro_hgvs::config::{warn_unmapped_override, FerroConfig, OverrideSource};
+use ferro_hgvs::config::{apply_override, FerroConfig, OverrideSource};
 use ferro_hgvs::error_handling::{
     get_code_info, list_all_codes, list_error_codes, list_warning_codes, ErrorConfig, ErrorMode,
-    ErrorType,
 };
 use ferro_hgvs::reference::TranscriptDb;
 use ferro_hgvs::vcf::{generate_info_header_lines, open_vcf, VcfAnnotator, VcfRecord};
@@ -3106,20 +3105,24 @@ fn build_error_config(mode: &str, ignore: &[String], reject: &[String]) -> Error
 
     // Apply ignore overrides (silent correct)
     for code in ignore {
-        if let Some(error_type) = ErrorType::from_code(code) {
-            config.set_override(error_type, ErrorOverride::SilentCorrect);
-        } else {
-            warn_unmapped_override(code, "ignore", OverrideSource::Cli);
-        }
+        apply_override(
+            &mut config,
+            code,
+            ErrorOverride::SilentCorrect,
+            "ignore",
+            OverrideSource::Cli,
+        );
     }
 
     // Apply reject overrides
     for code in reject {
-        if let Some(error_type) = ErrorType::from_code(code) {
-            config.set_override(error_type, ErrorOverride::Reject);
-        } else {
-            warn_unmapped_override(code, "reject", OverrideSource::Cli);
-        }
+        apply_override(
+            &mut config,
+            code,
+            ErrorOverride::Reject,
+            "reject",
+            OverrideSource::Cli,
+        );
     }
 
     config

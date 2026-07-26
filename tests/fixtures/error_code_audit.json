@@ -259,7 +259,7 @@
       "spec_section": "recommendations/grammar.md (ASCII grammar)",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/grammar/",
       "status": "registered",
-      "spec_section_notes": "Real coverage of non-ASCII inputs is via W2001 (en/em-dash) and W2002 (smart quotes). The generic catch-all is registered as ErrorType::InvalidUnicodeCharacter but no preprocessor or parser site emits it on its own — non-ASCII characters not matching the dash or quote correctors fall through to a generic parse error."
+      "spec_section_notes": "Real coverage of non-ASCII inputs is via W2001 (en/em-dash) and W2002 (smart quotes). The generic catch-all is registered as ErrorType::InvalidUnicodeCharacter but no preprocessor or parser site emits it on its own — non-ASCII characters not matching the dash or quote correctors fall through to a generic parse error. Declared inert via `ErrorType::consults_error_config`, so an `--ignore`/`--reject` naming it draws a CLI diagnostic rather than silently doing nothing (#1196)."
     },
     {
       "code": "W3001",
@@ -311,7 +311,7 @@
       "spec_section": "recommendations/checklist.md:63 ('Ter or * should be used to indicate a translation stop codon; the X should not be used') — '*' is co-equal with 'Ter', not deprecated",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/checklist/",
       "status": "registered",
-      "spec_section_notes": "The '*' stop-codon glyph is spec-sanctioned (checklist.md:63), so correct_deprecated_protein_forms no longer detects it — the core parser accepts '*' natively as Ter and Display canonicalizes it. The ErrorType variant is retained (python-exposed) but never emitted. Reclassified from `enforced` to `registered` in #1114 (originally #125).",
+      "spec_section_notes": "The '*' stop-codon glyph is spec-sanctioned (checklist.md:63), so correct_deprecated_protein_forms no longer detects it — the core parser accepts '*' natively as Ter and Display canonicalizes it. The ErrorType variant is retained (python-exposed) but never emitted. Reclassified from `enforced` to `registered` in #1114 (originally #125). Declared inert via `ErrorType::consults_error_config`, so an `--ignore`/`--reject` naming it draws a CLI diagnostic rather than silently doing nothing (#1196).",
       "follow_up_issues": [125, 1114]
     },
     {
@@ -329,7 +329,7 @@
       "spec_section": "recommendations/checklist.md:63 ('Ter or * should be used ... the X should not be used'); recommendations/protein/frameshift.md lists 'p.Arg97Profs*23' as a valid example — 'fs*N' is not deprecated",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/protein/variant/frameshift/",
       "status": "registered",
-      "spec_section_notes": "The 'fs*N' glyph is spec-sanctioned, so correct_deprecated_protein_forms no longer detects it — the core parser accepts 'fs*N' natively as fsTerN and Display canonicalizes it. The ErrorType variant is retained (python-exposed) but never emitted. Reclassified from `enforced` to `registered` in #1114 (originally #125).",
+      "spec_section_notes": "The 'fs*N' glyph is spec-sanctioned, so correct_deprecated_protein_forms no longer detects it — the core parser accepts 'fs*N' natively as fsTerN and Display canonicalizes it. The ErrorType variant is retained (python-exposed) but never emitted. Reclassified from `enforced` to `registered` in #1114 (originally #125). Declared inert via `ErrorType::consults_error_config`, so an `--ignore`/`--reject` naming it draws a CLI diagnostic rather than silently doing nothing (#1196).",
       "follow_up_issues": [125, 1114]
     },
     {
@@ -395,7 +395,7 @@
       "spec_section": "recommendations/DNA/substitution.md (mosaic '/' and chimeric '//' markers are presence-only; the spec carries no allele fraction in the HGVS string)",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
       "status": "enforced",
-      "spec_section_notes": "Parser-level rejection at the trailing-content check in src/hgvs/parser/variant.rs::parse_variant. Closes the diagnostic gap left by issue #133 work-item 4 (allele-fraction soft-warning code follow-up, issue #278). Cannot be auto-corrected: the fraction belongs in accompanying metadata (VCF FORMAT/AF, ClinVar heteroplasmy field, etc.), not in the HGVS string."
+      "spec_section_notes": "Parser-level rejection at the trailing-content check in src/hgvs/parser/variant.rs::parse_variant. Closes the diagnostic gap left by issue #133 work-item 4 (allele-fraction soft-warning code follow-up, issue #278). Cannot be auto-corrected: the fraction belongs in accompanying metadata (VCF FORMAT/AF, ClinVar heteroplasmy field, etc.), not in the HGVS string. Not configurable: the rejection is raised by the grammar, which runs below the error-configuration layer, and there is no auto-correction to select, so every mode rejects. `ErrorType::consults_error_config` declares this and the CLI reports an `--ignore`/`--reject` naming it instead of accepting it silently (#1196)."
     },
     {
       "code": "W3018",
@@ -403,7 +403,7 @@
       "spec_section": "recommendations/DNA/substitution.md (mosaic '/' requires fully qualified RHS or the compact '<pos>=/<alt-edit>' form; the bare-base prose shape is not a spec form)",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
       "status": "enforced",
-      "spec_section_notes": "Parser-level rejection in src/hgvs/parser/variant.rs::parse_phase_allele when the bare-base prose RHS is detected after the spec-compact fallback fails. Closes the diagnostic gap left by issue #133 work-item 4 (mosaic prose follow-up, issue #278)."
+      "spec_section_notes": "Parser-level rejection in src/hgvs/parser/variant.rs::parse_phase_allele when the bare-base prose RHS is detected after the spec-compact fallback fails. Closes the diagnostic gap left by issue #133 work-item 4 (mosaic prose follow-up, issue #278). Not configurable for the same reason as W3017: raised by the grammar below the error-configuration layer with no auto-correction to select, so every mode rejects; declared inert via `ErrorType::consults_error_config` and reported by the CLI when an override names it (#1196)."
     },
     {
       "code": "W3019",
@@ -411,7 +411,7 @@
       "spec_section": "recommendations/DNA/substitution.md (compact mosaic '=/<edit>' and chimeric '=//<edit>'); no nesting or '[a/b]' production is defined in HGVS v21.",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/DNA/substitution/",
       "status": "enforced",
-      "spec_section_notes": "Always-reject (no canonical alternative exists, so no auto-correction). Two parser-level detectors in src/hgvs/parser/variant.rs: (A) `has_slash_inside_brackets` runs at the top of `parse_variant` and catches '[a/b]' / '[a//b]'; (B) the existing chunk-has-inner-slash guard inside `parse_phase_allele` upgrades to the same W3019 family. Both go through `non_spec_mosaic_form_error`, which inlines the spec-supported alternatives ([a;b] cis; acc:c.X/acc:c.Y mosaic; acc:c.X//acc:c.Y chimeric; compact =/<edit> and =//<edit>) in the message text so callers using plain `to_string()` see the migration path. Pinned by tests/issue_281_mosaic_chimeric_nesting.rs (closes #281, follow-up to #217 / #216)."
+      "spec_section_notes": "Always-reject (no canonical alternative exists, so no auto-correction). Two parser-level detectors in src/hgvs/parser/variant.rs: (A) `has_slash_inside_brackets` runs at the top of `parse_variant` and catches '[a/b]' / '[a//b]'; (B) the existing chunk-has-inner-slash guard inside `parse_phase_allele` upgrades to the same W3019 family. Both go through `non_spec_mosaic_form_error`, which inlines the spec-supported alternatives ([a;b] cis; acc:c.X/acc:c.Y mosaic; acc:c.X//acc:c.Y chimeric; compact =/<edit> and =//<edit>) in the message text so callers using plain `to_string()` see the migration path. Pinned by tests/issue_281_mosaic_chimeric_nesting.rs (closes #281, follow-up to #217 / #216). Not configurable for the same reason as W3017: raised by the grammar below the error-configuration layer with no auto-correction to select, so every mode rejects; declared inert via `ErrorType::consults_error_config` and reported by the CLI when an override names it (#1196)."
     },
     {
       "code": "W3020",
@@ -435,7 +435,7 @@
       "spec_section": "recommendations/general.md §3 (prioritization: dup preferred over ins); recommendations/protein/variant/deletion.md §63-65 (Met1-inclusive deletion); recommendations/protein/variant/substitution.md §45-65 (start-codon substitution rule p.0/p.0?/p.(Met1?))",
       "spec_url": "https://hgvs-nomenclature.org/stable/recommendations/general/",
       "status": "enforced",
-      "spec_section_notes": "Emitted by try_protein_ins_to_dup / try_protein_delins_canonicalize in src/normalize/mod.rs when the resulting dup interval includes position 1. mode_behavior is warn_accept (Reject in strict, WarnAndAccept in lenient/silent) — the warning is purely informational (consumers should consider the p.0/p.0? substitution-rule interpretation); the runtime does not attempt to auto-correct the input to an alternative form. Closes #92."
+      "spec_section_notes": "Emitted by try_protein_ins_to_dup / try_protein_delins_canonicalize in src/normalize/mod.rs when the resulting dup interval includes position 1. mode_behavior is `advisory` (WarnAndAccept in strict and lenient, Accept in silent): the warning describes ferro's own canonical output rather than a defect in the input — it also fires when the input already was a Met1-covering dup and nothing was rewritten — so no *mode* rejects it (strict would otherwise refuse ferro's own canonical output), and the runtime does not attempt to auto-correct the input to an alternative form. The emission is gated on `NormalizeConfig::should_warn_initiator_met_canonicalization`, so silent mode and `--ignore W3022` suppress it; an explicit `--reject W3022` is honored via `ErrorConfig::explicit_override` and promotes the advisory to an error, so neither override direction is inert. Before #1196 the push was unconditional and both were inert. Closes #92."
     },
     {
       "code": "W3023",

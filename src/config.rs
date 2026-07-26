@@ -143,29 +143,35 @@ impl FerroConfig {
 
         // Apply ignore overrides (silent correct)
         for code in &self.error_handling.ignore {
-            if let Some(error_type) = ErrorType::from_code(code) {
-                config.set_override(error_type, ErrorOverride::SilentCorrect);
-            } else {
-                warn_unmapped_override(code, "ignore", OverrideSource::ConfigFile);
-            }
+            apply_override(
+                &mut config,
+                code,
+                ErrorOverride::SilentCorrect,
+                "ignore",
+                OverrideSource::ConfigFile,
+            );
         }
 
         // Apply reject overrides
         for code in &self.error_handling.reject {
-            if let Some(error_type) = ErrorType::from_code(code) {
-                config.set_override(error_type, ErrorOverride::Reject);
-            } else {
-                warn_unmapped_override(code, "reject", OverrideSource::ConfigFile);
-            }
+            apply_override(
+                &mut config,
+                code,
+                ErrorOverride::Reject,
+                "reject",
+                OverrideSource::ConfigFile,
+            );
         }
 
         // Apply warn overrides
         for code in &self.error_handling.warn {
-            if let Some(error_type) = ErrorType::from_code(code) {
-                config.set_override(error_type, ErrorOverride::WarnCorrect);
-            } else {
-                warn_unmapped_override(code, "warn", OverrideSource::ConfigFile);
-            }
+            apply_override(
+                &mut config,
+                code,
+                ErrorOverride::WarnCorrect,
+                "warn",
+                OverrideSource::ConfigFile,
+            );
         }
 
         config
@@ -193,20 +199,24 @@ impl FerroConfig {
 
         // Add CLI ignore overrides
         for code in cli_ignore {
-            if let Some(error_type) = ErrorType::from_code(code) {
-                config.set_override(error_type, ErrorOverride::SilentCorrect);
-            } else {
-                warn_unmapped_override(code, "ignore", OverrideSource::Cli);
-            }
+            apply_override(
+                &mut config,
+                code,
+                ErrorOverride::SilentCorrect,
+                "ignore",
+                OverrideSource::Cli,
+            );
         }
 
         // Add CLI reject overrides
         for code in cli_reject {
-            if let Some(error_type) = ErrorType::from_code(code) {
-                config.set_override(error_type, ErrorOverride::Reject);
-            } else {
-                warn_unmapped_override(code, "reject", OverrideSource::Cli);
-            }
+            apply_override(
+                &mut config,
+                code,
+                ErrorOverride::Reject,
+                "reject",
+                OverrideSource::Cli,
+            );
         }
 
         config
@@ -282,6 +292,62 @@ pub fn warn_unmapped_override(code: &str, list: &str, source: OverrideSource) {
         OverrideSource::Cli => format!("`--{list}` flag value"),
     };
     eprintln!("warning: {prefix} `{code}` does not match a known ErrorType{detail}");
+}
+
+/// Emit a stderr warning when an override targets a *known* warning code whose
+/// handling never consults the error configuration, so the override cannot
+/// change anything (#1196).
+///
+/// Two disjoint reasons land here, and the message names which one applies so
+/// the user knows whether to drop the entry or to expect the code later:
+///
+///   * the code is registered but no site emits it (e.g. W2004, W3007, W3009 —
+///     retained as stable Python discriminants), or
+///   * the code is a hard parse rejection raised below the error-configuration
+///     layer, with no auto-correction to select (W3017, W3018, W3019).
+///
+/// This is a warning rather than a hard error to stay consistent with
+/// [`warn_unmapped_override`]: it would be perverse for a *known* code to abort
+/// the run when an entirely unknown one only warns.
+pub fn warn_inert_override(code: &str, list: &str, source: OverrideSource) {
+    let Some(error_type) = ErrorType::from_code(code) else {
+        return;
+    };
+    let detail = if error_type.is_correctable() {
+        "no site emits this code, so the override has no effect"
+    } else {
+        "this code is a parse-time rejection with no auto-correction; every mode \
+         rejects it and the override has no effect"
+    };
+    let prefix = match source {
+        OverrideSource::ConfigFile => format!("`.ferro.toml` `[error-handling].{list}` entry"),
+        OverrideSource::Cli => format!("`--{list}` flag value"),
+    };
+    eprintln!("warning: {prefix} `{code}` ({error_type:?}): {detail}");
+}
+
+/// Resolve an override code and apply it to `config`, emitting the appropriate
+/// stderr diagnostic when the code is unknown or inert (#1196).
+///
+/// Shared by the `.ferro.toml` and CLI paths so both surfaces report the same
+/// thing; an inert override is still recorded, so this only adds a diagnostic
+/// and never changes resolution.
+pub fn apply_override(
+    config: &mut ErrorConfig,
+    code: &str,
+    override_: ErrorOverride,
+    list: &str,
+    source: OverrideSource,
+) {
+    match ErrorType::from_code(code) {
+        Some(error_type) => {
+            if !error_type.consults_error_config() {
+                warn_inert_override(code, list, source);
+            }
+            config.set_override(error_type, override_);
+        }
+        None => warn_unmapped_override(code, list, source),
+    }
 }
 
 // Warning-code → `ErrorType` resolution lives on `ErrorType::from_code`
