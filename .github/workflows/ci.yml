@@ -112,6 +112,16 @@ jobs:
   python-lint:
     name: Python Lint
     runs-on: ubuntu-latest
+    env:
+      # `uv sync --no-install-project` below deliberately skips building the
+      # project, but a bare `uv run` re-installs it — and for this maturin
+      # package that means a full Rust extension build. Measured: 158s of this
+      # job's 169s was `Building ferro-hgvs`, to run ~9s of ruff and mypy over
+      # pure Python; with this set the job takes 10s. Nothing here needs the
+      # compiled module: ruff is a static linter and mypy reads the checked-in
+      # `python/ferro_hgvs/__init__.pyi` stubs. The wheel is built and
+      # exercised for real in `python-wheel-test`.
+      UV_NO_SYNC: "1"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -191,21 +201,32 @@ jobs:
             ${{ runner.os }}-cargo-
       - run: cargo clippy --all-features --all-targets -- -D warnings
 
-  test:
-    name: Test
+  # Build the test binaries and the two generated spec artifacts ONCE, then fan
+  # out: every downstream job consumes this job's `nextest archive`, so the
+  # crate compiles a single time no matter how many shards run.
+  #
+  # `--extract-to . --extract-overwrite` in the consumers is load-bearing, not
+  # tidiness. 26 call sites across 10 test files resolve the CLI binary with
+  # `env!("CARGO_BIN_EXE_ferro")`, which bakes an ABSOLUTE path to
+  # `<workspace>/target/debug/ferro` at compile time. Extracting to nextest's
+  # default temporary directory leaves that path empty and every CLI test fails
+  # -- observed directly, 4-23 failures per shard, while the proptest-only soak
+  # shards passed on the same archive. Every job in a workflow gets the same
+  # runner workspace path, so extracting INTO the workspace puts the binaries
+  # exactly where those baked paths point. Verified locally by hiding
+  # `target/debug/ferro` to reproduce the shard's condition: default extraction
+  # gave 6 failures, `--extract-to .` gave 6 passes.
+  test-build:
+    name: Build test archive
     runs-on: ubuntu-latest
     env:
-      # The Test job builds and LINKS ~230 separate integration-test
-      # binaries (tests/*.rs). With full debuginfo (dev/test profile
-      # default `debug = true`) the linked `target/` exhausts the stock
-      # runner's ~14 GB free disk, and the linker dies with
-      # `ld terminated with signal 7 (Bus error)` — a write past a full
-      # disk. Stripping test-binary debuginfo in CI removes the bulk of
-      # each binary's size and is now the sole guard against that crash
-      # (the old `rm -rf` preinstalled-toolchain step was dropped: it
-      # cost ~90s on the critical path for headroom the debuginfo strip
-      # already provides). CI-only (not in Cargo.toml), so local dev
-      # keeps full debuginfo for backtraces.
+      # The Test jobs build and LINK the integration-test binary. With full
+      # debuginfo (dev/test profile default `debug = true`) the linked
+      # `target/` exhausts the stock runner's ~14 GB free disk and the linker
+      # dies with `ld terminated with signal 7 (Bus error)` — a write past a
+      # full disk. Stripping test-binary debuginfo in CI removes the bulk of
+      # that. CI-only (not in Cargo.toml), so local dev keeps full debuginfo
+      # for backtraces.
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
@@ -225,57 +246,262 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          # `-nodebug` suffix: with CARGO_PROFILE_TEST_DEBUG=0 the test
-          # artifacts are much smaller. A fresh key prevents restoring the
-          # old debuginfo-laden `target/` (which would refill the disk and
-          # defeat the size reduction). Don't fall back to the generic
-          # `-cargo-` caches for the same reason — only reuse a Cargo.lock-
-          # matched nodebug cache.
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
-      - name: "Note: reference-aware tests are skipped without a manifest"
-        # `tests/mutalyzer_normalize_tests.rs` and the biocommons
-        # reference-aware suite both silently no-op when
-        # `FERRO_MANIFEST` is unset (PR CI does not provision the
-        # multi-GB reference manifest). Surface a GitHub annotation
-        # so reviewers see the skip explicitly in the PR check
-        # summary; the nightly `nightly-mutalyzer.yml` workflow runs
-        # the same suite with a real manifest. #397 item 6.
-        run: |
-          echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip. The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest."
       - name: Generate HGVS v21.0 spec fixture
-        # The fixture is a generated artifact (gitignored), not committed.
-        # Regenerate it before the test run; the generator also validates the
-        # overrides file, which is the guard the old `--check` step provided.
+        # Gitignored generated artifact, not committed. Generating it here also
+        # validates the curated overrides file — the guard the old `--check`
+        # step provided. Shipped to the shards as an artifact so they never
+        # regenerate it (and so they need no spec submodule).
         run: cargo run --features dev --example generate_spec_fixture
       - name: Generate HGVS spec test enumeration
-        # Second generated artifact (gitignored), built on top of the fixture
-        # above. Regenerating here also validates its overrides file.
         run: cargo run --features dev --example generate_spec_enumeration
-      - name: Run Rust tests
-        run: cargo nextest run --features dev
+      - name: Build test archive
+        # Compiles every test binary and packs them with their run metadata.
+        run: cargo nextest archive --features dev --archive-file nextest.tar.zst
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: nextest-archive
+          path: nextest.tar.zst
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: spec-fixtures
+          path: |
+            tests/fixtures/grammar/hgvs_spec_normalization.json
+            tests/fixtures/grammar/hgvs_spec_enumeration.json
+          retention-days: 1
+
+  # The suite, split across shards. `--partition hash:K/N` assigns each test to
+  # a shard by a hash of its name, so the split is deterministic and stays
+  # stable as tests are added. Verified even on this suite: 8646 tests split
+  # 2148 / 2181 / 2162 / 2155 across four shards.
+  test:
+    name: Test (${{ matrix.shard }}/6)
+    needs: test-build
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: nextest-archive
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: spec-fixtures
+          path: tests/fixtures/grammar/
+      - name: "Note: reference-aware tests are skipped without a manifest"
+        # `tests/mutalyzer_normalize_tests.rs` and the biocommons reference-aware
+        # suite both silently no-op when `FERRO_MANIFEST` is unset (PR CI does
+        # not provision the multi-GB reference manifest). Surface a GitHub
+        # annotation so reviewers see the skip explicitly. #397 item 6.
+        if: matrix.shard == 1
+        run: |
+          echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip. The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest."
+      - name: Run Rust tests (shard ${{ matrix.shard }} of 6)
+        # Builds in-shard rather than consuming the archive — see the note on
+        # `test-build` for why the archive is soak-only.
+        #
+        # Proptests are excluded here and owned entirely by the `soak` job,
+        # which runs them at 125k cases per shard instead of 12k. Leaving them
+        # in would run the same properties twice at strictly lower depth AND
+        # wreck shard balance: measured locally, the shard holding them took
+        # 66.6s against 8.8-13.5s for its siblings.
+        run: |
+          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
+            --extract-to . --extract-overwrite \
+            --partition hash:${{ matrix.shard }}/6 -E 'not test(proptest)'
+
+  # The idempotency oracle re-run. Deliberately EXCLUDES the proptest modules:
+  # their own property already *is* `norm(norm(x)) == norm(x)`, which is exactly
+  # what the oracle asserts, so re-rolling thousands of random cases here checks
+  # nothing the plain run did not already check — it just cost ~80s of every CI
+  # run. The deep random coverage lives in the `soak` job below instead.
+  test-oracle:
+    name: Test oracle (${{ matrix.shard }}/2)
+    needs: test-build
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: nextest-archive
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: spec-fixtures
+          path: tests/fixtures/grammar/
       - name: Run Rust tests with normalization idempotency self-check
-        # Re-run the suite with the opt-in boundary-level idempotency oracle
-        # enabled (`FERRO_ASSERT_IDEMPOTENT`), turning every reference-backed
-        # test into an assertion that `norm(norm(x)) == norm(x)`. The gate is
-        # `#[cfg(debug_assertions)]`, which is on in the test profile even with
+        # `FERRO_ASSERT_IDEMPOTENT` turns every reference-backed test into an
+        # assertion that `norm(norm(x)) == norm(x)`. The gate is
+        # `#[cfg(debug_assertions)]`, on in the test profile even with
         # `CARGO_PROFILE_TEST_DEBUG=0` (that strips debuginfo, not assertions).
-        # Reuses the binaries built by the step above, so this is only re-run
-        # cost, no recompile. See src/normalize/mod.rs::normalize.
-        run: FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev
+        # See src/normalize/mod.rs::normalize.
+        env:
+          FERRO_ASSERT_IDEMPOTENT: "1"
+        run: |
+          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
+            --extract-to . --extract-overwrite \
+            --partition hash:${{ matrix.shard }}/2 -E 'not test(proptest)'
+
+  # 1,000,000-case idempotency soak on every PR, split 8 ways.
+  #
+  # Why this job exists: PR CI's ordinary 12k-case run has never caught one of
+  # this campaign's idempotency defects. #1210 first reproduced at ~150,000
+  # cases — two orders of magnitude past what a normal run explores. The 12k
+  # setting is a smoke test; depth is what actually finds these.
+  #
+  # Why it is safe to gate merges on: each shard pins `PROPTEST_RNG_SEED`, and
+  # proptest's default RNG is ChaCha, so a shard explores the SAME cases every
+  # run. Verified directly: one seed reproduced a byte-identical minimal failing
+  # case across repeated runs, while a different seed explored a different
+  # stream. Without pinned seeds this would be flaky by construction — a latent
+  # bug anywhere in the normalizer would randomly redden unrelated PRs, and
+  # "re-run the job" would become the route to green.
+  #
+  # Why sharding the SEED and not the test list: `--partition` splits at test
+  # granularity, and the cost here sits inside a handful of property functions
+  # that each run their cases serially. Partitioning bottoms out at the slowest
+  # single property. Eight shards of 125k cases under eight distinct seeds cover
+  # the same 1M cases in a fraction of the wall time, and decorrelated streams
+  # are if anything better coverage than one stream of 1M.
+  #
+  # The nightly counterpart (nightly-soak.yml) runs the same depth UNSEEDED, so
+  # new territory still gets explored — it just reports instead of blocking.
+  soak:
+    name: Idempotency soak (${{ matrix.shard }}/8)
+    needs: test-build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Distinct arbitrary seeds; the values matter only in that they differ
+        # and are fixed. Changing one changes which cases that shard explores.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        include:
+          - { shard: 1, seed: 1000001 }
+          - { shard: 2, seed: 2000003 }
+          - { shard: 3, seed: 3000017 }
+          - { shard: 4, seed: 4000037 }
+          - { shard: 5, seed: 5000011 }
+          - { shard: 6, seed: 6000023 }
+          - { shard: 7, seed: 7000003 }
+          - { shard: 8, seed: 8000009 }
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      # Safe to run from the archive: this job runs ONLY the proptest modules,
+      # which never shell out to the `ferro` binary, so the compile-time
+      # `CARGO_BIN_EXE_ferro` paths that break the other shards are never read.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: nextest-archive
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: spec-fixtures
+          path: tests/fixtures/grammar/
+      - name: Soak 125k cases (seed ${{ matrix.seed }})
+        env:
+          # 8 shards x 125k = 1,000,000 cases per property.
+          PROPTEST_CASES: "125000"
+          PROPTEST_RNG_SEED: ${{ matrix.seed }}
+          # `core_strategy`'s body-length filter rejects a steady ~6.7% of
+          # draws, so proptest's absolute 65_536 local-reject cap aborts a long
+          # run with "Too many local rejects" — a harness quota, not a failure.
+          PROPTEST_MAX_LOCAL_REJECTS: "1000000"
+        run: |
+          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
+            --extract-to . --extract-overwrite -E 'test(proptest)'
+
+  # The generated-doc `--check` gates. Split out of the old monolithic Test job
+  # so they no longer sit behind the whole suite on the critical path.
+  generated-docs:
+    name: Generated docs up to date
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          lfs: true
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
       - name: Verify conformance summary docs are up to date
         run: cargo run --features dev --example generate_conformance_summary -- --check
       - name: Tool-support tables up to date
         run: cargo run --features dev --example generate_tool_support_tables -- --check
       - name: Perf tables up to date
         run: cargo run --features dev --example generate_perf_tables -- --check
-      # Python tests run in the parallel `python-wheel-test` job, which
-      # exercises the same `tests/python/` suite against a from-scratch
-      # release wheel. Running them here too forced a serial
-      # `--features python` rebuild of the extension (~80s; the job's cache
-      # is warm only for `--features dev`) for a 0.3s pytest run, so the
-      # duplicate has been dropped from this job's critical path.
+
+  # Aggregator that reports the `Test` status context.
+  #
+  # `main` has an ACTIVE RULESET (not legacy branch protection — it does not
+  # appear under /branches/main/protection, which 404s) requiring these exact
+  # contexts: Build, Test, Clippy, Clippy (all features), Format, Python Lint,
+  # Python Wheel Test, abi3 floor ↔ requires-python.
+  #
+  # Sharding renamed the old single `Test` job to `Test (K/6)`, so the required
+  # `Test` context stopped being reported and every PR hung on "Expected —
+  # Waiting for status to be reported" with no run to link to. This job restores
+  # the contract from inside the workflow, so no repository-settings change is
+  # needed and future re-shardings cannot break it again.
+  test-required:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [test, test-oracle, soak, generated-docs]
+    # `always()` so a failed or cancelled dependency still reports a conclusion
+    # rather than leaving the required context pending forever.
+    if: always()
+    steps:
+      - name: Verify every test job succeeded
+        run: |
+          echo "test            = ${{ needs.test.result }}"
+          echo "test-oracle     = ${{ needs.test-oracle.result }}"
+          echo "soak            = ${{ needs.soak.result }}"
+          echo "generated-docs  = ${{ needs.generated-docs.result }}"
+          if [ "${{ needs.test.result }}" != "success" ] \
+            || [ "${{ needs.test-oracle.result }}" != "success" ] \
+            || [ "${{ needs.soak.result }}" != "success" ] \
+            || [ "${{ needs.generated-docs.result }}" != "success" ]; then
+            echo "::error::one or more test jobs did not succeed"
+            exit 1
+          fi
 
   # Builds the release wheel with maturin and exercises it from a clean venv,
   # outside the source tree. This catches packaging issues (missing data files,
