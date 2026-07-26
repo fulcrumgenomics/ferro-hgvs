@@ -129,12 +129,15 @@ fn engine_error_is_unavailable(e: &FerroError) -> bool {
 /// Read the chosen axis off a completed projection, rendering its HGVS string
 /// or reporting it unavailable.
 pub fn select_axis(projection: &VariantProjection, axis: Axis) -> AxisOutcome {
-    let field = match axis {
-        Axis::Genomic => &projection.genomic,
-        Axis::Coding => &projection.coding,
-        Axis::Noncoding => &projection.noncoding,
-        Axis::Protein => &projection.protein,
-        Axis::Rna => &projection.rna,
+    let declines = &projection.axis_decline_reasons;
+    // Read the axis and its recorded decline reason together, so the reason can
+    // never be taken from a *different* axis than the one being reported.
+    let (field, decline) = match axis {
+        Axis::Genomic => (&projection.genomic, &declines.genomic),
+        Axis::Coding => (&projection.coding, &declines.coding),
+        Axis::Noncoding => (&projection.noncoding, &declines.noncoding),
+        Axis::Protein => (&projection.protein, &declines.protein),
+        Axis::Rna => (&projection.rna, &declines.rna),
     };
     let tx = projection.transcript_id.clone();
     // #1182: the projection's normalization warnings were read off nowhere and
@@ -150,9 +153,37 @@ pub fn select_axis(projection: &VariantProjection, axis: Axis) -> AxisOutcome {
         },
         None => AxisOutcome::Unavailable {
             transcript_id: Some(tx),
-            reason: format!("no {}. representation for this variant", axis.code()),
+            reason: unavailable_reason(axis, decline.as_deref()),
             warnings,
         },
+    }
+}
+
+/// Phrase why `axis` is unavailable.
+///
+/// The engine's own explanation *replaces* the synthesized string when one was
+/// recorded (#1198). The synthesized string is derived from nothing but the axis
+/// code, so it restates what both output formats already say — text writes
+/// `[<axis>]: unavailable:` and JSON carries `"axis"` plus
+/// `"status": "unavailable"` — while the real explanation was computed, logged
+/// at `trace`, and dropped.
+///
+/// With no recorded explanation the wording is unchanged. An axis can be absent
+/// because it was never applicable, or because its decline is not one the
+/// projector records (see [`crate::project::AxisDeclineReasons`]) — and
+/// inventing a cause for
+/// either would trade one generic answer for a wrong one.
+///
+/// This does **not** widen what exits 0. Which errors are a clean decline is
+/// decided by [`engine_error_is_unavailable`] for a failed *projection*, and by
+/// the projector's best-effort axis contract for a failed *axis* — an
+/// underivable axis has always been reported as unavailable at exit 0, whatever
+/// its error's class, so that the other four axes survive. This function only
+/// changes what that record says, never whether it is emitted.
+fn unavailable_reason(axis: Axis, decline: Option<&str>) -> String {
+    match decline {
+        Some(explanation) => explanation.to_string(),
+        None => format!("no {}. representation for this variant", axis.code()),
     }
 }
 
@@ -263,7 +294,7 @@ mod tests {
     use super::*;
     use crate::data::cdot::{CdotMapper, CdotTranscript};
     use crate::data::projection::Projector;
-    use crate::project::VariantProjection;
+    use crate::project::{AxisDeclineReasons, VariantProjection};
     use crate::reference::mock::MockProvider;
     use crate::reference::transcript::{Exon, ManeStatus, Strand as TxStrand, Transcript};
     use crate::reference::Strand;
@@ -322,6 +353,7 @@ mod tests {
             is_intronic: false,
             is_utr: false,
             affects_init: false,
+            axis_decline_reasons: AxisDeclineReasons::default(),
         }
     }
 
@@ -377,6 +409,75 @@ mod tests {
             AxisOutcome::Rendered { warnings, .. } => assert!(warnings.is_empty()),
             other => panic!("expected Rendered, got {other:?}"),
         }
+    }
+
+    /// #1198: when the engine recorded *why* an axis declined, that explanation
+    /// must reach the outcome — verbatim, and *instead of* the string
+    /// synthesized from the axis code alone. Decorating it with the synthesized
+    /// string would put the axis and its unavailability into the reason twice
+    /// over, since both output formats already state each of them.
+    #[test]
+    fn select_axis_surfaces_a_recorded_decline_reason_verbatim() {
+        let engine_explanation =
+            "transcript position n.0 (start) is outside NM_000088.3: `n.` numbering starts at 1";
+        let mut proj = projection_with(None, None);
+        proj.axis_decline_reasons.noncoding = Some(engine_explanation.to_string());
+        match select_axis(&proj, Axis::Noncoding) {
+            AxisOutcome::Unavailable { reason, .. } => {
+                assert!(
+                    !reason.contains("representation for this variant"),
+                    "the synthesized string must be replaced, not decorated; got {reason:?}"
+                );
+                assert_eq!(reason, engine_explanation);
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    /// A reason recorded for one axis must not be reported against another —
+    /// the whole point is that the explanation is *this* axis's, so borrowing
+    /// it would be a new way of lying about the cause.
+    #[test]
+    fn select_axis_does_not_borrow_another_axis_decline_reason() {
+        let mut proj = projection_with(None, None);
+        proj.axis_decline_reasons.noncoding = Some("the n. axis's own problem".to_string());
+        match select_axis(&proj, Axis::Protein) {
+            AxisOutcome::Unavailable { reason, .. } => {
+                assert_eq!(reason, "no p. representation for this variant");
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    /// With nothing recorded the wording is unchanged: most absent axes were
+    /// never applicable to the input, and inventing a cause would be worse than
+    /// saying nothing.
+    #[test]
+    fn select_axis_keeps_the_generic_reason_when_nothing_was_recorded() {
+        let proj = projection_with(None, None);
+        match select_axis(&proj, Axis::Noncoding) {
+            AxisOutcome::Unavailable { reason, .. } => {
+                assert_eq!(reason, "no n. representation for this variant");
+            }
+            other => panic!("expected Unavailable, got {other:?}"),
+        }
+    }
+
+    /// The axis value, not the presence of a reason, decides which outcome you
+    /// get. Checking the reason first — plausible, since it is the new input to
+    /// this function — would report a rendered axis as unavailable.
+    #[test]
+    fn a_decline_reason_does_not_override_a_rendered_axis() {
+        let mut proj = projection_with(Some("NC_000017.11:g.50198003C>A"), None);
+        proj.axis_decline_reasons.genomic = Some("stale".to_string());
+        assert_eq!(
+            select_axis(&proj, Axis::Genomic),
+            AxisOutcome::Rendered {
+                transcript_id: "NM_000088.3".to_string(),
+                output: "NC_000017.11:g.50198003C>A".to_string(),
+                warnings: Vec::new(),
+            }
+        );
     }
 
     #[test]

@@ -22,7 +22,7 @@ use crate::project::protein::{
     read_cds_start_codon, render_silent_identity, try_project_cis_combined_inframe,
     whole_exon_deletion_span, CisCombined, RefProteinBundle,
 };
-use crate::project::result::VariantProjection;
+use crate::project::result::{AxisDeclineReasons, VariantProjection};
 use crate::reference::transcript::Transcript;
 use crate::reference::ReferenceProvider;
 use std::collections::HashMap;
@@ -3236,6 +3236,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .clone();
             return Ok(VariantProjection {
                 normalization_warnings: Vec::new(),
+                axis_decline_reasons: AxisDeclineReasons::default(),
                 // No inner variant to derive a genomic form from; report `None`
                 // rather than wrapping the (possibly non-genomic) input allele
                 // into `.genomic`. Consistent with `coding`/`protein`, which are
@@ -3287,6 +3288,24 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             .collect();
         let noncoding = noncoding_variants
             .map(|variants| HgvsVariant::Allele(AlleleVariant::new(variants, allele.phase)));
+
+        // #1198: because the rule above is all-or-nothing, an absent allele `n.`
+        // axis means at least one member's was absent — and that member may have
+        // recorded why. Carry it up rather than letting the aggregate fall back
+        // to the generic wording: the explanation already exists, and dropping it
+        // here would reintroduce exactly the defect being fixed. The reason is
+        // labelled as a member's, since it describes one member's coordinates and
+        // not the whole allele. Several members may have declined; the first
+        // recorded cause is reported, because one true cause is more use than
+        // none and picking a "primary" among them would be invention.
+        let noncoding_decline = if noncoding.is_none() {
+            inner_projections
+                .iter()
+                .find_map(|p| p.axis_decline_reasons.noncoding.as_deref())
+                .map(|reason| format!("an allele member has no n. form: {reason}"))
+        } else {
+            None
+        };
 
         // A cis allele whose member disrupts the translation initiation codon
         // has an unknown whole-protein consequence: once initiation is uncertain
@@ -3417,6 +3436,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         Ok(VariantProjection {
             normalization_warnings: Vec::new(),
+            axis_decline_reasons: AxisDeclineReasons {
+                noncoding: noncoding_decline,
+                ..Default::default()
+            },
             genomic,
             coding,
             noncoding,
@@ -3997,6 +4020,66 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         Ok(protein)
     }
 
+    /// Derive the `n.` (transcript-relative) axis from resolved CDS positions,
+    /// keeping the reason when the derivation declines.
+    ///
+    /// Best-effort by contract: a derivation edge — the transcript sequence not
+    /// being fetchable, or a `c.` position 5' of the transcript's first base
+    /// (#1193) — leaves the axis `None` rather than failing the whole
+    /// projection, because one underivable axis must not cost the other four.
+    ///
+    /// #1198: the *derivation's* declining error is returned alongside the
+    /// (absent) axis instead of only being logged at `trace`. It was previously
+    /// computed and dropped, which left `ferro project` able to say only that an
+    /// axis was unavailable, never why. Recording a reason does not change the
+    /// exit code — the axis is still a clean decline, per the best-effort
+    /// contract above — it only stops the explanation being thrown away.
+    ///
+    /// Only explanations that are about the *user's variant* are recorded — see
+    /// [`variant_decline_explanation`]. A failure to *fetch* the transcript is
+    /// deliberately excluded on the same rule: it is a fact about the reference
+    /// installation, so reporting "Reference not found: NM_X" as the answer to
+    /// "why is there no `n.` form?" would mislabel the cause, and the `r.` axis
+    /// — which fails on the very same fetch a few lines later — would keep the
+    /// generic wording, telling the user two different stories about one
+    /// problem. That arm is defensive in any case: on the paths reached today a
+    /// missing transcript has already failed the whole projection before the
+    /// `n.` derivation runs.
+    ///
+    /// Returns `(axis, decline_reason)`; the reason is `None` whenever the axis
+    /// is `Some`.
+    fn noncoding_axis_with_reason(
+        &self,
+        normalized: &HgvsVariant,
+        transcript_id: &str,
+        cds_start: &CdsPos,
+        cds_end: &CdsPos,
+        c_edit: &NaEdit,
+        gene_symbol: Option<String>,
+    ) -> (Option<HgvsVariant>, Option<String>) {
+        let tx = match self.cached_get_transcript_for_variant(normalized, transcript_id) {
+            Ok(tx) => tx,
+            Err(e) => {
+                log::trace!("c→n derivation failed for {transcript_id}: {e}");
+                return (None, None);
+            }
+        };
+        match crate::project::transcript_axis::noncoding_from_coding(
+            cds_start,
+            cds_end,
+            &tx,
+            c_edit,
+            transcript_id,
+            gene_symbol,
+        ) {
+            Ok(v) => (Some(v), None),
+            Err(e) => {
+                log::trace!("c→n derivation failed for {transcript_id}: {e}");
+                (None, variant_decline_explanation(&e))
+            }
+        }
+    }
+
     /// Direct c.→p. projection for a bare transcript coding input (no
     /// `genomic_context` parent). The c.→g.→CDS roundtrip cannot run without a
     /// genome alignment, but protein prediction only needs the transcript's
@@ -4103,24 +4186,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // gene symbol (`cds.gene_symbol`) so the n. form matches the `coding`
         // form (which is the raw input here) rather than disagreeing on the
         // gene tag. Best-effort — a derivation edge (e.g. legacy c.0) is logged
-        // and leaves the axis None rather than failing the whole projection.
-        let noncoding = match self.cached_get_transcript_for_variant(normalized, transcript_id) {
-            Ok(tx) => match crate::project::transcript_axis::noncoding_from_coding(
-                &cds_start,
-                &cds_end,
-                &tx,
-                &edit,
-                transcript_id,
-                cds.gene_symbol.clone(),
-            ) {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    log::trace!("c→n derivation failed for {transcript_id}: {e}");
-                    None
-                }
-            },
-            Err(_) => None,
-        };
+        // and leaves the axis None rather than failing the whole projection —
+        // but the declining error's message is kept so it can reach the user
+        // (#1198) instead of being computed and dropped.
+        let (noncoding, noncoding_decline) = self.noncoding_axis_with_reason(
+            normalized,
+            transcript_id,
+            &cds_start,
+            &cds_end,
+            &edit,
+            cds.gene_symbol.clone(),
+        );
 
         // Build-scope the `predict_rna` transcript fetch via the shared helper
         // for consistency with the allele site and the genome-pivot path (#843).
@@ -4166,6 +4242,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         Ok(VariantProjection {
             normalization_warnings: Vec::new(),
+            axis_decline_reasons: AxisDeclineReasons {
+                noncoding: noncoding_decline,
+                ..Default::default()
+            },
             genomic,
             coding,
             noncoding,
@@ -4412,6 +4492,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         if !is_coding {
             return Ok(VariantProjection {
                 normalization_warnings: Vec::new(),
+                axis_decline_reasons: AxisDeclineReasons::default(),
                 genomic,
                 coding: None,
                 noncoding: Some(noncoding_axis),
@@ -4490,6 +4571,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         Ok(VariantProjection {
             normalization_warnings: Vec::new(),
+            axis_decline_reasons: AxisDeclineReasons::default(),
             genomic,
             coding,
             // The non-coding axis is the input itself for an `n.` input, and the
@@ -5128,26 +5210,17 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // path is currently pinned unsupported — see
         // `tests/issue_328_projector_accepts_cnr.rs` — so this arm is not yet
         // reached, but carries the correct semantics for when it is).
-        let noncoding = if is_coding {
-            match self.cached_get_transcript_for_variant(&cache_variant, transcript_id) {
-                Ok(tx) => match crate::project::transcript_axis::noncoding_from_coding(
-                    &cds_start,
-                    &cds_end,
-                    &tx,
-                    &c_edit,
-                    transcript_id,
-                    gene_symbol.clone(),
-                ) {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        log::trace!("c→n derivation failed for {transcript_id}: {e}");
-                        None
-                    }
-                },
-                Err(_) => None,
-            }
+        let (noncoding, noncoding_decline) = if is_coding {
+            self.noncoding_axis_with_reason(
+                &cache_variant,
+                transcript_id,
+                &cds_start,
+                &cds_end,
+                &c_edit,
+                gene_symbol.clone(),
+            )
         } else {
-            Some(coding.clone())
+            (Some(coding.clone()), None)
         };
 
         // `.genomic` is the canonical g. *output*. For a g. input it is the
@@ -5213,6 +5286,10 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         Ok(VariantProjection {
             normalization_warnings: Vec::new(),
+            axis_decline_reasons: AxisDeclineReasons {
+                noncoding: noncoding_decline,
+                ..Default::default()
+            },
             genomic,
             coding,
             noncoding,
@@ -5298,6 +5375,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         Some(VariantProjection {
             normalization_warnings: Vec::new(),
+            axis_decline_reasons: AxisDeclineReasons::default(),
             genomic,
             coding,
             noncoding: None,
@@ -5371,6 +5449,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         };
         VariantProjection {
             normalization_warnings: Vec::new(),
+            axis_decline_reasons: AxisDeclineReasons::default(),
             genomic: Some(genomic),
             coding,
             noncoding: None,
@@ -5384,6 +5463,39 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             is_utr: false,
             affects_init: false,
         }
+    }
+}
+
+/// The part of a declining error that explains the **user's variant**, ready to
+/// be recorded as an axis decline reason — or `None` when the error explains
+/// something else and the generic wording is the more honest answer.
+///
+/// Two filters, both about not misleading the reader of a
+/// `status: unavailable` record (#1198):
+///
+/// 1. **The `FerroError` class label is dropped.** `Display` prefixes a class
+///    (`Invalid coordinates: …`). That label is right when the error is reported
+///    as a failure, but wrong here: `NM_004006.3:c.-238` is a perfectly valid
+///    `c.` coordinate, and calling it invalid beside `status: unavailable`
+///    asserts two contradictory things about one record. Only the message body
+///    — the part that actually describes the variant — is kept.
+/// 2. **Errors about the reference data are not recorded at all.**
+///    `ConversionError { msg: "Transcript has no CDS" }` (reachable when cdot
+///    calls a transcript coding but the provider's record carries no
+///    `cds_start`) is a fact about the reference installation, not the variant —
+///    the same rule that excludes a transcript-fetch failure. Answering "why is
+///    there no `n.` form?" with internal conversion jargon would replace one
+///    unhelpful string with a differently unhelpful one.
+///
+/// Anything not matched falls back to the generic wording, which is the safe
+/// default: a new derivation error is not surfaced until someone has judged its
+/// message fit for a user to read.
+fn variant_decline_explanation(e: &FerroError) -> Option<String> {
+    match e {
+        // The #1193 out-of-transcript refusal: names the refused position, the
+        // transcript, and the rule. The one message here written for a user.
+        FerroError::InvalidCoordinates { msg } => Some(msg.clone()),
+        _ => None,
     }
 }
 
@@ -9464,6 +9576,7 @@ mod tests {
             });
             let proj = VariantProjection {
                 normalization_warnings: Vec::new(),
+                axis_decline_reasons: AxisDeclineReasons::default(),
                 genomic: Some(genomic),
                 coding: Some(coding),
                 noncoding: None,
@@ -9534,6 +9647,7 @@ mod tests {
             });
             let proj = VariantProjection {
                 normalization_warnings: Vec::new(),
+                axis_decline_reasons: AxisDeclineReasons::default(),
                 genomic: None,
                 coding: Some(coding),
                 noncoding: None,
@@ -13405,6 +13519,7 @@ mod tests {
             is_utr: false,
             affects_init: false,
             normalization_warnings: Vec::new(),
+            axis_decline_reasons: AxisDeclineReasons::default(),
         };
         // Multi-exon-spanning: c.5+10_20-10del deletes exon(s) between bases 5 and
         // 20 → Opaque (not ProteinIrrelevant).

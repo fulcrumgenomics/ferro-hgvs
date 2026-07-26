@@ -150,3 +150,97 @@ fn bare_genomic_with_transcript_renders_coding() {
         other => panic!("expected Rendered, got {other:?}"),
     }
 }
+
+/// #1198: an unavailable axis must report the engine's *own* explanation, not a
+/// string synthesized from the axis code alone.
+///
+/// `NM_TEST.1` begins its CDS at transcript base 1, so `c.-1` lies 5' of the
+/// transcript's first base and `noncoding_from_coding` refuses it (#1193) with a
+/// precise message. That message was computed and then dropped, leaving the user
+/// with the generic "no n. representation for this variant".
+///
+/// A deletion, not a substitution: `c.-1` is not a base of this transcript at
+/// all, so a substitution would have to assert a reference base that cannot be
+/// checked. The issue's own reproducer (`c.-238del`) has the same shape.
+#[test]
+fn unavailable_n_axis_reports_the_engines_explanation() {
+    let vp = fixture();
+    let variant = parse_hgvs("NM_TEST.1:c.-1del").unwrap();
+    let outcome = project_axis(&vp, &variant, Axis::Noncoding, None).unwrap();
+    match outcome {
+        AxisOutcome::Unavailable {
+            reason, warnings, ..
+        } => {
+            // Asserted by substance, not by exact string: the load-bearing claim
+            // is that the reason names the refused position and the transcript,
+            // which is what the synthesized string could never do. Pinning the
+            // whole sentence would couple this test to `FerroError`'s Display
+            // prefix and to #1193's prose, neither of which it has an opinion on.
+            assert_ne!(
+                reason, "no n. representation for this variant",
+                "the synthesized string must not survive when the engine explained itself"
+            );
+            // The `FerroError` class label must not come with it: `c.-1` is a
+            // valid `c.` coordinate, so "Invalid coordinates:" beside
+            // `status: unavailable` would assert two contradictory things.
+            assert!(
+                !reason.starts_with("Invalid coordinates:"),
+                "the error's class label must be stripped; got {reason:?}"
+            );
+            for expected in ["n.0", "NM_TEST.1", "5' of the transcript's first base"] {
+                assert!(
+                    reason.contains(expected),
+                    "the reason must carry the engine's explanation ({expected:?} missing); \
+                     got {reason:?}"
+                );
+            }
+            // #1182's contract still holds on this arm: an axis can be
+            // unavailable *because* of what a warning describes, so the reason
+            // must not have displaced the warnings.
+            assert_eq!(
+                warnings.iter().map(|w| w.code.as_str()).collect::<Vec<_>>(),
+                ["POSITION_PAST_END"],
+                "the reason and the warnings must coexist"
+            );
+        }
+        other => panic!("expected Unavailable, got {other:?}"),
+    }
+}
+
+/// The converse of the test above: a derivable axis must not acquire a decline
+/// reason. A reason that is always populated would be as uninformative as the
+/// generic string it replaces.
+#[test]
+fn a_derivable_n_axis_records_no_decline_reason() {
+    let vp = fixture();
+    let variant = parse_hgvs("NM_TEST.1:c.4C>A").unwrap();
+    let projection = vp.project_variant(&variant, "NM_TEST.1").unwrap();
+    assert!(
+        projection.noncoding.is_some(),
+        "c.4 is inside the CDS, so the n. axis must derive"
+    );
+    assert_eq!(projection.axis_decline_reasons.noncoding, None);
+}
+
+/// #1198: an allele's `n.` axis is all-or-nothing, so when it is absent at least
+/// one member's was — and the member's recorded reason must be carried up rather
+/// than the aggregate falling back to the generic string. Dropping it there would
+/// reintroduce the same defect one level out.
+#[test]
+fn an_allele_carries_up_a_members_decline_reason() {
+    let vp = fixture();
+    // The second member lies 5' of the transcript's first base, so its own `n.`
+    // derivation is refused and the whole allele's `n.` axis goes absent.
+    let variant = parse_hgvs("NM_TEST.1:c.[4C>A;-1del]").unwrap();
+    let outcome = project_axis(&vp, &variant, Axis::Noncoding, None).unwrap();
+    match outcome {
+        AxisOutcome::Unavailable { reason, .. } => {
+            assert!(
+                reason.contains("allele member") && reason.contains("n.0"),
+                "the member's explanation must reach the aggregate, labelled as a \
+                 member's; got {reason:?}"
+            );
+        }
+        other => panic!("expected Unavailable, got {other:?}"),
+    }
+}
