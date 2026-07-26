@@ -532,6 +532,41 @@ jobs:
       - name: Perf tables up to date
         run: cargo run --features dev --example generate_perf_tables -- --check
 
+  # Aggregator that reports the `Test` status context.
+  #
+  # `main` has an ACTIVE RULESET (not legacy branch protection — it does not
+  # appear under /branches/main/protection, which 404s) requiring these exact
+  # contexts: Build, Test, Clippy, Clippy (all features), Format, Python Lint,
+  # Python Wheel Test, abi3 floor ↔ requires-python.
+  #
+  # Sharding renamed the old single `Test` job to `Test (K/6)`, so the required
+  # `Test` context stopped being reported and every PR would hang on "Expected —
+  # Waiting for status to be reported". This job restores that contract from
+  # inside the workflow, so no repository-settings change is needed and future
+  # re-shardings cannot break it again: it succeeds only when every job that the
+  # old monolithic `Test` job used to cover has succeeded.
+  test-required:
+    name: Test
+    runs-on: ubuntu-latest
+    needs: [test, test-oracle, soak, generated-docs]
+    # `always()` so a failed/cancelled dependency still reports a conclusion
+    # rather than leaving the required context permanently pending.
+    if: always()
+    steps:
+      - name: Verify every test job succeeded
+        run: |
+          echo "test            = ${{ needs.test.result }}"
+          echo "test-oracle     = ${{ needs.test-oracle.result }}"
+          echo "soak            = ${{ needs.soak.result }}"
+          echo "generated-docs  = ${{ needs.generated-docs.result }}"
+          if [ "${{ needs.test.result }}" != "success" ] \
+            || [ "${{ needs.test-oracle.result }}" != "success" ] \
+            || [ "${{ needs.soak.result }}" != "success" ] \
+            || [ "${{ needs.generated-docs.result }}" != "success" ]; then
+            echo "::error::one or more test jobs did not succeed"
+            exit 1
+          fi
+
   # Builds the release wheel with maturin and exercises it from a clean venv,
   # outside the source tree. This catches packaging issues (missing data files,
   # stale stubs, sys.path leakage) that the editable-mode install in the `test`
