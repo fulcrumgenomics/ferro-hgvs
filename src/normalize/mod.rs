@@ -3211,9 +3211,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //   - only when BOTH endpoints are CDS-resident (`start_axis` /
         //     `end_axis` == Cds) so we never reinterpret a variant that already
         //     straddles an axis (those keep the #350 bail above);
-        //   - only del/dup/delins (the spec-clear "most-3' of the reference
-        //     sequence" shapes). Insertions keep the clamp — their re-axing into
-        //     the 3'UTR is governed by the dedicated #387 CDS-end clamp;
+        //   - only del/dup/delins/ins (the spec-clear "most-3' of the reference
+        //     sequence" shapes);
+        //
+        //     `Insertion` was originally excluded on the theory that an
+        //     insertion's re-axing into the 3'UTR was already governed by the
+        //     dedicated #387 CDS-end clamp. It is not, and the exclusion was
+        //     itself a non-idempotency (#1209): with the bound left at
+        //     `cds_end`, an insertion that could shift *past* the boundary
+        //     instead stopped on it, and the #387 clamp then rewrote it to
+        //     `c.<cds_end>delins<…>`. That output is a `Delins`, which DOES get
+        //     this relaxation, so a second pass shifted it the rest of the way —
+        //     the two passes literally took different branches of this `match`.
+        //     `c.25_26insGAT` over a CDS ending `GGGG` with an `ACGT…` 3'UTR
+        //     gave `c.26delinsGATG` then `c.*1_*2insTGA`.
+        //
+        //     Relaxing the bound does not disarm the #387 clamp: an insertion
+        //     that genuinely *saturates* `cds_end` still has nowhere to shift,
+        //     so the shuffle leaves it resting on the boundary and the clamp
+        //     fires exactly as before. Only insertions that had somewhere to go
+        //     stop reaching it — which is the whole defect.
         //
         //     `Delins` is included because gating on the input's edit-kind
         //     *spelling* made this relaxation miss its own case (#1185). A
@@ -3232,6 +3249,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //     "for all descriptions", and the single-contiguous-sequence argument
         //     above does not depend on the edit kind. It is also what keeps the
         //     rule from depending on how a caller happened to spell an edit.
+        //     The same reasoning is why `Insertion` now joins them rather than
+        //     being special-cased to only the non-idempotent shape.
         //   - only the 3'-direction shuffle;
         //   - the bound is relaxed to the **exon** bound, not seq_len, so the
         //     spec's exon/exon exception stays enforced: a 3'UTR intron still
@@ -3243,7 +3262,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
             && matches!(end_axis, boundary::AxisRegion::Cds)
             && matches!(
                 edit,
-                NaEdit::Deletion { .. } | NaEdit::Duplication { .. } | NaEdit::Delins { .. }
+                NaEdit::Deletion { .. }
+                    | NaEdit::Duplication { .. }
+                    | NaEdit::Delins { .. }
+                    | NaEdit::Insertion { .. }
             )
         {
             boundaries = Boundaries::new(boundaries.left, exon_only.right);
