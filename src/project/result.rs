@@ -3,6 +3,43 @@
 use crate::hgvs::variant::HgvsVariant;
 use crate::normalize::NormalizationWarning;
 
+/// Why each axis of a [`VariantProjection`] is `None`, when the engine
+/// actually computed an explanation.
+///
+/// An axis is `None` for two very different reasons: it was never applicable to
+/// this input (there is nothing to explain), or a derivation *was* attempted and
+/// declined. Only the second case has an explanation, and it used to be logged
+/// at `trace` level and dropped — so `ferro project` could report *that* an axis
+/// was unavailable but never *why*, falling back to a string synthesized from
+/// the axis code alone (#1198).
+///
+/// Each field names the like-named axis of [`VariantProjection`] and holds an
+/// explanation written for a user to read — see the projector's
+/// `variant_decline_explanation`, which drops the `FerroError` class label and
+/// refuses to record errors that describe the reference data rather than the
+/// variant.
+///
+/// **`None` does not mean "no reason exists."** A field is `None` when that axis
+/// is present, when it was never applicable to the input, *or* when its decline
+/// is one this type does not record. Only `noncoding` is populated today — for
+/// both a single variant and an allele, whose members' reasons are carried up —
+/// and the projector still has articulated-but-unrecorded declines on the other
+/// axes: the genomic re-anchor failure in `frame_projection_owned`, the
+/// `cds_start_incomplete` gate that drops `coding`/`protein`/`rna` together, and
+/// the non-initiator protein decline. Wiring each of those is a judgement call
+/// about what is meaningful to a user, not a mechanical extension, so callers
+/// must keep their own fallback wording and must not read an absent reason as
+/// evidence that none was computed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct AxisDeclineReasons {
+    pub genomic: Option<String>,
+    pub coding: Option<String>,
+    pub noncoding: Option<String>,
+    pub protein: Option<String>,
+    pub rna: Option<String>,
+}
+
 /// A variant resolved across coordinate systems.
 ///
 /// Each coordinate axis is independently optional: a projection carries
@@ -56,4 +93,8 @@ pub struct VariantProjection {
     /// normalize entry points; deep projection-building helpers default it to
     /// empty and the entry point attaches the captured set.
     pub normalization_warnings: Vec<NormalizationWarning>,
+    /// Why an axis above is `None`, for the axes whose derivation declined with
+    /// an explanation. See [`AxisDeclineReasons`]; empty (all-`None`) on a
+    /// projection where nothing was attempted and refused.
+    pub axis_decline_reasons: AxisDeclineReasons,
 }

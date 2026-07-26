@@ -9,4 +9,4 @@ pub(crate) mod rna;
 mod transcript_axis;
 
 pub use projector::VariantProjector;
-pub use result::VariantProjection;
+pub use result::{AxisDeclineReasons, VariantProjection};
