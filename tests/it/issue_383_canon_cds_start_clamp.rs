@@ -234,26 +234,52 @@ fn five_prime_insertion_long_homopolymer_shift_clamps_at_cds_start() {
     // `c.-1_1insAA` — strictly inside 5'UTR even though the input was
     // CDS-interior.
     //
-    // Clamp form is the MINIMAL, single-base-anchored delins at c.1:
-    // `c.1delinsAAA` (= delete c.1 = "A", insert 3 A's = net +2). Applying
-    // this to the ref `GGG | AAAAAAAAAAAAAAAAAAAA | G...` yields
-    // `GGG + AAA + ref[c.2..]` = `GGG + 22*A + G...`, the same total as the
-    // input `c.5_6insAA` (insert 2 A's into the 20-A tract).
+    // Re-blessed by #1204 from `c.1delinsAAA` to `c.1_2dup`. The two added A's
+    // copy `c.1_2`, the 5'-most pair of the 20-A tract, so the change IS a
+    // duplication and `repeated.md` L22 prescribes `dup` — which also needs no
+    // clamp, since both its anchors are inside the CDS. What this test pins is
+    // unchanged: a CDS-interior insertion that 5'-shifts the length of the tract
+    // must not escape to `c.-1_1insAA` (strictly inside the 5'UTR), and every
+    // start position of the same haplotype must reach ONE idempotent form.
     //
-    // (Re-blessed from the earlier width-varying `c.1_3delinsAAAAA`: the
-    // boundary clamp now rewrites via the exact coordinate identity
-    // `delete ref[cds_start], insert A' ++ ref[cds_start]` keyed on the
-    // shuffled `A'`, so every start position of the same haplotype collapses
-    // to ONE minimal, idempotent form — confluence. The `k`-widened form was
-    // equivalent but non-confluent, e.g. `c.6_7insAA` gave a different
-    // `c.1_4delinsAAAAAA`.)
+    // (Previously re-blessed from the width-varying `c.1_3delinsAAAAA` for that
+    // same confluence: the clamp rewrites via the exact coordinate identity
+    // `delete ref[cds_start], insert A' ++ ref[cds_start]` keyed on the shuffled
+    // `A'`, where the `k`-widened form gave e.g. `c.1_4delinsAAAAAA` for
+    // `c.6_7insAA`.)
     assert_eq!(
         normalize_with_provider(
             provider_homopolymer(),
             ShuffleDirection::FivePrime,
             "NM_TEST383HP.1:c.5_6insAA",
         ),
-        "NM_TEST383HP.1:c.1delinsAAA",
+        "NM_TEST383HP.1:c.1_2dup",
+    );
+}
+
+/// The clamp regime on the same fixture, so this file keeps a homopolymer row
+/// that actually reaches the CDS-start rewrite after #1204.
+///
+/// 21 added A's against a 20-A tract: there is no 21-base A tract to copy, so no
+/// duplication describes it, it stays an insertion, and the 5' shift saturates at
+/// `cds_start`. Clamp form is the MINIMAL single-base-anchored delins at c.1 —
+/// `delete c.1` (= "A"), `insert 22 A's` (net +21). Applying that to the ref
+/// `GGG | A×20 | G…` yields `GGG + A×22 + ref[c.2..]` = `GGG + A×41 + G…`, the
+/// same total as inserting 21 A's into the 20-A tract.
+///
+/// A shorter alt cannot reach here: any alt at most as long as the tract copies an
+/// adjacent window of itself and resolves as a `dup` instead. That is a property of
+/// the shapes, not a gap — the clamp is also covered by the non-tandem
+/// `c.1_2insCA` biocommons rows above, which never had a duplication to promote to.
+#[test]
+fn five_prime_over_long_insertion_still_clamps_at_cds_start() {
+    assert_eq!(
+        normalize_with_provider(
+            provider_homopolymer(),
+            ShuffleDirection::FivePrime,
+            "NM_TEST383HP.1:c.5_6insAAAAAAAAAAAAAAAAAAAAA",
+        ),
+        "NM_TEST383HP.1:c.1delinsAAAAAAAAAAAAAAAAAAAAAA",
     );
 }
 
@@ -264,16 +290,18 @@ fn five_prime_insertion_far_interior_homopolymer_shift_clamps() {
     // and alt.len() = 3, so x = 20 >> alt.len() + 1 = 4 — the buggy
     // branch was silently no-op'ing on inputs of this shape.
     //
-    // Minimal single-base-anchored clamp form: delete c.1 = "A", insert
-    // 4 A's (net +3), extending the 20-A tract by the alt length. Re-blessed
-    // from the earlier width-varying `c.1_17delinsAAAAAAAAAAAAAAAAAAAA` for
-    // confluence (see the sibling long-homopolymer test).
+    // Re-blessed by #1204 from `c.1delinsAAAA` to `c.1_3dup`: the three added A's
+    // copy `c.1_3`, the 5'-most triple of the tract. Same reasoning as the sibling
+    // long-homopolymer test, and the property under test — a deep-interior start
+    // must still collapse to the 5'-canonical form for this haplotype, not no-op
+    // into the UTR — is unchanged. (Previously re-blessed from the width-varying
+    // `c.1_17delinsAAAAAAAAAAAAAAAAAAAA` for confluence.)
     assert_eq!(
         normalize_with_provider(
             provider_homopolymer(),
             ShuffleDirection::FivePrime,
             "NM_TEST383HP.1:c.20_21insAAA",
         ),
-        "NM_TEST383HP.1:c.1delinsAAAA",
+        "NM_TEST383HP.1:c.1_3dup",
     );
 }

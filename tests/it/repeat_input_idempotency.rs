@@ -146,7 +146,10 @@ fn five_prime_codon_gated_repeat_expansion_is_idempotent() {
         "NM_TEST.1:c.4A[5]",
         ShuffleDirection::FivePrime,
     );
-    assert_eq!(once, "NM_TEST.1:c.3_4insAA", "must name the 5' flank");
+    assert_eq!(
+        once, "NM_TEST.1:c.4_5dup",
+        "must name the 5'-most duplicated pair"
+    );
     assert_eq!(
         norm_cds("CCCAAACCC", &once, ShuffleDirection::FivePrime),
         once,
@@ -162,7 +165,7 @@ fn three_prime_codon_gated_repeat_expansion_unchanged() {
         "NM_TEST.1:c.4A[5]",
         ShuffleDirection::ThreePrime,
     );
-    assert_eq!(once, "NM_TEST.1:c.6_7insAA");
+    assert_eq!(once, "NM_TEST.1:c.5_6dup");
     assert_eq!(
         norm_cds("CCCAAACCC", &once, ShuffleDirection::ThreePrime),
         once,

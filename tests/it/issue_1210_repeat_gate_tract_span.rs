@@ -137,11 +137,19 @@ fn interior_tract_is_still_codon_gated() {
         coding_transcript_with_utrs("CCCCAAAAAAAAGGGG", Strand::Plus),
         "NM_TEST.1:r.11_12insaa",
     );
-    // Gated: the tract is CDS-resident and the unit is 1 nt, so the expansion
-    // stays a literal insertion, 3'-shifted to the end of the `A` run at `c.12`.
+    // Gated: the tract is CDS-resident and the unit is 1 nt, so repeat notation
+    // is refused — which is what this guard is for, and is unchanged.
+    assert!(
+        !once.contains('['),
+        "a CDS-interior 1-nt tract must not become a repeat, got {once}",
+    );
+    // The fallback form is the `dup` `repeated.md` L22 prescribes for this shape
+    // ("use `NM_024312.4:c.2692_2693dup`"): the added `aa` copies `r.11_12`, the
+    // 3'-most pair of the `A` run at `r.5_12`. Re-blessed from `r.12_13insaa` by
+    // #1204, which is about the fallback and not about whether the gate fires.
     assert_eq!(
-        once, "NM_TEST.1:r.12_13insaa",
-        "a CDS-interior 1-nt tract must stay an insertion, not become a repeat"
+        once, "NM_TEST.1:r.11_12dup",
+        "a CDS-interior 1-nt tract must stay gated, falling back to the dup"
     );
     assert_eq!(twice, once, "and is a fixed point");
 }

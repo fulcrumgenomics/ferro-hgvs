@@ -7703,7 +7703,35 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             let ins_edit = NaEdit::Insertion {
                                 sequence: InsertedSequence::Literal(Sequence::new(bases)),
                             };
-                            return Ok((ins_start, ins_end, ins_edit, warnings));
+                            // Re-enter on the derived insertion rather than
+                            // returning it raw (#1204), exactly as the
+                            // `DupToRepeatResult::GatedInsertion` arm below does.
+                            // All three spellings of a gated expansion — `unit[N]`
+                            // here, `dup` there, a directly written `ins` — then
+                            // reach the SAME insertion canonicalization, so they
+                            // agree on the output form. Returning the literal
+                            // straight out left this one path unable to promote to
+                            // the `dup` the spec prescribes (`repeated.md` L22),
+                            // which made `norm(unit[N])` an `ins` while
+                            // `norm(norm(unit[N]))` was a `dup` — a
+                            // non-idempotency the moment the insertion path
+                            // learned to promote. The rule layer also anchors this
+                            // insertion at the tract's 3' flank regardless of
+                            // direction, so re-entry is what shuffles it to the
+                            // direction-appropriate resting place and subjects it
+                            // to the same boundary clamps.
+                            //
+                            // Terminates: the derived edit is an `Insertion`, and
+                            // the `Insertion` arm never re-enters this `Repeat`
+                            // arm. `is_coding` / `cds_span` are threaded unchanged
+                            // — same transcript, same CDS bounds (#1185).
+                            let (rec_start, rec_end, rec_edit, mut rec_warnings) = self
+                                .normalize_na_edit(
+                                    ref_seq, &ins_edit, ins_start, ins_end, boundaries, is_coding,
+                                    cds_span,
+                                )?;
+                            warnings.append(&mut rec_warnings);
+                            return Ok((rec_start, rec_end, rec_edit, warnings));
                         }
                         // Defensive fallback: rule layer returned a base byte
                         // that doesn't fit the Base alphabet (e.g. N). Don't
@@ -7891,43 +7919,46 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         self.config.shuffle_direction,
                     );
 
-                    // Codon-frame gate (repeated.md): in c., if the alt is
-                    // >=2 copies of a non-codon-aligned unit, the spec
-                    // mandates ins<literal>, not dup. The smallest-unit
-                    // length is rotation-invariant, so we can compute it
-                    // once from `seq_bytes` and apply the same gate at
-                    // every dup-emission site below. In practice the gate
-                    // never fires when `ins_to_dup` is `Some` (that helper
-                    // only returns for single-unit alts, where
-                    // `smallest_unit.len() == seq_bytes.len()`), but we
-                    // guard the (a) fast path and (c) single-copy fallback
-                    // anyway so the spec rule is explicit at each site and
-                    // survives future changes to `insertion_to_duplication`.
-                    let smallest_unit = rules::smallest_repeat_unit(&seq_bytes);
-                    let codon_blocks_dup = is_coding
-                        && smallest_unit.len() < seq_bytes.len()
-                        && !smallest_unit.len().is_multiple_of(3);
-
-                    if !codon_blocks_dup {
-                        if let Some(rules::InsToDupResult {
-                            start: dup_start,
-                            end: dup_end,
-                            ref_count,
-                            ..
-                        }) = ins_to_dup.as_ref()
-                        {
-                            if *ref_count >= 2 {
-                                return Ok((
-                                    *dup_start,
-                                    *dup_end,
-                                    NaEdit::Duplication {
-                                        sequence: None,
-                                        length: None,
-                                        uncertain_extent: None,
-                                    },
-                                    warnings,
-                                ));
-                            }
+                    // No codon-frame gate on the dup paths below (#1204). The
+                    // `repeated.md` exception forbids *repeat notation* for a
+                    // non-triplet unit in the CDS, and names `dup` as the
+                    // replacement for exactly this case — "use
+                    // `NM_024312.4:c.2692_2693dup` and **not**
+                    // `NM_024312.4:c.2686A[10]`" (DNA L22, RNA L25). The gate is
+                    // therefore applied where repeat notation is decided —
+                    // `insertion_to_repeat` above and `duplication_to_repeat` in
+                    // the Duplication arm, both of which return `None` / reroute
+                    // here when it fires — and must NOT be re-applied here, or
+                    // the prescribed `dup` is unreachable and the spec's *other*
+                    // replacement (a flat `ins`) is emitted for both cases.
+                    //
+                    // Which of the two the spec prescribes is decided by the
+                    // reference, not by the gate, and the three paths below
+                    // already decide it correctly: each emits a `dup` only where
+                    // the alt equals an adjacent same-length reference tract, so
+                    // the change genuinely IS a duplication. The spec's second
+                    // example — four `TA` copies added to a `TA[2]` tract — has
+                    // no such tract (the added bases are twice its length), so
+                    // none of them fire and it falls through to
+                    // `c.1741_1742insTATATATA` as prescribed.
+                    if let Some(rules::InsToDupResult {
+                        start: dup_start,
+                        end: dup_end,
+                        ref_count,
+                        ..
+                    }) = ins_to_dup.as_ref()
+                    {
+                        if *ref_count >= 2 {
+                            return Ok((
+                                *dup_start,
+                                *dup_end,
+                                NaEdit::Duplication {
+                                    sequence: None,
+                                    length: None,
+                                    uncertain_extent: None,
+                                },
+                                warnings,
+                            ));
                         }
                     }
 
@@ -7985,7 +8016,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     let three_prime_match = pos_idx + ins_len <= ref_seq.len()
                         && ref_seq[pos_idx..pos_idx + ins_len] == rotated_seq[..];
 
-                    if !codon_blocks_dup && (five_prime_match || three_prime_match) {
+                    if five_prime_match || three_prime_match {
                         // Side-aware dup anchor. `insertion_is_duplication`-
                         // equivalent checks above return true if EITHER the
                         // preceding ref tract (5'-side: `ref[pos-L..pos]`)
@@ -8091,7 +8122,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         start: dup_start,
                         end: dup_end,
                         ..
-                    }) = ins_to_dup.as_ref().filter(|_| !codon_blocks_dup)
+                    }) = ins_to_dup.as_ref()
                     {
                         // (c) Single-copy tract fallback. Reached when (a) declined
                         // because `ref_count < 2` and (b) declined because the post-

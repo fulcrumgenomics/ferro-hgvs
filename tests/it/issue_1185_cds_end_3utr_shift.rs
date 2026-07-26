@@ -223,14 +223,21 @@ fn dup_whose_shifted_tract_leaves_the_cds_gets_repeat_notation_in_one_pass() {
 
 /// The control that proves the gate was narrowed, not disabled. A non-triplet
 /// unit whose tract stays **entirely inside** the CDS must still be refused
-/// repeat notation and rendered as an `ins` literal — the spec's own remedy
-/// ("use `NM_024312.4:c.1741_1742insTATATATA` and **not** `c.1738TA[6]`").
+/// repeat notation — no `AC[6]` here, unlike the straddling case above.
+///
+/// Re-blessed by #1204 from the `ins` literal `c.9_10insACAC`. The gate forbids
+/// repeat notation, and of the spec's two replacements this input takes the first:
+/// the added `ACAC` copies `c.6_9`, the 3'-most four bases of the `c.2_9` tract, so
+/// it is a duplication ("use `NM_024312.4:c.2692_2693dup`"). The `ins` remedy
+/// ("use `c.1741_1742insTATATATA` and **not** `c.1738TA[6]`") is for added bases no
+/// duplication covers, which are longer than the tract they land in; that shape is
+/// pinned in `issue_1204_gated_dup_fallback` and `ins_shift_matrix`'s case 2.
 #[test]
-fn control_non_triplet_dup_inside_the_cds_still_renders_as_ins_literal() {
+fn control_non_triplet_dup_inside_the_cds_is_still_refused_repeat_notation() {
     assert_one_pass(
         coding_transcript("GACACACACGGGTTT", &"GGGTTT".repeat(4), Strand::Plus),
         "NM_UTR3.1:c.2_5dup",
-        "NM_UTR3.1:c.9_10insACAC",
+        "NM_UTR3.1:c.6_9dup",
     );
 }
 

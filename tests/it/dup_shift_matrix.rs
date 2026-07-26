@@ -193,18 +193,29 @@ mod cds_plus {
     }
 
     #[rstest]
-    // Case 1: 2-A dup in 5-A homopolymer. unit_len=1; codon-frame gate forbids
-    // A[7] in c., so emits insAA at the 3' tract flanking position per spec
-    // (≥2 added unit copies → ins<literal>).
-    #[case("ACAAAAACGTACGTACGTAC", "c.{0}_{1}dup", &[3u64, 4u64], "c.{0}_{1}insAA", &[7u64, 8u64])]
-    // Case 2: 4-A dup in 4-A homopolymer (full tract dup) → insAAAA.
-    #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}dup", &[3u64, 6u64], "c.{0}_{1}insAAAA", &[6u64, 7u64])]
+    // Cases 1, 2 and 5 carry non-triplet units, so the codon-frame gate refuses
+    // repeat notation. Re-blessed from `ins` literals to `dup` by #1204: the gate
+    // forbids *repeat notation*, and `repeated.md` L22 names `dup` as the
+    // replacement for exactly this shape — "use `NM_024312.4:c.2692_2693dup` and
+    // **not** `c.2686A[10]`". In each case the added bases duplicate an adjacent
+    // same-length reference tract, which is what makes `dup` a faithful
+    // description; the flat `ins` remains the answer only where no such tract
+    // exists (the spec's other replacement, `c.1741_1742insTATATATA`).
+    //
+    // Case 1: 2-A dup in a 5-A homopolymer (tract c.3_7). A[7] is forbidden in
+    // c.; the two added A's copy the tract's 3'-most pair, so the 3'-rule dup is
+    // c.6_7.
+    #[case("ACAAAAACGTACGTACGTAC", "c.{0}_{1}dup", &[3u64, 4u64], "c.{0}_{1}dup", &[6u64, 7u64])]
+    // Case 2: 4-A dup of the whole 4-A tract (c.3_6). That is the tract's only
+    // 4-base window, so the input is already canonical and is now a fixed point.
+    #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}dup", &[3u64, 6u64], "c.{0}_{1}dup", &[3u64, 6u64])]
     // Case 3: 2 GCAs dup'd in 3-GCA tandem → GCA[5] (codon-aligned, gate passes).
     #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}dup", &[3u64, 8u64], "c.{0}_{1}GCA[5]", &[3u64, 11u64])]
     // Case 4: cyclic GCA tract → GCA[5].
     #[case("TTGCAGCAGCATTACGTACGT", "c.{0}_{1}dup", &[4u64, 9u64], "c.{0}_{1}GCA[5]", &[3u64, 11u64])]
-    // Case 5: AT periodicity. unit_len=2; gate forbids AT[7] in c. → insATAT.
-    #[case("CCATATATATATCCACGTACGT", "c.{0}_{1}dup", &[3u64, 6u64], "c.{0}_{1}insATAT", &[12u64, 13u64])]
+    // Case 5: AT periodicity, unit_len=2. AT[7] is forbidden in c.; the added
+    // `ATAT` copies the 3'-most 4 bases of the c.3_12 tract → dup at c.9_12.
+    #[case("CCATATATATATCCACGTACGT", "c.{0}_{1}dup", &[3u64, 6u64], "c.{0}_{1}dup", &[9u64, 12u64])]
     fn multi_base_dup_of_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
@@ -317,18 +328,29 @@ mod cds_minus {
     }
 
     #[rstest]
-    // Case 1: 2-A dup in 5-A homopolymer. unit_len=1; codon-frame gate forbids
-    // A[7] in c., so emits insAA at the 3' tract flanking position per spec
-    // (≥2 added unit copies → ins<literal>).
-    #[case("ACAAAAACGTACGTACGTAC", "c.{0}_{1}dup", &[3u64, 4u64], "c.{0}_{1}insAA", &[7u64, 8u64])]
-    // Case 2: 4-A dup in 4-A homopolymer (full tract dup) → insAAAA.
-    #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}dup", &[3u64, 6u64], "c.{0}_{1}insAAAA", &[6u64, 7u64])]
+    // Cases 1, 2 and 5 carry non-triplet units, so the codon-frame gate refuses
+    // repeat notation. Re-blessed from `ins` literals to `dup` by #1204: the gate
+    // forbids *repeat notation*, and `repeated.md` L22 names `dup` as the
+    // replacement for exactly this shape — "use `NM_024312.4:c.2692_2693dup` and
+    // **not** `c.2686A[10]`". In each case the added bases duplicate an adjacent
+    // same-length reference tract, which is what makes `dup` a faithful
+    // description; the flat `ins` remains the answer only where no such tract
+    // exists (the spec's other replacement, `c.1741_1742insTATATATA`).
+    //
+    // Case 1: 2-A dup in a 5-A homopolymer (tract c.3_7). A[7] is forbidden in
+    // c.; the two added A's copy the tract's 3'-most pair, so the 3'-rule dup is
+    // c.6_7.
+    #[case("ACAAAAACGTACGTACGTAC", "c.{0}_{1}dup", &[3u64, 4u64], "c.{0}_{1}dup", &[6u64, 7u64])]
+    // Case 2: 4-A dup of the whole 4-A tract (c.3_6). That is the tract's only
+    // 4-base window, so the input is already canonical and is now a fixed point.
+    #[case("ACAAAACGTACGTACGTAC", "c.{0}_{1}dup", &[3u64, 6u64], "c.{0}_{1}dup", &[3u64, 6u64])]
     // Case 3: 2 GCAs dup'd in 3-GCA tandem → GCA[5] (codon-aligned, gate passes).
     #[case("ACGCAGCAGCATGACGTACG", "c.{0}_{1}dup", &[3u64, 8u64], "c.{0}_{1}GCA[5]", &[3u64, 11u64])]
     // Case 4: cyclic GCA tract → GCA[5].
     #[case("TTGCAGCAGCATTACGTACGT", "c.{0}_{1}dup", &[4u64, 9u64], "c.{0}_{1}GCA[5]", &[3u64, 11u64])]
-    // Case 5: AT periodicity. unit_len=2; gate forbids AT[7] in c. → insATAT.
-    #[case("CCATATATATATCCACGTACGT", "c.{0}_{1}dup", &[3u64, 6u64], "c.{0}_{1}insATAT", &[12u64, 13u64])]
+    // Case 5: AT periodicity, unit_len=2. AT[7] is forbidden in c.; the added
+    // `ATAT` copies the 3'-most 4 bases of the c.3_12 tract → dup at c.9_12.
+    #[case("CCATATATATATCCACGTACGT", "c.{0}_{1}dup", &[3u64, 6u64], "c.{0}_{1}dup", &[9u64, 12u64])]
     fn multi_base_dup_of_multiple_units(
         #[case] core: &str,
         #[case] in_template: &str,
