@@ -112,6 +112,52 @@ impl NormalizeConfig {
         Self::default()
     }
 
+    /// Build the configuration for an **entry point** — a seam where a shuffle
+    /// direction and an error mode arrive from outside the library (the CLI,
+    /// the PyO3 bindings, the web service).
+    ///
+    /// Both settings are required arguments, which is the whole point:
+    /// `NormalizeConfig::default().with_direction(d)` silently fills in every
+    /// field the caller does not name, and `error_config` defaults to
+    /// [`ErrorConfig::lenient`]. That is the shape that produced #1181 — the
+    /// CLI built an `ErrorConfig` from `--error-mode`, passed it into
+    /// `run_normalize`, and then constructed the normalizer's config without
+    /// it, so the flag (and `--ignore` / `--reject` with it) was inert from the
+    /// initial commit through 678 commits and roughly five months. #1191 fixed
+    /// that one call site; this constructor removes the shape (#1197).
+    ///
+    /// Forgetting the error configuration *in this call* cannot compile, just
+    /// as it cannot in the web service's struct literal. Note the limit of that
+    /// guarantee: it binds only callers who choose this constructor. `default`,
+    /// `new`, the `lenient`/`strict`/`silent` presets and `Normalizer::new` all
+    /// remain reachable and all supply an error configuration the caller never
+    /// named, so a *new* entry point can still elide one and compile. What
+    /// stops it is a lint, not the type system —
+    /// `tests/it/issue_1197_required_error_config.rs` scans the entry-point
+    /// seams for those shapes and fails the build.
+    ///
+    /// Prefer this over the builder chain at every entry point; the builder
+    /// remains for library callers that deliberately want the lenient default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use ferro_hgvs::error_handling::ErrorConfig;
+    /// use ferro_hgvs::normalize::{NormalizeConfig, ShuffleDirection};
+    ///
+    /// let config =
+    ///     NormalizeConfig::for_entry_point(ShuffleDirection::ThreePrime, ErrorConfig::strict());
+    /// assert_eq!(config.shuffle_direction, ShuffleDirection::ThreePrime);
+    /// assert!(config.should_reject_ref_mismatch());
+    /// ```
+    pub fn for_entry_point(direction: ShuffleDirection, error_config: ErrorConfig) -> Self {
+        Self {
+            shuffle_direction: direction,
+            error_config,
+            ..Default::default()
+        }
+    }
+
     /// Create a config with strict error handling (reject reference mismatches)
     pub fn strict() -> Self {
         Self {
@@ -400,6 +446,40 @@ impl NormalizeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `for_entry_point` must carry the error configuration it is handed, and
+    /// the builder chain it replaces must not — that contrast is the hazard
+    /// #1197 removes. Asserting both halves keeps the test from passing merely
+    /// because `default()` happens to agree with the requested mode.
+    #[test]
+    fn for_entry_point_carries_the_error_config_the_builder_chain_defaults_away() {
+        let explicit =
+            NormalizeConfig::for_entry_point(ShuffleDirection::FivePrime, ErrorConfig::strict());
+        assert_eq!(explicit.shuffle_direction, ShuffleDirection::FivePrime);
+        assert!(
+            explicit.should_reject_ref_mismatch(),
+            "the strict config handed in must arrive",
+        );
+
+        let defaulted = NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime);
+        assert!(
+            !defaulted.should_reject_ref_mismatch(),
+            "premise: the builder chain silently supplies a *lenient* error config, which is \
+             the omission that made `--error-mode` inert for five months (#1181)",
+        );
+    }
+
+    /// Every other field must keep its documented default, so the constructor
+    /// is a narrowing of `default()` rather than a second source of truth.
+    #[test]
+    fn for_entry_point_leaves_other_fields_at_their_defaults() {
+        let config =
+            NormalizeConfig::for_entry_point(ShuffleDirection::ThreePrime, ErrorConfig::silent());
+        let default = NormalizeConfig::default();
+        assert_eq!(config.cross_boundaries, default.cross_boundaries);
+        assert_eq!(config.window_size, default.window_size);
+        assert_eq!(config.prevent_overlap, default.prevent_overlap);
+    }
 
     #[test]
     fn test_default_config() {

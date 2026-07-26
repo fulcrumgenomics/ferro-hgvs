@@ -758,6 +758,12 @@ pub struct VariantProjector<P: ReferenceProvider + Clone> {
 
 impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     pub fn new(projector: Projector, provider: P) -> Self {
+        // Deliberately the lenient library default, not an entry-point config:
+        // this is a library constructor with no external error mode to carry, so
+        // it is out of scope for #1197's `for_entry_point` rule. Entry points
+        // override it — the `project` CLI does so via `with_normalize_config`
+        // (#1193) — and `tests/it/issue_1197_required_error_config.rs` scans only
+        // the CLI / PyO3 / service seams for that reason.
         let normalizer = Normalizer::with_config(provider.clone(), NormalizeConfig::default());
         Self {
             projector,

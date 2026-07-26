@@ -1487,13 +1487,15 @@ fn run_normalize(
 
     let preprocessor = error_config.preprocessor();
     // #1181: the error configuration must reach the *normalizer*, not just the
-    // preprocessor. `NormalizeConfig::default()` is lenient by construction, so
-    // without this every `--error-mode` (and every `--ignore`/`--reject`
+    // preprocessor, or every `--error-mode` (and every `--ignore`/`--reject`
     // override, which `build_error_config` folds into the same `ErrorConfig`)
-    // was silently discarded and all modes behaved as lenient.
-    let config = NormalizeConfig::default()
-        .with_direction(parse_shuffle_direction(direction))
-        .with_error_config(error_config.clone());
+    // is silently discarded and all modes behave as lenient.
+    // `for_entry_point` takes the error configuration as a required argument,
+    // so the omission cannot recur at this call site (#1197). It is not a
+    // whole-crate guarantee — see the constructor's docs and the entry-point
+    // scan in `tests/it/issue_1197_required_error_config.rs`.
+    let config =
+        NormalizeConfig::for_entry_point(parse_shuffle_direction(direction), error_config.clone());
 
     // Create reference provider from directory
     let provider = create_reference_provider(reference.map(|p| p.as_path()), strict_reference)?;
@@ -1720,11 +1722,24 @@ fn run_project(
     // #1182: `project` normalizes its input before projecting, so the error
     // configuration has to reach that normalizer or every normalizer-level
     // diagnostic (W4004 among them) is unreachable — the same defect #1181
-    // fixed on `normalize`. `NormalizeConfig::default()` is lenient by
-    // construction, so this is what makes `--error-mode strict` mean anything
-    // here.
+    // fixed on `normalize`. This is what makes `--error-mode strict` reach the
+    // normalizer here.
+    //
+    // It does *not* make the whole `ErrorConfig` effective on `project`:
+    // unlike `run_normalize` and `run_parse`, this path never builds
+    // `error_config.preprocessor()`, so the preprocessing half of `--ignore` /
+    // `--reject` is still discarded. That is a pre-existing gap of the same
+    // family as #1181, out of scope here; noted so the line above is not read
+    // as a stronger claim than it makes.
+    //
+    // `project` has no direction flag; naming the 3' default explicitly is the
+    // price of a constructor that cannot silently default the error
+    // configuration (#1197), and it documents the choice at the call site.
     let projector = VariantProjector::new(Projector::new(cdot), provider).with_normalize_config(
-        ferro_hgvs::normalize::NormalizeConfig::default().with_error_config(error_config.clone()),
+        ferro_hgvs::normalize::NormalizeConfig::for_entry_point(
+            ferro_hgvs::normalize::ShuffleDirection::ThreePrime,
+            error_config.clone(),
+        ),
     );
 
     let mut writer: Box<dyn Write> = match output {

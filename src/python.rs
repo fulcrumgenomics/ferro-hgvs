@@ -176,6 +176,17 @@ fn parse_direction_or_raise(direction: &str) -> PyResult<ShuffleDirection> {
     })
 }
 
+/// Resolve an optional `error_config=` keyword argument to the `ErrorConfig`
+/// the normalizer should use.
+///
+/// `None` means "the caller did not ask for a mode", which resolves to lenient
+/// — the same handling these entry points have always had, when it came from
+/// `NormalizeConfig::default()`. Naming it here keeps the default visible now
+/// that [`NormalizeConfig::for_entry_point`] requires the argument (#1197).
+fn error_config_or_default(error_config: Option<&PyErrorConfig>) -> ErrorConfig {
+    error_config.map_or_else(ErrorConfig::lenient, |ec| ec.inner.clone())
+}
+
 /// Validate the `protein_stop` argument at the Python boundary → `TerStyle`.
 fn parse_protein_stop_or_raise(value: &str) -> PyResult<crate::hgvs::location::TerStyle> {
     match value {
@@ -490,7 +501,14 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
     let variant = parse_hgvs(hgvs_string)
         .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
 
-    let config = NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
+    // This convenience API takes no error-mode argument, so the lenient default
+    // is a deliberate choice rather than a dropped parameter — `for_entry_point`
+    // makes it explicit at the call site instead of inheriting it silently
+    // (#1197). Callers wanting strict handling construct a `Normalizer`.
+    let config = NormalizeConfig::for_entry_point(
+        parse_direction_or_raise(direction)?,
+        ErrorConfig::lenient(),
+    );
     // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
     let provider = JsonProvider::with_test_data();
     // This free function always uses genome-less test data; surface the
@@ -873,8 +891,12 @@ impl PyHgvsVariant {
     ///     A new PyHgvsVariant representing the normalized variant
     #[pyo3(signature = (direction="3prime"))]
     fn normalize(&self, py: Python<'_>, direction: &str) -> PyResult<PyHgvsVariant> {
-        let config =
-            NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
+        // No error-mode argument on this convenience method either; the lenient
+        // default is stated rather than inherited (#1197).
+        let config = NormalizeConfig::for_entry_point(
+            parse_direction_or_raise(direction)?,
+            ErrorConfig::lenient(),
+        );
         // Note: Uses built-in test data. For production use, create a Normalizer with reference_json.
         let provider = JsonProvider::with_test_data();
         // Genome-less test data; surface the reduced-capability signal once per
@@ -1089,11 +1111,10 @@ impl PyNormalizer {
         // invalid direction always raises `ValueError` regardless of whether the
         // reference path is valid — a bad/missing path must not mask (or be
         // masked by) the argument error.
-        let mut config =
-            NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
-        if let Some(ec) = error_config {
-            config = config.with_error_config(ec.inner.clone());
-        }
+        let config = NormalizeConfig::for_entry_point(
+            parse_direction_or_raise(direction)?,
+            error_config_or_default(error_config),
+        );
 
         let (provider, kind) = match reference_json {
             Some(path) => (
@@ -1136,11 +1157,10 @@ impl PyNormalizer {
     ) -> PyResult<Self> {
         // Validate `direction` before loading the manifest (see `new`): a bad
         // manifest path must not mask an invalid-direction `ValueError`.
-        let mut config =
-            NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
-        if let Some(ec) = error_config {
-            config = config.with_error_config(ec.inner.clone());
-        }
+        let config = NormalizeConfig::for_entry_point(
+            parse_direction_or_raise(direction)?,
+            error_config_or_default(error_config),
+        );
         let provider = PyProvider::from_manifest(Path::new(manifest_path))?;
         let normalizer = Self {
             provider,
@@ -1997,11 +2017,10 @@ fn parse_projector_boundary_args(
     assembly: Option<&str>,
     error_config: Option<&PyErrorConfig>,
 ) -> PyResult<(NormalizeConfig, Option<&'static str>)> {
-    let mut config =
-        NormalizeConfig::default().with_direction(parse_direction_or_raise(direction)?);
-    if let Some(ec) = error_config {
-        config = config.with_error_config(ec.inner.clone());
-    }
+    let config = NormalizeConfig::for_entry_point(
+        parse_direction_or_raise(direction)?,
+        error_config_or_default(error_config),
+    );
     let assembly_build = match assembly {
         Some(name) => Some(
             crate::liftover::aliases::normalize_assembly_name(name).ok_or_else(|| {
