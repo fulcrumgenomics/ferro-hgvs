@@ -418,6 +418,159 @@ fn edit_is_del_or_dup(edit: &NaEdit) -> bool {
     )
 }
 
+/// Which side of `anchor` a shuffled insertion payload came to rest on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoundarySide {
+    /// Payload rests immediately 5' of `anchor` (`…ins` before `ref[anchor]`).
+    FivePrime,
+    /// Payload rests immediately 3' of `anchor` (`…ins` after `ref[anchor]`).
+    ThreePrime,
+}
+
+/// The coordinate identity shared by every boundary clamp in this module:
+/// "insert `A'` immediately outside `anchor`" is *identically* "delete
+/// `ref[anchor]`, insert the concatenation".
+///
+/// - [`BoundarySide::FivePrime`] → `delins(A' ++ ref[anchor])`
+/// - [`BoundarySide::ThreePrime`] → `delins(ref[anchor] ++ A')`
+///
+/// It merely moves the delete boundary one base, so it is exact for **any**
+/// `A'` and needs no equivalence check. That argument is what PR #1170 (5', at
+/// `cds_start`), issue #387 (3', at `cds_end`) and issue #1202 (both, at the
+/// transcript bounds) each rely on — this function is the single place it is
+/// implemented, so the proof lives once rather than once per boundary.
+///
+/// Only the *rewrite* is shared. Each caller keeps its own **detection**,
+/// because the two boundary kinds differ in kind, not degree: `cds_start` /
+/// `cds_end` are *axis-change* boundaries whose far side (`c.-1`, `c.*1`) is
+/// perfectly representable, so clamping there is a policy with carve-outs
+/// (#401 spanning dups, #387's edit-type allow-list, #383's Delins restore);
+/// the transcript bounds are *representability* boundaries with no far side at
+/// all, so that clamp is unconditional. Folding the detections together would
+/// mean threading those carve-outs through a single predicate for no gain.
+///
+/// Returns `None` — leaving the caller's values untouched — when `anchor` lies
+/// outside `seq` or the reference byte there is not a base we can spell.
+fn insertion_to_boundary_delins(
+    seq: &[u8],
+    a_prime: &Sequence,
+    anchor: u64,
+    side: BoundarySide,
+) -> Option<NaEdit> {
+    let anchor_0b = (anchor as usize).saturating_sub(1);
+    let ref_base = Base::from_char(*seq.get(anchor_0b)? as char)?;
+    let payload = a_prime.bases();
+    let mut bases = Vec::with_capacity(payload.len() + 1);
+    match side {
+        BoundarySide::FivePrime => {
+            bases.extend_from_slice(payload);
+            bases.push(ref_base);
+        }
+        BoundarySide::ThreePrime => {
+            bases.push(ref_base);
+            bases.extend_from_slice(payload);
+        }
+    }
+    Some(NaEdit::Delins {
+        sequence: InsertedSequence::Literal(Sequence::new(bases)),
+        deleted: None,
+        deleted_length: None,
+        substitution_reference: None,
+    })
+}
+
+/// Rewrite in place a post-shuffle insertion that has saturated at a
+/// **transcript** boundary, into the equivalent `delins` — the only spelling of
+/// that haplotype the `n.` / `r.` axes, and the `c.` axis outside the CDS, can
+/// express. Leaves `edit`/`start`/`end` untouched for anything that is not a
+/// boundary-saturated literal insertion.
+///
+/// `n.` and `r.` number the transcript directly: there is no position `0` and
+/// no `*`-suffixed overflow axis, so an insertion driven to rest immediately
+/// 5' of base 1 or immediately 3' of the last base has no valid pair of
+/// adjacent anchors. Left alone it escapes in one of two broken shapes (#1202):
+///
+/// - 5': the 0-based shuffle result of `0` clamps back through
+///   `saturating_sub(1)` to the degenerate `start == end == 1`, emitted as
+///   `n.1ins<A'>` — a single-position insertion, which ferro's own parser
+///   rejects (`DNA/insertion.md:95-101` requires two adjacent anchors).
+/// - 3': the shuffle rests against `boundaries.right`, emitted as
+///   `n.<len>_<len+1>ins<A'>`, whose second anchor is past the transcript end
+///   and so raises W4004 `PositionPastEnd` when re-normalized in strict mode.
+///
+/// Both are repaired by applying [`insertion_to_boundary_delins`] at the
+/// transcript bounds — the same identity PR #1170 and issue #387 apply at
+/// `cds_start` / `cds_end` — giving `n.1delins<A' ++ ref[1]>` at the 5' bound
+/// and `n.<len>delins<ref[len] ++ A'>` at the 3' bound.
+///
+/// This is deliberately keyed on the *post-shuffle* edit rather than the input,
+/// so every spelling that shuffles to the same resting payload (a directly
+/// written `ins`, a `dup` routed through the shuffle, any start position)
+/// collapses to the same minimal, idempotent output.
+///
+/// Note this is **not** a non-coding-transcript special case: the `n.` axis
+/// numbers the whole transcript with no CDS sub-axis regardless of whether the
+/// record carries `cds_start`/`cds_end` (#334), so an `n.` variant on a coding
+/// transcript reaches this the same way.
+///
+/// **Relationship to the `c.`-axis clamps.** `normalize_cds` clamps at
+/// `cds_start` (#1170) and `cds_end` (#387), gated on `AxisRegion::Cds`. Those
+/// are a different boundary, not a superset: a `c.` insertion in a **UTR**
+/// region (`AxisRegion::FiveUtr` / `ThreeUtr`) is outside that gate and can
+/// still saturate against the transcript bounds. So `normalize_cds` calls this
+/// helper too, after its own clamps. All three callers therefore hold the same
+/// invariant — a post-shuffle insertion never rests outside `[1, len]` — while
+/// each axis keeps its own axis-specific boundary behavior:
+///
+/// | axis | boundary the axis clamps at | clamped by |
+/// |---|---|---|
+/// | `c.` (CDS region) | `cds_start` / `cds_end` | `normalize_cds` |
+/// | `c.` (UTR regions) | transcript `1` / `len` | this helper |
+/// | `n.`, `r.` | transcript `1` / `len` | this helper |
+/// | `g.` | contig `1` / `len` | **nobody — see #1205** |
+/// | `m.`, `o.` | circular, so position 1 has a valid 5' neighbour | n/a |
+///
+/// The invariant is therefore **per-axis, not global**: `normalize_genome` has
+/// no clamp, so a 5'-saturated insertion at a contig start still escapes as
+/// `g.1ins<A'>` — the same unparseable shape, on the axis the spec uses for its
+/// own counter-example (`DNA/insertion.md:95-101` rejects `g.123insG`).
+/// Tracked in #1205 and deliberately not fixed here: the contig bounds are a
+/// different boundary, it changes output on the hottest axis, and `m.`/`o.`
+/// need a wraparound answer rather than this `delins` rewrite. Nothing in this
+/// helper is transcript-specific — it enforces `[1, seq.len()]` — so #1205 is
+/// expected to add a fourth caller rather than new logic.
+fn clamp_insertion_at_transcript_bounds(
+    seq: &[u8],
+    edit: &mut NaEdit,
+    start: &mut u64,
+    end: &mut u64,
+) {
+    // Cheapest discriminating guard first: only two resting places qualify, and
+    // both are two register compares against values already in hand. `tx_len ==
+    // 0` needs no separate guard — `insertion_to_boundary_delins` bails on an
+    // anchor outside `seq`, which an empty `seq` always is.
+    let tx_len = seq.len() as u64;
+    let (anchor, side) = if *start == 1 && *end == 1 {
+        (1, BoundarySide::FivePrime)
+    } else if *start == tx_len && *end == tx_len + 1 {
+        (tx_len, BoundarySide::ThreePrime)
+    } else {
+        return;
+    };
+    let NaEdit::Insertion {
+        sequence: InsertedSequence::Literal(a_prime),
+    } = &*edit
+    else {
+        return;
+    };
+    let Some(delins) = insertion_to_boundary_delins(seq, a_prime, anchor, side) else {
+        return;
+    };
+    *edit = delins;
+    *start = anchor;
+    *end = anchor;
+}
+
 /// Warning generated during normalization.
 ///
 /// This enum is open-ended: each variant owns the fields its code needs.
@@ -3359,25 +3512,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     sequence: InsertedSequence::Literal(a_prime),
                 } = &new_edit
                 {
-                    let cds_start_0b = (cds_start as usize).saturating_sub(1);
-                    if cds_start_0b < seq.len() {
-                        let mut new_alt: Vec<u8> =
-                            a_prime.bases().iter().map(|b| *b as u8).collect();
-                        new_alt.push(seq[cds_start_0b]);
-                        let bases: Vec<Base> = new_alt
-                            .iter()
-                            .filter_map(|b| Base::from_char(*b as char))
-                            .collect();
-                        if bases.len() == new_alt.len() {
-                            new_edit = NaEdit::Delins {
-                                sequence: InsertedSequence::Literal(Sequence::new(bases)),
-                                deleted: None,
-                                deleted_length: None,
-                                substitution_reference: None,
-                            };
-                            new_tx_start = cds_start;
-                            new_tx_end = cds_start;
-                        }
+                    if let Some(delins) = insertion_to_boundary_delins(
+                        seq,
+                        a_prime,
+                        cds_start,
+                        BoundarySide::FivePrime,
+                    ) {
+                        new_edit = delins;
+                        new_tx_start = cds_start;
+                        new_tx_end = cds_start;
                     }
                 }
             }
@@ -3459,28 +3602,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     sequence: InsertedSequence::Literal(a_prime),
                 } = &new_edit
                 {
-                    let cds_end_0b = (cds_end_tx as usize).saturating_sub(1);
-                    if cds_end_0b < seq.len() {
-                        let mut new_alt: Vec<u8> = vec![seq[cds_end_0b]];
-                        new_alt.extend(a_prime.bases().iter().map(|b| *b as u8));
-                        let bases: Vec<Base> = new_alt
-                            .iter()
-                            .filter_map(|b| Base::from_char(*b as char))
-                            .collect();
-                        if bases.len() == new_alt.len() {
-                            new_edit = NaEdit::Delins {
-                                sequence: InsertedSequence::Literal(Sequence::new(bases)),
-                                deleted: None,
-                                deleted_length: None,
-                                substitution_reference: None,
-                            };
-                            new_tx_start = cds_end_tx;
-                            new_tx_end = cds_end_tx;
-                        }
+                    if let Some(delins) = insertion_to_boundary_delins(
+                        seq,
+                        a_prime,
+                        cds_end_tx,
+                        BoundarySide::ThreePrime,
+                    ) {
+                        new_edit = delins;
+                        new_tx_start = cds_end_tx;
+                        new_tx_end = cds_end_tx;
                     }
                 }
             }
         }
+
+        // #1202: both clamps above are gated on `AxisRegion::Cds`, so a
+        // **UTR-region** insertion is outside them and can still saturate
+        // against the transcript bounds (reachable once `cds_start > 1`).
+        //
+        // Unconditional: the helper is self-gating on shape and position, and
+        // either clamp above has already rewritten `new_edit` to a `Delins`, so
+        // it is inert after them — no double-clamp. Runs before the CDS
+        // conversion so the arithmetic stays in transcript space.
+        clamp_insertion_at_transcript_bounds(
+            seq,
+            &mut new_edit,
+            &mut new_tx_start,
+            &mut new_tx_end,
+        );
 
         // Convert back to CDS coordinates
         let new_start = self.tx_to_cds_pos(new_tx_start, cds_start, transcript.cds_end)?;
@@ -3727,7 +3876,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some(s) => s.as_bytes(),
             None => return Ok((HV::Tx(self.canonicalize_tx_variant(variant)), vec![])),
         };
-        let (new_start, new_end, new_edit, mut warnings) =
+        let (mut new_start, mut new_end, mut new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, false)?;
 
         // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
@@ -3752,6 +3901,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // only if it actually crossed into the intron. The trigger is a rare edge
         // landing, so the hot path is untouched; it is 3'-only (5'/VCF shuffles
         // stay exon-confined), exactly as the `c.` path.
+        //
+        // Ordering constraint (#1202, other half documented at the clamp
+        // below): a 3'-saturated insertion arrives here with
+        // `new_end == boundaries.right + 1`, so it does NOT trip this trigger —
+        // and the clamp below then moves it onto exactly `boundaries.right`.
+        // Neither block may be reordered past the other.
         if self.config.shuffle_direction == ShuffleDirection::ThreePrime
             && new_end == boundaries.right
         {
@@ -3799,6 +3954,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 }
             }
         }
+
+        // #1202: rewrite an insertion the shuffle drove off either end of the
+        // transcript; see the helper for the identity and its proof.
+        //
+        // Must stay AFTER the exon/intron junction block above: that block
+        // tests `new_end == boundaries.right`, and the 3' rewrite moves
+        // `new_end` from `len + 1` onto exactly `len` (== `boundaries.right`
+        // for the insertion bounds), so clamping first would divert a saturated
+        // insertion into the junction-crossing engine.
+        clamp_insertion_at_transcript_bounds(seq, &mut new_edit, &mut new_start, &mut new_end);
 
         let new_variant = TxVariant {
             accession: variant.accession.clone(),
@@ -5196,7 +5361,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Some((cds_start, cds_end)) => tx_start >= cds_start && tx_end <= cds_end,
             None => false,
         };
-        let (new_tx_start, new_tx_end, new_edit, mut warnings) =
+        let (mut new_tx_start, mut new_tx_end, mut new_edit, mut warnings) =
             self.normalize_na_edit(seq, edit, tx_start, tx_end, &boundaries, is_coding)?;
 
         // See the identical guard + comment in `normalize_cds` (#1052 follow-up):
@@ -5219,6 +5384,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // adopt the result only if it actually crossed into the intron. The
         // original endpoints are purely exonic here, so they map to plain
         // (offset-less) `TxPos`. 3'-only; the hot path is untouched.
+        //
+        // Ordering constraint (#1202, other half documented at the clamp
+        // below): a 3'-saturated insertion arrives here with
+        // `new_tx_end == boundaries.right + 1`, so it does NOT trip this
+        // trigger — and the clamp below then moves it onto exactly
+        // `boundaries.right`. Neither block may be reordered past the other.
         if self.config.shuffle_direction == ShuffleDirection::ThreePrime
             && new_tx_end == boundaries.right
         {
@@ -5287,6 +5458,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 }
             }
         }
+
+        // #1202: mirror of the `normalize_tx` clamp. Runs in transcript space
+        // (before the `r.` mapping below) so it shares the helper verbatim, and
+        // must stay AFTER the junction block above for the same
+        // `new_tx_end == boundaries.right` reason documented there.
+        clamp_insertion_at_transcript_bounds(
+            seq,
+            &mut new_edit,
+            &mut new_tx_start,
+            &mut new_tx_end,
+        );
 
         // Convert each normalized tx position back to a CDS-relative `r.`
         // position via `tx_to_rna_pos`, which restores the correct region for

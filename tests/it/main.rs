@@ -133,6 +133,7 @@ mod issue_1162_bare_ins_diagnostic;
 mod issue_1177_rna_axis_cds_relative;
 mod issue_1183_rna_axis_ins_expansion;
 mod issue_1192_rna_codon_frame_gate;
+mod issue_1202_transcript_bounds_insertion_clamp;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;
