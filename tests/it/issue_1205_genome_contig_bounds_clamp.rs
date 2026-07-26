@@ -169,38 +169,20 @@ fn non_shuffling_insertion_at_the_contig_start_is_untouched() {
 }
 
 // ---------------------------------------------------------------------------
-// Scope boundary: circular references are NOT clamped
+// Scope boundary: the circular axes
 // ---------------------------------------------------------------------------
-
-/// `m.` (and `o.`) are deliberately left out of this fix, and this pins that
-/// boundary so a later change does not extend the clamp there by reflex.
-///
-/// A circular reference wraps: position 1 HAS a valid 5' neighbour — the last
-/// base — so the correct output for a 5'-saturated insertion there is a
-/// wraparound description, not this `delins` rewrite. Applying the genomic clamp
-/// would produce a well-formed but semantically wrong answer, which is worse than
-/// the status quo.
-///
-/// To be explicit about what that status quo is: `m.` currently emits the same
-/// invalid single-position form this PR fixes on `g.` (`m.1insCG`). That is a real
-/// defect and is **not** fixed here — it needs the circular answer, tracked
-/// separately. This test therefore asserts only that the clamp did not fire; it
-/// does not bless the output.
-#[test]
-fn mito_axis_is_not_clamped() {
-    let mut provider = MockProvider::new();
-    provider.add_genomic_sequence("NC_012920.1", CONTIG);
-    let normalizer = Normalizer::with_config(
-        provider,
-        NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
-    );
-    let variant = parse_hgvs("NC_012920.1:m.1_2insGC").expect("parse");
-    let rendered = normalizer
-        .normalize(&variant)
-        .expect("normalize")
-        .to_string();
-    assert!(
-        !rendered.contains("delins"),
-        "the genomic contig clamp must not reach the circular axis, got {rendered}",
-    );
-}
+//
+// This file used to carry a `mito_axis_is_not_clamped` test pinning `m.` as
+// deliberately out of scope, on the reasoning that a circular reference wraps —
+// position 1 HAS a valid 5' neighbour — so the right answer there was a
+// wraparound description rather than this `delins` rewrite. That test explicitly
+// asserted only that the clamp had not fired and did *not* bless the output,
+// because the output (`m.1insCG`) was the same invalid single-position form this
+// file fixes on `g.`.
+//
+// #1217 resolved that open question the other way and removed the boundary: the
+// wraparound `ins` is a form ferro rejects by design (#129), so the
+// single-position `delins` is the only available answer on `m.` too, and
+// `normalize_mt` became the fifth caller of the clamp. The `m.`-axis behavior now
+// lives in `issue_1217_mito_terminus_insertion_clamp.rs`, which also pins that
+// `o.` remains untouched (it is returned unchanged, so nothing can saturate).

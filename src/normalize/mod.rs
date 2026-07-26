@@ -682,7 +682,8 @@ impl SequenceEnds {
 /// | `c.` (UTR regions) | transcript `1` / `len` | this helper |
 /// | `n.`, `r.` | transcript `1` / `len` | this helper |
 /// | `g.` | contig `1` / `len` | `normalize_genome` (#1205) |
-/// | `m.`, `o.` | circular, so position 1 has a valid 5' neighbour | n/a |
+/// | `m.` | contig `1` / `len` | `normalize_mt` (#1217) |
+/// | `o.` | n/a — returned unchanged, no shuffle runs | n/a |
 ///
 /// `normalize_genome` became the fourth caller in #1205, which closes the last
 /// non-circular gap: before it, a 5'-saturated insertion at a contig start
@@ -691,9 +692,24 @@ impl SequenceEnds {
 /// `g.123insG`) — and a 3'-saturated one as `g.<len>_<len+1>ins<A\'>`, whose
 /// second anchor is past the contig end.
 ///
-/// `m.`/`o.` remain deliberately uncovered: a circular reference wraps, so
-/// position 1 HAS a valid 5\' neighbour (the last base) and the correct output
-/// there is a wraparound description, not this `delins` rewrite.
+/// `normalize_mt` became the fifth in #1217. #1205 had left it out on the
+/// grounds that a circular reference wraps, so position 1 HAS a valid 5\'
+/// neighbour (the last base) and the correct output there is a wraparound
+/// description rather than this `delins` rewrite. That does not hold: #129
+/// established, and `issue_129_mt_circular_wraparound.rs` pins, that ferro
+/// **rejects** `m.<high>_<low>ins`. The spec's reversed-range exception
+/// (`deletion.md:17`, SVD-WG006) is granted to `del`/`dup` — `delins` inherits
+/// it by composition — while `insertion.md` is silent, so the general 5\'→3\'
+/// rule applies, which is also how mutalyzer and biocommons read it. The
+/// wraparound `ins` is therefore not an available answer and the
+/// single-position `delins`, which needs no reversed range at all, is. (#129
+/// separately disabled 3\'-rule shifting across the origin, so coming to rest
+/// at the terminus is already the intended behavior; only its rendering was
+/// wrong.)
+///
+/// `o.` stays out: `normalize_core` returns circular `o.` variants unchanged, so
+/// no shuffle runs and nothing can saturate. A genuine circular normalizer is
+/// #951.
 ///
 /// The genomic caller passes a **window** rather than the whole contig, so it
 /// must say which of its ends are real — see [`SequenceEnds`].
@@ -6248,14 +6264,52 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // has no canonical "CDS" exemption boundary in the same sense as
         // nuclear `c.`; the spec's mito chapter doesn't carry the
         // codon-frame clause), so the gate is `NotApplicable`.
-        let (new_rel_start, new_rel_end, new_edit, mut warnings) = self.normalize_na_edit(
+        let (mut new_rel_start, mut new_rel_end, mut new_edit, mut warnings) = self
+            .normalize_na_edit(
+                ref_seq.as_bytes(),
+                edit,
+                rel_start,
+                rel_end,
+                &Boundaries::new(0, ref_seq.len() as u64),
+                CodonGate::NotApplicable,
+            )?;
+
+        // #1217: an insertion driven to rest against either mitochondrial
+        // terminus has no valid pair of adjacent anchors there, exactly as on
+        // the transcript axes (#1202) and the `g.` axis (#1205) — 5' it escapes
+        // as the single-position `m.1ins<A'>`, which `DNA/insertion.md:95-101`
+        // rejects by name and ferro's own parser refuses; 3' as
+        // `m.<len>_<len+1>ins<A'>`, whose second anchor is past the contig end.
+        //
+        // Circularity does not supply an escape here. #1205 left `m.` out on the
+        // grounds that position 1 has a valid 5' neighbour on a circular
+        // reference, so the answer ought to be a wraparound description — but
+        // #129 established that ferro **rejects** `m.<high>_<low>ins` (the
+        // reversed-range exception at `deletion.md:17` / SVD-WG006 covers
+        // `del`/`dup`, and `delins` by composition; `insertion.md` is silent, so
+        // the general 5'→3' rule applies, as both mutalyzer and biocommons
+        // read it). So the wraparound `ins` is not an available answer, and the
+        // single-position `delins` — which needs no reversed range — is. #129
+        // also disabled 3'-rule shifting across the origin, so resting at the
+        // terminus is already the intended behavior; only its rendering was
+        // wrong.
+        //
+        // Same windowed-flushness reasoning as `normalize_genome`: `ref_seq` is
+        // a window, so an end is a real contig bound only where the window is
+        // flush with it, and with no length available we cannot establish
+        // flushness and so do not clamp.
+        let contig_len = self.provider.get_sequence_length(&accession).ok();
+        clamp_insertion_at_sequence_bounds(
             ref_seq.as_bytes(),
-            edit,
-            rel_start,
-            rel_end,
-            &Boundaries::new(0, ref_seq.len() as u64),
-            CodonGate::NotApplicable,
-        )?;
+            &mut new_edit,
+            &mut new_rel_start,
+            &mut new_rel_end,
+            SequenceEnds {
+                five_prime: window_start == 0,
+                three_prime: contig_len
+                    .is_some_and(|len| window_start + ref_seq.len() as u64 >= len),
+            },
+        );
 
         let new_start = new_rel_start + window_start;
         let new_end = new_rel_end + window_start;
