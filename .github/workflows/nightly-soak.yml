@@ -67,9 +67,9 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
       - name: Generate HGVS v21.0 spec fixture
-        run: cargo run --features dev --example generate_spec_fixture
+        run: cargo run --features dev --bin generate_spec_fixture
       - name: Generate HGVS spec test enumeration
-        run: cargo run --features dev --example generate_spec_enumeration
+        run: cargo run --features dev --bin generate_spec_enumeration
       - name: Soak 125k unseeded cases
         # No PROPTEST_RNG_SEED: each shard, each night, draws a fresh stream.
         env:

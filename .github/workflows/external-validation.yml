@@ -206,10 +206,10 @@ jobs:
       # The spec-normalization fixture is a generated artifact (gitignored);
       # regenerate it before the suite so the reader tests find it.
       - name: Generate HGVS v21.0 spec fixture
-        run: cargo run --features dev --example generate_spec_fixture
+        run: cargo run --features dev --bin generate_spec_fixture
 
       - name: Generate HGVS spec test enumeration
-        run: cargo run --features dev --example generate_spec_enumeration
+        run: cargo run --features dev --bin generate_spec_enumeration
 
       # `dev` bundles every testable feature; `slow-tests` is
       # intentionally opt-in because it requires a ~1 GB ClinVar

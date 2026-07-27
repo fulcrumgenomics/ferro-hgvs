@@ -37,7 +37,7 @@ repos:
       # the build cost is paid only when actually pushing.
       - id: generate-spec-fixture
         name: generate_spec_fixture
-        entry: cargo run --features dev --example generate_spec_fixture
+        entry: cargo run --features dev --bin generate_spec_fixture
         language: system
         # always_run (not types: [rust]) — a push that only touches the
         # spec submodule or the overrides file still needs the guard, and
@@ -54,7 +54,7 @@ repos:
       # as a `bash -c` chain that re-invoked the fixture generator.
       - id: generate-spec-enumeration
         name: generate_spec_enumeration
-        entry: cargo run --features dev --example generate_spec_enumeration
+        entry: cargo run --features dev --bin generate_spec_enumeration
         language: system
         always_run: true
         pass_filenames: false

@@ -27,18 +27,20 @@ use std::path::Path;
 ///   never been generated is a cold cache, not drift: there is no committed
 ///   baseline it could have drifted from. Materialise it and say so.
 ///
-/// `label` names the artifact in messages; `example` is the generator to rerun.
+/// `label` names the artifact in messages; `generator` is the generator to
+/// rerun. Both generators are `[[bin]]` targets, so the printed command must say
+/// `--bin`; `--example` would name a target that no longer exists.
 pub fn check_up_to_date(
     path: &Path,
     rendered: &str,
     label: &str,
-    example: &str,
+    generator: &str,
 ) -> anyhow::Result<()> {
     match std::fs::read_to_string(path) {
         Ok(on_disk) if on_disk == rendered => Ok(()),
         Ok(_) => {
             eprintln!(
-                "{label} {} is out of date; rerun: cargo run --features dev --example {example}",
+                "{label} {} is out of date; rerun: cargo run --features dev --bin {generator}",
                 path.display()
             );
             Err(anyhow::anyhow!("{label} out of date"))

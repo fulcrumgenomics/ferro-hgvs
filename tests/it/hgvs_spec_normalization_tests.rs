@@ -4,7 +4,7 @@
 //! output for every variant string in the v21.0 spec. Rows whose `current`
 //! diverges from `spec_expected` carry a `todo` link to the #83 audit.
 //!
-//! Regenerate the fixture: `cargo run --features dev --example generate_spec_fixture`.
+//! Regenerate the fixture: `cargo run --features dev --bin generate_spec_fixture`.
 //! That run is also the guard on the committed overrides, and is what CI and the
 //! pre-push hook use. Adding `-- --check` instead asks only whether the local
 //! (gitignored) artifact is current — useful for spotting whether a code change
@@ -208,7 +208,7 @@ fn pinned_v21_normalization_behavior() {
         panic!(
             "{} row(s) drifted from the pinned current behavior. First {} shown.\n\n{}\n\n\
              If this drift is intentional, regenerate the fixture:\n  \
-             cargo run --features dev --example generate_spec_fixture",
+             cargo run --features dev --bin generate_spec_fixture",
             diffs.len(),
             diffs.len().min(20),
             preview,

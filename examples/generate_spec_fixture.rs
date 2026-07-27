@@ -14,8 +14,8 @@
 //!     cache, not drift (the file is gitignored, so there is no committed
 //!     baseline), and is simply generated.
 //!
-//! Run: `cargo run --features dev --example generate_spec_fixture`
-//! Check: `cargo run --features dev --example generate_spec_fixture -- --check`
+//! Run: `cargo run --features dev --bin generate_spec_fixture`
+//! Check: `cargo run --features dev --bin generate_spec_fixture -- --check`
 //!
 //! See: docs/superpowers/specs/2026-05-03-issue-84-hgvs-v21-normalization-fixture-design.md
 

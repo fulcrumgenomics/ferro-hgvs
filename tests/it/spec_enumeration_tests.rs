@@ -10,7 +10,7 @@
 //! parses and obeys the MUST-level shape rules — nothing more.
 //!
 //! The fixture is generated and gitignored; regenerate it with
-//! `cargo run --features dev --example generate_spec_enumeration`.
+//! `cargo run --features dev --bin generate_spec_enumeration`.
 //!
 //! Rows whose recorded behaviour diverges from the spec are **not** failures
 //! here. They are classified (`repair-diverges`, `false-acceptance`,
@@ -199,7 +199,7 @@ fn enumeration_replays_recorded_behavior() {
     assert!(
         diffs.is_empty(),
         "{} enumeration row(s) drifted. Regenerate if intentional:\n  \
-         cargo run --features dev --example generate_spec_enumeration\n\n{}",
+         cargo run --features dev --bin generate_spec_enumeration\n\n{}",
         diffs.len(),
         diffs
             .iter()
@@ -244,7 +244,7 @@ fn every_row_carries_provenance() {
 /// regression *or* a fix — trips this and must be re-blessed deliberately.
 ///
 /// Regenerate the numbers with:
-///   `cargo run --features dev --example generate_spec_enumeration -- --census`
+///   `cargo run --features dev --bin generate_spec_enumeration -- --census`
 /// and read `by_status` in the generated fixture.
 const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // Spec-forbidden strings ferro parses and renders anyway.
@@ -308,7 +308,7 @@ fn divergence_budget_is_unchanged() {
 /// `every_observed_status_is_accounted_for` fails and names it, turning "a new
 /// status category appeared" into a deliberate, reviewed decision instead of a
 /// silent pass. Regenerate the roster of observed statuses with:
-///   `cargo run --features dev --example generate_spec_enumeration -- --census`
+///   `cargo run --features dev --bin generate_spec_enumeration -- --census`
 /// and read `by_status` in the generated fixture.
 const KNOWN_PASSING_STATUSES: &[Status] = &[
     // Spec-forbidden string that ferro rejected outright (parse error) — the

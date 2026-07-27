@@ -26,6 +26,15 @@ exclude = [
     "/acgt-landing/",
 ]
 
+# The two spec generators live under `examples/` but are declared as `[[bin]]`
+# targets below (they need `CARGO_BIN_EXE_*`). With auto-discovery on, cargo
+# would ALSO register them as example targets — verified: `cargo metadata`
+# reported each file twice, once as `bin` and once as `example` — compiling
+# both copies of a ~2000-line target every build. Turning discovery off makes
+# every example explicit, which is why the five previously-implicit ones are
+# declared below alongside the six that already were.
+autoexamples = false
+
 [lib]
 name = "ferro_hgvs"
 # cdylib is required for Python bindings (built via maturin)
@@ -86,7 +95,7 @@ web-service = ["dep:axum", "dep:tokio", "dep:tower", "dep:tower-http", "dep:trac
 # Long-running tests (e.g., full ClinVar validation). Run with: cargo test --release --features slow-tests
 slow-tests = []
 # dev feature includes all testable features (python requires maturin for building)
-dev = ["validation", "mmap", "benchmark", "parallel", "protein-fetch", "web-service"]
+dev = ["validation", "mmap", "benchmark", "parallel", "protein-fetch", "web-service", "dep:pulldown-cmark", "dep:anyhow", "dep:serde_yaml"]
 
 [dependencies.dhat]
 version = "0.3"
@@ -187,16 +196,41 @@ optional = true
 version = "5"
 optional = true
 
+# Markdown parsing for the HGVS spec harvest (`examples/common/spec_harvest.rs`).
+#
+# OPTIONAL, and pulled in only by the non-default `dev` feature, so an ordinary
+# consumer never resolves or builds it. It sits here rather than in
+# `[dev-dependencies]` because the two spec generators are `[[bin]]` targets and
+# binaries — unlike examples — cannot use dev-dependencies. See the `[[bin]]`
+# blocks below for why they must be binaries.
+# `anyhow` and `serde_yaml` are ALSO needed by the two generator `[[bin]]`
+# targets, for the same reason as `pulldown-cmark`: binaries cannot use
+# dev-dependencies. Both are optional and reached only through the non-default
+# `dev` feature, so an ordinary consumer resolves neither.
+#
+# They deliberately REMAIN in `[dev-dependencies]` as well. Other test and
+# example targets use them, and `tests/it` still compiles without `--features
+# dev`; dropping the dev-dependency would break those configurations. Cargo
+# permits a crate in both sections and unifies them for test targets.
+[dependencies.anyhow]
+version = "1"
+optional = true
+
+[dependencies.serde_yaml]
+version = "0.9"
+optional = true
+
+[dependencies.pulldown-cmark]
+version = "0.13"
+default-features = false
+optional = true
+
 [dev-dependencies]
 proptest = "1.0"
 criterion = "0.5"
 flate2 = "1.0"
 tempfile = "3.14"
 rstest = "0.23"
-# Used by examples/generate_spec_fixture.rs to extract HGVS strings from the
-# vendored v21.0 spec. Examples (unlike binaries under src/bin) have access to
-# dev-dependencies, so these stay out of the runtime dependency tree.
-pulldown-cmark = { version = "0.13", default-features = false }
 serde_yaml = "0.9"
 anyhow = "1"
 # Used by examples/build_conformance_snapshot.rs to record a per-entry SHA-256 of
@@ -224,12 +258,34 @@ required-features = ["dev"]
 name = "generate_perf_tables"
 required-features = ["dev"]
 
-# These two carry `#[cfg(test)]` unit tests (in the example and in the shared
-# `common/` modules they include via `#[path]`). Cargo does not build an
-# example's tests unless the target opts in with `test = true`, so without this
-# their tests silently never run under `cargo nextest --features dev`.
-[[example]]
+# The two spec generators are BINARIES, not examples.
+#
+# Tests must locate and run them, and `CARGO_BIN_EXE_<name>` — which cargo
+# defines for bins only — is the only way to get that path right for the cargo
+# invocation actually in flight. Deriving it by hand from `current_exe()` meant
+# re-deriving the invocation, and produced a silent wrong-path bug twice: on the
+# profile axis (#1224) and on the target-dir axis under `cargo llvm-cov`
+# (#1225, which left `main` red for 15 commits). `CARGO_BIN_EXE_*` is resolved
+# by cargo, so it is correct under any profile, target dir or cross-compile, and
+# cargo guarantees the binary is freshly built before integration tests run.
+#
+# Their sources stay under `examples/` so the `#[path = "common/..."]` includes
+# they share with `extract_spec_enumeration_windows` keep resolving;
+# `autoexamples = false` in `[package]` stops cargo also auto-discovering them
+# as example targets.
+#
+# `test = true` because both carry `#[cfg(test)]` unit tests, in the target and
+# in the shared `common/` modules. Cargo does not build a target's tests unless
+# it opts in, so without this they silently never run.
+[[bin]]
 name = "generate_spec_enumeration"
+path = "examples/generate_spec_enumeration.rs"
+required-features = ["dev"]
+test = true
+
+[[bin]]
+name = "generate_spec_fixture"
+path = "examples/generate_spec_fixture.rs"
 required-features = ["dev"]
 test = true
 
@@ -238,6 +294,25 @@ name = "extract_spec_enumeration_windows"
 required-features = ["dev"]
 test = true
 
+[[example]]
+name = "derive_tx_placements"
+required-features = ["dev"]
+
+[[example]]
+name = "extract_biocommons_windows"
+required-features = ["dev"]
+
+[[example]]
+name = "generate_conformance_summary"
+required-features = ["dev"]
+
+[[example]]
+name = "projector-bench"
+required-features = ["dev"]
+
+[[example]]
+name = "report_conformance_reference_gaps"
+required-features = ["dev"]
 [[bin]]
 name = "ferro"
 path = "src/bin/ferro.rs"
