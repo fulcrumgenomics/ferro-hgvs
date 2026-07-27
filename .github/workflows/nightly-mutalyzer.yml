@@ -145,3 +145,21 @@ jobs:
           name: ferro-xfail-${{ github.run_id }}
           path: /tmp/ferro-xfail/
           if-no-files-found: warn
+
+  report-failure:
+    needs: reference-aware-tests
+    if: failure()
+    uses: ./.github/workflows/report-failure.yml
+    permissions:
+      contents: read
+      issues: write
+    with:
+      title: "nightly reference-aware tests failed"
+      summary: >-
+        The nightly manifest-backed conformance run failed.
+      hint: |
+          These axes only run with a prepared reference (`FERRO_MANIFEST`), so they cannot run on a pull request. Reproduce on a box with the reference:
+          ```
+          FERRO_MANIFEST=<ref>/manifest.json cargo nextest run --features dev
+          ```
+          A moved conformance baseline is re-blessable; a new live divergence is not.

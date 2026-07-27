@@ -1,0 +1,109 @@
+# Reusable failure reporter for workflows that cannot fail on a pull request.
+#
+# A workflow that only ever runs after a merge — on a schedule, or on push to
+# `main` — has no way to stop the break it detects. Its red X is decoration
+# unless something turns it into work somebody sees. Before this existed, six
+# of the seven such workflows here had no alerting at all, and `Coverage`
+# demonstrated the consequence: it stayed red for 15 commits (`92da6d0` ..
+# `e90dff2`) while every pull request in that window reported a full green
+# board (#1225, #1226).
+#
+# `nightly-soak` already had the right pattern and this is a straight
+# generalisation of it: ONE rolling issue per workflow, updated rather than
+# re-filed, so a defect that reproduces nightly does not bury the tracker.
+#
+# Usage — add a job to the caller, gated on `failure()`:
+#
+#     report:
+#       needs: [<the job(s) that can fail>]
+#       if: failure()
+#       uses: ./.github/workflows/report-failure.yml
+#       with:
+#         title: "nightly perf: startup budget exceeded"
+#         summary: "The startup perf budget was exceeded."
+#         hint: |
+#           Reproduce locally with:
+#           ```
+#           cargo run --release --bin ferro -- ...
+#           ```
+#       permissions:
+#         contents: read
+#         issues: write
+#
+# `needs:` matters. `if: failure()` alone is true when *any* earlier job in the
+# run failed, but without `needs` the reporter can start before the job it is
+# reporting on has finished.
+name: Report failure
+
+on:
+  workflow_call:
+    inputs:
+      title:
+        description: >-
+          Issue title. Must be STABLE for a given failure mode — it is the
+          lookup key for the rolling issue, so anything varying per run (a
+          date, a run id, a shard number) would file a fresh issue every time
+          and defeat the whole point.
+        required: true
+        type: string
+      summary:
+        description: One-line statement of what failed.
+        required: true
+        type: string
+      hint:
+        description: >-
+          Optional reproduction guidance appended to the body. Markdown.
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Open or update the tracking issue
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ inputs.title }}
+          SUMMARY: ${{ inputs.summary }}
+          HINT: ${{ inputs.hint }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WORKFLOW: ${{ github.workflow }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # `--search "<title> in:title"` is a fuzzy full-text match, so an
+          # unrelated issue whose title merely contains these words could come
+          # back first. Filter for an exact title match before treating a hit
+          # as "the" rolling issue — otherwise a comment lands on a stranger's
+          # issue and the real one is never created.
+          #
+          # The comparison reads the title through jq's `env`, not by
+          # interpolating it into the jq program: a title containing a quote
+          # would otherwise produce a malformed filter, and the value is
+          # workflow-supplied input.
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+            --json number,title \
+            --jq '[.[] | select(.title == env.TITLE)] | .[0].number // empty')
+          BODY=$(printf '%s\n' \
+            "$SUMMARY" \
+            "" \
+            "- Workflow: \`$WORKFLOW\`" \
+            "- Commit: \`$SHA\`" \
+            "- Run: $RUN_URL" \
+            "" \
+            "$HINT" \
+            "" \
+            "_This workflow does not run on pull requests, so this failure could not have been caught before merge. One rolling issue is used per failure mode; repeat occurrences are added as comments._")
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "$BODY"
+          else
+            gh issue create --title "$TITLE" --body "$BODY"
+          fi
