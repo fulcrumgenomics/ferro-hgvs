@@ -51,3 +51,21 @@ jobs:
           name: coverage-report
           path: coverage/
           retention-days: 30
+
+  report-failure:
+    needs: coverage
+    if: failure()
+    uses: ./.github/workflows/report-failure.yml
+    permissions:
+      contents: read
+      issues: write
+    with:
+      title: "coverage: the test suite fails under llvm-cov"
+      summary: >-
+        The `Coverage` workflow failed. This usually means the suite does not build or pass under llvm-cov instrumentation, not that coverage dropped.
+      hint: |
+          Reproduce locally:
+          ```
+          cargo llvm-cov --features dev --workspace
+          ```
+          A frequent cause is a test that shells out to `cargo` without forwarding `--target-dir`: llvm-cov builds into `target/llvm-cov-target/`, which a nested cargo does not inherit (#1225).

@@ -87,3 +87,21 @@ jobs:
           name: fuzz-crashes-${{ matrix.target }}
           path: fuzz/artifacts/${{ matrix.target }}/
           if-no-files-found: ignore
+
+  report-failure:
+    needs: fuzz
+    if: failure()
+    uses: ./.github/workflows/report-failure.yml
+    permissions:
+      contents: read
+      issues: write
+    with:
+      title: "fuzz: a target found a crash"
+      summary: >-
+        A fuzz target failed. The parser is expected to reject bad input, never panic on it.
+      hint: |
+          The crashing input is in the run artifacts. Reproduce:
+          ```
+          cargo fuzz run <target> <artifact>
+          ```
+          Commit the artifact as a regression seed alongside the fix.

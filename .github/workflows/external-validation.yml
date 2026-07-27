@@ -298,3 +298,17 @@ jobs:
           else
             echo "Validation report not available" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  report-failure:
+    needs: [run-comparison-tests, run-standard-tests]
+    if: failure()
+    uses: ./.github/workflows/report-failure.yml
+    permissions:
+      contents: read
+      issues: write
+    with:
+      title: "external API validation failed"
+      summary: >-
+        The scheduled external-API validation run failed.
+      hint: |
+          This talks to third-party services (mutalyzer, VariantValidator), so a failure may be an upstream outage rather than a ferro defect. Check the run log before assuming a regression.

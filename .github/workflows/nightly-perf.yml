@@ -177,3 +177,17 @@ jobs:
             echo "::warning::startup median ${median}s exceeds warn threshold ${STARTUP_WARN_MEDIAN}s"
           fi
           echo "startup OK: min=${min}s median=${median}s"
+
+  report-failure:
+    needs: startup-budget
+    if: failure()
+    uses: ./.github/workflows/report-failure.yml
+    permissions:
+      contents: read
+      issues: write
+    with:
+      title: "nightly perf: startup budget exceeded"
+      summary: >-
+        The nightly startup perf budget was exceeded.
+      hint: |
+          Perf regressions compound quietly, so bisect promptly. Reference loading dominates startup; see #1178 / #1186 for what that path costs.
