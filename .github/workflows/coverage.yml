@@ -1,8 +1,24 @@
 name: Coverage
 
+# Runs on pull requests as well as on `main`. Until #1225 this workflow was
+# push-only, which made it structurally incapable of failing before a merge:
+# a break landed on `main` and stayed there for 15 commits while every PR in
+# that window reported a full green board, because `Coverage` is also not one
+# of the required status contexts. Running it on PRs costs nothing on a public
+# repo and is what makes the signal actionable at the point a human can still
+# act on it.
+#
+# Deliberately NOT added to the required-status-check ruleset. The gate worth
+# having is "the suite compiles and passes under llvm-cov instrumentation",
+# which this provides as a visible check; gating on a coverage *percentage*
+# rewards touching lines rather than catching bugs. Promotion to a required
+# context is a separate decision to take once it has proven stable — and note
+# that required contexts match on exact job name, so a rename silently yields
+# "Expected — Waiting for status to be reported" (see #1216).
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
