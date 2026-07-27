@@ -108,6 +108,15 @@ fn built_example(example: &str) -> PathBuf {
         .and_then(|n| n.to_str())
         .unwrap_or("debug")
         .to_string();
+    // …and the target directory is one level above that. It is NOT always
+    // `<manifest>/target`: `cargo llvm-cov` builds into
+    // `target/llvm-cov-target/`, and `--target-dir` / `CARGO_TARGET_DIR` can
+    // point anywhere. The nested build must be told, or it writes to the
+    // default `target/` while the lookup reads somewhere else entirely.
+    let target_dir = profile_dir
+        .parent()
+        .expect("target dir above target/<profile>")
+        .to_path_buf();
 
     BUILD.call_once(|| {
         if prebuilt {
@@ -116,7 +125,7 @@ fn built_example(example: &str) -> PathBuf {
         }
         let status = Command::new(env!("CARGO"))
             .current_dir(manifest_dir())
-            .args(build_args(&profile))
+            .args(build_args(&profile, &target_dir))
             .status();
         let ok = matches!(status, Ok(s) if s.success());
         BUILD_OK.store(ok, std::sync::atomic::Ordering::SeqCst);
@@ -136,14 +145,22 @@ fn built_example(example: &str) -> PathBuf {
 }
 
 /// `cargo build` arguments that place both generator examples in
-/// `target/<profile>/examples/`.
+/// `<target_dir>/<profile>/examples/`.
 ///
-/// `profile` is the *directory* name under `target/`, which is not always the
-/// profile name: cargo writes the built-in `dev` profile into `target/debug`,
-/// while every other profile's directory matches its name. So `debug` means
-/// "pass no profile flag" and anything else is forwarded verbatim via
-/// `--profile`, which also covers custom profiles.
-fn build_args(profile: &str) -> Vec<String> {
+/// Both coordinates are passed explicitly, because the nested cargo inherits
+/// neither from the parent test run:
+///
+/// - `profile` is the *directory* name under the target dir, which is not
+///   always the profile name: cargo writes the built-in `dev` profile into
+///   `debug/`, while every other profile's directory matches its name. So
+///   `debug` means "pass no profile flag" and anything else is forwarded
+///   verbatim via `--profile`, which also covers custom profiles.
+/// - `target_dir` is forwarded via `--target-dir`. `cargo llvm-cov` drives
+///   `cargo test --target-dir target/llvm-cov-target`, and that flag does not
+///   reach a grandchild cargo — without this the build lands in the default
+///   `target/` while the lookup reads
+///   `target/llvm-cov-target/<profile>/examples/`.
+fn build_args(profile: &str, target_dir: &std::path::Path) -> Vec<String> {
     let mut args: Vec<String> = [
         "build",
         "--quiet",
@@ -161,47 +178,71 @@ fn build_args(profile: &str) -> Vec<String> {
         args.push("--profile".to_string());
         args.push(profile.to_string());
     }
+    args.push("--target-dir".to_string());
+    args.push(target_dir.display().to_string());
     args
 }
 
 #[cfg(test)]
 mod build_args_tests {
     use super::build_args;
+    use std::path::Path;
 
-    /// The `dev` profile builds into `target/debug`, so no profile flag is
+    fn args(profile: &str) -> Vec<String> {
+        build_args(profile, Path::new("/w/target"))
+    }
+
+    /// The `dev` profile builds into `<target>/debug`, so no profile flag is
     /// passed — adding `--profile debug` would be an error (there is no
     /// `debug` profile; the profile is named `dev`).
     #[test]
     fn debug_profile_passes_no_profile_flag() {
-        let args = build_args("debug");
+        let a = args("debug");
         assert!(
-            !args.iter().any(|a| a == "--profile"),
-            "unexpected --profile in {args:?}"
+            !a.iter().any(|x| x == "--profile"),
+            "unexpected --profile in {a:?}"
         );
     }
 
     /// A `--release` test binary must build its examples into
-    /// `target/release/examples/`, or the lookup finds a stale binary or none.
+    /// `<target>/release/examples/`, or the lookup finds a stale binary or none.
     #[test]
     fn release_profile_is_forwarded() {
-        let args = build_args("release");
-        let i = args
+        let a = args("release");
+        let i = a
             .iter()
-            .position(|a| a == "--profile")
+            .position(|x| x == "--profile")
             .expect("--profile must be passed for a non-debug profile");
-        assert_eq!(args[i + 1], "release");
+        assert_eq!(a[i + 1], "release");
     }
 
     /// Custom profiles use their own directory name, so forwarding the
     /// directory name verbatim is correct for them too.
     #[test]
     fn custom_profile_is_forwarded_verbatim() {
-        let args = build_args("release-lto");
-        let i = args
-            .iter()
-            .position(|a| a == "--profile")
-            .expect("--profile");
-        assert_eq!(args[i + 1], "release-lto");
+        let a = args("release-lto");
+        let i = a.iter().position(|x| x == "--profile").expect("--profile");
+        assert_eq!(a[i + 1], "release-lto");
+    }
+
+    /// The target directory must be forwarded on every profile.
+    ///
+    /// `cargo llvm-cov` drives `cargo test --target-dir target/llvm-cov-target`,
+    /// and that flag does not reach the cargo this helper spawns. Without
+    /// `--target-dir` the examples land in the default `target/` while the
+    /// lookup reads `target/llvm-cov-target/<profile>/examples/` — the mismatch
+    /// that turned the `Coverage` workflow red for 15 commits while every
+    /// required PR check stayed green.
+    #[test]
+    fn target_dir_is_always_forwarded() {
+        for profile in ["debug", "release"] {
+            let a = build_args(profile, Path::new("/w/target/llvm-cov-target"));
+            let i = a
+                .iter()
+                .position(|x| x == "--target-dir")
+                .unwrap_or_else(|| panic!("--target-dir missing for {profile}: {a:?}"));
+            assert_eq!(a[i + 1], "/w/target/llvm-cov-target");
+        }
     }
 
     /// Whatever the profile, both generators must be requested — the helper's
@@ -210,9 +251,9 @@ mod build_args_tests {
     #[test]
     fn both_generators_are_always_requested() {
         for profile in ["debug", "release"] {
-            let args = build_args(profile);
-            assert!(args.iter().any(|a| a == "generate_spec_fixture"));
-            assert!(args.iter().any(|a| a == "generate_spec_enumeration"));
+            let a = args(profile);
+            assert!(a.iter().any(|x| x == "generate_spec_fixture"));
+            assert!(a.iter().any(|x| x == "generate_spec_enumeration"));
         }
     }
 }
