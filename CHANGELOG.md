@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.10.1...v0.11.0) - 2026-07-27
+
+### Added
+
+- *(error-handling)* diagnose a bare `ins` as W3027 InsertionWithoutInsertedSequence ([#1166](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1166))
+- *(prepare)* record the cdot data release per artifact ([#1164](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1164))
+- *(reference)* per-artifact schema handshake + recorded cdot data version (#1001 item 3) ([#1154](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1154))
+- *(reference)* stamp & verify a reference content identity (#1001 items 2+4) ([#1153](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1153))
+
+### Fixed
+
+- *(test)* pass the target directory to the generator-example build ([#1225](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1225))
+- *(test)* build the generator examples for the running profile ([#1224](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1224))
+- *(error-handling)* make every enforced warning code reach the error configuration ([#1220](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1220))
+- *(project)* surface the engine's own reason for an unavailable axis ([#1221](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1221))
+- *(normalize)* clamp an insertion saturated at a mitochondrial terminus ([#1222](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1222))
+- *(normalize)* clamp an insertion saturated at a contig bound on the g. axis ([#1215](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1215))
+- *(normalize)* fall back to dup, not ins, where the codon gate refuses a repeat ([#1213](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1213))
+- *(project)* refuse out-of-transcript positions and surface projection warnings ([#1193](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1193))
+- *(test)* stop spec_generator_preconditions running a stale example binary ([#1219](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1219))
+- *(cli)* pass the error configuration to the normalizer ([#1191](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1191))
+- *(normalize)* answer the repeat codon gate for the tract, not the input span ([#1212](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1212))
+- *(normalize)* shift a c.-axis insertion past cds_end in one pass ([#1211](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1211))
+- *(normalize)* clamp a saturated insertion at the CDS bounds on the r. axis ([#1208](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1208))
+- *(normalize)* complete the 3'-shift across cds_end in one pass for delins and dup ([#1189](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1189))
+- *(normalize)* clamp boundary-saturated insertions at the transcript bounds ([#1203](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1203))
+- *(project)* read r.-axis inputs as CDS-relative, not transcript-relative ([#1179](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1179))
+- *(normalize)* apply the codon-frame gate on the r. axis ([#1194](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1194))
+- *(normalize)* run the ins[...] expansion on the r. axis ([#1188](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1188))
+- *(normalize)* handle an inv suffix on a cross-reference insertion range ([#1187](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1187))
+- *(normalize)* maximize the repeat tract instead of taking the first literal hit ([#1176](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1176))
+- *(normalize)* direction-aware copy selection in normalize_repeat; fuzz unit[N] inputs ([#1172](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1172))
+- *(normalize)* 5' boundary + repeat/dup canonicalization; enable the general 5' idempotency proptest ([#1170](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1170))
+- *(dev)* make the spec generators usable on a fresh worktree ([#1201](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1201))
+- *(normalize)* rotate the inserted sequence when 5'-shifting a multi-base insertion ([#1169](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1169))
+- *(normalize)* make the #418 CDS-start boundary clamp a stable fixed point ([#1167](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1167))
+- compare resulting sequence in EquivalenceChecker for complex indels ([#1158](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1158)) ([#1161](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1161))
+- *(reference)* enforce the canonical-overrides schema version at load ([#1155](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1155))
+- 3'-shift delins that reduces to a deletion or duplication ([#1157](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1157)) ([#1160](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1160))
+- *(parser)* reject an insertion with no inserted sequence (bare `ins`) ([#1152](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1152))
+
+### Other
+
+- *(reference)* construct the FASTA index through a single PreparedIndex type ([#1186](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1186))
+- *(reference)* stop building FASTA-index state that is immediately discarded ([#1178](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1178))
+- *(normalize)* require an explicit ErrorConfig at every entry point ([#1223](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1223))
+- *(io)* buffer serde_json reads from files ([#1171](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1171))
+- *(compliance)* pin cross-document HGVS rules (round-trip identity + contiguous changes) ([#1190](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1190))
+- *(conformance)* accept the sized-suffix parse-rejection taxonomy divergence ([#1173](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1173))
+- *(normalize)* fold is_coding + cds_span into one CodonGate ([#1214](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1214))
+- shard the test suite and gate every PR on a 1M-case idempotency soak ([#1216](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1216))
+- *(normalize)* fuzz the n./r. axes and inv/con edits for idempotency ([#1180](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1180))
+- *(normalize)* extend the idempotency oracle to the projector path ([#1174](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1174))
+- *(normalize)* make the direction-invariance test and proptest flanks honest ([#1175](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1175))
+- [**breaking**] mark the remaining additive-change-prone public types non_exhaustive ([#1168](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1168))
+- [**breaking**] make the public equivalence API robust to additive changes ([#1165](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1165))
+
 ## [0.10.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.10.0...v0.10.1) - 2026-07-23
 
 ### Fixed
