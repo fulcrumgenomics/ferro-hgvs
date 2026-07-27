@@ -71,6 +71,17 @@ fn scratch(name: &str) -> PathBuf {
 /// where the binaries are known-current and cargo is unavailable: CI's sharded
 /// test jobs, which run from a nextest archive after `test-build` has already
 /// built and executed both generators.
+///
+/// # The build and the lookup must agree on the profile
+///
+/// Both halves are derived from the same `target/<profile>/` directory. Getting
+/// only one of them right is worse than getting both wrong: a `--release` run
+/// used to build into `target/debug/examples/` and then look in
+/// `target/release/examples/`, which failed outright for
+/// `generate_spec_enumeration` and — far worse — silently *succeeded* for
+/// `generate_spec_fixture` whenever a stale release binary happened to be
+/// sitting there, resurrecting exactly the staleness this helper exists to
+/// prevent.
 fn built_example(example: &str) -> PathBuf {
     static BUILD: std::sync::Once = std::sync::Once::new();
     static BUILD_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -82,6 +93,22 @@ fn built_example(example: &str) -> PathBuf {
     // world per shard.
     let prebuilt = std::env::var_os("FERRO_PREBUILT_EXAMPLES").is_some();
 
+    // The test binary lives at `…/target/<profile>/deps/it-<hash>`, so the
+    // examples directory is two levels up. Deriving it from `current_exe`
+    // rather than hardcoding `debug/` keeps this correct under `--release` and
+    // under a nextest archive extracted into the workspace.
+    let exe = std::env::current_exe().expect("current_exe");
+    let profile_dir = exe
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("target/<profile>")
+        .to_path_buf();
+    let profile = profile_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("debug")
+        .to_string();
+
     BUILD.call_once(|| {
         if prebuilt {
             BUILD_OK.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -89,16 +116,7 @@ fn built_example(example: &str) -> PathBuf {
         }
         let status = Command::new(env!("CARGO"))
             .current_dir(manifest_dir())
-            .args([
-                "build",
-                "--quiet",
-                "--features",
-                "dev",
-                "--example",
-                "generate_spec_fixture",
-                "--example",
-                "generate_spec_enumeration",
-            ])
+            .args(build_args(&profile))
             .status();
         let ok = matches!(status, Ok(s) if s.success());
         BUILD_OK.store(ok, std::sync::atomic::Ordering::SeqCst);
@@ -108,23 +126,95 @@ fn built_example(example: &str) -> PathBuf {
         "failed to build the generator examples"
     );
 
-    // The test binary lives at `…/target/<profile>/deps/it-<hash>`, so the
-    // examples directory is two levels up. Deriving it from `current_exe`
-    // rather than hardcoding `debug/` keeps this correct under `--release` and
-    // under a nextest archive extracted into the workspace.
-    let exe = std::env::current_exe().expect("current_exe");
-    let path = exe
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("target/<profile>")
-        .join("examples")
-        .join(example);
+    let path = profile_dir.join("examples").join(example);
     assert!(
         path.is_file(),
         "expected a freshly built example at {}",
         path.display()
     );
     path
+}
+
+/// `cargo build` arguments that place both generator examples in
+/// `target/<profile>/examples/`.
+///
+/// `profile` is the *directory* name under `target/`, which is not always the
+/// profile name: cargo writes the built-in `dev` profile into `target/debug`,
+/// while every other profile's directory matches its name. So `debug` means
+/// "pass no profile flag" and anything else is forwarded verbatim via
+/// `--profile`, which also covers custom profiles.
+fn build_args(profile: &str) -> Vec<String> {
+    let mut args: Vec<String> = [
+        "build",
+        "--quiet",
+        "--features",
+        "dev",
+        "--example",
+        "generate_spec_fixture",
+        "--example",
+        "generate_spec_enumeration",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    if profile != "debug" {
+        args.push("--profile".to_string());
+        args.push(profile.to_string());
+    }
+    args
+}
+
+#[cfg(test)]
+mod build_args_tests {
+    use super::build_args;
+
+    /// The `dev` profile builds into `target/debug`, so no profile flag is
+    /// passed — adding `--profile debug` would be an error (there is no
+    /// `debug` profile; the profile is named `dev`).
+    #[test]
+    fn debug_profile_passes_no_profile_flag() {
+        let args = build_args("debug");
+        assert!(
+            !args.iter().any(|a| a == "--profile"),
+            "unexpected --profile in {args:?}"
+        );
+    }
+
+    /// A `--release` test binary must build its examples into
+    /// `target/release/examples/`, or the lookup finds a stale binary or none.
+    #[test]
+    fn release_profile_is_forwarded() {
+        let args = build_args("release");
+        let i = args
+            .iter()
+            .position(|a| a == "--profile")
+            .expect("--profile must be passed for a non-debug profile");
+        assert_eq!(args[i + 1], "release");
+    }
+
+    /// Custom profiles use their own directory name, so forwarding the
+    /// directory name verbatim is correct for them too.
+    #[test]
+    fn custom_profile_is_forwarded_verbatim() {
+        let args = build_args("release-lto");
+        let i = args
+            .iter()
+            .position(|a| a == "--profile")
+            .expect("--profile");
+        assert_eq!(args[i + 1], "release-lto");
+    }
+
+    /// Whatever the profile, both generators must be requested — the helper's
+    /// single-build-for-both property is what keeps the cargo lock cost at one
+    /// acquisition per test binary.
+    #[test]
+    fn both_generators_are_always_requested() {
+        for profile in ["debug", "release"] {
+            let args = build_args(profile);
+            assert!(args.iter().any(|a| a == "generate_spec_fixture"));
+            assert!(args.iter().any(|a| a == "generate_spec_enumeration"));
+        }
+    }
 }
 
 /// Run a `--features dev` example with `args`, returning its captured output.
