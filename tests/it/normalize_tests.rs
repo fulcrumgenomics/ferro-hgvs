@@ -4292,15 +4292,18 @@ mod comprehensive_normalization_tests {
         fn test_compact_allele_notation() {
             // Compact allele notation with accession before bracket
             // NM_TEST.1:c.[4del;9A>G] format
+            //
+            // Re-blessed for #1234. The deletion sits in the A-run at 4-9, so
+            // its standalone 3'-most position is `9del` — on top of the
+            // substitution at 9. This used to emit `[9del;9A>G]`, two members
+            // claiming one base: malformed, and read back as a bare `9del`
+            // with the substitution swallowed. The deletion is now clamped at
+            // 8, leaving it adjacent to the substitution, and the two coalesce
+            // into a single delins (`delins.md:16`).
             let seq = "GGGAAAAAAGGG";
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.[4del;9A>G]");
-            // Should normalize the variants
-            assert!(
-                result.contains("del") && result.contains("A>G"),
-                "Compact allele should normalize both variants, got: {}",
-                result
-            );
+            assert_eq!(result, "NM_TEST.1:c.8_9delinsG");
         }
     }
 }

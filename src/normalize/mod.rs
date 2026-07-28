@@ -2275,11 +2275,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
             let mut result: Vec<HgvsVariant> = Vec::with_capacity(merged_split.len());
             let mut pass_warnings: Vec<NormalizationWarning> = Vec::new();
-            for v in merged_split {
-                let (r, warnings) = self.normalize_core(&v)?;
+            for v in &merged_split {
+                let (r, warnings) = self.normalize_core(v)?;
                 pass_warnings.extend(warnings);
                 result.push(r);
             }
+            // Each member was shifted in isolation, so one may have run over a
+            // sibling (#1234). Pull those back before the next pass sees them;
+            // a clamped member ends up adjacent to its sibling and the merge at
+            // the top of the loop then coalesces the two.
+            merge::clamp_shifted_members(&merged_split, &mut result, allele.phase);
 
             pass += 1;
             // Stable once a full pass leaves the member set unchanged.

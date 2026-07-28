@@ -1553,6 +1553,176 @@ pub(crate) fn coalesce_protein_adjacent_changes(
     }
 }
 
+// ----------------------------------------------------------------------------
+// Sibling-clamped 3'-shift (#1234)
+// ----------------------------------------------------------------------------
+
+/// Pull back any cis member whose 3'-shift ran into a sibling.
+///
+/// The 3' rule (`general.md:41`) is stated per description with no
+/// allele-awareness, and the only text that ever addressed cross-member
+/// shifting — SVD-WG010 — was rejected, so the spec is silent here. Left
+/// unbounded, a deletion shifts to its *standalone* most-3' position and can
+/// land on top of a downstream sibling: the emitted allele has two members
+/// claiming one base, which is malformed, and it denotes a different sequence
+/// (ferro reads `[6_8del;8A>T]` as a bare `6_8del`, swallowing the
+/// substitution).
+///
+/// A 3'-shift is a rotation, so every position between a member's pre-shift
+/// span and its shifted span describes the same sequence. Pulling the member
+/// back toward its pre-shift position is therefore always sequence-preserving,
+/// and stopping at the last position before the sibling is the most 3' choice
+/// that keeps the members disjoint. Once clamped the member is adjacent to its
+/// sibling rather than overlapping it, and the caller's next merge pass
+/// coalesces the two into one delins (`delins.md:16`).
+///
+/// `before` is the member list as it entered per-member normalization and
+/// supplies the pull-back floor; `after` is the shifted list, mutated in place.
+/// Members whose spans cannot be read (uncertain, offset, special positions)
+/// are left alone.
+pub(crate) fn clamp_shifted_members(
+    before: &[HgvsVariant],
+    after: &mut [HgvsVariant],
+    phase: AllelePhase,
+) {
+    if phase != AllelePhase::Cis || after.len() < 2 || before.len() != after.len() {
+        return;
+    }
+    let Some(kind) = clamp_kind_of(&after[0]) else {
+        return;
+    };
+    // Walk 3'→5' so a member pulled back cannot be re-overlapped by the one
+    // before it in the same pass.
+    for i in (0..after.len() - 1).rev() {
+        let (
+            Some((accession, region, start, end, edit)),
+            Some((next_accession, next_region, next_start, _, next_edit)),
+        ) = (
+            cis_axis_parts(&after[i], kind),
+            cis_axis_parts(&after[i + 1], kind),
+        )
+        else {
+            continue;
+        };
+        // Only edits that actually consume reference bases can collide. An
+        // insertion sits *between* two bases and claims none of them, so a
+        // deletion ending at `p` and an insertion in the gap `p_p+1` are
+        // adjacent, not overlapping — clamping there would break the
+        // shift-created-adjacency collapse (#999) and the self-cancelling
+        // del+ins case (#1135). A duplication is an insertion of a copy, so it
+        // is excluded on the same grounds.
+        if !claims_reference_bases(edit) || !claims_reference_bases(next_edit) {
+            continue;
+        }
+        // Positions on different accessions, or in different regions of one
+        // axis (`c.-1` vs `c.1`), share no coordinate line and cannot overlap.
+        if accession != next_accession || region != next_region {
+            continue;
+        }
+        if end < next_start {
+            continue; // already disjoint
+        }
+        // The clamp reads the list as 5'→3'. An unsorted pair is not a shift
+        // collision — leave it to the sort and merge passes.
+        if start > next_start {
+            continue;
+        }
+        let overlap = end - next_start + 1;
+        // Never pull back past where the member started: those positions were
+        // not reachable by a 3'-shift and are not equivalent.
+        let Some((_, _, floor, _, _)) = cis_axis_parts(&before[i], kind) else {
+            continue;
+        };
+        let pull_back = overlap.min(start - floor);
+        if pull_back <= 0 {
+            continue;
+        }
+        shift_member_left(&mut after[i], pull_back);
+    }
+}
+
+/// Whether an edit consumes the reference bases under its span.
+///
+/// Substitutions, deletions, delins and inversions replace or remove the bases
+/// they cover, so two of them over one position is a genuine conflict.
+/// Insertions and duplications add sequence at a junction without consuming a
+/// base, so they never conflict positionally with a neighbour.
+fn claims_reference_bases(edit: &NaEdit) -> bool {
+    matches!(
+        edit,
+        NaEdit::Substitution { .. }
+            | NaEdit::Deletion { .. }
+            | NaEdit::Delins { .. }
+            | NaEdit::Inversion { .. }
+    )
+}
+
+/// The `CisKind` for the clamp pass, or `None` for a kind it does not serve.
+fn clamp_kind_of(variant: &HgvsVariant) -> Option<CisKind> {
+    match variant {
+        HgvsVariant::Genome(_) => Some(CisKind::Genome),
+        HgvsVariant::Mt(_) => Some(CisKind::Mt),
+        HgvsVariant::Cds(_) => Some(CisKind::Cds),
+        HgvsVariant::Tx(_) => Some(CisKind::Tx),
+        HgvsVariant::Rna(_) => Some(CisKind::Rna),
+        _ => None,
+    }
+}
+
+/// Move a member's span `delta` positions 5', leaving its edit untouched.
+fn shift_member_left(variant: &mut HgvsVariant, delta: i64) {
+    match variant {
+        HgvsVariant::Genome(g) => shift_genome_interval(&mut g.loc_edit.location, delta),
+        HgvsVariant::Mt(m) => shift_genome_interval(&mut m.loc_edit.location, delta),
+        HgvsVariant::Cds(c) => shift_cds_interval(&mut c.loc_edit.location, delta),
+        HgvsVariant::Tx(t) => shift_tx_interval(&mut t.loc_edit.location, delta),
+        HgvsVariant::Rna(r) => shift_rna_interval(&mut r.loc_edit.location, delta),
+        _ => {}
+    }
+}
+
+/// Apply `f` to both certain endpoints of an interval, leaving uncertain or
+/// unknown boundaries untouched.
+fn map_certain_endpoints<T>(interval: &mut Interval<T>, mut f: impl FnMut(&mut T)) {
+    for boundary in [&mut interval.start, &mut interval.end] {
+        if let UncertainBoundary::Single(Mu::Certain(pos)) = boundary {
+            f(pos);
+        }
+    }
+}
+
+fn shift_genome_interval(interval: &mut Interval<GenomePos>, delta: i64) {
+    map_certain_endpoints(interval, |pos| {
+        if pos.special.is_none() {
+            pos.base = pos.base.saturating_sub(delta as u64);
+        }
+    });
+}
+
+fn shift_cds_interval(interval: &mut Interval<CdsPos>, delta: i64) {
+    map_certain_endpoints(interval, |pos| {
+        if pos.special.is_none() && pos.offset.is_none() {
+            pos.base -= delta;
+        }
+    });
+}
+
+fn shift_tx_interval(interval: &mut Interval<TxPos>, delta: i64) {
+    map_certain_endpoints(interval, |pos| {
+        if pos.offset.is_none() {
+            pos.base -= delta;
+        }
+    });
+}
+
+fn shift_rna_interval(interval: &mut Interval<RnaPos>, delta: i64) {
+    map_certain_endpoints(interval, |pos| {
+        if pos.offset.is_none() {
+            pos.base -= delta;
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
