@@ -1574,6 +1574,191 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
     }
 
+    /// Whether a lone (non-allele) member is a shape the sequence-first pass
+    /// can improve: a `delins` or an `inv`, the two forms that may be hiding an
+    /// unchanged interior base and so need re-partitioning (#1230, #1232).
+    ///
+    /// Restricted to the genomic axes because `merge::canonicalize_from_sequence`
+    /// refuses every other one anyway (the `c.`/`n.`/`r.` clamps and alphabet are
+    /// not yet modelled there). Admitting them here would only buy a clone and a
+    /// structural comparison per `normalize()` before the same refusal — and this
+    /// predicate gates every lone member on the hot path.
+    fn is_splittable_single_member(variant: &HgvsVariant) -> bool {
+        let edit = match variant {
+            HV::Genome(g) => &g.loc_edit.edit,
+            HV::Mt(m) => &m.loc_edit.edit,
+            _ => return false,
+        };
+        matches!(
+            edit.inner(),
+            Some(NaEdit::Delins { .. }) | Some(NaEdit::Inversion { .. })
+        )
+    }
+
+    /// Re-derive the variant from the sequence it produces (#1229-#1235).
+    ///
+    /// The per-member pipeline normalizes each cis-allele member in isolation,
+    /// which makes the canonical form depend on the input spelling and lets one
+    /// member's 3'-shift run over a sibling. This pass runs once, at the top
+    /// level, over the already-normalized variant: it applies the whole thing to
+    /// the reference, re-derives the edit set from the (reference, result) pair,
+    /// and partitions it globally. See `merge::canonicalize_from_sequence`.
+    ///
+    /// Canonicalizing can expose further work for the per-member pipeline (a
+    /// derived member may itself 3'-shift), so the two alternate to a fixed
+    /// point. The loop is bounded: each pass either reaches a fixed point or is
+    /// abandoned in favour of the last stable value, so this can never diverge.
+    fn canonicalize_from_sequence(
+        &self,
+        variant: HgvsVariant,
+        warnings: Vec<NormalizationWarning>,
+    ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        /// Alternations between the sequence-first pass and `normalize_core`.
+        /// Two is enough for every shape seen so far; the bound only exists so
+        /// a pathological input cannot spin.
+        const MAX_PASSES: usize = 4;
+
+        let mut current = variant;
+        // The value the loop started from, kept for the exhaustion fallback
+        // below — that branch needs the pre-loop value rather than whichever
+        // way-point the loop stopped on.
+        //
+        // Cloned lazily. Exhaustion requires the loop to have advanced at least
+        // once, so a variant the pass declines on the first line never needs the
+        // copy — and that is the overwhelming majority, since this method runs on
+        // every `normalize()` and every projection while `sequence_first_pass`
+        // serves only cis alleles and lone `delins`/`inv` members. Cloning
+        // eagerly put a heap allocation on that whole path.
+        let mut original: Option<HgvsVariant> = None;
+        // Warnings belonging to the pass whose result is the one we return.
+        //
+        // Only the settled pass's warnings are kept, exactly as the sibling
+        // loop in `normalize_allele` does with its own `settled_warnings`.
+        // Accumulating across passes is wrong twice over: extending *before*
+        // the `renormalized == current` check duplicates every warning the
+        // re-derivation reproduces, and extending on a pass whose result a
+        // later pass overwrites attaches warnings describing a discarded
+        // intermediate state to the final variant. `assert_idempotent` cannot
+        // catch either, because it compares `to_string()` of the variant and
+        // never looks at the warning set.
+        let mut settled_warnings: Vec<NormalizationWarning> = Vec::new();
+        // Every `break` below is a *proof* that `current` is a fixed point of
+        // this loop: the pass declined, or re-deriving reproduced `current`.
+        // Running out of iterations proves nothing, so the two must be told
+        // apart — see the exhaustion branch below.
+        let mut converged = false;
+        for _ in 0..MAX_PASSES {
+            let Some(canonical) = self.sequence_first_pass(&current) else {
+                converged = true;
+                break;
+            };
+            if canonical == current {
+                converged = true;
+                break;
+            }
+            // The re-derived form is expressed in raw coordinates; hand it back
+            // to the per-member pipeline so axis-specific canonicalization
+            // (position shapes, boundary clamps, warnings) is applied to it.
+            let (renormalized, pass_warnings) = self.normalize_core(&canonical)?;
+            if renormalized == current {
+                converged = true;
+                break;
+            }
+            original.get_or_insert_with(|| current.clone());
+            settled_warnings = pass_warnings;
+            current = renormalized;
+        }
+
+        // Exhausting the bound means the last pass's output was never shown to
+        // be stable, and returning it breaks idempotency: `normalize` would
+        // hand back pass 4's result, and normalizing *that* runs the same
+        // alternation again and reaches pass 5. Since the loop is a pure
+        // function of its input, returning the value it started from is
+        // idempotent by construction — the second call re-enters with the same
+        // value, exhausts identically, and returns it again.
+        //
+        // A missed canonicalization is the cost, and it is the right one: this
+        // is the same trade every refusal in `merge` makes, and the pre-loop
+        // value is the per-member pipeline's own output rather than an
+        // arbitrary way-point. `assert_idempotent` is `#[cfg(debug_assertions)]`,
+        // so nothing would catch the alternative in the builds that process
+        // real data.
+        //
+        // Not reachable on any shape measured so far — two alternations settle
+        // every case seen — but "not currently reachable" is exactly the
+        // circumstance in which a silent wrong answer survives.
+        if !converged {
+            // `original` is always `Some` here: reaching the exhaustion branch
+            // means every iteration ran, and each one sets it.
+            return Ok((original.unwrap_or(current), warnings));
+        }
+
+        let mut warnings = warnings;
+        warnings.extend(settled_warnings);
+        Ok((current, warnings))
+    }
+
+    /// One sequence-first re-derivation. `None` when the variant is not a shape
+    /// the pass serves (protein, trans alleles, fusions, and so on).
+    fn sequence_first_pass(&self, variant: &HgvsVariant) -> Option<HgvsVariant> {
+        // Only shapes where a partition decision actually exists. A lone
+        // substitution / deletion / insertion / duplication already has exactly
+        // one canonical partition, so re-deriving it can only lose what the
+        // per-member pipeline added (gene symbol, RNA `U` alphabet, boundary and
+        // exon-junction clamps). A lone `delins` or `inv` is different: those are
+        // precisely the single-member forms that may need splitting (#1230,
+        // #1232).
+        //
+        // Borrowed, not cloned: `canonicalize_from_sequence` refuses far more
+        // often than it rebuilds, and every refusal used to cost a full copy of
+        // the member list (a thousand members for a large allele) first.
+        let members: &[HgvsVariant] = match variant {
+            HV::Allele(allele) => {
+                if allele.uncertain || allele.phase != AllelePhase::Cis || allele.variants.len() < 2
+                {
+                    return None;
+                }
+                &allele.variants
+            }
+            single if Self::is_splittable_single_member(single) => std::slice::from_ref(variant),
+            _ => return None,
+        };
+        // `phase` is `Cis` on both arms — the allele arm refuses anything else
+        // above — and `uncertain` is likewise always false, which is exactly what
+        // `AlleleVariant::new` builds.
+        let rebuilt = merge::canonicalize_from_sequence(members, AllelePhase::Cis, &self.provider)?;
+        match rebuilt.len() {
+            0 => None,
+            1 => rebuilt.into_iter().next(),
+            _ => Some(HV::Allele(crate::hgvs::variant::AlleleVariant::new(
+                rebuilt,
+                AllelePhase::Cis,
+            ))),
+        }
+    }
+
+    /// `normalize_core` followed by the sequence-first canonicalization.
+    ///
+    /// This is the seam every public exit must share. The pass cannot live in
+    /// `normalize_core` itself — `normalize_allele` re-enters that per member, so
+    /// it would recurse — but it also must not be wired into only one of the two
+    /// exits: `normalize()` and `normalize_with_diagnostics()` would then return
+    /// *different canonical strings* for exactly the shapes #1229-#1235 exist to
+    /// canonicalize, and `normalize_with_diagnostics` is what the Python bindings
+    /// and the web service call.
+    ///
+    /// Canonicalizing after the per-member pipeline is safe because the sibling
+    /// clamp (#1234) guarantees the members it produces are disjoint — an allele
+    /// whose members overlap has no well-defined resulting sequence, so
+    /// canonicalizing one would be canonicalizing a corrupted form.
+    fn normalize_core_canonical(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        let (normalized, warnings) = self.normalize_core(variant)?;
+        self.canonicalize_from_sequence(normalized, warnings)
+    }
+
     /// Normalize a variant, apply the strict-mode rejection ladder, and return
     /// the normalized variant together with any warnings that were NOT promoted
     /// to hard errors.
@@ -1590,10 +1775,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
-        // Call `normalize_core` directly (skipping the per-call
+        // Call the canonical core directly (skipping the per-call
         // `detect_shuffle_infos` work `normalize_with_diagnostics` does) and wrap
         // with empty infos; the ladder below only inspects warnings.
-        let (normalized, warnings) = self.normalize_core(variant)?;
+        let (normalized, warnings) = self.normalize_core_canonical(variant)?;
         let result = NormalizeResult::with_warnings(normalized, warnings);
 
         // EINTRONIC (#486): reject an intronic offset on a bare transcript
@@ -1896,7 +2081,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<NormalizeResult, FerroError> {
-        let (result, warnings) = self.normalize_core(variant)?;
+        // Through `normalize_core_canonical`, not `normalize_core`: this exit
+        // must emit the same canonical variant `normalize()` does, and `infos`
+        // must describe the shift from the input to *that* variant.
+        let (result, warnings) = self.normalize_core_canonical(variant)?;
         let infos = detect_shuffle_infos(variant, &result, self.config.shuffle_direction);
         Ok(NormalizeResult::with_diagnostics(result, warnings, infos))
     }

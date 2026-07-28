@@ -28,19 +28,23 @@ fn level(core: &str, a: &str, b: &str) -> EquivalenceLevel {
 
 /// Core `AGTCAGT` at HGVS 257..=263. Replacing all seven bases with `GATTA`
 /// (`g.257_263delinsGATTA`) yields the same sequence as the decomposed cis
-/// allele `[257A>G;258G>A;260C>T;262_263del]` — but ferro keeps them in
-/// different canonical forms (the length-changing delins stays a delins; the
-/// allele normalizes to `[257_258delinsGA;260C>T;262_263del]`). Same resulting
-/// sequence, different normalized strings. This is issue #1158's case A.
+/// allele `[257A>G;258G>A;260C>T;262_263del]`. Since #1235 both encodings
+/// normalize to `[257_258delinsGA;260C>T;262_263del]`, so the checker now
+/// reaches the stronger `NormalizedMatch` rung rather than falling through to
+/// `SequenceMatch`. This is issue #1158's case A.
 const CASE_A_CORE: &str = "AGTCAGT";
 const CASE_A_DELINS: &str = "NC_TEST.1:g.257_263delinsGATTA";
 const CASE_A_ALLELE: &str = "NC_TEST.1:g.[257A>G;258G>A;260C>T;262_263del]";
 
 #[test]
 fn delins_and_decomposed_allele_with_same_sequence_are_equivalent() {
+    // Re-blessed for #1235: the two encodings now converge under `normalize`,
+    // so they match at the normalized-string rung. `SequenceMatch` remains the
+    // rung for pairs that stay in different canonical forms — see the
+    // length-changing cases below.
     assert_eq!(
         level(CASE_A_CORE, CASE_A_DELINS, CASE_A_ALLELE),
-        EquivalenceLevel::SequenceMatch,
+        EquivalenceLevel::NormalizedMatch,
     );
 }
 
