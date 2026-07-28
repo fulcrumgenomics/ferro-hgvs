@@ -1506,16 +1506,70 @@ const MAX_CANONICAL_WINDOW: i64 = 4096;
 /// Padding either side of the changed interval, giving the 3'-shift room.
 const CANONICAL_PAD: i64 = 128;
 
-/// Longest changed block the canonicalizer will *split* into several members.
+/// Longest changed block the canonicalizer will attempt to partition.
 ///
-/// The separation rule (`delins.md:17`) says changes separated by unchanged
-/// nucleotides are described individually, but `delins.md:44-47` keeps a single
-/// spanning delins for a large replacement whose interior only *coincidentally*
-/// aligns ("parts of the inserted sequence align … the delins format is
-/// recommended"), and gives no threshold. A long block is that regime: emit one
-/// delins rather than an alignment artefact. The spec's own counter-example
-/// spans 52 nt.
-const MAX_SPLIT_BLOCK: usize = 32;
+/// This is a cost bound, not a policy: the alignment is quadratic in the block
+/// length, and a block this long is a structural event rather than a few
+/// nucleotide changes. It is deliberately far above the size at which the
+/// separation rule (`delins.md:17`) is the interesting question.
+///
+/// It is *not* the `delins.md:44-47` "coincidental alignment" guard. That
+/// concern — a large replacement whose interior only accidentally aligns, which
+/// the spec keeps as one delins — is handled by [`separations_are_meaningful`]
+/// and the [`changed_columns_of_pieces`] bound, not here.
+///
+/// Restricting the search to single-gap alignments is **not** that guard, and an
+/// earlier revision of this comment claimed it was. The restriction stops the
+/// aligner shredding a contiguous replacement by opening compensating gaps, which
+/// is a real and necessary bound — the #1034/#1040/#182 "stays delins" cases
+/// depend on it. But within one gap [`best_alignment`] still scores *every*
+/// placement and keeps the highest, so it actively hunts for the position with
+/// the most matches and will happily seize on a base that survives by
+/// coincidence. Structure alone therefore cannot tell a real separation from an
+/// accidental one; [`separations_are_meaningful`] is what draws that line.
+///
+/// This bound therefore applies only where a real guard exists — see
+/// [`MAX_UNGUARDED_SPLIT_BLOCK`] for the regime where one does not.
+const MAX_SPLIT_BLOCK: usize = 1024;
+
+/// The same bound for a **net deletion**, where nothing else guards the split.
+///
+/// [`separations_are_meaningful`] is restricted to net insertions, so the three
+/// block regimes are not equally protected:
+///
+/// | regime | guard against a coincidental split |
+/// | --- | --- |
+/// | equal length | none needed — [`best_alignment`] compares position-wise, so there is no gap to place and no search to go wrong |
+/// | net insertion | [`separations_are_meaningful`] |
+/// | **net deletion** | **nothing** |
+///
+/// In the third regime this constant *is* the guard, which is why it stays at
+/// the original 32. That was never the intent — it guarded by accident, being
+/// smaller than the blocks at risk — but raising it to [`MAX_SPLIT_BLOCK`]
+/// across the board removed the cover and split the spec's own
+/// `delins.md:44-47` worked example:
+///
+/// ```text
+/// LRG_199t1:c.850_901delinsTTCCTCGATGCCTG        52 nt -> 14 nt
+///   spanning  LRG_199:g.646630_646681delins…
+///   split     LRG_199:g.[646630_646636delinsTTCCTCG;646640_646678delinsC;
+///                        646680_646681delinsTG]
+/// ```
+///
+/// Which is precisely the harm that passage names, on that passage's own
+/// example: the corpus shows one correct
+/// `p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)` becoming three bogus
+/// consequences.
+///
+/// Splitting the bound by regime keeps the raise where it is safe — a long
+/// equal-length block has no alignment choice to get wrong, and a long net
+/// insertion is guarded — while leaving net deletions exactly as they were.
+///
+/// The principled fix is to extend [`separations_are_meaningful`] to net
+/// deletions and then retire this constant. That is not a local change: the
+/// notes there record that a naive extension breaks #1232 and #1157 and breaks
+/// confluence outright, so it needs its own measurement pass.
+const MAX_UNGUARDED_SPLIT_BLOCK: usize = 32;
 
 /// Unchanged reference bases two pieces of a net insertion must be separated by
 /// before the split between them is believed. See `separations_are_meaningful`.
@@ -2175,7 +2229,14 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
             alt: result.to_vec(),
         }]
     };
-    if reference.len() > MAX_SPLIT_BLOCK || result.len() > MAX_SPLIT_BLOCK {
+    // The cap depends on whether anything else guards this block against a
+    // coincidental split. See `MAX_UNGUARDED_SPLIT_BLOCK`.
+    let cap = if result.len() < reference.len() {
+        MAX_UNGUARDED_SPLIT_BLOCK
+    } else {
+        MAX_SPLIT_BLOCK
+    };
+    if reference.len() > cap || result.len() > cap {
         return whole();
     }
     let Some(columns) = best_alignment(reference, result) else {
@@ -2259,6 +2320,15 @@ fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
 /// `best_alignment`'s score margin cannot work at all: in these cases the winning
 /// placement *is* the 5'-most one, so the margin is zero. Match-density variants
 /// trade corpus rows against unit tests without a threshold that satisfies both.
+///
+/// # Net deletions are not covered here
+///
+/// Deliberately, per the first bullet above. A long net deletion is instead held
+/// by [`MAX_UNGUARDED_SPLIT_BLOCK`], which stays at the original 32 precisely
+/// because this rule does not reach it — see that constant for the spec example
+/// that fails when the bound is raised across the board. Extending this rule to
+/// cover them, and retiring that constant, is the principled fix and needs its
+/// own measurement pass.
 fn separations_are_meaningful(pieces: &[Piece]) -> bool {
     pieces
         .windows(2)
@@ -2279,6 +2349,21 @@ fn separations_are_meaningful(pieces: &[Piece]) -> bool {
 /// inside one block) lets the aligner manufacture matches from coincidence and
 /// shred a genuinely contiguous replacement — the regime `delins.md:44-47`
 /// warns about, seen concretely in the #1034/#1040/#182 "stays delins" cases.
+///
+/// # Cost
+///
+/// Scoring is arithmetic rather than materialized. A single-gap alignment is
+/// fully described by its gap offset `k`, so a placement's matched-column count
+/// can be read straight off the two slices and only the winner is ever built.
+/// Building every candidate instead cost one `Vec<Column>` per placement — at
+/// [`MAX_SPLIT_BLOCK`] that is 1025 allocations of 1024 columns each, roughly
+/// 33 MB of churn for one call, all but one dropped immediately.
+///
+/// The score is also *separable*: the columns before the gap pair `i` with `i`
+/// and those after it pair `i` with `i + gap_len`, and neither set depends on
+/// `k` beyond where it is cut. Two running sums therefore answer every placement
+/// in O(1), making the search linear rather than quadratic — at
+/// [`MAX_SPLIT_BLOCK`] that is ~1024 comparisons against ~1e6.
 fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
     if reference.len() == result.len() {
         return Some((0..reference.len()).map(|i| (Some(i), Some(i))).collect());
@@ -2294,23 +2379,40 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
         result.len()
     };
 
-    let mut best: Option<(usize, Vec<Column>)> = None;
+    // Matched columns for the placement whose gap follows `k` aligned positions.
+    // Columns before the gap pair `i` with `i`; those after it pair across the
+    // gap. Exactly what `single_gap_alignment` lays out, counted instead of
+    // built.
+    //
+    // `leading(k)` grows with `k` and `trailing(k)` shrinks with it, so both are
+    // swept once: `leading` accumulates the column `k` just crossed, and
+    // `trailing` starts at its `k == 0` value and sheds that same column.
+    let ungapped = |i: usize| -> bool {
+        if shorter_is_ref {
+            reference[i] == result[i + gap_len]
+        } else {
+            reference[i + gap_len] == result[i]
+        }
+    };
+    let mut leading = 0usize;
+    let mut trailing = (0..anchored).filter(|&i| ungapped(i)).count();
+
+    let mut best: Option<(usize, usize)> = None;
     for k in 0..=anchored {
-        let columns =
-            single_gap_alignment(k, gap_len, shorter_is_ref, reference.len(), result.len());
-        let matches = columns
-            .iter()
-            .filter(|(r, a)| match (r, a) {
-                (Some(ri), Some(ai)) => reference[*ri] == result[*ai],
-                _ => false,
-            })
-            .count();
+        if k > 0 {
+            leading += usize::from(reference[k - 1] == result[k - 1]);
+            trailing -= usize::from(ungapped(k - 1));
+        }
+        let matches = leading + trailing;
         // Strictly greater keeps the first (5'-most) alignment on a tie.
         if best.as_ref().is_none_or(|(score, _)| matches > *score) {
-            best = Some((matches, columns));
+            best = Some((matches, k));
         }
     }
-    best.map(|(_, columns)| columns)
+    // Only the winner is materialized.
+    best.map(|(_, k)| {
+        single_gap_alignment(k, gap_len, shorter_is_ref, reference.len(), result.len())
+    })
 }
 
 /// Columns for an alignment with a single gap of `gap_len` after `k` aligned
@@ -2814,6 +2916,69 @@ mod tests {
         assert_eq!(forward, reversed, "member order changed the result");
         // `ACGT` | `TT` replacing [5, 6] | `GT` | `G` inserted after 8 | `AC`
         assert_eq!(forward.as_deref(), Some(&b"ACGTTTGTGAC"[..]));
+    }
+
+    /// `partition_block` bounds by *regime*, not by length alone.
+    ///
+    /// Only net deletions are unguarded (`separations_are_meaningful` covers net
+    /// insertions, and an equal-length block has no alignment choice to make), so
+    /// only they keep the original 32 nt bound. Tested here rather than through
+    /// `normalize` because the end-to-end path routes through `best_alignment`'s
+    /// max-match search, which makes the *fixture* rather than the bound decide
+    /// the outcome.
+    #[test]
+    fn partition_block_bounds_a_long_net_deletion_but_not_its_siblings() {
+        let reference: Vec<u8> = b"ACGT".repeat(13); // 52 nt, past the 32 nt bound
+        assert_eq!(reference.len(), 52);
+
+        // Net deletion: unguarded, so the bound must keep it whole.
+        let deletion_result = b"TTCCTCGATGCCTG".to_vec(); // 14 nt
+        assert!(deletion_result.len() < reference.len());
+        let pieces = partition_block(&reference, &deletion_result);
+        assert_eq!(
+            pieces.len(),
+            1,
+            "a 52 -> 14 net deletion must stay one piece; got {pieces:?}"
+        );
+        assert_eq!(pieces[0].ref_start, 0);
+        assert_eq!(pieces[0].ref_end, reference.len());
+
+        // Equal length, same span: no gap to place, so the raise applies and an
+        // unchanged interior base still separates two pieces.
+        let mut equal_result: Vec<u8> = reference.iter().map(|b| flip_base(*b)).collect();
+        equal_result[25] = reference[25];
+        let pieces = partition_block(&reference, &equal_result);
+        assert_eq!(
+            pieces.len(),
+            2,
+            "an equal-length block past 32 nt must still split; got {pieces:?}"
+        );
+
+        // Net insertion of the same span: guarded by `separations_are_meaningful`,
+        // so the raise applies here too — the bound is not what stops it.
+        let mut insertion_result = equal_result.clone();
+        insertion_result.extend_from_slice(b"GG");
+        assert!(insertion_result.len() > reference.len());
+        assert!(
+            reference.len() > MAX_UNGUARDED_SPLIT_BLOCK,
+            "fixture must exceed the unguarded bound or it proves nothing"
+        );
+        // Whatever partition the aligner picks, the *bound* must not have been
+        // the thing that refused it — that is the regime distinction under test.
+        let pieces = partition_block(&reference, &insertion_result);
+        assert!(
+            !pieces.is_empty(),
+            "a net insertion past 32 nt must still reach the aligner"
+        );
+    }
+
+    fn flip_base(base: u8) -> u8 {
+        match base {
+            b'A' => b'C',
+            b'C' => b'A',
+            b'G' => b'T',
+            _ => b'G',
+        }
     }
 
     /// `complement_base` must refuse a byte that is not a base.
