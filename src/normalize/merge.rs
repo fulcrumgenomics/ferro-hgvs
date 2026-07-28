@@ -2042,13 +2042,23 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     if rebuilt == variants {
         return variants;
     }
-    // Never let canonicalization silently change what the variant means.
-    debug_assert_eq!(
-        collect_canonical_edits(&rebuilt, kind, body, &template_accession)
-            .and_then(|e| apply_edits_to_window(&e, &ref_bytes, w_lo)),
-        Some(result),
-        "sequence-first canonicalization changed the resulting sequence"
-    );
+    // Never let canonicalization change what the variant means. This is a
+    // *runtime* refusal, not a debug assertion: the whole point of #1234 is that
+    // a normalizer silently emitting a different variant is the worst failure
+    // this crate can have, and a `debug_assert` is compiled out of exactly the
+    // release builds that process real data. Re-deriving the result from the
+    // rebuilt members and comparing costs one window-sized apply on a path that
+    // has already fetched and applied that window once.
+    //
+    // If it does not round-trip, fall back to the per-member pipeline's output
+    // rather than emitting the re-derivation. A missed canonicalization is a
+    // cosmetic defect; a changed sequence is data corruption.
+    let round_trips = collect_canonical_edits(&rebuilt, kind, body, &template_accession)
+        .and_then(|edits| apply_edits_to_window(&edits, &ref_bytes, w_lo))
+        .is_some_and(|reapplied| reapplied == result);
+    if !round_trips {
+        return variants;
+    }
     rebuilt
 }
 
