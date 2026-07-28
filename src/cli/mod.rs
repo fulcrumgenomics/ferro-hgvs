@@ -10,8 +10,9 @@ pub mod project;
 
 // Re-export commonly used items
 pub use format::{
-    output_error, output_error_with_context, output_project_error, output_projection,
-    output_result, OutputFormat,
+    normalize_tsv_row, normalize_tsv_summary, output_error, output_error_with_context,
+    output_project_error, output_projection, output_result, NormalizeTsvFailure,
+    NormalizeTsvOutcome, NormalizeTsvRow, OutputFormat, NORMALIZE_TSV_HEADER,
 };
 pub use parse::{
     parse_genome_build, parse_shuffle_direction, parse_vcf_line, parse_vcf_line_with_build,

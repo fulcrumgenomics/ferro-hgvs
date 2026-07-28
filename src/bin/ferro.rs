@@ -7,8 +7,10 @@
 
 use clap::{Parser, Subcommand};
 use ferro_hgvs::cli::{
-    output_error as cli_output_error, output_error_with_context as cli_output_error_with_context,
-    parse_genome_build, parse_shuffle_direction, parse_vcf_line, process_input_line, OutputFormat,
+    normalize_tsv_row, normalize_tsv_summary, output_error as cli_output_error,
+    output_error_with_context as cli_output_error_with_context, parse_genome_build,
+    parse_shuffle_direction, parse_vcf_line, process_input_line, OutputFormat,
+    NORMALIZE_TSV_HEADER,
 };
 use ferro_hgvs::config::{apply_override, FerroConfig, OverrideSource};
 use ferro_hgvs::error_handling::{
@@ -23,6 +25,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Parser)]
 #[command(name = "ferro")]
@@ -227,8 +230,11 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// Output format
-        #[arg(short = 'f', long, default_value = "text", value_parser = ["text", "json"])]
+        /// Output format. `tsv` writes a header-bearing table (one row per
+        /// input: line, input, normalized, changed, status, detail) plus a
+        /// summary line on stderr, for answering "which of my variants
+        /// changed?".
+        #[arg(short = 'f', long, default_value = "text", value_parser = ["text", "json", "tsv"])]
         format: String,
 
         /// Shuffle direction (3prime or 5prime)
@@ -1350,6 +1356,7 @@ fn run_hgvs_to_vcf(
 }
 
 /// Outcome of processing one input line in the batch normalize/parse driver.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LineStatus {
     /// Line was blank/comment and produced no output (not counted).
     Skipped,
@@ -1378,6 +1385,19 @@ impl LineResult {
             status: LineStatus::Skipped,
         }
     }
+}
+
+/// Write the `normalize --format tsv` header row, when that is the format.
+///
+/// Deliberately called only once the run's input is known to be readable: writing
+/// it while opening the output stream made `--input missing.txt` leave behind a
+/// header-only artifact byte-identical to the one a *successful* empty-input run
+/// produces, with nothing on the output stream to tell the two apart.
+fn write_tsv_header<W: Write>(writer: &mut W, tsv: bool) -> io::Result<()> {
+    if tsv {
+        writeln!(writer, "{}", NORMALIZE_TSV_HEADER)?;
+    }
+    Ok(())
 }
 
 /// Number of input lines processed per batch before their results are written.
@@ -1514,6 +1534,77 @@ fn run_normalize(
     let mut total_count = 0usize;
     let start = Instant::now();
 
+    // TSV is a *reporting* format rather than a per-variant rendering: every
+    // input becomes exactly one row (failures included), so it needs its own
+    // per-variant path and a header written before any row. Keeping it entirely
+    // out of `process` below is what guarantees `text` and `json` output is
+    // byte-for-byte unchanged.
+    let tsv = format == "tsv";
+    // Counted separately from success/error because only TSV reports it, and the
+    // batch driver's per-line closure must be `Sync` (it may run on a rayon
+    // pool), so the counter cannot be a captured `&mut usize`.
+    let changed_count = AtomicUsize::new(0);
+
+    // Render one input variant as a TSV row, classifying a failure by the phase
+    // it happened in. `line` is the 1-based input line number, or `None` for a
+    // single positional variant, which has no line context. Warnings go to `err`
+    // in the same shape as the text format *and* into the row's `detail`, so a
+    // lenient-mode correction is both greppable where it always was and
+    // correlatable to the row it explains.
+    let tsv_row = |line: Option<usize>, v: &str, err: &mut dyn Write| -> (String, LineStatus) {
+        use ferro_hgvs::cli::{NormalizeTsvFailure, NormalizeTsvOutcome};
+
+        let failed = |phase: NormalizeTsvFailure, detail: &str| -> (String, LineStatus) {
+            (
+                normalize_tsv_row(line, v, NormalizeTsvOutcome::Failed(phase, detail)).row,
+                LineStatus::Err,
+            )
+        };
+
+        let mut preprocess_result = preprocessor.preprocess(v);
+        if let Some(rejection) = preprocess_result.take_rejection_error() {
+            return failed(NormalizeTsvFailure::Preprocess, &rejection.to_string());
+        }
+        let corrections: Vec<(&str, &str)> = preprocess_result
+            .warnings
+            .iter()
+            .map(|w| (w.error_type.code(), w.message.as_str()))
+            .collect();
+        for warning in &preprocess_result.warnings {
+            let _ = writeln!(
+                err,
+                "warning[{}]: {}",
+                warning.error_type.code(),
+                warning.message
+            );
+        }
+        let parsed = match parse_hgvs(&preprocess_result.preprocessed) {
+            Ok(parsed) => parsed,
+            Err(e) => return failed(NormalizeTsvFailure::Parse, &e.to_string()),
+        };
+        match normalizer.normalize(&parsed) {
+            Ok(normalized) => {
+                let normalized_str = normalized.to_string();
+                let row = normalize_tsv_row(
+                    line,
+                    v,
+                    NormalizeTsvOutcome::Normalized {
+                        normalized: normalized_str.as_str(),
+                        corrections: &corrections,
+                    },
+                );
+                // The verdict comes back from the renderer rather than being
+                // recomputed here, so the summary's `changed` count and the
+                // column cannot drift apart.
+                if row.changed {
+                    changed_count.fetch_add(1, Ordering::Relaxed);
+                }
+                (row.row, LineStatus::Ok)
+            }
+            Err(e) => failed(NormalizeTsvFailure::Normalize, &e.to_string()),
+        }
+    };
+
     // Per-line work, factored so it can run serially or in parallel: `out`
     // receives the success output (the order-critical stdout/file stream) and
     // `err` receives text-mode warnings. Both are written into per-line buffers
@@ -1586,7 +1677,20 @@ fn run_normalize(
         // `output_error`). Warnings go straight to the live stderr.
         total_count += 1;
         let mut stderr = io::stderr();
-        if let Err(e) = process(v, &mut writer, &mut stderr) {
+        if tsv {
+            // A failure is a row here too, so `--format tsv` on one positional
+            // variant reports the same way as a one-line `--input` file — except
+            // for the `line` column, which is empty because there is no file to
+            // number lines in.
+            write_tsv_header(&mut writer, tsv)?;
+            let (row, status) = tsv_row(None, v, &mut stderr);
+            writeln!(writer, "{}", row)?;
+            if status == LineStatus::Ok {
+                success_count += 1;
+            } else {
+                error_count += 1;
+            }
+        } else if let Err(e) = process(v, &mut writer, &mut stderr) {
             output_error(v, &e, format)?;
             error_count += 1;
         } else {
@@ -1605,6 +1709,20 @@ fn run_normalize(
             let Some(variant_str) = process_input_line(line, is_first) else {
                 return LineResult::skipped();
             };
+            if tsv {
+                // One row per line, failures included: the row *is* the error
+                // report, so nothing goes to the per-line stderr buffer except
+                // preprocessing warnings.
+                let mut err = Vec::new();
+                let (row, status) = tsv_row(Some(line_num + 1), variant_str, &mut err);
+                let mut out = Vec::new();
+                let _ = writeln!(out, "{}", row);
+                return LineResult {
+                    stdout: out,
+                    stderr: err,
+                    status,
+                };
+            }
             let mut out = Vec::new();
             let mut err = Vec::new();
             let status = match process(variant_str, &mut out, &mut err) {
@@ -1630,7 +1748,10 @@ fn run_normalize(
         };
 
         let (t, s, er) = if let Some(input_path) = input {
+            // Open before the header is written: a missing input file must not
+            // leave a header-only artifact behind (see `write_tsv_header`).
             let file = std::fs::File::open(input_path)?;
+            write_tsv_header(&mut writer, tsv)?;
             run_batch(
                 io::BufReader::new(file).lines(),
                 &mut writer,
@@ -1640,6 +1761,7 @@ fn run_normalize(
         } else {
             let stdin = io::stdin();
             let reader = stdin.lock();
+            write_tsv_header(&mut writer, tsv)?;
             run_batch(reader.lines(), &mut writer, workers, &item)?
         };
         total_count += t;
@@ -1650,12 +1772,32 @@ fn run_normalize(
     // The reference provider (cdot maps + FASTA index, ~1.4 GB) is owned by
     // `normalizer`. Running its destructor here only frees memory the OS
     // reclaims at process exit anyway — on a batch run ~10% of wall time is
-    // spent walking the millions of map entries to drop them. `process`
-    // borrowed `normalizer`, but its last use is above, so that borrow has
-    // already ended; leak `normalizer` so the process can exit without the
-    // teardown. `writer` is independent (output is passed in, not captured)
-    // and still flushes on its own drop, so this does not affect output.
+    // spent walking the millions of map entries to drop them. Both `process` and
+    // `tsv_row` borrowed `normalizer`, but the last use of either is above, so
+    // those borrows have already ended; leak `normalizer` so the process can exit
+    // without the teardown. `writer` is independent (output is passed in, not
+    // captured) and still flushes on its own drop, so this does not affect output.
     std::mem::forget(normalizer);
+
+    // The run summary answers "how many of my variants changed?" without the
+    // caller having to re-read the table. It goes to stderr so the output stream
+    // stays a table whose every line is a row.
+    if tsv {
+        // Flush before claiming counts: with `--output` the rows are sitting in a
+        // `BufWriter` whose `Drop` would swallow a write error, so flushing here
+        // is what turns a failed write into a reported failure rather than a
+        // summary that asserts rows were emitted. (Bare stdout is a `LineWriter`,
+        // already flushed per row, so there this is a no-op.)
+        writer.flush()?;
+        eprintln!(
+            "{}",
+            normalize_tsv_summary(
+                total_count,
+                changed_count.load(Ordering::Relaxed),
+                error_count
+            )
+        );
+    }
 
     let elapsed = start.elapsed();
 
