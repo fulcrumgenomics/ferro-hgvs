@@ -1775,13 +1775,36 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     if rebuilt == variants {
         return None;
     }
-    // Never let canonicalization silently change what the variant means.
+    // Never let canonicalization change what the variant means. This is a
+    // *runtime* refusal, not a debug assertion: the whole point of #1234 is that
+    // a normalizer silently emitting a different variant is the worst failure
+    // this crate can have, and a `debug_assert` is compiled out of exactly the
+    // release builds that process real data. Re-deriving the result from the
+    // rebuilt members and comparing costs one window-sized apply on a path that
+    // has already fetched and applied that window once.
+    //
+    // If it does not round-trip, fall back to the per-member pipeline's output
+    // rather than emitting the re-derivation. A missed canonicalization is a
+    // cosmetic defect; a changed sequence is data corruption.
+    //
+    // The three ways this can decline are kept apart on purpose. A rebuilt form
+    // that will not lower back to edits, and one whose edits will not re-apply,
+    // are both "cannot tell" — the pass declines and the per-member output
+    // stands, which is unremarkable. A round trip that *succeeds* and disagrees
+    // is the interesting one: it means the canonicalizer built a form denoting
+    // different bases, which is a defect in this module rather than an input it
+    // cannot serve. Collapsing all three into one boolean would hide that case
+    // among the other two, so it gets a `debug_assert` of its own — loud in
+    // tests and development, with the runtime refusal still carrying release.
+    let rebuilt_edits = collect_canonical_edits(&rebuilt, kind, body, &template_accession)?;
+    let reapplied = apply_edits_to_window(&rebuilt_edits, &ref_bytes, w_lo)?;
     debug_assert_eq!(
-        collect_canonical_edits(&rebuilt, kind, body, &template_accession)
-            .and_then(|e| apply_edits_to_window(&e, &ref_bytes, w_lo)),
-        Some(result),
+        reapplied, result,
         "sequence-first canonicalization changed the resulting sequence"
     );
+    if reapplied != result {
+        return None;
+    }
     Some(rebuilt)
 }
 /// The `CisKind` a variant belongs to, or `None` for an axis the sequence-first
