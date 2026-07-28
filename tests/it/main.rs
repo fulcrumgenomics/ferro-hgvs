@@ -158,6 +158,7 @@ mod issue_1210_repeat_gate_tract_span;
 mod issue_1217_mito_terminus_insertion_clamp;
 mod issue_1234_sibling_clamped_shift;
 mod issue_1235_cis_allele_confluence;
+mod issue_1235_transcript_axes;
 mod issue_1244_equivalence_overlap_panic;
 mod issue_1254_sibling_crossing_shift;
 mod issue_129_mt_circular_wraparound;

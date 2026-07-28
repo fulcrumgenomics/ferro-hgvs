@@ -420,7 +420,10 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     //     (delta = `cds_start - 1`) — the same mapping `lookup_codon_middle_ref`
     //     uses. Both regions have been restricted to the positive body above.
     let accession = template_accession.transcript_accession();
-    let Some(delta) = axis_sequence_delta(kind, &template_accession, provider) else {
+    // Only the offset matters here — this collapse has no codon exception to
+    // gate, so the frame's `reading_frame` half is not consulted.
+    let Some(delta) = axis_frame(kind, &template_accession, provider).map(|frame| frame.delta)
+    else {
         return variants;
     };
     let start0 = w_lo + delta - 1;
@@ -1652,18 +1655,20 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         return None;
     }
     let kind = cis_kind_of(&variants[0])?;
-    // Genomic axes only, for now. The transcript axes (`c.`/`n.`/`r.`) layer
-    // several rules on top of a raw re-derivation that this pass does not yet
-    // model: the CDS/UTR and transcript-end insertion clamps (#1202, #1205,
-    // #1207, #1209, #383, #387), the exon-junction exception to the 3' rule
-    // (`general.md:44`), the coding one-amino-acid exception to the separation
-    // rule (`general.md:35`, still current law — SVD-WG010 was rejected), and
-    // the `r.` `U`/`T` alphabet. Re-deriving without them silently discards
-    // them. All of #1229-#1235 were reported on `g.`; the transcript axes are
-    // tracked as follow-up.
-    if !matches!(kind, CisKind::Genome | CisKind::Mt) {
-        return None;
-    }
+    // Every axis, genomic and transcript. #1237 gated this to `g.`/`m.` because
+    // the transcript axes layer extra rules on a raw re-derivation; each is now
+    // either implemented here or shown to be already covered:
+    //
+    // * the coding one-amino-acid exception (`general.md:35`, still current law
+    //   — SVD-WG010 was rejected) — `apply_coding_codon_exception` below;
+    // * the `r.` `U`/`T` alphabet — `canonical_base_byte` folds the window into
+    //   one alphabet before any comparison;
+    // * the CDS/UTR and transcript-end insertion clamps (#1202, #1205, #1207,
+    //   #1209, #383, #387) and the exon-junction exception to the 3' rule
+    //   (`general.md:44`) — covered by the pass's existing refusals: the body
+    //   region check in `collect_canonical_edits` keeps every member inside the
+    //   positive body, and the lone-pure-insertion bail hands terminal
+    //   insertions back to the per-member pipeline that owns those clamps.
     let body = body_region(kind);
     let (template_accession, _, _, _, _) = cis_axis_parts(&variants[0], kind)?;
     let template_accession = template_accession.clone();
@@ -1678,16 +1683,25 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         return None;
     }
 
-    let delta = axis_sequence_delta(kind, &template_accession, provider)?;
+    let frame = axis_frame(kind, &template_accession, provider)?;
     let accession = template_accession.transcript_accession();
-    let start0 = w_lo + delta - 1;
-    let end0 = w_hi + delta;
+    let start0 = w_lo + frame.delta - 1;
+    let end0 = w_hi + frame.delta;
     if start0 < 0 {
         return None;
     }
     // A short read at the 3' end is normal near the sequence end; retry with the
     // window the provider can actually serve so terminal variants still resolve.
     let ref_bytes = fetch_canonical_window(provider, &accession, start0, end0)?;
+    // Compare in one alphabet. On the `r.` axis the submitted bases are RNA
+    // (`u`) while the transcript reference is DNA (`T`), so a position holding
+    // the same nucleotide would otherwise read as changed and corrupt the whole
+    // partition. Folding `U` to `T` is safe to do unconditionally, and costs
+    // nothing on the DNA axes. Emitting `T` is likewise correct for `r.`: its
+    // formatter lower-cases and maps `T` to `u` when it renders an alt
+    // sequence, the same assumption `apply_canonical_split` already relies on.
+    // (`fetch_canonical_window` has already upper-cased, so this only folds.)
+    let ref_bytes: Vec<u8> = ref_bytes.iter().map(|b| canonical_base_byte(*b)).collect();
 
     // A member that misstates its reference base is a reference mismatch, not a
     // canonicalization problem: strict mode must still reject it and lenient
@@ -1747,6 +1761,14 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     if changed_columns_of_pieces(&pieces) > changed_columns_of_edits(&edits) {
         return None;
     }
+
+    // Applied *after* the weight bound, deliberately. The bound is a statement
+    // about the re-derived partition — it may not describe more change than the
+    // input did — and the codon exception (`general.md:35`) is a licensed
+    // widening on top of an already-accepted partition, not part of what the
+    // bound judges. Running it first would let a legitimate codon merge inflate
+    // the weight and trip a refusal.
+    apply_coding_codon_exception(&mut pieces, frame.reading_frame, w_lo, &ref_bytes);
     if needs_unsupported_form(&pieces, &ref_bytes) {
         return None;
     }
@@ -1964,20 +1986,72 @@ fn edit_span_union(edits: &[GEdit]) -> Option<(i64, i64)> {
     (lo <= hi).then_some((lo, hi))
 }
 
-/// Offset between the member axis and the fetched sequence: 0 for `g.`/`m.`/`n.`,
-/// `cds_start - 1` for the CDS-relative `c.`/`r.` axes.
-fn axis_sequence_delta<P: ReferenceProvider>(
+/// How a cis group's own axis sits on the sequence the provider serves.
+///
+/// The two facts travel together because both are answered by the same
+/// `cds_start` lookup, and a second provider round-trip to re-answer the other
+/// half would be pure waste on a path that already fetches a window.
+struct AxisFrame {
+    /// Offset between the member axis and the fetched sequence: 0 for
+    /// `g.`/`m.`/`n.`, `cds_start - 1` for the CDS-relative `c.`/`r.` axes.
+    delta: i64,
+    /// Whether positions on this axis carry a **reading frame** — i.e. whether
+    /// [`same_codon`] means anything here. True only when the axis is
+    /// CDS-relative *and* the transcript actually has a CDS.
+    ///
+    /// Not the same question as `delta`: a non-coding `r.` falls back to
+    /// `delta == 0` and is still an `r.` description, so keying the codon
+    /// exception off the axis alone stamps a reading frame onto a transcript
+    /// that has none (#1241).
+    reading_frame: bool,
+}
+
+/// Resolve the group's [`AxisFrame`], or refuse the group.
+fn axis_frame<P: ReferenceProvider>(
     kind: CisKind,
     accession: &Accession,
     provider: &P,
-) -> Option<i64> {
+) -> Option<AxisFrame> {
     match kind {
-        CisKind::Genome | CisKind::Mt | CisKind::Tx => Some(0),
-        CisKind::Cds | CisKind::Rna => {
+        CisKind::Genome | CisKind::Mt | CisKind::Tx => Some(AxisFrame {
+            delta: 0,
+            reading_frame: false,
+        }),
+        CisKind::Cds => {
             let tx = provider
                 .get_transcript(&accession.transcript_accession())
                 .ok()?;
-            i64::try_from(tx.cds_start?).ok().map(|start| start - 1)
+            Some(AxisFrame {
+                delta: i64::try_from(tx.cds_start?).ok()? - 1,
+                reading_frame: true,
+            })
+        }
+        // `r.` is CDS-relative on a coding transcript but transcript-relative on
+        // a non-coding one, which has no `cds_start` at all. Refusing there
+        // would leave every non-coding `r.` description outside the
+        // canonicalization; fall back to transcript-1, matching what
+        // `fetch_ref_for_canonical_split` does for the same case.
+        CisKind::Rna => {
+            let cds_start = provider
+                .get_transcript(&accession.transcript_accession())
+                .ok()
+                .and_then(|tx| tx.cds_start);
+            match cds_start {
+                Some(cds_start) => Some(AxisFrame {
+                    delta: i64::try_from(cds_start).ok()? - 1,
+                    reading_frame: true,
+                }),
+                // Transcript-relative: either a non-coding transcript, or a
+                // provider that cannot resolve it. Both mean "no CDS offset",
+                // not "refuse" — `Tx` reaches the same conclusion without ever
+                // consulting the provider. Neither has a reading frame: the
+                // non-coding transcript has no CDS, and an unresolvable one
+                // gives no grounds to claim it has.
+                None => Some(AxisFrame {
+                    delta: 0,
+                    reading_frame: false,
+                }),
+            }
         }
     }
 }
@@ -2090,11 +2164,74 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
         }
     }
 
+    // An insertion — or a duplication's copy — landing *strictly inside*
+    // territory a sibling deletes, replaces, or inverts is the #486 overlap
+    // conflict: `c.[4_10inv;5_6insAA]` says nothing about whether the inserted
+    // bases are themselves inverted, so the combination has no defined
+    // resulting sequence. Ferro's standing answer since #395/#486/#1004 is to
+    // report `OverlapConflict` (an error in strict mode) and leave the
+    // description alone rather than pick a winner. This pass would instead
+    // apply both edits in member order and hand back a tidy single edit that no
+    // longer looks conflicted at all (`c.5_9delinsCAAAATT`) — laundering the
+    // conflict out of the string while the warning still says there is one.
+    //
+    // The interior test is `overlap::detect_insertion_overlaps`' own — the
+    // junction after `gap` is interior to `[s, e]` when `s <= gap < e` — so
+    // this refuses exactly the set that detector reports and no more. An
+    // insertion merely *abutting* a span's edge is not interior and stays
+    // accepted, which is what keeps the spec-valid shape that detector
+    // documents (an insertion on each side of a substitution) flowing through.
+    //
+    // Keyed off the edit geometry rather than off the `OverlapConflict` warning
+    // the earlier layers raise, deliberately: the geometry is a property of the
+    // edits themselves and so survives any respelling of them, whereas the
+    // diagnostic has to be re-derived by a detector on each pass. That
+    // distinction is not hypothetical — the per-member pipeline rewrites
+    // `[4_10inv;5_6insAA]` into `[5_9inv;5_6dup]`, and a detector that keys on
+    // `NaEdit::Insertion` alone stops seeing the conflict once the interior
+    // `ins` has become a `dup`. A warning-driven refusal would then decline on
+    // the first pass and accept on the second, costing idempotency
+    // (`FERRO_ASSERT_IDEMPOTENT` catches it).
+    //
+    // `detect_insertion_overlaps` now registers `dup` and `repeat` as junction
+    // occupants too, exactly as the `GEdit::Dup { e, .. } => *e` arm below does,
+    // so the two agree on those shapes. Keying off geometry keeps them from
+    // drifting apart again.
     let n = ref_bytes.len();
     let idx = |p: i64| -> Option<usize> {
         let i = p - w_lo;
         (i >= 0 && (i as usize) < n).then_some(i as usize)
     };
+    // `interior_gap[i]` marks the junction *after* window position `i` as
+    // enclosed by some span edit. Marked as a bitmap in one pass rather than
+    // re-scanned per insertion, mirroring `claimed` below: a 4096-wide window
+    // may carry as many members, and the pairwise form is quadratic in that.
+    let mut interior_gap = vec![false; n];
+    for edit in edits {
+        let (s, e) = match edit {
+            GEdit::Del { s, e } | GEdit::Delins { s, e, .. } | GEdit::Inv { s, e } => (*s, *e),
+            GEdit::Ins { .. } | GEdit::Dup { .. } | GEdit::Sub { .. } => continue,
+        };
+        for p in s..e {
+            if let Some(i) = idx(p) {
+                interior_gap[i] = true;
+            }
+        }
+    }
+    for edit in edits {
+        let gap = match edit {
+            GEdit::Ins { gap, .. } => *gap,
+            // A `Dup` writes its copy into the slot after its own last base.
+            GEdit::Dup { e, .. } => *e,
+            GEdit::Del { .. } | GEdit::Delins { .. } | GEdit::Inv { .. } | GEdit::Sub { .. } => {
+                continue
+            }
+        };
+        if idx(gap).is_some_and(|i| interior_gap[i]) {
+            return None;
+        }
+    }
+
     let mut cell: Vec<Option<u8>> = ref_bytes.iter().map(|b| Some(*b)).collect();
     let mut after: Vec<Vec<u8>> = vec![Vec::new(); n];
     let mut claimed = vec![false; n];
@@ -2119,7 +2256,7 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
             }
             GEdit::Sub { pos, alt } => {
                 claim(&mut claimed, *pos, *pos)?;
-                cell[idx(*pos)?] = Some(alt.to_u8());
+                cell[idx(*pos)?] = Some(canonical_base_byte(alt.to_u8()));
             }
             GEdit::Delins { s, e, alt } => {
                 claim(&mut claimed, *s, *e)?;
@@ -2138,7 +2275,7 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
                 if !after[slot].is_empty() {
                     return None;
                 }
-                after[slot].extend(alt.iter().map(|b| b.to_u8()));
+                after[slot].extend(alt.iter().map(|b| canonical_base_byte(b.to_u8())));
             }
             GEdit::Ins { gap, alt } => {
                 // An insertion occupies no reference position, so it claims
@@ -2147,7 +2284,7 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
                 if !after[slot].is_empty() {
                     return None;
                 }
-                after[slot].extend(alt.iter().map(|b| b.to_u8()));
+                after[slot].extend(alt.iter().map(|b| canonical_base_byte(b.to_u8())));
             }
             GEdit::Dup { s, e } => {
                 let mut copied = Vec::with_capacity((*e - *s + 1) as usize);
@@ -2183,6 +2320,19 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
         out.extend(&after[i]);
     }
     Some(out)
+}
+
+/// Fold a base byte into the single alphabet used for comparison: upper case,
+/// with `U` mapped to `T`.
+///
+/// The `r.` axis submits RNA bases while its reference is the DNA transcript
+/// sequence, so uracil and thymine denote the same nucleotide and must compare
+/// equal — otherwise every `u` in an `r.` description reads as a change.
+fn canonical_base_byte(base: u8) -> u8 {
+    match base.to_ascii_uppercase() {
+        b'U' => b'T',
+        other => other,
+    }
 }
 
 /// Watson-Crick complement of an IUPAC base, case-insensitive, as uppercase.
@@ -2580,6 +2730,99 @@ fn shift_pieces_three_prime(pieces: &mut [Piece], ref_bytes: &[u8]) {
                 pieces[i].alt.rotate_left(rotation);
             }
         }
+    }
+}
+
+/// Re-merge pieces the coding one-amino-acid exception keeps together.
+///
+/// The separation rule says changes separated by one or more unchanged
+/// nucleotides are described individually — but `general.md:35` carves out the
+/// case where they are separated by *exactly one* nucleotide and together affect
+/// **one amino acid**, which must be a delins:
+///
+/// > **exception**: two variants separated by one nucleotide, together affecting
+/// > one amino acid, should be described as a "delins".
+///
+/// `NM_004006.2:c.145_147delinsTGG` is the spec's worked example, and it
+/// explicitly rejects `c.[145C>T;147C>G]` even though position 146 is unchanged.
+/// This is still current law: SVD-WG010, which would have replaced it with a
+/// context-free "separated by less than two nucleotides" rule at every level,
+/// was **rejected** (`SVD-WG010.md:5-8`).
+///
+/// The exception needs reading-frame context, so it applies only where one
+/// exists — never on `g.`/`m.`/`n.`, and on `r.` only when the transcript
+/// actually has a CDS (see [`AxisFrame::reading_frame`]). Keying it off the
+/// axis alone was #1241: `CisKind::Rna` says nothing about whether the
+/// transcript is coding, so a non-coding `r.` got a codon frame stamped onto it
+/// and stopped converging with the `n.` spelling of the very same change.
+///
+/// `merge.rs`'s codon-frame merge already implements the exception for separate
+/// input members; without this the re-derivation would split such a delins
+/// straight back apart, leaving the two spellings converging in opposite
+/// directions.
+fn apply_coding_codon_exception(
+    pieces: &mut Vec<Piece>,
+    reading_frame: bool,
+    w_lo: i64,
+    ref_bytes: &[u8],
+) {
+    if !reading_frame {
+        return;
+    }
+    // A single changed reference base replaced by a single alt base — the
+    // `Substitution` the spec's "two variants" are.
+    let is_substitution =
+        |piece: &Piece| piece.ref_end == piece.ref_start + 1 && piece.alt.len() == 1;
+
+    let mut index = 1;
+    while index < pieces.len() {
+        let previous_end = pieces[index - 1].ref_end;
+        let next_start = pieces[index].ref_start;
+        // Exactly one unchanged reference base between the two pieces.
+        let separated_by_one = next_start == previous_end + 1;
+        // The exception is a *triplet*, not a span: `build_split_variants`
+        // matches exactly `[Sub@p; Identity@p+1; Sub@p+2]` with `p` and `p+2`
+        // in one codon, and `general.md:35` says "two variants separated by one
+        // nucleotide", not "any two edits whose hull fits a codon". So the
+        // left piece must be a lone substitution, the right piece must *begin*
+        // with one, and only `p`/`p+2` are codon-tested.
+        //
+        // Testing the hull instead is what made this rule disagree with the
+        // per-member pipeline. On `c.10_13delinsTCAG` (ref `CCCC`, codon 4 =
+        // 10-12) the changed columns are 10, 12 and 13, so the pieces arrive as
+        // `[10]` and `[12,13]`; the hull 10..13 crosses into codon 5, the merge
+        // declined, and the result was `[10C>T;12_13delinsAG]` against the
+        // pipeline's `[10_12delinsTCA;13C>G]`.
+        let starts_with_substitution =
+            pieces[index].ref_end - pieces[index].ref_start == pieces[index].alt.len();
+        let triplet_start = w_lo + pieces[index - 1].ref_start as i64;
+        if separated_by_one
+            && is_substitution(&pieces[index - 1])
+            && starts_with_substitution
+            && same_codon(triplet_start, triplet_start + 2)
+        {
+            let middle = ref_bytes[previous_end];
+            // Take only the triplet's third base. Anything after it belongs to
+            // the next codon and stays a member of its own — that split is the
+            // whole point, and the remainder is re-examined on the next
+            // iteration so a second triplet can still form from it.
+            let next = &mut pieces[index];
+            let tail_alt = next.alt.split_off(1);
+            let third = next.alt[0];
+            next.ref_start += 1;
+            next.alt = tail_alt;
+            let exhausted = next.ref_start == next.ref_end;
+            if exhausted {
+                pieces.remove(index);
+            }
+            let previous = &mut pieces[index - 1];
+            // The unchanged base is now interior to the merged replacement, so
+            // it has to be carried through explicitly.
+            previous.alt.push(middle);
+            previous.alt.push(third);
+            previous.ref_end = previous.ref_start + 3;
+        }
+        index += 1;
     }
 }
 
@@ -3728,19 +3971,31 @@ mod tests {
 
         // Net insertion of the same span: guarded by `separations_are_meaningful`,
         // so the raise applies here too — the bound is not what stops it.
-        let mut insertion_result = equal_result.clone();
-        insertion_result.extend_from_slice(b"GG");
+        //
+        // The fixture is a lone substitution near the 5' end plus one contiguous
+        // 2 nt insertion near the 3' end, far enough apart that the separation
+        // *is* meaningful. That matters: `whole()` returns exactly one piece on
+        // every refusal path, so `!pieces.is_empty()` cannot tell "reached the
+        // aligner" from "the bound refused it" — only a genuine multi-piece
+        // partition can.
+        let mut insertion_result = reference.clone();
+        insertion_result[2] = flip_base(reference[2]);
+        insertion_result.splice(45..45, b"GG".iter().copied());
         assert!(insertion_result.len() > reference.len());
         assert!(
             reference.len() > MAX_UNGUARDED_SPLIT_BLOCK,
             "fixture must exceed the unguarded bound or it proves nothing"
         );
-        // Whatever partition the aligner picks, the *bound* must not have been
-        // the thing that refused it — that is the regime distinction under test.
         let pieces = partition_block(&reference, &insertion_result);
         assert!(
-            !pieces.is_empty(),
-            "a net insertion past 32 nt must still reach the aligner"
+            pieces.len() >= 2,
+            "a net insertion past 32 nt must reach the aligner and keep its \
+             separated pieces; a single piece is the bound-refusal `whole()` \
+             fallback. got {pieces:?}"
+        );
+        assert_eq!(
+            pieces[0].ref_start, 2,
+            "the first piece must be the lone 5' substitution; got {pieces:?}"
         );
     }
 

@@ -14,10 +14,13 @@
 //!   (`sub`/`del`/`delins`/`dup`/`inv`/`repeat`) whose `(region, start, end)`
 //!   keys are identical. Insertions are excluded here (they anchor at a
 //!   boundary, not a single-base span).
-//! - [`detect_insertion_overlaps`] — *pre-merge* insertion overlaps: two
-//!   insertions at one junction, or an insertion interior to a span edit
+//! - [`detect_insertion_overlaps`] — *pre-merge* junction overlaps: two
+//!   junction-anchored edits at one junction, or one interior to a span edit
 //!   (mutalyzer `EOVERLAP`, #486). Must run before the normalizer's merge step
-//!   collapses overlapping cis edits into one combined edit.
+//!   collapses overlapping cis edits into one combined edit. "Junction-
+//!   anchored" covers a true `ins` plus the `dup` and `repeat` spellings (which
+//!   land their extra copies at the junction after their own span), so the
+//!   detector sees the same conflict whichever way the pipeline has spelled it.
 
 use std::collections::BTreeMap;
 
@@ -88,7 +91,8 @@ pub(crate) fn detect_overlap_conflicts(
     warnings
 }
 
-/// Detect overlaps that involve at least one insertion within a cis allele.
+/// Detect overlaps that involve at least one junction-anchored edit within a
+/// cis allele.
 ///
 /// An insertion `a_(a+1)ins…` occupies the zero-width junction between
 /// reference positions `a` and `a+1`. It overlaps:
@@ -103,8 +107,26 @@ pub(crate) fn detect_overlap_conflicts(
 /// base `100` substitution — is *not* interior, so it does not overlap. This
 /// keeps the spec-valid `[273_274insT;274G>T;274_275insA]` accepted.
 ///
-/// One warning is emitted per same-junction insertion group and one per span
-/// edit that encloses ≥1 insertion. Iteration is in deterministic order
+/// A **`dup` and a `repeat` also occupy a junction** (see
+/// [`junction_writing_kind`]): each writes its extra copies directly 3' of its
+/// own span, i.e. at the junction after `end`. Both are therefore registered as
+/// junction occupants *in addition to* being spans, so `[5_9inv;5_6dup]` and
+/// `[1005_1009inv;1005_1006A[4]]` are each flagged just as the `ins`-spelled
+/// input they normalize from is.
+///
+/// Without this the detector is spelling-sensitive and normalization is not
+/// idempotent on a conflicting allele. The first pass respells the interior
+/// `insAA` — as a `dup` on the CDS axis, as a `repeat` on the genomic axis —
+/// the second pass no longer recognises either as a conflict, and so it
+/// reorders members that the first pass deliberately left in authored order
+/// (`#395`). Covering only one of the two respellings fixes only one axis.
+///
+/// An occupant's own span never encloses its own junction (`gap == end`, and
+/// the interior test is `gap < end`), so a lone `dup`/`repeat` cannot conflict
+/// with itself.
+///
+/// One warning is emitted per same-junction occupant group and one per span
+/// edit that encloses ≥1 occupant. Iteration is in deterministic order
 /// (BTreeMap junction key, then input index) so equivalent inputs yield
 /// identical warning sequences.
 ///
@@ -119,12 +141,16 @@ pub(crate) fn detect_insertion_overlaps(
     if phase != AllelePhase::Cis || variants.len() < 2 {
         return Vec::new();
     }
+    /// An edit that anchors at a zero-width junction: a true `ins`, or the
+    /// copies a `dup`/`repeat` lands 3' of its own span. `kind` is the label the
+    /// emitted warning reports for this member (`"ins"` / `"dup"` / `"repeat"`).
     struct Insertion {
         idx: usize,
         accession: String,
         coord_system: &'static str,
         region: Region,
         gap: i64,
+        kind: &'static str,
     }
     struct Span {
         idx: usize,
@@ -157,9 +183,28 @@ pub(crate) fn detect_insertion_overlaps(
                     coord_system,
                     region,
                     gap: start,
+                    kind: "ins",
                 });
             }
         } else if is_overlap_edit(edit) {
+            // A `dup` and a `repeat` are each both a span (the run they read)
+            // and a junction occupant (the copies they write, landing
+            // immediately 3' of that run). Registering only the span would miss
+            // the conflict whenever the per-member pipeline has respelled an
+            // interior `ins` as one of these — which it does routinely, and
+            // which axis it picks decides *which* spelling: the CDS axis
+            // rewrites `c.5_6insAA` to `c.5_6dup`, the genomic axis rewrites
+            // the same shape to `g.1005_1006A[4]`.
+            if let Some(kind) = junction_writing_kind(edit) {
+                insertions.push(Insertion {
+                    idx,
+                    accession: accession.clone(),
+                    coord_system,
+                    region,
+                    gap: end,
+                    kind,
+                });
+            }
             spans.push(Span {
                 idx,
                 accession,
@@ -173,36 +218,56 @@ pub(crate) fn detect_insertion_overlaps(
 
     let mut warnings = Vec::new();
 
-    // (a) Two or more insertions sharing a junction.
-    let mut by_junction: BTreeMap<(String, &'static str, Region, i64), Vec<usize>> =
-        BTreeMap::new();
+    // (a) Two or more junction-anchored edits sharing a junction. Dups and
+    // repeats count alongside true insertions: `[3_6dup;5_6dup]` writes both
+    // copies into the slot after position 6 with no defined order between them,
+    // exactly as `[5_6insA;5_6insT]` does. Branch (b) does not cover that pair —
+    // the inner dup's junction sits at the outer dup's *edge*, not interior to
+    // it — so omitting them here would leave the shape unreported even though
+    // the sequence-first guard in `merge::…` refuses it (one `after[slot]`, two
+    // writers). The same holds for the `repeat` spelling.
+    // Each group carries `(index, kind)` so the warning can name every member by
+    // its own spelling rather than labelling the whole group `ins`.
+    /// `(accession, coordinate system, region, gap)` — one zero-width junction
+    /// on one molecule.
+    type JunctionKey = (String, &'static str, Region, i64);
+    /// The members writing at a junction, as `(index into `variants`, kind)`.
+    type Occupants = Vec<(usize, &'static str)>;
+
+    let mut by_junction: BTreeMap<JunctionKey, Occupants> = BTreeMap::new();
     for ins in &insertions {
         by_junction
             .entry((ins.accession.clone(), ins.coord_system, ins.region, ins.gap))
             .or_default()
-            .push(ins.idx);
+            .push((ins.idx, ins.kind));
     }
-    for ((accession, coord_system, _region, _gap), indices) in &by_junction {
-        if indices.len() < 2 {
+    for ((accession, coord_system, _region, _gap), occupants) in &by_junction {
+        if occupants.len() < 2 {
             continue;
         }
-        // Render the junction via the insertion's HGVS Display (like branch (b)
+        // Render the junction via the occupant's HGVS Display (like branch (b)
         // and `detect_overlap_conflicts`) so region prefixes (`*`/`-`) survive;
         // the raw signed `gap` drops them (e.g. 3'UTR `*1_*2` → `1_2`).
-        let location = location_for_variant(&variants[indices[0]])
-            .expect("same-junction insertion has a renderable location");
+        let location = location_for_variant(&variants[occupants[0].0])
+            .expect("same-junction occupant has a renderable location");
         warnings.push(NormalizationWarning::OverlapConflict {
             accession: accession.clone(),
             coordinate_system: coord_system.to_string(),
             location,
-            edit_kinds: indices.iter().map(|_| "ins".to_string()).collect(),
+            edit_kinds: occupants.iter().map(|(_, k)| k.to_string()).collect(),
         });
     }
 
     // (b) An insertion junction strictly interior to a span edit's range.
     for span in &spans {
         let interior = insertions.iter().filter(|ins| {
-            ins.accession == span.accession
+            // A `dup`/`repeat` is registered as both span and occupant, so it
+            // meets itself here. The interior test already excludes it — its
+            // junction is its own `end`, and `gap < end` is strict — but state
+            // the invariant locally rather than leave it resting on that
+            // coincidence.
+            ins.idx != span.idx
+                && ins.accession == span.accession
                 && ins.coord_system == span.coord_system
                 && ins.region == span.region
                 && span.start <= ins.gap
@@ -212,7 +277,7 @@ pub(crate) fn detect_insertion_overlaps(
         let mut edit_kinds = vec![edit_kind(&variants[span.idx])
             .expect("span edit has a known kind")
             .to_string()];
-        edit_kinds.extend(interior.map(|_| "ins".to_string()));
+        edit_kinds.extend(interior.map(|ins| ins.kind.to_string()));
         if edit_kinds.len() < 2 {
             continue;
         }
@@ -343,6 +408,23 @@ fn simple_span(variant: &HgvsVariant) -> Option<(&'static str, Region, i64, i64)
         HgvsVariant::Tx(t) => na_span(&t.loc_edit, tx_range).map(|(r, s, e)| ("n", r, s, e)),
         HgvsVariant::Rna(r) => na_span(&r.loc_edit, rna_range).map(|(rg, s, e)| ("r", rg, s, e)),
         HgvsVariant::Mt(m) => na_span(&m.loc_edit, genome_range).map(|(r, s, e)| ("m", r, s, e)),
+        _ => None,
+    }
+}
+
+/// The occupant label for a span edit that also *writes* at the junction 3' of
+/// its own span, or `None` for one that only rewrites the span in place.
+///
+/// A `dup` copies its run to the slot after its last base; a `repeat` rewrites
+/// a tract to a different copy count, and any expansion lands at that same
+/// slot. Both are therefore junction occupants as well as spans, which is what
+/// lets the detector recognise an interior insertion after the per-member
+/// pipeline has respelled it as one of them. Everything else
+/// (`sub`/`del`/`delins`/`inv`) edits its span in place and writes no junction.
+fn junction_writing_kind(edit: &NaEdit) -> Option<&'static str> {
+    match edit {
+        NaEdit::Duplication { .. } => Some("dup"),
+        NaEdit::Repeat { .. } => Some("repeat"),
         _ => None,
     }
 }
@@ -731,6 +813,108 @@ mod tests {
                 .all(|w| matches!(w, NormalizationWarning::OverlapConflict { .. })),
             "all warnings must be OverlapConflict: {warnings:?}"
         );
+    }
+
+    #[test]
+    fn duplication_interior_to_inversion_emits_one_warning() {
+        // A `dup` lands its copy at the junction after its own last base, so
+        // `5_6dup` occupies junction 6, strictly interior to `5_9inv`
+        // (positions 5..=9). This is the `ins`-spelled conflict
+        // `[4_10inv;5_6insAA]` after the per-member pipeline has respelled it,
+        // and it must be recognised as the same conflict — otherwise
+        // normalization is not idempotent on the conflicting allele.
+        let (variants, phase) = parse_allele("NM_TEST.1:c.[5_9inv;5_6dup]");
+        let warnings = detect_insertion_overlaps(&variants, phase);
+        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+        let NormalizationWarning::OverlapConflict {
+            location,
+            edit_kinds,
+            ..
+        } = &warnings[0]
+        else {
+            panic!("expected OverlapConflict, got {:?}", warnings[0]);
+        };
+        assert_eq!(location, "5_9", "the warning names the enclosing span");
+        assert_eq!(edit_kinds, &vec!["inv".to_string(), "dup".to_string()]);
+    }
+
+    #[test]
+    fn duplication_conflict_is_detected_in_either_member_order() {
+        // Detection must not depend on authored order: the sort that renders
+        // cis members in genomic order is gated *off* by this very warning, so
+        // both spellings have to be reported or the two orders normalize to
+        // each other and idempotency breaks.
+        for allele in ["NM_TEST.1:c.[5_9inv;5_6dup]", "NM_TEST.1:c.[5_6dup;5_9inv]"] {
+            let (variants, phase) = parse_allele(allele);
+            assert_eq!(
+                detect_insertion_overlaps(&variants, phase).len(),
+                1,
+                "expected one warning for {allele}"
+            );
+        }
+    }
+
+    #[test]
+    fn lone_duplication_does_not_conflict_with_itself() {
+        // A `dup` is registered as both a span and a junction occupant. Its own
+        // junction (`gap == end`) is not strictly interior to its own span
+        // (`gap < end` fails), and the self-pairing is skipped explicitly, so a
+        // duplication alongside an unrelated edit stays clean.
+        let (variants, phase) = parse_allele("NM_TEST.1:c.[5_6dup;20A>G]");
+        assert!(detect_insertion_overlaps(&variants, phase).is_empty());
+    }
+
+    #[test]
+    fn duplication_abutting_a_span_edge_no_warning() {
+        // `1_4dup` writes at junction 4, which is the *edge* of `5_9inv`
+        // (interior junctions are 5..=8), not interior to it. Mirrors
+        // `insertions_flanking_a_sub_no_warning` for the dup spelling.
+        let (variants, phase) = parse_allele("NM_TEST.1:c.[1_4dup;5_9inv]");
+        assert!(detect_insertion_overlaps(&variants, phase).is_empty());
+    }
+
+    #[test]
+    fn two_duplications_at_one_junction_emit_one_warning() {
+        // Both dups write their copy into the slot after position 6, with no
+        // defined order between the two payloads — the same ambiguity branch
+        // (a) reports for `[5_6insA;5_6insT]`. Branch (b) does *not* cover this
+        // pair: the inner dup's junction (6) is the outer dup's end, i.e. its
+        // edge, and the interior test is strict (`gap < end`).
+        let (variants, phase) = parse_allele("NM_TEST.1:c.[3_6dup;5_6dup]");
+        let warnings = detect_insertion_overlaps(&variants, phase);
+        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+        let NormalizationWarning::OverlapConflict { edit_kinds, .. } = &warnings[0] else {
+            panic!("expected OverlapConflict, got {:?}", warnings[0]);
+        };
+        assert_eq!(edit_kinds, &vec!["dup".to_string(), "dup".to_string()]);
+    }
+
+    #[test]
+    fn repeat_interior_to_inversion_emits_one_warning() {
+        // The genomic axis respells an interior insertion as a repeat
+        // expansion rather than a dup, so the `repeat` spelling has to be
+        // recognised as a junction occupant for the same reason: `1005_1006A[4]`
+        // writes its extra copies at junction 1006, interior to `1005_1009inv`.
+        let (variants, phase) = parse_allele("NC_000001.11:g.[1005_1009inv;1005_1006A[4]]");
+        let warnings = detect_insertion_overlaps(&variants, phase);
+        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+        let NormalizationWarning::OverlapConflict { edit_kinds, .. } = &warnings[0] else {
+            panic!("expected OverlapConflict, got {:?}", warnings[0]);
+        };
+        assert_eq!(edit_kinds, &vec!["inv".to_string(), "repeat".to_string()]);
+    }
+
+    #[test]
+    fn duplication_and_insertion_at_one_junction_emit_one_warning() {
+        // Mixed spellings compete for the same slot too, and the warning must
+        // name each member by its own kind rather than labelling both `ins`.
+        let (variants, phase) = parse_allele("NM_TEST.1:c.[5_6dup;6_7insA]");
+        let warnings = detect_insertion_overlaps(&variants, phase);
+        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+        let NormalizationWarning::OverlapConflict { edit_kinds, .. } = &warnings[0] else {
+            panic!("expected OverlapConflict, got {:?}", warnings[0]);
+        };
+        assert_eq!(edit_kinds, &vec!["dup".to_string(), "ins".to_string()]);
     }
 
     #[test]
