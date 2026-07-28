@@ -1815,16 +1815,20 @@ const MAX_CANONICAL_WINDOW: i64 = 4096;
 /// Padding either side of the changed interval, giving the 3'-shift room.
 const CANONICAL_PAD: i64 = 128;
 
-/// Longest changed block the canonicalizer will *split* into several members.
+/// Longest changed block the canonicalizer will attempt to partition.
 ///
-/// The separation rule (`delins.md:17`) says changes separated by unchanged
-/// nucleotides are described individually, but `delins.md:44-47` keeps a single
-/// spanning delins for a large replacement whose interior only *coincidentally*
-/// aligns ("parts of the inserted sequence align … the delins format is
-/// recommended"), and gives no threshold. A long block is that regime: emit one
-/// delins rather than an alignment artefact. The spec's own counter-example
-/// spans 52 nt.
-const MAX_SPLIT_BLOCK: usize = 32;
+/// This is a cost bound, not a policy: the alignment is quadratic in the block
+/// length, and a block this long is a structural event rather than a few
+/// nucleotide changes. It is deliberately far above the size at which the
+/// separation rule (`delins.md:17`) is the interesting question.
+///
+/// It is *not* the `delins.md:44-47` "coincidental alignment" guard. That
+/// concern — a large replacement whose interior only accidentally aligns, which
+/// the spec keeps as one delins — is handled structurally instead: only
+/// single-gap alignments are considered, so the aligner cannot manufacture
+/// matches by opening compensating gaps, and a block is split only where a base
+/// genuinely survives unchanged.
+const MAX_SPLIT_BLOCK: usize = 1024;
 
 /// Unchanged reference bases two pieces of a net insertion must be separated by
 /// before the split between them is believed. See `separations_are_meaningful`.
