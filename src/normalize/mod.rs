@@ -1587,6 +1587,108 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// would reject via `normalize()`. In the default lenient config every
     /// `should_reject_*` is false, so the ladder is a no-op and the warnings pass
     /// straight through.
+    /// Whether a lone (non-allele) member is a shape the sequence-first pass
+    /// can improve: a `delins` or an `inv`, the two forms that may be hiding an
+    /// unchanged interior base and so need re-partitioning (#1230, #1232).
+    fn is_splittable_single_member_impl(variant: &HgvsVariant) -> bool {
+        let edit = match variant {
+            HV::Genome(g) => &g.loc_edit.edit,
+            HV::Mt(m) => &m.loc_edit.edit,
+            HV::Cds(c) => &c.loc_edit.edit,
+            HV::Tx(t) => &t.loc_edit.edit,
+            HV::Rna(r) => &r.loc_edit.edit,
+            _ => return false,
+        };
+        matches!(
+            edit.inner(),
+            Some(NaEdit::Delins { .. }) | Some(NaEdit::Inversion { .. })
+        )
+    }
+
+    /// Re-derive the variant from the sequence it produces (#1229-#1235).
+    ///
+    /// The per-member pipeline normalizes each cis-allele member in isolation,
+    /// which makes the canonical form depend on the input spelling and lets one
+    /// member's 3'-shift run over a sibling. This pass runs once, at the top
+    /// level, over the already-normalized variant: it applies the whole thing to
+    /// the reference, re-derives the edit set from the (reference, result) pair,
+    /// and partitions it globally. See `merge::canonicalize_from_sequence`.
+    ///
+    /// Canonicalizing can expose further work for the per-member pipeline (a
+    /// derived member may itself 3'-shift), so the two alternate to a fixed
+    /// point. The loop is bounded: each pass either reaches a fixed point or is
+    /// abandoned in favour of the last stable value, so this can never diverge.
+    fn canonicalize_from_sequence(
+        &self,
+        variant: HgvsVariant,
+        warnings: Vec<NormalizationWarning>,
+    ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        /// Alternations between the sequence-first pass and `normalize_core`.
+        /// Two is enough for every shape seen so far; the bound only exists so
+        /// a pathological input cannot spin.
+        const MAX_PASSES: usize = 4;
+
+        let mut current = variant;
+        let mut warnings = warnings;
+        for _ in 0..MAX_PASSES {
+            let Some(canonical) = self.sequence_first_pass(&current) else {
+                return Ok((current, warnings));
+            };
+            if canonical == current {
+                return Ok((current, warnings));
+            }
+            // The re-derived form is expressed in raw coordinates; hand it back
+            // to the per-member pipeline so axis-specific canonicalization
+            // (position shapes, boundary clamps, warnings) is applied to it.
+            let (renormalized, pass_warnings) = self.normalize_core(&canonical)?;
+            // Only keep this pass's warnings if its result is the one we keep.
+            // Extending first would duplicate every warning the re-derivation
+            // reproduces from the previous pass whenever it settles back on
+            // `current`.
+            if renormalized == current {
+                return Ok((current, warnings));
+            }
+            warnings.extend(pass_warnings);
+            current = renormalized;
+        }
+        Ok((current, warnings))
+    }
+
+    /// One sequence-first re-derivation. `None` when the variant is not a shape
+    /// the pass serves (protein, trans alleles, fusions, and so on).
+    fn sequence_first_pass(&self, variant: &HgvsVariant) -> Option<HgvsVariant> {
+        // Only shapes where a partition decision actually exists. A lone
+        // substitution / deletion / insertion / duplication already has exactly
+        // one canonical partition, so re-deriving it can only lose what the
+        // per-member pipeline added (gene symbol, RNA `U` alphabet, boundary and
+        // exon-junction clamps). A lone `delins` or `inv` is different: those are
+        // precisely the single-member forms that may need splitting (#1230,
+        // #1232).
+        let (members, phase, uncertain) = match variant {
+            HV::Allele(allele) => {
+                if allele.uncertain || allele.phase != AllelePhase::Cis || allele.variants.len() < 2
+                {
+                    return None;
+                }
+                (allele.variants.clone(), allele.phase, allele.uncertain)
+            }
+            single if Self::is_splittable_single_member_impl(single) => {
+                (vec![variant.clone()], AllelePhase::Cis, false)
+            }
+            _ => return None,
+        };
+        let rebuilt = merge::canonicalize_from_sequence(members, phase, &self.provider);
+        match rebuilt.len() {
+            0 => None,
+            1 => rebuilt.into_iter().next(),
+            _ => {
+                let mut allele = crate::hgvs::variant::AlleleVariant::new(rebuilt, phase);
+                allele.uncertain = uncertain;
+                Some(HV::Allele(allele))
+            }
+        }
+    }
+
     pub(crate) fn normalize_core_checked(
         &self,
         variant: &HgvsVariant,
@@ -1595,6 +1697,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `detect_shuffle_infos` work `normalize_with_diagnostics` does) and wrap
         // with empty infos; the ladder below only inspects warnings.
         let (normalized, warnings) = self.normalize_core(variant)?;
+        // Re-derive from the resulting sequence. This runs *after* the
+        // per-member pipeline, which is safe because the sibling clamp (#1234)
+        // guarantees the members it produces are disjoint — an allele whose
+        // members overlap has no well-defined resulting sequence, so
+        // canonicalizing one would be canonicalizing a corrupted form.
+        let (normalized, warnings) = self.canonicalize_from_sequence(normalized, warnings)?;
         let result = NormalizeResult::with_warnings(normalized, warnings);
 
         // EINTRONIC (#486): reject an intronic offset on a bare transcript
