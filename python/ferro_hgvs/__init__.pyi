@@ -1,8 +1,9 @@
 """Type stubs for ferro-hgvs Python bindings."""
 
 from collections.abc import Iterable
-from enum import IntEnum
 from typing import Any, Callable, Literal, overload
+
+from typing_extensions import Self
 
 __version__: str
 
@@ -297,7 +298,53 @@ def build_transcript(config: BuildTranscriptConfig) -> BuildTranscriptReport:
 # Core Classes
 # ============================================================================
 
-class Axis(IntEnum):
+class _NativeEnum:
+    """Shared behaviour of ferro's native enums.
+
+    These are pyo3 classes, not :class:`enum.Enum` subclasses, and the
+    difference is visible: ``isinstance(member, enum.Enum)`` is ``False`` and
+    the class itself is not iterable (no ``list(Cls)``, no ``__members__``).
+    pyo3 cannot provide either for a ``#[pyclass]`` enum.
+
+    Everything else an ``IntEnum`` offers is available: members hash, order,
+    compare equal to their integer, expose :attr:`name` and :attr:`value`, and
+    can be looked up by value with ``Cls(value)`` (raising ``ValueError`` for an
+    unknown one). ``Cls(value)`` returns the *interned* member — the same object
+    bound to the class attribute — so ``is`` behaves as it does on a standard
+    library enum, and members hash like the integers they equal.
+
+    The stubs previously declared these as ``IntEnum``, which type-checkers
+    honoured while the runtime did not — see issue #1245.
+    """
+
+    def __init__(self, value: int) -> None: ...
+    @property
+    def name(self) -> str:
+        """The member's name, matching the attribute it is bound to."""
+        ...
+
+    @property
+    def value(self) -> int:
+        """The member's integer value."""
+        ...
+
+    def __int__(self) -> int: ...
+    def __hash__(self) -> int: ...
+    def __eq__(self, other: object) -> bool: ...
+    # Ordering accepts a member of the *same* enum or a plain int, mirroring
+    # what pyo3's `ord` + `eq_int` actually implement. `Self` narrows to the
+    # concrete subclass, so `Axis.Genomic < Strand.Plus` is rejected the way the
+    # runtime rejects it (`TypeError`) rather than silently type-checking. `int`
+    # stays in the union because `Axis.Genomic < 3` genuinely works.
+    #
+    # `__eq__` keeps `object`: equality is total, answering `False` across enums
+    # instead of raising.
+    def __lt__(self, other: Self | int) -> bool: ...
+    def __le__(self, other: Self | int) -> bool: ...
+    def __gt__(self, other: Self | int) -> bool: ...
+    def __ge__(self, other: Self | int) -> bool: ...
+
+class Axis(_NativeEnum):
     """The coordinate axis (reference molecule / coordinate system) of a variant.
 
     Returned by :attr:`HgvsVariant.axis`. Each member carries its single-letter
@@ -305,13 +352,13 @@ class Axis(IntEnum):
     (:meth:`is_dna` / :meth:`is_rna` / :meth:`is_protein`).
     """
 
-    Genomic = 0
-    Coding = 1
-    NonCoding = 2
-    Rna = 3
-    Protein = 4
-    Mitochondrial = 5
-    Circular = 6
+    Genomic: Axis  # 0
+    Coding: Axis  # 1
+    NonCoding: Axis  # 2
+    Rna: Axis  # 3
+    Protein: Axis  # 4
+    Mitochondrial: Axis  # 5
+    Circular: Axis  # 6
 
     def code(self) -> str:
         """The single-letter HGVS coordinate code (``g``/``c``/``n``/``r``/``p``/``m``/``o``)."""
@@ -795,14 +842,14 @@ class OneBasedPos:
 # Equivalence Classes
 # ============================================================================
 
-class EquivalenceLevel(IntEnum):
+class EquivalenceLevel(_NativeEnum):
     """Equivalence level between two variants."""
 
-    Identical = 0
-    NormalizedMatch = 1
-    AccessionVersionDifference = 2
-    NotEquivalent = 3
-    SequenceMatch = 4
+    Identical: EquivalenceLevel  # 0
+    NormalizedMatch: EquivalenceLevel  # 1
+    AccessionVersionDifference: EquivalenceLevel  # 2
+    NotEquivalent: EquivalenceLevel  # 3
+    SequenceMatch: EquivalenceLevel  # 4
 
     def is_equivalent(self) -> bool:
         """Returns true if the variants are considered equivalent."""
@@ -910,28 +957,28 @@ class EquivalenceChecker:
 # Effect Prediction Classes
 # ============================================================================
 
-class Consequence(IntEnum):
+class Consequence(_NativeEnum):
     """Sequence Ontology consequence term."""
 
-    TranscriptAblation = 0
-    SpliceAcceptorVariant = 1
-    SpliceDonorVariant = 2
-    StopGained = 3
-    FrameshiftVariant = 4
-    StopLost = 5
-    StartLost = 6
-    MissenseVariant = 7
-    InframeInsertion = 8
-    InframeDeletion = 9
-    ProteinAlteringVariant = 10
-    SpliceRegionVariant = 11
-    SynonymousVariant = 12
-    StartRetainedVariant = 13
-    StopRetainedVariant = 14
-    FivePrimeUtrVariant = 15
-    ThreePrimeUtrVariant = 16
-    IntronVariant = 17
-    CodingSequenceVariant = 18
+    TranscriptAblation: Consequence  # 0
+    SpliceAcceptorVariant: Consequence  # 1
+    SpliceDonorVariant: Consequence  # 2
+    StopGained: Consequence  # 3
+    FrameshiftVariant: Consequence  # 4
+    StopLost: Consequence  # 5
+    StartLost: Consequence  # 6
+    MissenseVariant: Consequence  # 7
+    InframeInsertion: Consequence  # 8
+    InframeDeletion: Consequence  # 9
+    ProteinAlteringVariant: Consequence  # 10
+    SpliceRegionVariant: Consequence  # 11
+    SynonymousVariant: Consequence  # 12
+    StartRetainedVariant: Consequence  # 13
+    StopRetainedVariant: Consequence  # 14
+    FivePrimeUtrVariant: Consequence  # 15
+    ThreePrimeUtrVariant: Consequence  # 16
+    IntronVariant: Consequence  # 17
+    CodingSequenceVariant: Consequence  # 18
 
     def so_term(self) -> str:
         """Get the Sequence Ontology term."""
@@ -949,13 +996,13 @@ class Consequence(IntEnum):
         """Get a human-readable description."""
         ...
 
-class Impact(IntEnum):
+class Impact(_NativeEnum):
     """Variant impact level (VEP-style)."""
 
-    Modifier = 0
-    Low = 1
-    Moderate = 2
-    High = 3
+    Modifier: Impact  # 0
+    Low: Impact  # 1
+    Moderate: Impact  # 2
+    High: Impact  # 3
 
 class ProteinEffect:
     """Protein effect prediction result."""
@@ -1195,71 +1242,71 @@ class BatchProcessor:
 # Error Handling Classes
 # ============================================================================
 
-class ErrorMode(IntEnum):
+class ErrorMode(_NativeEnum):
     """Error handling mode."""
 
-    Strict = 0
-    Lenient = 1
-    Silent = 2
+    Strict: ErrorMode  # 0
+    Lenient: ErrorMode  # 1
+    Silent: ErrorMode  # 2
 
-class ErrorType(IntEnum):
+class ErrorType(_NativeEnum):
     """Error type for configurable error handling."""
 
-    LowercaseAminoAcid = 0
-    MissingVersion = 1
-    WrongDashCharacter = 2
-    ExtraWhitespace = 3
-    ProteinSubstitutionArrow = 4
+    LowercaseAminoAcid: ErrorType  # 0
+    MissingVersion: ErrorType  # 1
+    WrongDashCharacter: ErrorType  # 2
+    ExtraWhitespace: ErrorType  # 3
+    ProteinSubstitutionArrow: ErrorType  # 4
     # Discriminant 5 was `PositionZero` (W4002), retired in issue #269.
-    SingleLetterAminoAcid = 6
-    WrongQuoteCharacter = 7
-    LowercaseAccessionPrefix = 8
-    MixedCaseEditType = 9
-    OldSubstitutionSyntax = 10
-    InvalidUnicodeCharacter = 11
-    SwappedPositions = 12
-    TrailingAnnotation = 13
-    MissingCoordinatePrefix = 14
-    OldAlleleFormat = 15
-    RefSeqMismatch = 16
-    DeprecatedStopCodonStar = 17
-    DeprecatedStopCodonX = 18
-    DeprecatedFrameshiftStar = 19
-    DeprecatedFrameshiftX = 20
-    DelSizeSuffix = 21
-    EmptyDelinsInsert = 22
-    RedundantRepeatLabel = 23
-    SinglePositionRange = 24
-    DeprecatedIvsNotation = 25
-    DeprecatedConSyntax = 26
-    LengthMismatch = 27
-    AlleleFractionAnnotation = 28
-    ClinVarProseMultiAllelic = 29
-    RnaThymineCanonicalized = 30
-    ProteinBracketedAaInsertion = 31
-    PositionPastEnd = 32
-    VariantExceedsReference = 33
-    NonSpecMosaicForm = 34
-    OverlapConflictingEdits = 35
-    InitiatorMetCanonicalization = 36
-    DupSizeSuffix = 37
-    DupExplicitSeq = 38
-    DelExplicitSeq = 39
-    NonConformantBracketCardinality = 40
-    UnresolvableCentromere = 41
-    TranscriptFlankNotDescribable = 42
-    IntronicOnBareTranscript = 43
-    IncompleteCdsStartReference = 44
-    InsertionWithoutInsertedSequence = 45
+    SingleLetterAminoAcid: ErrorType  # 6
+    WrongQuoteCharacter: ErrorType  # 7
+    LowercaseAccessionPrefix: ErrorType  # 8
+    MixedCaseEditType: ErrorType  # 9
+    OldSubstitutionSyntax: ErrorType  # 10
+    InvalidUnicodeCharacter: ErrorType  # 11
+    SwappedPositions: ErrorType  # 12
+    TrailingAnnotation: ErrorType  # 13
+    MissingCoordinatePrefix: ErrorType  # 14
+    OldAlleleFormat: ErrorType  # 15
+    RefSeqMismatch: ErrorType  # 16
+    DeprecatedStopCodonStar: ErrorType  # 17
+    DeprecatedStopCodonX: ErrorType  # 18
+    DeprecatedFrameshiftStar: ErrorType  # 19
+    DeprecatedFrameshiftX: ErrorType  # 20
+    DelSizeSuffix: ErrorType  # 21
+    EmptyDelinsInsert: ErrorType  # 22
+    RedundantRepeatLabel: ErrorType  # 23
+    SinglePositionRange: ErrorType  # 24
+    DeprecatedIvsNotation: ErrorType  # 25
+    DeprecatedConSyntax: ErrorType  # 26
+    LengthMismatch: ErrorType  # 27
+    AlleleFractionAnnotation: ErrorType  # 28
+    ClinVarProseMultiAllelic: ErrorType  # 29
+    RnaThymineCanonicalized: ErrorType  # 30
+    ProteinBracketedAaInsertion: ErrorType  # 31
+    PositionPastEnd: ErrorType  # 32
+    VariantExceedsReference: ErrorType  # 33
+    NonSpecMosaicForm: ErrorType  # 34
+    OverlapConflictingEdits: ErrorType  # 35
+    InitiatorMetCanonicalization: ErrorType  # 36
+    DupSizeSuffix: ErrorType  # 37
+    DupExplicitSeq: ErrorType  # 38
+    DelExplicitSeq: ErrorType  # 39
+    NonConformantBracketCardinality: ErrorType  # 40
+    UnresolvableCentromere: ErrorType  # 41
+    TranscriptFlankNotDescribable: ErrorType  # 42
+    IntronicOnBareTranscript: ErrorType  # 43
+    IncompleteCdsStartReference: ErrorType  # 44
+    InsertionWithoutInsertedSequence: ErrorType  # 45
 
-class ErrorOverride(IntEnum):
+class ErrorOverride(_NativeEnum):
     """Override behavior for a specific error type."""
 
-    Default = 0
-    Reject = 1
-    WarnCorrect = 2
-    SilentCorrect = 3
-    Accept = 4
+    Default: ErrorOverride  # 0
+    Reject: ErrorOverride  # 1
+    WarnCorrect: ErrorOverride  # 2
+    SilentCorrect: ErrorOverride  # 3
+    Accept: ErrorOverride  # 4
 
 class CorrectionWarning:
     """Warning generated during preprocessing."""
@@ -1700,18 +1747,19 @@ class BuildTranscriptReport:
 # Reference Classes
 # ============================================================================
 
-class GenomeBuild(IntEnum):
+class GenomeBuild(_NativeEnum):
     """Genome build (GRCh37 or GRCh38)."""
 
-    GRCh37 = 0
-    GRCh38 = 1
-    Unknown = 2
+    GRCh37: GenomeBuild  # 0
+    GRCh38: GenomeBuild  # 1
+    Unknown: GenomeBuild  # 2
 
-class Strand(IntEnum):
+class Strand(_NativeEnum):
     """Strand direction."""
 
-    Plus = 0
-    Minus = 1
+    Plus: Strand  # 0
+    Minus: Strand  # 1
+    Unknown: Strand  # 2
 
 # ============================================================================
 # Coordinate Mapping Classes
