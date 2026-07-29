@@ -1553,6 +1553,247 @@ pub(crate) fn coalesce_protein_adjacent_changes(
     }
 }
 
+// ----------------------------------------------------------------------------
+// Sibling-crossing shift clamp (#1254)
+// ----------------------------------------------------------------------------
+
+/// A cis member's span on the shared coordinate axis, copied out of the
+/// variant so the caller can mutate the member afterwards.
+struct MemberSpan {
+    accession: String,
+    region: Region,
+    start: i64,
+    end: i64,
+    /// Whether the edit consumes the reference bases under its span.
+    claims_bases: bool,
+}
+
+/// Read a member's span for the clamp pass, or `None` for a member this pass
+/// cannot place (wrong kind, uncertain edit, offset / special position).
+fn member_span(v: &HgvsVariant, kind: CisKind) -> Option<MemberSpan> {
+    let (accession, region, start, end, edit) = cis_axis_parts(v, kind)?;
+    Some(MemberSpan {
+        accession: accession.full(),
+        region,
+        start,
+        end,
+        claims_bases: claims_reference_bases(edit),
+    })
+}
+
+/// Whether an edit consumes the reference bases under its span.
+///
+/// Substitutions, deletions, delins and inversions replace or remove the bases
+/// they cover, so a shift that carries one of them over another's bases changes
+/// what the allele denotes. Insertions and duplications add sequence at a
+/// junction without consuming a base, so a member landing flush against one is
+/// the *adjacency* the collapse pass is meant to catch (#999, #1135) — they are
+/// neither clamped nor treated as barriers.
+fn claims_reference_bases(edit: &NaEdit) -> bool {
+    matches!(
+        edit,
+        NaEdit::Substitution { .. }
+            | NaEdit::Deletion { .. }
+            | NaEdit::Delins { .. }
+            | NaEdit::Inversion { .. }
+    )
+}
+
+/// The [`CisKind`] this pass serves, or `None` for a variant kind it does not.
+fn cis_kind_of(variant: &HgvsVariant) -> Option<CisKind> {
+    match variant {
+        HgvsVariant::Genome(_) => Some(CisKind::Genome),
+        HgvsVariant::Mt(_) => Some(CisKind::Mt),
+        HgvsVariant::Cds(_) => Some(CisKind::Cds),
+        HgvsVariant::Tx(_) => Some(CisKind::Tx),
+        HgvsVariant::Rna(_) => Some(CisKind::Rna),
+        _ => None,
+    }
+}
+
+/// Pull back any cis member whose shift carried it over a sibling's bases.
+///
+/// The 3' rule (`general.md:41`) is stated per description, with no
+/// allele-awareness, so a member is shifted to its *standalone* most-3'
+/// position. When a sibling edits a base inside the tract the member rotates
+/// through, that is not meaning-preserving: the member leapfrogs the sibling
+/// and the pair now describes a different sequence. `g.[3_4del;9del]` over
+/// `TAATATATATAATATATATT` shifted `3_4del` to `10_11del`, straight past the
+/// `9del`, and the two then merged to `g.12_14del` — a well-formed,
+/// warning-free description of *different* bases (#1254).
+///
+/// The invariant this restores: a member's **sweep window** — every position
+/// between its pre-shift and post-shift span — must contain no base claimed by
+/// another member. A shift is a rotation, so within a window no sibling edits,
+/// every position in it describes the same sequence; the members then sit on
+/// disjoint windows and compose exactly as the input did. Stopping at the last
+/// position before the nearest sibling base is the most 3' choice that keeps
+/// that true, which leaves the member *adjacent* to its sibling rather than
+/// past it — and the caller's next merge pass coalesces the two
+/// (`delins.md:16`). For the case above the clamp yields `[7_8del;9del]`, which
+/// merges to `g.7_9del`: three contiguous deleted bases, the same sequence the
+/// input denotes.
+///
+/// Both shift directions are handled — [`ShuffleDirection::FivePrime`] crosses
+/// siblings the same way, in the other direction.
+///
+/// `before` is the member list as it entered per-member normalization and
+/// supplies both the pull-back floor and the barrier positions; `after` is the
+/// shifted list, mutated in place. The two must be index-aligned. Barriers are
+/// read from a snapshot of `after` as well, so a sibling that shifted *into*
+/// this member's window also blocks; taking them from snapshots rather than the
+/// live list keeps the pass independent of member order.
+///
+/// [`ShuffleDirection::FivePrime`]: crate::normalize::ShuffleDirection
+pub(crate) fn clamp_sibling_crossing_shifts(
+    before: &[HgvsVariant],
+    after: &mut [HgvsVariant],
+    phase: AllelePhase,
+    uncertain: bool,
+) {
+    // An uncertain allele — `g.[(…)]` — asserts only that the members are in
+    // cis, not where they sit, so repositioning one states something the input
+    // did not. Every neighbouring transform in `normalize_allele` gates on this.
+    if phase != AllelePhase::Cis || uncertain || after.len() < 2 || before.len() != after.len() {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&after[0]) else {
+        return;
+    };
+    let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
+    let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+
+    for i in 0..after.len() {
+        let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
+            continue;
+        };
+        if !b.claims_bases || !a.claims_bases || b.region != a.region {
+            continue;
+        }
+        // Only a pure translation is a rotation. A member whose span length
+        // changed (an `ins` canonicalised to a `dup`, a `delins` reduced) is
+        // not something this pass can reason about positionally.
+        let delta = a.start - b.start;
+        if delta == 0 || a.end - b.end != delta {
+            continue;
+        }
+        // Every sibling span, from either snapshot, that shares this member's
+        // coordinate line and claims bases of its own.
+        let siblings: Vec<&MemberSpan> = (0..pre.len())
+            .filter(|&j| j != i)
+            .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
+            .flatten()
+            .filter(|s| s.claims_bases && s.region == a.region && s.accession == a.accession)
+            .collect();
+
+        let pull = if delta > 0 {
+            // 3'-shift: the window is `[b.start, a.end]`. A sibling starting
+            // beyond this member's original end but at or before its new end
+            // was rotated over; stop one position short of the nearest.
+            siblings
+                .iter()
+                .map(|s| s.start)
+                .filter(|&start| start > b.end && start <= a.end)
+                .min()
+                .map(|start| a.end - (start - 1))
+        } else {
+            // 5'-shift: mirror image, window `[a.start, b.end]`.
+            siblings
+                .iter()
+                .map(|s| s.end)
+                .filter(|&end| end < b.start && end >= a.start)
+                .max()
+                .map(|end| a.start - (end + 1))
+        };
+        // Never move past where the member started: those positions were not
+        // reachable by this shift and are not equivalent to it.
+        let Some(pull) = pull.map(|p| {
+            if delta > 0 {
+                p.min(delta)
+            } else {
+                p.max(delta)
+            }
+        }) else {
+            continue;
+        };
+        if pull != 0 {
+            translate_member(&mut after[i], -pull, kind, a);
+        }
+    }
+}
+
+/// Move `variant`'s span `delta` positions along its axis (negative is 5').
+///
+/// Reverts and leaves the variant untouched unless the result lands exactly
+/// where intended on the *same* region — the guard against an axis whose
+/// integer coordinate is not simply translatable (a `c.` span that would cross
+/// into the 5'UTR or `*`-region, a genomic base that would underflow).
+fn translate_member(variant: &mut HgvsVariant, delta: i64, kind: CisKind, from: &MemberSpan) {
+    let original = variant.clone();
+    let moved = match variant {
+        HgvsVariant::Genome(g) => {
+            translate_interval(&mut g.loc_edit.location, |p: &mut GenomePos| {
+                shift_unsigned(&mut p.base, delta)
+            })
+        }
+        HgvsVariant::Mt(m) => translate_interval(&mut m.loc_edit.location, |p: &mut GenomePos| {
+            shift_unsigned(&mut p.base, delta)
+        }),
+        HgvsVariant::Cds(c) => translate_interval(&mut c.loc_edit.location, |p: &mut CdsPos| {
+            shift_signed(&mut p.base, delta)
+        }),
+        HgvsVariant::Tx(t) => translate_interval(&mut t.loc_edit.location, |p: &mut TxPos| {
+            shift_signed(&mut p.base, delta)
+        }),
+        HgvsVariant::Rna(r) => translate_interval(&mut r.loc_edit.location, |p: &mut RnaPos| {
+            shift_signed(&mut p.base, delta)
+        }),
+        _ => false,
+    };
+    let landed = moved
+        && member_span(variant, kind).is_some_and(|s| {
+            s.region == from.region && s.start == from.start + delta && s.end == from.end + delta
+        });
+    if !landed {
+        *variant = original;
+    }
+}
+
+/// Apply `step` to both certain endpoints of an interval, refusing any
+/// boundary this pass cannot move (uncertain, unknown, or a range endpoint).
+fn translate_interval<T>(interval: &mut Interval<T>, mut step: impl FnMut(&mut T) -> bool) -> bool {
+    let mut moved = true;
+    for boundary in [&mut interval.start, &mut interval.end] {
+        match boundary {
+            UncertainBoundary::Single(Mu::Certain(pos)) => moved &= step(pos),
+            _ => return false,
+        }
+    }
+    moved
+}
+
+/// Shift a 1-based unsigned coordinate, refusing a move off the 5' end.
+fn shift_unsigned(base: &mut u64, delta: i64) -> bool {
+    match base.checked_add_signed(delta) {
+        Some(shifted) if shifted >= 1 => {
+            *base = shifted;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Shift a signed axis coordinate, refusing a move onto the non-existent `0`.
+fn shift_signed(base: &mut i64, delta: i64) -> bool {
+    match base.checked_add(delta) {
+        Some(shifted) if shifted != 0 => {
+            *base = shifted;
+            true
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

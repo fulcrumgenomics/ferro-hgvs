@@ -2275,11 +2275,25 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
             let mut result: Vec<HgvsVariant> = Vec::with_capacity(merged_split.len());
             let mut pass_warnings: Vec<NormalizationWarning> = Vec::new();
-            for v in merged_split {
-                let (r, warnings) = self.normalize_core(&v)?;
+            for v in &merged_split {
+                let (r, warnings) = self.normalize_core(v)?;
                 pass_warnings.extend(warnings);
                 result.push(r);
             }
+
+            // The per-member shift above is sibling-unaware: each member goes to
+            // its standalone most-3' position, which can carry it clear over a
+            // sibling's bases and make the pair denote a different sequence
+            // (#1254). Pull any such member back to the last position before the
+            // sibling — still the most 3' placement that keeps the members on
+            // disjoint windows, and now merely *adjacent*, so the next pass's
+            // merge coalesces the two.
+            merge::clamp_sibling_crossing_shifts(
+                &merged_split,
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+            );
 
             pass += 1;
             // Stable once a full pass leaves the member set unchanged.

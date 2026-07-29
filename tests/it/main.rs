@@ -153,6 +153,7 @@ mod issue_1207_rna_cds_boundary_clamp;
 mod issue_1209_cds_end_insertion_shift;
 mod issue_1210_repeat_gate_tract_span;
 mod issue_1217_mito_terminus_insertion_clamp;
+mod issue_1254_sibling_crossing_shift;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;
