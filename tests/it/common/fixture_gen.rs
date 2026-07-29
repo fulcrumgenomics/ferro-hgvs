@@ -4,10 +4,10 @@
 //! `hgvs_spec_enumeration.json` (see [`super::spec_enumeration`]) are generated
 //! build artifacts, not committed files (see `CLAUDE.md`): tracking them made
 //! every parser PR a merge-conflict magnet. Each is produced by running a
-//! `--features dev` example with `--output <tmp>` and atomically renaming the
+//! `--features dev` generator binary with `--output <tmp>` and atomically renaming the
 //! result into place. This module holds the one regeneration flow they share —
 //! locking, subprocess execution, temp-file cleanup, atomic rename — so the two
-//! callers are thin wrappers that differ only in path, example name, temp stem,
+//! callers are thin wrappers that differ only in path, generator name, temp stem,
 //! and an optional prerequisite fixture to satisfy first.
 
 use std::path::{Path, PathBuf};
@@ -30,7 +30,7 @@ pub fn fixture_path(relative: &str) -> PathBuf {
 }
 
 /// Ensure `path` exists, regenerating it via
-/// `cargo run --features dev --example <example> -- --output <tmp>` when it is
+/// `cargo run --features dev --bin <generator> -- --output <tmp>` when it is
 /// missing. `dependency` runs first (before the lock is taken) to satisfy any
 /// fixture the generator itself reads; pass `|| {}` when there is none. `label`
 /// names the fixture in panic messages. Idempotent and safe to call from many
@@ -38,7 +38,7 @@ pub fn fixture_path(relative: &str) -> PathBuf {
 /// atomically, so a partially written file is never observed.
 pub fn ensure_generated_fixture(
     path: &Path,
-    example: &str,
+    generator: &str,
     tmp_stem: &str,
     label: &str,
     dependency: impl FnOnce(),
@@ -64,6 +64,19 @@ pub fn ensure_generated_fixture(
     let dir = path.parent().expect("fixture path has a parent directory");
     let tmp = dir.join(format!("{tmp_stem}.{}.tmp", std::process::id()));
 
+    // Deliberately a nested `cargo run`, NOT `CARGO_BIN_EXE_<generator>`.
+    //
+    // The generator-executing test modules (`spec_generator_preconditions`,
+    // `issue_1046_generator_gitdir_leak`) do use `CARGO_BIN_EXE_*`, and should:
+    // they are `#[cfg(feature = "dev")]`. This helper is not. It is reached from
+    // `hgvs_spec_normalization_tests`, `idempotency_tests` and
+    // `spec_enumeration_tests`, which are ungated so that a plain `cargo test`
+    // still runs them. `env!` resolves at *compile* time and cargo defines
+    // `CARGO_BIN_EXE_*` only for bins it builds — and both generators are
+    // `required-features = ["dev"]` — so expanding it here would fail to compile
+    // the whole `it` target without `--features dev`. `generator` is also a
+    // runtime string, which `env!` cannot take. Resolving the generator at run
+    // time is what keeps this callable from ungated modules.
     let status = Command::new(env!("CARGO"))
         .current_dir(manifest_dir)
         .args([
@@ -71,15 +84,15 @@ pub fn ensure_generated_fixture(
             "--quiet",
             "--features",
             "dev",
-            "--example",
-            example,
+            "--bin",
+            generator,
             "--",
             "--output",
         ])
         .arg(&tmp)
         .status()
-        .unwrap_or_else(|e| panic!("failed to run `{example}` example: {e}"));
-    assert!(status.success(), "`{example}` exited with failure");
+        .unwrap_or_else(|e| panic!("failed to run `{generator}` binary: {e}"));
+    assert!(status.success(), "`{generator}` exited with failure");
 
     // Atomically install the result. If a sibling test binary won the race and
     // already created the final file, drop our redundant temp copy.

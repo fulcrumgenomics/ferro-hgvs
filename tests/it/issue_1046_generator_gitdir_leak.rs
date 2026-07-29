@@ -34,31 +34,17 @@ fn rev_parse(dir: &Path, rev: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
 }
 
-/// The target directory root of the running test binary
-/// (`<target>/<profile>/deps/<test-exe>` → `<target>`). This tracks whatever
-/// `--target-dir` / `CARGO_TARGET_DIR` the outer `cargo test` used, including
-/// the `target/llvm-cov-target` override that the coverage job passes on the
-/// command line (which nested cargo invocations do *not* otherwise inherit).
-fn target_dir() -> PathBuf {
-    let mut p = std::env::current_exe().expect("current_exe");
-    p.pop(); // drop the test-exe filename → .../deps/
-    p.pop(); // drop deps → .../<profile>/
-    p.pop(); // drop <profile> → .../<target>/
-    p
-}
-
-/// Path to the built `generate_spec_fixture` example under the profile that the
-/// running test binary was built with (`<target>/<profile>/deps/<test-exe>` →
-/// `<target>/<profile>/examples/generate_spec_fixture`). This is robust to
-/// `CARGO_TARGET_DIR` and the active profile, and avoids invoking the example
-/// through `cargo run` (which would leak our hostile GIT env into cargo too).
-fn example_binary() -> PathBuf {
-    let mut p = std::env::current_exe().expect("current_exe");
-    p.pop(); // drop the test-exe filename → .../deps/
-    p.pop(); // drop deps → .../<profile>/
-    p.push("examples");
-    p.push("generate_spec_fixture");
-    p
+/// Path to the `generate_spec_fixture` binary, from cargo.
+///
+/// This used to re-derive `<target>/<profile>/examples/<name>` from
+/// `current_exe()`. That derivation is exactly what produced the wrong-path
+/// bugs in #1224 (profile axis) and #1225 (target-dir axis, which left `main`
+/// red for 15 commits). `CARGO_BIN_EXE_*` is resolved by cargo for the
+/// invocation actually running, so no axis can be missed — and cargo builds
+/// the binary before this test runs, which is why the explicit `cargo build`
+/// that used to precede this call is gone too.
+fn generator_binary() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_generate_spec_fixture"))
 }
 
 #[test]
@@ -98,31 +84,13 @@ fn commit_sha_is_submodule_pin_under_hook_git_env() {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
 
-    // Build the example (a fast no-op when already built). Pin `--target-dir`
-    // to the outer test binary's target root so the example lands exactly where
-    // `example_binary()` looks: the coverage job passes `--target-dir` on the
-    // command line, and that override is not inherited by this nested cargo
-    // invocation (which would otherwise build into the default `target/`).
-    let build = Command::new(env!("CARGO"))
-        .current_dir(&root)
-        .args([
-            "build",
-            "--quiet",
-            "--features",
-            "dev",
-            "--example",
-            "generate_spec_fixture",
-        ])
-        .arg("--target-dir")
-        .arg(target_dir())
-        .status()
-        .expect("build generate_spec_fixture example");
-    assert!(build.success(), "example build failed");
-
-    let bin = example_binary();
+    // Cargo builds the generator before this test runs and hands us its path via
+    // `CARGO_BIN_EXE_*`, so there is no nested `cargo build` and no
+    // profile/target-dir reconstruction to get wrong.
+    let bin = generator_binary();
     assert!(
         bin.exists(),
-        "example binary not found at {}",
+        "generator binary not found at {}",
         bin.display()
     );
 
@@ -131,7 +99,7 @@ fn commit_sha_is_submodule_pin_under_hook_git_env() {
         std::process::id()
     ));
 
-    // Run the example directly (no cargo) with the hostile GIT env set.
+    // Run the generator directly (no cargo) with the hostile GIT env set.
     let status = Command::new(&bin)
         .current_dir(&root)
         .arg("--output")
@@ -139,7 +107,7 @@ fn commit_sha_is_submodule_pin_under_hook_git_env() {
         .env("GIT_DIR", &outer_git_dir)
         .env("GIT_WORK_TREE", &root)
         .status()
-        .expect("run generate_spec_fixture example");
+        .expect("run generate_spec_fixture");
     assert!(status.success(), "generator exited with failure");
 
     let text = std::fs::read_to_string(&tmp).expect("read generated fixture");

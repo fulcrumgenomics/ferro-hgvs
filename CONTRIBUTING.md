@@ -103,7 +103,7 @@ If your PR changes any normalization output:
    # compares against. (On a fresh worktree there is nothing to snapshot;
    # regenerate on `main` first if you want a baseline.)
    cp tests/fixtures/grammar/hgvs_spec_normalization.json /tmp/spec-fixture-before.json
-   cargo run --features dev --example generate_spec_fixture
+   cargo run --features dev --bin generate_spec_fixture
    ```
 
 2. Inspect the change against that snapshot — not `git diff`, which shows
@@ -190,7 +190,7 @@ override file.
    override against it, so a stale override fails the build.
 
    ```bash
-   cargo run --features dev --example generate_spec_fixture
+   cargo run --features dev --bin generate_spec_fixture
    ```
 
    The pre-push hook runs the same command for the same reason. `--check` is a
@@ -198,7 +198,7 @@ override file.
    — and is never a gate:
 
    ```bash
-   cargo run --features dev --example generate_spec_fixture -- --check
+   cargo run --features dev --bin generate_spec_fixture -- --check
    ```
 
    (Contrast the tool-support tables below, whose outputs *are* committed. There

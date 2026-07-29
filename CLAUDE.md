@@ -55,12 +55,16 @@ skips its own check.
 
 ### Generated spec fixture (not committed)
 
-`tests/fixtures/grammar/hgvs_spec_normalization.json` is a **generated build artifact** — it is `.gitignore`d, not committed. It is produced by the `generate_spec_fixture` example from the HGVS spec submodule, the parser's behavior, and the curated `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`. (Committing it made every parser PR a merge-conflict magnet, since each PR regenerated the whole file.)
+`tests/fixtures/grammar/hgvs_spec_normalization.json` is a **generated build artifact** — it is `.gitignore`d, not committed. It is produced by the `generate_spec_fixture` binary from the HGVS spec submodule, the parser's behavior, and the curated `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`. (Committing it made every parser PR a merge-conflict magnet, since each PR regenerated the whole file.)
 
 ```bash
-cargo run --features dev --example generate_spec_fixture            # (re)generate it
-cargo run --features dev --example generate_spec_fixture -- --output <path>   # write elsewhere
+cargo run --features dev --bin generate_spec_fixture            # (re)generate it
+cargo run --features dev --bin generate_spec_fixture -- --output <path>   # write elsewhere
 ```
+
+Replace `<path>` with the destination you want; the first form writes to the default
+location above. Do not substitute a machine-specific absolute path into a committed file
+(see [Repository Hygiene](#no-machine-local-paths-in-committed-files)).
 
 The tests that read it (`tests/it/hgvs_spec_normalization_tests.rs`, `tests/it/idempotency_tests.rs`, `tests/it/mito_circular_audit.rs`, `tests/it/protein_silent_eq.rs`, `tests/it/protein_unknown_roundtrip.rs`) call a shared helper (`tests/it/common/spec_fixture.rs`) that regenerates it on demand if missing, so a fresh `cargo test` "just works" (one-time generation). CI and the pre-push hook regenerate it explicitly before the test run — plain generation, not `--check`, because generation is what validates the committed overrides against the spec checkout.
 

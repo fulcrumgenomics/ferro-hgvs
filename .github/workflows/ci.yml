@@ -254,22 +254,23 @@ jobs:
         # validates the curated overrides file — the guard the old `--check`
         # step provided. Shipped to the shards as an artifact so they never
         # regenerate it (and so they need no spec submodule).
-        run: cargo run --features dev --example generate_spec_fixture
+        run: cargo run --features dev --bin generate_spec_fixture
       - name: Generate HGVS spec test enumeration
-        run: cargo run --features dev --example generate_spec_enumeration
+        run: cargo run --features dev --bin generate_spec_enumeration
       - name: Build test archive
         # Compiles every test binary and packs them with their run metadata.
         run: cargo nextest archive --features dev --archive-file nextest.tar.zst
-      - name: Stage the generator examples for the shards
-        # `spec_generator_preconditions` executes these two binaries. nextest
-        # does NOT build examples, so the shards cannot rely on finding them,
-        # and they must not shell out to cargo either (they run from the
-        # archive with no build state). Both were already built and run by the
-        # generate steps above, so ship them alongside the archive.
+      - name: Stage the generator binaries for the shards
+        # `spec_generator_preconditions` executes these two binaries. They are
+        # `required-features = ["dev"]` bin targets, and the shards run from the
+        # nextest archive with no build state, so they must not shell out to
+        # cargo. Both were already built and run by the generate steps above, so
+        # ship them alongside the archive. As `[[bin]]` targets they land in
+        # `target/debug/`, not `target/debug/examples/`.
         run: |
           mkdir -p staged-examples
-          cp target/debug/examples/generate_spec_fixture \
-             target/debug/examples/generate_spec_enumeration staged-examples/
+          cp target/debug/generate_spec_fixture \
+             target/debug/generate_spec_enumeration staged-examples/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: nextest-archive
@@ -318,10 +319,10 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: generator-examples
-          path: target/debug/examples/
-      - name: Restore the executable bit on the staged examples
+          path: target/debug/
+      - name: Restore the executable bit on the staged generators
         # Artifact upload does not preserve the executable bit.
-        run: chmod +x target/debug/examples/generate_spec_fixture target/debug/examples/generate_spec_enumeration
+        run: chmod +x target/debug/generate_spec_fixture target/debug/generate_spec_enumeration
       - name: "Note: reference-aware tests are skipped without a manifest"
         # `tests/mutalyzer_normalize_tests.rs` and the biocommons reference-aware
         # suite both silently no-op when `FERRO_MANIFEST` is unset (PR CI does
@@ -380,10 +381,10 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: generator-examples
-          path: target/debug/examples/
-      - name: Restore the executable bit on the staged examples
+          path: target/debug/
+      - name: Restore the executable bit on the staged generators
         # Artifact upload does not preserve the executable bit.
-        run: chmod +x target/debug/examples/generate_spec_fixture target/debug/examples/generate_spec_enumeration
+        run: chmod +x target/debug/generate_spec_fixture target/debug/generate_spec_enumeration
       - name: Run Rust tests with normalization idempotency self-check
         # `FERRO_ASSERT_IDEMPOTENT` turns every reference-backed test into an
         # assertion that `norm(norm(x)) == norm(x)`. The gate is
@@ -460,10 +461,10 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
           name: generator-examples
-          path: target/debug/examples/
-      - name: Restore the executable bit on the staged examples
+          path: target/debug/
+      - name: Restore the executable bit on the staged generators
         # Artifact upload does not preserve the executable bit.
-        run: chmod +x target/debug/examples/generate_spec_fixture target/debug/examples/generate_spec_enumeration
+        run: chmod +x target/debug/generate_spec_fixture target/debug/generate_spec_enumeration
       - name: Soak 125k cases (seed ${{ matrix.seed }})
         env:
           # 8 shards x 125k = 1,000,000 cases per property.

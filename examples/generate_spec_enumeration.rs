@@ -22,9 +22,9 @@
 //! artifact**: gitignored, regenerated on demand. Only the hand-curated
 //! overrides, this generator, and the test driver are committed.
 //!
-//! Run:   `cargo run --features dev --example generate_spec_enumeration`
-//! Check: `cargo run --features dev --example generate_spec_enumeration -- --check`
-//! Census: `cargo run --features dev --example generate_spec_enumeration -- --census`
+//! Run:   `cargo run --features dev --bin generate_spec_enumeration`
+//! Check: `cargo run --features dev --bin generate_spec_enumeration -- --check`
+//! Census: `cargo run --features dev --bin generate_spec_enumeration -- --census`
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -288,7 +288,7 @@ mod dedup {
             let text = std::fs::read_to_string(path).map_err(|e| {
                 anyhow::anyhow!(
                     "read {}: {e}\nHint: regenerate it first with \
-                     `cargo run --features dev --example generate_spec_fixture`",
+                     `cargo run --features dev --bin generate_spec_fixture`",
                     path.display()
                 )
             })?;
@@ -1939,7 +1939,7 @@ mod render {
         let doc = Document {
             description:
                 "Exhaustive, non-redundant HGVS spec test enumeration. Generated artifact - \
-                 gitignored, regenerate with `cargo run --features dev --example \
+                 gitignored, regenerate with `cargo run --features dev --bin \
                  generate_spec_enumeration`. Complements (never restates) \
                  hgvs_spec_normalization.json.",
             spec: SpecBlock {

@@ -38,233 +38,63 @@ fn scratch(name: &str) -> PathBuf {
     dir
 }
 
-/// Build the two generator examples exactly once per test binary, and return
-/// the path to the requested one.
+/// Absolute path to a generator binary, provided by cargo.
 ///
-/// # Why not just `cargo run --example`
+/// # Why `CARGO_BIN_EXE_*` and not a hand-derived path
 ///
-/// That is what this module did originally, and it was pathologically slow —
-/// but not for the reason it looks like. Cargo takes a **file lock on
-/// `target/`**, so the four tests here, which nextest runs concurrently,
-/// serialised behind one another: each reported ~25s even against a fully warm
-/// build tree, and in CI they blew past nextest's 60s SLOW threshold and made
-/// whichever shard held them the critical path of the whole test job.
+/// This helper used to shell out to `cargo build` and then locate the output
+/// itself. Locating it means reconstructing the cargo invocation that is
+/// actually in flight — profile, target directory, features — and every
+/// coordinate missed is a silent wrong-path bug:
 ///
-/// # Why not just invoke `target/<profile>/examples/<name>` directly
+/// - the build ignored the profile, so `--release` looked in
+///   `target/release/examples/` for something written to `target/debug/`
+///   (#1224). Worse than the one hard failure, a sibling test *passed* against
+///   a stale release binary left over from an earlier build — exactly the
+///   staleness the machinery existed to prevent;
+/// - the build then ignored the target directory, so under `cargo llvm-cov`
+///   (which builds into `target/llvm-cov-target/`) all four tests failed, and
+///   `main` stayed red for 15 commits because `Coverage` runs only after a
+///   merge and gates nothing (#1225).
 ///
-/// Tried, and it is **wrong**. `cargo test` / `cargo nextest run` do *not*
-/// rebuild examples, so the binary sitting in `examples/` can be arbitrarily
-/// old. Observed directly: a `generate_spec_enumeration` binary from the
-/// previous day produced the pre-#1201 error message, and this module's test
-/// for #1201's guard failed against source that unmistakably contained it. A
-/// stale binary makes these tests assert things about code that is not the code
-/// under test — a far worse failure than being slow.
+/// Cargo defines `CARGO_BIN_EXE_<name>` for every `[[bin]]` target of the
+/// package under test, resolved for the invocation in hand. It is correct
+/// under any profile, target dir, or cross-compile, and cargo guarantees the
+/// binary is built and current before integration tests run — so the `Once`,
+/// the nested build, the path arithmetic, and the `FERRO_PREBUILT_EXAMPLES`
+/// escape hatch for CI's nextest archives all become unnecessary. That is why
+/// the generators are declared as `[[bin]]` in `Cargo.toml`.
 ///
-/// # What this does
-///
-/// One `cargo build` for both examples, behind a `Once`, then direct execution.
-/// The build is current by construction, and it happens exactly once no matter
-/// how many tests run concurrently — so the cargo lock is taken once rather
-/// than per test, which is where the speedup comes from.
-///
-/// `FERRO_PREBUILT_EXAMPLES` skips even that single build, for the one context
-/// where the binaries are known-current and cargo is unavailable: CI's sharded
-/// test jobs, which run from a nextest archive after `test-build` has already
-/// built and executed both generators.
-///
-/// # The build and the lookup must agree on the profile
-///
-/// Both halves are derived from the same `target/<profile>/` directory. Getting
-/// only one of them right is worse than getting both wrong: a `--release` run
-/// used to build into `target/debug/examples/` and then look in
-/// `target/release/examples/`, which failed outright for
-/// `generate_spec_enumeration` and — far worse — silently *succeeded* for
-/// `generate_spec_fixture` whenever a stale release binary happened to be
-/// sitting there, resurrecting exactly the staleness this helper exists to
-/// prevent.
-fn built_example(example: &str) -> PathBuf {
-    static BUILD: std::sync::Once = std::sync::Once::new();
-    static BUILD_OK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-    // CI builds both examples in the `test-build` job (it runs them to generate
-    // the spec artifacts) and sets this variable, so the sharded test jobs —
-    // which execute from a nextest archive and have no cargo build state at all
-    // — must not shell out to cargo. A cargo invocation there would rebuild the
-    // world per shard.
-    let prebuilt = std::env::var_os("FERRO_PREBUILT_EXAMPLES").is_some();
-
-    // The test binary lives at `…/target/<profile>/deps/it-<hash>`, so the
-    // examples directory is two levels up. Deriving it from `current_exe`
-    // rather than hardcoding `debug/` keeps this correct under `--release` and
-    // under a nextest archive extracted into the workspace.
-    let exe = std::env::current_exe().expect("current_exe");
-    let profile_dir = exe
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("target/<profile>")
-        .to_path_buf();
-    let profile = profile_dir
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("debug")
-        .to_string();
-    // …and the target directory is one level above that. It is NOT always
-    // `<manifest>/target`: `cargo llvm-cov` builds into
-    // `target/llvm-cov-target/`, and `--target-dir` / `CARGO_TARGET_DIR` can
-    // point anywhere. The nested build must be told, or it writes to the
-    // default `target/` while the lookup reads somewhere else entirely.
-    let target_dir = profile_dir
-        .parent()
-        .expect("target dir above target/<profile>")
-        .to_path_buf();
-
-    BUILD.call_once(|| {
-        if prebuilt {
-            BUILD_OK.store(true, std::sync::atomic::Ordering::SeqCst);
-            return;
-        }
-        let status = Command::new(env!("CARGO"))
-            .current_dir(manifest_dir())
-            .args(build_args(&profile, &target_dir))
-            .status();
-        let ok = matches!(status, Ok(s) if s.success());
-        BUILD_OK.store(ok, std::sync::atomic::Ordering::SeqCst);
-    });
-    assert!(
-        BUILD_OK.load(std::sync::atomic::Ordering::SeqCst),
-        "failed to build the generator examples"
-    );
-
-    let path = profile_dir.join("examples").join(example);
-    assert!(
-        path.is_file(),
-        "expected a freshly built example at {}",
-        path.display()
-    );
-    path
+/// The whole module is `dev`-gated: `CARGO_BIN_EXE_*` exists only for targets
+/// cargo actually builds, and both generators are `required-features = ["dev"]`.
+fn spec_fixture_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_generate_spec_fixture")
 }
 
-/// `cargo build` arguments that place both generator examples in
-/// `<target_dir>/<profile>/examples/`.
-///
-/// Both coordinates are passed explicitly, because the nested cargo inherits
-/// neither from the parent test run:
-///
-/// - `profile` is the *directory* name under the target dir, which is not
-///   always the profile name: cargo writes the built-in `dev` profile into
-///   `debug/`, while every other profile's directory matches its name. So
-///   `debug` means "pass no profile flag" and anything else is forwarded
-///   verbatim via `--profile`, which also covers custom profiles.
-/// - `target_dir` is forwarded via `--target-dir`. `cargo llvm-cov` drives
-///   `cargo test --target-dir target/llvm-cov-target`, and that flag does not
-///   reach a grandchild cargo — without this the build lands in the default
-///   `target/` while the lookup reads
-///   `target/llvm-cov-target/<profile>/examples/`.
-fn build_args(profile: &str, target_dir: &std::path::Path) -> Vec<String> {
-    let mut args: Vec<String> = [
-        "build",
-        "--quiet",
-        "--features",
-        "dev",
-        "--example",
-        "generate_spec_fixture",
-        "--example",
-        "generate_spec_enumeration",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
-    if profile != "debug" {
-        args.push("--profile".to_string());
-        args.push(profile.to_string());
-    }
-    args.push("--target-dir".to_string());
-    args.push(target_dir.display().to_string());
-    args
+fn spec_enumeration_bin() -> &'static str {
+    env!("CARGO_BIN_EXE_generate_spec_enumeration")
 }
 
-#[cfg(test)]
-mod build_args_tests {
-    use super::build_args;
-    use std::path::Path;
-
-    fn args(profile: &str) -> Vec<String> {
-        build_args(profile, Path::new("/w/target"))
-    }
-
-    /// The `dev` profile builds into `<target>/debug`, so no profile flag is
-    /// passed — adding `--profile debug` would be an error (there is no
-    /// `debug` profile; the profile is named `dev`).
-    #[test]
-    fn debug_profile_passes_no_profile_flag() {
-        let a = args("debug");
-        assert!(
-            !a.iter().any(|x| x == "--profile"),
-            "unexpected --profile in {a:?}"
-        );
-    }
-
-    /// A `--release` test binary must build its examples into
-    /// `<target>/release/examples/`, or the lookup finds a stale binary or none.
-    #[test]
-    fn release_profile_is_forwarded() {
-        let a = args("release");
-        let i = a
-            .iter()
-            .position(|x| x == "--profile")
-            .expect("--profile must be passed for a non-debug profile");
-        assert_eq!(a[i + 1], "release");
-    }
-
-    /// Custom profiles use their own directory name, so forwarding the
-    /// directory name verbatim is correct for them too.
-    #[test]
-    fn custom_profile_is_forwarded_verbatim() {
-        let a = args("release-lto");
-        let i = a.iter().position(|x| x == "--profile").expect("--profile");
-        assert_eq!(a[i + 1], "release-lto");
-    }
-
-    /// The target directory must be forwarded on every profile.
-    ///
-    /// `cargo llvm-cov` drives `cargo test --target-dir target/llvm-cov-target`,
-    /// and that flag does not reach the cargo this helper spawns. Without
-    /// `--target-dir` the examples land in the default `target/` while the
-    /// lookup reads `target/llvm-cov-target/<profile>/examples/` — the mismatch
-    /// that turned the `Coverage` workflow red for 15 commits while every
-    /// required PR check stayed green.
-    #[test]
-    fn target_dir_is_always_forwarded() {
-        for profile in ["debug", "release"] {
-            let a = build_args(profile, Path::new("/w/target/llvm-cov-target"));
-            let i = a
-                .iter()
-                .position(|x| x == "--target-dir")
-                .unwrap_or_else(|| panic!("--target-dir missing for {profile}: {a:?}"));
-            assert_eq!(a[i + 1], "/w/target/llvm-cov-target");
-        }
-    }
-
-    /// Whatever the profile, both generators must be requested — the helper's
-    /// single-build-for-both property is what keeps the cargo lock cost at one
-    /// acquisition per test binary.
-    #[test]
-    fn both_generators_are_always_requested() {
-        for profile in ["debug", "release"] {
-            let a = args(profile);
-            assert!(a.iter().any(|x| x == "generate_spec_fixture"));
-            assert!(a.iter().any(|x| x == "generate_spec_enumeration"));
-        }
-    }
+/// Resolve a generator binary by the name the tests use.
+///
+/// Nothing is built here: both generators are `[[bin]]` targets that cargo has
+/// already built, and `CARGO_BIN_EXE_*` hands us the path.
+fn generator_binary(generator: &str) -> PathBuf {
+    let path = match generator {
+        "generate_spec_fixture" => spec_fixture_bin(),
+        "generate_spec_enumeration" => spec_enumeration_bin(),
+        other => panic!("unknown generator {other}"),
+    };
+    PathBuf::from(path)
 }
 
-/// Run a `--features dev` example with `args`, returning its captured output.
-fn run_example(example: &str, args: &[&str]) -> Output {
-    Command::new(built_example(example))
+/// Run a `--features dev` generator with `args`, returning its captured output.
+fn run_generator(generator: &str, args: &[&str]) -> Output {
+    Command::new(generator_binary(generator))
         .current_dir(manifest_dir())
         .args(args)
         .output()
-        .unwrap_or_else(|e| panic!("failed to run `{example}`: {e}"))
+        .unwrap_or_else(|e| panic!("failed to run `{generator}`: {e}"))
 }
 
 fn stderr_of(out: &Output) -> String {
@@ -356,7 +186,7 @@ fn spec_dir_if_initialised() -> Option<PathBuf> {
 #[test]
 fn empty_spec_checkout_names_the_submodule_not_the_overrides() {
     let empty = scratch("empty-spec-dir");
-    let out = run_example(
+    let out = run_generator(
         "generate_spec_fixture",
         &[
             "--spec-dir",
@@ -394,7 +224,7 @@ fn empty_spec_checkout_names_the_submodule_not_the_overrides() {
 #[test]
 fn empty_spec_checkout_is_rejected_by_the_enumeration_generator_too() {
     let empty = scratch("empty-spec-dir-enum");
-    let out = run_example(
+    let out = run_generator(
         "generate_spec_enumeration",
         &[
             "--spec-dir",
@@ -439,7 +269,7 @@ fn check_generates_an_absent_artifact_instead_of_failing() {
     let output = dir.join("hgvs_spec_normalization.json");
     assert!(!output.exists(), "scratch output must start absent");
 
-    let out = run_example(
+    let out = run_generator(
         "generate_spec_fixture",
         &[
             "--spec-dir",
@@ -478,7 +308,7 @@ fn check_still_reports_a_stale_artifact_and_leaves_it_alone() {
     let stale = "{\"not\": \"the real fixture\"}\n";
     std::fs::write(&output, stale).expect("seed a stale artifact");
 
-    let out = run_example(
+    let out = run_generator(
         "generate_spec_fixture",
         &[
             "--spec-dir",
@@ -519,10 +349,13 @@ fn pre_push_hooks_run_plain_generation_like_ci() {
     let hooks = pre_commit_hooks();
     let ci_runs = ci_run_commands();
 
-    for example in ["generate_spec_fixture", "generate_spec_enumeration"] {
-        let plain = format!("cargo run --features dev --example {example}");
+    for generator in ["generate_spec_fixture", "generate_spec_enumeration"] {
+        // `--bin`, not `--example`: both generators are `[[bin]]` targets so
+        // tests can locate them via `CARGO_BIN_EXE_*`. The hooks and CI must
+        // agree with that, or the pre-push hook silently builds nothing.
+        let plain = format!("cargo run --features dev --bin {generator}");
 
-        let hook_id = example.replace('_', "-");
+        let hook_id = generator.replace('_', "-");
         let hook = hooks
             .iter()
             .find(|h| h.id == hook_id)
@@ -544,7 +377,7 @@ fn pre_push_hooks_run_plain_generation_like_ci() {
         // run what CI runs" is precisely the claim being pinned.
         assert!(
             ci_runs.iter().any(|r| r.trim() == plain),
-            "expected CI to run plain `{example}`, matching the pre-push hook",
+            "expected CI to run plain `{generator}`, matching the pre-push hook",
         );
     }
 

@@ -97,6 +97,11 @@ mod issue_1039_convert_gff_fasta_error;
 mod issue_1040_inv_overrecognition_probes;
 mod issue_1041_repro;
 mod issue_1044_mito_window_clamp;
+// Same gate as `spec_generator_preconditions` below, and for the same reason:
+// this module resolves `CARGO_BIN_EXE_generate_spec_fixture` with `env!`, which
+// is a *compile-time* lookup, so a plain `cargo test` would fail to build the
+// whole `it` target rather than skip these tests.
+#[cfg(feature = "dev")]
 mod issue_1046_generator_gitdir_leak;
 mod issue_1052_substitution_refseq;
 mod issue_1063_preserve_uncertain_wrapper;
@@ -333,6 +338,11 @@ mod spdi_tests;
 mod spec_canonical_locks;
 mod spec_coverage_misc;
 mod spec_enumeration_tests;
+// `CARGO_BIN_EXE_generate_spec_*` is defined only for bin targets cargo builds,
+// and both generators are `required-features = ["dev"]`. Without this gate a
+// plain `cargo test` (no `--features dev`) fails to compile the whole `it`
+// target rather than merely skipping these tests.
+#[cfg(feature = "dev")]
 mod spec_generator_preconditions;
 mod strict_del_size_suffix_mode;
 mod strict_explicit_seq_size_modes;
