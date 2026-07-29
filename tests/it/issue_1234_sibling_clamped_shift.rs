@@ -172,3 +172,32 @@ fn normalization_preserves_the_resulting_sequence() {
         );
     }
 }
+
+/// An uncertain allele — `g.[( … )]` — asserts only that its members are in
+/// cis, not where they sit. Rewriting a member's position drops the predicted
+/// marker and states something the input deliberately did not.
+///
+/// Every neighbouring transform in `normalize_allele` already gates on this
+/// flag. The clamp did not, so `g.[(4_6del;8A>T)]` collapsed to a bare
+/// `g.5_8delinsT`: the parentheses vanished, turning a prediction into an
+/// assertion. The PR's own comment claimed the flag is always false here, which
+/// holds for protein but not for a DNA `g.[( … )]`.
+#[test]
+fn an_uncertain_allele_keeps_its_predicted_marker() {
+    let normalized = normalize_to_string("TEMPLATE:g.[(4_6del;8A>T)]");
+    assert!(
+        normalized.contains('('),
+        "the predicted marker must survive normalization, got `{normalized}`"
+    );
+    assert_eq!(normalized, "TEMPLATE:g.[(6_8del;8A>T)]");
+}
+
+/// The certain spelling of the same allele is unaffected — the gate must not
+/// disable the clamp generally.
+#[test]
+fn the_certain_spelling_of_that_allele_still_clamps() {
+    assert_eq!(
+        normalize_to_string("TEMPLATE:g.[4_6del;8A>T]"),
+        "TEMPLATE:g.5_8delinsT"
+    );
+}

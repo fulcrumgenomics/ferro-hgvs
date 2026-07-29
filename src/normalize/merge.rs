@@ -10,6 +10,7 @@ use crate::hgvs::variant::{
     Accession, AllelePhase, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant, RnaVariant,
     TxVariant,
 };
+use crate::normalize::verify;
 use crate::reference::ReferenceProvider;
 
 /// Coordinate-system region used as the merge-eligibility key.
@@ -1580,17 +1581,31 @@ pub(crate) fn coalesce_protein_adjacent_changes(
 /// supplies the pull-back floor; `after` is the shifted list, mutated in place.
 /// Members whose spans cannot be read (uncertain, offset, special positions)
 /// are left alone.
-pub(crate) fn clamp_shifted_members(
+pub(crate) fn clamp_shifted_members<P: ReferenceProvider>(
     before: &[HgvsVariant],
     after: &mut [HgvsVariant],
     phase: AllelePhase,
+    uncertain: bool,
+    provider: &P,
 ) {
     if phase != AllelePhase::Cis || after.len() < 2 || before.len() != after.len() {
+        return;
+    }
+    // An uncertain allele — `g.[(…)]` — asserts only that the members are in
+    // cis, not where they sit, so rewriting one member's position drops the
+    // predicted marker and states something the input did not. Every
+    // neighbouring transform in `normalize_allele` gates on this; the clamp
+    // must too. The flag is always false for protein but genuinely reachable
+    // for DNA.
+    if uncertain {
         return;
     }
     let Some(kind) = clamp_kind_of(&after[0]) else {
         return;
     };
+    // Record the shifted positions so an unverifiable clamp can be undone.
+    let unclamped = after.to_vec();
+    let mut clamped: Vec<usize> = Vec::new();
     // Walk 3'→5' so a member pulled back cannot be re-overlapped by the one
     // before it in the same pass.
     for i in (0..after.len() - 1).rev() {
@@ -1638,7 +1653,43 @@ pub(crate) fn clamp_shifted_members(
             continue;
         }
         shift_member_left(&mut after[i], pull_back);
+        clamped.push(i);
     }
+
+    if clamped.is_empty() {
+        return;
+    }
+
+    // Everything above is positional reasoning, and positional reasoning is
+    // exactly what cannot decide this. A 3'-shift is a rotation, so pulling a
+    // member back toward its pre-shift position preserves the sequence *for
+    // that member alone*; it stops doing so once a sibling edits a base inside
+    // the tract the member rotated through, and no property of the edit kinds
+    // or their span lengths tells the two apart. Fuzzing an earlier structural
+    // gate over 222,300 three-member alleles found 32 cases where it passed
+    // every condition and still changed the sequence silently. So the pull-back
+    // is proposed here, and the reference decides.
+    if verify::same_resulting_sequence(provider, before, after) == Some(true) {
+        return;
+    }
+
+    // Something in the batch changed the sequence. Try to keep the rest: revert
+    // one member at a time, newest-clamped first, and re-verify. A single
+    // culprit is the realistic shape, and stopping there keeps this bounded.
+    for &candidate in &clamped {
+        let mut trial = after.to_vec();
+        trial[candidate] = unclamped[candidate].clone();
+        if verify::same_resulting_sequence(provider, before, &trial) == Some(true) {
+            after.clone_from_slice(&trial);
+            return;
+        }
+    }
+
+    // Unverifiable, or more than one member is implicated. Leave the members
+    // where per-member normalization put them. That output may still overlap,
+    // which is a shape a consumer can detect and reject — strictly better than
+    // a clean-looking description that denotes different bases.
+    after.clone_from_slice(&unclamped);
 }
 
 /// Whether an edit consumes the reference bases under its span.

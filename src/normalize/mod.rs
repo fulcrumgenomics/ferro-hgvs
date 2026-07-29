@@ -30,6 +30,7 @@ mod overlap;
 pub mod rules;
 pub mod shuffle;
 pub mod validate;
+mod verify;
 
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
@@ -2284,7 +2285,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // sibling (#1234). Pull those back before the next pass sees them;
             // a clamped member ends up adjacent to its sibling and the merge at
             // the top of the loop then coalesces the two.
-            merge::clamp_shifted_members(&merged_split, &mut result, allele.phase);
+            merge::clamp_shifted_members(
+                &merged_split,
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+                &self.provider,
+            );
 
             pass += 1;
             // Stable once a full pass leaves the member set unchanged.
