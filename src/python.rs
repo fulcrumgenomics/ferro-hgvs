@@ -3872,9 +3872,17 @@ impl PyCodonChange {
     }
 
     /// Position(s) in codon that changed (1-indexed)
+    ///
+    /// Widened from the underlying `u8` because pyo3 special-cases `Vec<u8>`
+    /// to Python `bytes`, which is not the `list[int]` the stub declares and
+    /// not what a list of positions should be (#1246).
     #[getter]
-    fn changed_positions(&self) -> Vec<u8> {
-        self.inner.changed_positions.clone()
+    fn changed_positions(&self) -> Vec<usize> {
+        self.inner
+            .changed_positions
+            .iter()
+            .map(|position| *position as usize)
+            .collect()
     }
 
     /// Number of nucleotide changes
