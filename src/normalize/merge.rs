@@ -1722,6 +1722,175 @@ pub(crate) fn clamp_sibling_crossing_shifts(
     }
 }
 
+/// Re-spell as a plain deletion any cis member whose repeat notation spans a
+/// sibling's bases.
+///
+/// `deletion_to_repeat` (`repeated.md` B2) re-expresses a deletion inside a
+/// tandem tract as a copy count over the **whole tract**, not over the deleted
+/// bases: on a nine-`T` run, `g.1_2del` becomes `g.1_9T[7]`. That widened span
+/// is correct for a lone variant, but in a cis allele it can swallow a sibling
+/// — `g.[1_2del;4del]` emitted `g.[1_9T[7];9del]`, where `9del` sits inside
+/// `1_9`. Overlapping members are malformed, and the pair denotes a different
+/// sequence than the input.
+///
+/// The conversion happens per member, deep inside `normalize_na_edit`, with no
+/// sibling context reaching it, so the decision is undone here instead: the
+/// repeat is re-spelled as the equivalent 3'-most deletion of the same number
+/// of bases, ending where the tract ends. That is the form the member would
+/// have taken had B2 declined, and it is exactly equivalent — B2 only re-writes
+/// notation, never the bases removed.
+///
+/// Restoring the deletion is what lets the rest of the pipeline finish the job.
+/// [`clamp_sibling_crossing_shifts`] can then see a real span to pull back, and
+/// the caller's next merge pass coalesces the members. `g.[1_2del;4del]` ends up
+/// as `g.1_9T[6]` — one member, three bases removed from the tract, repeat
+/// notation restored now that there is no sibling to span.
+///
+/// Runs before the clamp, so the clamp sees the deletion rather than the
+/// repeat. Members whose pre-normalization form was not a plain deletion are
+/// left alone: without a deleted-base count there is nothing to re-spell to.
+pub(crate) fn demote_repeats_spanning_siblings(
+    before: &[HgvsVariant],
+    after: &mut [HgvsVariant],
+    phase: AllelePhase,
+    uncertain: bool,
+) {
+    if phase != AllelePhase::Cis || uncertain || after.len() < 2 || before.len() != after.len() {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&after[0]) else {
+        return;
+    };
+    let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
+    let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+
+    for i in 0..after.len() {
+        let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
+            continue;
+        };
+        // Only a repeat that grew out of a plain deletion is re-spellable.
+        if !matches!(
+            cis_axis_parts(&after[i], kind).map(|(_, _, _, _, e)| e),
+            Some(NaEdit::Repeat { .. })
+        ) || !matches!(
+            cis_axis_parts(&before[i], kind).map(|(_, _, _, _, e)| e),
+            Some(NaEdit::Deletion { .. })
+        ) {
+            continue;
+        }
+        let deleted = b.end - b.start + 1;
+        // The equivalent deletion is the 3'-most `deleted` bases of the tract.
+        let start = a.end - deleted + 1;
+        if deleted <= 0 || start < a.start || b.region != a.region {
+            continue;
+        }
+        // Does the tract actually span a sibling's bases? Both snapshots, so a
+        // sibling that moved into the tract counts too.
+        let spans_sibling = (0..pre.len())
+            .filter(|&j| j != i)
+            .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
+            .flatten()
+            .filter(|s| s.claims_bases && s.region == a.region && s.accession == a.accession)
+            .any(|s| s.start <= a.end && s.end >= a.start);
+        if !spans_sibling {
+            continue;
+        }
+        respell_as_deletion(&mut after[i], kind, a.region, start, a.end);
+    }
+}
+
+/// Replace `variant`'s edit with a plain deletion over `[start, end]`.
+///
+/// Reverts on any axis this pass cannot rewrite, or if the result does not land
+/// exactly where intended on the same region.
+fn respell_as_deletion(
+    variant: &mut HgvsVariant,
+    kind: CisKind,
+    region: Region,
+    start: i64,
+    end: i64,
+) {
+    let original = variant.clone();
+    let placed = match variant {
+        HgvsVariant::Genome(g) => place_genome(&mut g.loc_edit, start, end),
+        HgvsVariant::Mt(m) => place_genome(&mut m.loc_edit, start, end),
+        HgvsVariant::Cds(c) => place_signed(&mut c.loc_edit, start, end, |p: &mut CdsPos, v| {
+            p.base = v;
+        }),
+        HgvsVariant::Tx(t) => place_signed(&mut t.loc_edit, start, end, |p: &mut TxPos, v| {
+            p.base = v;
+        }),
+        HgvsVariant::Rna(r) => place_signed(&mut r.loc_edit, start, end, |p: &mut RnaPos, v| {
+            p.base = v;
+        }),
+        _ => false,
+    };
+    let landed = placed
+        && member_span(variant, kind)
+            .is_some_and(|s| s.region == region && s.start == start && s.end == end);
+    if !landed {
+        *variant = original;
+    }
+}
+
+/// Set a genomic `LocEdit` to a plain deletion over `[start, end]`.
+fn place_genome(loc_edit: &mut LocEdit<Interval<GenomePos>, NaEdit>, start: i64, end: i64) -> bool {
+    let (Ok(start), Ok(end)) = (u64::try_from(start), u64::try_from(end)) else {
+        return false;
+    };
+    if !set_endpoints(
+        &mut loc_edit.location,
+        |p: &mut GenomePos, v: u64| p.base = v,
+        start,
+        end,
+    ) {
+        return false;
+    }
+    loc_edit.edit = Mu::Certain(NaEdit::Deletion {
+        sequence: None,
+        length: None,
+    });
+    true
+}
+
+/// Set a signed-axis `LocEdit` to a plain deletion over `[start, end]`.
+fn place_signed<P, L>(
+    loc_edit: &mut LocEdit<Interval<P>, NaEdit>,
+    start: i64,
+    end: i64,
+    assign: L,
+) -> bool
+where
+    L: Fn(&mut P, i64) + Copy,
+{
+    if start == 0 || end == 0 {
+        return false; // no `c.0` / `n.0` position exists
+    }
+    if !set_endpoints(&mut loc_edit.location, assign, start, end) {
+        return false;
+    }
+    loc_edit.edit = Mu::Certain(NaEdit::Deletion {
+        sequence: None,
+        length: None,
+    });
+    true
+}
+
+/// Assign both certain endpoints of an interval, refusing anything else.
+fn set_endpoints<P, V, L>(interval: &mut Interval<P>, assign: L, start: V, end: V) -> bool
+where
+    L: Fn(&mut P, V),
+    V: Copy,
+{
+    for (boundary, value) in [(&mut interval.start, start), (&mut interval.end, end)] {
+        match boundary {
+            UncertainBoundary::Single(Mu::Certain(pos)) => assign(pos, value),
+            _ => return false,
+        }
+    }
+    true
+}
+
 /// Move `variant`'s span `delta` positions along its axis (negative is 5').
 ///
 /// Reverts and leaves the variant untouched unless the result lands exactly

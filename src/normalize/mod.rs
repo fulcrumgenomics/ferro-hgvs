@@ -2281,13 +2281,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 result.push(r);
             }
 
-            // The per-member shift above is sibling-unaware: each member goes to
-            // its standalone most-3' position, which can carry it clear over a
-            // sibling's bases and make the pair denote a different sequence
-            // (#1254). Pull any such member back to the last position before the
-            // sibling — still the most 3' placement that keeps the members on
-            // disjoint windows, and now merely *adjacent*, so the next pass's
-            // merge coalesces the two.
+            // Two sibling-unaware decisions were taken per member above, and
+            // both are corrected here, in this order.
+            //
+            // First: a deletion inside a tandem tract is re-spelled as a copy
+            // count over the *whole tract* (`g.1_2del` -> `g.1_9T[7]` on a
+            // nine-base run), and that widened span can swallow a sibling. Undo
+            // it before the clamp runs, so the clamp sees a deletion span it can
+            // pull back rather than a repeat it would skip.
+            merge::demote_repeats_spanning_siblings(
+                &merged_split,
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+            );
+            // Second: each member went to its standalone most-3' position, which
+            // can carry it clear over a sibling's bases and make the pair denote
+            // a different sequence (#1254). Pull any such member back to the last
+            // position before the sibling — still the most 3' placement that
+            // keeps the members on disjoint windows, and now merely *adjacent*,
+            // so the next pass's merge coalesces the two.
             merge::clamp_sibling_crossing_shifts(
                 &merged_split,
                 &mut result,
