@@ -2307,6 +2307,17 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 allele.phase,
                 allele.uncertain,
             );
+            // Third: an insertion or duplication consumes no base, so the clamp
+            // above leaves it alone — but its *junction* shifts through a tract
+            // too, and carrying it past a base a sibling edits changes what the
+            // allele denotes. Bound the junction at the sibling's 5' edge, which
+            // is still flush against it, so the #999 collapse keeps firing.
+            merge::clamp_sibling_crossing_junctions(
+                &merged_split,
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+            );
 
             pass += 1;
             // Stable once a full pass leaves the member set unchanged.

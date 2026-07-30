@@ -1768,20 +1768,34 @@ pub(crate) fn demote_repeats_spanning_siblings(
         let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
             continue;
         };
-        // Only a repeat that grew out of a plain deletion is re-spellable.
+        // Only a repeat is re-spellable, and only back into the kind of edit it
+        // grew out of.
         if !matches!(
             cis_axis_parts(&after[i], kind).map(|(_, _, _, _, e)| e),
             Some(NaEdit::Repeat { .. })
-        ) || !matches!(
-            cis_axis_parts(&before[i], kind).map(|(_, _, _, _, e)| e),
-            Some(NaEdit::Deletion { .. })
         ) {
             continue;
         }
-        let deleted = b.end - b.start + 1;
-        // The equivalent deletion is the 3'-most `deleted` bases of the tract.
-        let start = a.end - deleted + 1;
-        if deleted <= 0 || start < a.start || b.region != a.region {
+        let Some(source) = cis_axis_parts(&before[i], kind).and_then(|(_, _, _, _, e)| match e {
+            // A deletion removes the bases under its span.
+            NaEdit::Deletion { .. } => Some((RepeatSource::Removed, b.end - b.start + 1)),
+            // A duplication adds a copy of the bases under its span.
+            NaEdit::Duplication { .. } => Some((RepeatSource::Added, b.end - b.start + 1)),
+            // An insertion adds its own sequence at a junction; its span is the
+            // gap, so the length has to come from the sequence itself.
+            NaEdit::Insertion { sequence } => sequence
+                .len()
+                .and_then(|n| i64::try_from(n).ok())
+                .map(|n| (RepeatSource::Added, n)),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let (source, length) = source;
+        // Either way the equivalent edit sits on the 3'-most `length` bases of
+        // the tract: removing them, or duplicating them.
+        let start = a.end - length + 1;
+        if length <= 0 || start < a.start || b.region != a.region {
             continue;
         }
         // Does the tract actually span a sibling's bases? Both snapshots, so a
@@ -1795,34 +1809,175 @@ pub(crate) fn demote_repeats_spanning_siblings(
         if !spans_sibling {
             continue;
         }
-        respell_as_deletion(&mut after[i], kind, a.region, start, a.end);
+        respell_as(&mut after[i], kind, a.region, start, a.end, source);
     }
 }
 
-/// Replace `variant`'s edit with a plain deletion over `[start, end]`.
+/// Pull back any cis member whose *junction* was carried over a sibling's bases.
+///
+/// [`clamp_sibling_crossing_shifts`] governs edits that consume the bases under
+/// their span. An insertion or duplication consumes none — it adds sequence at
+/// the junction between two bases — so it is excluded there, and deliberately:
+/// a member landing flush against one is the adjacency the collapse pass exists
+/// to catch (#999, #1135).
+///
+/// It can still cross. The junction itself 3'-shifts through a tract, and when
+/// a sibling substitutes or deletes a base inside that tract, moving the
+/// junction past it changes what the allele denotes:
+///
+/// ```text
+/// reference    ACAAAAAAAACGTACGTACG        A-run at 3-10
+/// g.[2_3insA;5A>G]  ->  g.[5A>G;10dup]     junction moved from 2|3 to 10|11
+/// input applied     ACAAAGAAAAACGTACGTACG
+/// output applied    ACAAGAAAAAACGTACGTACG  ← the substituted base moved
+/// ```
+///
+/// No overlap, no warning, well-formed — and wrong. The constraint is that the
+/// junction may reach a sibling's 5' edge but not pass it: for a sibling
+/// claiming `[s, e]`, a 3'-shifted junction must stay at or below `s - 1`, and
+/// a 5'-shifted one at or above `e`. That is exactly the adjacency #999 needs —
+/// its insertion lands at `306|307` against a substitution at `307`, which is
+/// the last position the rule permits — so the collapse still fires.
+///
+/// A junction sits immediately 3' of one position: `end` for a duplication
+/// (the copy follows the duplicated bases), `start` for an insertion (whose
+/// span is the gap `start_end`).
+pub(crate) fn clamp_sibling_crossing_junctions(
+    before: &[HgvsVariant],
+    after: &mut [HgvsVariant],
+    phase: AllelePhase,
+    uncertain: bool,
+) {
+    if phase != AllelePhase::Cis || uncertain || after.len() < 2 || before.len() != after.len() {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&after[0]) else {
+        return;
+    };
+    let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
+    let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+
+    for i in 0..after.len() {
+        let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
+            continue;
+        };
+        let (Some(before_junction), Some(after_junction)) = (
+            cis_axis_parts(&before[i], kind).and_then(|(_, _, s, e, edit)| junction_of(edit, s, e)),
+            cis_axis_parts(&after[i], kind).and_then(|(_, _, s, e, edit)| junction_of(edit, s, e)),
+        ) else {
+            continue;
+        };
+        if before_junction == after_junction || b.region != a.region {
+            continue;
+        }
+        let siblings: Vec<&MemberSpan> = (0..pre.len())
+            .filter(|&j| j != i)
+            .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
+            .flatten()
+            .filter(|s| s.claims_bases && s.region == a.region && s.accession == a.accession)
+            .collect();
+
+        // 3' only, and the 5' case is genuinely unsolved rather than merely
+        // unwritten. A duplication's span and its junction move together under a
+        // 5' shift, so bounding the junction there mis-places the copy: a mirror
+        // of the rule below was measured to turn 80 previously-correct outputs
+        // into silently wrong ones, and was removed as defective rather than
+        // deferred.
+        //
+        // A 5' junction *does* cross, in a shape this rule would not have caught
+        // anyway — when the sibling is **upstream** and the junction travels
+        // toward it (`g.[4A>G;9dup]` under 5' shuffle emits `g.4_5insG`, which
+        // denotes different bases). That is pre-existing and untouched here; see
+        // `a_five_prime_junction_with_an_upstream_sibling_is_a_known_gap`.
+        if after_junction < before_junction {
+            continue;
+        }
+        // The junction crossed a sibling if it started 5' of the sibling's
+        // first base and ended at or past it.
+        let limit = siblings
+            .iter()
+            .filter(|s| s.start > before_junction && s.start <= after_junction)
+            .map(|s| s.start - 1)
+            .min();
+        let Some(limit) = limit else {
+            continue;
+        };
+        // Never move past where the junction started.
+        let delta = (limit - after_junction).max(before_junction - after_junction);
+        if delta != 0 {
+            translate_member(&mut after[i], delta, kind, a);
+        }
+    }
+}
+
+/// The position a junction-inserting edit sits immediately 3' of, or `None` for
+/// an edit that is not junction-inserting.
+fn junction_of(edit: &NaEdit, start: i64, end: i64) -> Option<i64> {
+    match edit {
+        // The copy follows the duplicated bases.
+        NaEdit::Duplication { .. } => Some(end),
+        // The span is the gap `start_end`, so the sequence lands after `start`.
+        NaEdit::Insertion { .. } => Some(start),
+        _ => None,
+    }
+}
+
+/// Which plain edit a tract-wide repeat was standing in for.
+#[derive(Clone, Copy)]
+enum RepeatSource {
+    /// The tract lost copies — re-spell as a deletion.
+    Removed,
+    /// The tract gained copies — re-spell as a duplication.
+    Added,
+}
+
+impl RepeatSource {
+    fn edit(self) -> NaEdit {
+        match self {
+            RepeatSource::Removed => NaEdit::Deletion {
+                sequence: None,
+                length: None,
+            },
+            RepeatSource::Added => NaEdit::Duplication {
+                sequence: None,
+                length: None,
+                uncertain_extent: None,
+            },
+        }
+    }
+}
+
+/// Replace `variant`'s edit with `source`'s plain form over `[start, end]`.
 ///
 /// Reverts on any axis this pass cannot rewrite, or if the result does not land
 /// exactly where intended on the same region.
-fn respell_as_deletion(
+fn respell_as(
     variant: &mut HgvsVariant,
     kind: CisKind,
     region: Region,
     start: i64,
     end: i64,
+    source: RepeatSource,
 ) {
     let original = variant.clone();
     let placed = match variant {
-        HgvsVariant::Genome(g) => place_genome(&mut g.loc_edit, start, end),
-        HgvsVariant::Mt(m) => place_genome(&mut m.loc_edit, start, end),
-        HgvsVariant::Cds(c) => place_signed(&mut c.loc_edit, start, end, |p: &mut CdsPos, v| {
-            p.base = v;
-        }),
-        HgvsVariant::Tx(t) => place_signed(&mut t.loc_edit, start, end, |p: &mut TxPos, v| {
-            p.base = v;
-        }),
-        HgvsVariant::Rna(r) => place_signed(&mut r.loc_edit, start, end, |p: &mut RnaPos, v| {
-            p.base = v;
-        }),
+        HgvsVariant::Genome(g) => place_genome(&mut g.loc_edit, start, end, source),
+        HgvsVariant::Mt(m) => place_genome(&mut m.loc_edit, start, end, source),
+        HgvsVariant::Cds(c) => {
+            place_signed(&mut c.loc_edit, start, end, source, |p: &mut CdsPos, v| {
+                p.base = v;
+            })
+        }
+        HgvsVariant::Tx(t) => {
+            place_signed(&mut t.loc_edit, start, end, source, |p: &mut TxPos, v| {
+                p.base = v;
+            })
+        }
+        HgvsVariant::Rna(r) => {
+            place_signed(&mut r.loc_edit, start, end, source, |p: &mut RnaPos, v| {
+                p.base = v;
+            })
+        }
         _ => false,
     };
     let landed = placed
@@ -1833,8 +1988,13 @@ fn respell_as_deletion(
     }
 }
 
-/// Set a genomic `LocEdit` to a plain deletion over `[start, end]`.
-fn place_genome(loc_edit: &mut LocEdit<Interval<GenomePos>, NaEdit>, start: i64, end: i64) -> bool {
+/// Set a genomic `LocEdit` to `source`'s plain form over `[start, end]`.
+fn place_genome(
+    loc_edit: &mut LocEdit<Interval<GenomePos>, NaEdit>,
+    start: i64,
+    end: i64,
+    source: RepeatSource,
+) -> bool {
     let (Ok(start), Ok(end)) = (u64::try_from(start), u64::try_from(end)) else {
         return false;
     };
@@ -1846,18 +2006,16 @@ fn place_genome(loc_edit: &mut LocEdit<Interval<GenomePos>, NaEdit>, start: i64,
     ) {
         return false;
     }
-    loc_edit.edit = Mu::Certain(NaEdit::Deletion {
-        sequence: None,
-        length: None,
-    });
+    loc_edit.edit = Mu::Certain(source.edit());
     true
 }
 
-/// Set a signed-axis `LocEdit` to a plain deletion over `[start, end]`.
+/// Set a signed-axis `LocEdit` to `source`'s plain form over `[start, end]`.
 fn place_signed<P, L>(
     loc_edit: &mut LocEdit<Interval<P>, NaEdit>,
     start: i64,
     end: i64,
+    source: RepeatSource,
     assign: L,
 ) -> bool
 where
@@ -1869,10 +2027,7 @@ where
     if !set_endpoints(&mut loc_edit.location, assign, start, end) {
         return false;
     }
-    loc_edit.edit = Mu::Certain(NaEdit::Deletion {
-        sequence: None,
-        length: None,
-    });
+    loc_edit.edit = Mu::Certain(source.edit());
     true
 }
 
