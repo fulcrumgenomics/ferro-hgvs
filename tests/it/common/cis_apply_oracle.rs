@@ -8,11 +8,15 @@
 //! [`apply_with`] is the load-bearing piece: its `claimed_from` walk is what
 //! makes "declines an overlapping description" true, and every
 //! sequence-preservation assertion in `cis_junction_crossing_shift.rs`,
-//! `issue_1234_sibling_clamped_shift.rs`, `issue_1254_sibling_crossing_shift.rs`
-//! and `repeat_span_sibling_overlap.rs` rests on it. It lives here rather than
+//! `issue_1234_sibling_clamped_shift.rs`, `issue_1254_sibling_crossing_shift.rs`,
+//! `issue_1261_cis_member_order.rs`, `issue_1281_reducing_member_shift.rs` and
+//! `repeat_span_sibling_overlap.rs` rests on it. It lives here rather than
 //! being copied into each of them so a change cannot silently weaken one file's
 //! oracle while the others keep their own version — it is generic over the
 //! provider so the `JsonProvider`-backed file shares it too.
+//!
+//! [`assert_normalizes_preserving`] and [`assert_normalizes_preserving_in`] are
+//! the assertion half of that, one per shuffle direction, for the same reason.
 //!
 //! [`sweep_sequences`] is here for the same reason: the three exhaustive sweeps
 //! assert case-count floors, and one of them an exact residual count, over the
@@ -200,11 +204,26 @@ pub fn assert_members_ascending(seq: &str, descriptor: &str) {
     );
 }
 
-/// Assert that `input` normalizes to `expected` *and* that both denote the same
-/// sequence when applied to `seq`.
+/// Assert that `input` normalizes to `expected` in the default 3' direction
+/// *and* that both denote the same sequence when applied to `seq`.
 pub fn assert_normalizes_preserving(seq: &str, input: &str, expected: &str) {
-    let actual = normalize(seq, input);
-    assert_eq!(actual, expected, "normalizing {input}");
+    assert_normalizes_preserving_in(seq, input, expected, ShuffleDirection::ThreePrime);
+}
+
+/// Assert that `input` normalizes to `expected` in `direction` *and* that both
+/// denote the same sequence when applied to `seq`.
+///
+/// The 5' direction gets the same single home as the 3' one for the reason
+/// [`apply_with`] does: a hand-rolled copy per file is a way for one file's
+/// assertion to weaken while the others keep theirs.
+pub fn assert_normalizes_preserving_in(
+    seq: &str,
+    input: &str,
+    expected: &str,
+    direction: ShuffleDirection,
+) {
+    let actual = normalize_in(seq, input, direction);
+    assert_eq!(actual, expected, "normalizing {input} in {direction:?}");
     let from_input = apply(seq, input).expect("input applies");
     let from_output = apply(seq, &actual).unwrap_or_else(|| {
         panic!("{actual} has no well-defined resulting sequence (overlapping or unconvertible)")
