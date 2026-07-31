@@ -134,6 +134,11 @@ jobs:
           # `catch_panics`, so an oracle panic surfaces as that case FAILing
           # its axis tally and landing in the xfail report, not as a lost run.
           FERRO_ASSERT_IDEMPOTENT: "1"
+          # And that a normalized description re-parses when normalization is
+          # what broke it — the `0`/`?` outputs and inputs that do not
+          # themselves re-parse are exempt; see the note beside the same pair
+          # in ci.yml.
+          FERRO_ASSERT_REPARSE: "1"
         run: |
           cargo nextest run --features dev \
             -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/) | test(/hgvs_rs_projection_tests::/)'

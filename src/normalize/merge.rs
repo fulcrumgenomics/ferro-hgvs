@@ -2749,6 +2749,755 @@ fn reverse_complement_bytes(bases: &[u8]) -> Option<Vec<u8>> {
     bases.iter().rev().map(|b| complement_base(*b)).collect()
 }
 
+// ----------------------------------------------------------------------------
+// Sibling-crossing shift clamp (#1254)
+// ----------------------------------------------------------------------------
+
+/// A cis member's span on the shared coordinate axis, copied out of the
+/// variant so the caller can mutate the member afterwards.
+struct MemberSpan {
+    /// The member's accession as written, used to decide whether two members
+    /// sit on the same reference. Keeps any genomic-context wrapper, so
+    /// members differing only in that wrapper are not treated as siblings.
+    accession: String,
+    /// The same accession reduced to the bare form a provider is keyed by, per
+    /// `Accession::transcript_accession`. `accession` itself may carry a
+    /// wrapper (`NC_000013.11(BRCA2)`) that no provider has an entry for, so a
+    /// lookup through it would silently fail and skip the rewrite; every other
+    /// provider lookup in this module already reduces first.
+    provider_key: String,
+    region: Region,
+    start: i64,
+    end: i64,
+    /// Whether the edit consumes the reference bases under its span.
+    claims_bases: bool,
+    /// For an insertion-like edit, the position its added sequence sits
+    /// immediately 3' of; `None` for anything that consumes bases instead.
+    junction: Option<i64>,
+}
+
+/// Read a member's span for the clamp pass, or `None` for a member this pass
+/// cannot place (wrong kind, uncertain edit, offset / special position).
+fn member_span(v: &HgvsVariant, kind: CisKind) -> Option<MemberSpan> {
+    let (accession, region, start, end, edit) = cis_axis_parts(v, kind)?;
+    Some(MemberSpan {
+        accession: accession.full(),
+        provider_key: accession.transcript_accession(),
+        region,
+        start,
+        end,
+        claims_bases: claims_reference_bases(edit),
+        junction: junction_of(edit, start, end),
+    })
+}
+
+/// Whether an edit consumes the reference bases under its span.
+///
+/// Substitutions, deletions, delins and inversions replace or remove the bases
+/// they cover, so a shift that carries one of them over another's bases changes
+/// what the allele denotes. `NPaddedDeletion` (`delN[15]`) is a deletion that
+/// states its length as a count rather than spelling the bases, and removes them
+/// just the same; `SubstitutionNoRef` (`9>G`) replaces the base under its span
+/// exactly as `9A>G` does, and omitting it made the clamp *spelling-sensitive* —
+/// the same variant clamped or not depending on whether the reference base
+/// happened to be written out. Insertions and duplications add sequence at a junction without
+/// consuming a base, so a member landing flush against one is the *adjacency*
+/// the collapse pass is meant to catch (#999, #1135) — they are neither clamped
+/// nor treated as barriers.
+///
+/// `Repeat`/`MultiRepeat` are the one deliberate omission: a repeat does claim
+/// the bases under its tract, but making it say so changes clamp and barrier
+/// behaviour across the whole repeat corpus at once. That is tracked in #1269,
+/// with `demote_repeats_spanning_siblings` standing in until it is measured.
+fn claims_reference_bases(edit: &NaEdit) -> bool {
+    matches!(
+        edit,
+        NaEdit::Substitution { .. }
+            | NaEdit::SubstitutionNoRef { .. }
+            | NaEdit::Deletion { .. }
+            | NaEdit::NPaddedDeletion { .. }
+            | NaEdit::Delins { .. }
+            | NaEdit::Inversion { .. }
+    )
+}
+
+/// Pull back any cis member whose shift carried it over a sibling's bases.
+///
+/// The 3' rule (`general.md:41`) is stated per description, with no
+/// allele-awareness, so a member is shifted to its *standalone* most-3'
+/// position. When a sibling edits a base inside the tract the member rotates
+/// through, that is not meaning-preserving: the member leapfrogs the sibling
+/// and the pair now describes a different sequence. `g.[3_4del;9del]` over
+/// `TAATATATATAATATATATT` shifted `3_4del` to `10_11del`, straight past the
+/// `9del`, and the two then merged to `g.12_14del` — a well-formed,
+/// warning-free description of *different* bases (#1254).
+///
+/// The invariant this restores: a member's **sweep window** — every position
+/// between its pre-shift and post-shift span — must contain no base claimed by
+/// another member. A shift is a rotation, so within a window no sibling edits,
+/// every position in it describes the same sequence; the members then sit on
+/// disjoint windows and compose exactly as the input did. Stopping at the last
+/// position before the nearest sibling base is the most 3' choice that keeps
+/// that true, which leaves the member *adjacent* to its sibling rather than
+/// past it — and the caller's next merge pass coalesces the two
+/// (`delins.md:16`). For the case above the clamp yields `[7_8del;9del]`, which
+/// merges to `g.7_9del`: three contiguous deleted bases, the same sequence the
+/// input denotes.
+///
+/// Both shift directions are handled — [`ShuffleDirection::FivePrime`] crosses
+/// siblings the same way, in the other direction.
+///
+/// `before` is the member list as it entered per-member normalization and
+/// supplies both the pull-back floor and the barrier positions; `after` is the
+/// shifted list, mutated in place. The two must be index-aligned. Barriers are
+/// read from a snapshot of `after` as well, so a sibling that shifted *into*
+/// this member's window also blocks; taking them from snapshots rather than the
+/// live list keeps the pass independent of member order.
+///
+/// [`ShuffleDirection::FivePrime`]: crate::normalize::ShuffleDirection
+pub(crate) fn clamp_sibling_crossing_shifts(
+    before: &[HgvsVariant],
+    after: &mut [HgvsVariant],
+    phase: AllelePhase,
+    uncertain: bool,
+) {
+    // An uncertain allele — `g.[(…)]` — asserts only that the members are in
+    // cis, not where they sit, so repositioning one states something the input
+    // did not. Every neighbouring transform in `normalize_allele` gates on this.
+    if phase != AllelePhase::Cis || uncertain || after.len() < 2 || before.len() != after.len() {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&after[0]) else {
+        return;
+    };
+    let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
+    let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+
+    for i in 0..after.len() {
+        let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
+            continue;
+        };
+        if !b.claims_bases || !a.claims_bases || b.region != a.region {
+            continue;
+        }
+        // Only a pure translation is a rotation. A member whose span length
+        // changed (an `ins` canonicalised to a `dup`, a `delins` reduced) is
+        // not something this pass can reason about positionally.
+        let delta = a.start - b.start;
+        if delta == 0 || a.end - b.end != delta {
+            continue;
+        }
+        // Every sibling, from either snapshot, that shares this member's
+        // coordinate line. A sibling blocks in one of two ways: it *claims*
+        // bases, so this member may not land on them; or it is insertion-like
+        // and sits at a *junction*, which this member may not sweep across —
+        // sliding a deletion past the point where a sibling adds sequence
+        // reorders the two edits and changes what the allele denotes (`g.
+        // [258del;259_260insC]` emitted `g.[259_260insC;263del]`).
+        let siblings: Vec<&MemberSpan> = (0..pre.len())
+            .filter(|&j| j != i)
+            .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
+            .flatten()
+            .filter(|s| s.region == a.region && s.accession == a.accession)
+            .collect();
+
+        let pull = if delta > 0 {
+            // 3'-shift: the window is `[b.start, a.end]`. A sibling starting
+            // beyond this member's original end but at or before its new end
+            // was rotated over; stop one position short of the nearest.
+            let onto_bases = siblings
+                .iter()
+                .filter(|s| s.claims_bases)
+                .map(|s| s.start)
+                .filter(|&start| start > b.end && start <= a.end)
+                .map(|start| start - 1);
+            // A junction between `j` and `j+1` is crossed once this member's
+            // end reaches `j + 1`; stopping at `j` leaves it flush against the
+            // junction, which is the adjacency the collapse pass wants.
+            let across_junctions = siblings
+                .iter()
+                .filter_map(|s| s.junction)
+                .filter(|&j| j >= b.end && j < a.end);
+            onto_bases
+                .chain(across_junctions)
+                .min()
+                .map(|limit| a.end - limit)
+        } else {
+            // 5'-shift: mirror image, window `[a.start, b.end]`.
+            let onto_bases = siblings
+                .iter()
+                .filter(|s| s.claims_bases)
+                .map(|s| s.end)
+                .filter(|&end| end < b.start && end >= a.start)
+                .map(|end| end + 1);
+            // No junction barrier in this direction: measured, it introduced
+            // fresh 5'-shuffle failures rather than removing them (an
+            // insertion-like sibling and a 5'-shifting span interact through
+            // the merge's cancellation path, not through the crossing this
+            // rule models). 3'-only, deliberately — see the module tests.
+            onto_bases.max().map(|limit| a.start - limit)
+        };
+        // Never move past where the member started: those positions were not
+        // reachable by this shift and are not equivalent to it.
+        let Some(pull) = pull.map(|p| {
+            if delta > 0 {
+                p.min(delta)
+            } else {
+                p.max(delta)
+            }
+        }) else {
+            continue;
+        };
+        if pull != 0 {
+            translate_member(&mut after[i], -pull, kind, a);
+        }
+    }
+}
+
+/// Re-spell as the plain edit it grew from any cis member whose repeat notation
+/// spans a sibling's bases.
+///
+/// Covers all three sources, not deletions alone: a repeat grown from a
+/// `Deletion` re-spells as a deletion, and one grown from a `Duplication` or an
+/// `Insertion` as a duplication over the tract's 3'-most bases. Demoting an
+/// insertion to a *duplication* rather than back to an insertion is deliberate
+/// and load-bearing: a duplication's payload is read from the reference under
+/// its span, so it is in phase at whatever position it lands on, whereas an
+/// insertion carries a fixed literal that would need rotating to stay correct in
+/// a non-homopolymer tract.
+///
+/// `deletion_to_repeat` (`repeated.md` B2) re-expresses a deletion inside a
+/// tandem tract as a copy count over the **whole tract**, not over the deleted
+/// bases: on a nine-`T` run, `g.1_2del` becomes `g.1_9T[7]`. That widened span
+/// is correct for a lone variant, but in a cis allele it can swallow a sibling
+/// — `g.[1_2del;4del]` emitted `g.[1_9T[7];9del]`, where `9del` sits inside
+/// `1_9`. Overlapping members are malformed, and the pair denotes a different
+/// sequence than the input.
+///
+/// The conversion happens per member, deep inside `normalize_na_edit`, with no
+/// sibling context reaching it, so the decision is undone here instead: the
+/// repeat is re-spelled as the equivalent 3'-most deletion of the same number
+/// of bases, ending where the tract ends. That is the form the member would
+/// have taken had B2 declined, and it is exactly equivalent — B2 only re-writes
+/// notation, never the bases removed.
+///
+/// Restoring the deletion is what lets the rest of the pipeline finish the job.
+/// [`clamp_sibling_crossing_shifts`] can then see a real span to pull back, and
+/// the caller's next merge pass coalesces the members. `g.[1_2del;4del]` ends up
+/// as `g.1_9T[6]` — one member, three bases removed from the tract, repeat
+/// notation restored now that there is no sibling to span.
+///
+/// Runs before the clamp, so the clamp sees the deletion rather than the
+/// repeat. Members whose pre-normalization form was not a plain deletion are
+/// left alone: without a deleted-base count there is nothing to re-spell to.
+pub(crate) fn demote_repeats_spanning_siblings(
+    before: &[HgvsVariant],
+    after: &mut [HgvsVariant],
+    phase: AllelePhase,
+    uncertain: bool,
+) {
+    if phase != AllelePhase::Cis || uncertain || after.len() < 2 || before.len() != after.len() {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&after[0]) else {
+        return;
+    };
+    let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
+    let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+
+    for i in 0..after.len() {
+        let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
+            continue;
+        };
+        // Only a repeat is re-spellable, and only back into the kind of edit it
+        // grew out of.
+        if !matches!(
+            cis_axis_parts(&after[i], kind).map(|(_, _, _, _, e)| e),
+            Some(NaEdit::Repeat { .. })
+        ) {
+            continue;
+        }
+        let Some(source) = cis_axis_parts(&before[i], kind).and_then(|(_, _, _, _, e)| match e {
+            // A deletion removes the bases under its span.
+            NaEdit::Deletion { .. } => Some((RepeatSource::Removed, b.end - b.start + 1)),
+            // A duplication adds a copy of the bases under its span.
+            NaEdit::Duplication { .. } => Some((RepeatSource::Added, b.end - b.start + 1)),
+            // An insertion adds its own sequence at a junction; its span is the
+            // gap, so the length has to come from the sequence itself.
+            NaEdit::Insertion { sequence } => sequence
+                .len()
+                .and_then(|n| i64::try_from(n).ok())
+                .map(|n| (RepeatSource::Added, n)),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let (source, length) = source;
+        // Either way the equivalent edit sits on the 3'-most `length` bases of
+        // the tract: removing them, or duplicating them.
+        let start = a.end - length + 1;
+        if length <= 0 || start < a.start || b.region != a.region {
+            continue;
+        }
+        // Does the tract actually span a sibling's bases? Both snapshots, so a
+        // sibling that moved into the tract counts too.
+        let spans_sibling = (0..pre.len())
+            .filter(|&j| j != i)
+            .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
+            .flatten()
+            .filter(|s| s.claims_bases && s.region == a.region && s.accession == a.accession)
+            .any(|s| s.start <= a.end && s.end >= a.start);
+        if !spans_sibling {
+            continue;
+        }
+        respell_as(&mut after[i], kind, a.region, start, a.end, source);
+    }
+}
+
+/// Pull back any cis member whose *junction* was carried over a sibling's bases.
+///
+/// [`clamp_sibling_crossing_shifts`] governs edits that consume the bases under
+/// their span. An insertion or duplication consumes none — it adds sequence at
+/// the junction between two bases — so it is excluded there, and deliberately:
+/// a member landing flush against one is the adjacency the collapse pass exists
+/// to catch (#999, #1135).
+///
+/// It can still cross. The junction itself 3'-shifts through a tract, and when
+/// a sibling substitutes or deletes a base inside that tract, moving the
+/// junction past it changes what the allele denotes:
+///
+/// ```text
+/// reference    ACAAAAAAAACGTACGTACG        A-run at 3-10
+/// g.[2_3insA;5A>G]  ->  g.[5A>G;10dup]     junction moved from 2|3 to 10|11
+/// input applied     ACAAAGAAAAACGTACGTACG
+/// output applied    ACAAGAAAAAACGTACGTACG  ← the substituted base moved
+/// ```
+///
+/// No overlap, no warning, well-formed — and wrong. The constraint is that the
+/// junction may reach a sibling's 5' edge but not pass it: for a sibling
+/// claiming `[s, e]`, a 3'-shifted junction must stay at or below `s - 1`, and
+/// a 5'-shifted one at or above `e`. That is exactly the adjacency #999 needs —
+/// its insertion lands at `306|307` against a substitution at `307`, which is
+/// the last position the rule permits — so the collapse still fires.
+///
+/// A junction sits immediately 3' of one position: `end` for a duplication
+/// (the copy follows the duplicated bases), `start` for an insertion (whose
+/// span is the gap `start_end`).
+pub(crate) fn clamp_sibling_crossing_junctions(
+    before: &[HgvsVariant],
+    after: &mut [HgvsVariant],
+    phase: AllelePhase,
+    uncertain: bool,
+) {
+    if phase != AllelePhase::Cis || uncertain || after.len() < 2 || before.len() != after.len() {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&after[0]) else {
+        return;
+    };
+    let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
+    let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+
+    for i in 0..after.len() {
+        let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
+            continue;
+        };
+        let (Some(before_junction), Some(after_junction)) = (
+            cis_axis_parts(&before[i], kind).and_then(|(_, _, s, e, edit)| junction_of(edit, s, e)),
+            cis_axis_parts(&after[i], kind).and_then(|(_, _, s, e, edit)| junction_of(edit, s, e)),
+        ) else {
+            continue;
+        };
+        if before_junction == after_junction || b.region != a.region {
+            continue;
+        }
+        let siblings: Vec<&MemberSpan> = (0..pre.len())
+            .filter(|&j| j != i)
+            .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
+            .flatten()
+            .filter(|s| s.claims_bases && s.region == a.region && s.accession == a.accession)
+            .collect();
+
+        // 3' only, and the 5' case is genuinely unsolved rather than merely
+        // unwritten. A duplication's span and its junction move together under a
+        // 5' shift, so bounding the junction there mis-places the copy: a mirror
+        // of the rule below was measured to turn 80 previously-correct outputs
+        // into silently wrong ones, and was removed as defective rather than
+        // deferred.
+        //
+        // A 5' junction *does* cross, in a shape this rule would not have caught
+        // anyway — when the sibling is **upstream** and the junction travels
+        // toward it (`g.[4A>G;9dup]` under 5' shuffle emits `g.4_5insG`, which
+        // denotes different bases). That is pre-existing and untouched here; see
+        // `a_five_prime_junction_with_an_upstream_sibling_is_a_known_gap`.
+        if after_junction < before_junction {
+            continue;
+        }
+        // The junction crossed a sibling if it started 5' of the sibling's
+        // first base and ended at or past it.
+        let limit = siblings
+            .iter()
+            .filter(|s| s.start > before_junction && s.start <= after_junction)
+            .map(|s| s.start - 1)
+            .min();
+        let Some(limit) = limit else {
+            continue;
+        };
+        // Never move past where the junction started.
+        let delta = (limit - after_junction).max(before_junction - after_junction);
+        if delta != 0 {
+            translate_member(&mut after[i], delta, kind, a);
+        }
+    }
+}
+
+/// The position a junction-inserting edit sits immediately 3' of, or `None` for
+/// an edit that is not junction-inserting.
+fn junction_of(edit: &NaEdit, start: i64, end: i64) -> Option<i64> {
+    match edit {
+        // The copy follows the duplicated bases. `DupIns` is a duplication that
+        // also carries inserted sequence, so its junction sits in the same
+        // place: omitting it would leave a `DupIns` sibling invisible as a
+        // barrier and let a 3'-shifting member sweep across it.
+        NaEdit::Duplication { .. } | NaEdit::DupIns { .. } => Some(end),
+        // The span is the gap `start_end`, so the sequence lands after `start`.
+        NaEdit::Insertion { .. } => Some(start),
+        _ => None,
+    }
+}
+
+/// Which plain edit a tract-wide repeat was standing in for.
+#[derive(Clone, Copy)]
+enum RepeatSource {
+    /// The tract lost copies — re-spell as a deletion.
+    Removed,
+    /// The tract gained copies — re-spell as a duplication.
+    Added,
+}
+
+impl RepeatSource {
+    fn edit(self) -> NaEdit {
+        match self {
+            RepeatSource::Removed => NaEdit::Deletion {
+                sequence: None,
+                length: None,
+            },
+            RepeatSource::Added => NaEdit::Duplication {
+                sequence: None,
+                length: None,
+                uncertain_extent: None,
+            },
+        }
+    }
+}
+
+/// Replace `variant`'s edit with `source`'s plain form over `[start, end]`.
+///
+/// Reverts on any axis this pass cannot rewrite, or if the result does not land
+/// exactly where intended on the same region.
+fn respell_as(
+    variant: &mut HgvsVariant,
+    kind: CisKind,
+    region: Region,
+    start: i64,
+    end: i64,
+    source: RepeatSource,
+) {
+    let original = variant.clone();
+    let placed = match variant {
+        HgvsVariant::Genome(g) => place_genome(&mut g.loc_edit, start, end, source),
+        HgvsVariant::Mt(m) => place_genome(&mut m.loc_edit, start, end, source),
+        HgvsVariant::Cds(c) => {
+            place_signed(&mut c.loc_edit, start, end, source, |p: &mut CdsPos, v| {
+                p.base = v;
+            })
+        }
+        HgvsVariant::Tx(t) => {
+            place_signed(&mut t.loc_edit, start, end, source, |p: &mut TxPos, v| {
+                p.base = v;
+            })
+        }
+        HgvsVariant::Rna(r) => {
+            place_signed(&mut r.loc_edit, start, end, source, |p: &mut RnaPos, v| {
+                p.base = v;
+            })
+        }
+        _ => false,
+    };
+    let landed = placed
+        && member_span(variant, kind)
+            .is_some_and(|s| s.region == region && s.start == start && s.end == end);
+    if !landed {
+        *variant = original;
+    }
+}
+
+/// Set a genomic `LocEdit` to `source`'s plain form over `[start, end]`.
+fn place_genome(
+    loc_edit: &mut LocEdit<Interval<GenomePos>, NaEdit>,
+    start: i64,
+    end: i64,
+    source: RepeatSource,
+) -> bool {
+    let (Ok(start), Ok(end)) = (u64::try_from(start), u64::try_from(end)) else {
+        return false;
+    };
+    if !set_endpoints(
+        &mut loc_edit.location,
+        |p: &mut GenomePos, v: u64| p.base = v,
+        start,
+        end,
+    ) {
+        return false;
+    }
+    loc_edit.edit = Mu::Certain(source.edit());
+    true
+}
+
+/// Set a signed-axis `LocEdit` to `source`'s plain form over `[start, end]`.
+fn place_signed<P, L>(
+    loc_edit: &mut LocEdit<Interval<P>, NaEdit>,
+    start: i64,
+    end: i64,
+    source: RepeatSource,
+    assign: L,
+) -> bool
+where
+    L: Fn(&mut P, i64) + Copy,
+{
+    if start == 0 || end == 0 {
+        return false; // no `c.0` / `n.0` position exists
+    }
+    if !set_endpoints(&mut loc_edit.location, assign, start, end) {
+        return false;
+    }
+    loc_edit.edit = Mu::Certain(source.edit());
+    true
+}
+
+/// Assign both certain endpoints of an interval, refusing anything else.
+fn set_endpoints<P, V, L>(interval: &mut Interval<P>, assign: L, start: V, end: V) -> bool
+where
+    L: Fn(&mut P, V),
+    V: Copy,
+{
+    for (boundary, value) in [(&mut interval.start, start), (&mut interval.end, end)] {
+        match boundary {
+            UncertainBoundary::Single(Mu::Certain(pos)) => assign(pos, value),
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Move `variant`'s span `delta` positions along its axis (negative is 5').
+///
+/// Reverts and leaves the variant untouched unless the result lands exactly
+/// where intended on the *same* region — the guard against an axis whose
+/// integer coordinate is not simply translatable (a `c.` span that would cross
+/// into the 5'UTR or `*`-region, a genomic base that would underflow).
+fn translate_member(variant: &mut HgvsVariant, delta: i64, kind: CisKind, from: &MemberSpan) {
+    let original = variant.clone();
+    let moved = match variant {
+        HgvsVariant::Genome(g) => {
+            translate_interval(&mut g.loc_edit.location, |p: &mut GenomePos| {
+                shift_unsigned(&mut p.base, delta)
+            })
+        }
+        HgvsVariant::Mt(m) => translate_interval(&mut m.loc_edit.location, |p: &mut GenomePos| {
+            shift_unsigned(&mut p.base, delta)
+        }),
+        HgvsVariant::Cds(c) => translate_interval(&mut c.loc_edit.location, |p: &mut CdsPos| {
+            shift_signed(&mut p.base, delta)
+        }),
+        HgvsVariant::Tx(t) => translate_interval(&mut t.loc_edit.location, |p: &mut TxPos| {
+            shift_signed(&mut p.base, delta)
+        }),
+        HgvsVariant::Rna(r) => translate_interval(&mut r.loc_edit.location, |p: &mut RnaPos| {
+            shift_signed(&mut p.base, delta)
+        }),
+        _ => false,
+    };
+    let landed = moved
+        && member_span(variant, kind).is_some_and(|s| {
+            s.region == from.region && s.start == from.start + delta && s.end == from.end + delta
+        });
+    if !landed {
+        *variant = original;
+    }
+}
+
+/// Apply `step` to both certain endpoints of an interval, refusing any
+/// boundary this pass cannot move (uncertain, unknown, or a range endpoint).
+fn translate_interval<T>(interval: &mut Interval<T>, mut step: impl FnMut(&mut T) -> bool) -> bool {
+    let mut moved = true;
+    for boundary in [&mut interval.start, &mut interval.end] {
+        match boundary {
+            UncertainBoundary::Single(Mu::Certain(pos)) => moved &= step(pos),
+            _ => return false,
+        }
+    }
+    moved
+}
+
+/// Shift a 1-based unsigned coordinate, refusing a move off the 5' end.
+fn shift_unsigned(base: &mut u64, delta: i64) -> bool {
+    match base.checked_add_signed(delta) {
+        Some(shifted) if shifted >= 1 => {
+            *base = shifted;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Shift a signed axis coordinate, refusing a move onto the non-existent `0`.
+fn shift_signed(base: &mut i64, delta: i64) -> bool {
+    match base.checked_add(delta) {
+        Some(shifted) if shifted != 0 => {
+            *base = shifted;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Re-spell a duplication that collides with a base-claiming sibling as the
+/// equivalent insertion.
+///
+/// A duplication's span *is* the base it copies, so `g.262dup` claims position
+/// 262 — and a sibling deletion covering 262 makes the pair contradictory.
+/// ferro's own parser rejects the result ("Self-cancelling allele: variants at
+/// index 0 (del) and 1 (dup) describe overlapping reference positions"), so
+/// normalization emits a description it cannot read back.
+///
+/// The collision is a *spelling* problem, not a positional one. `Xdup` and
+/// `X_X+1ins<ref[X]>` denote exactly the same edit — a copy of the reference
+/// bases inserted at the junction 3' of them — but the insertion form claims no
+/// base, so it does not collide. Re-spelling therefore fixes the output without
+/// moving anything.
+///
+/// This is why the positional clamps cannot solve it. Pulling the deletion one
+/// base short of the junction also works, and breaks #1135, where a deletion
+/// must reach the junction for the self-cancelling del+ins merge to fire.
+/// Telling those apart needs the reference; so does writing the inserted bases,
+/// which is why this pass takes a provider where the clamps do not.
+///
+/// Runs **inside** the fixed-point loop, last of the four sibling passes. Run
+/// once after the loop instead, the result is not a fixed point: the `del` and
+/// `ins` this re-spelling exposes cancel further on the next pass
+/// (`g.[261_262del;262_263insA;…]` reduces to `g.[261del;…]`), so the loop has
+/// to see the re-spelled form to settle on that reduction.
+///
+/// Genomic axes only. On `c.`/`n.`/`r.` the 1-based coordinate is not a direct
+/// offset into the fetched sequence, and the conversion this would need already
+/// exists only inside `collapse_overlapping_cis_edits`; rather than duplicate
+/// it, a transcript-axis collision is left alone.
+pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
+    members: &mut [HgvsVariant],
+    phase: AllelePhase,
+    uncertain: bool,
+    provider: &P,
+) {
+    if phase != AllelePhase::Cis || uncertain || members.len() < 2 {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&members[0]) else {
+        return;
+    };
+    if !matches!(kind, CisKind::Genome | CisKind::Mt) {
+        return;
+    }
+    let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
+
+    for i in 0..members.len() {
+        let Some(dup) = spans[i].as_ref() else {
+            continue;
+        };
+        if !matches!(
+            cis_axis_parts(&members[i], kind).map(|(_, _, _, _, e)| e),
+            Some(NaEdit::Duplication { .. })
+        ) {
+            continue;
+        }
+        let collides = (0..spans.len()).filter(|&j| j != i).any(|j| {
+            spans[j].as_ref().is_some_and(|s| {
+                s.claims_bases
+                    && s.region == dup.region
+                    && s.accession == dup.accession
+                    && s.start <= dup.end
+                    && s.end >= dup.start
+            })
+        });
+        if !collides {
+            continue;
+        }
+        // The duplicated bases, read from the reference: `[start, end]` 1-based
+        // inclusive is `[start - 1, end)` half-open 0-based.
+        let (Ok(from), Ok(to)) = (u64::try_from(dup.start - 1), u64::try_from(dup.end)) else {
+            continue;
+        };
+        let Ok(copied) = provider.get_sequence(&dup.provider_key, from, to) else {
+            continue;
+        };
+        if copied.len() as i64 != dup.end - dup.start + 1 {
+            continue;
+        }
+        let bases: Option<Vec<Base>> = copied.chars().map(Base::from_char).collect();
+        let Some(bases) = bases else {
+            continue;
+        };
+        let edit = NaEdit::Insertion {
+            sequence: InsertedSequence::Literal(Sequence::new(bases)),
+        };
+        // The copy lands at the junction 3' of the duplicated span, which is
+        // the gap `[end, end + 1]`.
+        respell_at_gap(&mut members[i], kind, dup, edit);
+    }
+}
+
+/// Replace a genomic member with `edit` over the gap `[span.end, span.end + 1]`.
+///
+/// Reverts unless the result reads back exactly as intended.
+fn respell_at_gap(variant: &mut HgvsVariant, kind: CisKind, span: &MemberSpan, edit: NaEdit) {
+    let original = variant.clone();
+    let (gap_start, gap_end) = (span.end, span.end + 1);
+    let (Ok(start), Ok(end)) = (u64::try_from(gap_start), u64::try_from(gap_end)) else {
+        return;
+    };
+    let placed = match variant {
+        HgvsVariant::Genome(g) => {
+            set_endpoints(
+                &mut g.loc_edit.location,
+                |p: &mut GenomePos, v: u64| p.base = v,
+                start,
+                end,
+            ) && {
+                g.loc_edit.edit = Mu::Certain(edit.clone());
+                true
+            }
+        }
+        HgvsVariant::Mt(m) => {
+            set_endpoints(
+                &mut m.loc_edit.location,
+                |p: &mut GenomePos, v: u64| p.base = v,
+                start,
+                end,
+            ) && {
+                m.loc_edit.edit = Mu::Certain(edit);
+                true
+            }
+        }
+        _ => false,
+    };
+    let landed = placed
+        && member_span(variant, kind)
+            .is_some_and(|s| s.region == span.region && s.start == gap_start && s.end == gap_end);
+    if !landed {
+        *variant = original;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

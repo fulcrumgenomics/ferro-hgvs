@@ -1469,6 +1469,28 @@ fn idempotency_self_check_enabled() -> bool {
     })
 }
 
+/// Whether the opt-in re-parse self-check is active.
+///
+/// Enabled when `FERRO_ASSERT_REPARSE` is set to anything other than
+/// `0`/empty. Read once and cached, like the idempotency gate beside it.
+///
+/// Separate from `FERRO_ASSERT_IDEMPOTENT` on purpose. The two oracles overlap
+/// but neither subsumes the other, and the idempotency one has a blind spot the
+/// re-parse one covers: it verifies by *re-normalizing* its own output, which it
+/// cannot do for an output that fails to parse. An unparseable result is
+/// therefore invisible to it, so folding this in under the same flag would hide
+/// which invariant actually broke. Both are on in CI.
+#[cfg(debug_assertions)]
+fn reparse_self_check_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("FERRO_ASSERT_REPARSE")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
 #[cfg(debug_assertions)]
 thread_local! {
     /// Re-entrancy guard for the idempotency self-check.
@@ -1572,6 +1594,60 @@ impl<P: ReferenceProvider> Normalizer<P> {
                  input: {variant}\n  once:  {normalized}\n  error: {e}",
             ),
         }
+    }
+
+    /// Assert that a normalized description is one `parse_hgvs` accepts.
+    ///
+    /// Not a canonicalization question. Whatever the right canonical form is,
+    /// `normalize` is documented to return a valid HGVS description, and every
+    /// consumer that chains a second call depends on that — including the
+    /// idempotency oracle above, which re-normalizes its own output and so
+    /// cannot even run on a string that will not parse. An unparseable result is
+    /// invisible to that oracle, which is why this one is separate.
+    ///
+    /// The case that motivated it — a deletion and an
+    /// insertion-turned-duplication claiming one position, which ferro emitted
+    /// as `g.[261_262del;262dup;…]` and its own parser rejected as a
+    /// self-cancelling allele — is fixed by `respell_colliding_duplications` in
+    /// this change, and the reduced form is pinned by
+    /// `tests/it/normalize_reparse_invariant.rs`. CI therefore sets
+    /// `FERRO_ASSERT_REPARSE` alongside `FERRO_ASSERT_IDEMPOTENT`; the whole
+    /// suite passes with it on.
+    ///
+    /// Compiled out in release, and cheaper than the idempotency check it sits
+    /// beside — one parse rather than a whole re-normalization.
+    #[cfg(debug_assertions)]
+    fn assert_reparseable(&self, variant: &HgvsVariant, normalized: &HgvsVariant) {
+        if !reparse_self_check_enabled() {
+            return;
+        }
+        // `0` and `?` are legal whole-allele descriptions but are not
+        // self-describing: `parse_hgvs` wants an accession, so it rejects them
+        // standalone. That is a limit of the entry point, not a malformed
+        // output, and exempting them here keeps the oracle's failures meaningful.
+        if matches!(
+            normalized,
+            HgvsVariant::NullAllele | HgvsVariant::UnknownAllele
+        ) {
+            return;
+        }
+        let rendered = normalized.to_string();
+        let Err(e) = crate::hgvs::parser::parse_hgvs(&rendered) else {
+            return;
+        };
+        // Only fire when normalization *introduced* the breakage. A description
+        // the parser accepts but cannot re-read — an empty allele rendering as
+        // `[]`, or an `ins` whose anchors the parser tolerates inbound and
+        // rejects outbound — is a parse/display round-trip asymmetry that
+        // normalize merely passes through. Real, but a different bug, and
+        // reporting it here would bury the one this oracle is for.
+        if crate::hgvs::parser::parse_hgvs(&variant.to_string()).is_err() {
+            return;
+        }
+        panic!(
+            "FERRO_ASSERT_REPARSE: normalization produced a description ferro cannot re-parse\n  \
+             input:  {variant}\n  output: {rendered}\n  error:  {e}",
+        );
     }
 
     /// Whether a lone (non-allele) member is a shape the sequence-first pass
@@ -2067,6 +2143,8 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // covers `normalize()` AND every `VariantProjector` path; see
         // `assert_idempotent` for the re-entrancy guard.
         #[cfg(debug_assertions)]
+        self.assert_reparseable(variant, &result.result);
+        #[cfg(debug_assertions)]
         self.assert_idempotent(variant, &result.result);
 
         Ok((result.result, result.warnings))
@@ -2463,11 +2541,68 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
             let mut result: Vec<HgvsVariant> = Vec::with_capacity(merged_split.len());
             let mut pass_warnings: Vec<NormalizationWarning> = Vec::new();
-            for v in merged_split {
-                let (r, warnings) = self.normalize_core(&v)?;
+            for v in &merged_split {
+                let (r, warnings) = self.normalize_core(v)?;
                 pass_warnings.extend(warnings);
                 result.push(r);
             }
+
+            // Four sibling-unaware decisions were taken per member above, and
+            // all four are corrected here, in this order. The order matters:
+            // each pass leaves the member set in the shape the next one expects.
+            //
+            // First: a deletion inside a tandem tract is re-spelled as a copy
+            // count over the *whole tract* (`g.1_2del` -> `g.1_9T[7]` on a
+            // nine-base run), and that widened span can swallow a sibling. Undo
+            // it before the clamp runs, so the clamp sees a deletion span it can
+            // pull back rather than a repeat it would skip.
+            merge::demote_repeats_spanning_siblings(
+                &merged_split,
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+            );
+            // Second: each member went to its standalone most-3' position, which
+            // can carry it clear over a sibling's bases and make the pair denote
+            // a different sequence (#1254). Pull any such member back to the last
+            // position before the sibling — still the most 3' placement that
+            // keeps the members on disjoint windows, and now merely *adjacent*,
+            // so the next pass's merge coalesces the two.
+            merge::clamp_sibling_crossing_shifts(
+                &merged_split,
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+            );
+            // Third: an insertion or duplication consumes no base, so the clamp
+            // above leaves it alone — but its *junction* shifts through a tract
+            // too, and carrying it past a base a sibling edits changes what the
+            // allele denotes. Bound the junction at the sibling's 5' edge, which
+            // is still flush against it, so the #999 collapse keeps firing.
+            merge::clamp_sibling_crossing_junctions(
+                &merged_split,
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+            );
+            // Finally, a spelling repair rather than a repositioning: a
+            // duplication whose span collides with a sibling's bases becomes
+            // the equivalent insertion. `Xdup` claims position X, so a deletion
+            // covering X makes the pair contradictory and ferro's own parser
+            // rejects the result; `X_X+1ins<ref[X]>` denotes the same edit and
+            // claims no base.
+            //
+            // Inside the loop, not after it. Run once at the end this produced
+            // a non-idempotent result — the re-spelled allele is not a fixed
+            // point, because the del and ins it exposes then cancel further
+            // (`[261_262del;262_263insA;…]` reduces to `[261del;…]`). Feeding it
+            // back through settles on that reduction instead.
+            merge::respell_colliding_duplications(
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+                &self.provider,
+            );
 
             pass += 1;
             // Stable once a full pass leaves the member set unchanged.

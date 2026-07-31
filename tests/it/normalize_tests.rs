@@ -4290,17 +4290,22 @@ mod comprehensive_normalization_tests {
 
         #[test]
         fn test_compact_allele_notation() {
-            // Compact allele notation with accession before bracket
-            // NM_TEST.1:c.[4del;9A>G] format
+            // Compact allele notation with accession before bracket.
+            // `c.4del` sits in the A-run `c.4..9` and 3'-shifts within it, but
+            // `c.9` is the substituted base — so the shift stops at `c.8`
+            // (#1254) instead of landing on top of the substitution. The two are
+            // then adjacent with no intervening nucleotide, which HGVS requires
+            // to render as one edit (`delins.md:16`): delete `c.8_9` (`AA`),
+            // insert the substituted `G`.
+            //
+            // Before #1254 this shifted clear onto the sibling and emitted the
+            // overlapping `c.[9A>G;9del]` — two members claiming `c.9`, which
+            // ferro itself flags as an overlap conflict and which denotes a
+            // different sequence than the input.
             let seq = "GGGAAAAAAGGG";
             let provider = provider_with_transcript("NM_TEST.1", seq);
             let result = normalize_to_string(provider, "NM_TEST.1:c.[4del;9A>G]");
-            // Should normalize the variants
-            assert!(
-                result.contains("del") && result.contains("A>G"),
-                "Compact allele should normalize both variants, got: {}",
-                result
-            );
+            assert_eq!(result, "NM_TEST.1:c.8_9delinsG");
         }
     }
 }
