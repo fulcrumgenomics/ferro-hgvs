@@ -11322,11 +11322,13 @@ mod tests {
         let key_sub = cis_member_order_key(&sub);
         let key_del = cis_member_order_key(&del);
 
-        // Same accession and same start point (region/base/offset)...
+        // Same accession, same start point, and — since both are one base wide
+        // — the same end point too, so every positional field of the key ties
+        // and only the descriptor can separate them (#1261 added the end).
         assert_eq!(
-            (&key_sub.0, key_sub.1, key_sub.2, key_sub.3),
-            (&key_del.0, key_del.1, key_del.2, key_del.3),
-            "the two members must share their start-point portion of the key"
+            (&key_sub.0, key_sub.1, key_sub.2),
+            (&key_del.0, key_del.1, key_del.2),
+            "the two members must share the whole positional portion of the key"
         );
         // ...but distinct keys overall, via the rendered-descriptor tie-break.
         assert_ne!(

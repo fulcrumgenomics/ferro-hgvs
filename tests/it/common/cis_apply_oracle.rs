@@ -162,6 +162,44 @@ pub fn apply_with<P: ReferenceProvider + ?Sized>(
     String::from_utf8(edited).ok()
 }
 
+/// The half-open interbase spans of `descriptor`'s members, in the order they
+/// are rendered.
+///
+/// Spans come from `hgvs_to_spdi` rather than the printed HGVS endpoints
+/// because the two disagree for the edits that consume no base: `a_b ins` names
+/// two positions while occupying the junction at `a`, and `a_b dup` places its
+/// copy at the junction *after* `b`. Interbase coordinates are the frame the
+/// ordering and disjointness contracts are actually stated in — reading the
+/// printed endpoints instead is what let #1261 render as ascending.
+pub fn member_interbase_spans(seq: &str, descriptor: &str) -> Vec<(u64, u64)> {
+    let template = provider(seq);
+    let members: Vec<HgvsVariant> = match parse_hgvs(descriptor).expect("parse") {
+        HgvsVariant::Allele(allele) => allele.variants.clone(),
+        single => vec![single],
+    };
+    members
+        .iter()
+        .map(|member| {
+            let triple = hgvs_to_spdi(member, &template)
+                .unwrap_or_else(|e| panic!("`{descriptor}`: member `{member}` has no SPDI: {e}"));
+            (
+                triple.position,
+                triple.position + triple.deletion.len() as u64,
+            )
+        })
+        .collect()
+}
+
+/// Assert that `descriptor`'s members are rendered in ascending interbase
+/// order (#1098's contract, and #1235's second acceptance criterion).
+pub fn assert_members_ascending(seq: &str, descriptor: &str) {
+    let spans = member_interbase_spans(seq, descriptor);
+    assert!(
+        spans.windows(2).all(|pair| pair[0] <= pair[1]),
+        "`{descriptor}` renders its members out of order: interbase spans {spans:?}"
+    );
+}
+
 /// Assert that `input` normalizes to `expected` *and* that both denote the same
 /// sequence when applied to `seq`.
 pub fn assert_normalizes_preserving(seq: &str, input: &str, expected: &str) {
