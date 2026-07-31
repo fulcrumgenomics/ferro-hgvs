@@ -1,15 +1,17 @@
-# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
 #
 # CodeRabbit review configuration for ferro-hgvs (HGVS variant normalizer).
 #
 # This repo is output-stability-critical: parsing, normalization, and coordinate
-# projection must be idempotent, round-trip stable, and byte-identical to the
-# external oracles we conform to (biocommons hgvs, Mutalyzer, VariantValidator).
-# The `assertive` profile + the path instructions below aim the review at the
-# failure modes that actually bite here (output divergence, non-idempotent
-# normalization, parser/fast-path disagreement, coordinate off-by-one, panics on
-# adversarial input, spec-conformance drift) rather than generic style. CI
-# (proptests, fuzz targets, idempotency tests, conformance oracles) is the
+# projection must be idempotent, round-trip stable, and conformant with the
+# external oracles we validate against (biocommons hgvs, Mutalyzer,
+# VariantValidator). It also ships a PyO3 extension, a CLI, a web service, and a
+# reference-data preparation pipeline, each with its own failure modes. The
+# `assertive` profile + the path instructions below aim the review at what
+# actually bites here (output divergence, non-idempotent normalization,
+# parser/fast-path disagreement, coordinate off-by-one, panics on adversarial
+# input, spec-conformance drift, stale reference data) rather than generic style.
+# CI (proptests, fuzz targets, idempotency tests, conformance oracles) is the
 # primary correctness net; assertive makes CodeRabbit surface the borderline tier
 # that net can still miss — a false positive here is cheaper than a missed
 # output divergence.
@@ -18,6 +20,20 @@
 # CLI does NOT reliably inherit this file via `-c .coderabbit.yaml` (it can miss
 # findings the bot catches), so treat the CLI as a lighter pre-push smoke check,
 # not a substitute for the bot review.
+#
+# MAINTENANCE: the path instructions below name specific modules, invariants, and
+# test files. Re-read and update them whenever those are refactored, renamed, or
+# moved — a stale instruction silently misdirects the reviewer, which is worse
+# than no instruction at all. (The previous revision of this file pointed at
+# `tests/*.rs` paths after the integration suite had moved to `tests/it/`, so
+# every "confirm the test still covers it" pointer dangled.)
+#
+# That obligation is enforced, not just stated: `tests/it/coderabbit_config_paths.rs`
+# asserts every `path:` glob below matches at least one file in the repository, that
+# every repo-relative path named in backticks exists, and that no such path is split
+# across lines (the `>-` scalars fold a line break into a space, which would turn a
+# wrapped path into one that names nothing). A rename that orphans an instruction
+# fails the test suite instead of rotting silently.
 
 language: en-US
 
@@ -35,30 +51,53 @@ reviews:
   high_level_summary: true
   poem: false
   collapse_walkthrough: false
+  # Never auto-block merges on a review verdict; findings are advisory.
+  request_changes_workflow: false
+  estimate_code_review_effort: true
+  enable_prompt_for_ai_agents: true
+
   # Reviews are triggered on demand, not automatically. CodeRabbit enforces a
   # per-developer hourly review rate limit; auto-review on PR-open (`enabled`)
   # and on every push (`auto_incremental_review`) fire extra reviews into that
   # one shared budget, so a burst of PRs/commits exhausts it and later reviews
   # stall for hours. Disabling both keeps the budget under deliberate control —
   # reviews run only when requested. On-demand `@coderabbitai review` still works
-  # with `enabled: false`, and the assertive profile + path instructions above
-  # still apply to those reviews.
+  # with `enabled: false`, and the assertive profile + path instructions below
+  # still apply to those reviews. Use `@coderabbitai full review` after a push to
+  # force a fresh review of the whole diff instead of an incremental one.
   auto_review:
     enabled: false
     auto_incremental_review: false
     drafts: false
-  # Never auto-block merges on a review verdict; findings are advisory.
-  request_changes_workflow: false
 
-  # Don't spend review budget on build output, vendored trees, lockfiles, or the
-  # generated spec fixture (regenerated from code, never hand-edited).
+  # Don't spend review budget on build output, vendored trees, lockfiles, or
+  # committed data.
+  #
+  # Nothing under tests/fixtures/ is filtered — not even the two generated spec
+  # fixtures (`tests/fixtures/grammar/hgvs_spec_normalization.json` and
+  # `tests/fixtures/grammar/hgvs_spec_enumeration.json`, produced from code by
+  # the `generate_spec_fixture` and `generate_spec_enumeration` `[[bin]]` targets
+  # whose sources live under `examples/`, so `--example` does not work). Those two
+  # are gitignored and must never appear in a diff at all; the gitignore entry is
+  # the real gate, and the "Generated spec fixtures not committed" check below is
+  # the backstop for the case where one slips past it (`git add -f`). A `!` filter
+  # would drop the file from the reviewed diff, so that check could never observe
+  # the only situation it exists to catch. The curated `*_overrides.json` files
+  # next to them ARE committed and reviewed.
   path_filters:
     - "!**/target/**"
     - "!**/*.lock"
     - "!vendor/**"
     - "!assets/**"
-    - "!tests/fixtures/grammar/hgvs_spec_normalization.json"
+    - "!data/**"
+    - "!**/*.so"
 
+  # Scope note: these cover the modules whose failure modes are specific enough
+  # to be worth naming. Deliberately left untuned (generic review is adequate
+  # there): `src/benchmark/`, `src/perf_table/`, `src/tool_support/`,
+  # `src/clinvar/`, `src/rsid/`, `src/mave/`, `src/extractor/`, `src/config.rs`,
+  # and `src/sequence.rs`. Add an instruction when one of them grows an
+  # invariant a reviewer would not infer from the code.
   path_instructions:
     - path: "src/hgvs/parser/**/*.rs"
       instructions: >-
@@ -66,39 +105,496 @@ reviews:
         `fast_path.rs` is the DEFAULT parse route and is only sound if it is
         observationally identical to the generic `parse_variant` for EVERY input
         — both reject, or both accept and yield the same `HgvsVariant`. Treat any
-        change to fast-path eligibility or output as potentially behavior-changing
-        and confirm the differential test (`tests/fast_path_differential.rs`,
-        both its table and its proptest) still covers it. Flag: inputs the spec
-        rejects being accepted (or vice-versa); panics / unwraps / indexing on
-        attacker-controlled input (this parser is fuzzed — `fuzz/fuzz_targets/`);
-        loss of parse→Display round-trip stability; and `usize` arithmetic on
-        positions/offsets that can wrap or narrow.
+        change to fast-path eligibility or output as potentially
+        behavior-changing and confirm the differential coverage still applies
+        (`tests/it/fast_path_differential.rs`, both its table and its proptest,
+        plus `tests/it/fast_path_drift_scope.rs`). Flag: inputs the spec rejects
+        being accepted, or vice versa; panics, `unwrap`, `expect`, slicing, or
+        byte-indexing on attacker-controlled input (this parser is fuzzed —
+        `fuzz/fuzz_targets/fuzz_parse_hgvs.rs` and `fuzz_structured_hgvs.rs`);
+        non-ASCII / multi-byte input splitting a `char` boundary; loss of
+        parse→Display round-trip stability; and `usize` arithmetic on positions
+        or offsets that can wrap, saturate, or narrow. A new accepted syntax
+        needs a spec citation, not just a test.
+    - path: "src/hgvs/**/*.rs"
+      instructions: >-
+        These are the core HGVS types (`HgvsVariant`, `Edit`, `Location`,
+        position/offset representation). Their `Display` implementations are the
+        canonical serialization and are compared byte-for-byte against external
+        oracles, so any change to formatting is an output change. Flag: a
+        `Display`/`FromStr` pair that no longer round-trips; a new enum variant
+        added without handling in every downstream `match` that currently
+        enumerates variants exhaustively (silent behavior loss if a catch-all
+        arm swallows it); `Ord`/`PartialOrd` or `Hash` implementations that
+        disagree with `Eq`; and changes to the public API surface (re-exports in
+        `lib.rs`, struct fields, enum variants) that are semver-breaking without
+        a CHANGELOG entry.
     - path: "src/normalize/**/*.rs"
       instructions: >-
-        This is normalization: 3'-shifting, boundary handling, repeat shuffling,
-        edit merging, and overlap resolution. The core invariant is IDEMPOTENCY —
-        normalize(normalize(x)) == normalize(x) — and shift correctness
-        (3'-most placement, exact repeat-unit boundaries). Confirm changes are
-        covered by `tests/idempotency_tests.rs` and `tests/normalize_property_tests.rs`.
-        Flag: off-by-one in shuffle/boundary windows; wrong shift direction or
-        strand handling; mishandled circular/mitochondrial wraparound; overlap
-        merges that silently drop or reorder edits; and any path that can make a
-        second normalization pass change the output.
+        This is normalization: 3'-shifting (`shuffle.rs`), boundary handling
+        (`boundary.rs`), repeat shuffling, edit merging (`merge.rs`), overlap
+        resolution (`overlap.rs`), and rule application (`rules.rs`). The core
+        invariant is IDEMPOTENCY — normalize(normalize(x)) == normalize(x) —
+        enforced in debug builds by `FERRO_ASSERT_IDEMPOTENT=1` at the shared
+        exit of `normalize_core_checked`, which covers both `normalize()` and
+        every `VariantProjector` path. Confirm changes are covered by
+        `tests/it/idempotency_tests.rs`, `tests/it/normalize_property_tests.rs`,
+        and `tests/it/normalize_idempotency_proptest.rs`. Flag: off-by-one in
+        shuffle or boundary windows; wrong shift direction or strand handling;
+        mishandled circular/mitochondrial wraparound; overlap merges that
+        silently drop or reorder edits; any path that can make a second
+        normalization pass change the output; and any new early return that
+        bypasses the shared checked exit (which would also bypass the
+        idempotency assertion, disabling the oracle rather than satisfying it).
     - path: "src/{project,convert,coords,spdi,liftover}/**/*.rs"
       instructions: >-
         This is coordinate projection and cross-system conversion (c/g/n/r/p,
-        SPDI, liftover, CDS/intron math, protein consequence + frameshift
+        SPDI, liftover, CDS/intron math, protein consequence and frameshift
         classification). These are the off-by-one minefields. Flag: intronic
         offset sign errors on the minus strand; CDS start/end clamp boundaries;
-        UTR/exon-junction edge cases; frame/codon arithmetic; and any projection
-        that emits coordinates without validating them against transcript/contig
-        bounds. Require coverage by the relevant `tests/projection*.rs`,
-        `tests/spdi_tests.rs`, or `issue_*`/`*_matrix` regression test.
+        UTR and exon-junction edge cases; frame and codon arithmetic; 0-based
+        vs 1-based and half-open vs closed interval confusion at any boundary
+        the data crosses (HGVS is 1-based inclusive, SPDI and VCF are not); and
+        any projection that emits coordinates without validating them against
+        transcript or contig bounds. Projection must DECLINE rather than emit a
+        coordinate it cannot justify — flag a fallback that silently produces a
+        plausible-but-unverified position. Require coverage by
+        `tests/it/projection.rs`, `tests/it/projection_coverage.rs`,
+        `tests/it/hgvs_rs_projection_tests.rs`, `tests/it/spdi_tests.rs`, or the
+        relevant `issue_*` / `*_matrix` regression test.
+    - path: "src/reference/**/*.rs"
+      instructions: >-
+        This is the reference-data layer: the `ReferenceProvider` trait, FASTA
+        and multi-FASTA providers, the JSON provider, the prepared index, and
+        genomic-placement resolution (RefSeqGene→genome alignments and LRG XML
+        backing `genomic_placement`, which `VariantProjector::project_to_genomic`
+        composes with the cdot NM→NC step). Flag: a placement resolved without
+        checking the genome build, so a GRCh37 accession picks up a GRCh38
+        placement or vice versa; sequence slicing that assumes a coordinate
+        convention rather than converting explicitly; memory-mapped reads whose
+        offsets are not validated against the mapping length (fail closed on a
+        truncated or malformed index, never read past the end); a cache or
+        prepared index keyed without every input that determines its contents
+        (a stale cache is a silent wrong answer, not an error); and any provider
+        that returns a default, empty, or zero-length sequence where it should
+        return an error — downstream normalization will happily shift against it.
+        `legacy_selector.rs` resolves a bare gene selector to a transcript
+        version via the manifest's optional `ng_hosted_transcripts` artifact:
+        flag a resolution path that silently degrades to "not found" (or to an
+        arbitrary version) when that artifact is absent, rather than declining
+        distinguishably — an optional manifest field that is easy to leave unset
+        must not make a wrong answer look like a missing one.
+    - path: "src/{prepare,check,data}/**/*.rs"
+      instructions: >-
+        This is reference-data acquisition and validation (`ferro prepare`,
+        `ferro check`) — network downloads, archive extraction, and manifest
+        construction. Flag: a downloaded artifact used without verifying its
+        checksum or expected size; an extraction path taken from archive
+        contents without rejecting `..` or absolute components; a partial
+        download left in place under the final filename instead of being written
+        to a temporary path and renamed; unbounded retry or unbounded in-memory
+        buffering of a multi-gigabyte file; and any manifest entry stored as an
+        absolute path — manifest paths are relative so the prepared reference is
+        portable across hosts. Optional manifest fields are populated only when
+        the corresponding flag is passed (e.g. `--derive-ng-placements` fills
+        `ng_hosted_transcripts`), so a re-run without the flag silently clears a
+        field an earlier run set: flag a manifest write that drops or nulls a
+        field it did not compute, instead of preserving the existing value or
+        refusing to overwrite. `ferro check` must fail loudly on a manifest that
+        references a missing or size-mismatched file rather than degrading to a
+        reduced-capability mode without saying so.
+    - path: "src/vcf/**/*.rs"
+      instructions: >-
+        This is VCF parsing and HGVS annotation. Flag: REF/ALT handling that
+        assumes a single ALT allele where the record is multiallelic; the
+        anchor-base convention for indels applied inconsistently between the VCF
+        side (left-anchored, 1-based) and the HGVS side; symbolic ALTs (`<DEL>`,
+        `<*>`), spanning deletions (`*`), and breakend records treated as literal
+        sequence; POS/END arithmetic that disagrees with the emitted HGVS span;
+        and per-record failure aborting the whole stream where the configured
+        error mode says it should be reported and skipped. Any annotation change
+        needs coverage in `tests/it/annotation_cross_format.rs` or
+        `tests/it/annotation_tool_conformance.rs`.
+    - path: "src/{python.rs,python_helpers.rs}"
+      instructions: >-
+        This is the PyO3 boundary. Flag: a Rust panic that can cross the FFI
+        boundary instead of being converted to a Python exception (`unwrap`,
+        `expect`, slicing, integer overflow in debug); a long-running or
+        blocking call made without releasing the GIL; an API added, renamed, or
+        given a changed signature or default without a matching update to
+        `python/ferro_hgvs/__init__.pyi` and the docs; use of a symbol outside
+        the `abi3-py310` stable subset, which breaks the shipped abi3 wheel; and
+        error types mapped to a bare `Exception` rather than the specific
+        exception class the Python tests assert on. Any behavior reachable from
+        Python needs a test under `tests/python/`, not only a Rust test.
+    - path: "src/service/**/*.rs"
+      instructions: >-
+        This is the HTTP service (`web-service` feature). It parses untrusted
+        input with the same parser the fuzz targets exercise, so treat every
+        handler as an attack surface. Flag: a request field used without a
+        length or cardinality bound (batch endpoints in particular — an
+        unbounded list is a trivial memory-exhaustion vector); a handler that can
+        panic, since that takes down the worker; internal errors, file paths, or
+        reference-directory locations echoed into a client-visible response;
+        a blocking or CPU-heavy call on an async executor without
+        `spawn_blocking`; and a response schema change that is not additive,
+        which breaks existing clients silently.
+    - path: "src/{cli,commands,bin}/**/*.rs"
+      instructions: >-
+        This is the CLI surface. Its stdout is consumed by pipelines, so treat
+        output format as an API. Flag: a change to a JSON field name, type, or
+        nesting, or to a TSV column order, without a CHANGELOG entry; a renamed
+        flag or changed default without an alias or deprecation note; diagnostics
+        written to stdout instead of stderr (that corrupts a downstream parse);
+        a process exit code that does not distinguish "ran, found nothing" from
+        "failed"; and progress output emitted when stdout is not a TTY.
+    - path: "src/{error.rs,diagnostic.rs,error_handling/**/*.rs}"
+      instructions: >-
+        This is the configurable error-mode machinery (strict / lenient /
+        silent). Flag: a new failure path that ignores the configured mode and
+        unconditionally returns an error or unconditionally swallows one; an
+        error variant added without a stable error code, or an existing code
+        reused for a different condition (`tests/it/error_code_audit.rs` pins
+        these); a diagnostic whose message states a position or accession that
+        does not match the input that produced it; and `silent` mode dropping a
+        failure without incrementing whatever counter makes it observable — a
+        silently discarded variant must still be countable.
+    - path: "src/{batch/**/*.rs,parallel.rs,cache.rs}"
+      instructions: >-
+        This is batching, Rayon-based parallelism, and caching. Output must not
+        depend on thread count or completion order: flag any collection into an
+        unordered container, or any result ordering derived from completion
+        rather than input index (`tests/it/cli_parallel_*.rs` pin single-thread
+        vs multi-thread equivalence). Flag a cache keyed on fewer inputs than
+        determine the value, an unbounded cache with no eviction, and interior
+        mutability shared across threads without justification.
+    - path: "src/{effect,equivalence,backtranslate}/**/*.rs"
+      instructions: >-
+        This is protein-level reasoning: consequence and impact classification
+        (`effect/`), variant equivalence (`equivalence/`), and protein-to-DNA
+        backtranslation (`backtranslate/`). Flag: a translation or codon walk
+        that stops at the CDS end instead of reading through into the 3' UTR —
+        a frameshift or stop-loss consequence is only correct if the extension is
+        translated past the original terminator; a codon table used without
+        checking the sequence's genetic code (mitochondrial sequences do not use
+        the standard table); an equivalence check that answers "equivalent" from
+        string or coordinate comparison alone when the contract requires
+        comparing normalized forms against a reference; an equivalence level
+        widened (e.g. a stricter level returned where a looser one is meant, or
+        vice versa) without a test pinning the boundary between levels; and
+        backtranslation that enumerates codons without bounding the result set or
+        without stating the genetic code it assumed. `?`/unknown amino acids and
+        `Ter` must be handled explicitly, never defaulted to a concrete residue.
+    - path: "src/conformance/**/*.rs"
+      instructions: >-
+        This is the conformance-corpus schema, the reference snapshot/window
+        machinery, and the summary generators — the code that decides what the
+        committed FAIL-set ledgers under `tests/fixtures/**/baseline-failures/`
+        say. It is the single source of truth for the case schemas that both the
+        integration harnesses and `examples/generate_conformance_summary.rs`
+        deserialize through, so a schema change here silently reinterprets every
+        corpus case. Flag: a schema field made optional or given a default, which
+        turns a malformed case into a silently-accepted one; a case-outcome
+        classification (pass / fail / skip / not-applicable) whose change moves
+        cases between buckets without the PR quantifying the movement; a harness
+        that treats "no reference available" as a pass rather than a skip; and
+        snapshot or reference-window provenance (accession, build, digest)
+        dropped from the recorded output — the ledgers are only comparable when
+        the reference identity behind them is pinned.
+    - path: "src/legacy/**/*.rs"
+      instructions: >-
+        This is deprecated-notation support (IVS offsets, `c.100_102>ATG`,
+        arrow and number-first protein substitutions) that rewrites legacy input
+        into modern HGVS. A rewrite is a semantic claim, not a string edit. Flag:
+        a rewrite that changes the variant's meaning (IVS numbering resolved
+        against the wrong intron or the wrong side of the junction, a `>` form
+        expanded to a delins with a different span); a legacy form accepted by
+        the strict parser rather than only behind the legacy configuration —
+        legacy acceptance must be opt-in, because silently accepting deprecated
+        syntax makes ferro-hgvs disagree with the spec-conformant tools it is
+        validated against; and a rewrite applied without recording that it
+        happened, so a caller cannot tell a legacy input from a modern one.
     - path: "tests/**/*.rs"
       instructions: >-
-        Generate test data programmatically; do not add committed fixtures.
-        Conformance assertions must check against an INDEPENDENT oracle
-        (biocommons hgvs, Mutalyzer, VariantValidator) or a different internal
-        code path than the one under test — not a self-consistency check. Flag
-        assertions weaker than the stated contract, and `issue_*` regression
-        tests that assert the buggy output instead of the fixed one.
+        The integration suite lives in `tests/it/` behind a single harness
+        binary; new integration tests belong there and must be registered in its
+        module tree (two standalone binaries remain —
+        `tests/conformance_reference_snapshot_tests.rs` and
+        `tests/issue_500_legacy_gene_selector.rs` — do not add more). Generate
+        test data programmatically; do not add a NEW committed fixture. Three
+        families already under `tests/fixtures/` are deliberate and must not be
+        flagged: the offline cross-tool oracle snapshots under
+        `tests/fixtures/validation/` (read through the `load_fixture()` pattern
+        in `tests/it/spdi_tests.rs`, which is how an independent oracle is
+        checked without network access), and the expected-FAIL ledgers and
+        `.count` baselines that the two instructions further down address on
+        their own terms. Conformance assertions must check against an INDEPENDENT oracle
+        (biocommons hgvs, Mutalyzer, VariantValidator, or a genuinely different
+        internal code path) — not a self-consistency check that would pass
+        against the bug itself. Flag: assertions weaker than the stated contract;
+        `issue_*` regression tests that pin the buggy output instead of the fixed
+        one; a test that reads
+        `tests/fixtures/grammar/hgvs_spec_normalization.json` or
+        `tests/fixtures/grammar/hgvs_spec_enumeration.json` without going
+        through the shared `tests/it/common/spec_fixture.rs` helper (both are
+        generated, gitignored build artifacts, not committed files); and a
+        `#[ignore]` added without a linked issue explaining when it comes back.
+        Coverage added only to a reference-aware test — any test that resolves a
+        prepared reference from `FERRO_MANIFEST`, which is the mutalyzer /
+        biocommons / hgvs-rs axis suites plus roughly a dozen `issue_*` tests —
+        does NOT run on PR CI, which does not provision the manifest. Such a test
+        skips silently there; only the nightly job runs it. Say so in the PR
+        rather than citing it as pre-merge coverage.
+    - path: "tests/it/{mutalyzer_*.rs,biocommons_*.rs,hgvs_rs_projection_tests.rs}"
+      instructions: >-
+        These suites are REFERENCE-AWARE: they resolve a prepared reference from
+        `FERRO_MANIFEST` and silently no-op when it is unset. PR CI does not
+        provision the multi-gigabyte manifest (`.github/workflows/ci.yml` emits a
+        GitHub notice saying exactly that); only the nightly
+        `nightly-mutalyzer.yml` job runs them against a real reference. So a test
+        added here is NOT pre-merge coverage, and "the existing tests still pass"
+        is not evidence about this code — on PR CI they did not run. Flag: a PR
+        whose only new coverage for a behavior change lands in one of these files
+        without saying so, and without either a manifest-free test (a
+        `JsonProvider`/`MockProvider` fixture built programmatically) or an
+        explicit statement that the nightly is the gate. Flag also a skip path
+        that returns silently without printing why, and a gate that falls back to
+        a hardcoded local reference path when the env var is unset — the env var
+        is authoritative precisely so a developer host cannot pass where CI skips.
+    - path: "tests/fixtures/**/baseline-failures/*.txt"
+      instructions: >-
+        These are the committed expected-FAIL ledgers for the conformance axes
+        (Mutalyzer, biocommons, hgvs-rs projection): each line is a case
+        ferro-hgvs is known NOT to match the oracle on. They are regenerated by
+        `tests/it/failure_expectations_blesser_tests.rs`, so re-blessing is
+        mechanically easy and therefore easy to do instead of fixing the bug.
+        Treat every line change as a claim requiring evidence. Flag: a line
+        REMOVED (FAIL to PASS) without the PR naming the code change that fixed
+        it — removal is only justified if the divergence is genuinely gone, not
+        if the case stopped being emitted; a line ADDED (a new expected failure)
+        — that is a regression being blessed, and it needs an issue link and a
+        statement of which oracle it now disagrees with; bulk churn across
+        several ledgers in a PR that does not touch `src/normalize/`,
+        `src/project/`, or `src/convert/` — that means the reference data or the
+        harness moved, not the code, and the PR must say which; and any ledger
+        edit whose PR description does not state whether the change moves
+        ferro-hgvs TOWARD or AWAY from the reference oracles. Ledgers are only
+        comparable across runs when the prepared reference identity is unchanged;
+        a ledger diff landing alongside a reference or manifest change must say
+        which one caused what.
+    - path: "tests/fixtures/**/*.count"
+      instructions: >-
+        These are blessed cardinality baselines (e.g. the empty-projection counts
+        for the Mutalyzer axis) pinned against a specific prepared reference.
+        A changed count is an output change, not a bookkeeping update. Flag a
+        count edit that the PR does not explain in terms of a specific behavior
+        change, and any edit that loosens a baseline (a larger empty-projection
+        count means MORE cases now project to nothing — that is a regression
+        unless the PR argues otherwise).
+    # Proptest persists failing seeds in two layouts here: the legacy sibling
+    # file (`tests/<name>.proptest-regressions`) and the newer per-crate
+    # directory (`tests/proptest-regressions/<name>.txt`). Both need the same
+    # instruction — a single `**/*.proptest-regressions` glob silently misses
+    # the directory layout, which is where the idempotency proptest's seeds live.
+    - path: "**/*.proptest-regressions"
+      instructions: >-
+        These files are proptest's persisted failing seeds — each line is a
+        counterexample that once broke the property. Adding a line is expected
+        after a fix. Flag any diff that DELETES or rewrites an existing seed
+        line: that removes regression coverage, and it is the mechanical
+        signature of "the test was failing so I cleared the file". Require the PR
+        description to justify a deletion (e.g. the property itself was removed
+        or its semantics intentionally changed).
+    - path: "**/proptest-regressions/**/*.txt"
+      instructions: >-
+        Same contract as the sibling `*.proptest-regressions` files: these are
+        proptest's persisted failing seeds, one counterexample per line, and
+        `tests/proptest-regressions/normalize_idempotency_proptest.txt` holds the
+        seeds for the idempotency oracle specifically. Adding a line is expected
+        after a fix. Flag any diff that DELETES or rewrites an existing seed
+        line, and require the PR description to justify it.
+    - path: "fuzz/**/*.rs"
+      instructions: >-
+        These are the libFuzzer targets for the parser. Flag: a target that
+        catches or suppresses panics (that defeats the point — the panic IS the
+        finding); a harness that discards most inputs via an early `return`
+        before reaching the parser, silently collapsing coverage; and a new
+        public parse entry point added to `src/hgvs/parser/` with no
+        corresponding target here.
+    - path: "python/**/*.{py,pyi}"
+      instructions: >-
+        This is the Python package wrapping the native extension. Flag: a `.pyi`
+        stub whose signature, argument names, or return type disagrees with the
+        `#[pyfunction]`/`#[pymethods]` definition in `src/python.rs` (the stub is
+        the only type contract users see); a re-export added to `__init__.py`
+        without a stub entry, or vice versa; and use of syntax below the declared
+        minimum Python version. Follow the Google Python style with a 100-column
+        line length; all parameters and returns annotated.
+    - path: "tests/python/**/*.py"
+      instructions: >-
+        These exercise the PyO3 surface. Flag: a test asserting only that a call
+        does not raise, rather than checking the returned value; a `pytest.raises`
+        on bare `Exception` rather than the specific exception class the bindings
+        promise; and behavior tested only in Rust when it is reachable from
+        Python (the binding layer is where the signature and exception mapping
+        actually break).
+    - path: "benches/**/*.rs"
+      instructions: >-
+        Flag: a benchmark whose input is generated inside the timed region; a
+        result that can be optimized away without `black_box`; and an assertion
+        of a performance number in a unit of measure that is not comparable
+        across hosts. A benchmark is not a correctness test — flag one being used
+        to justify a behavior change without a corresponding correctness test.
+    - path: "docs/**/*.md"
+      instructions: >-
+        Flag: documented CLI flags, defaults, output fields, or Python signatures
+        that no longer match the code in this diff; a claimed conformance or
+        performance number without the corpus, tool version, and host it was
+        measured on; and any machine-local absolute path (`/Users/`, `/home/`,
+        `/Volumes/`) — runbooks must use a placeholder or a shell variable the
+        reader sets, since this repository is public.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Actions must be pinned by full commit SHA with the version in a trailing
+        comment, never by a mutable tag. Flag: a matrix row that skips the test
+        step; a `continue-on-error` or unchecked step that lets a failing
+        conformance, proptest, or idempotency run pass the job; a cache key that
+        omits an input determining the cached contents; and token permissions
+        broader than the job needs.
+
+  # Deterministic checks specific to this repo. These are review-visible
+  # severities, NOT merge gates: `main`'s ruleset requires 8 status checks (Build,
+  # Test, Clippy, Clippy all-features, Format, Python Lint, Python Wheel Test,
+  # abi3 floor) and CodeRabbit is not among them, `request_changes_workflow` is
+  # false, and `auto_review.enabled` is false — so these run only on a requested
+  # review and nothing they report can block a merge. `error` therefore means
+  # "must be fixed before merging" to a human reader; `warning` means "explain it
+  # in the PR". Making any of them a real gate requires adding CodeRabbit to the
+  # branch ruleset, which is a separate, deliberate decision.
+  pre_merge_checks:
+    title:
+      mode: "warning"
+      requirements: >-
+        Title must follow Conventional Commits (feat:, fix:, perf:, refactor:,
+        docs:, test:, chore:, ci:, build:) with an optional scope, and must name
+        the component touched (e.g. parser, normalize, project, spdi, vcf,
+        python, cli) rather than a generic phrase like "improvements" or
+        "updates".
+    description:
+      mode: "warning"
+    docstrings:
+      mode: "warning"
+      threshold: 70
+    custom_checks:
+      - name: "No machine-local paths"
+        mode: "error"
+        instructions: >-
+          This repository is public and its outputs must be portable across
+          machines. FAIL if any added or modified line in the diff — in source,
+          tests, examples, docs, CI, or fixtures — contains a machine-specific
+          absolute path matching `/Users/`, `/home/`, `/Volumes/`, or
+          `C:\\Users\\`. Such paths break on every other machine and leak local
+          directory layout. The accepted alternatives are: a CLI argument, an
+          environment variable (e.g. `FERRO_MANIFEST`), a repo-relative default,
+          or — in docs and runbooks — an explicit placeholder such as
+          `/path/to/ferro-bench-data` or a shell variable the reader sets. When
+          failing, quote the line and name which alternative fits. PASS if no
+          such path appears.
+      - name: "Generated spec fixtures not committed"
+        mode: "error"
+        instructions: >-
+          `tests/fixtures/grammar/hgvs_spec_normalization.json` and
+          `tests/fixtures/grammar/hgvs_spec_enumeration.json` are generated,
+          gitignored build artifacts produced by the `generate_spec_fixture` and
+          `generate_spec_enumeration` binaries from the HGVS spec submodule plus
+          the curated overrides files.
+          They were deliberately removed from version control because committing
+          them made every parser PR a merge-conflict magnet. FAIL if the diff adds
+          or modifies either file. The curated
+          `hgvs_spec_normalization_overrides.json` and
+          `hgvs_spec_enumeration_overrides.json` ARE committed and may be
+          edited — do not flag them. PASS otherwise.
+      - name: "Output change has a pinned regression test"
+        mode: "warning"
+        instructions: >-
+          Parsing, normalization, and projection output is a contract validated
+          against external oracles. Determine whether this diff can change what
+          ferro-hgvs emits for an input it already accepted: treat as
+          output-changing any modification under src/hgvs/, src/normalize/,
+          src/project/, src/convert/, src/coords/, src/spdi/, src/liftover/, or
+          src/vcf/ that touches parsing acceptance, `Display` output, shift or
+          boundary logic, coordinate arithmetic, or edit selection. If the diff
+          is output-changing, PASS only if it also adds or modifies a test that
+          pins the NEW expected output for a concrete input — an `issue_*`
+          regression test, a `*_matrix` case, or a conformance entry — and the PR
+          description says whether the change moves ferro-hgvs toward or away
+          from the reference oracles. A test that merely still passes is not
+          sufficient. FAIL naming the specific input class whose output can move.
+          PASS trivially for changes confined to docs, CI, benches, or the build.
+      - name: "Python API and stubs in sync"
+        mode: "error"
+        instructions: >-
+          The `.pyi` stubs are the only type contract Python users see. FAIL if
+          the diff modifies a `#[pyfunction]`, `#[pymethods]`, `#[pyclass]`, or
+          `#[pymodule]` item in src/python.rs or src/python_helpers.rs — adding,
+          removing, or renaming a symbol, or changing a parameter name, order,
+          default, or return type — without a corresponding change to
+          python/ferro_hgvs/__init__.pyi (and to __init__.py if the symbol is
+          re-exported). Name the specific symbol that drifted. PASS if the diff
+          touches no PyO3 item, or if the stubs were updated to match.
+      - name: "Conformance ledger change is justified"
+        mode: "warning"
+        instructions: >-
+          The committed expected-FAIL ledgers
+          (`tests/fixtures/**/baseline-failures/*.txt`) and the blessed count
+          baselines (`tests/fixtures/**/*.count`) record where ferro-hgvs is
+          known to diverge from the Mutalyzer, biocommons, and hgvs-rs oracles.
+          They are regenerated mechanically, so updating them is the cheapest way
+          to make a failing suite green — which is exactly why a diff that
+          touches them needs an argument. PASS only if the PR description states,
+          for each ledger touched: what code or reference change moved the
+          result, and whether the movement is toward or away from the oracle.
+          FAIL if the ledger changes are unexplained; if a case moves from FAIL to
+          PASS with no corresponding fix in the diff; if a NEW expected-failure
+          line is added without an issue link (that is a regression being
+          blessed, not recorded); or if ledgers change in a diff that does not
+          touch src/ at all, without the PR naming the reference-data or harness
+          change responsible. PASS trivially if no ledger or count baseline is
+          in the diff.
+
+  # Enable the analyzers that match this stack; disable the ones that only add
+  # noise here.
+  tools:
+    clippy:
+      enabled: true
+    ruff:
+      enabled: true
+    shellcheck:
+      enabled: true
+    actionlint:
+      enabled: true
+    yamllint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    # Long-form design docs and runbooks with intentional formatting; both bury
+    # real findings under style noise.
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+
+knowledge_base:
+  # Carry forward what CodeRabbit learns about this repo's conventions across
+  # PRs, scoped to this repository only (it is public).
+  learnings:
+    scope: "local"
+  code_guidelines:
+    enabled: true
+    # CLAUDE.md is picked up by default; CONTRIBUTING.md and the design docs
+    # carry the conventions that are not in it.
+    filePatterns:
+      - "CLAUDE.md"
+      - "CONTRIBUTING.md"
+      - "docs/CONFORMANCE_HARNESS_DESIGN.md"
+      - "docs/RECONSTRUCTION_POLICY_DESIGN.md"
