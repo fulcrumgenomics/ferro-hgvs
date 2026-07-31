@@ -39,6 +39,7 @@ mod civic_validation;
 mod cli_build_transcript;
 mod cli_check_transcripts_json;
 mod cli_convert_gff_flags;
+mod cli_normalize_tsv;
 mod cli_parallel_annotate;
 mod cli_parallel_normalize;
 mod cli_parallel_parse;
