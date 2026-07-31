@@ -8,8 +8,10 @@
 //!
 //! `normalize_idempotency_proptest` already fuzzes confluence for *homopolymer
 //! boundary* spellings of a single edit. This file covers the cis-allele case:
-//! one haplotype spelled as separate substitutions, as one spanning delins, and
-//! as runs grouped into delins members must all reach one form.
+//! several encodings of one haplotype must all reach one form. Two models
+//! generate those haplotypes — a substitution-only one and a length-changing
+//! one — with different encoding sets and different reach; see **Two models**
+//! below for what each can and cannot assert.
 //!
 //! Cases are **valid by construction** — the encodings are generated from a
 //! chosen set of changed positions over a known core, so each one provably
@@ -27,15 +29,38 @@
 //! oracle: `check()` normalizes both sides, so comparing a normalized result
 //! against anything returns `Identical` tautologically.
 //!
-//! **Scope: substitution-only, and so length-preserving.** Every generated
-//! haplotype replaces bases in place, which means no encoding and no normalized
-//! output can contain a bare `del`, `ins` or `dup`. That bounds what this file
-//! can reach: `shift_pieces_three_prime` only moves a piece for which
-//! `is_pure_indel()` holds, so the sibling clamp of #1234 — where a member's
-//! 3'-shift runs over a neighbour — is unreachable from here, and #1231/#1232/
-//! #1233's indel-bearing shapes are not covered. Extending the model to
-//! reference/alternate edit pairs reaches those; that work belongs with the
-//! normalizer fixes it depends on and is tracked separately.
+//! **Two models.** The original `Haplotype` is substitution-only and so
+//! length-preserving: no encoding and no normalized output can contain a bare
+//! `del`, `ins` or `dup`. That bounded what this file could reach —
+//! `shift_pieces_three_prime` only moves a piece for which `is_pure_indel()`
+//! holds, so the sibling clamp of #1234 was unreachable from here, and
+//! #1231/#1232/#1233's indel-bearing shapes were not covered.
+//!
+//! `IndelHaplotype` closes that gap: single-base deletions and one- or two-base
+//! insertions, which do reach the shifting machinery. It is deliberately a
+//! second model rather than a widening of the first — the substitution corpus
+//! is tuned (see `core_strategy` and the non-vacuity guard) and runs at the
+//! soak's 125k cases, and mixing the two would blur which shapes a failure came
+//! from.
+//!
+//! What the indel model can assert today is narrower than what it should:
+//!
+//! - The **spanning-delins comparison is held back**. A length-changing
+//!   haplotype and its spanning `delins` reach two fixed points in general, not
+//!   in two edge cases — the derivation reaches the *same* piece set from both
+//!   spellings, and only the input-relative gates in `canonicalize_from_sequence`
+//!   (the `changed_columns_of_edits` bound and the `input_separator_gaps` veto)
+//!   decide differently, because both are measured against how the input
+//!   happened to be written. Tracked by #1260 and #1262 and pinned by
+//!   `adjacent_gap_insertions_are_a_known_gap`.
+//! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
+//!   because it finds unfixed defects in the #1269 `claims_reference_bases`
+//!   family, filed as #1286 and #1287; see its doc comment for both
+//!   reproductions.
+//!
+//! Neither restriction is silent: both are named, pinned, and fail loudly when
+//! the underlying issue is fixed (#1268/#1283's complaint about coverage that
+//! reads wider than it is).
 //!
 //! Axis scope: the genomic axis, matching where the sequence-first
 //! canonicalization is enabled. Extending this to `c.`/`n.`/`r.` should follow
@@ -520,5 +545,449 @@ fn the_strategy_generates_every_shape_the_properties_depend_on() {
     panic!(
         "strategy never produced every required shape \
          (adjacent={adjacent}, separated={separated}, three_encodings={three_encodings})"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Length-changing haplotypes (#1235 criterion 1, beyond substitutions)
+// ---------------------------------------------------------------------------
+
+/// One length-changing event on the core: a single-base deletion, or an
+/// insertion of one or two bases at the gap *after* an index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Event {
+    /// Delete `core[index]`.
+    Delete { index: usize },
+    /// Insert `bases` into the gap between `core[index]` and `core[index + 1]`.
+    ///
+    /// A `&'static str` payload rather than a `([char; 2], len)` pair: the
+    /// latter made a `len` past the array's end constructible, and `inserted()`
+    /// would then slice out of bounds.
+    Insert { index: usize, bases: &'static str },
+}
+
+impl Event {
+    fn index(&self) -> usize {
+        match self {
+            Event::Delete { index } | Event::Insert { index, .. } => *index,
+        }
+    }
+
+    fn inserted(&self) -> &'static str {
+        match self {
+            Event::Delete { .. } => "",
+            Event::Insert { bases, .. } => bases,
+        }
+    }
+}
+
+/// A haplotype built from length-changing events.
+///
+/// The substitution model above cannot reach a bare `del`, `ins` or `dup`, and
+/// so cannot reach the shifting machinery at all: `shift_pieces_three_prime`
+/// only moves a piece for which `is_pure_indel()` holds. This model reaches it.
+#[derive(Debug, Clone)]
+struct IndelHaplotype {
+    core: String,
+    /// Ascending by index, never two events on the same index.
+    events: Vec<Event>,
+}
+
+impl IndelHaplotype {
+    /// The core with every event applied — computed without the normalizer, so
+    /// it can detect a canonicalization that silently altered the sequence.
+    fn intended_sequence(&self) -> String {
+        let mut out = String::new();
+        for (index, base) in self.core.chars().enumerate() {
+            let deleted = self
+                .events
+                .iter()
+                .any(|e| matches!(e, Event::Delete { index: i } if *i == index));
+            if !deleted {
+                out.push(base);
+            }
+            for event in &self.events {
+                if matches!(event, Event::Insert { index: i, .. } if *i == index) {
+                    out.push_str(event.inserted());
+                }
+            }
+        }
+        out
+    }
+
+    /// The member string for one event.
+    fn member(event: &Event) -> String {
+        match event {
+            Event::Delete { index } => format!("{}del", hgvs_position(*index)),
+            Event::Insert { index, .. } => format!(
+                "{}_{}ins{}",
+                hgvs_position(*index),
+                hgvs_position(*index) + 1,
+                event.inserted()
+            ),
+        }
+    }
+
+    /// One member per event: `g.[261del;265_266insAC]`.
+    fn as_separate_members(&self) -> String {
+        let members: Vec<String> = self.events.iter().map(Self::member).collect();
+        render_members(&members)
+    }
+
+    /// The same members authored in descending order — the input the
+    /// order-independence property compares against. Shares `member` with
+    /// `as_separate_members` so the two cannot drift.
+    fn as_separate_members_reversed(&self) -> String {
+        let members: Vec<String> = self.events.iter().rev().map(Self::member).collect();
+        render_members(&members)
+    }
+
+    /// One delins spanning the first to the last affected base, carrying the
+    /// unchanged interior through: the same haplotype, spelled as one member.
+    fn as_spanning_delins(&self) -> String {
+        let first = self.events.first().expect("non-empty").index();
+        let last = self.events.last().expect("non-empty").index();
+        let mut replacement = String::new();
+        for (index, base) in self.core.chars().enumerate() {
+            if index < first || index > last {
+                continue;
+            }
+            let deleted = self
+                .events
+                .iter()
+                .any(|e| matches!(e, Event::Delete { index: i } if *i == index));
+            if !deleted {
+                replacement.push(base);
+            }
+            for event in &self.events {
+                if matches!(event, Event::Insert { index: i, .. } if *i == index) {
+                    replacement.push_str(event.inserted());
+                }
+            }
+        }
+        if replacement.is_empty() {
+            return format!(
+                "NC_TEST.1:g.{}_{}del",
+                hgvs_position(first),
+                hgvs_position(last)
+            );
+        }
+        format!(
+            "NC_TEST.1:g.{}_{}delins{replacement}",
+            hgvs_position(first),
+            hgvs_position(last)
+        )
+    }
+
+    fn encodings(&self) -> Vec<String> {
+        let mut out = Vec::with_capacity(2);
+        for encoding in [self.as_separate_members(), self.as_spanning_delins()] {
+            if !out.contains(&encoding) {
+                out.push(encoding);
+            }
+        }
+        out
+    }
+
+    /// Whether two insertions sit at **adjacent gaps** — the one shape this
+    /// model must currently exclude, tracked by #1260 and #1262.
+    ///
+    /// Excluded, not silently skipped: `adjacent_gap_insertions_are_a_known_gap`
+    /// below pins the shape as currently-broken, so fixing either issue fails
+    /// that test loudly and this filter comes out at the same time.
+    fn has_adjacent_gap_insertions(&self) -> bool {
+        self.events.windows(2).any(|pair| {
+            matches!(pair[0], Event::Insert { .. })
+                && matches!(pair[1], Event::Insert { .. })
+                && pair[1].index() == pair[0].index() + 1
+        })
+    }
+}
+
+fn indel_haplotype_strategy() -> impl Strategy<Value = IndelHaplotype> {
+    core_strategy().prop_flat_map(|core| {
+        let length = core.len();
+        // Leave the first and last base alone so an event never sits against
+        // the core/padding seam, where a shift would leave the modelled region.
+        prop::collection::btree_set(1..length.saturating_sub(1), 2..=3).prop_flat_map(
+            move |indices| {
+                let core = core.clone();
+                let indices: Vec<usize> = indices.into_iter().collect();
+                let kinds = prop::collection::vec(0..4usize, indices.len());
+                let payloads = prop::collection::vec((0..4usize, 0..4usize), indices.len());
+                (kinds, payloads)
+                    .prop_map(move |(kinds, payloads)| {
+                        // One- and two-base payloads over the full alphabet.
+                        const ONE: [&str; 4] = ["A", "C", "G", "T"];
+                        const TWO: [&str; 4] = ["AA", "AC", "GA", "TG"];
+                        let events = indices
+                            .iter()
+                            .zip(kinds.iter())
+                            .zip(payloads.iter())
+                            .map(|((index, kind), (first, second))| match kind {
+                                0 | 1 => Event::Delete { index: *index },
+                                2 => Event::Insert {
+                                    index: *index,
+                                    bases: ONE[*first],
+                                },
+                                _ => Event::Insert {
+                                    index: *index,
+                                    bases: TWO[*second],
+                                },
+                            })
+                            .collect();
+                        IndelHaplotype {
+                            core: core.clone(),
+                            events,
+                        }
+                    })
+                    .prop_filter(
+                        "two insertions at adjacent gaps: #1260 / #1262 (see module docs)",
+                        |haplotype| !haplotype.has_adjacent_gap_insertions(),
+                    )
+                    // A haplotype whose events cancel denotes the reference itself.
+                    // That is a real HGVS question (`=` and the self-cancelling
+                    // merge, #1135) but not a *confluence* one: the spanning-delins
+                    // encoding of a no-change region is degenerate, so the model
+                    // would be comparing two spellings of "nothing happened".
+                    .prop_filter("events cancel to no net change", |haplotype| {
+                        haplotype.intended_sequence() != haplotype.core
+                    })
+            },
+        )
+    })
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 512, ..ProptestConfig::default() })]
+
+    /// A length-changing haplotype normalizes to something that denotes it, is
+    /// a fixed point, and renders disjoint members in ascending order.
+    ///
+    /// **`#[ignore]`d: this currently fails, and the failures are real.** Run it
+    /// with `cargo test --features dev -- --ignored an_indel_haplotype`.
+    ///
+    /// It is committed rather than withheld because it earned its place
+    /// immediately — the first two runs found two defects that no committed
+    /// sweep reaches, now filed as #1286 and #1287:
+    ///
+    /// ```text
+    /// #1286: core "AAAAAA", insert A after index 1 and after index 2
+    ///   g.[258_259insA;259_260insA] -> g.[263dup;263dup]
+    ///     two dup members at one junction (both interbase 263)
+    ///
+    /// #1287: core "ATACAGAAAATCAGGGCATA", insert GA after 4, AA after 6
+    ///   g.[261_262insGA;263_264insAA] -> g.[262_263dup;263_266A[6]]
+    ///     the dup's junction (263) sits inside the repeat's span (262-266)
+    /// ```
+    ///
+    /// Both are the `claims_reference_bases` family (#1269): a duplication and a
+    /// repeat report that they claim no bases, so the sibling clamps skip them
+    /// and two members settle onto the same span. #1259 addressed part of this
+    /// with `demote_repeats_spanning_siblings`; these shapes are past it.
+    ///
+    /// Enabling this test is the acceptance criterion for #1286 and #1287 — do
+    /// not weaken it to make it pass.
+    #[test]
+    #[ignore = "finds real unfixed defects in the #1269 dup/repeat family; see doc comment"]
+    fn an_indel_haplotype_normalizes_to_its_own_sequence(
+        haplotype in indel_haplotype_strategy()
+    ) {
+        let provider = SyntheticBuilder::genomic(&haplotype.core).build();
+        let normalizer = Normalizer::new(provider.clone());
+        let reference = padded(&haplotype.core);
+        let intended = padded(&haplotype.intended_sequence());
+
+        let input = haplotype.as_separate_members();
+        let normalized = normalize(&normalizer, &input);
+
+        let applied = resulting_sequence(&normalized, &provider, &reference)?;
+        prop_assert_eq!(
+            &applied,
+            &intended,
+            "`{}` -> `{}` does not denote the haplotype's sequence",
+            input, normalized
+        );
+
+        let twice = normalize(&normalizer, &normalized.to_string()).to_string();
+        prop_assert_eq!(
+            &twice,
+            &normalized.to_string(),
+            "`{}` is not a fixed point",
+            normalized
+        );
+
+        let spans = interbase_spans(&normalized, &provider)?;
+        for pair in spans.windows(2) {
+            let ((_, previous_end), (start, _)) = (pair[0], pair[1]);
+            prop_assert!(
+                start >= previous_end,
+                "`{}` -> `{}`: member at interbase {} overlaps or does not follow the \
+                 previous member ending at {}",
+                input, normalized, start, previous_end
+            );
+        }
+    }
+
+    /// The rendered form does not depend on the order the members were authored
+    /// in — #1098's contract, and the confluence this model *can* check without
+    /// the delins spelling.
+    #[test]
+    fn an_indel_haplotype_is_authored_order_independent(
+        haplotype in indel_haplotype_strategy()
+    ) {
+        let provider = SyntheticBuilder::genomic(&haplotype.core).build();
+        let normalizer = Normalizer::new(provider);
+        let forward = haplotype.as_separate_members();
+        let reversed = haplotype.as_separate_members_reversed();
+        prop_assume!(forward != reversed);
+        prop_assert_eq!(
+            normalize(&normalizer, &forward).to_string(),
+            normalize(&normalizer, &reversed).to_string(),
+            "authored order changed the result:\n  {}\n  {}",
+            forward, reversed
+        );
+    }
+}
+
+/// Pins the shapes the indel model holds back, so neither the filter nor the
+/// missing spanning-delins comparison becomes permanent by inattention.
+///
+/// Both are **currently broken**, and this test asserts they still are. Fixing
+/// #1260 or #1262 fails it, which is the prompt to drop
+/// `has_adjacent_gap_insertions` and to restore the delins encoding to
+/// `an_indel_haplotype_normalizes_to_its_own_sequence`'s comparison set.
+///
+/// The two rows are not two edge cases. They are the general behaviour of
+/// "length-changing members versus the spanning delins": the derivation reaches
+/// the *same* piece set from both spellings, and only the input-relative gates
+/// in `canonicalize_from_sequence` — the `changed_columns_of_edits` bound and
+/// the `input_separator_gaps` veto — decide differently, because both are
+/// measured against how the input happened to be written.
+#[test]
+fn adjacent_gap_insertions_are_a_known_gap() {
+    let provider = SyntheticBuilder::genomic("AAAAAA").build();
+    let normalizer = Normalizer::new(provider);
+    let normalize_str = |input: &str| normalize(&normalizer, input).to_string();
+
+    // #1260, driven through the model itself so the held-back
+    // `as_spanning_delins` encoding stays exercised rather than rotting: two
+    // insertions of one base at adjacent gaps in a poly-A run.
+    let haplotype = IndelHaplotype {
+        core: "AAAAAA".to_string(),
+        events: vec![
+            Event::Insert {
+                index: 1,
+                bases: "C",
+            },
+            Event::Insert {
+                index: 2,
+                bases: "C",
+            },
+        ],
+    };
+    assert!(
+        haplotype.has_adjacent_gap_insertions(),
+        "the pinned haplotype must be the shape the strategy filters out"
+    );
+    let encodings = haplotype.encodings();
+    assert_eq!(
+        encodings.len(),
+        2,
+        "the pinned haplotype must have two distinct encodings, got {encodings:?}"
+    );
+    let normalized: Vec<String> = encodings.iter().map(|e| normalize_str(e)).collect();
+    assert_ne!(
+        normalized[0], normalized[1],
+        "#1260 appears fixed — drop `has_adjacent_gap_insertions` from \
+         `indel_haplotype_strategy` and restore the delins comparison to \
+         `an_indel_haplotype_normalizes_to_its_own_sequence`"
+    );
+
+    // #1262: a substitution and a deletion against the spanning delins. Spelled
+    // literally because the indel model has no substitution event.
+    let split = normalize_str("NC_TEST.1:g.[258A>C;260del]");
+    let spanning = normalize_str("NC_TEST.1:g.258_260delinsCA");
+    assert_ne!(
+        split, spanning,
+        "#1262 appears fixed — restore the delins comparison in \
+         `an_indel_haplotype_normalizes_to_its_own_sequence`"
+    );
+}
+
+/// Pins the two defects that keep `an_indel_haplotype_normalizes_to_its_own_sequence`
+/// `#[ignore]`d, so fixing either one fails here and names the ignore to drop.
+///
+/// Its doc comment records both reproductions, but a doc comment does not run:
+/// #1286 or #1287 could be fixed and the property would simply stay ignored,
+/// which is the coverage-that-reads-wider-than-it-is complaint in #1268/#1283.
+/// This is the same guard `adjacent_gap_insertions_are_a_known_gap` gives the
+/// two shapes the model holds back.
+///
+/// Asserted on the *shape* of the defect — two members settling onto one span,
+/// or one member's junction landing inside another's — rather than on the
+/// rendered strings, so an unrelated re-spelling does not fail it while the
+/// defect stands.
+#[test]
+fn the_ignored_indel_property_still_finds_its_two_defects() {
+    for (core, input, issue) in [
+        ("AAAAAA", "NC_TEST.1:g.[258_259insA;259_260insA]", "#1286"),
+        (
+            "ATACAGAAAATCAGGGCATA",
+            "NC_TEST.1:g.[261_262insGA;263_264insAA]",
+            "#1287",
+        ),
+    ] {
+        let provider = SyntheticBuilder::genomic(core).build();
+        let normalizer = Normalizer::new(provider.clone());
+        let normalized = normalize(&normalizer, input);
+        let spans = interbase_spans(&normalized, &provider)
+            .expect("every normalized member converts to SPDI");
+        assert!(
+            spans
+                .windows(2)
+                .any(|pair| pair[0] == pair[1] || pair[1].0 < pair[0].1),
+            "{issue} appears fixed — `{input}` -> `{normalized}` now renders disjoint \
+             members {spans:?}. Re-run `an_indel_haplotype_normalizes_to_its_own_sequence` \
+             with `--ignored`, and drop its `#[ignore]` once both are fixed."
+        );
+    }
+}
+
+/// Non-vacuity guard for the indel model: it must actually produce deletions,
+/// insertions, and haplotypes mixing the two, or the properties above are
+/// asserting over a corpus narrower than they read as covering (#1268/#1283).
+#[test]
+fn the_indel_strategy_generates_every_shape_the_properties_depend_on() {
+    use proptest::strategy::ValueTree;
+    use proptest::test_runner::TestRunner;
+
+    let mut runner = TestRunner::deterministic();
+    let (mut deletion, mut insertion, mut mixed, mut multi_base) = (false, false, false, false);
+    for _ in 0..512 {
+        let haplotype = indel_haplotype_strategy()
+            .new_tree(&mut runner)
+            .expect("strategy produces a value")
+            .current();
+        let deletes = haplotype
+            .events
+            .iter()
+            .filter(|e| matches!(e, Event::Delete { .. }))
+            .count();
+        let inserts = haplotype.events.len() - deletes;
+        deletion |= deletes > 0;
+        insertion |= inserts > 0;
+        mixed |= deletes > 0 && inserts > 0;
+        multi_base |= haplotype
+            .events
+            .iter()
+            .any(|e| matches!(e, Event::Insert { bases, .. } if bases.len() == 2));
+        if deletion && insertion && mixed && multi_base {
+            return;
+        }
+    }
+    panic!(
+        "indel strategy never produced every required shape (deletion={deletion}, \
+         insertion={insertion}, mixed={mixed}, multi_base={multi_base})"
     );
 }
