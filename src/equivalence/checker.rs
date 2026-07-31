@@ -503,12 +503,16 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
 /// base is not `A`), we cannot faithfully reconstruct the edit, so we decline
 /// (`None`) rather than assert a sequence equivalence we cannot trust. Also
 /// returns `None` if any triple falls outside the window (a defensive guard;
-/// callers build the window to cover every triple).
+/// callers build the window to cover every triple), or if two triples overlap
+/// (see [`triples_are_disjoint`]).
 fn apply_triples(reference: &str, win_start: u64, triples: &[SpdiVariant]) -> Option<String> {
     let ref_bytes = reference.as_bytes();
     let mut bytes = ref_bytes.to_vec();
     let mut ordered: Vec<&SpdiVariant> = triples.iter().collect();
     ordered.sort_by_key(|t| std::cmp::Reverse(t.position));
+    if !triples_are_disjoint(&ordered) {
+        return None;
+    }
     for t in ordered {
         let rel = t.position.checked_sub(win_start)? as usize;
         let end = rel.checked_add(t.deletion.len())?;
@@ -522,9 +526,53 @@ fn apply_triples(reference: &str, win_start: u64, triples: &[SpdiVariant]) -> Op
         if !ref_bytes[rel..end].eq_ignore_ascii_case(t.deletion.as_bytes()) {
             return None;
         }
+        // The splice targets the mutated buffer, whose length no longer matches
+        // the reference once a length-changing edit has been applied. The
+        // disjointness guard above already makes `end <= bytes.len()` hold;
+        // bound it explicitly anyway so a future change cannot turn a logic
+        // slip back into an out-of-bounds panic (#1244).
+        if end > bytes.len() {
+            return None;
+        }
         bytes.splice(rel..end, t.insertion.bytes());
     }
     String::from_utf8(bytes).ok()
+}
+
+/// Whether no two of `ordered` claim the same reference base.
+///
+/// `ordered` must be sorted by descending position, as [`apply_triples`] leaves
+/// it. That descending application order is what lets each stated deletion be
+/// validated against the pristine reference: every already-applied splice sits
+/// strictly 3' of the next one, so the span about to be read is untouched. The
+/// argument holds only while the triples are disjoint — overlapping ones both
+/// invalidate that validation and can index past the end of the shrinking
+/// buffer, which is the out-of-bounds panic of #1244.
+///
+/// Declining is also the honest answer semantically: an allele whose members
+/// claim the same base has no single well-defined resulting sequence, so there
+/// is nothing to compare. The caller uses the comparison only to *upgrade* a
+/// `NotEquivalent` verdict, so a decline never invents an equivalence.
+///
+/// Two triples that merely abut are disjoint, and so is any number of pure
+/// insertions at one interbase position — an insertion deletes nothing and
+/// therefore claims no base.
+fn triples_are_disjoint(ordered: &[&SpdiVariant]) -> bool {
+    // Walk 5' -> 3' (the reverse of `ordered`) carrying the furthest 3' reach
+    // of every triple seen so far. Comparing against the running maximum rather
+    // than the immediate predecessor is what makes this complete: one long
+    // triple can span several shorter ones that do not touch each other.
+    let mut reach: Option<u64> = None;
+    for t in ordered.iter().rev() {
+        let Some(end) = t.position.checked_add(t.deletion.len() as u64) else {
+            return false;
+        };
+        if reach.is_some_and(|r| r > t.position) {
+            return false;
+        }
+        reach = Some(reach.map_or(end, |r| r.max(end)));
+    }
+    true
 }
 
 /// Extract the variant part from an HGVS string (everything after the colon).
