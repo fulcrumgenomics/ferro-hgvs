@@ -2664,6 +2664,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 allele.uncertain,
                 &self.provider,
             );
+            // Last: two junction-occupying members that settled on the SAME
+            // junction. The clamps above bound a member against a sibling's
+            // bases, and an insertion or duplication has none, so a pair can
+            // land on one interbase and claim it twice (#1286). Merge them into
+            // one insertion carrying both payloads. This must happen here rather
+            // than in the sequence-first pass, which derives from the allele's
+            // resulting sequence — an overlapping allele has none, so that pass
+            // declines exactly the input it would have fixed.
+            merge::coalesce_members_at_one_junction(
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+                &self.provider,
+            );
 
             pass += 1;
             // Stable once a full pass leaves the member set unchanged.

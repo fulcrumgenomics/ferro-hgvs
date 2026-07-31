@@ -54,9 +54,9 @@
 //!   happened to be written. Tracked by #1260 and #1262 and pinned by
 //!   `adjacent_gap_insertions_are_a_known_gap`.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
-//!   because it finds unfixed defects in the #1269 `claims_reference_bases`
-//!   family, filed as #1286 and #1287; see its doc comment for both
-//!   reproductions.
+//!   because it finds #1287, an unfixed defect in the #1269
+//!   `claims_reference_bases` family. It found #1286 first, now fixed; see its
+//!   doc comment for the history and the live reproduction.
 //!
 //! Neither restriction is silent: both are named, pinned, and fail loudly when
 //! the underlying issue is fixed (#1268/#1283's complaint about coverage that
@@ -769,14 +769,16 @@ proptest! {
     ///
     /// It is committed rather than withheld because it earned its place
     /// immediately — the first two runs found two defects that no committed
-    /// sweep reaches, now filed as #1286 and #1287:
+    /// sweep reaches, filed as #1286 and #1287:
     ///
     /// ```text
-    /// #1286: core "AAAAAA", insert A after index 1 and after index 2
+    /// #1286 (FIXED): core "AAAAAA", insert A after index 1 and after index 2
     ///   g.[258_259insA;259_260insA] -> g.[263dup;263dup]
     ///     two dup members at one junction (both interbase 263)
+    ///   now merged by `coalesce_members_at_one_junction` into g.257_263A[9];
+    ///   regression-tested in `issue_1286_shared_junction_merge.rs`
     ///
-    /// #1287: core "ATACAGAAAATCAGGGCATA", insert GA after 4, AA after 6
+    /// #1287 (LIVE): core "ATACAGAAAATCAGGGCATA", insert GA after 4, AA after 6
     ///   g.[261_262insGA;263_264insAA] -> g.[262_263dup;263_266A[6]]
     ///     the dup's junction (263) sits inside the repeat's span (262-266)
     /// ```
@@ -786,10 +788,12 @@ proptest! {
     /// and two members settle onto the same span. #1259 addressed part of this
     /// with `demote_repeats_spanning_siblings`; these shapes are past it.
     ///
-    /// Enabling this test is the acceptance criterion for #1286 and #1287 — do
-    /// not weaken it to make it pass.
+    /// Enabling this test is the acceptance criterion for what remains — #1287,
+    /// and whatever the property surfaces after it, pinned one at a time by
+    /// `the_ignored_indel_property_still_finds_its_defect`. Do not weaken it to
+    /// make it pass.
     #[test]
-    #[ignore = "finds real unfixed defects in the #1269 dup/repeat family; see doc comment"]
+    #[ignore = "finds a real unfixed defect in the #1269 dup/repeat family (#1287); see doc comment"]
     fn an_indel_haplotype_normalizes_to_its_own_sequence(
         haplotype in indel_haplotype_strategy()
     ) {
@@ -915,43 +919,92 @@ fn adjacent_gap_insertions_are_a_known_gap() {
     );
 }
 
-/// Pins the two defects that keep `an_indel_haplotype_normalizes_to_its_own_sequence`
-/// `#[ignore]`d, so fixing either one fails here and names the ignore to drop.
+/// The three clauses of `an_indel_haplotype_normalizes_to_its_own_sequence`,
+/// evaluated on one hand-written case instead of over the strategy: the output
+/// denotes the input's sequence, normalization is a fixed point, and the members
+/// render disjoint and ascending.
 ///
-/// Its doc comment records both reproductions, but a doc comment does not run:
-/// #1286 or #1287 could be fixed and the property would simply stay ignored,
-/// which is the coverage-that-reads-wider-than-it-is complaint in #1268/#1283.
-/// This is the same guard `adjacent_gap_insertions_are_a_known_gap` gives the
-/// two shapes the model holds back.
+/// `Ok(())` means the property holds for `input` against `core`; `Err` names the
+/// clause that fails. [`the_ignored_indel_property_still_finds_its_defect`]
+/// asserts `Err`, so fixing the pinned defect turns it red.
 ///
-/// Asserted on the *shape* of the defect — two members settling onto one span,
-/// or one member's junction landing inside another's — rather than on the
-/// rendered strings, so an unrelated re-spelling does not fail it while the
-/// defect stands.
-#[test]
-fn the_ignored_indel_property_still_finds_its_two_defects() {
-    for (core, input, issue) in [
-        ("AAAAAA", "NC_TEST.1:g.[258_259insA;259_260insA]", "#1286"),
-        (
-            "ATACAGAAAATCAGGGCATA",
-            "NC_TEST.1:g.[261_262insGA;263_264insAA]",
-            "#1287",
-        ),
-    ] {
-        let provider = SyntheticBuilder::genomic(core).build();
-        let normalizer = Normalizer::new(provider.clone());
-        let normalized = normalize(&normalizer, input);
-        let spans = interbase_spans(&normalized, &provider)
-            .expect("every normalized member converts to SPDI");
-        assert!(
-            spans
-                .windows(2)
-                .any(|pair| pair[0] == pair[1] || pair[1].0 < pair[0].1),
-            "{issue} appears fixed — `{input}` -> `{normalized}` now renders disjoint \
-             members {spans:?}. Re-run `an_indel_haplotype_normalizes_to_its_own_sequence` \
-             with `--ignored`, and drop its `#[ignore]` once both are fixed."
-        );
+/// Stated over the property's own clauses rather than over a defect's *shape*
+/// because the shapes differ: #1286 and #1287 rendered overlapping members,
+/// while later defects change the sequence or break the fixed point instead. A
+/// shape-specific assertion would have to be rewritten for each one, and — worse
+/// — would report a defect as fixed while the property still failed on it some
+/// other way.
+fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
+    let provider = SyntheticBuilder::genomic(core).build();
+    let normalizer = Normalizer::new(provider.clone());
+    let reference = padded(core);
+
+    // The pinned inputs are well-formed by construction, so an input that does
+    // not itself denote a sequence is a broken pin rather than a property
+    // failure — panic rather than report it as the defect still standing.
+    let parsed = parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for `{input}`: {e}"));
+    let intended = resulting_sequence(&parsed, &provider, &reference)
+        .unwrap_or_else(|e| panic!("pinned input `{input}` has no resulting sequence: {e}"));
+
+    let normalized = normalize(&normalizer, input);
+
+    let applied = resulting_sequence(&normalized, &provider, &reference)
+        .map_err(|e| format!("`{input}` -> `{normalized}` has no resulting sequence: {e}"))?;
+    if applied != intended {
+        return Err(format!(
+            "`{input}` -> `{normalized}` does not denote the input's sequence"
+        ));
     }
+
+    let once = normalized.to_string();
+    let twice = normalize(&normalizer, &once).to_string();
+    if twice != once {
+        return Err(format!(
+            "`{once}` is not a fixed point: it normalizes to `{twice}`"
+        ));
+    }
+
+    let spans = interbase_spans(&normalized, &provider)
+        .map_err(|e| format!("`{input}` -> `{normalized}` has no interbase spans: {e}"))?;
+    for pair in spans.windows(2) {
+        let ((_, previous_end), (start, _)) = (pair[0], pair[1]);
+        if start < previous_end {
+            return Err(format!(
+                "`{input}` -> `{normalized}`: member at interbase {start} overlaps or does not \
+                 follow the previous member ending at {previous_end}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Pins the defect that currently keeps `an_indel_haplotype_normalizes_to_its_own_sequence`
+/// `#[ignore]`d, so fixing it fails here and names the ignore to revisit.
+///
+/// The property's doc comment records the reproduction, but a doc comment does
+/// not run: the live defect could be fixed and the property would simply stay
+/// ignored, which is the coverage-that-reads-wider-than-it-is complaint in
+/// #1268/#1283. This is the same guard `adjacent_gap_insertions_are_a_known_gap`
+/// gives the two shapes the model holds back.
+///
+/// One row, not a list: the property stops at its first failure, so only the
+/// *live* blocker is observable here. Each fix moves this pin to whatever the
+/// property surfaces next, and the ignore comes off when there is nothing left
+/// to pin.
+#[test]
+fn the_ignored_indel_property_still_finds_its_defect() {
+    // #1287: the dup's junction (263) lands inside the repeat's span (262-266).
+    let (core, input, issue) = (
+        "ATACAGAAAATCAGGGCATA",
+        "NC_TEST.1:g.[261_262insGA;263_264insAA]",
+        "#1287",
+    );
+    assert!(
+        indel_property_holds(core, input).is_err(),
+        "{issue} appears fixed — the property now holds for `{input}`. Re-run \
+         `an_indel_haplotype_normalizes_to_its_own_sequence` with `--ignored`, pin whatever \
+         it finds next here, and drop its `#[ignore]` once it finds nothing."
+    );
 }
 
 /// Non-vacuity guard for the indel model: it must actually produce deletions,
