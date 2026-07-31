@@ -270,12 +270,15 @@ fn rna_cross_reference_coding_expands_cds_relative() {
         !out.contains("AAA"),
         "transcript-relative AAA must not appear in output; got {out}",
     );
-    // The normalizer suffix-trims "ATG" to "AT" (trailing G matches ref).
-    // Presence of "g.10_14" in the output confirms CDS-relative expansion
-    // succeeded (transcript-relative "AAA" would produce "g.10_15").
-    assert!(
-        out.contains("g.10_14"),
-        "CDS-relative r.1_3 (ATG) must normalize to g.10_14 range; got {out}",
+    // The normalizer suffix-trims "ATG" to "AT" (trailing G matches ref), then
+    // (#1235) splits the result at the unchanged base at 13, since changes
+    // separated by unchanged nucleotides are described individually
+    // (`delins.md:17`). The span still ends at 14, which is what confirms
+    // CDS-relative expansion succeeded — transcript-relative "AAA" would reach
+    // 15.
+    assert_eq!(
+        out, "NC_000022.10:g.[10_12del;14C>T]",
+        "CDS-relative r.1_3 (ATG) must normalize within the 10_14 range; got {out}",
     );
 }
 
@@ -414,14 +417,50 @@ fn cross_reference_inv_suffix_expands_inside_a_complex_bracket() {
         inv_payload_provider(),
     )
     .expect("inv-suffixed cross-reference in a Complex bracket must expand (#1184)");
-    // Pin the whole description, not just the `delins…` tail: the replaced range
-    // (`g.10_15` == `CTATAG`) shares no base with the payload, so the canonical
-    // split cannot trim either endpoint and the anchor must stay `10_15`. The
-    // payload is the literal `A` followed by the reverse complement `AACCCC`,
-    // and the flattening leaves no bracket behind.
+    // Pin the whole description, not just the `delins…` tail. The payload is the
+    // literal `A` followed by the reverse complement `AACCCC`, and the
+    // flattening leaves no bracket behind.
+    //
+    // Stays ONE spanning delins. A 6 nt span replaced by a 7 nt payload leaves
+    // `g.12` matching, but that is a lone coincidental base inside a net
+    // insertion, and `delins.md:44-47` prefers the spanning `delins` when the
+    // payload merely "aligns" — the corpus agrees, failing the same way when this
+    // split is allowed. A #1235 revision had re-blessed this to two members on
+    // the strength of that one match; that was the coincidental-alignment trap.
     assert_eq!(
         out, "NC_000022.10:g.10_15delinsAAACCCC",
-        "literal `A` then the reverse complement `AACCCC`, at the unshifted anchor",
+        "literal `A` then the reverse complement `AACCCC`; the match at 12 is coincidence",
+    );
+
+    // The collapsed form is a fixed point.
+    assert_eq!(
+        normalize("NC_000022.10:g.10_15delinsAAACCCC", inv_payload_provider()).expect("normalize"),
+        "NC_000022.10:g.10_15delinsAAACCCC",
+        "the spanning delins must be a normalization fixed point",
+    );
+
+    // KNOWN LIMITATION, pinned deliberately so it is visible rather than merely
+    // absent: the hand-written two-member spelling of this same variant does
+    // *not* converge on the spanning delins. Two stable strings, one variant.
+    //
+    // It cannot be closed from here. The two-member input trips the
+    // `input_separator_positions` veto (`general.md:34` — do not merge across a
+    // base the input left unchanged), which returns it verbatim. Letting a
+    // coincidence-driven collapse override that veto does close this case, but it
+    // also merges `g.[306dup;308C>A]` into `g.307_308delinsCGA`, breaking #999 —
+    // and the collapse cannot tell the two apart, because both are two-member
+    // inputs whose derived pieces collapse to one. The veto is what protects
+    // #999, so it stays and this case stays split.
+    //
+    // Change this assertion only alongside a fix that keeps #999 green.
+    assert_eq!(
+        normalize(
+            "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
+            inv_payload_provider()
+        )
+        .expect("normalize"),
+        "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
+        "the two-member spelling is left alone by the separator veto (known non-confluence)",
     );
 }
 

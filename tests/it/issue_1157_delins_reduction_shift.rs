@@ -134,18 +134,26 @@ fn decomposed_cis_allele_is_not_collapsed_into_a_spanning_delins() {
 }
 
 #[test]
-fn single_delins_is_not_decomposed_into_an_allele() {
-    // The length-changing delins stays a single delins; it is not rewritten as
-    // the decomposed allele. Together with the test above, this pins that the
-    // two sequence-identical encodings remain distinct after normalization.
-    assert_eq!(norm(CASE_A_CORE, CASE_A_DELINS), CASE_A_DELINS);
+fn single_delins_is_decomposed_at_its_unchanged_bases() {
+    // Re-blessed for #1235. #1160's scope note closed "case A" on the argument
+    // that collapsing the decomposed allele into one spanning delins would be
+    // wrong — which is true, and the test above still pins it. But that leaves
+    // the other direction, which is the one #1157 actually asked about: the
+    // spanning delins covers unchanged bases at 259 and 261, and changes
+    // separated by unchanged nucleotides are described individually
+    // (`delins.md:17`, restated in every DNA page). So the delins decomposes
+    // *into* the allele, and both encodings reach one canonical form.
+    assert_eq!(
+        norm(CASE_A_CORE, CASE_A_DELINS),
+        "NC_TEST.1:g.[257_258delinsGA;260C>T;262_263del]",
+    );
 }
 
 #[test]
-fn sequence_identical_delins_and_allele_do_not_normalize_equal() {
-    // The scope-decision point of #1157 in one assertion: same resulting
-    // sequence, different canonical forms — by design.
-    assert_ne!(
+fn sequence_identical_delins_and_allele_normalize_equal() {
+    // The point of #1235: two encodings of one variant converge. This assertion
+    // was `assert_ne!` under #1160's scope decision.
+    assert_eq!(
         norm(CASE_A_CORE, CASE_A_DELINS),
         norm(CASE_A_CORE, CASE_A_ALLELE),
     );

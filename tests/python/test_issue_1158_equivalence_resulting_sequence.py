@@ -3,7 +3,13 @@
 ``EquivalenceChecker.check`` returned ``NotEquivalent`` for two variants with
 the same resulting sequence when they used different (but equivalent) HGVS
 encodings of a complex indel. A sequence-level rung now reconstructs each
-variant's edited sequence against the reference and reports ``SequenceMatch``.
+variant's edited sequence against the reference, so such pairs report as
+equivalent.
+
+These tests assert *equivalence*, not which rung established it. Since #1235
+these two encodings converge under ``normalize``, so the checker settles at
+``NormalizedMatch`` before the sequence rung is needed — an improvement that
+would otherwise read as a regression against a hard-coded ``SequenceMatch``.
 
 The reference here is fully synthetic (no real accession, coordinates, or
 reference bases): the core ``AGTCAGT`` sits at 1-based g.21..=27, padded on both
@@ -44,15 +50,27 @@ def _level(checker, a: str, b: str) -> "ferro_hgvs.EquivalenceLevel":
 
 # A single length-changing delins over g.21..=27 replacing AGTCAGT with GATTA,
 # and its decomposition as a cis allele of the same edit. Same resulting
-# sequence, different normalized strings.
+# sequence.
 DELINS = "TEMPLATE:g.21_27delinsGATTA"
 ALLELE = "TEMPLATE:g.[21A>G;22G>A;24C>T;26_27del]"
 
+# Rungs that all mean "these are the same variant". The issue's contract is
+# equivalence, not which mechanism established it, so assert against this set
+# rather than one rung: as normalization improves, a pair can start matching at
+# an *earlier* rung, which is a better answer and must not read as a regression.
+# (#1235 did exactly that — these two now converge under `normalize`, so the
+# checker settles at `NormalizedMatch` without needing the sequence rung.)
+EQUIVALENT_LEVELS = (
+    ferro_hgvs.EquivalenceLevel.Identical,
+    ferro_hgvs.EquivalenceLevel.NormalizedMatch,
+    ferro_hgvs.EquivalenceLevel.SequenceMatch,
+)
 
-def test_delins_vs_decomposed_allele_is_sequence_match(tmp_path):
+
+def test_delins_vs_decomposed_allele_is_equivalent(tmp_path):
     checker = _checker(tmp_path)
     result = checker.check(ferro_hgvs.parse(DELINS), ferro_hgvs.parse(ALLELE))
-    assert result.level == ferro_hgvs.EquivalenceLevel.SequenceMatch
+    assert result.level in EQUIVALENT_LEVELS, result.level
     assert result.level.is_equivalent()
 
 
