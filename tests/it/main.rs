@@ -161,6 +161,8 @@ mod issue_1235_cis_allele_confluence;
 mod issue_1235_transcript_axes;
 mod issue_1244_equivalence_overlap_panic;
 mod issue_1254_sibling_crossing_shift;
+mod issue_1261_cis_member_order;
+mod issue_1281_reducing_member_shift;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;

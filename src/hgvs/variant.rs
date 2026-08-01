@@ -950,7 +950,7 @@ enum SelfCancellingAxis {
 /// The genome/mito axes never carry a region flag and rarely an
 /// offset, but we include both for uniformity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct SelfCancellingPoint {
+pub(crate) struct SelfCancellingPoint {
     region: bool,
     base: i64,
     offset: i64,
@@ -1112,52 +1112,80 @@ fn rna_simple_range(interval: &crate::hgvs::interval::RnaInterval) -> Option<Sel
 /// cis-allele members in genomic (coordinate) order regardless of the order
 /// they were written (#1098).
 ///
-/// The key is `(accession, region, base, offset, descriptor)`:
+/// The key is `(accession, start, end, descriptor)`, with `start` and `end`
+/// each spelled `(region, base, offset)`:
 ///
 /// - `accession` groups members by molecule first. A bracketed cis allele is
 ///   normally single-accession, so this is constant in the common case; for a
 ///   mixed-accession allele it at least keeps members grouped and
 ///   deterministic.
-/// - `(region, base, offset)` is the member's canonical **start** point in the
-///   same "region + base + offset" coordinate the self-cancelling detector
-///   uses, so 5'UTR sorts before CDS-proper before 3'UTR and intronic offsets
-///   sort within their anchor. Members whose start cannot be resolved to a
-///   definite point (uncertain/unknown positions, or a non-positional arm)
-///   get a max sentinel so they sort last, still deterministically.
+/// - `(region, base, offset)` is a canonical point in the same "region + base +
+///   offset" coordinate the self-cancelling detector uses, so 5'UTR sorts
+///   before CDS-proper before 3'UTR and intronic offsets sort within their
+///   anchor. Members whose location cannot be resolved to a definite range
+///   (uncertain/unknown positions, or a non-positional arm) get a max sentinel
+///   so they sort last, still deterministically.
+/// - The **end** breaks a tie on the start (#1261). Two members that share a
+///   start are the ones whose rendered order was previously decided by the
+///   descriptor, which is arbitrary with respect to where they sit: a
+///   duplication places its copy at the junction *after* its last base, so
+///   `258dup` and `258_259dup` share a start but occupy interbase 258 and 259
+///   respectively, and `"258_259dup" < "258dup"` lexically rendered them
+///   descending. Ordering by the end puts them in junction order.
+///
+///   This cannot reorder members whose spans do not overlap: for those, `a < c`
+///   implies `b < c` (else the spans meet), so start-order, end-order and
+///   junction-order already agree. Overlapping members do not reach the sort at
+///   all — `normalize_allele` skips it when an `OverlapConflict` was warned,
+///   since reordering is only meaning-preserving for disjoint members.
 /// - `descriptor` (the member's rendered HGVS string) is the final tie-break.
-///   It makes the order **total**: two members that share a start point still
-///   get distinct keys, so the sort result never depends on input order. This
-///   is why a total order is used rather than a stable sort keyed on the start
-///   alone — the latter would leave same-start members in input order, which
+///   It makes the order **total**: two members sharing both endpoints still get
+///   distinct keys, so the sort result never depends on input order. This is
+///   why a total order is used rather than a stable sort keyed on position
+///   alone — the latter would leave same-position members in input order, which
 ///   is the exact order-dependence #1098 is about.
-pub(crate) fn cis_member_order_key(v: &HgvsVariant) -> (String, bool, i64, i64, String) {
+pub(crate) fn cis_member_order_key(
+    v: &HgvsVariant,
+) -> (String, SelfCancellingPoint, SelfCancellingPoint, String) {
     let accession = v.accession().map(Accession::full).unwrap_or_default();
     let descriptor = format!("{v}");
-    let (region, base, offset) = match cis_member_start_point(v) {
-        Some(p) => (p.region, p.base, p.offset),
-        None => (true, i64::MAX, i64::MAX),
-    };
-    (accession, region, base, offset, descriptor)
+    // `SelfCancellingPoint` derives `Ord` over `(region, base, offset)` in that
+    // field order, which is exactly the comparison this key wants, so the points
+    // go in whole rather than flattened into six scalars.
+    let sentinel = SelfCancellingPoint::new(true, i64::MAX, i64::MAX);
+    let (start, end) = cis_member_range(v).unwrap_or((sentinel, sentinel));
+    (accession, start, end, descriptor)
 }
 
-/// Canonical **start** point of a cis-allele member's location, or `None` when
-/// the member has no definite positional start (uncertain/unknown positions,
-/// or a non-positional arm such as a null/unknown-allele marker). Reuses the
-/// per-axis range extractors that back the self-cancelling detector.
-fn cis_member_start_point(v: &HgvsVariant) -> Option<SelfCancellingPoint> {
+/// Canonical **start and end** points of a cis-allele member's location, or
+/// `None` when the member has no definite positional range (uncertain/unknown
+/// positions, or a non-positional arm such as a null/unknown-allele marker).
+/// Reuses the per-axis range extractors that back the self-cancelling detector.
+///
+/// The end is what breaks a start tie in [`cis_member_order_key`]; see that
+/// function's docs for why the start alone is not a sufficient discriminator.
+fn cis_member_range(v: &HgvsVariant) -> Option<SelfCancellingRange> {
     match v {
-        HgvsVariant::Genome(x) => genome_simple_range(&x.loc_edit.location).map(|r| r.0),
-        HgvsVariant::Cds(x) => cds_simple_range(&x.loc_edit.location).map(|r| r.0),
-        HgvsVariant::Tx(x) => tx_simple_range(&x.loc_edit.location).map(|r| r.0),
-        HgvsVariant::Rna(x) => rna_simple_range(&x.loc_edit.location).map(|r| r.0),
-        HgvsVariant::Mt(x) => genome_simple_range(&x.loc_edit.location).map(|r| r.0),
-        HgvsVariant::Circular(x) => genome_simple_range(&x.loc_edit.location).map(|r| r.0),
-        HgvsVariant::Protein(x) => x
-            .loc_edit
-            .location
-            .start
-            .inner()
-            .map(|p| SelfCancellingPoint::new(false, p.number as i64, 0)),
+        HgvsVariant::Genome(x) => genome_simple_range(&x.loc_edit.location),
+        HgvsVariant::Cds(x) => cds_simple_range(&x.loc_edit.location),
+        HgvsVariant::Tx(x) => tx_simple_range(&x.loc_edit.location),
+        HgvsVariant::Rna(x) => rna_simple_range(&x.loc_edit.location),
+        HgvsVariant::Mt(x) => genome_simple_range(&x.loc_edit.location),
+        HgvsVariant::Circular(x) => genome_simple_range(&x.loc_edit.location),
+        // The protein axis needs the end for the same reason the nucleotide
+        // axes do: `p.Ala3dup` and `p.Ala3_Ala4dup` share a start, so without it
+        // their order falls to the descriptor tie-break that #1261 is about.
+        // A point location carries `end == start`, so this is the start for
+        // everything that is not a range; an absent end degrades to the start
+        // rather than dropping the member to the sort's max sentinel.
+        HgvsVariant::Protein(x) => {
+            let point = |p: &crate::hgvs::location::ProtPos| {
+                SelfCancellingPoint::new(false, p.number as i64, 0)
+            };
+            let start = x.loc_edit.location.start.inner().map(point)?;
+            let end = x.loc_edit.location.end.inner().map(point).unwrap_or(start);
+            Some((start, end))
+        }
         _ => None,
     }
 }

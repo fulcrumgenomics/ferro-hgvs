@@ -2557,13 +2557,44 @@ impl<P: ReferenceProvider> Normalizer<P> {
             );
             let merged_raw =
                 merge::merge_consecutive_edits(pre_collapsed, allele.phase, &self.provider);
-            let merged_split: Vec<HgvsVariant> = if is_cis {
-                merged_raw
-                    .into_iter()
-                    .flat_map(|v| self.canonical_split_for_variant(v))
-                    .collect()
+            // `canonical_split_for_variant` is the sequence-first
+            // canonicalization (#1237), and like `normalize_core` below it acts
+            // on one member with no sibling context. It can *reposition* a
+            // member, not merely re-spell it: on a nine-`T` tract
+            // `g.9_10delinsA` reduces to `g.1del` under a 5' shuffle, an
+            // eight-position move. The sibling passes take their "before"
+            // snapshot to decide what crossed what, so a snapshot taken *after*
+            // this step shows no movement and they let the member sit wherever
+            // it landed — including on top of a sibling (#1281).
+            //
+            // So record, per surviving member, the member it came from. A
+            // one-for-one rewrite is a repositioning of the same member, and
+            // its origin span is what the clamp needs. A genuine split into
+            // several pieces has no single origin span per piece — the pieces
+            // partition the original between them — so each piece stands for
+            // itself, exactly as before.
+            let (merged_split, pre_split): (Vec<HgvsVariant>, Vec<HgvsVariant>) = if is_cis {
+                let mut split = Vec::with_capacity(merged_raw.len());
+                let mut origins = Vec::with_capacity(merged_raw.len());
+                for variant in merged_raw {
+                    let origin = variant.clone();
+                    let pieces = self.canonical_split_for_variant(variant);
+                    if pieces.len() == 1 {
+                        origins.push(origin);
+                    } else {
+                        origins.extend(pieces.iter().cloned());
+                    }
+                    split.extend(pieces);
+                }
+                (split, origins)
             } else {
-                merged_raw
+                // Non-cis has no origin snapshot to build: all three sibling
+                // passes below return early on `phase != AllelePhase::Cis`, so
+                // cloning the member list here would be pure waste on the
+                // normalization hot path. All three also refuse a `before` whose
+                // length differs from `after`, so an empty snapshot stays safe
+                // if that phase gate ever moves.
+                (merged_raw, Vec::new())
             };
 
             let mut result: Vec<HgvsVariant> = Vec::with_capacity(merged_split.len());
@@ -2584,7 +2615,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // it before the clamp runs, so the clamp sees a deletion span it can
             // pull back rather than a repeat it would skip.
             merge::demote_repeats_spanning_siblings(
-                &merged_split,
+                &pre_split,
                 &mut result,
                 allele.phase,
                 allele.uncertain,
@@ -2595,8 +2626,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // position before the sibling — still the most 3' placement that
             // keeps the members on disjoint windows, and now merely *adjacent*,
             // so the next pass's merge coalesces the two.
+            // `pre_split`, not `merged_split`: a member repositioned by the
+            // canonicalization above must be measured from where it started,
+            // not from where that step already put it (#1281).
             merge::clamp_sibling_crossing_shifts(
-                &merged_split,
+                &pre_split,
                 &mut result,
                 allele.phase,
                 allele.uncertain,
@@ -2607,7 +2641,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // allele denotes. Bound the junction at the sibling's 5' edge, which
             // is still flush against it, so the #999 collapse keeps firing.
             merge::clamp_sibling_crossing_junctions(
-                &merged_split,
+                &pre_split,
                 &mut result,
                 allele.phase,
                 allele.uncertain,
@@ -11388,11 +11422,13 @@ mod tests {
         let key_sub = cis_member_order_key(&sub);
         let key_del = cis_member_order_key(&del);
 
-        // Same accession and same start point (region/base/offset)...
+        // Same accession, same start point, and — since both are one base wide
+        // — the same end point too, so every positional field of the key ties
+        // and only the descriptor can separate them (#1261 added the end).
         assert_eq!(
-            (&key_sub.0, key_sub.1, key_sub.2, key_sub.3),
-            (&key_del.0, key_del.1, key_del.2, key_del.3),
-            "the two members must share their start-point portion of the key"
+            (&key_sub.0, key_sub.1, key_sub.2),
+            (&key_del.0, key_del.1, key_del.2),
+            "the two members must share the whole positional portion of the key"
         );
         // ...but distinct keys overall, via the rendered-descriptor tie-break.
         assert_ne!(

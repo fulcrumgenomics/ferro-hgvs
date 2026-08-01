@@ -1,0 +1,12 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+# The three cases the IndelHaplotype model found. The first two are filtered by
+# the strategy today (#1260/#1262 adjacent-gap insertions, and events cancelling
+# to no net change) and are re-rejected rather than re-run. The third is #1287.
+cc e8fb54e331549cd5d7b8d2f8100951aed7db8ab2ffc759df817bd69a7e4eff9a # #1286; shrinks to haplotype = IndelHaplotype { core: "AAAAAA", events: [Insert { index: 1, bases: ['A', 'A'], len: 1 }, Insert { index: 2, bases: ['A', 'A'], len: 1 }] }
+cc e11d211278b3d526443f114ec02b2ec4e1b35df7d4a6024ba0bcc543d52162b3 # shrinks to haplotype = IndelHaplotype { core: "AAAAAA", events: [Delete { index: 1 }, Insert { index: 2, bases: ['A', 'A'], len: 1 }] }
+cc a38727fa5784df80e613e4c9547baccb981621191ad1260871fb5943faf8dce6 # #1287; shrinks to haplotype = IndelHaplotype { core: "ATACAGAAAATCAGGGCATA", events: [Insert { index: 4, bases: ['G', 'A'], len: 2 }, Insert { index: 6, bases: ['A', 'A'], len: 2 }] }

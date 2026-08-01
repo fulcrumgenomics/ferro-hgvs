@@ -3123,11 +3123,30 @@ pub(crate) fn clamp_sibling_crossing_shifts(
         if !b.claims_bases || !a.claims_bases || b.region != a.region {
             continue;
         }
-        // Only a pure translation is a rotation. A member whose span length
-        // changed (an `ins` canonicalised to a `dup`, a `delins` reduced) is
-        // not something this pass can reason about positionally.
+        // A member that did not move cannot have crossed anything.
         let delta = a.start - b.start;
-        if delta == 0 || a.end - b.end != delta {
+        if delta == 0 {
+            continue;
+        }
+        // A pure translation is the clear case: the whole span rotated.
+        //
+        // A member that *shrank* while its start moved is admitted too (#1281).
+        // Merging an adjacent substitution and deletion yields a `delins` that
+        // reduces to a plain deletion and shifts in the same pass — `g.
+        // 9_10delinsA` becomes `g.1del` on a nine-`T` tract, where `delta` is -8
+        // at the start but -9 at the end. Refusing that let the member cross
+        // eight positions unchecked, straight onto a `1del` sibling, and
+        // `g.[1del;9_10delinsA]` emitted `g.[1del;1del]` — two members claiming
+        // one base, which the apply oracle declines. It still swept a window
+        // this pass can bound, and the cap below keeps the pull inside it.
+        //
+        // A member that *grew* is still refused. An insertion canonicalising to
+        // a duplication moves its span and its junction together, so bounding
+        // the span mis-places the copy — measured on the 5' sweep, that turns
+        // correct outputs into silently wrong ones (#1266, #1279).
+        let translated = a.end - b.end == delta;
+        let shrank = a.end - a.start < b.end - b.start;
+        if !translated && !shrank {
             continue;
         }
         // Every sibling, from either snapshot, that shares this member's

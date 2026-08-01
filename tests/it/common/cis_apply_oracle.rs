@@ -8,11 +8,15 @@
 //! [`apply_with`] is the load-bearing piece: its `claimed_from` walk is what
 //! makes "declines an overlapping description" true, and every
 //! sequence-preservation assertion in `cis_junction_crossing_shift.rs`,
-//! `issue_1234_sibling_clamped_shift.rs`, `issue_1254_sibling_crossing_shift.rs`
-//! and `repeat_span_sibling_overlap.rs` rests on it. It lives here rather than
+//! `issue_1234_sibling_clamped_shift.rs`, `issue_1254_sibling_crossing_shift.rs`,
+//! `issue_1261_cis_member_order.rs`, `issue_1281_reducing_member_shift.rs` and
+//! `repeat_span_sibling_overlap.rs` rests on it. It lives here rather than
 //! being copied into each of them so a change cannot silently weaken one file's
 //! oracle while the others keep their own version — it is generic over the
 //! provider so the `JsonProvider`-backed file shares it too.
+//!
+//! [`assert_normalizes_preserving`] and [`assert_normalizes_preserving_in`] are
+//! the assertion half of that, one per shuffle direction, for the same reason.
 //!
 //! [`sweep_sequences`] is here for the same reason: the three exhaustive sweeps
 //! assert case-count floors, and one of them an exact residual count, over the
@@ -162,11 +166,64 @@ pub fn apply_with<P: ReferenceProvider + ?Sized>(
     String::from_utf8(edited).ok()
 }
 
-/// Assert that `input` normalizes to `expected` *and* that both denote the same
-/// sequence when applied to `seq`.
+/// The half-open interbase spans of `descriptor`'s members, in the order they
+/// are rendered.
+///
+/// Spans come from `hgvs_to_spdi` rather than the printed HGVS endpoints
+/// because the two disagree for the edits that consume no base: `a_b ins` names
+/// two positions while occupying the junction at `a`, and `a_b dup` places its
+/// copy at the junction *after* `b`. Interbase coordinates are the frame the
+/// ordering and disjointness contracts are actually stated in — reading the
+/// printed endpoints instead is what let #1261 render as ascending.
+pub fn member_interbase_spans(seq: &str, descriptor: &str) -> Vec<(u64, u64)> {
+    let template = provider(seq);
+    let members: Vec<HgvsVariant> = match parse_hgvs(descriptor).expect("parse") {
+        HgvsVariant::Allele(allele) => allele.variants.clone(),
+        single => vec![single],
+    };
+    members
+        .iter()
+        .map(|member| {
+            let triple = hgvs_to_spdi(member, &template)
+                .unwrap_or_else(|e| panic!("`{descriptor}`: member `{member}` has no SPDI: {e}"));
+            (
+                triple.position,
+                triple.position + triple.deletion.len() as u64,
+            )
+        })
+        .collect()
+}
+
+/// Assert that `descriptor`'s members are rendered in ascending interbase
+/// order (#1098's contract, and #1235's second acceptance criterion).
+pub fn assert_members_ascending(seq: &str, descriptor: &str) {
+    let spans = member_interbase_spans(seq, descriptor);
+    assert!(
+        spans.windows(2).all(|pair| pair[0] <= pair[1]),
+        "`{descriptor}` renders its members out of order: interbase spans {spans:?}"
+    );
+}
+
+/// Assert that `input` normalizes to `expected` in the default 3' direction
+/// *and* that both denote the same sequence when applied to `seq`.
 pub fn assert_normalizes_preserving(seq: &str, input: &str, expected: &str) {
-    let actual = normalize(seq, input);
-    assert_eq!(actual, expected, "normalizing {input}");
+    assert_normalizes_preserving_in(seq, input, expected, ShuffleDirection::ThreePrime);
+}
+
+/// Assert that `input` normalizes to `expected` in `direction` *and* that both
+/// denote the same sequence when applied to `seq`.
+///
+/// The 5' direction gets the same single home as the 3' one for the reason
+/// [`apply_with`] does: a hand-rolled copy per file is a way for one file's
+/// assertion to weaken while the others keep theirs.
+pub fn assert_normalizes_preserving_in(
+    seq: &str,
+    input: &str,
+    expected: &str,
+    direction: ShuffleDirection,
+) {
+    let actual = normalize_in(seq, input, direction);
+    assert_eq!(actual, expected, "normalizing {input} in {direction:?}");
     let from_input = apply(seq, input).expect("input applies");
     let from_output = apply(seq, &actual).unwrap_or_else(|| {
         panic!("{actual} has no well-defined resulting sequence (overlapping or unconvertible)")
