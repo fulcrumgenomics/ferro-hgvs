@@ -3054,10 +3054,10 @@ fn member_span(v: &HgvsVariant, kind: CisKind) -> Option<MemberSpan> {
 /// span are what it copies; `blocks_sibling_shift` carries that, keeping this
 /// predicate to the narrower "consumes bases" question its name asks.
 ///
-/// `Repeat`/`MultiRepeat` are the one deliberate omission: a repeat does claim
-/// the bases under its tract, but making it say so changes clamp and barrier
-/// behaviour across the whole repeat corpus at once. That is tracked in #1269,
-/// with `demote_repeats_spanning_siblings` standing in until it is measured.
+/// `Repeat`/`MultiRepeat` claim the bases under their tract too: `g.1_9T[7]`
+/// covers positions 1–9 whatever copy count it asserts. They were excluded until
+/// the change could be measured (#1269), which left a repeat invisible as a
+/// barrier and let a sibling's 3' shift land inside its tract (#1296).
 fn claims_reference_bases(edit: &NaEdit) -> bool {
     matches!(
         edit,
@@ -3067,6 +3067,8 @@ fn claims_reference_bases(edit: &NaEdit) -> bool {
             | NaEdit::NPaddedDeletion { .. }
             | NaEdit::Delins { .. }
             | NaEdit::Inversion { .. }
+            | NaEdit::Repeat { .. }
+            | NaEdit::MultiRepeat { .. }
     )
 }
 
@@ -3281,11 +3283,16 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
 /// have taken had B2 declined, and it is exactly equivalent — B2 only re-writes
 /// notation, never the bases removed.
 ///
-/// Restoring the deletion is what lets the rest of the pipeline finish the job.
-/// [`clamp_sibling_crossing_shifts`] can then see a real span to pull back, and
-/// the caller's next merge pass coalesces the members. `g.[1_2del;4del]` ends up
-/// as `g.1_9T[6]` — one member, three bases removed from the tract, repeat
-/// notation restored now that there is no sibling to span.
+/// Restoring the deletion is what lets the rest of the pipeline finish the job:
+/// the member is back to a span the caller's next merge pass can coalesce with
+/// its sibling. `g.[1_2del;4del]` ends up as `g.1_9T[6]` — one member, three
+/// bases removed from the tract, repeat notation restored now that there is no
+/// sibling to span.
+///
+/// Visibility to [`clamp_sibling_crossing_shifts`] is no longer part of that:
+/// since #1296 a repeat reports that it claims the bases under its tract, so
+/// the clamp sees the widened span whether or not this pass has run. What this
+/// pass still supplies is the *narrower, coalescible* spelling.
 ///
 /// Runs before the clamp, so the clamp sees the deletion rather than the
 /// repeat. Members whose pre-normalization form was not a plain deletion are

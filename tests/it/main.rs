@@ -169,6 +169,7 @@ mod issue_1286_shared_junction_merge;
 mod issue_1287_repeat_span_junction;
 mod issue_1290_junction_crosses_junction;
 mod issue_1292_junction_payload_rotation;
+mod issue_1296_repeat_claims_its_bases;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;

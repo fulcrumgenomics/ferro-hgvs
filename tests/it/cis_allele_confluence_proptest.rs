@@ -54,10 +54,10 @@
 //!   happened to be written. Tracked by #1260 and #1262 and pinned by
 //!   `adjacent_gap_insertions_are_a_known_gap`.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
-//!   because it finds #1296, a repeat that is not a barrier to a sibling's 3'
-//!   shift. It found #1286, #1287, #1290 and #1292 first, all now fixed, each
-//!   masked behind the one before it; see its doc comment for the history and
-//!   the live reproduction.
+//!   because it finds #1297, a cancelled member left as an identity member
+//!   overlapping the repeat that absorbed it. It found #1286, #1287, #1290,
+//!   #1292 and #1296 first, all now fixed, each masked behind the one before
+//!   it; see its doc comment for the history and the live reproduction.
 //!
 //! Neither restriction is silent: both are named, pinned, and fail loudly when
 //! the underlying issue is fixed (#1268/#1283's complaint about coverage that
@@ -779,32 +779,35 @@ proptest! {
     /// ```
     ///
     /// #1290 followed and is also fixed — a junction shifting past *another
-    /// junction*, reordering two insertions. So is #1292, a duplication whose
-    /// payload was rewritten when a clamp translated it. The live failure is
-    /// the fifth it has found, **#1296**: a `Repeat` claims the bases under its
-    /// tract but does not report that it does, so it is no barrier to a
-    /// sibling's 3' shift and the pair ends up overlapping.
+    /// junction*, reordering two insertions. So are #1292, a duplication whose
+    /// payload was rewritten when a clamp translated it, and #1296, a repeat
+    /// that did not report claiming the bases under its tract. The live failure
+    /// is the sixth it has found, **#1297**: a member that cancelled is left as
+    /// an identity member, overlapping the repeat that absorbed it.
     ///
     /// ```text
-    /// core "AAAAAAATAATCGCAACAGAAG", delete index 15 and 16, insert "AA" after 17
-    ///   g.[272_273del;274_275insAA] -> g.[273_274del;274A[3]]
-    ///     both members claim 274 — the apply oracle declines the output
+    /// core "GCATGAAAAT", insert "AA" after 4, delete index 6, insert "A" after 7
+    ///   g.[261_262insAA;263del;264_265insA] -> g.[262_265A[6];265=]
+    ///     the repeat alone is right; the `265=` residue overlaps it
     /// ```
     ///
-    /// Each of the five was masked behind the one before it, which is the point
+    /// Each of the six was masked behind the one before it, which is the point
     /// of keeping this committed rather than deleting it until it can pass.
     ///
-    /// Enabling this test was #1292's acceptance criterion. #1292 itself is
-    /// fixed and pinned — by `issue_1292_junction_payload_rotation` and by the
-    /// `99d5d382` seed below, which now replays green — but the criterion could
-    /// not be met with it, because the property's next two failures were behind
-    /// it. Enabling now belongs to #1296 and, behind that, **#1297**. Both of
-    /// their seeds are committed below, so taking the ignore off replays them
-    /// immediately — which is what should gate taking it off.
+    /// Enabling this test was #1292's acceptance criterion. #1292 is fixed and
+    /// pinned — by `issue_1292_junction_payload_rotation` and by the `99d5d382`
+    /// seed below, which replays green — but the criterion could not be met
+    /// with it, because the property's next two failures were behind it.
+    /// Enabling now belongs to **#1297**, whose seed `a88766af` is committed
+    /// below — so taking the ignore off replays it immediately, which is what
+    /// should gate taking it off. Absent that seed this passes the 512-case
+    /// budget and fails a 30,000-case soak on the same shape, so switching it
+    /// on would make a green CI a matter of the budget rather than of the
+    /// property holding.
     ///
     /// Do not weaken it to make it pass.
     #[test]
-    #[ignore = "finds #1296, a real unfixed defect; see doc comment"]
+    #[ignore = "finds #1297, a real unfixed defect; see doc comment"]
     fn an_indel_haplotype_normalizes_to_its_own_sequence(
         haplotype in indel_haplotype_strategy()
     ) {
@@ -1004,12 +1007,12 @@ fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
 /// to pin.
 #[test]
 fn the_ignored_indel_property_still_finds_its_defect() {
-    // #1296: the repeat claims the bases under its tract without reporting it,
-    // so it is no barrier to the sibling's 3' shift and the pair overlaps.
+    // #1297: a member that cancelled is left behind as an identity member,
+    // overlapping the repeat that absorbed it.
     let (core, input, issue) = (
-        "AAAAAAATAATCGCAACAGAAG",
-        "NC_TEST.1:g.[272_273del;274_275insAA]",
-        "#1296",
+        "GCATGAAAAT",
+        "NC_TEST.1:g.[261_262insAA;263del;264_265insA]",
+        "#1297",
     );
     assert!(
         indel_property_holds(core, input).is_err(),
