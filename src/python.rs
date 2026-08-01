@@ -40,6 +40,94 @@ use crate::vcf::{vcf_to_genomic_hgvs as rust_vcf_to_hgvs, VcfRecord};
 use crate::{parse_hgvs, NormalizeConfig, Normalizer};
 
 // ---------------------------------------------------------------------------
+// The native-enum contract
+// ---------------------------------------------------------------------------
+
+/// Generate the `#[pymethods]` block for a native (`#[pyclass]`) enum: the
+/// shared `enum.Enum` contract — by-value construction, `name`, `value` and
+/// `__hash__` — plus whatever enum-specific methods that enum adds.
+///
+/// All nine exported enums owe Python the same four methods, and every copy was
+/// identical bar the value→variant table. Writing them out nine times is what
+/// let them drift in the first place: `Axis` alone carried `frozen, hash`, which
+/// is how the missing `__hash__` on the other eight went unnoticed until #1245.
+///
+/// The enum-specific methods have to come through here too rather than living in
+/// a second `impl`: pyo3's `multiple-pymethods` feature is off (it pulls in
+/// `inventory` and is not supported on every platform), so a class gets exactly
+/// one `#[pymethods]` block.
+///
+/// The value→variant table stays explicit at each call site rather than being
+/// derived from the declaration. `PyErrorType` skips discriminant 5
+/// (`PositionZero`, retired in #269), and an explicit table is what keeps that
+/// gap deliberate and greppable — a catch-all mapping would silently absorb an
+/// omitted variant. `test_error_type_rejects_the_retired_discriminant` pins it.
+macro_rules! native_enum_pymethods {
+    (
+        $ty:ident as $py_name:literal,
+        values { $($value:literal => $variant:ident),+ $(,)? }
+        $(, methods { $($method:tt)* })?
+        $(,)?
+    ) => {
+        #[pymethods]
+        impl $ty {
+            /// Look a member up by its integer value.
+            ///
+            /// Mirrors `EnumClass(value)` on an `enum.Enum`, including the `ValueError`
+            /// for an unknown value and the *interned* member as the result — `Cls(v)`
+            /// is the very object bound to the class attribute, so `is` compares the
+            /// same way the standard library's enums do (#1245).
+            #[new]
+            fn py_new(py: pyo3::Python<'_>, value: i32) -> pyo3::PyResult<pyo3::Py<Self>> {
+                use pyo3::IntoPyObject;
+                let member = match value {
+                    $($value => Ok(Self::$variant),)+
+                    other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+                        "{other} is not a valid {}",
+                        $py_name
+                    ))),
+                }?;
+                Ok(member.into_pyobject(py)?.unbind())
+            }
+
+            /// The member's name, matching the attribute it is bound to.
+            ///
+            /// Mirrors `enum.Enum.name`. Derived from the `Debug` formatting of the
+            /// variant, which for a fieldless enum is exactly the variant identifier —
+            /// the same identifier pyo3 binds the member to. A future `rename_all` on
+            /// the `#[pyclass]` would decouple the two (#1245).
+            #[getter]
+            fn name(&self) -> String {
+                format!("{self:?}")
+            }
+
+            /// The member's integer value.
+            ///
+            /// Mirrors `enum.Enum.value`, and matches what `int()` and `==` against an
+            /// int already yield via `eq_int`.
+            #[getter]
+            fn value(&self) -> i32 {
+                *self as i32
+            }
+
+            /// Hash by integer value, matching :meth:`__eq__`.
+            ///
+            /// `eq_int` makes these members compare equal to plain ints, and Python
+            /// requires equal objects to hash equally — otherwise a member and the
+            /// int it equals land in different buckets and dict/set lookups disagree
+            /// with `==`. pyo3's `hash` option would delegate to the Rust `Hash` derive,
+            /// which hashes the variant, not its discriminant; this returns the
+            /// discriminant so `hash(member) == hash(member.value)`.
+            fn __hash__(&self) -> isize {
+                *self as isize
+            }
+
+            $($($method)*)?
+        }
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Typed exception hierarchy
 //
 // Every ferro variant-processing failure surfaces as `ferro_hgvs.FerroError` or
@@ -540,8 +628,8 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
 /// Returned by :attr:`HgvsVariant.axis`. Each member carries its single-letter
 /// HGVS coordinate code (:meth:`code`) and a molecule-type grouping
 /// (:meth:`is_dna` / :meth:`is_rna` / :meth:`is_protein`).
-#[pyclass(name = "Axis", eq, eq_int, frozen, hash, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[pyclass(name = "Axis", eq, eq_int, ord, frozen, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PyCoordinateAxis {
     Genomic = 0,
     Coding = 1,
@@ -580,33 +668,44 @@ impl From<PyCoordinateAxis> for CoordinateAxis {
     }
 }
 
-#[pymethods]
-impl PyCoordinateAxis {
-    /// The single-letter HGVS coordinate code (``g``/``c``/``n``/``r``/``p``/``m``/``o``).
-    fn code(&self) -> &'static str {
-        CoordinateAxis::from(*self).code()
-    }
+native_enum_pymethods! {
+    PyCoordinateAxis as "Axis",
+    values {
+        0 => Genomic,
+        1 => Coding,
+        2 => NonCoding,
+        3 => Rna,
+        4 => Protein,
+        5 => Mitochondrial,
+        6 => Circular,
+    },
+    methods {
+        /// The single-letter HGVS coordinate code (``g``/``c``/``n``/``r``/``p``/``m``/``o``).
+        fn code(&self) -> &'static str {
+            CoordinateAxis::from(*self).code()
+        }
 
-    /// Whether this axis addresses a DNA molecule (``g``/``c``/``n``/``m``/``o``).
-    ///
-    /// Treats mitochondrial and circular DNA as DNA, unlike the deprecated
-    /// ``is_genomic()`` predicate (which is ``g.``-only).
-    fn is_dna(&self) -> bool {
-        CoordinateAxis::from(*self).is_dna()
-    }
+        /// Whether this axis addresses a DNA molecule (``g``/``c``/``n``/``m``/``o``).
+        ///
+        /// Treats mitochondrial and circular DNA as DNA, unlike the deprecated
+        /// ``is_genomic()`` predicate (which is ``g.``-only).
+        fn is_dna(&self) -> bool {
+            CoordinateAxis::from(*self).is_dna()
+        }
 
-    /// Whether this axis addresses an RNA molecule (``r.``).
-    fn is_rna(&self) -> bool {
-        CoordinateAxis::from(*self).is_rna()
-    }
+        /// Whether this axis addresses an RNA molecule (``r.``).
+        fn is_rna(&self) -> bool {
+            CoordinateAxis::from(*self).is_rna()
+        }
 
-    /// Whether this axis addresses a protein (``p.``).
-    fn is_protein(&self) -> bool {
-        CoordinateAxis::from(*self).is_protein()
-    }
+        /// Whether this axis addresses a protein (``p.``).
+        fn is_protein(&self) -> bool {
+            CoordinateAxis::from(*self).is_protein()
+        }
 
-    fn __str__(&self) -> &'static str {
-        CoordinateAxis::from(*self).code()
+        fn __str__(&self) -> &'static str {
+            CoordinateAxis::from(*self).code()
+        }
     }
 }
 
@@ -2431,8 +2530,8 @@ fn index_to_hgvs_pos(idx: usize) -> u64 {
 // ============================================================================
 
 /// Equivalence level between two variants
-#[pyclass(name = "EquivalenceLevel", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[pyclass(name = "EquivalenceLevel", eq, eq_int, ord, frozen, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PyEquivalenceLevel {
     /// Exactly identical (same string representation)
     Identical = 0,
@@ -2461,33 +2560,42 @@ impl From<EquivalenceLevel> for PyEquivalenceLevel {
     }
 }
 
-#[pymethods]
-impl PyEquivalenceLevel {
-    fn __str__(&self) -> &'static str {
-        match self {
-            PyEquivalenceLevel::Identical => "Identical",
-            PyEquivalenceLevel::NormalizedMatch => "NormalizedMatch",
-            PyEquivalenceLevel::SequenceMatch => "SequenceMatch",
-            PyEquivalenceLevel::AccessionVersionDifference => "AccessionVersionDifference",
-            PyEquivalenceLevel::NotEquivalent => "NotEquivalent",
-        }
-    }
-
-    /// Returns true if the variants are considered equivalent
-    fn is_equivalent(&self) -> bool {
-        !matches!(self, PyEquivalenceLevel::NotEquivalent)
-    }
-
-    /// Get a human-readable description
-    fn description(&self) -> &'static str {
-        match self {
-            PyEquivalenceLevel::Identical => "Identical representation",
-            PyEquivalenceLevel::NormalizedMatch => "Equivalent after normalization",
-            PyEquivalenceLevel::SequenceMatch => "Equivalent by resulting sequence",
-            PyEquivalenceLevel::AccessionVersionDifference => {
-                "Same variant, different accession versions"
+native_enum_pymethods! {
+    PyEquivalenceLevel as "EquivalenceLevel",
+    values {
+        0 => Identical,
+        1 => NormalizedMatch,
+        2 => AccessionVersionDifference,
+        3 => NotEquivalent,
+        4 => SequenceMatch,
+    },
+    methods {
+        fn __str__(&self) -> &'static str {
+            match self {
+                PyEquivalenceLevel::Identical => "Identical",
+                PyEquivalenceLevel::NormalizedMatch => "NormalizedMatch",
+                PyEquivalenceLevel::SequenceMatch => "SequenceMatch",
+                PyEquivalenceLevel::AccessionVersionDifference => "AccessionVersionDifference",
+                PyEquivalenceLevel::NotEquivalent => "NotEquivalent",
             }
-            PyEquivalenceLevel::NotEquivalent => "Not equivalent",
+        }
+
+        /// Returns true if the variants are considered equivalent
+        fn is_equivalent(&self) -> bool {
+            !matches!(self, PyEquivalenceLevel::NotEquivalent)
+        }
+
+        /// Get a human-readable description
+        fn description(&self) -> &'static str {
+            match self {
+                PyEquivalenceLevel::Identical => "Identical representation",
+                PyEquivalenceLevel::NormalizedMatch => "Equivalent after normalization",
+                PyEquivalenceLevel::SequenceMatch => "Equivalent by resulting sequence",
+                PyEquivalenceLevel::AccessionVersionDifference => {
+                    "Same variant, different accession versions"
+                }
+                PyEquivalenceLevel::NotEquivalent => "Not equivalent",
+            }
         }
     }
 }
@@ -2680,8 +2788,8 @@ impl PyEquivalenceChecker {
 // ============================================================================
 
 /// Sequence Ontology consequence term
-#[pyclass(name = "Consequence", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[pyclass(name = "Consequence", eq, eq_int, ord, frozen, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PyConsequence {
     TranscriptAblation = 0,
     SpliceAcceptorVariant = 1,
@@ -2756,36 +2864,59 @@ impl From<PyConsequence> for Consequence {
     }
 }
 
-#[pymethods]
-impl PyConsequence {
-    fn __str__(&self) -> &'static str {
-        Consequence::from(*self).so_term()
-    }
+native_enum_pymethods! {
+    PyConsequence as "Consequence",
+    values {
+        0 => TranscriptAblation,
+        1 => SpliceAcceptorVariant,
+        2 => SpliceDonorVariant,
+        3 => StopGained,
+        4 => FrameshiftVariant,
+        5 => StopLost,
+        6 => StartLost,
+        7 => MissenseVariant,
+        8 => InframeInsertion,
+        9 => InframeDeletion,
+        10 => ProteinAlteringVariant,
+        11 => SpliceRegionVariant,
+        12 => SynonymousVariant,
+        13 => StartRetainedVariant,
+        14 => StopRetainedVariant,
+        15 => FivePrimeUtrVariant,
+        16 => ThreePrimeUtrVariant,
+        17 => IntronVariant,
+        18 => CodingSequenceVariant,
+    },
+    methods {
+        fn __str__(&self) -> &'static str {
+            Consequence::from(*self).so_term()
+        }
 
-    /// Get the Sequence Ontology term
-    fn so_term(&self) -> &'static str {
-        Consequence::from(*self).so_term()
-    }
+        /// Get the Sequence Ontology term
+        fn so_term(&self) -> &'static str {
+            Consequence::from(*self).so_term()
+        }
 
-    /// Get the Sequence Ontology ID
-    fn so_id(&self) -> &'static str {
-        Consequence::from(*self).so_id()
-    }
+        /// Get the Sequence Ontology ID
+        fn so_id(&self) -> &'static str {
+            Consequence::from(*self).so_id()
+        }
 
-    /// Get the impact level
-    fn impact(&self) -> PyImpact {
-        Consequence::from(*self).impact().into()
-    }
+        /// Get the impact level
+        fn impact(&self) -> PyImpact {
+            Consequence::from(*self).impact().into()
+        }
 
-    /// Get a human-readable description
-    fn description(&self) -> &'static str {
-        Consequence::from(*self).description()
+        /// Get a human-readable description
+        fn description(&self) -> &'static str {
+            Consequence::from(*self).description()
+        }
     }
 }
 
 /// Variant impact level (VEP-style)
-#[pyclass(name = "Impact", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[pyclass(name = "Impact", eq, eq_int, ord, frozen, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PyImpact {
     Modifier = 0,
     Low = 1,
@@ -2804,14 +2935,22 @@ impl From<Impact> for PyImpact {
     }
 }
 
-#[pymethods]
-impl PyImpact {
-    fn __str__(&self) -> &'static str {
-        match self {
-            PyImpact::High => "HIGH",
-            PyImpact::Moderate => "MODERATE",
-            PyImpact::Low => "LOW",
-            PyImpact::Modifier => "MODIFIER",
+native_enum_pymethods! {
+    PyImpact as "Impact",
+    values {
+        0 => Modifier,
+        1 => Low,
+        2 => Moderate,
+        3 => High,
+    },
+    methods {
+        fn __str__(&self) -> &'static str {
+            match self {
+                PyImpact::High => "HIGH",
+                PyImpact::Moderate => "MODERATE",
+                PyImpact::Low => "LOW",
+                PyImpact::Modifier => "MODIFIER",
+            }
         }
     }
 }
@@ -3408,8 +3547,8 @@ impl PyBatchProcessor {
 // ============================================================================
 
 /// Error handling mode
-#[pyclass(name = "ErrorMode", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[pyclass(name = "ErrorMode", eq, eq_int, ord, frozen, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PyErrorMode {
     /// Strict mode - reject all non-standard input
     Strict = 0,
@@ -3417,6 +3556,15 @@ pub enum PyErrorMode {
     Lenient = 1,
     /// Silent mode - auto-correct without warnings
     Silent = 2,
+}
+
+native_enum_pymethods! {
+    PyErrorMode as "ErrorMode",
+    values {
+        0 => Strict,
+        1 => Lenient,
+        2 => Silent,
+    },
 }
 
 impl From<ErrorMode> for PyErrorMode {
@@ -3440,8 +3588,8 @@ impl From<PyErrorMode> for ErrorMode {
 }
 
 /// Error type for configurable error handling
-#[pyclass(name = "ErrorType", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[pyclass(name = "ErrorType", eq, eq_int, ord, frozen, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PyErrorType {
     LowercaseAminoAcid = 0,
     MissingVersion = 1,
@@ -3517,6 +3665,57 @@ pub enum PyErrorType {
     // insertion with no inserted sequence); rejected in every mode, since the
     // missing bases are not recoverable from the description (#1162).
     InsertionWithoutInsertedSequence = 45,
+}
+
+native_enum_pymethods! {
+    PyErrorType as "ErrorType",
+    values {
+        0 => LowercaseAminoAcid,
+        1 => MissingVersion,
+        2 => WrongDashCharacter,
+        3 => ExtraWhitespace,
+        4 => ProteinSubstitutionArrow,
+        6 => SingleLetterAminoAcid,
+        7 => WrongQuoteCharacter,
+        8 => LowercaseAccessionPrefix,
+        9 => MixedCaseEditType,
+        10 => OldSubstitutionSyntax,
+        11 => InvalidUnicodeCharacter,
+        12 => SwappedPositions,
+        13 => TrailingAnnotation,
+        14 => MissingCoordinatePrefix,
+        15 => OldAlleleFormat,
+        16 => RefSeqMismatch,
+        17 => DeprecatedStopCodonStar,
+        18 => DeprecatedStopCodonX,
+        19 => DeprecatedFrameshiftStar,
+        20 => DeprecatedFrameshiftX,
+        21 => DelSizeSuffix,
+        22 => EmptyDelinsInsert,
+        23 => RedundantRepeatLabel,
+        24 => SinglePositionRange,
+        25 => DeprecatedIvsNotation,
+        26 => DeprecatedConSyntax,
+        27 => LengthMismatch,
+        28 => AlleleFractionAnnotation,
+        29 => ClinVarProseMultiAllelic,
+        30 => RnaThymineCanonicalized,
+        31 => ProteinBracketedAaInsertion,
+        32 => PositionPastEnd,
+        33 => VariantExceedsReference,
+        34 => NonSpecMosaicForm,
+        35 => OverlapConflictingEdits,
+        36 => InitiatorMetCanonicalization,
+        37 => DupSizeSuffix,
+        38 => DupExplicitSeq,
+        39 => DelExplicitSeq,
+        40 => NonConformantBracketCardinality,
+        41 => UnresolvableCentromere,
+        42 => TranscriptFlankNotDescribable,
+        43 => IntronicOnBareTranscript,
+        44 => IncompleteCdsStartReference,
+        45 => InsertionWithoutInsertedSequence,
+    },
 }
 
 impl From<ErrorType> for PyErrorType {
@@ -3632,8 +3831,8 @@ impl From<PyErrorType> for ErrorType {
 }
 
 /// Override behavior for a specific error type
-#[pyclass(name = "ErrorOverride", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[pyclass(name = "ErrorOverride", eq, eq_int, ord, frozen, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PyErrorOverride {
     /// Use the base mode's behavior
     Default = 0,
@@ -3645,6 +3844,17 @@ pub enum PyErrorOverride {
     SilentCorrect = 3,
     /// Accept the input as-is without correction
     Accept = 4,
+}
+
+native_enum_pymethods! {
+    PyErrorOverride as "ErrorOverride",
+    values {
+        0 => Default,
+        1 => Reject,
+        2 => WarnCorrect,
+        3 => SilentCorrect,
+        4 => Accept,
+    },
 }
 
 impl From<ErrorOverride> for PyErrorOverride {
@@ -5040,8 +5250,8 @@ fn build_transcript(
 // ============================================================================
 
 /// Genome build (GRCh37 or GRCh38)
-#[pyclass(name = "GenomeBuild", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[pyclass(name = "GenomeBuild", eq, eq_int, ord, frozen, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PyGenomeBuild {
     GRCh37 = 0,
     GRCh38 = 1,
@@ -5058,20 +5268,27 @@ impl From<GenomeBuild> for PyGenomeBuild {
     }
 }
 
-#[pymethods]
-impl PyGenomeBuild {
-    fn __str__(&self) -> &'static str {
-        match self {
-            PyGenomeBuild::GRCh37 => "GRCh37",
-            PyGenomeBuild::GRCh38 => "GRCh38",
-            PyGenomeBuild::Unknown => "Unknown",
+native_enum_pymethods! {
+    PyGenomeBuild as "GenomeBuild",
+    values {
+        0 => GRCh37,
+        1 => GRCh38,
+        2 => Unknown,
+    },
+    methods {
+        fn __str__(&self) -> &'static str {
+            match self {
+                PyGenomeBuild::GRCh37 => "GRCh37",
+                PyGenomeBuild::GRCh38 => "GRCh38",
+                PyGenomeBuild::Unknown => "Unknown",
+            }
         }
     }
 }
 
 /// Strand direction
-#[pyclass(name = "Strand", eq, eq_int, from_py_object)]
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[pyclass(name = "Strand", eq, eq_int, ord, frozen, from_py_object)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum PyStrand {
     Plus = 0,
     Minus = 1,
@@ -5088,13 +5305,20 @@ impl From<Strand> for PyStrand {
     }
 }
 
-#[pymethods]
-impl PyStrand {
-    fn __str__(&self) -> &'static str {
-        match self {
-            PyStrand::Plus => "+",
-            PyStrand::Minus => "-",
-            PyStrand::Unknown => ".",
+native_enum_pymethods! {
+    PyStrand as "Strand",
+    values {
+        0 => Plus,
+        1 => Minus,
+        2 => Unknown,
+    },
+    methods {
+        fn __str__(&self) -> &'static str {
+            match self {
+                PyStrand::Plus => "+",
+                PyStrand::Minus => "-",
+                PyStrand::Unknown => ".",
+            }
         }
     }
 }
