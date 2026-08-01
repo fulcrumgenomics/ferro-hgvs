@@ -85,7 +85,7 @@ fn a_repeat_grown_from_an_insertion_does_not_span_a_sibling() {
 fn a_lone_duplication_still_reaches_repeat_notation() {
     // Negative control: no sibling, nothing to span, so the tract-wide repeat
     // is exactly right and must survive.
-    assert_eq!(normalize(TRACT, "TEMPLATE:g.1_2dup"), "TEMPLATE:g.1_9T[11]");
+    assert_normalizes_preserving(TRACT, "TEMPLATE:g.1_2dup", "TEMPLATE:g.1_9T[11]");
 }
 
 #[test]
@@ -342,24 +342,12 @@ fn a_deletion_does_not_shift_across_an_insertion_junction() {
         "TEMPLATE:g.[259del;259_260insC]",
         "TEMPLATE:g.259delinsC",
     ] {
-        let actual = normalize(&seq, input);
-        assert_eq!(actual, "TEMPLATE:g.259A>C", "normalizing {input}");
-        assert_eq!(
-            apply(&seq, &actual).expect("output applies"),
-            apply(&seq, input).expect("input applies"),
-            "{input} -> {actual} changed the sequence"
-        );
+        assert_normalizes_preserving(&seq, input, "TEMPLATE:g.259A>C");
     }
 
     // A junction further into the tract clamps to that junction instead.
-    let input = "TEMPLATE:g.[258del;261_262insC]";
-    let actual = normalize(&seq, input);
-    assert_eq!(actual, "TEMPLATE:g.261A>C");
-    assert_eq!(
-        apply(&seq, &actual).expect("output applies"),
-        apply(&seq, input).expect("input applies"),
-    );
+    assert_normalizes_preserving(&seq, "TEMPLATE:g.[258del;261_262insC]", "TEMPLATE:g.261A>C");
 
     // Negative control: with no sibling the deletion still shifts fully.
-    assert_eq!(normalize(&seq, "TEMPLATE:g.258del"), "TEMPLATE:g.263del");
+    assert_normalizes_preserving(&seq, "TEMPLATE:g.258del", "TEMPLATE:g.263del");
 }

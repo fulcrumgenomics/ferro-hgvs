@@ -25,7 +25,7 @@
 //! pre-existing on `main` and independent of both.
 
 use crate::common::cis_apply_oracle::{
-    apply, assert_normalizes_preserving, normalize, normalize_in, sweep_sequences,
+    apply, assert_normalizes_preserving, normalize_in, sweep_sequences,
 };
 use ferro_hgvs::ShuffleDirection;
 
@@ -74,8 +74,8 @@ fn a_lone_deletion_still_becomes_a_repeat() {
     // Negative control: with no sibling there is nothing to span, so B2 applies
     // exactly as before. Guards against "fixing" this by disabling the repeat
     // form for deletions.
-    assert_eq!(normalize(TRACT, "TEMPLATE:g.1_2del"), "TEMPLATE:g.1_9T[7]");
-    assert_eq!(normalize(TRACT, "TEMPLATE:g.1_3del"), "TEMPLATE:g.1_9T[6]");
+    assert_normalizes_preserving(TRACT, "TEMPLATE:g.1_2del", "TEMPLATE:g.1_9T[7]");
+    assert_normalizes_preserving(TRACT, "TEMPLATE:g.1_3del", "TEMPLATE:g.1_9T[6]");
 }
 
 #[test]
