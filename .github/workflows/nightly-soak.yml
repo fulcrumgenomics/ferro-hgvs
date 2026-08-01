@@ -71,8 +71,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-soak
       - name: Build soak archive
+        # No `--features dev` — see the same step in ci.yml. The feature drags
+        # `web-service` and `benchmark` into an `opt-level = 3` build for a
+        # binary that uses neither, and `test(proptest)` resolves to the same
+        # 10 tests with or without it.
         run: |
-          cargo nextest archive --features dev --cargo-profile soak --test it \
+          cargo nextest archive --cargo-profile soak --test it \
             --archive-file nextest-soak.tar.zst
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
