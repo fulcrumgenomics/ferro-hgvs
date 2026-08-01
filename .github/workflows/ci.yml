@@ -341,7 +341,19 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
+          # Hashed on this workflow file as well as the lockfile, and given a
+          # suffix distinct from `generated-docs`. Two separate bugs met here.
+          #
+          # `actions/cache` skips the save on an exact key hit, so a
+          # lockfile-only key can never refresh once written. And this key was
+          # SHARED with `generated-docs`, which builds in the dev profile,
+          # while this job builds in the test profile where
+          # `CARGO_PROFILE_TEST_DEBUG=0` re-fingerprints every dependency. The
+          # frozen cache therefore satisfied that job and was useless to this
+          # one: measured on run 30684270515, `generated-docs` compiled 3
+          # crates and this job compiled 316 — the entire tree from
+          # `proc-macro2` up — on every single run.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}-test-archive
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
       - name: Build test archive
@@ -496,7 +508,7 @@ jobs:
   # nothing the plain run did not already check — it just cost ~80s of every CI
   # run. The deep random coverage lives in the `soak` job below instead.
   test-oracle:
-    name: Test oracle (${{ matrix.shard }}/2)
+    name: Test oracle (${{ matrix.shard }}/3)
     needs: [test-build, spec-fixtures]
     runs-on: ubuntu-latest
     env:
@@ -504,7 +516,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -549,7 +561,7 @@ jobs:
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
-            --partition hash:${{ matrix.shard }}/2 \
+            --partition hash:${{ matrix.shard }}/3 \
             -E "not test(proptest) and not ($SWEEP_FILTER)"
 
   # 1,000,000-case idempotency soak on every PR, split 8 ways.
@@ -712,7 +724,11 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
+          # Its own key, no longer shared with `test-build` — see there. This
+          # job builds examples in the dev profile; that one builds test
+          # binaries with different debug settings, and one cache cannot serve
+          # both.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}-gendocs
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
       - name: Verify conformance summary docs are up to date
