@@ -304,6 +304,13 @@ jobs:
     name: Build test archive
     runs-on: ubuntu-latest
     env:
+      # Link with mold. Set here rather than in `.cargo/config.toml` so it
+      # applies only to CI and stays visible next to the job that pays for it.
+      # Changing this value changes the cache key, because the key hashes this
+      # file — which is exactly what has to happen: RUSTFLAGS re-fingerprints
+      # every crate, and a cache keyed without it would restore artifacts built
+      # by a different linker and rebuild them all, every run.
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
       # The Test jobs build and LINK the integration-test binary. With full
       # debuginfo (dev/test profile default `debug = true`) the linked
       # `target/` exhausts the stock runner's ~14 GB free disk and the linker
@@ -353,6 +360,16 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}-test-archive
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
+      - name: Install mold
+        # A large share of both archive builds is linking, not codegen: this job
+        # links ~8 test binaries into a 93 MB archive, and the soak one links a
+        # single large `it` binary. mold is a drop-in replacement for GNU ld
+        # that parallelizes the link. Installed from apt rather than a
+        # third-party action so there is no unpinned dependency.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends mold
+          mold --version
       - name: Build test archive
         # Compiles every test binary and packs them with their run metadata.
         run: cargo nextest archive --features dev --archive-file nextest.tar.zst
@@ -382,6 +399,9 @@ jobs:
   test-build-soak:
     name: Build soak archive (optimized)
     runs-on: ubuntu-latest
+    env:
+      # See `test-build` for why this lives here and why it moves the cache key.
+      RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -418,6 +438,16 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}-soak
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-soak
+      - name: Install mold
+        # A large share of both archive builds is linking, not codegen: this job
+        # links ~8 test binaries into a 93 MB archive, and the soak one links a
+        # single large `it` binary. mold is a drop-in replacement for GNU ld
+        # that parallelizes the link. Installed from apt rather than a
+        # third-party action so there is no unpinned dependency.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends mold
+          mold --version
       - name: Build soak archive
         # No `--features dev`. That feature pulls in `web-service` (axum, tokio,
         # tower, tracing) and `benchmark` (reqwest, rusqlite, tokio-postgres,
