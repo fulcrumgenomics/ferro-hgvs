@@ -80,19 +80,24 @@ fn a_del_beside_a_dup_re_spells_instead_of_colliding() {
 }
 
 /// Apply `descriptor` to the synthetic reference independently of the
-/// normalizer, via SPDI triples, and return a 20-base window at 0-based 254.
+/// normalizer, via SPDI triples, and return the **whole** resulting sequence.
 ///
 /// Delegates to the shared oracle rather than re-deriving the splice walk: that
 /// walk is what makes "declines an overlapping description" true, and it is
 /// already the single copy the sibling-crossing tests rest on.
+///
+/// The full sequence, not a window around the core. This previously returned
+/// `skip(254).take(20)`, which is narrower than the contract its caller states
+/// ("changed the sequence"): the cases here change length, so a member that
+/// shifted out of the window, or content pushed past its end, compared equal
+/// while the sequences differed.
 fn applied(core: &str, descriptor: &str) -> String {
     let provider = SyntheticBuilder::genomic(core).build();
     let reference = padded(core);
-    let edited = crate::common::cis_apply_oracle::apply_with(&provider, &reference, descriptor)
+    crate::common::cis_apply_oracle::apply_with(&provider, &reference, descriptor)
         .unwrap_or_else(|| {
             panic!("`{descriptor}` has no well-defined resulting sequence (overlapping or unconvertible)")
-        });
-    edited.chars().skip(254).take(20).collect()
+        })
 }
 
 /// The invariant itself, over the cases that already satisfy it — so the
