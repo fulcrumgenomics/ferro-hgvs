@@ -894,7 +894,22 @@ pub(crate) fn deletion_to_repeat(
     })
 }
 
-/// Get the complement of a DNA base
+/// Get the complement of a nucleotide, over the whole IUPAC alphabet that
+/// [`crate::hgvs::edit::Base`] models.
+///
+/// Ambiguity codes complement by complementing their member set: `R` (A/G)
+/// becomes `Y` (C/T), `B` (not A) becomes `V` (not T), and so on. `W` (A/T),
+/// `S` (C/G) and `N` are the only genuinely self-complementary symbols.
+///
+/// Modelling the ambiguity codes matters because callers ask
+/// [`is_self_complementary`] whether "inverting this base changes nothing".
+/// Mapping an unmodelled symbol to itself made that test lie: `R` looked
+/// self-complementary, so an inversion resolving to a lone `R` was silently
+/// discarded as identity even though its reverse complement is `Y`.
+///
+/// The complement is returned uppercase regardless of input case, matching the
+/// long-standing behaviour for A/C/G/T/U. Bytes outside the alphabet are still
+/// returned unchanged — there is no meaningful complement to report for them.
 fn complement(base: u8) -> u8 {
     match base {
         b'A' | b'a' => b'T',
@@ -902,8 +917,66 @@ fn complement(base: u8) -> u8 {
         b'G' | b'g' => b'C',
         b'C' | b'c' => b'G',
         b'U' | b'u' => b'A', // RNA
-        _ => base,           // N and other IUPAC codes
+        // IUPAC ambiguity codes, complemented member-set-wise.
+        b'R' | b'r' => b'Y', // A/G  -> C/T
+        b'Y' | b'y' => b'R', // C/T  -> A/G
+        b'K' | b'k' => b'M', // G/T  -> A/C
+        b'M' | b'm' => b'K', // A/C  -> G/T
+        b'B' | b'b' => b'V', // C/G/T -> A/C/G
+        b'V' | b'v' => b'B', // A/C/G -> C/G/T
+        b'D' | b'd' => b'H', // A/G/T -> A/C/T
+        b'H' | b'h' => b'D', // A/C/T -> A/G/T
+        // Self-complementary: W (A/T), S (C/G), N (any).
+        b'W' | b'w' => b'W',
+        b'S' | b's' => b'S',
+        b'N' | b'n' => b'N',
+        _ => base, // Not a nucleotide we model.
     }
+}
+
+/// True when `last` is the complement of `first`, i.e. inverting the pair
+/// changes nothing.
+///
+/// Compares case-insensitively. [`complement`] always answers uppercase, so a
+/// raw `complement(x) == y` test silently fails for soft-masked reference bases:
+/// `complement(b'a')` is `b'T'`, which never equals `b't'`. Reference sequences
+/// really do arrive soft-masked (see
+/// `issue_1235_cis_allele_confluence::soft_masked_reference_yields_the_same_canonical_form`),
+/// so every complement comparison in the inversion-shortening path goes through
+/// here and treats `a` exactly like `A`.
+fn is_complementary_pair(first: u8, last: u8) -> bool {
+    let first = first.to_ascii_uppercase();
+    complement(first) == last.to_ascii_uppercase()
+}
+
+/// True when inverting `base` on its own changes nothing, i.e. it is one of the
+/// self-complementary symbols `W` (A/T), `S` (C/G) and `N`.
+///
+/// Bytes outside the modelled alphabet answer `true` as well, because
+/// [`complement`] returns them unchanged — there is no complement to substitute
+/// in, so the caller must not describe one.
+fn is_self_complementary(base: u8) -> bool {
+    is_complementary_pair(base, base)
+}
+
+/// The `reference > alternative` pair that describes inverting a single base:
+/// the base itself and its complement.
+///
+/// Returns `None` when the base is its own complement (nothing is substituted)
+/// or when either side is not a typed [`crate::hgvs::edit::Base`], so callers
+/// never fabricate a substitution they cannot spell.
+pub fn complementary_substitution(
+    base: u8,
+) -> Option<(crate::hgvs::edit::Base, crate::hgvs::edit::Base)> {
+    use crate::hgvs::edit::Base;
+
+    if is_self_complementary(base) {
+        return None;
+    }
+    Some((
+        Base::from_char(base as char)?,
+        Base::from_char(complement(base) as char)?,
+    ))
 }
 
 /// Shorten an inversion by removing outer bases that cancel out
@@ -912,8 +985,20 @@ fn complement(base: u8) -> u8 {
 /// inverting them produces no net change, so they can be excluded.
 /// This is repeated until no more cancellation is possible.
 ///
-/// Returns the shortened (start, end) positions (0-indexed), or None if
-/// the inversion reduces to identity (0 or 1 base).
+/// Returns the shortened (start, end) positions (0-indexed), or `None` if the
+/// inversion reduces to identity.
+///
+/// A residue of **two or more** bases is still an inversion. A residue of
+/// exactly **one** base is not identity: that base is replaced by its own
+/// complement, which `DNA/inversion.md:16` says to describe as a substitution
+/// ("a one-nucleotide inversion should be described as a substitution"). Such a
+/// residue is returned as a one-base range so the caller can emit that
+/// substitution; only a self-complementary base (`W`, `S`, `N`) collapses to
+/// identity. Conflating the one- and zero-base cases silently dropped real
+/// variants — see #1249.
+///
+/// Note for external callers: a span that once yielded `None` may now yield a
+/// one-base range.
 pub fn shorten_inversion(ref_seq: &[u8], start: usize, end: usize) -> Option<(usize, usize)> {
     if start >= end || end > ref_seq.len() {
         return None;
@@ -922,13 +1007,17 @@ pub fn shorten_inversion(ref_seq: &[u8], start: usize, end: usize) -> Option<(us
     let mut s = start;
     let mut e = end;
 
-    // Keep shrinking while outer bases are complementary
-    while s < e {
+    // Keep shrinking while the outer *pair* is complementary. The bound is
+    // `s + 1 < e`, not `s < e`: at `e == s + 1` the span is a single base and
+    // `ref_seq[s]` and `ref_seq[e - 1]` are the same byte, so a
+    // self-complementary centre would cancel against itself and drive `e` below
+    // `s`. The lone-centre case is classified after the loop instead.
+    while s + 1 < e {
         let first = ref_seq[s];
         let last = ref_seq[e - 1]; // e is exclusive
 
         // Check if first base is complement of last base
-        if complement(first) == last {
+        if is_complementary_pair(first, last) {
             s += 1;
             e -= 1;
         } else {
@@ -936,9 +1025,18 @@ pub fn shorten_inversion(ref_seq: &[u8], start: usize, end: usize) -> Option<(us
         }
     }
 
-    // If inversion shrinks to 0 or 1 base, it's identity
-    if e <= s + 1 {
-        return None; // Becomes identity - no inversion needed
+    // Every base cancelled against its partner, so the inversion is a genuine
+    // no-op. This is the only span that shrinks to nothing, and it requires an
+    // even length.
+    if e == s {
+        return None;
+    }
+
+    // An odd-length span always leaves a centre base. Inverting one base
+    // replaces it with its complement, so it is identity only when the base is
+    // its own complement.
+    if e == s + 1 && is_self_complementary(ref_seq[s]) {
+        return None;
     }
 
     Some((s, e))
@@ -4089,6 +4187,174 @@ mod tests {
         let (s, e) = result2.unwrap();
         assert_eq!(s, 0);
         assert_eq!(e, 4);
+    }
+
+    #[test]
+    fn complement_models_the_iupac_ambiguity_codes() {
+        // Ambiguity codes complement by complementing their member set.
+        for (base, expected) in [
+            (b'R', b'Y'), // A/G   -> C/T
+            (b'Y', b'R'), // C/T   -> A/G
+            (b'K', b'M'), // G/T   -> A/C
+            (b'M', b'K'), // A/C   -> G/T
+            (b'B', b'V'), // C/G/T -> A/C/G
+            (b'V', b'B'), // A/C/G -> C/G/T
+            (b'D', b'H'), // A/G/T -> A/C/T
+            (b'H', b'D'), // A/C/T -> A/G/T
+        ] {
+            assert_eq!(
+                complement(base),
+                expected,
+                "complement({}) should be {}",
+                base as char,
+                expected as char
+            );
+            // Lowercase complements to the same uppercase symbol as A/C/G/T/U do.
+            assert_eq!(complement(base.to_ascii_lowercase()), expected);
+        }
+
+        // Only W, S and N are genuinely self-complementary.
+        for base in *b"WSN" {
+            assert_eq!(
+                complement(base),
+                base,
+                "{} is self-complementary",
+                base as char
+            );
+        }
+    }
+
+    #[test]
+    fn shorten_inversion_keeps_an_ambiguous_one_base_residue() {
+        // "ART": A(0) cancels against T(2), leaving R at the centre. R is not
+        // self-complementary — its reverse complement is Y — so the residue must
+        // survive as a one-base range for the caller to describe. Treating it as
+        // identity would silently discard the variant, which is #1249 all over
+        // again for the IUPAC codes.
+        let result = shorten_inversion(b"ART", 0, 3);
+        assert_eq!(result, Some((1, 2)));
+        assert_eq!(
+            complementary_substitution(b'R'),
+            Some((crate::hgvs::edit::Base::R, crate::hgvs::edit::Base::Y)),
+            "a lone R inverts to Y"
+        );
+    }
+
+    #[test]
+    fn shorten_inversion_never_returns_a_backwards_range() {
+        // A self-complementary centre base used to cancel against *itself* —
+        // `ref_seq[s]` and `ref_seq[e - 1]` are the same byte once the span is
+        // one base wide — driving `e` below `s` and yielding `Some((2, 1))`.
+        // These spans are identity and must report `None`.
+        for seq in [b"ANT", b"AWT", b"AST"] {
+            assert_eq!(
+                shorten_inversion(seq, 0, 3),
+                None,
+                "{} reduces to a self-complementary centre, i.e. identity",
+                std::str::from_utf8(seq).unwrap()
+            );
+        }
+
+        // The invariant, stated directly: whatever the sequence, a returned
+        // range is non-empty and correctly ordered.
+        for seq in [
+            b"ART".as_slice(),
+            b"ANT".as_slice(),
+            b"RR".as_slice(),
+            b"RY".as_slice(),
+            b"NNN".as_slice(),
+            b"ATGCAT".as_slice(),
+        ] {
+            if let Some((s, e)) = shorten_inversion(seq, 0, seq.len()) {
+                assert!(
+                    s < e,
+                    "{} produced a backwards range ({s}, {e})",
+                    std::str::from_utf8(seq).unwrap()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn shorten_inversion_cancels_ambiguity_codes_only_when_they_pair() {
+        // revcomp("RY") == "RY", so the pair genuinely cancels to identity.
+        assert_eq!(shorten_inversion(b"RY", 0, 2), None);
+
+        // revcomp("RR") == "YY", so nothing cancels and the inversion stands.
+        // Before the IUPAC codes were modelled, `complement(R) == R` made this
+        // look like a complementary pair and collapsed it to identity.
+        assert_eq!(shorten_inversion(b"RR", 0, 2), Some((0, 2)));
+    }
+
+    #[test]
+    fn shorten_inversion_treats_soft_masked_bases_like_uppercase() {
+        // `complement` always answers uppercase, so every `complement(x) == y`
+        // test used to fail on a soft-masked reference: `complement(b'a')` is
+        // `b'T'`, never `b't'`. That made lowercase spans behave differently
+        // from the identical uppercase span at both comparison sites — the
+        // outer-pair loop and the lone-centre check.
+        for (lower, upper) in [
+            (b"at".as_slice(), b"AT".as_slice()), // outer pair cancels to nothing
+            (b"awt".as_slice(), b"AWT".as_slice()), // cancels to a self-complementary centre
+            (b"ast".as_slice(), b"AST".as_slice()),
+            (b"ant".as_slice(), b"ANT".as_slice()),
+            (b"art".as_slice(), b"ART".as_slice()), // centre survives: revcomp(r) is y
+            (b"rr".as_slice(), b"RR".as_slice()),   // nothing cancels
+            (b"atgcat".as_slice(), b"ATGCAT".as_slice()),
+        ] {
+            assert_eq!(
+                shorten_inversion(lower, 0, lower.len()),
+                shorten_inversion(upper, 0, upper.len()),
+                "{} and {} must shorten identically",
+                std::str::from_utf8(lower).unwrap(),
+                std::str::from_utf8(upper).unwrap()
+            );
+        }
+
+        // The two headline cases, spelled out rather than left to the parity
+        // check above: a soft-masked self-complementary centre is identity, and
+        // a soft-masked non-self-complementary centre still survives.
+        assert_eq!(shorten_inversion(b"awt", 0, 3), None);
+        assert_eq!(shorten_inversion(b"art", 0, 3), Some((1, 2)));
+    }
+
+    #[test]
+    fn complementary_substitution_never_describes_a_base_as_itself() {
+        // A soft-masked self-complementary base used to escape the identity
+        // branch — `complement(b'w')` is `b'W'`, which is not `b'w'` — and then
+        // `Base::from_char` uppercased both sides, yielding the degenerate
+        // `Some((W, W))`. Normalization returned that straight out of the
+        // `Inversion` arm as `<pos>W>W`, bypassing the `ref == alt` → identity
+        // rewrite that only runs on the original input edit.
+        for base in *b"WSNwsn" {
+            assert_eq!(
+                complementary_substitution(base),
+                None,
+                "{} is self-complementary, so inverting it substitutes nothing",
+                base as char
+            );
+        }
+
+        // Bases that do have a distinct complement are unaffected, in either case.
+        for (base, reference, alternative) in [
+            (b'a', crate::hgvs::edit::Base::A, crate::hgvs::edit::Base::T),
+            (b'A', crate::hgvs::edit::Base::A, crate::hgvs::edit::Base::T),
+            (b'r', crate::hgvs::edit::Base::R, crate::hgvs::edit::Base::Y),
+            (b'R', crate::hgvs::edit::Base::R, crate::hgvs::edit::Base::Y),
+        ] {
+            assert_eq!(
+                complementary_substitution(base),
+                Some((reference, alternative)),
+                "{} inverts to its complement",
+                base as char
+            );
+        }
+
+        // A byte outside the modelled alphabet has no complement to substitute
+        // in, upper or lower case.
+        for base in *b"Xx" {
+            assert_eq!(complementary_substitution(base), None);
+        }
     }
 
     // =========================================================================

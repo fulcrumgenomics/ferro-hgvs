@@ -8246,6 +8246,41 @@ impl<P: ReferenceProvider> Normalizer<P> {
 
                 if let Some((new_s, new_e)) = rules::shorten_inversion(ref_seq, start_idx, end_idx)
                 {
+                    // A one-base residue is a substitution to that base's
+                    // complement, not an inversion: `inversion.md:5` defines an
+                    // inversion as more than one nucleotide and `:16` names the
+                    // substitution as its replacement. #1079 enforces the same
+                    // rule in the parser, which can only reject `g.234inv`
+                    // because deriving the substitution needs the reference
+                    // sequence; here we have it. Emitting identity instead
+                    // silently discarded the variant (#1249).
+                    if new_e == new_s + 1 {
+                        if let Some((reference, alternative)) =
+                            rules::complementary_substitution(ref_seq[new_s])
+                        {
+                            let pos = index_to_hgvs_pos(new_s);
+                            return Ok((
+                                pos,
+                                pos,
+                                NaEdit::Substitution {
+                                    reference,
+                                    alternative,
+                                },
+                                warnings,
+                            ));
+                        }
+                        // Not a base we can complement into a typed
+                        // substitution. Unreachable as written:
+                        // `shorten_inversion` yields a one-base residue only
+                        // for a base whose complement differs from it, which
+                        // `complement` answers only for the IUPAC alphabet
+                        // `Base` models — a byte outside it is left unchanged,
+                        // reads as self-complementary, and collapses to
+                        // identity before reaching here. Kept as a defensive
+                        // fallback: leave the inversion as authored rather than
+                        // assert or invent an edit.
+                        return Ok((start, end, canonicalize_edit(edit), warnings));
+                    }
                     return Ok((
                         index_to_hgvs_pos(new_s),
                         new_e as u64,
