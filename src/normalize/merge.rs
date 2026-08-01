@@ -3332,14 +3332,33 @@ pub(crate) fn demote_repeats_spanning_siblings(
         if length <= 0 || start < a.start || b.region != a.region {
             continue;
         }
-        // Does the tract actually span a sibling's bases? Both snapshots, so a
+        // Does the tract actually swallow a sibling? Both snapshots, so a
         // sibling that moved into the tract counts too.
-        let spans_sibling = (0..pre.len())
-            .filter(|&j| j != i)
-            .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
-            .flatten()
-            .filter(|s| s.claims_bases && s.region == a.region && s.accession == a.accession)
+        //
+        // Two ways to be swallowed. A sibling that *claims bases* is swallowed
+        // when its span meets the tract. A sibling that claims none is still
+        // swallowed when its **junction** falls strictly inside the tract
+        // (#1287): a copy count over `1_9` cannot express another member adding
+        // sequence in the middle of those nine bases, so the pair overlaps. The
+        // 3' end is exclusive on purpose — a junction at `a.end` is flush against
+        // the tract rather than inside it, which is the adjacency the collapse
+        // pass exists to catch (#999, #1135), and the same strictness
+        // `detect_insertion_overlaps` uses for an interior junction (#1276).
+        let siblings = || {
+            (0..pre.len())
+                .filter(|&j| j != i)
+                .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
+                .flatten()
+                .filter(|s| s.region == a.region && s.accession == a.accession)
+        };
+        let spans_sibling_bases = siblings()
+            .filter(|s| s.claims_bases)
             .any(|s| s.start <= a.end && s.end >= a.start);
+        let spans_sibling_junction = siblings()
+            .filter(|s| !s.claims_bases)
+            .filter_map(|s| s.junction)
+            .any(|junction| junction >= a.start && junction < a.end);
+        let spans_sibling = spans_sibling_bases || spans_sibling_junction;
         if !spans_sibling {
             continue;
         }
