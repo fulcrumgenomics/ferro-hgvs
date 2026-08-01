@@ -2634,6 +2634,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 &mut result,
                 allele.phase,
                 allele.uncertain,
+                &self.provider,
             );
             // Third: an insertion or duplication consumes no base, so the clamp
             // above leaves it alone — but its *junction* shifts through a tract
