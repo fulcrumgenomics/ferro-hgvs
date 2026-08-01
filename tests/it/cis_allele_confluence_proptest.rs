@@ -53,6 +53,12 @@
 //!   decide differently, because both are measured against how the input
 //!   happened to be written. Tracked by #1260 and #1262 and pinned by
 //!   `adjacent_gap_insertions_are_a_known_gap`.
+//!
+//!   This is the **only** restriction those two issues justify. The generator
+//!   used to carry a second one citing them — a filter excluding two insertions
+//!   at adjacent gaps — which #1294 removed after re-measuring: neither #1260
+//!   nor #1262 is about overlapping members, so the citation did not describe
+//!   the shape it was excluding. What that shape actually hits is #1301.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
 //!   because it finds #1297, a cancelled member left as an identity member
 //!   overlapping the repeat that absorbed it. It found #1286, #1287, #1290,
@@ -690,12 +696,12 @@ impl IndelHaplotype {
         out
     }
 
-    /// Whether two insertions sit at **adjacent gaps** — the one shape this
-    /// model must currently exclude, tracked by #1260 and #1262.
+    /// Whether two insertions sit at **adjacent gaps**.
     ///
-    /// Excluded, not silently skipped: `adjacent_gap_insertions_are_a_known_gap`
-    /// below pins the shape as currently-broken, so fixing either issue fails
-    /// that test loudly and this filter comes out at the same time.
+    /// The strategy no longer filters this shape out (#1294). It is kept because
+    /// `adjacent_gap_insertions_are_a_known_gap` uses it to assert that the
+    /// haplotype it pins really is one, so that test cannot drift onto a
+    /// different shape than the one it claims to pin.
     fn has_adjacent_gap_insertions(&self) -> bool {
         self.events.windows(2).any(|pair| {
             matches!(pair[0], Event::Insert { .. })
@@ -742,10 +748,6 @@ fn indel_haplotype_strategy() -> impl Strategy<Value = IndelHaplotype> {
                             events,
                         }
                     })
-                    .prop_filter(
-                        "two insertions at adjacent gaps: #1260 / #1262 (see module docs)",
-                        |haplotype| !haplotype.has_adjacent_gap_insertions(),
-                    )
                     // A haplotype whose events cancel denotes the reference itself.
                     // That is a real HGVS question (`=` and the self-cancelling
                     // merge, #1135) but not a *confluence* one: the spanning-delins
@@ -804,6 +806,18 @@ proptest! {
     /// budget and fails a 30,000-case soak on the same shape, so switching it
     /// on would make a green CI a matter of the budget rather than of the
     /// property holding.
+    ///
+    /// **#1301** is behind it, and reachable at the first generated case since
+    /// #1294 dropped the adjacent-gap-insertion filter from the strategy: two
+    /// insertions at adjacent gaps reach a duplication and an insertion that
+    /// denote the right bases but overlap and are rendered out of order.
+    ///
+    /// Expect the reported minimal case to name that shape rather than #1297's.
+    /// #1297's seed is the one that fails, but with the filter gone its shrink
+    /// is free to walk onto an adjacent-gap pair, which is strictly simpler —
+    /// so the failure output reads as #1301 while the `#[ignore]` reason and the
+    /// seed file both say #1297. Both are accurate; they describe the seed and
+    /// the shrink respectively.
     ///
     /// Do not weaken it to make it pass.
     #[test]
@@ -906,7 +920,7 @@ fn adjacent_gap_insertions_are_a_known_gap() {
     };
     assert!(
         haplotype.has_adjacent_gap_insertions(),
-        "the pinned haplotype must be the shape the strategy filters out"
+        "the pinned haplotype must be an adjacent-gap-insertion one"
     );
     let encodings = haplotype.encodings();
     assert_eq!(
