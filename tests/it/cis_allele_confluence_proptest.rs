@@ -321,6 +321,10 @@ fn resulting_sequence(
     Ok(out)
 }
 
+/// The building blocks a core is assembled from, biased toward repeats and
+/// complementary pairs (see [`core_strategy`]).
+const CORE_PARTS: [&str; 8] = ["A", "C", "G", "T", "AA", "AT", "GC", "CAG"];
+
 /// Cores biased toward repeats and complementary pairs, so inversion
 /// recognition and repeat-aware partitioning are exercised rather than a random
 /// string where nothing is a palindrome and no tract repeats.
@@ -328,7 +332,46 @@ fn resulting_sequence(
 /// This bias does **not** buy 3'-shifting: the corpus is substitution-only and
 /// so length-preserving, and only a pure indel piece shifts (see the module
 /// doc's scope note).
+///
+/// Drawn as **indices** into [`CORE_PARTS`] rather than as
+/// `prop_oneof![Just("A".to_string()), ...]`. The two have the same
+/// distribution — `prop_oneof!` weights its arms equally, so both are uniform
+/// over the eight parts — but the union form dominated the soak's runtime.
+/// Every case draws 6-13 parts, and each part cost a `TupleUnion` value tree
+/// over eight `Just<String>` arms plus a `String` clone, none of it inlined in
+/// the unoptimized test profile CI runs. Measured at 5,000 cases in that
+/// profile: 2.52s of user CPU for this strategy alone against 0.14s for the
+/// index form, an 18x difference that carried straight through to the
+/// properties below (4.25s -> 1.9s each). At the soak's 125,000 cases it was
+/// about 60% of the job's wall time.
 fn core_strategy() -> impl Strategy<Value = String> {
+    prop::collection::vec(0..CORE_PARTS.len(), 6..14)
+        .prop_map(|parts| parts.into_iter().map(|index| CORE_PARTS[index]).collect())
+}
+
+/// The original union-based draw, kept **only** for [`indel_haplotype_strategy`].
+///
+/// Identical in distribution to [`core_strategy`] — `prop_oneof!` weights its
+/// arms equally, so both are uniform over the same eight parts — and slower for
+/// the reason documented there. It survives because
+/// `tests/proptest-regressions/cis_allele_confluence_proptest.txt` pins three
+/// `IndelHaplotype` reproductions (#1286, #1287) as RNG **seeds**, and proptest
+/// replays a seed *through the strategy*: change how the strategy consumes
+/// randomness and the same seed yields a different value.
+///
+/// Verified rather than assumed. Running
+/// `an_indel_haplotype_normalizes_to_its_own_sequence --run-ignored all` with
+/// the indel model on the index-based draw still fails, but on a *different*
+/// case — it appended a fresh seed for `core: "AAAAACAGCGCGCGCAAC"` instead of
+/// reproducing either recorded one. The pinned cases would have stopped
+/// guarding the bugs they were filed for, silently, because that test is
+/// `#[ignore]`d and CI would never have gone red.
+///
+/// The substitution model has no such pinned cases, so it is free to move.
+/// Collapsing these two is safe once #1286/#1287 are fixed and their seeds are
+/// re-recorded, or once the indel corpus is at the soak's case count and needs
+/// the speed.
+fn union_core_strategy() -> impl Strategy<Value = String> {
     prop::collection::vec(
         prop_oneof![
             Just("A".to_string()),
@@ -705,7 +748,7 @@ impl IndelHaplotype {
 }
 
 fn indel_haplotype_strategy() -> impl Strategy<Value = IndelHaplotype> {
-    core_strategy().prop_flat_map(|core| {
+    union_core_strategy().prop_flat_map(|core| {
         let length = core.len();
         // Leave the first and last base alone so an event never sits against
         // the core/padding seam, where a shift would leave the modelled region.
