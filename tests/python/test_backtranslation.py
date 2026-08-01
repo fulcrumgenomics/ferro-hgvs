@@ -58,8 +58,10 @@ class TestCodonChange:
         assert hasattr(change, "changed_positions")
         assert isinstance(change.ref_codon, str)
         assert isinstance(change.alt_codon, str)
-        # changed_positions is bytes containing position values
-        assert isinstance(change.changed_positions, bytes)
+        # changed_positions is a list of 1-indexed positions, as the stub
+        # declares. It used to come back as `bytes` — see #1246.
+        assert isinstance(change.changed_positions, list)
+        assert all(isinstance(position, int) for position in change.changed_positions)
 
     def test_codon_change_num_changes(self) -> None:
         bt = ferro_hgvs.Backtranslator.standard()
