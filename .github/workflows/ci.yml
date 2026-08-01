@@ -393,7 +393,17 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-soak
+          # Keyed on the workflow file as well as the lockfile. `actions/cache`
+          # SKIPS the save on an exact key hit ("Cache hit occurred on the
+          # primary key ..., not saving cache"), so a key derived from
+          # `Cargo.lock` alone freezes `target/` at whatever the first run for
+          # that lockfile produced. Measured directly: after this job dropped
+          # `--features dev`, the restored cache still held the dev-feature
+          # artifacts, so every run re-compiled reqwest, hyper, criterion and
+          # the rest at opt-level 3 — about 60s, repeated forever rather than
+          # paid once. The build flags live in this file, so hashing it makes
+          # the cache follow them.
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}-soak
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-soak
       - name: Build soak archive
