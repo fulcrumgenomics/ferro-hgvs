@@ -8,11 +8,11 @@
 # are fixed and replay green; the second seed is still rejected by the strategy,
 # whose remaining filter drops haplotypes whose events cancel to no net change.
 # (The adjacent-gap-insertion filter that used to reject the first seed as well
-# was removed in #1294, so it runs now.) #1297 and #1308 are fixed too, and all
-# of the above now replay green. #1312 is not yet fixed and is the reason
-# `an_indel_haplotype_normalizes_to_its_own_sequence` is still `#[ignore]`d — it
-# is the one seed here that still fails, which is what should gate enabling the
-# test.
+# was removed in #1294, so it runs now.) #1297, #1308 and #1312 are fixed
+# too, and all of the above now replay green. #1316 is not yet fixed and is the
+# reason `an_indel_haplotype_normalizes_to_its_own_sequence` is still
+# `#[ignore]`d — it is the one seed here that still fails, which is what should
+# gate enabling the test.
 cc e8fb54e331549cd5d7b8d2f8100951aed7db8ab2ffc759df817bd69a7e4eff9a # #1286; shrinks to haplotype = IndelHaplotype { core: "AAAAAA", events: [Insert { index: 1, bases: ['A', 'A'], len: 1 }, Insert { index: 2, bases: ['A', 'A'], len: 1 }] }
 cc e11d211278b3d526443f114ec02b2ec4e1b35df7d4a6024ba0bcc543d52162b3 # shrinks to haplotype = IndelHaplotype { core: "AAAAAA", events: [Delete { index: 1 }, Insert { index: 2, bases: ['A', 'A'], len: 1 }] }
 cc a38727fa5784df80e613e4c9547baccb981621191ad1260871fb5943faf8dce6 # #1287; shrinks to haplotype = IndelHaplotype { core: "ATACAGAAAATCAGGGCATA", events: [Insert { index: 4, bases: ['G', 'A'], len: 2 }, Insert { index: 6, bases: ['A', 'A'], len: 2 }] }
@@ -21,3 +21,4 @@ cc d327f0bf8cf0b8efddb73821bcc4e210ec3c32c5df034d9d4607833b24a588d2 # #1296; shr
 cc a88766af1b7adaab791aaf8fda16997a3c66fe0d265cb1a57d9488f22a67ef5d # #1297; shrinks to haplotype = IndelHaplotype { core: "GCATGAAAAT", events: [Insert { index: 4, bases: "AA" }, Delete { index: 6 }, Insert { index: 7, bases: "A" }] }
 cc 03577f141460793dd01977d320da2524039646462483ad1e6df70eb4426e8213 # #1308; shrinks to haplotype = IndelHaplotype { core: "CAGAAGATGAATAA", events: [Insert { index: 6, bases: "TG" }, Insert { index: 7, bases: "TG" }] }
 cc 958acf3ea2005efa9eafd738606d0fd1d6bb0f586c918b926fd4d79d052f8d99 # #1312; shrinks to haplotype = IndelHaplotype { core: "TAAAACCA", events: [Insert { index: 3, bases: "AC" }, Insert { index: 4, bases: "AC" }] }
+cc 23c331742c910e4d748997c1e4e9d988fe3b4d032c3f60b1e995c9d052f3c720 # #1316; shrinks to haplotype = IndelHaplotype { core: "ACAGCCAGTCAGCGCATCAG", events: [Insert { index: 1, bases: "AA" }, Insert { index: 2, bases: "AA" }] }
