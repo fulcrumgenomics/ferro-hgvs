@@ -4042,15 +4042,53 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
         ) {
             continue;
         }
-        let collides = (0..spans.len()).filter(|&j| j != i).any(|j| {
-            spans[j].as_ref().is_some_and(|s| {
-                s.claims_bases
-                    && s.region == dup.region
-                    && s.accession == dup.accession
-                    && s.start <= dup.end
-                    && s.end >= dup.start
-            })
-        });
+        let same_molecule =
+            |s: &&MemberSpan| s.region == dup.region && s.accession == dup.accession;
+        let siblings = || {
+            (0..spans.len())
+                .filter(|&j| j != i)
+                .filter_map(|j| spans[j].as_ref())
+                .filter(same_molecule)
+        };
+        // A sibling that claims bases collides when its span meets the
+        // duplication's — the two then name the same positions.
+        let claims_the_bases = siblings()
+            .filter(|s| s.claims_bases)
+            .any(|s| s.start <= dup.end && s.end >= dup.start);
+        // A sibling that claims none still collides when its **junction** falls
+        // strictly between the duplication's two ends (#1320).
+        //
+        // A duplication *sorts* by its span's start and *acts* at its span's
+        // end — it copies the bases under the span and lands them at the
+        // junction 3' of them. Those two positions are the same for a one-base
+        // dup and diverge as the span widens, and a sibling junction strictly
+        // between them falls on the wrong side of both: the duplication is
+        // rendered first, because 263 precedes 264, while the bases it adds
+        // arrive at 266, after the sibling's. The pair then reads as out of
+        // order however it is spelled. Re-spelling settles it, because the
+        // insertion form sorts where it acts.
+        //
+        // **Both** ends are exclusive, and each for its own reason:
+        //
+        // - at `dup.end` the junction is the duplication's own landing junction,
+        //   the shared-junction case `coalesce_members_at_one_junction` merges
+        //   (#1286) — re-spelling would pull it out from under that merge;
+        // - at `dup.start` the duplication sorts to the same position as the
+        //   sibling, so `junction_rank` already orders the pair correctly
+        //   (#1301) and there is no discrepancy to repair. `g.[264_265insCA;
+        //   264_265dup]` and `g.[258dup;258_259dup]` are both well-ordered and
+        //   must survive untouched.
+        //
+        // This is narrower than the equivalent test in
+        // `demote_repeats_spanning_siblings` (#1287), which takes `>=` at the 5'
+        // end. A repeat has no comparable sort/act split — it spans its tract
+        // and is rendered there — so an interior junction is a problem for it
+        // wherever it sits.
+        let swallows_a_junction = siblings()
+            .filter(|s| !s.claims_bases)
+            .filter_map(|s| s.junction)
+            .any(|junction| junction > dup.start && junction < dup.end);
+        let collides = claims_the_bases || swallows_a_junction;
         if !collides {
             continue;
         }

@@ -177,6 +177,7 @@ mod issue_1304_junction_barrier_snapshot;
 mod issue_1308_commuting_payload_phase;
 mod issue_1312_landed_payload_commutes;
 mod issue_1316_coincident_tract_repeats;
+mod issue_1320_dup_spans_sibling_junction;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
