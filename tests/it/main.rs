@@ -365,6 +365,7 @@ mod reject_coord_system_mismatch;
 mod reject_dupins;
 mod reject_single_position_insertion;
 mod reject_u_in_dna;
+mod render_calibration;
 mod repeat_count_trans;
 mod repeat_deln_uncertain_range;
 mod repeat_span_sibling_overlap;
