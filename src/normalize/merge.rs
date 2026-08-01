@@ -3395,11 +3395,12 @@ pub(crate) fn demote_repeats_spanning_siblings(
 /// A junction sits immediately 3' of one position: `end` for a duplication
 /// (the copy follows the duplicated bases), `start` for an insertion (whose
 /// span is the gap `start_end`).
-pub(crate) fn clamp_sibling_crossing_junctions(
+pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
     before: &[HgvsVariant],
     after: &mut [HgvsVariant],
     phase: AllelePhase,
     uncertain: bool,
+    provider: &P,
 ) {
     if phase != AllelePhase::Cis || uncertain || after.len() < 2 || before.len() != after.len() {
         return;
@@ -3447,13 +3448,58 @@ pub(crate) fn clamp_sibling_crossing_junctions(
         if after_junction < before_junction {
             continue;
         }
-        // The junction crossed a sibling if it started 5' of the sibling's
-        // first base and ended at or past it.
-        let limit = siblings
+        // The junction crossed a base-claiming sibling if it started 5' of the
+        // sibling's first base and ended at or past it.
+        let onto_bases = siblings
             .iter()
             .filter(|s| s.start > before_junction && s.start <= after_junction)
-            .map(|s| s.start - 1)
-            .min();
+            .map(|s| s.start - 1);
+        // It can equally cross another *junction* (#1290). Two junction-
+        // occupying members add their payloads at two interbase points, and
+        // their relative order is the only thing fixing the order of those
+        // payloads — so a junction sweeping past another reorders them and
+        // changes what the allele denotes, while leaving both members
+        // well-formed and disjoint. Nothing else catches it: the overlap
+        // detector sees two distinct junctions, and the clamp above sees a
+        // sibling with no bases to land on.
+        //
+        // Stop one position **short** of the sibling's junction, not at it.
+        // Landing on it makes the two share a junction, which is the case with
+        // no defined payload order at all — `coalesce_members_at_one_junction`
+        // merges that only when the payloads commute, and declines otherwise,
+        // which would leave an overlap here rather than the correct ordered
+        // pair. One short keeps them distinct and in their original order.
+        //
+        // Only a sibling whose payload does not *commute* with this member's.
+        // Two payloads that commute have no observable order, so crossing is
+        // harmless, and letting them settle on one junction is better: they then
+        // merge into a single member (#1286), the canonical form the
+        // sequence-first derivation would also reach. Barring the crossing
+        // unconditionally would split `g.[258_259insA;259_260insA]` into
+        // `g.[262dup;263dup]` — correct, but two members where one will do — and
+        // would leave the three-insertion case at two members for the same
+        // reason, since a merged `AA` is not *equal* to a remaining `A` even
+        // though it commutes with it.
+        let payload = junction_payload(&after[i], kind, a, provider);
+        let across_junctions = (0..pre.len())
+            .filter(|&j| j != i)
+            .flat_map(|j| [(j, pre[j].as_ref()), (j, post[j].as_ref())])
+            .filter_map(|(j, span)| span.map(|s| (j, s)))
+            .filter(|(_, s)| !s.claims_bases && s.region == a.region && s.accession == a.accession)
+            .filter(|(j, s)| {
+                let blocks = match (&payload, junction_payload(&after[*j], kind, s, provider)) {
+                    (Some(mine), Some(theirs)) => !payloads_commute(mine, &theirs),
+                    // A payload that cannot be read blocks: refusing to cross is
+                    // the conservative answer when the reordering cannot be
+                    // shown to be harmless.
+                    _ => true,
+                };
+                blocks && s.junction.is_some()
+            })
+            .filter_map(|(_, s)| s.junction)
+            .filter(|&j| j > before_junction && j <= after_junction)
+            .map(|j| j - 1);
+        let limit = onto_bases.chain(across_junctions).min();
         let Some(limit) = limit else {
             continue;
         };
@@ -3803,12 +3849,16 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
 /// The next pass re-canonicalises it to a `dup` or a repeat where the reference
 /// permits.
 ///
-/// **Only when every colliding payload is identical.** Concatenation is
-/// otherwise order-dependent, and the order is exactly what the shift destroyed:
-/// two insertions that were at distinct junctions had a defined order, and once
-/// they share a junction they do not. Equal payloads make the concatenation
-/// order-independent, so the repair is unambiguous. A differing-payload
-/// collision is left for the overlap detector to report rather than guessed at.
+/// **Only when the colliding payloads commute** (`p ++ q == q ++ p`, see
+/// [`payloads_commute`]). Concatenation is otherwise order-dependent, and the
+/// order is exactly what the shift destroyed: two insertions at distinct
+/// junctions had a defined order, and once they share a junction they do not.
+/// Commuting payloads make the concatenation order-independent, so the repair is
+/// unambiguous.
+///
+/// A non-commuting pair never reaches here: `clamp_sibling_crossing_junctions`
+/// bars precisely that crossing (#1290), so the two stay at distinct junctions
+/// in their original order. The two predicates are deliberately the same one.
 ///
 /// Genomic axes only, matching `respell_colliding_duplications` — the
 /// transcript axes need a coordinate conversion this does not carry.
@@ -3866,8 +3916,15 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
         let Some(payloads) = payloads else {
             continue;
         };
-        // Order-independence guard: every payload identical.
-        if payloads.windows(2).any(|pair| pair[0] != pair[1]) {
+        // Order-independence guard: every pair must commute, so the
+        // concatenation below does not depend on the order the members happen
+        // to be in. The same predicate `clamp_sibling_crossing_junctions` uses
+        // to decide whether they were allowed to meet here at all.
+        if payloads.iter().enumerate().any(|(x, left)| {
+            payloads[x + 1..]
+                .iter()
+                .any(|right| !payloads_commute(left, right))
+        }) {
             continue;
         }
         let combined: Vec<Base> = payloads.concat();
@@ -3915,6 +3972,23 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
         index += 1;
         keep
     });
+}
+
+/// Whether two junction payloads may be reordered without changing what the
+/// allele denotes.
+///
+/// Exactly when they commute: `p ++ q == q ++ p`. That identity holds if and
+/// only if both are powers of one common word, which is precisely the case
+/// where the order two insertions apply in is unobservable — `A` and `AA` in a
+/// poly-A tract commute, `A` and `C` do not.
+///
+/// Used in two places that must agree. `clamp_sibling_crossing_junctions` bars a
+/// junction from crossing a sibling's only when the payloads do *not* commute,
+/// and `coalesce_members_at_one_junction` merges members sharing a junction only
+/// when they *do* — so a pair is either kept apart and ordered, or allowed
+/// together and merged, never left overlapping.
+fn payloads_commute(left: &[Base], right: &[Base]) -> bool {
+    left.iter().chain(right).eq(right.iter().chain(left))
 }
 
 /// The bases a junction-occupying member adds, or `None` when they cannot be

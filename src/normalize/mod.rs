@@ -2645,6 +2645,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 &mut result,
                 allele.phase,
                 allele.uncertain,
+                &self.provider,
             );
             // Finally, a spelling repair rather than a repositioning: a
             // duplication whose span collides with a sibling's bases becomes
