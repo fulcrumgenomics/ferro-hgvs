@@ -2685,6 +2685,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // resulting sequence — an overlapping allele has none, so that pass
             // declines exactly the input it would have fixed.
             merge::coalesce_members_at_one_junction(
+                &pre_split,
                 &mut result,
                 allele.phase,
                 allele.uncertain,
