@@ -676,3 +676,103 @@ fn test_insertion_to_dup_offphase_is_3prime_and_idempotent() {
     );
     assert_eq!(n1, n2, "normalize is not idempotent: {n1} -> {n2}");
 }
+
+/// Part 4 — regression lock for the overlap-conflict reorder class, hermetic
+/// (MockProvider genomic sequence, no manifest). An insertion strictly interior
+/// to an inversion is an overlap conflict with no defined resulting sequence, so
+/// the members are deliberately left in authored order rather than sorted into
+/// genomic order (the `#395` "preserve input verbatim" contract). That gate is
+/// driven by the `OverlapConflict` warning, which made idempotency depend on the
+/// conflict surviving the per-member pipeline's own respelling of the members —
+/// and it did not: the interior `ins` becomes a `dup` on the CDS axis and the
+/// same change is spelled as a `repeat` expansion on the genomic axis, neither
+/// of which the detector recognised as occupying a junction. The first pass then
+/// declined to sort and the second pass, seeing no conflict, sorted — two
+/// passes, two strings.
+///
+/// Both respellings are covered because fixing only one leaves the other broken:
+/// the `dup` one in `issue_1235_transcript_axes` (the CDS axis reaches it by
+/// respelling the `ins`), the `repeat` one in the second half of this test.
+/// The genomic axis does *not* respell the interior `ins` into a repeat — the
+/// #1259 sibling clamp holds it at `1006_1007insAA` rather than letting it
+/// expand across the inversion — so the `repeat` spelling is authored directly
+/// instead of waited for.
+#[test]
+fn test_overlap_conflicting_allele_is_idempotent_across_respellings() {
+    // 1-based: 1001..=1023 = "GGGCAATTGGGCCCAAATTTGGG", rest 'G'. The AA run at
+    // 1005..=1006 is what lets the interior insertion be spelled as a dup/repeat.
+    let seq = format!(
+        "{}{}{}",
+        "G".repeat(1000),
+        "GGGCAATTGGGCCCAAATTTGGG",
+        "G".repeat(1000)
+    );
+    let mut provider = MockProvider::new();
+    provider.add_genomic_sequence("NC_000001.11", seq);
+
+    // `1005_1006insAA` sits strictly inside the `1004_1010inv` span.
+    let input = "NC_000001.11:g.[1004_1010inv;1005_1006insAA]";
+    let v = parse_hgvs(input).expect("parse");
+    let n1 = format!(
+        "{}",
+        Normalizer::new(provider.clone())
+            .normalize(&v)
+            .expect("normalize")
+    );
+
+    // Value-pin: the inversion shifts 3' and the interior insertion shifts
+    // within the inverted span, but the two members stay two members in authored
+    // order — the conflict is preserved, not laundered into one tidy edit.
+    //
+    // This is a behavior lock, not a conformance assertion: the external oracles
+    // reject an overlap-conflicting allele outright rather than canonicalizing
+    // it, so there is no independent answer to check against. The property this
+    // test actually enforces is the idempotency assertion below; the pinned
+    // string is here to make a silent change in *what* it settles on visible.
+    assert_eq!(
+        n1, "NC_000001.11:g.[1005_1009inv;1006_1007insAA]",
+        "an overlap-conflicting allele must stay a multi-member allele in \
+         authored order; got {n1}"
+    );
+
+    // Idempotency: the second pass must not reorder the members.
+    let v2 = parse_hgvs(&n1).expect("re-parse");
+    let n2 = format!(
+        "{}",
+        Normalizer::new(provider.clone())
+            .normalize(&v2)
+            .expect("re-normalize")
+    );
+    assert_eq!(n1, n2, "normalize is not idempotent: {n1} -> {n2}");
+
+    // The `repeat` spelling of the same conflict, in both member orders. A
+    // `repeat` writes its extra copies at the junction after its own span, so
+    // `1005_1006A[4]` occupies junction 1006 — strictly interior to the
+    // `1005_1009inv`. Each must survive verbatim: the detector has to recognise
+    // the conflict in this spelling too, or the genomic-order sort un-gates and
+    // the two orders collapse into each other, which is the same idempotency
+    // break one pass later.
+    for authored in [
+        "NC_000001.11:g.[1005_1009inv;1005_1006A[4]]",
+        "NC_000001.11:g.[1005_1006A[4];1005_1009inv]",
+    ] {
+        let v = parse_hgvs(authored).expect("parse");
+        let r1 = format!(
+            "{}",
+            Normalizer::new(provider.clone())
+                .normalize(&v)
+                .expect("normalize")
+        );
+        assert_eq!(
+            r1, authored,
+            "a `repeat` interior to an `inv` must stay in authored order"
+        );
+        let r2 = format!(
+            "{}",
+            Normalizer::new(provider.clone())
+                .normalize(&parse_hgvs(&r1).expect("re-parse"))
+                .expect("re-normalize")
+        );
+        assert_eq!(r1, r2, "normalize is not idempotent: {r1} -> {r2}");
+    }
+}

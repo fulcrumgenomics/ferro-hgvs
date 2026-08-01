@@ -1654,11 +1654,33 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// can improve: a `delins` or an `inv`, the two forms that may be hiding an
     /// unchanged interior base and so need re-partitioning (#1230, #1232).
     ///
-    /// Restricted to the genomic axes because `merge::canonicalize_from_sequence`
-    /// refuses every other one anyway (the `c.`/`n.`/`r.` clamps and alphabet are
-    /// not yet modelled there). Admitting them here would only buy a clone and a
-    /// structural comparison per `normalize()` before the same refusal — and this
-    /// predicate gates every lone member on the hot path.
+    /// Genomic axes only — and, since this PR lifts `merge`'s axis gate, that is
+    /// now a deliberate restriction rather than a free one.
+    ///
+    /// #1237 narrowed this to `g.`/`m.` on the grounds that
+    /// `merge::canonicalize_from_sequence` refused the transcript axes anyway.
+    /// This PR removes that refusal for **alleles**, so lone `c.`/`n.`/`r.`
+    /// `delins` and `inv` members are the one shape still held back, and the
+    /// asymmetry is real: a lone spelling that the allele spelling of the same
+    /// variant would re-partition can stay unsplit.
+    ///
+    /// Widening it was tried and is **not** a drive-by change. It moves four
+    /// tests, and one of them is not ours to move unilaterally:
+    ///
+    /// * `normalize_tests::test_normalize_inversion_unchanged` and
+    ///   `rna_coding_consistency::parity_safe_regime::inversion_parity` — a lone
+    ///   `c.10_15inv` with an unchanged interior starts splitting into
+    ///   `[10_11delinsCA;14_15delinsAC]`. Coherent with #1230 on `g.`, and the
+    ///   parity test would need the `c_to_r` alphabet conversion its `delins`
+    ///   sibling already uses. Both are legitimately re-blessable.
+    /// * `spec_enumeration_tests::enumeration_replays_recorded_behavior` — a
+    ///   regenerated recording.
+    /// * `mutalyzer_normalize_tests::gate_normalized_snapshot` — **3 hermetic
+    ///   divergences from the Mutalyzer oracle.** That is output moving away
+    ///   from an independent oracle, which is a conformance decision needing its
+    ///   own measurement pass, not a side effect of this one.
+    ///
+    /// So the lone-member case stays gated until that pass happens.
     fn is_splittable_single_member(variant: &HgvsVariant) -> bool {
         let edit = match variant {
             HV::Genome(g) => &g.loc_edit.edit,
@@ -1823,10 +1845,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// canonicalize, and `normalize_with_diagnostics` is what the Python bindings
     /// and the web service call.
     ///
-    /// Canonicalizing after the per-member pipeline is safe because the sibling
-    /// clamp (#1234) guarantees the members it produces are disjoint — an allele
-    /// whose members overlap has no well-defined resulting sequence, so
-    /// canonicalizing one would be canonicalizing a corrupted form.
+    /// An allele whose members overlap has no well-defined resulting sequence,
+    /// so canonicalizing one would be canonicalizing a corrupted form. The
+    /// sibling clamp (#1234) keeps the members the per-member pipeline *shifts*
+    /// disjoint, but it does not cover a conflict that was in the input all
+    /// along — an insertion interior to another member's span is reported
+    /// (`OverlapConflict`) rather than resolved, and so survives into here.
+    /// `merge::apply_edits_to_window` refuses those on the edit geometry, which
+    /// is where the check has to live: the warning itself does not survive
+    /// re-normalization, so gating on it here would cost idempotency.
     fn normalize_core_canonical(
         &self,
         variant: &HgvsVariant,
@@ -9209,7 +9236,28 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // transcript has no CDS), so its ref window is CDS-aligned and the
         // codon-frame split path reads correctly for `cds_start > 1` (#469,
         // superseding the latent #291 mis-alignment).
-        let codon_frame_aware = matches!(variant, HgvsVariant::Cds(_) | HgvsVariant::Rna(_));
+        //
+        // The `r.` arm asks the transcript, not the discriminant. An `r.`
+        // description is an *RNA* description, not necessarily a *coding* one:
+        // on a non-coding transcript there is no reading frame, so there is no
+        // codon for the exception to preserve. Keying off `HgvsVariant::Rna`
+        // alone stamped a frame onto `NR_` transcripts and re-merged triplets
+        // the separation rule (`general.md:34`) says must stay apart — #1241,
+        // where the `n.` and `r.` spellings of one non-coding change settled on
+        // two different strings. `Cds` needs no such check: `c.` positions are
+        // CDS-relative by construction, and the `Cds` arm of
+        // `fetch_ref_for_canonical_split` has already refused a transcript with
+        // no `cds_start`.
+        let codon_frame_aware = match &variant {
+            HgvsVariant::Cds(_) => true,
+            HgvsVariant::Rna(r) => self
+                .provider
+                .get_transcript(&r.accession.transcript_accession())
+                .ok()
+                .and_then(|tx| tx.cds_start)
+                .is_some(),
+            _ => false,
+        };
         (
             build_split_variants(&variant, subedits, hgvs_start, codon_frame_aware),
             vec![],
@@ -9350,8 +9398,26 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if extract_simple_delins(&v).is_none() {
             return vec![v];
         }
-        match self.normalize_with_diagnostics(&v) {
-            Ok(r) => match r.result {
+        // `normalize_core`, deliberately, NOT `normalize_with_diagnostics`.
+        //
+        // This helper runs *inside* `normalize_allele`, which runs inside
+        // `normalize_core`. Since #1237 the public exits route through
+        // `normalize_core_canonical`, which runs the sequence-first pass — and
+        // that pass calls `normalize_core` on its own re-derivation. Going
+        // through a public exit from here therefore closes the loop
+        // `normalize_core → normalize_allele → canonical_split_for_variant →
+        // normalize_core_canonical → normalize_core`, which recurses until the
+        // stack is gone. That is exactly the recursion `normalize_core_canonical`
+        // documents as the reason the pass cannot live in `normalize_core`; the
+        // rule is the same here, one level down.
+        //
+        // The switch also restores this helper's pre-#1237 meaning. It wants the
+        // per-member pipeline's split of a simple delins, which is what
+        // `normalize_core` is; and it discards everything the diagnostics
+        // wrapper adds, so the `detect_shuffle_infos` pass it used to run was
+        // wasted work on every call.
+        match self.normalize_core(&v) {
+            Ok((result, _warnings)) => match result {
                 HgvsVariant::Allele(a) => a.variants,
                 other => vec![other],
             },
