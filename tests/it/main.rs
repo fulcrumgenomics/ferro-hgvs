@@ -37,6 +37,7 @@ mod bulk_fixture_tests;
 mod cds_utr3_crossing_shift_idempotency;
 mod cis_allele_confluence_proptest;
 mod cis_junction_crossing_shift;
+mod cis_spelling_confluence_gap;
 mod civic_validation;
 mod cli_build_transcript;
 mod cli_check_transcripts_json;
