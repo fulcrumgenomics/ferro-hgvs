@@ -3511,36 +3511,75 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
         // `265dup`, which reported the payload `GA` rather than `A`. `GA`
         // commutes with this member's `GA`, so the barrier vanished and the
         // member swept past it (#1304).
+        // Commuting payloads are exempt from the barrier, but only as far as the
+        // sibling's **settled** junction. Commuting says `p ++ q == q ++ p` — the
+        // two payloads have no observable order *once they meet*. It says
+        // nothing about a member sweeping past a sibling that stays put and
+        // landing beyond it, where reference bases now separate them differently:
+        //
+        //     core "CAGAAGATGAATAA"
+        //     g.[263_264insTG;264_265insTG]
+        //       the second member does not move; the first 3'-shifts 263 -> 265
+        //       intended  A T G T T G G
+        //       emitted   A T T G T G G          (#1308)
+        //
+        // So a commuting sibling bounds this member at the junction it settles
+        // on — landing *on* it is what lets the pair merge (#1286) — and only
+        // its post-normalization position counts, since where it started is
+        // exactly the order that commuting makes unobservable. A sibling whose
+        // payload does not commute keeps the stricter rule above: one short, and
+        // from either snapshot.
         let payload = junction_payload(&after[i], kind, a, provider);
         let across_junctions = (0..pre.len())
             .filter(|&j| j != i)
             .flat_map(|j| {
                 [
-                    (&before[j], pre[j].as_ref()),
-                    (&post_snapshot[j], post[j].as_ref()),
+                    (false, &before[j], pre[j].as_ref()),
+                    (true, &post_snapshot[j], post[j].as_ref()),
                 ]
             })
-            .filter_map(|(variant, span)| span.map(|s| (variant, s)))
-            .filter(|(_, s)| !s.claims_bases && s.region == a.region && s.accession == a.accession)
-            .filter(|(variant, s)| {
-                let blocks = match (&payload, junction_payload(variant, kind, s, provider)) {
-                    (Some(mine), Some(theirs)) => !payloads_commute(mine, &theirs),
+            .filter_map(|(settled, variant, span)| span.map(|s| (settled, variant, s)))
+            .filter(|(_, _, s)| {
+                !s.claims_bases && s.region == a.region && s.accession == a.accession
+            })
+            .filter_map(|(settled, variant, s)| {
+                let junction = s.junction?;
+                if junction <= before_junction || junction > after_junction {
+                    return None;
+                }
+                let commutes = match (&payload, junction_payload(variant, kind, s, provider)) {
+                    (Some(mine), Some(theirs)) => payloads_commute(mine, &theirs),
                     // A payload that cannot be read blocks: refusing to cross is
                     // the conservative answer when the reordering cannot be
                     // shown to be harmless.
-                    _ => true,
+                    _ => false,
                 };
-                blocks && s.junction.is_some()
-            })
-            .filter_map(|(_, s)| s.junction)
-            .filter(|&j| j > before_junction && j <= after_junction)
-            .map(|j| j - 1);
+                match commutes {
+                    // Where it settles, and it may be met rather than only
+                    // approached. Its pre-normalization position is exactly the
+                    // order commuting makes unobservable, so it is not a bound.
+                    true => settled.then_some(junction),
+                    false => Some(junction - 1),
+                }
+            });
         let limit = onto_bases.chain(across_junctions).min();
         let Some(limit) = limit else {
             continue;
         };
-        // Never move past where the junction started.
-        let delta = (limit - after_junction).max(before_junction - after_junction);
+        // Never move past where the junction started, and never onto a junction
+        // this member's payload is out of phase with: the walk back finds the
+        // most 3' position it can legally occupy. `before_junction` always can,
+        // since that is where the shift began.
+        let ceiling = limit.max(before_junction).min(after_junction);
+        let Some(payload) = payload.as_ref() else {
+            continue;
+        };
+        let Some(destination) = (before_junction..=ceiling).rev().find(|&j| {
+            payload_at_junction(payload, after_junction, j, &a.provider_key, provider).is_some()
+        }) else {
+            continue;
+        };
+        let delta = destination - after_junction;
         if delta != 0 {
             translate_junction_member(&mut after[i], delta, kind, a, provider);
         }
