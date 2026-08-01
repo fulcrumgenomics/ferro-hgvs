@@ -296,6 +296,10 @@ fn resulting_sequence(
     Ok(out)
 }
 
+/// The building blocks a core is assembled from, biased toward repeats and
+/// complementary pairs (see [`core_strategy`]).
+const CORE_PARTS: [&str; 8] = ["A", "C", "G", "T", "AA", "AT", "GC", "CAG"];
+
 /// Cores biased toward repeats and complementary pairs, so inversion
 /// recognition and repeat-aware partitioning are exercised rather than a random
 /// string where nothing is a palindrome and no tract repeats.
@@ -303,21 +307,21 @@ fn resulting_sequence(
 /// This bias does **not** buy 3'-shifting: the corpus is substitution-only and
 /// so length-preserving, and only a pure indel piece shifts (see the module
 /// doc's scope note).
+///
+/// Drawn as **indices** into [`CORE_PARTS`] rather than as
+/// `prop_oneof![Just("A".to_string()), ...]`. The two have the same
+/// distribution — `prop_oneof!` weights its arms equally, so both are uniform
+/// over the eight parts — but the union form dominated the soak's runtime.
+/// Every case draws 6-13 parts, and each part cost a `TupleUnion` value tree
+/// over eight `Just<String>` arms plus a `String` clone, none of it inlined in
+/// the unoptimized test profile CI runs. Measured at 5,000 cases in that
+/// profile: 2.52s of user CPU for this strategy alone against 0.14s for the
+/// index form, an 18x difference that carried straight through to the
+/// properties below (4.25s -> 1.9s each). At the soak's 125,000 cases it was
+/// about 60% of the job's wall time.
 fn core_strategy() -> impl Strategy<Value = String> {
-    prop::collection::vec(
-        prop_oneof![
-            Just("A".to_string()),
-            Just("C".to_string()),
-            Just("G".to_string()),
-            Just("T".to_string()),
-            Just("AA".to_string()),
-            Just("AT".to_string()),
-            Just("GC".to_string()),
-            Just("CAG".to_string()),
-        ],
-        6..14,
-    )
-    .prop_map(|parts| parts.concat())
+    prop::collection::vec(0..CORE_PARTS.len(), 6..14)
+        .prop_map(|parts| parts.into_iter().map(|index| CORE_PARTS[index]).collect())
 }
 
 /// Replacement bases are chosen from the three that *differ* from the
