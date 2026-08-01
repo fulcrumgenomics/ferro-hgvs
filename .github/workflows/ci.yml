@@ -213,9 +213,76 @@ jobs:
             ${{ runner.os }}-cargo-
       - run: cargo clippy --all-features --all-targets -- -D warnings
 
-  # Build the test binaries and the two generated spec artifacts ONCE, then fan
-  # out: every downstream job consumes this job's `nextest archive`, so the
-  # crate compiles a single time no matter how many shards run.
+  # The two generated spec artifacts, split out of `test-build`.
+  #
+  # These ran as the first two steps of `test-build`, which serialized ~52s of
+  # generation ahead of the ~105s archive compile inside one job. They share
+  # nothing with the archive but the library crate: the generators are `[[bin]]`
+  # targets that read the spec submodule at RUNTIME, and what they emit is a
+  # pair of JSON files the shards download. Running them concurrently with the
+  # archive build takes that serialization off the critical path.
+  #
+  # Generation is itself the gate on the curated overrides — plain generation,
+  # not `--check` — so this job failing means the overrides no longer resolve
+  # against the spec checkout. That signal is now its own job rather than
+  # buried in a build.
+  spec-fixtures:
+    name: Spec fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          lfs: true
+          # Required here, and ONLY here: the generators harvest HGVS strings
+          # from the vendored spec checkout at runtime.
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-specgen
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-specgen
+      - name: Generate HGVS v21.0 spec fixture
+        run: cargo run --features dev --bin generate_spec_fixture
+      - name: Generate HGVS spec test enumeration
+        run: cargo run --features dev --bin generate_spec_enumeration
+      - name: Stage the generator binaries for the shards
+        # `spec_generator_preconditions` executes these two binaries. The shards
+        # run from the nextest archive with no build state, so they must not
+        # shell out to cargo. Both were built and run by the steps above, so
+        # ship them alongside the fixtures. As `[[bin]]` targets they land in
+        # `target/debug/`, not `target/debug/examples/`.
+        run: |
+          mkdir -p staged-generators
+          cp target/debug/generate_spec_fixture \
+             target/debug/generate_spec_enumeration staged-generators/
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: generator-binaries
+          path: staged-generators/
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: spec-fixtures
+          path: |
+            tests/fixtures/grammar/hgvs_spec_normalization.json
+            tests/fixtures/grammar/hgvs_spec_enumeration.json
+          retention-days: 1
+
+  # Build the test binaries ONCE, then fan out: `test` and `test-oracle` consume
+  # this job's `nextest archive`, so the crate compiles a single time no matter
+  # how many shards run. (The two generated spec artifacts moved to
+  # `spec-fixtures` above; the soak and sweeps run from the optimized archive
+  # `test-build-soak` produces, not this one.)
   #
   # `--extract-to . --extract-overwrite` in the consumers is load-bearing, not
   # tidiness. 26 call sites across 10 test files resolve the CLI binary with
@@ -244,7 +311,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           lfs: true
-          submodules: true
+          # No `submodules: true`. The spec checkout is read at generator
+          # RUNTIME, in the `spec-fixtures` job — nothing here reads it at
+          # compile time (verified: no `include_str!`/`include_bytes!` under
+          # `src/` or `tests/` names a path below `assets/`).
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
@@ -261,44 +331,13 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
           restore-keys: |
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
-      - name: Generate HGVS v21.0 spec fixture
-        # Gitignored generated artifact, not committed. Generating it here also
-        # validates the curated overrides file — the guard the old `--check`
-        # step provided. Shipped to the shards as an artifact so they never
-        # regenerate it (and so they need no spec submodule).
-        run: cargo run --features dev --bin generate_spec_fixture
-      - name: Generate HGVS spec test enumeration
-        run: cargo run --features dev --bin generate_spec_enumeration
       - name: Build test archive
         # Compiles every test binary and packs them with their run metadata.
         run: cargo nextest archive --features dev --archive-file nextest.tar.zst
-      - name: Stage the generator binaries for the shards
-        # `spec_generator_preconditions` executes these two binaries. They are
-        # `required-features = ["dev"]` bin targets, and the shards run from the
-        # nextest archive with no build state, so they must not shell out to
-        # cargo. Both were already built and run by the generate steps above, so
-        # ship them alongside the archive. As `[[bin]]` targets they land in
-        # `target/debug/`, not `target/debug/examples/`.
-        run: |
-          mkdir -p staged-generators
-          cp target/debug/generate_spec_fixture \
-             target/debug/generate_spec_enumeration staged-generators/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: nextest-archive
           path: nextest.tar.zst
-          retention-days: 1
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: generator-binaries
-          path: staged-generators/
-          retention-days: 1
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: spec-fixtures
-          path: |
-            tests/fixtures/grammar/hgvs_spec_normalization.json
-            tests/fixtures/grammar/hgvs_spec_enumeration.json
           retention-days: 1
 
   # A SECOND archive, built at `opt-level = 3`, for the soak shards only.
@@ -358,7 +397,7 @@ jobs:
   # 2148 / 2181 / 2162 / 2155 across four shards.
   test:
     name: Test (${{ matrix.shard }}/6)
-    needs: test-build
+    needs: [test-build, spec-fixtures]
     runs-on: ubuntu-latest
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -421,7 +460,7 @@ jobs:
   # run. The deep random coverage lives in the `soak` job below instead.
   test-oracle:
     name: Test oracle (${{ matrix.shard }}/2)
-    needs: test-build
+    needs: [test-build, spec-fixtures]
     runs-on: ubuntu-latest
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"

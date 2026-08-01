@@ -33,18 +33,22 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  soak:
-    name: Unseeded soak (${{ matrix.shard }}/8)
+  # One optimized build, fanned out to all eight shards.
+  #
+  # Each shard used to run `cargo nextest run` directly, so every one of the
+  # eight compiled the whole test suite from scratch AND ran both spec
+  # generators first — eight full builds, and ~52s of fixture generation per
+  # shard for an artifact no proptest module reads. This mirrors what PR CI's
+  # `test-build-soak` does instead: build once, archive the `it` binary, and let
+  # the shards download it.
+  #
+  # `--cargo-profile soak` matters more here than anywhere: measured at 5,000
+  # cases, a confluence property costs 1.90s of user CPU in the test profile
+  # against 0.355s under this one, and `debug-assertions` / `overflow-checks`
+  # stay on so nothing the soak checks is weakened.
+  build:
+    name: Build soak archive (optimized)
     runs-on: ubuntu-latest
-    strategy:
-      # Let every shard finish: with independent random streams, one shard
-      # failing says nothing about the others, and the extra failures are
-      # additional evidence rather than noise.
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -63,19 +67,50 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-soak
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
-      - name: Generate HGVS v21.0 spec fixture
-        run: cargo run --features dev --bin generate_spec_fixture
-      - name: Generate HGVS spec test enumeration
-        run: cargo run --features dev --bin generate_spec_enumeration
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-soak
+      - name: Build soak archive
+        run: |
+          cargo nextest archive --features dev --cargo-profile soak --test it \
+            --archive-file nextest-soak.tar.zst
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: nextest-archive-soak
+          path: nextest-soak.tar.zst
+          retention-days: 1
+
+  soak:
+    name: Unseeded soak (${{ matrix.shard }}/8)
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      # Let every shard finish: with independent random streams, one shard
+      # failing says nothing about the others, and the extra failures are
+      # additional evidence rather than noise.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    steps:
+      # Still checked out, for two reasons the archive does not cover: proptest
+      # writes its shrunk case under `tests/proptest-regressions/`, and the
+      # capture step below reads that tree.
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          lfs: true
+          persist-credentials: false
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: nextest-archive-soak
       - name: Soak 125k unseeded cases
         # No PROPTEST_RNG_SEED: each shard, each night, draws a fresh stream.
         env:
           PROPTEST_CASES: "125000"
           PROPTEST_MAX_LOCAL_REJECTS: "1000000"
-        run: cargo nextest run --features dev -E 'test(proptest)'
+        run: |
+          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+            --extract-to . --extract-overwrite -E 'test(proptest)'
       - name: Capture the failing seed
         # proptest writes the shrunk case to its persistence file. Surfacing it
         # here means the reproducer is in the run log even if the artifact is
