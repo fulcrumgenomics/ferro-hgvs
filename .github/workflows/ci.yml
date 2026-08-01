@@ -289,6 +289,57 @@ jobs:
             tests/fixtures/grammar/hgvs_spec_enumeration.json
           retention-days: 1
 
+  # A SECOND archive, built at `opt-level = 3`, for the soak shards only.
+  #
+  # The soak is compute-bound in a way the other jobs are not: eight shards each
+  # run 125,000 proptest cases, so a constant factor on the code under test is
+  # multiplied a million times over. Measured locally at 5,000 cases, one
+  # confluence property costs 1.90s of user CPU in the test profile against
+  # 0.355s under this one — 5.4x. The other jobs run each test once and would
+  # only pay the longer compile.
+  #
+  # Only the `it` binary is built (`--test it`): every test the soak selects
+  # with `-E 'test(proptest)'` lives there, so compiling the rest of the test
+  # targets at `opt-level = 3` would be pure cost.
+  #
+  # `debug-assertions` and `overflow-checks` stay ON in the profile (see
+  # Cargo.toml) so this buys speed without quietly weakening what the soak
+  # checks — the `#[cfg(debug_assertions)]` oracles and every `debug_assert!`
+  # in the normalizer behave exactly as they do under the test profile.
+  test-build-soak:
+    name: Build soak archive (optimized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          lfs: true
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-soak
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-soak
+      - name: Build soak archive
+        run: |
+          cargo nextest archive --features dev --cargo-profile soak --test it \
+            --archive-file nextest-soak.tar.zst
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: nextest-archive-soak
+          path: nextest-soak.tar.zst
+          retention-days: 1
+
   # The suite, split across shards. `--partition hash:K/N` assigns each test to
   # a shard by a hash of its name, so the split is deterministic and stays
   # stable as tests are added. Verified even on this suite: 8646 tests split
@@ -437,7 +488,13 @@ jobs:
   # new territory still gets explored — it just reports instead of blocking.
   soak:
     name: Idempotency soak (${{ matrix.shard }}/8)
-    needs: test-build
+    # Only the optimized archive, NOT `test-build`. Every test the selection
+    # below reaches lives in `tests/it/{cis_allele_confluence,
+    # normalize_idempotency}_proptest.rs`, and neither reads the generated spec
+    # fixture or shells out to the staged generators — so the shards need
+    # neither of those artifacts, and waiting on the job that produces them
+    # would put the dev-profile compile back on the soak's critical path.
+    needs: test-build-soak
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -465,18 +522,7 @@ jobs:
       # `CARGO_BIN_EXE_ferro` paths that break the other shards are never read.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: nextest-archive
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: spec-fixtures
-          path: tests/fixtures/grammar/
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: generator-binaries
-          path: target/debug/
-      - name: Restore the executable bit on the staged generators
-        # Artifact upload does not preserve the executable bit.
-        run: chmod +x target/debug/generate_spec_fixture target/debug/generate_spec_enumeration
+          name: nextest-archive-soak
       - name: Soak 125k cases (seed ${{ matrix.seed }})
         env:
           # 8 shards x 125k = 1,000,000 cases per property.
@@ -488,7 +534,7 @@ jobs:
           PROPTEST_MAX_LOCAL_REJECTS: "1000000"
           FERRO_PREBUILT_EXAMPLES: "1"
         run: |
-          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
+          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite -E 'test(proptest)'
 
   # The generated-doc `--check` gates. Split out of the old monolithic Test job
