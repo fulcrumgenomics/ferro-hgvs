@@ -329,6 +329,44 @@ fn resulting_sequence(
     Ok(out)
 }
 
+/// The building blocks a core is assembled from, biased toward repeats and
+/// complementary pairs (see [`core_strategy`]).
+///
+/// [`UNION_CORE_PARTS`] holds the same parts for the indel model;
+/// `the_two_core_part_lists_agree` fails if the two ever drift apart.
+const CORE_PARTS: [&str; 8] = ["A", "C", "G", "T", "AA", "AT", "GC", "CAG"];
+
+/// The parts [`union_core_strategy`] draws from, **frozen** at the values in
+/// place when the seeds in
+/// `tests/proptest-regressions/cis_allele_confluence_proptest.txt` were
+/// recorded.
+///
+/// A separate constant rather than a reference to [`CORE_PARTS`], deliberately.
+/// The union strategy has to keep drawing exactly what it drew when those seeds
+/// were written (see its doc for why), so it must not follow a constant the
+/// substitution model is free to edit: reordering [`CORE_PARTS`], or retitling
+/// one entry, would otherwise silently retarget eight pinned regressions while
+/// every test stayed green. `the_two_core_part_lists_agree` is what keeps the
+/// duplication honest — it turns a silent divergence into a failing test.
+const UNION_CORE_PARTS: [&str; 8] = ["A", "C", "G", "T", "AA", "AT", "GC", "CAG"];
+
+/// The tripwire for the two constants above.
+///
+/// Both strategies' docs claim an identical distribution, and this is what
+/// makes that claim checkable. If you changed [`CORE_PARTS`] on purpose you are
+/// changing what the substitution model explores; decide separately whether the
+/// indel model should follow, and if it should, re-record the pinned seeds in
+/// the same commit rather than editing [`UNION_CORE_PARTS`] alone.
+#[test]
+fn the_two_core_part_lists_agree() {
+    assert_eq!(
+        CORE_PARTS, UNION_CORE_PARTS,
+        "the core part lists diverged: `core_strategy` and `union_core_strategy` no longer draw \
+         from the same set, so their docs' claim of an identical distribution is false. See the \
+         note on `UNION_CORE_PARTS` before reconciling them."
+    );
+}
+
 /// Cores biased toward repeats and complementary pairs, so inversion
 /// recognition and repeat-aware partitioning are exercised rather than a random
 /// string where nothing is a palindrome and no tract repeats.
@@ -336,17 +374,61 @@ fn resulting_sequence(
 /// This bias does **not** buy 3'-shifting: the corpus is substitution-only and
 /// so length-preserving, and only a pure indel piece shifts (see the module
 /// doc's scope note).
+///
+/// Drawn as **indices** into [`CORE_PARTS`] rather than as
+/// `prop_oneof![Just("A".to_string()), ...]`. The two have the same
+/// distribution — `prop_oneof!` weights its arms equally, so both are uniform
+/// over the eight parts — but the union form dominated the soak's runtime.
+/// Every case draws 6-13 parts, and each part cost a `TupleUnion` value tree
+/// over eight `Just<String>` arms plus a `String` clone, none of it inlined in
+/// the unoptimized test profile CI runs. Measured at 5,000 cases in that
+/// profile: 2.52s of user CPU for this strategy alone against 0.14s for the
+/// index form, an 18x difference that carried straight through to the
+/// properties below (4.25s -> 1.9s each). At the soak's 125,000 cases it was
+/// about 60% of the job's wall time.
 fn core_strategy() -> impl Strategy<Value = String> {
+    prop::collection::vec(0..CORE_PARTS.len(), 6..14)
+        .prop_map(|parts| parts.into_iter().map(|index| CORE_PARTS[index]).collect())
+}
+
+/// The original union-based draw, kept **only** for [`indel_haplotype_strategy`].
+///
+/// Identical in distribution to [`core_strategy`] — `prop_oneof!` weights its
+/// arms equally, so both are uniform over the same eight parts, drawn here from
+/// the frozen [`UNION_CORE_PARTS`] — and slower for the reason documented
+/// there. It survives because
+/// `tests/proptest-regressions/cis_allele_confluence_proptest.txt` pins eight
+/// `IndelHaplotype` reproductions as RNG **seeds** — #1286, #1287, #1292, #1296,
+/// #1297, #1308 and #1312, plus one unnumbered case the strategy's remaining
+/// filter now rejects — and proptest replays a seed *through the strategy*:
+/// change how the strategy consumes randomness and the same seed yields a
+/// different value.
+///
+/// Verified rather than assumed, and the counterfactual is worse than a wrong
+/// answer. With the draw preserved,
+/// `an_indel_haplotype_normalizes_to_its_own_sequence --run-ignored all`
+/// reproduces the recorded #1312 case (`core: "TAAAACCA"`) exactly and appends
+/// nothing. Point the indel model at [`core_strategy`] instead and that same run
+/// **passes**: #1312 is still open, but no seed reaches it any more, so the
+/// property reads as fixed. Nothing goes red, because the property is
+/// `#[ignore]`d and `the_ignored_indel_property_still_finds_its_defect` pins the
+/// defect by hardcoded input rather than through the strategy.
+///
+/// The substitution model has no such pinned cases, so it is free to move.
+/// Collapsing these two is safe once every pinned case is either fixed and
+/// re-recorded or retired — all but #1312 are fixed and replay green — or once
+/// the indel corpus runs at the soak's case count and needs the speed.
+fn union_core_strategy() -> impl Strategy<Value = String> {
     prop::collection::vec(
         prop_oneof![
-            Just("A".to_string()),
-            Just("C".to_string()),
-            Just("G".to_string()),
-            Just("T".to_string()),
-            Just("AA".to_string()),
-            Just("AT".to_string()),
-            Just("GC".to_string()),
-            Just("CAG".to_string()),
+            Just(UNION_CORE_PARTS[0].to_string()),
+            Just(UNION_CORE_PARTS[1].to_string()),
+            Just(UNION_CORE_PARTS[2].to_string()),
+            Just(UNION_CORE_PARTS[3].to_string()),
+            Just(UNION_CORE_PARTS[4].to_string()),
+            Just(UNION_CORE_PARTS[5].to_string()),
+            Just(UNION_CORE_PARTS[6].to_string()),
+            Just(UNION_CORE_PARTS[7].to_string()),
         ],
         6..14,
     )
@@ -713,7 +795,7 @@ impl IndelHaplotype {
 }
 
 fn indel_haplotype_strategy() -> impl Strategy<Value = IndelHaplotype> {
-    core_strategy().prop_flat_map(|core| {
+    union_core_strategy().prop_flat_map(|core| {
         let length = core.len();
         // Leave the first and last base alone so an event never sits against
         // the core/padding seam, where a shift would leave the modelled region.
