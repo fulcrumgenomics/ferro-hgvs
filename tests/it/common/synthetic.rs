@@ -359,7 +359,12 @@ pub fn assert_padded_preserving(core: &str, input: &str) -> String {
         for member in &members {
             triples.push(hgvs_to_spdi(member, &provider).ok()?);
         }
-        triples.sort_by_key(|t| std::cmp::Reverse(t.position));
+        // 3'-to-5', and at a tied position the *longer* deletion first. A
+        // deletion and an insertion can both touch one interbase (`262_263insA`
+        // and `263del`); applying the zero-width one first leaves `claimed` at
+        // that interbase and makes the deletion look like it overruns, so this
+        // applier would report a legal input as having no resulting sequence.
+        triples.sort_by_key(|t| std::cmp::Reverse((t.position, t.deletion.len())));
         let mut edited = reference.as_bytes().to_vec();
         let mut claimed = reference.len();
         for triple in &triples {
@@ -381,6 +386,35 @@ pub fn assert_padded_preserving(core: &str, input: &str) -> String {
         from_output, from_input,
         "`{input}` -> `{output}` changed the sequence"
     );
+
+    // Denoting the same bases is not enough: the members must also render
+    // disjoint and ascending. An overlapping pair that happens to apply to the
+    // right sequence is still malformed, and that is the shape most of the
+    // cis-allele regressions are about.
+    let members: Vec<HgvsVariant> = match parse_hgvs(&output).expect("output parses") {
+        HgvsVariant::Allele(allele) => allele.variants.clone(),
+        single => vec![single],
+    };
+    let spans: Vec<(u64, u64)> = members
+        .iter()
+        .map(|member| {
+            let triple = hgvs_to_spdi(member, &provider).expect("member has an SPDI");
+            (
+                triple.position,
+                triple.position + triple.deletion.len() as u64,
+            )
+        })
+        .collect();
+    for (index, pair) in spans.windows(2).enumerate() {
+        assert!(
+            pair[0] != pair[1] && pair[1].0 >= pair[0].1,
+            "`{input}` -> `{output}`: member {} at interbase {} overlaps or does not \
+             follow the previous member ending at {} (spans {spans:?})",
+            index + 1,
+            pair[1].0,
+            pair[0].1
+        );
+    }
     output
 }
 

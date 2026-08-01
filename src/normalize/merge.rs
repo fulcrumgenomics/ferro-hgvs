@@ -4396,9 +4396,28 @@ fn translate_junction_member<P: ReferenceProvider>(
 ///   the repeat alone denotes the input; the `265=` residue overlaps it
 /// ```
 ///
-/// Only the identity member is dropped, and only when a sibling *claims* the
-/// bases under it — a sibling that merely adds sequence at a junction inside it
-/// contradicts nothing.
+/// Only the identity member is dropped, and only when a sibling's span *covers*
+/// it under [`blocks_sibling_shift`] — a sibling that merely adds sequence at a
+/// junction inside it contradicts nothing.
+///
+/// `blocks_sibling_shift` rather than `claims_reference_bases`, because a
+/// duplication covers the positions it copies without consuming them (#1321):
+///
+/// ```text
+/// g.[261_262insGA;262_263insA;263del]  ->  g.[262_263dup;263=]
+///   `262_263dup` alone denotes the input; the `263=` overlaps it
+/// ```
+///
+/// That is #1297's shape one spelling over, and the two predicates differ by
+/// exactly the case that matters — `blocks_sibling_shift` is
+/// `claims_reference_bases` plus `Duplication`/`DupIns`, which are barriers
+/// precisely because they read their payload from the reference under their own
+/// span. Naming those positions is what makes an identity member inside them
+/// redundant.
+///
+/// Insertions stay out of it under either predicate, and must: an insertion's
+/// span *is* the gap it occupies, so `g.264_265insA` nominally covers position
+/// 264 while changing nothing there.
 pub(crate) fn drop_identity_members_covered_by_siblings(
     members: &mut Vec<HgvsVariant>,
     phase: AllelePhase,
@@ -4425,7 +4444,7 @@ pub(crate) fn drop_identity_members_covered_by_siblings(
             };
             (0..members.len()).filter(|&j| j != i).any(|j| {
                 spans[j].as_ref().is_some_and(|s| {
-                    s.claims_bases
+                    s.blocks_shift
                         && s.region == span.region
                         && s.accession == span.accession
                         && s.start <= span.start
