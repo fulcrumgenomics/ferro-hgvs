@@ -2666,6 +2666,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 allele.uncertain,
                 &self.provider,
             );
+            // Then, so the coalesce below can see them: two members that each
+            // grew the SAME tract are both spelled as a copy count over it, and
+            // a repeat carries no junction — so the pair claims one tract twice
+            // and the coalesce never considers it (#1316). Re-spell each as the
+            // insertion it stands for, which restores the junction. Deliberately
+            // after the clamps rather than inside
+            // `demote_repeats_spanning_siblings`: an insertion blocks no
+            // sibling's shift, so demoting a repeat before the clamps would
+            // release a sibling that #1296 clamped out of its tract.
+            merge::demote_coincident_tract_repeats(&mut result, allele.phase, allele.uncertain);
             // Last: two junction-occupying members that settled on the SAME
             // junction. The clamps above bound a member against a sibling's
             // bases, and an insertion or duplication has none, so a pair can
