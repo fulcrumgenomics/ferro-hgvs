@@ -74,7 +74,22 @@ cargo nextest run --features dev          # All tests (preferred)
 cargo test --features dev                 # Alternative
 cargo nextest run -E 'test(test_name)'    # Specific test
 cargo test -- --nocapture                 # With output
-cargo bench                              # Benchmarks
+cargo bench --features dev               # Benchmarks (`dev` is required by seqfirst_align)
+```
+
+### Conformance axis (manifest-backed)
+
+`cargo nextest run --features dev -E 'test(axis_)'` selects the manifest-backed
+conformance tests, but each of those silently returns early (reported as
+PASSED, not skipped) when `FERRO_MANIFEST` is unset or points at a missing
+file — so running that filter bare can look like a clean pass while testing
+nothing. Use `scripts/run_conformance_axis.sh` instead: it validates the
+manifest *before* invoking nextest, so a missing one is a hard failure rather
+than a silent green. See `scripts/README.md` for details, including why the
+test count the script prints is a weaker signal than the manifest check.
+
+```bash
+FERRO_MANIFEST=/path/to/manifest.json scripts/run_conformance_axis.sh
 ```
 
 ## Code Style
