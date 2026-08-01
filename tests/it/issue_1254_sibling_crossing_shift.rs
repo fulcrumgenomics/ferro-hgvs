@@ -25,7 +25,8 @@
 //! normalizes both sides, so it passed on the broken behavior.
 
 use crate::common::cis_apply_oracle::{
-    apply, assert_normalizes_preserving, normalize, normalize_in, sweep_sequences,
+    apply, assert_normalizes_preserving, assert_normalizes_preserving_in, normalize,
+    sweep_sequences,
 };
 use ferro_hgvs::ShuffleDirection;
 
@@ -101,12 +102,11 @@ fn a_five_prime_shift_does_not_cross_a_sibling_either() {
     // past the `5del`. Clamped to `6_7del` it is adjacent to the `5del`, and the
     // two merge into `g.5_7del`. This previously emitted `g.1_3del`, which
     // denotes `TATATATAATATATATT` where the input denotes `TAATTATAATATATATT`.
-    let input = "TEMPLATE:g.[5del;9_10del]";
-    let actual = normalize_in(TEMPLATE, input, ShuffleDirection::FivePrime);
-    assert_eq!(actual, "TEMPLATE:g.5_7del");
-    assert_eq!(
-        apply(TEMPLATE, &actual).expect("output applies"),
-        apply(TEMPLATE, input).expect("input applies"),
+    assert_normalizes_preserving_in(
+        TEMPLATE,
+        "TEMPLATE:g.[5del;9_10del]",
+        "TEMPLATE:g.5_7del",
+        ShuffleDirection::FivePrime,
     );
 }
 
