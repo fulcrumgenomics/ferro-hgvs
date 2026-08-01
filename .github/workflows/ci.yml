@@ -710,7 +710,15 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          lfs: true
+          # No `lfs: true`. The repo has exactly four LFS files
+          # (`git lfs ls-files`): two under `tests/fixtures/bulk/` and two
+          # under `tests/fixtures/validation/`, 149 MB in total. Every
+          # reference to them lives in `benches/benchmarks.rs` and five
+          # `tests/it/*` modules, and `cargo run --example` compiles neither
+          # `tests/` nor `benches/`. Nothing under `examples/` names them or
+          # has a compile-time include at all, and none of the eight paths
+          # the three generators actually read is LFS-tracked (checked with
+          # `git check-attr filter`).
           submodules: true
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
