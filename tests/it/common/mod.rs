@@ -1,6 +1,10 @@
 //! Shared test infrastructure for ferro-hgvs integration tests.
 //!
 //! Exposed sub-modules:
+//! - `cis_apply_oracle`: the SPDI-based apply oracle the sibling-crossing
+//!   cis-allele tests use to check that normalization did not change the
+//!   sequence a description denotes, plus `sweep_sequences`, the deterministic
+//!   corpus their exhaustive sweeps enumerate over and pin counts against.
 //! - `synthetic`: builders for synthetic `MockProvider` fixtures across
 //!   coordinate systems, used by the ins/del/dup shift coverage matrices.
 //! - `failure_expectations`: per-input expectations framework for the
@@ -22,6 +26,7 @@
 //! a real signal.
 #![allow(dead_code)]
 
+pub mod cis_apply_oracle;
 pub mod failure_expectations;
 pub mod fixture_gen;
 pub mod spec_enumeration;

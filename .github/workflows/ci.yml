@@ -385,14 +385,26 @@ jobs:
       - name: Restore the executable bit on the staged generators
         # Artifact upload does not preserve the executable bit.
         run: chmod +x target/debug/generate_spec_fixture target/debug/generate_spec_enumeration
-      - name: Run Rust tests with normalization idempotency self-check
+      - name: Run Rust tests with the normalization self-checks
         # `FERRO_ASSERT_IDEMPOTENT` turns every reference-backed test into an
         # assertion that `norm(norm(x)) == norm(x)`. The gate is
         # `#[cfg(debug_assertions)]`, on in the test profile even with
         # `CARGO_PROFILE_TEST_DEBUG=0` (that strips debuginfo, not assertions).
         # See src/normalize/mod.rs::normalize.
+        #
+        # `FERRO_ASSERT_REPARSE` asserts the other half: that the normalized
+        # description is one `parse_hgvs` accepts, when normalization is what
+        # broke it. It exempts the `0`/`?` whole-allele outputs the entry point
+        # rejects standalone, and any input that does not itself re-parse (a
+        # parse/display round-trip asymmetry, not a normalization defect).
+        # Separate from the above because neither subsumes the other, and the
+        # idempotency oracle has a blind spot this one covers — it verifies by
+        # re-normalizing its own output, which it cannot do for an output that
+        # will not parse. Both sit at the same seam,
+        # `normalize_core_checked`'s single exit.
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
+          FERRO_ASSERT_REPARSE: "1"
           FERRO_PREBUILT_EXAMPLES: "1"
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \

@@ -53,6 +53,27 @@ genomic/coding/protein axes). Its verification pass re-enters that same method, 
 a thread-local `IN_IDEMPOTENCY_CHECK` guard breaks the recursion — the inner call
 skips its own check.
 
+#### Normalization re-parse oracle
+
+`FERRO_ASSERT_REPARSE=1` is the second half of the same seam: it asserts that a
+normalized description is one `parse_hgvs` accepts — *when normalization is what
+broke it*. Two exemptions keep that scope honest: `0` and `?` are legal
+whole-allele outputs that `parse_hgvs` rejects standalone because it wants an
+accession, and an input that does not itself re-parse is passed over, since a
+description the parser accepts inbound but cannot re-read outbound is a
+parse/display round-trip asymmetry normalize merely carries through. Both are a
+different bug; reporting them here would bury the one this oracle is for.
+
+```bash
+FERRO_ASSERT_REPARSE=1 cargo nextest run --features dev
+```
+
+Kept separate from `FERRO_ASSERT_IDEMPOTENT` because neither subsumes the other,
+and the idempotency oracle has a blind spot this one covers: it verifies by
+*re-normalizing* its own output, which it cannot do for an output that fails to
+parse, so an unparseable result is invisible to it. Both sit at
+`normalize_core_checked`'s single exit and CI sets both together.
+
 ### Generated spec fixture (not committed)
 
 `tests/fixtures/grammar/hgvs_spec_normalization.json` is a **generated build artifact** — it is `.gitignore`d, not committed. It is produced by the `generate_spec_fixture` binary from the HGVS spec submodule, the parser's behavior, and the curated `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`. (Committing it made every parser PR a merge-conflict magnet, since each PR regenerated the whole file.)
