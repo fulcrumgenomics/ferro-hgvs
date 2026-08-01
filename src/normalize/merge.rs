@@ -3424,6 +3424,15 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
     };
     let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
     let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+    // The members `post` was measured from. The loop below translates `after`
+    // in place, so by the time member `i` inspects a sibling `j < i` that has
+    // already moved, `after[j]` no longer matches `post[j]` — pairing them
+    // reads a duplication's payload from bases under a span it has left, which
+    // is the #1304 mismatch one iteration later rather than one snapshot over.
+    // Keeping the pair together also keeps the barrier evaluated against the
+    // state the whole pass started from, so the result does not depend on the
+    // order the members happen to be visited in.
+    let post_snapshot: Vec<HgvsVariant> = after.to_vec();
 
     for i in 0..after.len() {
         let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
@@ -3494,14 +3503,27 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
         // would leave the three-insertion case at two members for the same
         // reason, since a merged `AA` is not *equal* to a remaining `A` even
         // though it commutes with it.
+        // Each span is carried with the variant it was read from. A duplication
+        // reads its payload from the reference *under its own span*, so pairing
+        // the post-normalization edit with the pre-normalization span reads
+        // bases belonging to neither: `g.[260_261insGA;261_262insA;264del]` had
+        // the sibling's `insA` span measured against its own normalized
+        // `265dup`, which reported the payload `GA` rather than `A`. `GA`
+        // commutes with this member's `GA`, so the barrier vanished and the
+        // member swept past it (#1304).
         let payload = junction_payload(&after[i], kind, a, provider);
         let across_junctions = (0..pre.len())
             .filter(|&j| j != i)
-            .flat_map(|j| [(j, pre[j].as_ref()), (j, post[j].as_ref())])
-            .filter_map(|(j, span)| span.map(|s| (j, s)))
+            .flat_map(|j| {
+                [
+                    (&before[j], pre[j].as_ref()),
+                    (&post_snapshot[j], post[j].as_ref()),
+                ]
+            })
+            .filter_map(|(variant, span)| span.map(|s| (variant, s)))
             .filter(|(_, s)| !s.claims_bases && s.region == a.region && s.accession == a.accession)
-            .filter(|(j, s)| {
-                let blocks = match (&payload, junction_payload(&after[*j], kind, s, provider)) {
+            .filter(|(variant, s)| {
+                let blocks = match (&payload, junction_payload(variant, kind, s, provider)) {
                     (Some(mine), Some(theirs)) => !payloads_commute(mine, &theirs),
                     // A payload that cannot be read blocks: refusing to cross is
                     // the conservative answer when the reordering cannot be

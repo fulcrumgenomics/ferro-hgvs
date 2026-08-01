@@ -172,6 +172,7 @@ mod issue_1292_junction_payload_rotation;
 mod issue_1296_repeat_claims_its_bases;
 mod issue_129_mt_circular_wraparound;
 mod issue_1301_adjacent_gap_member_order;
+mod issue_1304_junction_barrier_snapshot;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
