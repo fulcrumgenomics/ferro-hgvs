@@ -4011,10 +4011,22 @@ fn shift_signed(base: &mut i64, delta: i64) -> bool {
 /// (`g.[261_262del;262_263insA;…]` reduces to `g.[261del;…]`), so the loop has
 /// to see the re-spelled form to settle on that reduction.
 ///
-/// Genomic axes only. On `c.`/`n.`/`r.` the 1-based coordinate is not a direct
-/// offset into the fetched sequence, and the conversion this would need already
-/// exists only inside `collapse_overlapping_cis_edits`; rather than duplicate
-/// it, a transcript-axis collision is left alone.
+/// Runs on every axis whose 1-based coordinate is a direct offset into the
+/// sequence the provider serves — the genomic axes and `n.`.
+///
+/// That is the whole requirement, because the pass reads the duplicated bases
+/// over the member's own coordinates. `axis_frame` states which axes qualify:
+/// it returns `delta: 0` for `Genome`, `Mt` **and** `Tx`, since a non-coding
+/// transcript's positions index its sequence directly, exactly as a contig's
+/// do. The original gate said "genomic axes only", which was over-broad — it
+/// grouped `n.` with the CDS-relative axes it does not resemble (#1284).
+///
+/// `c.` and `r.` are still refused. Those are CDS-relative (`delta:
+/// cds_start - 1`) and the axis has no zero, so `c.-1` is `cds_start - 1`
+/// rather than `cds_start - 2`: a single delta is off by one below the CDS
+/// start, and applying one naively was measured to re-spell a duplication from
+/// the wrong bases and to move answers that were already correct. That
+/// conversion is the remaining half of #1284 and is not attempted here.
 pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
     members: &mut [HgvsVariant],
     phase: AllelePhase,
@@ -4027,7 +4039,10 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
     let Some(kind) = cis_kind_of(&members[0]) else {
         return;
     };
-    if !matches!(kind, CisKind::Genome | CisKind::Mt) {
+    // `Tx` belongs here and `Cds`/`Rna` do not: see the doc comment. The test
+    // is "does this axis index the served sequence directly", which is exactly
+    // the axes `axis_frame` gives `delta: 0`.
+    if !matches!(kind, CisKind::Genome | CisKind::Mt | CisKind::Tx) {
         return;
     }
     let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
@@ -4588,9 +4603,27 @@ fn respell_at_gap(
                 start,
                 end,
             ) && {
-                m.loc_edit.edit = Mu::Certain(edit);
+                m.loc_edit.edit = Mu::Certain(edit.clone());
                 true
             }
+        }
+        // `n.` is a signed axis with no zero, so a gap that would name `n.0` is
+        // refused — the same guard `place_signed` applies for `respell_as`.
+        // Otherwise it behaves exactly as the genomic arms: the position is a
+        // direct offset into the transcript sequence (see the doc comment).
+        HgvsVariant::Tx(t) => {
+            gap_start != 0
+                && gap_end != 0
+                && set_endpoints(
+                    &mut t.loc_edit.location,
+                    |p: &mut TxPos, v: i64| p.base = v,
+                    gap_start,
+                    gap_end,
+                )
+                && {
+                    t.loc_edit.edit = Mu::Certain(edit);
+                    true
+                }
         }
         _ => false,
     };
