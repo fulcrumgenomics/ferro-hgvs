@@ -1146,7 +1146,7 @@ fn rna_simple_range(interval: &crate::hgvs::interval::RnaInterval) -> Option<Sel
 ///   is the exact order-dependence #1098 is about.
 pub(crate) fn cis_member_order_key(
     v: &HgvsVariant,
-) -> (String, SelfCancellingPoint, SelfCancellingPoint, String) {
+) -> (String, SelfCancellingPoint, SelfCancellingPoint, u8, String) {
     let accession = v.accession().map(Accession::full).unwrap_or_default();
     let descriptor = format!("{v}");
     // `SelfCancellingPoint` derives `Ord` over `(region, base, offset)` in that
@@ -1154,7 +1154,42 @@ pub(crate) fn cis_member_order_key(
     // go in whole rather than flattened into six scalars.
     let sentinel = SelfCancellingPoint::new(true, i64::MAX, i64::MAX);
     let (start, end) = cis_member_range(v).unwrap_or((sentinel, sentinel));
-    (accession, start, end, descriptor)
+    (accession, start, end, junction_rank(v), descriptor)
+}
+
+/// Where within its own span a member adds sequence: `0` at the span's start,
+/// `1` at its end.
+///
+/// Breaks a tie that [`cis_member_order_key`]'s `end` cannot (#1301). An
+/// insertion's span *is* the gap it fills, so `264_265insCA` adds at interbase
+/// 264; a duplication places its copy after its last base, so `264_265dup` adds
+/// at 265. The two share both endpoints, and without this the order fell to the
+/// descriptor tie-break, which sorts `264_265dup` first — the reverse of the
+/// order the members apply in, so the pair rendered out of order and their
+/// interbase spans read as overlapping.
+///
+/// Everything that consumes the bases under its span occupies the whole of it
+/// and so ranks with the 3' end: a member that adds at a span's start must sort
+/// before one that acts across the same span.
+///
+/// **Nucleotide axes only.** A protein member reaches the same tie —
+/// `cis_member_range` gives it a real range, and `sort_cis_members_by_genomic_order`
+/// is axis-agnostic — so `p.[Gly4_Ala5insSer;Gly4_Ala5dup]` still falls to the
+/// descriptor tie-break and renders the `dup` first, exactly as #1301 did here.
+/// Ranking `ProteinEdit::Insertion` too would fix it, but that changes protein
+/// ordering, which is outside this change; tracked in #1328.
+fn junction_rank(v: &HgvsVariant) -> u8 {
+    use crate::hgvs::edit::NaEdit;
+    let edit = match v {
+        HgvsVariant::Genome(x) => x.loc_edit.edit.inner(),
+        HgvsVariant::Circular(x) => x.loc_edit.edit.inner(),
+        HgvsVariant::Mt(x) => x.loc_edit.edit.inner(),
+        HgvsVariant::Cds(x) => x.loc_edit.edit.inner(),
+        HgvsVariant::Tx(x) => x.loc_edit.edit.inner(),
+        HgvsVariant::Rna(x) => x.loc_edit.edit.inner(),
+        _ => None,
+    };
+    u8::from(!matches!(edit, Some(NaEdit::Insertion { .. })))
 }
 
 /// Canonical **start and end** points of a cis-allele member's location, or
