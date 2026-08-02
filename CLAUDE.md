@@ -64,6 +64,10 @@ description the parser accepts inbound but cannot re-read outbound is a
 parse/display round-trip asymmetry normalize merely carries through. Both are a
 different bug; reporting them here would bury the one this oracle is for.
 
+Like the idempotency oracle it is compiled out in release builds
+(`#[cfg(debug_assertions)]`) and read once into a `OnceLock`, so it adds no
+release-build cost and a disabled debug run pays only one atomic load.
+
 ```bash
 FERRO_ASSERT_REPARSE=1 cargo nextest run --features dev
 ```

@@ -25,7 +25,8 @@
 //! normalizes both sides, so it passed on the broken behavior.
 
 use crate::common::cis_apply_oracle::{
-    apply, assert_normalizes_preserving, normalize, normalize_in, sweep_sequences,
+    apply, assert_normalizes_preserving, assert_normalizes_preserving_in, normalize,
+    sweep_sequences,
 };
 use ferro_hgvs::ShuffleDirection;
 
@@ -101,12 +102,11 @@ fn a_five_prime_shift_does_not_cross_a_sibling_either() {
     // past the `5del`. Clamped to `6_7del` it is adjacent to the `5del`, and the
     // two merge into `g.5_7del`. This previously emitted `g.1_3del`, which
     // denotes `TATATATAATATATATT` where the input denotes `TAATTATAATATATATT`.
-    let input = "TEMPLATE:g.[5del;9_10del]";
-    let actual = normalize_in(TEMPLATE, input, ShuffleDirection::FivePrime);
-    assert_eq!(actual, "TEMPLATE:g.5_7del");
-    assert_eq!(
-        apply(TEMPLATE, &actual).expect("output applies"),
-        apply(TEMPLATE, input).expect("input applies"),
+    assert_normalizes_preserving_in(
+        TEMPLATE,
+        "TEMPLATE:g.[5del;9_10del]",
+        "TEMPLATE:g.5_7del",
+        ShuffleDirection::FivePrime,
     );
 }
 
@@ -126,8 +126,16 @@ fn shifts_never_change_the_sequence_across_an_exhaustive_two_member_sweep() {
     // reported silent sequence-changing normalizations — well-formed,
     // warning-free, disjoint output — in the low thousands; over-clamping would
     // show up as a canonical-form change in the pinned cases above.
+    //
+    // Two failure modes are counted separately, matching the sibling sweep in
+    // `cis_junction_crossing_shift.rs`: an *input* that does not apply is a case
+    // this sweep cannot speak for and is skipped, while an *output* that does
+    // not apply is a failure — an overlapping or unconvertible normalization is
+    // precisely the defect the sweep exists to catch, and folding it into
+    // `skipped` let it pass silently.
     let mut enumerated = 0usize;
     let mut skipped = 0usize;
+    let mut overlapping: Vec<String> = Vec::new();
     let mut mismatched: Vec<String> = Vec::new();
 
     for seq in sweep_sequences(64) {
@@ -156,9 +164,14 @@ fn shifts_never_change_the_sequence_across_an_exhaustive_two_member_sweep() {
                         // change in the skip rate trips a coverage floor
                         // for a reason unrelated to coverage.
                         enumerated += 1;
-                        let (Some(want), Some(got)) = (apply(&seq, &input), apply(&seq, &output))
-                        else {
-                            skipped += 1; // unconvertible, or a flagged overlap
+                        let Some(want) = apply(&seq, &input) else {
+                            skipped += 1; // the input itself is unconvertible
+                            continue;
+                        };
+                        let Some(got) = apply(&seq, &output) else {
+                            if overlapping.len() < 10 {
+                                overlapping.push(format!("{seq}: {input} -> {output}"));
+                            }
                             continue;
                         };
                         if want != got && mismatched.len() < 10 {
@@ -182,8 +195,12 @@ fn shifts_never_change_the_sequence_across_an_exhaustive_two_member_sweep() {
     );
     assert!(
         skipped * 10 < enumerated,
-        "too many cases skipped as unconvertible or overlapping: \
-         {skipped} of {enumerated}"
+        "too many cases skipped as unconvertible: {skipped} of {enumerated}"
+    );
+    assert!(
+        overlapping.is_empty(),
+        "overlapping or unconvertible output in {enumerated} enumerated cases: \
+         {overlapping:#?}"
     );
     assert!(
         mismatched.is_empty(),
