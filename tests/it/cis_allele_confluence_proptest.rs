@@ -60,9 +60,9 @@
 //!   nor #1262 is about overlapping members, so the citation did not describe
 //!   the shape it was excluding. What that shape hit was #1301, now fixed.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
-//!   because it finds #1320, a demoted repeat becoming a duplication that still
-//!   spans a sibling's junction. It found #1286, #1287, #1290, #1292, #1296,
-//!   #1301, #1304, #1297, #1308, #1312 and #1316 first, all now fixed, each
+//!   because it finds #1321, a cancelled identity member surviving inside a
+//!   duplication's span. It found #1286, #1287, #1290, #1292, #1296, #1301,
+//!   #1304, #1297, #1308, #1312, #1316 and #1320 first, all now fixed, each
 //!   masked behind the one before it; see its doc comment for the history and
 //!   the live reproduction.
 //!
@@ -808,22 +808,20 @@ proptest! {
     /// deletion and placed the repeats at 259; #1313 and #1317 moved both before
     /// #1316 itself was fixed.)
     ///
-    /// The live failure is the twelfth, **#1320**:
+    /// The live failure is the thirteenth, **#1321**:
     ///
     /// ```text
-    /// core "AACAGTAAAATAT", insert "AC" after 6, "AA" after 8, "AA" after 9
-    ///   g.[263_264insAC;265_266insAA;266_267insAA] -> g.[263_266dup;264_265insCA]
-    ///     the dup spans 263-266; the insertion adds at interbase 264, inside it
+    /// core "TCCCAGAAAAT", insert "GA" after 4, "A" after 5, delete index 6
+    ///   g.[261_262insGA;262_263insA;263del] -> g.[262_263dup;263=]
+    ///     the dup spans 262-263; the identity member names 263, inside it
     /// ```
     ///
-    /// The two `insAA` members merge into the tract-wide repeat correctly —
-    /// that pair alone gives `g.263_266A[8]`. `demote_repeats_spanning_siblings`
-    /// then re-spells that repeat as a duplication over the same four bases,
-    /// which swallows the third member's junction exactly as the repeat did. A
-    /// hole in #1287's fix, one spelling over. Verified pre-existing: the
-    /// parent of #1316's fix emits the identical output.
+    /// #1297's shape one spelling over: `drop_identity_members_covered_by_siblings`
+    /// drops a cancelled member only when a sibling *claims the bases* under it,
+    /// and a duplication claims none. Verified pre-existing — the parent of
+    /// #1320's fix emits the identical output.
     ///
-    /// Each of the twelve was masked behind the one before it, which is the
+    /// Each of the thirteen was masked behind the one before it, which is the
     /// point of keeping this committed rather than deleting it until it passes.
     ///
     /// Enabling this test was #1292's acceptance criterion, then #1316's; both
@@ -831,17 +829,20 @@ proptest! {
     /// `issue_1316_coincident_tract_repeats` and by the `99d5d382` and
     /// `23c33174` seeds below. Neither could carry the criterion, because the
     /// property's next failure was always behind it. Enabling now belongs to
-    /// **#1320**, whose seed `2521c720` is committed below — so taking the
+    /// **#1321**, whose seed `467e0a71` is committed below — so taking the
     /// ignore off replays it immediately and turns CI red, which is exactly what
     /// should gate taking it off.
     ///
-    /// A caution about soak depth, learned here: with #1316 fixed this passed
-    /// 200,000 cases, and then failed a 1,000,000-case run at 27,633 successes.
-    /// One clean soak is not evidence the chain has ended.
+    /// A caution about soak depth, learned twice here. With #1316 fixed this
+    /// passed 200,000 cases and then failed a 1,000,000-case run at 27,633
+    /// successes (#1320); with #1320 fixed it failed another 1,000,000-case run
+    /// at 114,694 (#1321). Each fix pushes the next failure roughly four times
+    /// deeper, so a clean soak at one depth is not evidence about the next, and
+    /// it is certainly not evidence the chain has ended.
     ///
     /// Do not weaken it to make it pass.
     #[test]
-    #[ignore = "finds #1320, a real unfixed defect; see doc comment"]
+    #[ignore = "finds #1321, a real unfixed defect; see doc comment"]
     fn an_indel_haplotype_normalizes_to_its_own_sequence(
         haplotype in indel_haplotype_strategy()
     ) {
@@ -1041,14 +1042,15 @@ fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
 /// to pin.
 #[test]
 fn the_ignored_indel_property_still_finds_its_defect() {
-    // #1320: `demote_repeats_spanning_siblings` re-spells a tract-wide repeat
-    // as a duplication over the same bases, which swallows a sibling's junction
-    // exactly as the repeat did -- a hole in #1287's fix, one spelling over.
-    // Moved here from #1316, which this change fixes.
+    // #1321: a cancelled identity member survives inside a duplication's span,
+    // because `drop_identity_members_covered_by_siblings` drops one only when a
+    // sibling *claims the bases* under it and a duplication claims none --
+    // #1297's shape one spelling over. Moved here from #1320, which this change
+    // fixes.
     let (core, input, issue) = (
-        "AACAGTAAAATAT",
-        "NC_TEST.1:g.[263_264insAC;265_266insAA;266_267insAA]",
-        "#1320",
+        "TCCCAGAAAAT",
+        "NC_TEST.1:g.[261_262insGA;262_263insA;263del]",
+        "#1321",
     );
     assert!(
         indel_property_holds(core, input).is_err(),
