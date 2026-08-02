@@ -4163,6 +4163,7 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
 /// Genomic axes only, matching `respell_colliding_duplications` — the
 /// transcript axes need a coordinate conversion this does not carry.
 pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
+    before: &[HgvsVariant],
     members: &mut Vec<HgvsVariant>,
     phase: AllelePhase,
     uncertain: bool,
@@ -4204,10 +4205,35 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
         }
     }
 
+    // Where each member sat *before* this pass's per-member normalization, used
+    // to order a group whose payloads do not commute. Aligned by index with
+    // `members`: the caller builds both from one list and every pass between
+    // mutates in place, so `before[i]` is member `i`'s origin. An empty or
+    // mismatched snapshot disables the ordering rather than mis-attributing it.
+    let origins: Vec<Option<(i64, i64)>> = if before.len() == members.len() {
+        before
+            .iter()
+            .map(|v| member_span(v, kind).map(|s| (s.start, s.end)))
+            .collect()
+    } else {
+        vec![None; members.len()]
+    };
+
     let mut remove: Vec<usize> = Vec::new();
     for (_, at) in &groups {
         if at.len() < 2 {
             continue;
+        }
+        // Concatenate in the order the members *came from*, not the order they
+        // happen to sit in now. Two members can reach one junction without
+        // either crossing the other — a collapse can create one there while a
+        // sibling re-spells into it in place — and then the rendered order is
+        // an artefact of their spans rather than of what the allele means
+        // (#1323). Their origins are what the input actually said.
+        let mut at: Vec<usize> = at.clone();
+        let ordered_by_origin = at.iter().all(|&i| origins[i].is_some());
+        if ordered_by_origin {
+            at.sort_by_key(|&i| (origins[i], i));
         }
         let payloads: Option<Vec<Vec<Base>>> = at
             .iter()
@@ -4216,17 +4242,27 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
         let Some(payloads) = payloads else {
             continue;
         };
-        // Order-independence guard: every pair must commute, so the
-        // concatenation below does not depend on the order the members happen
-        // to be in. The same predicate `clamp_sibling_crossing_junctions` uses
-        // to decide whether they were allowed to meet here at all.
-        if payloads.iter().enumerate().any(|(x, left)| {
-            payloads[x + 1..]
-                .iter()
-                .any(|right| !payloads_commute(left, right))
-        }) {
+        // Order-independence guard, needed only when the origins could not
+        // supply an order. Commuting payloads (`p ++ q == q ++ p`) concatenate
+        // the same either way, so this is exactly the case where "whatever
+        // order they happen to be in" is safe — and it is the same predicate
+        // `clamp_sibling_crossing_junctions` uses to decide whether the two were
+        // allowed to meet here at all.
+        //
+        // With origins available the guard is unnecessary rather than merely
+        // relaxed: a commuting group reaches the same concatenation under
+        // either ordering, so ordering by origin subsumes the old behaviour
+        // instead of overriding it.
+        if !ordered_by_origin
+            && payloads.iter().enumerate().any(|(x, left)| {
+                payloads[x + 1..]
+                    .iter()
+                    .any(|right| !payloads_commute(left, right))
+            })
+        {
             continue;
         }
+        let at = &at;
         let combined: Vec<Base> = payloads.concat();
         let edit = NaEdit::Insertion {
             sequence: InsertedSequence::Literal(Sequence::new(combined)),
