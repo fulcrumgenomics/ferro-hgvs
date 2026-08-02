@@ -181,6 +181,7 @@ mod issue_1304_junction_barrier_snapshot;
 mod issue_1308_commuting_payload_phase;
 mod issue_1312_landed_payload_commutes;
 mod issue_1316_coincident_tract_repeats;
+mod issue_1318_soft_masked_delins;
 mod issue_1320_dup_spans_sibling_junction;
 mod issue_1321_identity_inside_a_duplication;
 mod issue_1323_shared_junction_order;
