@@ -1,9 +1,11 @@
 //! Unit 3: cut the reference block into disjoint member blocks.
 //!
 //! Members are runs of *change*, where a reference position counts as unchanged
-//! only when every minimal alignment matches it, and a junction counts as
-//! changed when every minimal alignment inserts there. Consecutive runs merge
-//! when separated by fewer than [`MIN_SEPARATION`] unchanged bases.
+//! only when the same match **edge** is present in every minimal alignment
+//! (node agreement is not enough — see `align.rs`'s `Dominators` doc), and a
+//! junction counts as changed when every minimal alignment inserts there.
+//! Consecutive runs merge when separated by fewer than [`MIN_SEPARATION`]
+//! unchanged bases.
 //!
 //! Members come out disjoint **by construction** — they are a partition — so
 //! the overlap and ordering defects the repair passes exist to fix become
@@ -76,10 +78,11 @@ pub(crate) fn partition_members_with(dag: &AlignmentDag, min_separation: u32) ->
             // occupies no reference base at all and so ends at `end`.
             //
             // Widening an insertion-only end to `end + 1` would claim a
-            // reference base that every alignment matches, and the member would
-            // then denote the wrong sequence. Measured: #1260
-            // (`AAAAAAA -> AACACAAAA`) fails the Task 4 round-trip under the
-            // wider reading and passes under this one.
+            // reference base that every minimal alignment matches, giving the
+            // member a non-minimal extent. Both readings denote the same
+            // sequence and round-trip, so the round-trip invariant does not
+            // catch this — only the exact-span assertion in
+            // `insertion_junctions_do_not_claim_a_matched_base` does.
             //
             // When a position is both changed and a forced-insertion junction,
             // the changed reading wins — it is the wider of the two and the
