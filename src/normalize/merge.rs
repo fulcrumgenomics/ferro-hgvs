@@ -2,7 +2,7 @@
 //!
 //! See `docs/superpowers/specs/2026-04-30-merge-consecutive-allele-edits-design.md`.
 
-use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
+use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, RepeatCount, Sequence};
 use crate::hgvs::interval::{Interval, UncertainBoundary};
 use crate::hgvs::location::{CdsPos, GenomePos, RnaPos, TxPos};
 use crate::hgvs::uncertainty::Mu;
@@ -3377,6 +3377,168 @@ pub(crate) fn demote_repeats_spanning_siblings(
             continue;
         }
         respell_as(&mut after[i], kind, a.region, start, a.end, source);
+    }
+}
+
+/// The bases a repeat added to its own tract, spelled as an insertion payload,
+/// together with the unit it repeats.
+///
+/// A tract is tandem, so appending the added bases at its 3' end is just the
+/// unit repeated — and the 3' end is where the tract's own shift rule places
+/// them anyway. `g.262A[3]` over the one-base `A` at 262 added two copies, so
+/// its payload is `AA` and its junction is 262.
+///
+/// `None` unless the repeat is a plain exact count over a whole number of units
+/// that actually grew: a genotype count (`A[6][1]`), an inexact count, a VEP
+/// trailing sequence, a partial unit, or a tract that lost copies all describe
+/// something this equivalence does not cover, and fabricating a payload for
+/// them would state bases nothing asserted.
+fn repeat_growth_as_insertion(
+    variant: &HgvsVariant,
+    kind: CisKind,
+    span: &MemberSpan,
+) -> Option<(Vec<Base>, Vec<Base>)> {
+    let NaEdit::Repeat {
+        sequence: Some(unit),
+        count: RepeatCount::Exact(count),
+        additional_counts,
+        trailing: None,
+    } = cis_axis_parts(variant, kind)?.4
+    else {
+        return None;
+    };
+    if !additional_counts.is_empty() {
+        return None;
+    }
+    let unit = unit.bases();
+    let unit_len = i64::try_from(unit.len()).ok()?;
+    let tract = span.end - span.start + 1;
+    if unit_len <= 0 || tract <= 0 || tract % unit_len != 0 {
+        return None;
+    }
+    let added = i64::try_from(*count).ok()? * unit_len - tract;
+    if added <= 0 {
+        return None;
+    }
+    let payload: Vec<Base> = unit
+        .iter()
+        .copied()
+        .cycle()
+        .take(usize::try_from(added).ok()?)
+        .collect();
+    Some((payload, unit.to_vec()))
+}
+
+/// Re-spell two or more repeats that grew the *same* tract as the insertions
+/// they stand for, so the junction merge can combine their copies.
+///
+/// Each member is re-spelled per member, with no sibling context, and a member
+/// that grows a tract is spelled as a copy count over the whole tract. Two
+/// members that grew one tract therefore both name it, and the pair claims it
+/// twice — an overlap with no resulting sequence at all:
+///
+/// ```text
+/// reference  ("ACGT" x 64) + "CAGCCAGTCAGCGCATCAG" + ("ACGT" x 64)
+///            the `A` at 262 is a one-base tract, between `C` at 261 and `G` at 263
+///
+/// g.[261_262insAA;262_263insAA]  ->  g.[262A[3];262A[3]]
+///   each member grew the tract to three, and says so over the same one base
+/// ```
+///
+/// This is the repeat-form analogue of #1286, and nothing else catches it. A
+/// repeat has no junction (`junction_of` returns `None` for `NaEdit::Repeat`),
+/// so [`coalesce_members_at_one_junction`] never considers the pair; and
+/// [`demote_repeats_spanning_siblings`] re-spells a repeat back into a deletion
+/// or a duplication *over the tract*, neither of which can express two bases
+/// added to a one-base tract — it declines exactly this shape.
+///
+/// A repeat's growth is expressible, as an insertion at the tract's 3' junction.
+/// Emitting that gives both members a junction and the existing merge finishes
+/// the job: `g.262_263insAA` twice, coalesced to `insAAAA`, re-spelled `g.262A[5]`
+/// on the next pass (#1316).
+///
+/// Only a whole *group* sharing one tract is re-spelled, and only when every
+/// member of it yields a payload — a lone repeat is the correct spelling for a
+/// member with no sibling on its tract, and half a group demoted would trade one
+/// overlap for another. Requiring a shared unit as well as a shared span makes
+/// the payloads powers of one word, so they commute and the coalesce below
+/// cannot decline on order-ambiguity after this pass has already rewritten them.
+///
+/// Runs late, immediately before that coalesce, and **not** inside
+/// [`demote_repeats_spanning_siblings`] despite the kinship: the demotion there
+/// preserves the barrier a repeat presents to a sibling's shift, because a
+/// deletion and a duplication both still block one. An insertion claims no
+/// bases and blocks nothing, so demoting early released a sibling deletion that
+/// #1296 had deliberately clamped out of the tract. Two repeats on one tract
+/// have no such barrier to preserve — they occupy the same bases — so the
+/// rewrite is safe here and only here.
+pub(crate) fn demote_coincident_tract_repeats(
+    members: &mut [HgvsVariant],
+    phase: AllelePhase,
+    uncertain: bool,
+) {
+    if phase != AllelePhase::Cis || uncertain || members.len() < 2 {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&members[0]) else {
+        return;
+    };
+    if !matches!(kind, CisKind::Genome | CisKind::Mt) {
+        return;
+    }
+    let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
+    // A member participates only if it is a repeat that grew its tract by a
+    // whole number of units; `growth` carries the payload and the unit.
+    let growth: Vec<Option<(Vec<Base>, Vec<Base>)>> = (0..members.len())
+        .map(|i| {
+            let span = spans[i].as_ref()?;
+            repeat_growth_as_insertion(&members[i], kind, span)
+        })
+        .collect();
+
+    // Group by the tract itself — accession, region, span — plus the unit.
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for i in 0..members.len() {
+        let (Some(span), Some((_, unit))) = (spans[i].as_ref(), growth[i].as_ref()) else {
+            continue;
+        };
+        match groups.iter_mut().find(|at| {
+            let first = at[0];
+            spans[first].as_ref().is_some_and(|s| {
+                s.accession == span.accession
+                    && s.region == span.region
+                    && s.start == span.start
+                    && s.end == span.end
+            }) && growth[first].as_ref().is_some_and(|(_, u)| u == unit)
+        }) {
+            Some(at) => at.push(i),
+            None => groups.push(vec![i]),
+        }
+    }
+
+    for at in &groups {
+        if at.len() < 2 {
+            continue;
+        }
+        // All or nothing. `respell_at_gap` reverts a member it cannot place, and
+        // a group left half re-spelled is one insertion overlapping one repeat —
+        // the same defect in a new spelling, and one no later pass looks for.
+        let originals: Vec<HgvsVariant> = at.iter().map(|&i| members[i].clone()).collect();
+        let rewritten = at.iter().enumerate().all(|(slot, &i)| {
+            let (Some(span), Some((payload, _))) = (spans[i].as_ref(), growth[i].as_ref()) else {
+                return false;
+            };
+            let edit = NaEdit::Insertion {
+                sequence: InsertedSequence::Literal(Sequence::new(payload.clone())),
+            };
+            respell_at_gap(&mut members[i], kind, span, span.end, edit);
+            members[i] != originals[slot]
+        });
+        if !rewritten {
+            for (slot, &i) in at.iter().enumerate() {
+                members[i] = originals[slot].clone();
+            }
+        }
     }
 }
 

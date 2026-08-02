@@ -60,11 +60,11 @@
 //!   nor #1262 is about overlapping members, so the citation did not describe
 //!   the shape it was excluding. What that shape hit was #1301, now fixed.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
-//!   because it finds #1316, two adjacent-gap insertions each re-spelling as
-//!   the same tract-wide repeat. It found #1286, #1287, #1290, #1292, #1296,
-//!   #1301, #1304, #1297, #1308 and #1312 first, all now fixed, each masked
-//!   behind the one before it; see its doc comment for the history and the live
-//!   reproduction.
+//!   because it finds #1320, a demoted repeat becoming a duplication that still
+//!   spans a sibling's junction. It found #1286, #1287, #1290, #1292, #1296,
+//!   #1301, #1304, #1297, #1308, #1312 and #1316 first, all now fixed, each
+//!   masked behind the one before it; see its doc comment for the history and
+//!   the live reproduction.
 //!
 //! Neither restriction is silent: both are named, pinned, and fail loudly when
 //! the underlying issue is fixed (#1268/#1283's complaint about coverage that
@@ -790,8 +790,7 @@ proptest! {
     /// cancelled and was left as an identity member overlapping the repeat that
     /// absorbed it; #1308, a commuting payload sweeping past a sibling that
     /// stays put; and #1312, commuting tested against a payload the member no
-    /// longer carries once it lands. The live failure is the eleventh it has
-    /// found, **#1316**:
+    /// longer carries once it lands. The eleventh and last was **#1316**:
     ///
     /// ```text
     /// core "CAGCCAGTCAGCGCATCAG", insert "AA" after 4 and 5, delete index 12
@@ -799,34 +798,50 @@ proptest! {
     ///     two identical repeats over one tract
     /// ```
     ///
-    /// The seed's own shrink is smaller than that and drops the deletion
-    /// entirely — `core "ACAGCCAGTCAGCGCATCAG"` with `insAA` after 1 and 2,
-    /// giving `g.[257A[3];259A[3]]` — so the deletion is incidental to the
-    /// defect. The three-event form is kept here because it is the shape #1316
-    /// was filed from.
+    /// The seed's own shrink is smaller than that and carries no deletion at
+    /// all — `core "ACAGCCAGTCAGCGCATCAG"` with `insAA` after 1 and 2 — so the
+    /// deletion was incidental to the defect. The three-event form is kept here
+    /// because it is the shape #1316 was filed from.
     ///
     /// The repeat-form analogue of #1286, which fixed the same shape spelled as
-    /// duplications. It survives the 512-case budget below and is only reachable
-    /// in a soak, which is exactly why enabling the test on that budget would
-    /// prove nothing.
+    /// duplications. (The output recorded when it was filed also lost the
+    /// deletion and placed the repeats at 259; #1313 and #1317 moved both before
+    /// #1316 itself was fixed.)
     ///
-    /// Each of the ten was masked behind the one before it, which is the point
-    /// of keeping this committed rather than deleting it until it can pass.
+    /// The live failure is the twelfth, **#1320**:
     ///
-    /// Enabling this test was #1292's acceptance criterion. #1292 is fixed and
-    /// pinned — by `issue_1292_junction_payload_rotation` and by the `99d5d382`
-    /// seed below, which replays green — but the criterion could not be met
-    /// with it, because the property's next two failures were behind it.
-    /// Enabling now belongs to **#1316**, whose seed `23c33174` is committed
-    /// below — so taking the ignore off replays it immediately, which is what
-    /// should gate taking it off. Absent that seed this passes the 512-case
-    /// budget and fails a 30,000-case soak on the same shape, so switching it
-    /// on would make a green CI a matter of the budget rather than of the
-    /// property holding.
+    /// ```text
+    /// core "AACAGTAAAATAT", insert "AC" after 6, "AA" after 8, "AA" after 9
+    ///   g.[263_264insAC;265_266insAA;266_267insAA] -> g.[263_266dup;264_265insCA]
+    ///     the dup spans 263-266; the insertion adds at interbase 264, inside it
+    /// ```
+    ///
+    /// The two `insAA` members merge into the tract-wide repeat correctly —
+    /// that pair alone gives `g.263_266A[8]`. `demote_repeats_spanning_siblings`
+    /// then re-spells that repeat as a duplication over the same four bases,
+    /// which swallows the third member's junction exactly as the repeat did. A
+    /// hole in #1287's fix, one spelling over. Verified pre-existing: the
+    /// parent of #1316's fix emits the identical output.
+    ///
+    /// Each of the twelve was masked behind the one before it, which is the
+    /// point of keeping this committed rather than deleting it until it passes.
+    ///
+    /// Enabling this test was #1292's acceptance criterion, then #1316's; both
+    /// are fixed and pinned, by `issue_1292_junction_payload_rotation` and
+    /// `issue_1316_coincident_tract_repeats` and by the `99d5d382` and
+    /// `23c33174` seeds below. Neither could carry the criterion, because the
+    /// property's next failure was always behind it. Enabling now belongs to
+    /// **#1320**, whose seed `2521c720` is committed below — so taking the
+    /// ignore off replays it immediately and turns CI red, which is exactly what
+    /// should gate taking it off.
+    ///
+    /// A caution about soak depth, learned here: with #1316 fixed this passed
+    /// 200,000 cases, and then failed a 1,000,000-case run at 27,633 successes.
+    /// One clean soak is not evidence the chain has ended.
     ///
     /// Do not weaken it to make it pass.
     #[test]
-    #[ignore = "finds #1316, a real unfixed defect; see doc comment"]
+    #[ignore = "finds #1320, a real unfixed defect; see doc comment"]
     fn an_indel_haplotype_normalizes_to_its_own_sequence(
         haplotype in indel_haplotype_strategy()
     ) {
@@ -1026,13 +1041,14 @@ fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
 /// to pin.
 #[test]
 fn the_ignored_indel_property_still_finds_its_defect() {
-    // #1316: two identical repeats settle over one tract and the deletion is
-    // dropped -- the repeat-form analogue of #1286, which fixed the same shape
-    // spelled as duplications.
+    // #1320: `demote_repeats_spanning_siblings` re-spells a tract-wide repeat
+    // as a duplication over the same bases, which swallows a sibling's junction
+    // exactly as the repeat did -- a hole in #1287's fix, one spelling over.
+    // Moved here from #1316, which this change fixes.
     let (core, input, issue) = (
-        "CAGCCAGTCAGCGCATCAG",
-        "NC_TEST.1:g.[261_262insAA;262_263insAA;269del]",
-        "#1316",
+        "AACAGTAAAATAT",
+        "NC_TEST.1:g.[263_264insAC;265_266insAA;266_267insAA]",
+        "#1320",
     );
     assert!(
         indel_property_holds(core, input).is_err(),
