@@ -4,10 +4,11 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-# The cases the IndelHaplotype model has found. The first two are filtered by
-# the strategy today (#1260/#1262 adjacent-gap insertions, and events cancelling
-# to no net change) and are re-rejected rather than re-run. #1287 and #1292 are
-# fixed and replay green, as does #1296. #1297 is not yet fixed and is the
+# The cases the IndelHaplotype model has found. #1286, #1287, #1292 and #1296
+# are fixed and replay green; the second seed is still rejected by the strategy,
+# whose remaining filter drops haplotypes whose events cancel to no net change.
+# (The adjacent-gap-insertion filter that used to reject the first seed as well
+# was removed in #1294, so it runs now.) #1297 is not yet fixed and is the
 # reason `an_indel_haplotype_normalizes_to_its_own_sequence` is still
 # `#[ignore]`d, so it is recorded here rather than running: it replays the
 # moment the test is enabled, which is what should gate enabling it.
