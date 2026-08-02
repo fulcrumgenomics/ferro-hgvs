@@ -1643,6 +1643,44 @@ impl Piece {
     }
 }
 
+/// Whether to run both block splitters and report their disagreements.
+///
+/// Enabled by `FERRO_SEQFIRST_SHADOW=1`. Read once and cached, like the
+/// idempotency gate in [`crate::normalize`], so a disabled run pays one relaxed
+/// atomic load per canonicalization. When on, the sequence-first splitter runs
+/// *in addition to* the live one and any disagreement goes to stderr; it never
+/// changes what is returned.
+fn seqfirst_shadow_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("FERRO_SEQFIRST_SHADOW").as_deref() == Ok("1"))
+}
+
+/// A piece list rendered on one line with `alt` as text rather than bytes.
+///
+/// Only used by the `FERRO_SEQFIRST_SHADOW` report, whose whole value is being
+/// greppable: `Piece`'s derived `Debug` prints `alt` as `[65, 67, …]`, which
+/// makes a report of a 40-base block unreadable and long.
+struct DebugPieces<'a>(&'a [Piece]);
+
+impl std::fmt::Debug for DebugPieces<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[")?;
+        for (i, piece) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(",")?;
+            }
+            write!(
+                f,
+                "{}..{}>{}",
+                piece.ref_start,
+                piece.ref_end,
+                String::from_utf8_lossy(&piece.alt)
+            )?;
+        }
+        f.write_str("]")
+    }
+}
+
 /// One column of an alignment between the reference and result blocks.
 ///
 /// `None` on either side is a gap. Both-`Some` columns are matches when the
@@ -1749,6 +1787,31 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     }
 
     let mut pieces = partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
+    // Shadow the sequence-first splitter on the very same trimmed block, before
+    // any 3'-shift or coalescing, so a reported disagreement is a disagreement
+    // about the *split* and not about a downstream pass. Never affects `pieces`.
+    if seqfirst_shadow_enabled() {
+        let shadow = partition_block_sequence_first(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
+        if shadow.as_ref() == Some(&pieces) {
+            // The denominator. Without it, `grep -c SEQFIRST_SHADOW` returning 0
+            // cannot be told apart from a shadow that never ran — the failure
+            // mode that would make an audit of the disagreements vacuous.
+            eprintln!("SEQFIRST_AGREE");
+        } else {
+            eprintln!(
+                // Space-separated, and no space inside a piece list, on purpose:
+                // `cargo nextest` strips tab characters when it re-emits captured
+                // test output (`--success-output immediate`), so a tab-delimited
+                // report is unparseable in the one run mode that covers the whole
+                // suite. Verified by `od -c` on both run modes.
+                "SEQFIRST_SHADOW ref={} alt={} live={:?} shadow={:?}",
+                String::from_utf8_lossy(&ref_bytes[lo..hi_ref]),
+                String::from_utf8_lossy(&result[lo..hi_alt]),
+                DebugPieces(&pieces),
+                shadow.as_deref().map(DebugPieces),
+            );
+        }
+    }
     for piece in &mut pieces {
         piece.ref_start += lo;
         piece.ref_end += lo;
@@ -2591,11 +2654,9 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
 ///
 /// Returns `None` when the block cannot be partitioned this way, which today
 /// means only that [`member_alt_spans`] declined. The caller falls back.
-// Not yet called from `normalize_allele` or anywhere else — wiring it in is a
-// later task in this migration. Allowed here for the same reason
-// `seqfirst::mod` allows it at the module level: deliberately unused until
-// that wiring lands, not a code-quality issue to restructure around.
-#[allow(dead_code)]
+///
+/// Called only from the `FERRO_SEQFIRST_SHADOW` comparison in
+/// [`canonicalize_from_sequence`]; it does not yet decide any result.
 fn partition_block_sequence_first(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
     use crate::normalize::seqfirst::align::AlignmentDag;
     use crate::normalize::seqfirst::partition::{member_alt_spans, partition_members_with};
@@ -5671,6 +5732,333 @@ mod tests {
                 pair[0].ref_end <= pair[1].ref_start,
                 "pieces overlap or are out of order: {pieces:?}"
             );
+        }
+    }
+
+    /// The enumerated classes of disagreement between the two block splitters.
+    ///
+    /// Harvested with `FERRO_SEQFIRST_SHADOW=1` over the whole suite plus the
+    /// exhaustive two-member sweeps: **30 261 distinct `(reference, alternate)`
+    /// blocks** disagree. Every one of the 60 522 piece lists — both sides, every
+    /// block — reproduces the alternate block when its payloads are substituted
+    /// into the reference. So **neither splitter is ever wrong** in the only sense
+    /// that admits a definitive answer; each disagreement is a difference in how
+    /// the change is *divided*, and the tie-breaker below is minimality: the
+    /// changed-column count `changed_columns_of_pieces` measures, which is the
+    /// quantity HGVS asks a description to minimise.
+    ///
+    /// Counts are distinct blocks, and sum to 30 261.
+    ///
+    /// | class | mechanism | n | more minimal |
+    /// |-------|-----------|---|--------------|
+    /// | `A1` | shadow splits a block live kept whole | 7 035 | shadow |
+    /// | `A2` | shadow replaces live's coincidental substitution run with one indel pair | 6 915 | shadow |
+    /// | `A3` | shadow narrows a piece live over-widened | 4 567 | shadow |
+    /// | `A4` | shadow widens one piece but lowers the total | 379 | shadow |
+    /// | `B1` | shadow widens a member over an indel it will not localise | 8 044 | live |
+    /// | `B2` | shadow merges pieces live kept separate | 3 088 | live |
+    /// | `B3` | shadow narrows one piece and pays for it in the next | 1 | live |
+    /// | `C1` | equal weight, different division | 232 | neither |
+    ///
+    /// `A1`–`A4` (18 896, 62.4%) are the migration's payoff. The mechanism, in the
+    /// blocks pinned below, is `partition_block`'s single-gap restriction: two
+    /// independent length changes have no one-gap explanation, so the lone gap
+    /// parks at one end and the offset columns pair up as coincidental
+    /// substitutions or as one whole-block `delins`.
+    ///
+    /// `B1`–`B3` (11 133, 36.8%) are the risk, and they have two distinct causes.
+    /// `B1` is inherent to deriving the split from the alignment steps common to
+    /// every minimal alignment: when the inserted bases can sit at more than one
+    /// offset inside a run, no single alignment node is common to all of them, so
+    /// the member absorbs the whole ambiguous span instead of committing to a
+    /// tie-broken offset.
+    ///
+    /// `B2` splits in two by the narrowest unchanged run between live's pieces:
+    /// 1 453 blocks are separated by exactly one unchanged base (1 106 of those
+    /// equal-length, where `partition_block` compares position-wise and there is
+    /// no alignment choice to make), and 1 635 by two or more. The one-base half
+    /// is a threshold mismatch rather than an ambiguity —
+    /// `seqfirst::MIN_SEPARATION` is 2 on every axis, whereas this module's own
+    /// `MIN_PIECE_SEPARATION` of 2 gates only net insertions.
+    ///
+    /// `B2` is the class that bears on flipping the default, because it is what
+    /// the curated issue corpora overwhelmingly reach: of the 49 distinct blocks
+    /// the non-sweep, non-proptest tests produce, 38 are a `B2` merge. See
+    /// `shadow_merges_across_one_unchanged_base_where_live_splits`, which pins two
+    /// blocks taken straight from the #1232 and #1235 transcript-axis tests.
+    mod seqfirst_shadow_audit {
+        use super::*;
+
+        /// Substitute each piece's payload into `reference`.
+        ///
+        /// Returns `None` if the pieces are not disjoint and ascending, so a
+        /// caller cannot mistake an ill-formed piece list for a denotation.
+        fn denotes(reference: &[u8], pieces: &[Piece]) -> Option<Vec<u8>> {
+            let mut cursor = 0;
+            let mut out = Vec::new();
+            for piece in pieces {
+                if piece.ref_start < cursor
+                    || piece.ref_end < piece.ref_start
+                    || piece.ref_end > reference.len()
+                {
+                    return None;
+                }
+                out.extend_from_slice(&reference[cursor..piece.ref_start]);
+                out.extend_from_slice(&piece.alt);
+                cursor = piece.ref_end;
+            }
+            out.extend_from_slice(&reference[cursor..]);
+            Some(out)
+        }
+
+        /// `(ref_start, ref_end, alt)` triples, for terse expectations.
+        fn shape(pieces: &[Piece]) -> Vec<(usize, usize, &[u8])> {
+            pieces
+                .iter()
+                .map(|p| (p.ref_start, p.ref_end, p.alt.as_slice()))
+                .collect()
+        }
+
+        /// Run both splitters on one block and check the two invariants that hold
+        /// for every disagreement found: both sides denote the alternate block,
+        /// and the sequence-first side never declines.
+        ///
+        /// Returns `(live, shadow)` for the caller to pin exactly.
+        fn both(reference: &[u8], result: &[u8]) -> (Vec<Piece>, Vec<Piece>) {
+            let live = partition_block(reference, result);
+            let shadow = partition_block_sequence_first(reference, result)
+                .expect("no harvested disagreement had the sequence-first side decline");
+            assert_eq!(
+                denotes(reference, &live).as_deref(),
+                Some(result),
+                "live pieces must denote the alternate block: {live:?}"
+            );
+            assert_eq!(
+                denotes(reference, &shadow).as_deref(),
+                Some(result),
+                "shadow pieces must denote the alternate block: {shadow:?}"
+            );
+            assert_ne!(shape(&live), shape(&shadow), "this block must disagree");
+            (live, shadow)
+        }
+
+        /// `A1` (7 035 blocks). `partition_block` has no single-gap explanation
+        /// for two separate deletions, so it emits the whole block as one
+        /// `delins`; the sequence-first split finds both deletions.
+        #[test]
+        fn shadow_splits_a_block_live_kept_whole() {
+            let (live, shadow) = both(b"ACAC", b"CA");
+            assert_eq!(shape(&live), [(0, 4, b"CA".as_slice())]);
+            assert_eq!(
+                shape(&shadow),
+                [(0, 1, b"".as_slice()), (3, 4, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 4);
+            assert_eq!(changed_columns_of_pieces(&shadow), 2);
+        }
+
+        /// `A2` (6 915 blocks). The block is a 5' insertion plus a 3' deletion.
+        /// `partition_block`'s lone gap parks at one end, so the offset columns
+        /// pair up position-wise and read as a run of substitutions — three
+        /// pieces claiming three changed columns for what is one base in and one
+        /// base out.
+        #[test]
+        fn shadow_replaces_a_coincidental_substitution_run_with_one_indel_pair() {
+            let (live, shadow) = both(b"AACCA", b"TAACC");
+            assert_eq!(
+                shape(&live),
+                [
+                    (0, 1, b"T".as_slice()),
+                    (2, 3, b"A".as_slice()),
+                    (4, 5, b"C".as_slice()),
+                ]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 0, b"T".as_slice()), (4, 5, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 3);
+            assert_eq!(changed_columns_of_pieces(&shadow), 2);
+        }
+
+        /// `A3` (4 567 blocks). Same piece count; the live first piece spans one
+        /// base more than it needs to, and pays for it with a substitution the
+        /// sequence-first split renders as a deletion.
+        #[test]
+        fn shadow_narrows_a_piece_live_over_widened() {
+            let (live, shadow) = both(b"ACCA", b"CC");
+            assert_eq!(
+                shape(&live),
+                [(0, 2, b"".as_slice()), (3, 4, b"C".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 1, b"".as_slice()), (3, 4, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 3);
+            assert_eq!(changed_columns_of_pieces(&shadow), 2);
+        }
+
+        /// `A4` (379 blocks). The rarest of the four: the sequence-first first
+        /// piece is *wider* than live's, and the total is still lower.
+        #[test]
+        fn shadow_widens_one_piece_and_still_lowers_the_total() {
+            let (live, shadow) = both(b"AACAC", b"CA");
+            assert_eq!(
+                shape(&live),
+                [(0, 1, b"C".as_slice()), (2, 5, b"".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 2, b"".as_slice()), (4, 5, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 4);
+            assert_eq!(changed_columns_of_pieces(&shadow), 3);
+        }
+
+        /// `B1` (8 044 blocks) — **the sequence-first answer is less minimal.**
+        ///
+        /// `CA` is inserted into a run where it can sit at more than one offset,
+        /// so no alignment node is common to every minimal alignment there and
+        /// the member absorbs `reference[0..1]` rather than committing to the
+        /// 5'-most tie-break live picks. Both denote `CAACAG`; live spends 3
+        /// changed columns, the sequence-first split 4.
+        #[test]
+        fn shadow_widens_a_member_over_an_indel_it_will_not_localise() {
+            let (live, shadow) = both(b"ACAA", b"CAACAG");
+            assert_eq!(
+                shape(&live),
+                [(0, 0, b"CA".as_slice()), (3, 4, b"G".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 1, b"CAA".as_slice()), (3, 4, b"G".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 3);
+            assert_eq!(changed_columns_of_pieces(&shadow), 4);
+        }
+
+        /// `B2` (3 088 blocks, 1 265 of them equal-length) — **the sequence-first
+        /// answer is less minimal, and this is the class that reaches the curated
+        /// corpora.**
+        ///
+        /// `seqfirst::MIN_SEPARATION` is 2, so one unchanged reference base
+        /// between two runs of change merges them. `partition_block` splits
+        /// there: it compares equal-length blocks position-wise, and its own
+        /// `MIN_PIECE_SEPARATION` of 2 gates only net insertions.
+        ///
+        /// The three blocks below are, in order, the smallest instance, the block
+        /// `issue_1235_transcript_axes::noncoding_axis_converges_on_separated_changes`
+        /// produces, and the block
+        /// `issue_1235_cis_allele_confluence::issue_1232_spanning_delins_splits_at_unchanged_base`
+        /// produces. Both of those tests are named for the split the
+        /// sequence-first splitter declines to make.
+        #[test]
+        fn shadow_merges_across_one_unchanged_base_where_live_splits() {
+            let (live, shadow) = both(b"ACA", b"CC");
+            assert_eq!(
+                shape(&live),
+                [(0, 1, b"".as_slice()), (2, 3, b"C".as_slice())]
+            );
+            assert_eq!(shape(&shadow), [(0, 3, b"CC".as_slice())]);
+            assert_eq!(changed_columns_of_pieces(&live), 2);
+            assert_eq!(changed_columns_of_pieces(&shadow), 3);
+
+            // #1235's `noncoding_axis_converges_on_separated_changes`: an
+            // equal-length block, two substitutions one unchanged base apart.
+            let (live, shadow) = both(b"CAA", b"TAG");
+            assert_eq!(
+                shape(&live),
+                [(0, 1, b"T".as_slice()), (2, 3, b"G".as_slice())]
+            );
+            assert_eq!(shape(&shadow), [(0, 3, b"TAG".as_slice())]);
+            assert_eq!(changed_columns_of_pieces(&live), 2);
+            assert_eq!(changed_columns_of_pieces(&shadow), 3);
+
+            // #1232's `spanning_delins_splits_at_unchanged_base`: the split the
+            // issue is named for is the one that goes away.
+            let (live, shadow) = both(b"CAATT", b"TA");
+            assert_eq!(
+                shape(&live),
+                [(0, 3, b"".as_slice()), (4, 5, b"A".as_slice())]
+            );
+            assert_eq!(shape(&shadow), [(0, 5, b"TA".as_slice())]);
+            assert_eq!(changed_columns_of_pieces(&live), 4);
+            assert_eq!(changed_columns_of_pieces(&shadow), 5);
+        }
+
+        /// `B3` (1 block) — **the sequence-first answer is less minimal.** The
+        /// only harvested block where the two splits have the same piece count,
+        /// the sequence-first first piece is narrower, and the total is still
+        /// higher because the second piece grows by more than the first shrank.
+        #[test]
+        fn shadow_narrows_one_piece_and_pays_for_it_in_the_next() {
+            let (live, shadow) = both(b"GCCATA", b"CATAAC");
+            assert_eq!(
+                shape(&live),
+                [(0, 3, b"CAT".as_slice()), (4, 6, b"AC".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 3, b"C".as_slice()), (5, 6, b"AAC".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 5);
+            assert_eq!(changed_columns_of_pieces(&shadow), 6);
+        }
+
+        /// `C1` (232 blocks). Both denote the alternate block and both spend the
+        /// same number of changed columns; they only divide the change
+        /// differently. Which is preferable is not decided here — the spec's
+        /// prioritisation rule (`general.md:56`) is what reaches these, and the
+        /// two blocks below fall to it in opposite directions.
+        #[test]
+        fn equal_weight_different_division() {
+            let (live, shadow) = both(b"ACAGCG", b"CGCTGT");
+            assert_eq!(shape(&live), [(0, 6, b"CGCTGT".as_slice())]);
+            assert_eq!(
+                shape(&shadow),
+                [(0, 3, b"C".as_slice()), (5, 6, b"TGT".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 6);
+            assert_eq!(changed_columns_of_pieces(&shadow), 6);
+
+            let (live, shadow) = both(b"AGAGT", b"GAAGAG");
+            assert_eq!(
+                shape(&live),
+                [(0, 2, b"GA".as_slice()), (4, 5, b"AG".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 1, b"GAA".as_slice()), (4, 5, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 4);
+            assert_eq!(changed_columns_of_pieces(&shadow), 4);
+        }
+
+        /// The one property that held over all 30 261 harvested disagreements:
+        /// both piece lists are disjoint, ascending, and denote the alternate
+        /// block. `denotes` returns `None` on a piece list that is not, so this
+        /// is what makes "neither splitter is ever wrong" a checked claim rather
+        /// than a reading of the log.
+        #[test]
+        fn every_pinned_class_denotes_the_alternate_block_on_both_sides() {
+            for (reference, result) in [
+                (b"ACAC".as_slice(), b"CA".as_slice()),
+                (b"AACCA", b"TAACC"),
+                (b"ACCA", b"CC"),
+                (b"AACAC", b"CA"),
+                (b"ACAA", b"CAACAG"),
+                (b"ACA", b"CC"),
+                (b"CAA", b"TAG"),
+                (b"CAATT", b"TA"),
+                (b"GCCATA", b"CATAAC"),
+                (b"ACAGCG", b"CGCTGT"),
+                (b"AGAGT", b"GAAGAG"),
+            ] {
+                // `both` asserts the denotation on each side and that the block
+                // does in fact disagree.
+                both(reference, result);
+            }
         }
     }
 
