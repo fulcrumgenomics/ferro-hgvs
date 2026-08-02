@@ -28,14 +28,21 @@
 //! 0-based half-open throughout, matching [`crate::normalize::shuffle`].
 //! Reference offsets are relative to the start of `ref_block`.
 
-// This module is complete and tested but not yet wired into `normalize_allele`;
-// that is the migration step. Remove this allow when the wiring lands.
+// The sequence-first path IS compiled into production: `normalize_allele` runs
+// it as a shadow comparison. It is gated behind `FERRO_SEQFIRST_SHADOW=1` and
+// never affects output, so the migration step that remains is promoting it from
+// shadow to authoritative — not wiring it up at all, which the earlier version
+// of this comment claimed.
+//
+// The allowance is therefore scoped to the items that genuinely have no
+// non-test, non-benchmark caller yet, rather than blanketed over the module: a
+// module-wide `allow` would also hide a helper that becomes unreachable when the
+// shadow is promoted, which is exactly when the warning is worth having.
 //
 // The module (and `align`'s `AlignmentDag::build`/`edit_distance`, needed by
 // the `seqfirst_align` criterion benchmark) is `pub` only under the `dev`
 // feature so an external benchmark crate can reach it; it stays `pub(crate)`
 // otherwise, since there is no public API here yet.
-#![allow(dead_code)]
 
 #[cfg(feature = "dev")]
 pub mod align;
@@ -46,9 +53,15 @@ pub(crate) mod partition;
 /// Unchanged reference bases two runs of change must be separated by before the
 /// split between them is believed.
 ///
-/// `2`, not `1`. The HGVS spec contradicts itself here: `general.md:34` says
-/// variants "separated by one or more nucleotides" are described individually,
-/// while its own NOTE says the rule is moving to "separated by less than two →
-/// delins". The spec's worked example (`delins.md:44`, `LRG_199t1:c.850_901`)
-/// is only reproducible under the second reading, so that is the one used.
+/// `2`, not `1`. The HGVS spec's general rule (`general.md:34`) says variants
+/// "separated by one or more nucleotides" are described individually, but its
+/// own exception (`general.md:35`) already carves out "separated by one
+/// nucleotide, together affecting one amino acid" as a delins — i.e. a single
+/// unchanged base between two runs merges them. `DNA/delins.md:42` applies
+/// exactly that exception, rejecting the individually-described
+/// `c.[145C>T;147C>G]` in favor of `LRG_199t1:c.145_147delinsTGG`. The spec's
+/// worked example at `delins.md:44` (`LRG_199t1:c.850_901`) has that same
+/// one-unchanged-base gap and is only reproducible when it merges, so
+/// `MIN_SEPARATION` is `2` — merge when fewer than 2 unchanged bases separate
+/// two runs — not `1`.
 pub(crate) const MIN_SEPARATION: u32 = 2;

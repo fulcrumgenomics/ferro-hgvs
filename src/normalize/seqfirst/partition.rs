@@ -11,7 +11,7 @@
 //! the overlap and ordering defects the repair passes exist to fix become
 //! unrepresentable rather than repaired.
 
-use super::align::AlignmentDag;
+use super::align::{AlignmentDag, Dominators};
 use super::MIN_SEPARATION;
 
 /// One member of the canonicalized allele, as a half-open reference span
@@ -25,12 +25,23 @@ pub(crate) struct MemberBlock {
 }
 
 /// Partition the reference block at [`MIN_SEPARATION`].
+///
+/// Computes [`AlignmentDag::dominators`] itself, so it is the convenient
+/// entry point for a one-off partition. A caller that also needs
+/// [`member_alt_spans`] on the same DAG should instead compute the
+/// `Dominators` once and call [`partition_members_with`] and
+/// [`member_alt_spans`] directly, to avoid sweeping the DAG twice.
 pub(crate) fn partition_members(dag: &AlignmentDag) -> Vec<MemberBlock> {
-    partition_members_with(dag, MIN_SEPARATION)
+    let dominators = dag.dominators();
+    partition_members_with(dag, &dominators, MIN_SEPARATION)
 }
 
 /// Partition the reference block, merging runs separated by fewer than
 /// `min_separation` **unchanged reference bases**.
+///
+/// Takes `dominators` rather than computing it, so a caller that also needs
+/// [`member_alt_spans`] can sweep the DAG once and pass the same `Dominators`
+/// to both.
 ///
 /// The unit of separation is unchanged bases, not event indices. Two events at
 /// reference offsets `p` and `q` are separated by `q - p - 1` bases. Comparing
@@ -38,8 +49,11 @@ pub(crate) fn partition_members(dag: &AlignmentDag) -> Vec<MemberBlock> {
 /// into two members where the spec describes one; the other calibration cases
 /// score identically under both readings, so that error is invisible without
 /// that case.
-pub(crate) fn partition_members_with(dag: &AlignmentDag, min_separation: u32) -> Vec<MemberBlock> {
-    let dominators = dag.dominators();
+pub(crate) fn partition_members_with(
+    dag: &AlignmentDag,
+    dominators: &Dominators,
+    min_separation: u32,
+) -> Vec<MemberBlock> {
     let ref_len = dag.ref_len();
 
     // An event is a reference position no minimal alignment agrees is matched,
@@ -89,7 +103,12 @@ pub(crate) fn partition_members_with(dag: &AlignmentDag, min_separation: u32) ->
             // the changed reading wins — it is the wider of the two and the
             // base really does change.
             ref_end: if changed.binary_search(&end).is_ok() {
-                (end + 1).min(ref_len)
+                // `end` is itself a changed position, so `end < ref_len`
+                // always (a changed position is by definition within the
+                // block); the `+ 1` can never reach past `ref_len`, so no
+                // clamp is needed.
+                debug_assert!(end < ref_len, "a changed position must be within the block");
+                end + 1
             } else {
                 end
             },
@@ -99,13 +118,25 @@ pub(crate) fn partition_members_with(dag: &AlignmentDag, min_separation: u32) ->
 
 /// The alternate-block span each member consumes, parallel to `members`.
 ///
+/// Takes `dominators` rather than computing it, so a caller that also calls
+/// [`partition_members_with`] on the same DAG can sweep it once and pass the
+/// same `Dominators` to both — `dominators` must be `dag.dominators()` (or
+/// equal to it), since the two are read together below.
+///
 /// Each member's *start* is reached across a run of reference bases that every
 /// minimal alignment matches, so the alternate cursor advances one-for-one
 /// there. Each member's *end* is read from the dominator that terminates it.
 ///
-/// Returns `None` if a member's end is neither the end of the block nor a
-/// dominator match, or if the members are not an ascending partition — both
-/// mean a bug upstream rather than an unusual input.
+/// Returns `None` in any of three cases, each meaning a bug upstream rather
+/// than an unusual input:
+///
+/// 1. a member's end is neither the end of the block nor a dominator match;
+/// 2. the members are not an ascending, non-overlapping partition (a member's
+///    `ref_start` precedes the previous member's `ref_end`, or a member's own
+///    `ref_end` precedes its `ref_start`);
+/// 3. the computed span would be inverted (`alt_end < alt_start`) — this can
+///    only arise alongside a malformed `members` input, since a well-formed
+///    partition's alternate cursor never runs backward.
 ///
 /// # Why the end must come from a dominator
 ///
@@ -113,9 +144,9 @@ pub(crate) fn partition_members_with(dag: &AlignmentDag, min_separation: u32) ->
 /// coordinate at each reference boundary. That is wrong: away from dominators,
 /// different minimal alignments assign different alternate coordinates to the
 /// same reference boundary, so a walked path yields spans that rebuild the
-/// wrong alternate block. Measured while writing this plan — `AAAAAAA ->
-/// AACACAAAA` and `ACGTACGTAC -> ACGTTACGTGAC` both fail the round-trip that
-/// way, and both pass when the end is taken from the dominator's own cell.
+/// wrong alternate block. `AAAAAAA -> AACACAAAA` and `ACGTACGTAC ->
+/// ACGTTACGTGAC` both fail the round-trip that way, and both pass when the end
+/// is taken from the dominator's own cell.
 ///
 /// A member's `ref_end` is always either `ref_len` or a dominator-matched
 /// position: a run ending at a changed position `p` has `ref_end = p + 1`, and
@@ -124,9 +155,9 @@ pub(crate) fn partition_members_with(dag: &AlignmentDag, min_separation: u32) ->
 /// it would have been a changed position.
 pub(crate) fn member_alt_spans(
     dag: &AlignmentDag,
+    dominators: &Dominators,
     members: &[MemberBlock],
 ) -> Option<Vec<(u32, u32)>> {
-    let dominators = dag.dominators();
     let alt_at_boundary = |r: u32| -> Option<u32> {
         if r == dag.ref_len() {
             Some(dag.alt_len())
@@ -160,7 +191,7 @@ pub(crate) fn member_alt_spans(
 mod tests {
     use super::*;
 
-    /// The calibration corpus. Seven cases; 7/7 is the bar this design cleared
+    /// The calibration corpus. Six cases; 6/6 is the bar this design cleared
     /// and no other candidate did (score-margin and match-density both failed
     /// here — see `separations_are_meaningful` in `merge.rs` for their
     /// remains).
@@ -309,13 +340,103 @@ mod tests {
         );
     }
 
+    #[test]
+    fn lrg199_partitions_to_the_exact_whole_block_span() {
+        // The design's headline case (`delins.md:44`, `LRG_199t1:c.850_901`) is
+        // otherwise pinned only by member *count* (the corpus row above). Only
+        // reference offset 48 is a dominator match, so the two runs either
+        // side of it merge across the single unchanged base between them
+        // (fewer than `MIN_SEPARATION`), giving one member spanning the whole
+        // 52 nt block.
+        let dag = AlignmentDag::build(LRG199_REF, b"TTCCTCGATGCCTG");
+        let members = partition_members(&dag);
+        assert_eq!(
+            members,
+            vec![MemberBlock {
+                ref_start: 0,
+                ref_end: 52
+            }]
+        );
+    }
+
+    #[test]
+    fn min_separation_changes_whether_runs_merge() {
+        // "control two subs exactly 2 apart": at the default MIN_SEPARATION
+        // (2), the gap of exactly 2 unchanged bases does not merge, giving two
+        // members. Raising `min_separation` to 3 must merge them into one,
+        // pinning that the parameter is actually load-bearing rather than
+        // dead flexibility.
+        let dag = AlignmentDag::build(b"ACGTACGT", b"ATGTTCGT");
+        let dominators = dag.dominators();
+        assert_eq!(
+            partition_members_with(&dag, &dominators, 2).len(),
+            2,
+            "gap of exactly 2 must not merge at min_separation 2"
+        );
+        assert_eq!(
+            partition_members_with(&dag, &dominators, 3).len(),
+            1,
+            "gap of exactly 2 must merge at min_separation 3"
+        );
+    }
+
+    #[test]
+    fn member_alt_spans_matches_measured_values() {
+        // Verified exact spans, not just member boundaries: #1260's single
+        // member and both members of the "two insertions 5 apart" case.
+        for (name, r, a, expected_spans) in [
+            (
+                "#1260 two insC at adjacent gaps",
+                &b"AAAAAAA"[..],
+                &b"AACACAAAA"[..],
+                vec![(2u32, 5u32)],
+            ),
+            (
+                "two insertions 5 apart",
+                &b"ACGTACGTAC"[..],
+                &b"ACGTTACGTGAC"[..],
+                vec![(3u32, 5u32), (9u32, 10u32)],
+            ),
+        ] {
+            let dag = AlignmentDag::build(r, a);
+            let dominators = dag.dominators();
+            let members = partition_members_with(&dag, &dominators, MIN_SEPARATION);
+            let spans = member_alt_spans(&dag, &dominators, &members)
+                .unwrap_or_else(|| panic!("{name}: member_alt_spans returned None"));
+            assert_eq!(spans, expected_spans, "{name}: alt spans");
+        }
+    }
+
+    #[test]
+    fn member_alt_spans_rejects_overlapping_members() {
+        // `member_alt_spans` takes an arbitrary `&[MemberBlock]`, not only ones
+        // `partition_members` could have produced, and its contract promises
+        // `None` for a members list that is not an ascending, non-overlapping
+        // partition. Exercise that directly rather than trying to coax an
+        // impossible members list out of `partition_members` itself.
+        let dag = AlignmentDag::build(b"ACGT", b"ACGT");
+        let dominators = dag.dominators();
+        let overlapping = [
+            MemberBlock {
+                ref_start: 0,
+                ref_end: 2,
+            },
+            MemberBlock {
+                ref_start: 1,
+                ref_end: 3,
+            },
+        ];
+        assert_eq!(member_alt_spans(&dag, &dominators, &overlapping), None);
+    }
+
     /// Rebuild the alternate block from the reference block plus the members'
     /// payloads. This is the invariant that makes the partition meaningful: if
     /// it does not hold, the members denote a different sequence.
     fn round_trips(reference: &[u8], alt: &[u8]) -> bool {
         let dag = AlignmentDag::build(reference, alt);
-        let members = partition_members(&dag);
-        let Some(alt_spans) = member_alt_spans(&dag, &members) else {
+        let dominators = dag.dominators();
+        let members = partition_members_with(&dag, &dominators, MIN_SEPARATION);
+        let Some(alt_spans) = member_alt_spans(&dag, &dominators, &members) else {
             return false;
         };
         let mut rebuilt = Vec::new();
