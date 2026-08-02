@@ -20,57 +20,9 @@
 //! identity member a sibling *claims the bases of* is a contradiction, and only
 //! that one is dropped.
 
-use crate::common::synthetic::{padded, SyntheticBuilder};
-use ferro_hgvs::spdi::hgvs_to_spdi;
-use ferro_hgvs::{parse_hgvs, HgvsVariant, Normalizer};
+use crate::common::synthetic::assert_padded_preserving;
 
 const CORE: &str = "GCATGAAAAT";
-
-/// Normalize and assert the output denotes the input's bases. A pair whose
-/// members overlap has no resulting sequence at all, which is how the pre-fix
-/// output failed.
-fn assert_padded_preserving(core: &str, input: &str) -> String {
-    let provider = SyntheticBuilder::genomic(core).build();
-    let normalizer = Normalizer::new(provider.clone());
-    let reference = padded(core);
-    let output = normalizer
-        .normalize(&parse_hgvs(input).expect("parse"))
-        .expect("normalize")
-        .to_string();
-
-    let denote = |descriptor: &str| -> Option<String> {
-        let members: Vec<HgvsVariant> = match parse_hgvs(descriptor).ok()? {
-            HgvsVariant::Allele(allele) => allele.variants.clone(),
-            single => vec![single],
-        };
-        let mut triples = Vec::new();
-        for member in &members {
-            triples.push(hgvs_to_spdi(member, &provider).ok()?);
-        }
-        triples.sort_by_key(|t| std::cmp::Reverse(t.position));
-        let mut edited = reference.as_bytes().to_vec();
-        let mut claimed = reference.len();
-        for triple in &triples {
-            let start = usize::try_from(triple.position).ok()?;
-            let end = start.checked_add(triple.deletion.len())?;
-            if end > claimed {
-                return None;
-            }
-            edited.splice(start..end, triple.insertion.bytes());
-            claimed = start;
-        }
-        String::from_utf8(edited).ok()
-    };
-
-    let from_input = denote(input).expect("input applies");
-    let from_output = denote(&output)
-        .unwrap_or_else(|| panic!("`{input}` -> `{output}` has no resulting sequence"));
-    assert_eq!(
-        from_output, from_input,
-        "`{input}` -> `{output}` changed the sequence"
-    );
-    output
-}
 
 #[test]
 fn a_cancelled_member_does_not_survive_inside_the_repeat_that_absorbed_it() {
