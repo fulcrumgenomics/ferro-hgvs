@@ -1,0 +1,112 @@
+//! Commuting payloads may meet, but not sweep past a sibling that stays put.
+//!
+//! `clamp_sibling_crossing_junctions` exempts a sibling whose payload
+//! *commutes* with this member's: `p ++ q == q ++ p` means the two have no
+//! observable order, so letting them reach one junction is better than keeping
+//! them apart — they merge into a single member (#1286).
+//!
+//! That reasoning is about the order of the two payloads **relative to each
+//! other**, once they meet. It says nothing about a member sweeping past a
+//! sibling that does not move and landing beyond it, where different reference
+//! bases now separate them:
+//!
+//! ```text
+//! reference  ("ACGT" x 64) + "CAGAAGATGAATAA" + ("ACGT" x 64)
+//! g.[263_264insTG;264_265insTG]
+//!   the second member does not move; the first 3'-shifts 263 -> 265
+//!
+//!   intended  C A G A A G A T G T T G G A A T A A
+//!   emitted   C A G A A G A T T G G T G A A T A A
+//! ```
+//!
+//! Two well-formed members on distinct junctions, disjoint and in order — and
+//! denoting different bases. So a commuting sibling bounds this member at the
+//! junction it **settles** on, and only its post-normalization position counts,
+//! since where it started is exactly the order commuting makes unobservable.
+//!
+//! Landing on that bound can still be out of phase, and then the member may not
+//! go there either. The clamp walks back from the bound to the most 3' junction
+//! this member's payload is in phase with — `before_junction` always is, since
+//! that is where the shift began.
+//!
+//! **Not fully solved by this: see #1312.** When the payload is out of phase
+//! with the base between the two gaps, something downstream still merges them
+//! at one junction with a payload that is neither concatenation nor rotation.
+//! That case is pre-existing and denotes the same wrong sequence before and
+//! after this change.
+
+use crate::common::synthetic::{padded, SyntheticBuilder};
+use ferro_hgvs::spdi::hgvs_to_spdi;
+use ferro_hgvs::{parse_hgvs, HgvsVariant, Normalizer};
+
+/// Normalize and assert the output denotes the input's bases, projected through
+/// `hgvs_to_spdi` rather than the normalizer's own applier.
+fn assert_padded_preserving(core: &str, input: &str) -> String {
+    let provider = SyntheticBuilder::genomic(core).build();
+    let normalizer = Normalizer::new(provider.clone());
+    let reference = padded(core);
+    let output = normalizer
+        .normalize(&parse_hgvs(input).expect("parse"))
+        .expect("normalize")
+        .to_string();
+
+    let denote = |descriptor: &str| -> Option<String> {
+        let members: Vec<HgvsVariant> = match parse_hgvs(descriptor).ok()? {
+            HgvsVariant::Allele(allele) => allele.variants.clone(),
+            single => vec![single],
+        };
+        let mut triples = Vec::new();
+        for member in &members {
+            triples.push(hgvs_to_spdi(member, &provider).ok()?);
+        }
+        triples.sort_by_key(|t| std::cmp::Reverse(t.position));
+        let mut edited = reference.as_bytes().to_vec();
+        let mut claimed = reference.len();
+        for triple in &triples {
+            let start = usize::try_from(triple.position).ok()?;
+            let end = start.checked_add(triple.deletion.len())?;
+            if end > claimed {
+                return None;
+            }
+            edited.splice(start..end, triple.insertion.bytes());
+            claimed = start;
+        }
+        String::from_utf8(edited).ok()
+    };
+
+    let from_input = denote(input).expect("input applies");
+    let from_output = denote(&output)
+        .unwrap_or_else(|| panic!("`{input}` -> `{output}` has no resulting sequence"));
+    assert_eq!(
+        from_output, from_input,
+        "`{input}` -> `{output}` changed the sequence"
+    );
+    output
+}
+
+#[test]
+fn a_commuting_payload_does_not_sweep_past_a_sibling_that_stays() {
+    // #1308. `264_265insTG` does not move, so the first member may not shift
+    // from 263 to 265 across it.
+    let output =
+        assert_padded_preserving("CAGAAGATGAATAA", "NC_TEST.1:g.[263_264insTG;264_265insTG]");
+    assert_eq!(output, "NC_TEST.1:g.265_266insTTGG");
+}
+
+#[test]
+fn commuting_payloads_that_settle_together_still_merge() {
+    // The guard on the bound. Both members shift to the same junction in a
+    // poly-A tract, so the exemption must still let them meet and merge — one
+    // member, not two. Bounding at the sibling's *pre* junction would split it.
+    let output = assert_padded_preserving("AAAAAA", "NC_TEST.1:g.[258_259insA;259_260insA]");
+    assert_eq!(output, "NC_TEST.1:g.257_263A[9]");
+}
+
+#[test]
+fn three_commuting_payloads_still_reach_one_member() {
+    let output = assert_padded_preserving(
+        "AAAAAA",
+        "NC_TEST.1:g.[258_259insA;259_260insA;260_261insA]",
+    );
+    assert_eq!(output, "NC_TEST.1:g.257_263A[10]");
+}

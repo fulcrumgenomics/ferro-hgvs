@@ -60,9 +60,9 @@
 //!   nor #1262 is about overlapping members, so the citation did not describe
 //!   the shape it was excluding. What that shape hit was #1301, now fixed.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
-//!   because it finds #1308, two equal-payload insertions at adjacent gaps
-//!   that both shift 3' and denote different bases. It found #1286, #1287,
-//!   #1290, #1292, #1296, #1301, #1304 and #1297 first, all now fixed, each
+//!   because it finds #1312, equal-payload insertions at adjacent gaps merging
+//!   out of phase with the base between them. It found #1286, #1287, #1290,
+//!   #1292, #1296, #1301, #1304, #1297 and #1308 first, all now fixed, each
 //!   masked behind the one before it; see its doc comment for the history and
 //!   the live reproduction.
 //!
@@ -788,29 +788,30 @@ proptest! {
     /// sharing a span rendered out of order; #1304, a junction barrier reading a
     /// moved sibling's payload from the wrong snapshot; and #1297, a member that
     /// cancelled and was left as an identity member overlapping the repeat that
-    /// absorbed it. The live failure is the ninth it has found, **#1308**:
+    /// absorbed it, and #1308, a commuting payload sweeping past a sibling that
+    /// stays put. The live failure is the tenth it has found, **#1312**:
     ///
     /// ```text
-    /// core "CAGAAGATGAATAA", insert "TG" after index 6 and after index 7
-    ///   g.[263_264insTG;264_265insTG] -> g.[264_265insTG;264_265dup]
-    ///     intended  C A G A A G A T G T T G G A A T A A
-    ///     emitted   C A G A A G A T T G G T G A A T A A
+    /// core "TAAAACCA", insert "AC" after index 3 and after index 4
+    ///   g.[260_261insAC;261_262insAC] -> g.261_262insACCA
+    ///     intended  T A A A A C A A C C C A
+    ///     emitted   T A A A A A C C A C C A
     /// ```
     ///
-    /// Both insertions moved one position 3', which is only equivalent when the
-    /// base they step over is in phase with them. Their payloads are equal, so
-    /// they commute and the junction clamp permits the crossing — but commuting
-    /// governs the two payloads' order relative to *each other*, not their phase
-    /// against the reference.
+    /// `AC` is out of phase with the `A` between the two gaps, so neither member
+    /// may move onto the other's junction — yet they merge there anyway, with a
+    /// payload that is neither concatenation nor rotation. This one survives the
+    /// 512-case budget below and is only reachable in a soak, which is exactly
+    /// why enabling the test on that budget would prove nothing.
     ///
-    /// Each of the eight was masked behind the one before it, which is the point
+    /// Each of the nine was masked behind the one before it, which is the point
     /// of keeping this committed rather than deleting it until it can pass.
     ///
     /// Enabling this test was #1292's acceptance criterion. #1292 is fixed and
     /// pinned — by `issue_1292_junction_payload_rotation` and by the `99d5d382`
     /// seed below, which replays green — but the criterion could not be met
     /// with it, because the property's next two failures were behind it.
-    /// Enabling now belongs to **#1308**, whose seed `03577f14` is committed
+    /// Enabling now belongs to **#1312**, whose seed `958acf3e` is committed
     /// below — so taking the ignore off replays it immediately, which is what
     /// should gate taking it off. Absent that seed this passes the 512-case
     /// budget and fails a 30,000-case soak on the same shape, so switching it
@@ -819,7 +820,7 @@ proptest! {
     ///
     /// Do not weaken it to make it pass.
     #[test]
-    #[ignore = "finds #1308, a real unfixed defect; see doc comment"]
+    #[ignore = "finds #1312, a real unfixed defect; see doc comment"]
     fn an_indel_haplotype_normalizes_to_its_own_sequence(
         haplotype in indel_haplotype_strategy()
     ) {
@@ -1019,13 +1020,13 @@ fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
 /// to pin.
 #[test]
 fn the_ignored_indel_property_still_finds_its_defect() {
-    // #1308: two equal payloads commute, so the junction clamp lets both step
-    // 3' -- but the base they step over is out of phase with them, so the
-    // output denotes a different sequence.
+    // #1312: `AC` is out of phase with the `A` between the two gaps, so neither
+    // member may move onto the other's junction -- yet they merge there anyway,
+    // with a payload that is neither concatenation nor rotation.
     let (core, input, issue) = (
-        "CAGAAGATGAATAA",
-        "NC_TEST.1:g.[263_264insTG;264_265insTG]",
-        "#1308",
+        "TAAAACCA",
+        "NC_TEST.1:g.[260_261insAC;261_262insAC]",
+        "#1312",
     );
     assert!(
         indel_property_holds(core, input).is_err(),
