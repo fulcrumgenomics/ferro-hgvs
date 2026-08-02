@@ -5536,6 +5536,9 @@ fn respell_at_gap<P: ReferenceProvider>(
 }
 
 #[cfg(test)]
+mod splitter_reproducer_corpus;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::hgvs::parser::parse_hgvs;
