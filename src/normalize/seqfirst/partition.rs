@@ -31,6 +31,13 @@ pub(crate) struct MemberBlock {
 /// [`member_alt_spans`] on the same DAG should instead compute the
 /// `Dominators` once and call [`partition_members_with`] and
 /// [`member_alt_spans`] directly, to avoid sweeping the DAG twice.
+// The only item in this module with no production caller: `normalize_allele`'s
+// shadow comparison needs `member_alt_spans` on the same DAG, so it takes the
+// `partition_members_with` route that shares one `Dominators` sweep. This
+// convenience wrapper is used by tests and is kept as the documented one-off
+// entry point. Scoped rather than allowed module-wide, so a helper that becomes
+// unreachable when the shadow is promoted still warns.
+#[allow(dead_code)]
 pub(crate) fn partition_members(dag: &AlignmentDag) -> Vec<MemberBlock> {
     let dominators = dag.dominators();
     partition_members_with(dag, &dominators, MIN_SEPARATION)
@@ -43,12 +50,19 @@ pub(crate) fn partition_members(dag: &AlignmentDag) -> Vec<MemberBlock> {
 /// [`member_alt_spans`] can sweep the DAG once and pass the same `Dominators`
 /// to both.
 ///
-/// The unit of separation is unchanged bases, not event indices. Two events at
-/// reference offsets `p` and `q` are separated by `q - p - 1` bases. Comparing
-/// `q - p` instead splits the spec's own worked example (`LRG_199t1:c.850_901`)
-/// into two members where the spec describes one; the other calibration cases
-/// score identically under both readings, so that error is invisible without
-/// that case.
+/// The unit of separation is unchanged bases, not event indices: two events are
+/// separated by the count of reference bases lying strictly between the extents
+/// they occupy. Comparing event indices instead splits the spec's own worked
+/// example (`LRG_199t1:c.850_901`) into two members where the spec describes
+/// one; the other calibration cases score identically under both readings, so
+/// that error is invisible without that case.
+///
+/// The left extent is therefore *exclusive* and depends on what the event is: a
+/// changed position `p` occupies `p..p + 1`, so an event at `q` is `q - p - 1`
+/// bases away, but an insertion junction at `k` occupies no reference base at
+/// all, so an event at `q` is `q - k` bases away. Subtracting one
+/// unconditionally undercounts after a junction and merges runs that a
+/// separation of one unchanged base should keep apart.
 pub(crate) fn partition_members_with(
     dag: &AlignmentDag,
     dominators: &Dominators,
@@ -69,14 +83,40 @@ pub(crate) fn partition_members_with(
     events.sort_unstable();
     events.dedup();
 
+    // Where an event's extent ends, exclusive: a changed reference position
+    // occupies `end..end + 1`, while a forced-insertion junction occupies no
+    // reference base at all and so ends at `end`.
+    //
+    // Widening an insertion-only end to `end + 1` would claim a reference base
+    // that every minimal alignment matches, giving the member a non-minimal
+    // extent. Both readings denote the same sequence and round-trip, so the
+    // round-trip invariant does not catch this. The exact-span assertions in
+    // `insertion_junctions_do_not_claim_a_matched_base` and
+    // `an_insertion_only_member_has_an_empty_reference_span` do.
+    //
+    // When a position is both changed and a forced-insertion junction, the
+    // changed reading wins — it is the wider of the two and the base really
+    // does change.
+    let exclusive_end = |end: u32| -> u32 {
+        if changed.binary_search(&end).is_ok() {
+            // `end` is itself a changed position, so `end < ref_len` always (a
+            // changed position is by definition within the block); the `+ 1`
+            // can never reach past `ref_len`, so no clamp is needed.
+            debug_assert!(end < ref_len, "a changed position must be within the block");
+            end + 1
+        } else {
+            end
+        }
+    };
+
     // Group consecutive events into runs, merging across short gaps.
     let mut runs: Vec<(u32, u32)> = Vec::new();
     for event in events {
         match runs.last_mut() {
-            // `event - last_end - 1` is the count of unchanged bases between
-            // the previous event and this one.
+            // The unchanged bases between the run so far and this event are the
+            // ones from where the run's extent ends up to this event's start.
             Some((_, last_end))
-                if event.saturating_sub(*last_end).saturating_sub(1) < min_separation =>
+                if event.saturating_sub(exclusive_end(*last_end)) < min_separation =>
             {
                 *last_end = event;
             }
@@ -87,31 +127,7 @@ pub(crate) fn partition_members_with(
     runs.into_iter()
         .map(|(start, end)| MemberBlock {
             ref_start: start,
-            // A run's last event is either a changed reference position, which
-            // occupies `end..end + 1`, or a forced-insertion junction, which
-            // occupies no reference base at all and so ends at `end`.
-            //
-            // Widening an insertion-only end to `end + 1` would claim a
-            // reference base that every minimal alignment matches, giving the
-            // member a non-minimal extent. Both readings denote the same
-            // sequence and round-trip, so the round-trip invariant does not
-            // catch this. The exact-span assertions in
-            // `insertion_junctions_do_not_claim_a_matched_base` and
-            // `an_insertion_only_member_has_an_empty_reference_span` do.
-            //
-            // When a position is both changed and a forced-insertion junction,
-            // the changed reading wins — it is the wider of the two and the
-            // base really does change.
-            ref_end: if changed.binary_search(&end).is_ok() {
-                // `end` is itself a changed position, so `end < ref_len`
-                // always (a changed position is by definition within the
-                // block); the `+ 1` can never reach past `ref_len`, so no
-                // clamp is needed.
-                debug_assert!(end < ref_len, "a changed position must be within the block");
-                end + 1
-            } else {
-                end
-            },
+            ref_end: exclusive_end(end),
         })
         .collect()
 }
@@ -268,6 +284,30 @@ mod tests {
             partition_members(&dag).len(),
             1,
             "one unchanged base is fewer than MIN_SEPARATION, so these merge"
+        );
+    }
+
+    /// An insertion junction occupies no reference base, so the run it ends
+    /// stops *at* that offset rather than after it, and the base at that offset
+    /// is still unchanged and still separates it from whatever follows.
+    ///
+    /// #1260's block has forced insertion junctions at reference offsets 2 and
+    /// 3, with the base at offset 2 unchanged between them: the separation is
+    /// `3 - 2 = 1` unchanged base, not `3 - 2 - 1 = 0`.
+    ///
+    /// At `MIN_SEPARATION` (2) both readings merge, which is why neither the
+    /// exhaustive round-trip sweep nor the proptest catches the difference —
+    /// the members denote the same sequence either way. Only a threshold of 1
+    /// separates them, and there the undercount is the difference between
+    /// merging and splitting.
+    #[test]
+    fn separation_after_an_insertion_junction_counts_the_base_it_does_not_occupy() {
+        let dag = AlignmentDag::build(b"AAAAAAA", b"AACACAAAA");
+        let dominators = dag.dominators();
+        assert_eq!(
+            partition_members_with(&dag, &dominators, 1).len(),
+            2,
+            "one unchanged base is not fewer than a separation threshold of 1"
         );
     }
 
