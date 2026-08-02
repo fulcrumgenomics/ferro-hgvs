@@ -7,10 +7,10 @@
 # The cases the IndelHaplotype model has found. The first two are filtered by
 # the strategy today (#1260/#1262 adjacent-gap insertions, and events cancelling
 # to no net change) and are re-rejected rather than re-run. #1287 and #1292 are
-# fixed and replay green. #1296 and #1297 are not yet fixed and are the reason
-# `an_indel_haplotype_normalizes_to_its_own_sequence` is still `#[ignore]`d, so
-# they are recorded here rather than running: they replay the moment it is
-# enabled, which is what should gate enabling it.
+# fixed and replay green, as does #1296. #1297 is not yet fixed and is the
+# reason `an_indel_haplotype_normalizes_to_its_own_sequence` is still
+# `#[ignore]`d, so it is recorded here rather than running: it replays the
+# moment the test is enabled, which is what should gate enabling it.
 cc e8fb54e331549cd5d7b8d2f8100951aed7db8ab2ffc759df817bd69a7e4eff9a # #1286; shrinks to haplotype = IndelHaplotype { core: "AAAAAA", events: [Insert { index: 1, bases: ['A', 'A'], len: 1 }, Insert { index: 2, bases: ['A', 'A'], len: 1 }] }
 cc e11d211278b3d526443f114ec02b2ec4e1b35df7d4a6024ba0bcc543d52162b3 # shrinks to haplotype = IndelHaplotype { core: "AAAAAA", events: [Delete { index: 1 }, Insert { index: 2, bases: ['A', 'A'], len: 1 }] }
 cc a38727fa5784df80e613e4c9547baccb981621191ad1260871fb5943faf8dce6 # #1287; shrinks to haplotype = IndelHaplotype { core: "ATACAGAAAATCAGGGCATA", events: [Insert { index: 4, bases: ['G', 'A'], len: 2 }, Insert { index: 6, bases: ['A', 'A'], len: 2 }] }
