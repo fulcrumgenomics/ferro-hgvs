@@ -3,9 +3,12 @@
 //! Global alignment (both ends anchored) under **unit-cost Levenshtein**. Both
 //! choices are deliberate:
 //!
-//! - *Global*, because the flanks were trimmed by the caller and are identical
-//!   by construction, so there is no "where do these correspond" question and
-//!   every base must be accounted for.
+//! - *Global*, because the eventual caller in the migration will trim common
+//!   flanks before calling in, making them identical by construction and
+//!   removing any "where do these correspond" question. Nothing here requires
+//!   that: an untrimmed flank only adds harmless leading/trailing dominator
+//!   matches, since a flank match is itself a dominator (every minimal
+//!   alignment matches it) and so cannot change the partition.
 //! - *Unit cost, not affine*. The criterion is not "which alignment is best"
 //!   but "which steps appear in **all** minimal alignments" — the cost model's
 //!   job is to define that set, not to pick a winner. Affine penalties are
@@ -57,8 +60,13 @@ pub struct AlignmentDag {
 impl AlignmentDag {
     /// Build the DAG for `ref_block` -> `alt_block`.
     ///
-    /// Both slices are raw bases with common flanks already trimmed. Either may
-    /// be empty. Cost is `O(ref_len * alt_len)` in time and space.
+    /// Both slices are raw bases. Either may be empty. There is no requirement
+    /// that common flanks be pre-trimmed: an untrimmed flank only contributes
+    /// extra leading/trailing dominator matches (a flank match is matched by
+    /// every minimal alignment), which leaves the partition unchanged. The
+    /// eventual caller in the migration will trim flanks anyway, but that is a
+    /// caller convenience, not a precondition of this function. Cost is
+    /// `O(ref_len * alt_len)` in time and space.
     pub fn build(ref_block: &[u8], alt_block: &[u8]) -> Self {
         let n = ref_block.len();
         let m = alt_block.len();
@@ -149,19 +157,36 @@ impl AlignmentDag {
     }
 
     /// Every cell on a minimal alignment, in topological order (`i + j`
-    /// ascending). Every edge strictly increases `i + j`, so this ordering is a
-    /// valid topological sort.
+    /// ascending, then `i` ascending). Every edge strictly increases `i + j`,
+    /// so this ordering is a valid topological sort.
+    ///
+    /// Emitted by walking anti-diagonals (`d = i + j`) directly, rather than
+    /// collecting every on-path cell and sorting it — diagonal order is
+    /// already topological, so no sort is needed.
     pub(crate) fn cells(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
-        let mut cells: Vec<(u32, u32)> = (0..=self.ref_len)
-            .flat_map(move |i| (0..=self.alt_len).map(move |j| (i, j)))
-            .filter(|&(i, j)| self.contains_cell(i, j))
-            .collect();
-        cells.sort_by_key(|&(i, j)| (i + j, i));
-        cells.into_iter()
+        (0..=self.ref_len + self.alt_len)
+            .flat_map(move |d| {
+                let i_min = d.saturating_sub(self.alt_len);
+                let i_max = d.min(self.ref_len);
+                (i_min..=i_max).map(move |i| (i, d - i))
+            })
+            .filter(move |&(i, j)| self.contains_cell(i, j))
     }
 
     /// Out-edges of a cell, as `(next_i, next_j, step)`.
+    ///
+    /// `(i, j)` must be within the grid (`i <= ref_len`, `j <= alt_len`); this
+    /// does not panic off-grid, it silently aliases another cell's edges (the
+    /// backing storage is a flat row-major array, so an out-of-range `j`
+    /// wraps into the next row). Checked by the `debug_assert` below in debug
+    /// builds.
     pub(crate) fn out_edges(&self, i: u32, j: u32) -> impl Iterator<Item = (u32, u32, Step)> + '_ {
+        debug_assert!(
+            i <= self.ref_len && j <= self.alt_len,
+            "out_edges({i}, {j}) is off-grid ({} x {}) and would alias another cell",
+            self.ref_len,
+            self.alt_len
+        );
         self.out[self.index(i, j)].iter().copied()
     }
 }
@@ -177,6 +202,23 @@ impl AlignmentDag {
 ///
 /// The alternate offset is not decoration: it is the only reliable way to
 /// recover a member's alternate span. See `partition::member_alt_spans`.
+///
+/// # Why node agreement is not enough
+///
+/// A reference position can lie on every minimal alignment's path (node
+/// agreement) without any single match *edge* into it being common to all of
+/// them — and only a common edge pins a single alternate coordinate.
+///
+/// Worked example: `AT -> AAT`. Reference offset 0 (`A`) is `Match`-stepped on
+/// both minimal alignments, but at different alternate offsets: one path
+/// matches it to alternate offset 0, the other to alternate offset 1 (the
+/// inserted `A` sits before it on one path and after it on the other). No
+/// single match edge is common to both, so reference offset 0 is *not* a
+/// dominator match — it counts as changed. `matched = [(1, 2)]`, `changed =
+/// [0]`.
+///
+/// (`AAAAAAA -> AACACAAAA` is not a usable example here: all seven of its
+/// reference positions are dominator-matched, so its `changed` set is empty.)
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Dominators {
     pub(crate) matched: Vec<(u32, u32)>,
@@ -208,10 +250,14 @@ impl AlignmentDag {
     /// set, and whenever that count falls to one, that single edge is on every
     /// path.
     ///
-    /// `O(V + E)`. Deliberately not the per-edge reachability probe the
-    /// calibration prototype used — that is `O(E)` per edge, which is fine for
-    /// a 52 nt block and not for production. The probe survives as the test
-    /// oracle.
+    /// `Θ(n·m)` — no worse than `build()`'s own cost. `cells()` walks the full
+    /// `(ref_len + 1) x (alt_len + 1)` grid once to filter the on-path cells
+    /// (`V` of them) in topological order, and the in-degree table below is
+    /// sized to that same grid, so this pass cannot beat `Θ(n·m)` regardless of
+    /// how few cells are actually on-path; on top of that it is `O(V + E)` to
+    /// sweep. Deliberately not the per-edge reachability probe the calibration
+    /// prototype used — that is `O(E)` per edge, which is fine for a 52 nt
+    /// block and not for production. The probe survives as the test oracle.
     pub(crate) fn dominators(&self) -> Dominators {
         let mut result = Dominators::default();
         let sink = (self.ref_len, self.alt_len);
@@ -403,9 +449,10 @@ mod tests {
             vec![48],
             "LRG_199 must have exactly one dominator match, at reference offset 48"
         );
-        assert!(
-            dom.alt_at(48).is_some(),
-            "the dominator must pin an alternate coordinate too"
+        assert_eq!(
+            dom.alt_at(48),
+            Some(13),
+            "the dominator must pin alternate offset 13, not merely some coordinate"
         );
     }
 
@@ -421,9 +468,10 @@ mod tests {
             7,
             "every reference position is matched in every minimal alignment"
         );
-        assert!(
-            !dom.forced_ins_junctions.is_empty(),
-            "the insertions must show up as forced junctions, or they vanish"
+        assert_eq!(
+            dom.forced_ins_junctions,
+            vec![2, 3],
+            "the insertions must show up as forced junctions at exactly 2 and 3, or they vanish"
         );
     }
 
