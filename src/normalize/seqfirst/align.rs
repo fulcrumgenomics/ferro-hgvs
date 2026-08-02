@@ -161,6 +161,101 @@ impl AlignmentDag {
     }
 }
 
+/// Steps that every minimal alignment takes.
+///
+/// `matched` holds `(reference offset, alternate offset)` for each match edge
+/// present in every minimal alignment — the positions that are genuinely
+/// unchanged, together with where they sit in the alternate block. Sorted by
+/// reference offset. `forced_ins_junctions` holds junctions (reference offsets,
+/// with junction `k` sitting between reference bases `k - 1` and `k`) where
+/// every minimal alignment inserts.
+///
+/// The alternate offset is not decoration: it is the only reliable way to
+/// recover a member's alternate span. See `partition::member_alt_spans`.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Dominators {
+    pub(crate) matched: Vec<(u32, u32)>,
+    pub(crate) forced_ins_junctions: Vec<u32>,
+}
+
+impl Dominators {
+    /// Reference offsets that every minimal alignment matches.
+    pub(crate) fn matched_ref(&self) -> Vec<u32> {
+        self.matched.iter().map(|&(r, _)| r).collect()
+    }
+
+    /// The alternate offset pinned by the dominator match at `ref_pos`, if that
+    /// reference position is a dominator match.
+    pub(crate) fn alt_at(&self, ref_pos: u32) -> Option<u32> {
+        self.matched
+            .binary_search_by_key(&ref_pos, |&(r, _)| r)
+            .ok()
+            .map(|idx| self.matched[idx].1)
+    }
+}
+
+impl AlignmentDag {
+    /// Edges present in **every** minimal alignment.
+    ///
+    /// An edge lies on every source-to-sink path exactly when removing it
+    /// disconnects them. In a DAG this is found with one topological sweep:
+    /// track how many edges cross from the processed set to the unprocessed
+    /// set, and whenever that count falls to one, that single edge is on every
+    /// path.
+    ///
+    /// `O(V + E)`. Deliberately not the per-edge reachability probe the
+    /// calibration prototype used — that is `O(E)` per edge, which is fine for
+    /// a 52 nt block and not for production. The probe survives as the test
+    /// oracle.
+    pub(crate) fn dominators(&self) -> Dominators {
+        let mut result = Dominators::default();
+        let sink = (self.ref_len, self.alt_len);
+        let order: Vec<(u32, u32)> = self.cells().collect();
+
+        // In-degree within the DAG, needed to know when a node's incoming edges
+        // stop crossing the frontier.
+        let mut in_degree = vec![0u32; (self.ref_len as usize + 1) * (self.alt_len as usize + 1)];
+        for &(i, j) in &order {
+            for (ni, nj, _) in self.out_edges(i, j) {
+                in_degree[self.index(ni, nj)] += 1;
+            }
+        }
+
+        let mut crossing: i64 = 0;
+        for &(i, j) in &order {
+            crossing -= i64::from(in_degree[self.index(i, j)]);
+            let outs: Vec<(u32, u32, Step)> = self.out_edges(i, j).collect();
+            crossing += outs.len() as i64;
+
+            // If exactly one edge crosses the frontier now, it is on every
+            // path. Any node with two or more out-edges contributes two or more
+            // crossings itself, so a count of one means this node has exactly
+            // one out-edge and nothing older is still crossing.
+            if crossing == 1 && (i, j) != sink {
+                debug_assert_eq!(
+                    outs.len(),
+                    1,
+                    "a single crossing must be this cell's only out-edge"
+                );
+                let (_, _, step) = outs[0];
+                match step {
+                    // `(i, j)` is the cell the edge leaves, so it pins the
+                    // alternate coordinate as well as the reference one.
+                    Step::Match => result.matched.push((i, j)),
+                    Step::Ins => result.forced_ins_junctions.push(i),
+                    Step::Sub | Step::Del => {}
+                }
+            }
+        }
+
+        result.matched.sort_unstable();
+        result.matched.dedup();
+        result.forced_ins_junctions.sort_unstable();
+        result.forced_ins_junctions.dedup();
+        result
+    }
+}
+
 /// Full Levenshtein distance grid, row-major with `alt.len() + 1` columns.
 fn edit_grid(reference: &[u8], alt: &[u8]) -> Vec<u32> {
     let n = reference.len();
@@ -241,5 +336,131 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Brute-force oracle: an edge is a dominator iff deleting it disconnects
+    /// the source from the sink. `O(E)` per edge — correct but far too slow for
+    /// production, which is exactly why it belongs in the tests.
+    fn dominators_by_brute_force(dag: &AlignmentDag) -> (Vec<(u32, u32)>, Vec<u32>) {
+        let sink = (dag.ref_len(), dag.alt_len());
+        let mut matched = Vec::new();
+        let mut forced_ins = Vec::new();
+        for (i, j) in dag.cells().collect::<Vec<_>>() {
+            for (ni, nj, step) in dag.out_edges(i, j).collect::<Vec<_>>() {
+                if matches!(step, Step::Sub | Step::Del) {
+                    continue;
+                }
+                let banned = (i, j, ni, nj);
+                let mut seen = vec![(0u32, 0u32)];
+                let mut stack = vec![(0u32, 0u32)];
+                let mut reached = false;
+                while let Some(v) = stack.pop() {
+                    if v == sink {
+                        reached = true;
+                        break;
+                    }
+                    for (wi, wj, _) in dag.out_edges(v.0, v.1).collect::<Vec<_>>() {
+                        if (v.0, v.1, wi, wj) == banned || seen.contains(&(wi, wj)) {
+                            continue;
+                        }
+                        seen.push((wi, wj));
+                        stack.push((wi, wj));
+                    }
+                }
+                if !reached {
+                    match step {
+                        Step::Match => matched.push((i, j)),
+                        Step::Ins => forced_ins.push(i),
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        }
+        matched.sort_unstable();
+        matched.dedup();
+        forced_ins.sort_unstable();
+        forced_ins.dedup();
+        (matched, forced_ins)
+    }
+
+    #[test]
+    fn lrg199_has_exactly_one_dominator_match() {
+        // The spec's own worked example, `delins.md:44` / LRG_199t1:c.850_901.
+        // Real sequence, pulled from LRG_199.fasta; CDS offset verified against
+        // the spec's own `c.145_147 = CGC = Arg49`.
+        let dag = AlignmentDag::build(
+            b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT",
+            b"TTCCTCGATGCCTG",
+        );
+        let dom = dag.dominators();
+        assert_eq!(
+            dom.matched_ref(),
+            vec![48],
+            "LRG_199 must have exactly one dominator match, at reference offset 48"
+        );
+        assert!(
+            dom.alt_at(48).is_some(),
+            "the dominator must pin an alternate coordinate too"
+        );
+    }
+
+    #[test]
+    fn a_pure_insertion_is_seen_as_a_forced_junction() {
+        // #1260: two `insC` at adjacent gaps in a poly-A run. A node model
+        // reports this as zero members because no reference position changes;
+        // the junctions are the whole signal.
+        let dag = AlignmentDag::build(b"AAAAAAA", b"AACACAAAA");
+        let dom = dag.dominators();
+        assert_eq!(
+            dom.matched_ref().len(),
+            7,
+            "every reference position is matched in every minimal alignment"
+        );
+        assert!(
+            !dom.forced_ins_junctions.is_empty(),
+            "the insertions must show up as forced junctions, or they vanish"
+        );
+    }
+
+    #[test]
+    fn dominators_agree_with_brute_force_on_exhaustive_small_inputs() {
+        // Exhaustive over a 2-letter alphabet, lengths 0..=5 both sides. Small
+        // alphabet and short blocks maximise alternative minimal alignments,
+        // which is where a wrong dominator rule shows up.
+        fn words(len: u32) -> Vec<Vec<u8>> {
+            if len == 0 {
+                return vec![Vec::new()];
+            }
+            let mut out = Vec::new();
+            for shorter in words(len - 1) {
+                for base in *b"AC" {
+                    let mut w = shorter.clone();
+                    w.push(base);
+                    out.push(w);
+                }
+            }
+            out
+        }
+        let all: Vec<Vec<u8>> = (0..=5u32).flat_map(words).collect();
+        let mut checked = 0usize;
+        for r in &all {
+            for a in &all {
+                let dag = AlignmentDag::build(r, a);
+                let got = dag.dominators();
+                let (want_matched, want_ins) = dominators_by_brute_force(&dag);
+                assert_eq!(
+                    (got.matched, got.forced_ins_junctions),
+                    (want_matched, want_ins),
+                    "disagreement on {} -> {}",
+                    String::from_utf8_lossy(r),
+                    String::from_utf8_lossy(a)
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 3000,
+            "expected a large exhaustive sweep, ran {checked}"
+        );
     }
 }
