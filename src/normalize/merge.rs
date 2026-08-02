@@ -1820,7 +1820,21 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
             MIN_SEPARATION_NO_FRAME
         };
         let block = &ref_bytes[lo..hi_ref];
-        let shadow = partition_block_sequence_first(block, &result[lo..hi_alt], min_separation);
+        let mut shadow = partition_block_sequence_first(block, &result[lo..hi_alt], min_separation);
+        // `min_separation` alone captures only the distance half of
+        // `general.md:35`'s exception; this captures the codon half, splitting
+        // back apart any merge the exception does not actually license. `lo`
+        // is added because `block`'s offsets (unlike `pieces`' at this point)
+        // have not yet been shifted into the untrimmed window `w_lo` is
+        // relative to.
+        if let Some(shadow_pieces) = shadow.as_mut() {
+            split_codon_incompatible_triplets(
+                shadow_pieces,
+                frame.reading_frame,
+                w_lo + lo as i64,
+                block,
+            );
+        }
         // Both sides are also compared after `shrink_pieces_to_differences`,
         // because a split that only differs in how wide its members are is a
         // difference the rendering stage removes. Reported as a third outcome
@@ -3145,6 +3159,84 @@ fn apply_coding_codon_exception(
             previous.ref_end = previous.ref_start + 3;
         }
         index += 1;
+    }
+}
+
+/// Split a sequence-first merge back apart when it crosses a codon boundary.
+///
+/// `min_separation` (`seqfirst::MIN_SEPARATION`, `2`, on a reading-frame axis)
+/// captures only the *distance* half of `general.md:35`'s exception — merging
+/// any two runs separated by fewer than 2 unchanged bases, whichever codons
+/// they fall in. The exception itself is narrower: "two variants separated by
+/// one nucleotide, **together affecting one amino acid**" — both conditions,
+/// not one. A pair in different codons affects *two* amino acids and
+/// `general.md:34`'s plain rule governs it instead: described individually.
+///
+/// Scoped to the exact shape the exception describes — two single-nucleotide
+/// substitutions with their shared unchanged base carried in the middle
+/// (`ref_end - ref_start == 3`, `alt.len() == 3`, the middle alt base equal to
+/// the middle reference base, both flanking bases actually changed) — using
+/// the same [`same_codon`] arithmetic [`apply_coding_codon_exception`] already
+/// uses for the live splitter's own triplet, on the same axis distinction
+/// (`reading_frame`, from [`AxisFrame`]). A wider merged piece is not "two
+/// variants" in `general.md:35`'s sense at all — `LRG_199t1:c.850_901`
+/// (`delins.md:44`) merges a 52-base member for an unrelated reason (its
+/// `partition_block` sibling never reaches `best_alignment` in the first place;
+/// see [`MAX_UNGUARDED_SPLIT_BLOCK`]), not this exception, so it must not be
+/// touched here and is not: 52 ≠ 3.
+///
+/// Pinned by `sequence_first_split_declines_the_codon_exception_across_a_boundary`
+/// (`GCA -> TCC`, `general.md:34`'s split rule wins) and
+/// `sequence_first_split_keeps_the_codon_exception_within_one_codon`
+/// (`CCC -> GCA`, `general.md:35`'s exception wins) — the same two blocks
+/// `merge_consecutive_edits_tests::test_no_codon_frame_pair_straddles_codon_boundary`
+/// and `test_codon_frame_two_subs_one_codon` pin for the live splitter, so
+/// both sides are checked against the identical spec-derived expectation.
+fn split_codon_incompatible_triplets(
+    pieces: &mut Vec<Piece>,
+    reading_frame: bool,
+    w_lo: i64,
+    ref_bytes: &[u8],
+) {
+    if !reading_frame {
+        return;
+    }
+    let mut index = 0;
+    while index < pieces.len() {
+        let piece = &pieces[index];
+        let is_merged_triplet = piece.ref_end == piece.ref_start + 3
+            && piece.alt.len() == 3
+            && piece.alt[1] == ref_bytes[piece.ref_start + 1]
+            && piece.alt[0] != ref_bytes[piece.ref_start]
+            && piece.alt[2] != ref_bytes[piece.ref_start + 2];
+        if !is_merged_triplet {
+            index += 1;
+            continue;
+        }
+        let triplet_start = w_lo + piece.ref_start as i64;
+        if same_codon(triplet_start, triplet_start + 2) {
+            index += 1;
+            continue;
+        }
+        let ref_start = piece.ref_start;
+        let first_alt = piece.alt[0];
+        let third_alt = piece.alt[2];
+        pieces.splice(
+            index..=index,
+            [
+                Piece {
+                    ref_start,
+                    ref_end: ref_start + 1,
+                    alt: vec![first_alt],
+                },
+                Piece {
+                    ref_start: ref_start + 2,
+                    ref_end: ref_start + 3,
+                    alt: vec![third_alt],
+                },
+            ],
+        );
+        index += 2;
     }
 }
 
@@ -5841,6 +5933,125 @@ mod tests {
             (coding[0].ref_start, coding[0].ref_end),
             (0, reference.len())
         );
+    }
+
+    /// Codon-precision follow-up to Task 3: the coding-axis merge must also
+    /// check the codon, not just the distance. `ref=GCA alt=TCC` is the block
+    /// `issue_275_codon_frame_extensions::no_codon_frame_rna_pair_straddles_codon_boundary`
+    /// produces, from the `FERRO_SEQFIRST_SHADOW` audit's residual `B2` list —
+    /// and it is the exact block
+    /// `merge_consecutive_edits_tests::test_no_codon_frame_pair_straddles_codon_boundary`
+    /// already pins for the live splitter, at the same real position (`c.3G>T`,
+    /// `c.5A>C`: `(3-1)/3 = 0`, `(5-1)/3 = 1`, different codons).
+    /// `min_separation = 2` alone merges it into one triplet;
+    /// `split_codon_incompatible_triplets` must split it straight back apart.
+    #[test]
+    fn sequence_first_split_declines_the_codon_exception_across_a_boundary() {
+        let reference = b"GCA";
+        let result = b"TCC";
+        let mut merged = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
+        assert_eq!(
+            merged.len(),
+            1,
+            "the distance rule alone merges this into one triplet: {merged:?}"
+        );
+
+        split_codon_incompatible_triplets(&mut merged, true, 3, reference);
+        assert_eq!(
+            merged.len(),
+            2,
+            "different codons must not merge, even one nucleotide apart: {merged:?}"
+        );
+        assert_eq!(
+            (
+                merged[0].ref_start,
+                merged[0].ref_end,
+                merged[0].alt.as_slice()
+            ),
+            (0, 1, b"T".as_slice())
+        );
+        assert_eq!(
+            (
+                merged[1].ref_start,
+                merged[1].ref_end,
+                merged[1].alt.as_slice()
+            ),
+            (2, 3, b"C".as_slice())
+        );
+
+        // No reading frame: never touched, regardless of codon arithmetic.
+        let mut no_frame = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
+        split_codon_incompatible_triplets(&mut no_frame, false, 3, reference);
+        assert_eq!(
+            no_frame.len(),
+            1,
+            "no reading frame means no split: {no_frame:?}"
+        );
+    }
+
+    /// The other side of the same pin: two substitutions genuinely within one
+    /// codon must still merge. `ref=CCC alt=GCA` at `w_lo=10` is
+    /// `merge_consecutive_edits_tests::test_codon_frame_two_subs_one_codon`'s
+    /// exact block (`c.10C>G`, `c.12C>A`: `(10-1)/3 = 3`, `(12-1)/3 = 3`, same
+    /// codon) — the spec's `c.[145C>T;147C>G]` → `c.145_147delinsTGG` example,
+    /// re-based. `split_codon_incompatible_triplets` must leave it merged.
+    #[test]
+    fn sequence_first_split_keeps_the_codon_exception_within_one_codon() {
+        let reference = b"CCC";
+        let result = b"GCA";
+        let mut merged = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
+        assert_eq!(merged.len(), 1, "must merge into one triplet: {merged:?}");
+
+        split_codon_incompatible_triplets(&mut merged, true, 10, reference);
+        assert_eq!(merged.len(), 1, "same codon must stay merged: {merged:?}");
+        assert_eq!((merged[0].ref_start, merged[0].ref_end), (0, 3));
+        assert_eq!(merged[0].alt, b"GCA");
+    }
+
+    /// The calibration this task must not break: `LRG_199t1:c.850_901`
+    /// (`delins.md:44`) merges a 52-base member for a reason unrelated to the
+    /// codon exception (its `partition_block` sibling never reaches
+    /// `best_alignment` at all — see `MAX_UNGUARDED_SPLIT_BLOCK`), so
+    /// `split_codon_incompatible_triplets` must not touch it: the piece is 52
+    /// nt wide, not the 3 nt the codon exception's shape requires.
+    #[test]
+    fn split_codon_incompatible_triplets_leaves_the_spec_delins_example_whole() {
+        let reference = b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT";
+        let result = b"TTCCTCGATGCCTG";
+        let mut pieces = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("the spec example must partition");
+        assert_eq!(pieces.len(), 1);
+
+        // The real accession's CDS offset (`c.850` = this block's reference
+        // offset 0; `cds_start = 245`, `LRG_199t1` transcript offset 1094,
+        // `spec_enumeration_transcripts.fna`), so this is the exact codon
+        // arithmetic production would run, not a stand-in value.
+        split_codon_incompatible_triplets(&mut pieces, true, 850, reference);
+        assert_eq!(
+            pieces.len(),
+            1,
+            "spec still requires one delins, got {pieces:?}"
+        );
+        assert_eq!((pieces[0].ref_start, pieces[0].ref_end), (0, 52));
     }
 
     /// Every piece the new splitter emits must reconstruct the result block
