@@ -1635,15 +1635,50 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let Err(e) = crate::hgvs::parser::parse_hgvs(&rendered) else {
             return;
         };
-        // Only fire when normalization *introduced* the breakage. A description
-        // the parser accepts but cannot re-read — an empty allele rendering as
-        // `[]`, or an `ins` whose anchors the parser tolerates inbound and
-        // rejects outbound — is a parse/display round-trip asymmetry that
-        // normalize merely passes through. Real, but a different bug, and
-        // reporting it here would bury the one this oracle is for.
-        if crate::hgvs::parser::parse_hgvs(&variant.to_string()).is_err() {
+        // Only fire when normalization *introduced* the breakage — but say
+        // exactly which inputs are passed over, rather than exempting anything
+        // that fails to re-parse (#1264).
+        //
+        // The blanket version ("skip when the input does not itself re-parse")
+        // was doing far more work than its comment claimed. Instrumenting it to
+        // report instead of return silently, and re-running the suite, found 18
+        // hits in four shapes — including two live projector defects that were
+        // building descriptions ferro could not read back: the RNA-only `spl`
+        // edit carried onto the `g.`/`c.` axes, and an insertion whose anchors
+        // straddle a splice junction. Both are fixed in this change; a blanket
+        // exemption would have re-absorbed them, and any future defect of the
+        // same class, without a sound.
+        //
+        // What remains is a closed list. Each entry is a shape ferro constructs
+        // deliberately and does not claim is renderable:
+        //
+        // * An **empty allele** (`[]`). The parser refuses empty brackets
+        //   everywhere they can appear, so this is reachable only by direct
+        //   construction — which the projector's own tests do on purpose, to
+        //   pin that it declines them. `AlleleVariant::checked` now refuses it
+        //   at the boundaries where a member list is assembled from data.
+        // * A **non-flanking genomic insertion**. This is the projection
+        //   *pivot*: its coordinates are sound and the downstream cdot
+        //   derivation of the c./n./p. axes needs it, but its spelling is not
+        //   one HGVS admits, so the projector withholds the *reported* genomic
+        //   axis (see `non_flanking_genomic_insertion_anchor`). Normalizing the pivot
+        //   is deliberate; reporting it is what would be wrong.
+        //
+        // Anything else that arrives unparseable is now a failure, which is the
+        // point.
+        let input_is_a_deliberate_non_renderable = matches!(
+            variant,
+            HgvsVariant::Allele(allele) if allele.variants.is_empty()
+        )
+            || crate::hgvs::variant::non_flanking_genomic_insertion_anchor(variant).is_some();
+        if input_is_a_deliberate_non_renderable {
             return;
         }
+        debug_assert!(
+            crate::hgvs::parser::parse_hgvs(&variant.to_string()).is_ok(),
+            "FERRO_ASSERT_REPARSE: normalization was handed an input it cannot re-parse, and \
+             that input is not one of the deliberate non-renderable shapes\n  input: {variant}",
+        );
         panic!(
             "FERRO_ASSERT_REPARSE: normalization produced a description ferro cannot re-parse\n  \
              input:  {variant}\n  output: {rendered}\n  error:  {e}",
