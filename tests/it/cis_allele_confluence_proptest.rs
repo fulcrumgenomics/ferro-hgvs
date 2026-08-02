@@ -60,11 +60,11 @@
 //!   nor #1262 is about overlapping members, so the citation did not describe
 //!   the shape it was excluding. What that shape hit was #1301, now fixed.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
-//!   because it finds #1312, equal-payload insertions at adjacent gaps merging
-//!   out of phase with the base between them. It found #1286, #1287, #1290,
-//!   #1292, #1296, #1301, #1304, #1297 and #1308 first, all now fixed, each
-//!   masked behind the one before it; see its doc comment for the history and
-//!   the live reproduction.
+//!   because it finds #1316, two adjacent-gap insertions each re-spelling as
+//!   the same tract-wide repeat. It found #1286, #1287, #1290, #1292, #1296,
+//!   #1301, #1304, #1297, #1308 and #1312 first, all now fixed, each masked
+//!   behind the one before it; see its doc comment for the history and the live
+//!   reproduction.
 //!
 //! Neither restriction is silent: both are named, pinned, and fail loudly when
 //! the underlying issue is fixed (#1268/#1283's complaint about coverage that
@@ -788,30 +788,36 @@ proptest! {
     /// sharing a span rendered out of order; #1304, a junction barrier reading a
     /// moved sibling's payload from the wrong snapshot; and #1297, a member that
     /// cancelled and was left as an identity member overlapping the repeat that
-    /// absorbed it, and #1308, a commuting payload sweeping past a sibling that
-    /// stays put. The live failure is the tenth it has found, **#1312**:
+    /// absorbed it; #1308, a commuting payload sweeping past a sibling that
+    /// stays put; and #1312, commuting tested against a payload the member no
+    /// longer carries once it lands. The live failure is the eleventh it has
+    /// found, **#1316**:
     ///
     /// ```text
-    /// core "TAAAACCA", insert "AC" after index 3 and after index 4
-    ///   g.[260_261insAC;261_262insAC] -> g.261_262insACCA
-    ///     intended  T A A A A C A A C C C A
-    ///     emitted   T A A A A A C C A C C A
+    /// core "CAGCCAGTCAGCGCATCAG", insert "AA" after 4 and 5, delete index 12
+    ///   g.[261_262insAA;262_263insAA;269del] -> g.[262A[3];262A[3];269del]
+    ///     two identical repeats over one tract
     /// ```
     ///
-    /// `AC` is out of phase with the `A` between the two gaps, so neither member
-    /// may move onto the other's junction — yet they merge there anyway, with a
-    /// payload that is neither concatenation nor rotation. This one survives the
-    /// 512-case budget below and is only reachable in a soak, which is exactly
-    /// why enabling the test on that budget would prove nothing.
+    /// The seed's own shrink is smaller than that and drops the deletion
+    /// entirely — `core "ACAGCCAGTCAGCGCATCAG"` with `insAA` after 1 and 2,
+    /// giving `g.[257A[3];259A[3]]` — so the deletion is incidental to the
+    /// defect. The three-event form is kept here because it is the shape #1316
+    /// was filed from.
     ///
-    /// Each of the nine was masked behind the one before it, which is the point
+    /// The repeat-form analogue of #1286, which fixed the same shape spelled as
+    /// duplications. It survives the 512-case budget below and is only reachable
+    /// in a soak, which is exactly why enabling the test on that budget would
+    /// prove nothing.
+    ///
+    /// Each of the ten was masked behind the one before it, which is the point
     /// of keeping this committed rather than deleting it until it can pass.
     ///
     /// Enabling this test was #1292's acceptance criterion. #1292 is fixed and
     /// pinned — by `issue_1292_junction_payload_rotation` and by the `99d5d382`
     /// seed below, which replays green — but the criterion could not be met
     /// with it, because the property's next two failures were behind it.
-    /// Enabling now belongs to **#1312**, whose seed `958acf3e` is committed
+    /// Enabling now belongs to **#1316**, whose seed `23c33174` is committed
     /// below — so taking the ignore off replays it immediately, which is what
     /// should gate taking it off. Absent that seed this passes the 512-case
     /// budget and fails a 30,000-case soak on the same shape, so switching it
@@ -820,7 +826,7 @@ proptest! {
     ///
     /// Do not weaken it to make it pass.
     #[test]
-    #[ignore = "finds #1312, a real unfixed defect; see doc comment"]
+    #[ignore = "finds #1316, a real unfixed defect; see doc comment"]
     fn an_indel_haplotype_normalizes_to_its_own_sequence(
         haplotype in indel_haplotype_strategy()
     ) {
@@ -1020,13 +1026,13 @@ fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
 /// to pin.
 #[test]
 fn the_ignored_indel_property_still_finds_its_defect() {
-    // #1312: `AC` is out of phase with the `A` between the two gaps, so neither
-    // member may move onto the other's junction -- yet they merge there anyway,
-    // with a payload that is neither concatenation nor rotation.
+    // #1316: two identical repeats settle over one tract and the deletion is
+    // dropped -- the repeat-form analogue of #1286, which fixed the same shape
+    // spelled as duplications.
     let (core, input, issue) = (
-        "TAAAACCA",
-        "NC_TEST.1:g.[260_261insAC;261_262insAC]",
-        "#1312",
+        "CAGCCAGTCAGCGCATCAG",
+        "NC_TEST.1:g.[261_262insAA;262_263insAA;269del]",
+        "#1316",
     );
     assert!(
         indel_property_holds(core, input).is_err(),

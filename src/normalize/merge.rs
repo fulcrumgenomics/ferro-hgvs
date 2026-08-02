@@ -3547,11 +3547,36 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
                 if junction <= before_junction || junction > after_junction {
                     return None;
                 }
-                let commutes = match (&payload, junction_payload(variant, kind, s, provider)) {
-                    (Some(mine), Some(theirs)) => payloads_commute(mine, &theirs),
-                    // A payload that cannot be read blocks: refusing to cross is
-                    // the conservative answer when the reordering cannot be
-                    // shown to be harmless.
+                // Commuting is tested against the payload this member would
+                // carry **at that junction**, not the one it carries now. The
+                // two differ: landing there rotates the payload into phase, and
+                // a rotation is exactly what can destroy the identity —
+                // `260_261insAC` moved onto junction 261 becomes `insCA`, and
+                // `CA` does not commute with the `AC` already sitting there,
+                // though `AC` and `AC` did. Sharing a junction with a payload it
+                // does not commute with leaves the pair's order undefined, and
+                // the merge downstream concatenates them in rendered order:
+                // `g.[260_261insAC;261_262insAC]` became `g.261_262insACCA`,
+                // denoting different bases (#1312).
+                let commutes = match (
+                    payload
+                        .as_ref()
+                        .and_then(|mine| {
+                            payload_at_junction(
+                                mine,
+                                after_junction,
+                                junction,
+                                &a.provider_key,
+                                provider,
+                            )
+                        })
+                        .as_deref(),
+                    junction_payload(variant, kind, s, provider),
+                ) {
+                    (Some(landed), Some(theirs)) => payloads_commute(landed, &theirs),
+                    // A payload that cannot be read, or cannot legally reach the
+                    // junction, blocks: refusing to cross is the conservative
+                    // answer when the reordering cannot be shown to be harmless.
                     _ => false,
                 };
                 match commutes {

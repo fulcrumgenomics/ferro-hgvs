@@ -29,11 +29,9 @@
 //! this member's payload is in phase with — `before_junction` always is, since
 //! that is where the shift began.
 //!
-//! **Not fully solved by this: see #1312.** When the payload is out of phase
-//! with the base between the two gaps, something downstream still merges them
-//! at one junction with a payload that is neither concatenation nor rotation.
-//! That case is pre-existing and denotes the same wrong sequence before and
-//! after this change.
+//! The bound must be tested against the payload this member would carry **at**
+//! that junction, not the one it carries now — landing there rotates it, and a
+//! rotation can destroy the commuting identity. That half is #1312.
 
 use crate::common::synthetic::{padded, SyntheticBuilder};
 use ferro_hgvs::spdi::hgvs_to_spdi;
@@ -90,7 +88,10 @@ fn a_commuting_payload_does_not_sweep_past_a_sibling_that_stays() {
     // from 263 to 265 across it.
     let output =
         assert_padded_preserving("CAGAAGATGAATAA", "NC_TEST.1:g.[263_264insTG;264_265insTG]");
-    assert_eq!(output, "NC_TEST.1:g.265_266insTTGG");
+    // The input's own spelling. Landing on the sibling's junction would rotate
+    // this member's `TG` into `GT`, which does not commute with the `TG` already
+    // there, so the pair stays apart rather than merging (#1312).
+    assert_eq!(output, "NC_TEST.1:g.[263_264insTG;264_265insTG]");
 }
 
 #[test]
