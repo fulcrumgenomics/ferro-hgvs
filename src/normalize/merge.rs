@@ -3120,11 +3120,12 @@ fn blocks_sibling_shift(edit: &NaEdit) -> bool {
 /// live list keeps the pass independent of member order.
 ///
 /// [`ShuffleDirection::FivePrime`]: crate::normalize::ShuffleDirection
-pub(crate) fn clamp_sibling_crossing_shifts(
+pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
     before: &[HgvsVariant],
     after: &mut [HgvsVariant],
     phase: AllelePhase,
     uncertain: bool,
+    provider: &P,
 ) {
     // An uncertain allele — `g.[(…)]` — asserts only that the members are in
     // cis, not where they sit, so repositioning one states something the input
@@ -3242,7 +3243,13 @@ pub(crate) fn clamp_sibling_crossing_shifts(
             continue;
         };
         if pull != 0 {
-            translate_member(&mut after[i], -pull, kind, a);
+            // A duplication blocks a sibling's shift without claiming bases, so
+            // it reaches this pass too — and its payload is read from under its
+            // own span, so it cannot simply be slid (#1280, #1292).
+            match a.junction {
+                Some(_) => translate_junction_member(&mut after[i], -pull, kind, a, provider),
+                None => translate_member(&mut after[i], -pull, kind, a),
+            }
         }
     }
 }
@@ -3506,7 +3513,7 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
         // Never move past where the junction started.
         let delta = (limit - after_junction).max(before_junction - after_junction);
         if delta != 0 {
-            translate_member(&mut after[i], delta, kind, a);
+            translate_junction_member(&mut after[i], delta, kind, a, provider);
         }
     }
 }
@@ -3812,7 +3819,7 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
         };
         // The copy lands at the junction 3' of the duplicated span, which is
         // the gap `[end, end + 1]`.
-        respell_at_gap(&mut members[i], kind, dup, edit);
+        respell_at_gap(&mut members[i], kind, dup, dup.end, edit);
     }
 }
 
@@ -3935,28 +3942,13 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
         let Some(span) = spans[target].as_ref() else {
             continue;
         };
+        // The merged payload belongs at the junction the group shares, which is
+        // not `span.end` when the target member is spelled as an insertion.
         let Some(junction) = span.junction else {
             continue;
         };
-        // `respell_at_gap` places the edit over `[span.end, span.end + 1]`, so
-        // hand it a span whose `end` is the shared junction rather than the
-        // member's own. For a `Duplication` the two coincide (`junction_of`
-        // returns its `end`), but for an `Insertion` the junction is its
-        // `start`, so `span.end` sits one base 3' of it. `respell_at_gap`
-        // cannot catch that: it checks the result landed on the gap it was
-        // given, not that the gap was the right one.
-        let gap = MemberSpan {
-            accession: span.accession.clone(),
-            provider_key: span.provider_key.clone(),
-            region: span.region,
-            start: junction,
-            end: junction,
-            claims_bases: span.claims_bases,
-            blocks_shift: span.blocks_shift,
-            junction: Some(junction),
-        };
         let before = members[target].clone();
-        respell_at_gap(&mut members[target], kind, &gap, edit);
+        respell_at_gap(&mut members[target], kind, span, junction, edit);
         if members[target] == before {
             continue; // the re-spell did not take; leave the group alone
         }
@@ -3972,6 +3964,125 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
         index += 1;
         keep
     });
+}
+
+/// The payload an equivalent junction-inserting member carries at `to`, given
+/// that it carries `payload` at `from`.
+///
+/// A member that adds sequence at a junction denotes those bases *at that
+/// junction*, so the same payload spelled one position over denotes a different
+/// sequence. The two agree only under a rotation, and only when the base being
+/// stepped over is the one the rotation brings around:
+///
+/// ```text
+/// insert P at junction j  ==  insert (ref[j] ++ P[..n-1]) at junction j - 1
+///                             only when P[n-1] == ref[j]
+/// ```
+///
+/// with the mirror image 3'. A multi-position move composes single steps, which
+/// is why a payload can rotate through more than its own length.
+///
+/// `None` when some step is not payload-preserving, or the reference cannot be
+/// read — the caller's signal to leave the member where it is rather than emit
+/// a description of different bases.
+fn payload_at_junction<P: ReferenceProvider>(
+    payload: &[Base],
+    from: i64,
+    to: i64,
+    key: &str,
+    provider: &P,
+) -> Option<Vec<Base>> {
+    let base_at = |position: i64| -> Option<Base> {
+        let (start, end) = (
+            u64::try_from(position.checked_sub(1)?).ok()?,
+            u64::try_from(position).ok()?,
+        );
+        let read = provider.get_sequence(key, start, end).ok()?;
+        let mut chars = read.chars();
+        let base = Base::from_char(chars.next()?)?;
+        chars.next().is_none().then_some(base)
+    };
+    let mut rotated = payload.to_vec();
+    let mut junction = from;
+    while junction > to {
+        // 5' by one: the payload's last base is the one it steps back over.
+        if *rotated.last()? != base_at(junction)? {
+            return None;
+        }
+        rotated.rotate_right(1);
+        junction -= 1;
+    }
+    while junction < to {
+        // 3' by one: the payload's first base is the one it steps over.
+        if *rotated.first()? != base_at(junction + 1)? {
+            return None;
+        }
+        rotated.rotate_left(1);
+        junction += 1;
+    }
+    Some(rotated)
+}
+
+/// Move a junction-occupying member `delta` positions along its axis, keeping
+/// the bases it adds unchanged.
+///
+/// [`translate_member`] alone is not enough for these members, because a
+/// spelling can be position-dependent: a `Duplication` reads its payload from
+/// the reference **under its own span**, so translating the span silently
+/// rewrites what the member copies. On `g.[263_264insAC;265del]` that turned a
+/// clamped `g.265_266dup` (payload `CA`) into `g.263_264dup` (payload `AA`) and
+/// dropped the inserted `C` from the allele (#1292); the same rewrite corrupts
+/// a repeat demoted to a duplication that the clamp then pulls back (#1280).
+///
+/// So the payload is rotated into phase at the destination first, and the
+/// member is re-spelled as a plain insertion carrying it whenever the
+/// translated spelling would denote something else. A move whose payload cannot
+/// be rotated, read, or re-spelled leaves the member untouched: an unclamped
+/// crossing is the defect this pass is repairing, but a corrupted payload is a
+/// worse one.
+fn translate_junction_member<P: ReferenceProvider>(
+    variant: &mut HgvsVariant,
+    delta: i64,
+    kind: CisKind,
+    from: &MemberSpan,
+    provider: &P,
+) {
+    let (Some(junction), Some(payload)) = (
+        from.junction,
+        junction_payload(variant, kind, from, provider),
+    ) else {
+        return;
+    };
+    let destination = junction + delta;
+    let Some(moved) = payload_at_junction(
+        &payload,
+        junction,
+        destination,
+        &from.provider_key,
+        provider,
+    ) else {
+        return;
+    };
+
+    let original = variant.clone();
+    translate_member(variant, delta, kind, from);
+    if *variant == original {
+        return; // the translation was refused; nothing to repair
+    }
+    let landed = member_span(variant, kind)
+        .filter(|s| s.junction == Some(destination))
+        .and_then(|s| junction_payload(variant, kind, &s, provider));
+    if landed.as_deref() == Some(moved.as_slice()) {
+        return; // the spelling still denotes the same bases
+    }
+    let edit = NaEdit::Insertion {
+        sequence: InsertedSequence::Literal(Sequence::new(moved)),
+    };
+    let translated = variant.clone();
+    respell_at_gap(variant, kind, from, destination, edit);
+    if *variant == translated {
+        *variant = original;
+    }
 }
 
 /// Whether two junction payloads may be reordered without changing what the
@@ -4023,12 +4134,23 @@ fn junction_payload<P: ReferenceProvider>(
     }
 }
 
-/// Replace a genomic member with `edit` over the gap `[span.end, span.end + 1]`.
+/// Replace a genomic member with `edit` over the gap `[junction, junction + 1]`.
 ///
-/// Reverts unless the result reads back exactly as intended.
-fn respell_at_gap(variant: &mut HgvsVariant, kind: CisKind, span: &MemberSpan, edit: NaEdit) {
+/// The junction is passed rather than read off `span`, because where it sits
+/// depends on the spelling: `span.end` is the junction for a duplication, but
+/// one position past it for an insertion, whose span is the gap itself.
+///
+/// Reverts unless the result reads back exactly as intended. `span` is used
+/// only to check the result landed on the same region.
+fn respell_at_gap(
+    variant: &mut HgvsVariant,
+    kind: CisKind,
+    span: &MemberSpan,
+    junction: i64,
+    edit: NaEdit,
+) {
     let original = variant.clone();
-    let (gap_start, gap_end) = (span.end, span.end + 1);
+    let (gap_start, gap_end) = (junction, junction + 1);
     let (Ok(start), Ok(end)) = (u64::try_from(gap_start), u64::try_from(gap_end)) else {
         return;
     };
