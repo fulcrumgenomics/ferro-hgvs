@@ -370,6 +370,7 @@ mod repeat_count_trans;
 mod repeat_deln_uncertain_range;
 mod repeat_span_sibling_overlap;
 mod repeat_tract_maximization;
+mod rewrite_target_corpus;
 mod rna_coding_consistency;
 mod rna_spl_marker;
 mod service_tools_tests;
