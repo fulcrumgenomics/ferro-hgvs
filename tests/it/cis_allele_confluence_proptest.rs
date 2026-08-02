@@ -54,9 +54,9 @@
 //!   happened to be written. Tracked by #1260 and #1262 and pinned by
 //!   `adjacent_gap_insertions_are_a_known_gap`.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
-//!   because it finds #1287, an unfixed defect in the #1269
-//!   `claims_reference_bases` family. It found #1286 first, now fixed; see its
-//!   doc comment for the history and the live reproduction.
+//!   because it finds #1290, a junction shifting past another junction. It
+//!   found #1286 and #1287 first, both now fixed; see its doc comment for the
+//!   history and the live reproduction.
 //!
 //! Neither restriction is silent: both are named, pinned, and fail loudly when
 //! the underlying issue is fixed (#1268/#1283's complaint about coverage that
@@ -764,36 +764,37 @@ proptest! {
     /// A length-changing haplotype normalizes to something that denotes it, is
     /// a fixed point, and renders disjoint members in ascending order.
     ///
-    /// **`#[ignore]`d: this currently fails, and the failures are real.** Run it
+    /// **`#[ignore]`d: this currently fails, and the failure is real.** Run it
     /// with `cargo test --features dev -- --ignored an_indel_haplotype`.
     ///
-    /// It is committed rather than withheld because it earned its place
-    /// immediately — the first two runs found two defects that no committed
-    /// sweep reaches, filed as #1286 and #1287:
+    /// It is committed rather than withheld because it keeps earning its place.
+    /// Its first two runs found #1286 and #1287, both since fixed:
     ///
     /// ```text
-    /// #1286 (FIXED): core "AAAAAA", insert A after index 1 and after index 2
-    ///   g.[258_259insA;259_260insA] -> g.[263dup;263dup]
-    ///     two dup members at one junction (both interbase 263)
-    ///   now merged by `coalesce_members_at_one_junction` into g.257_263A[9];
-    ///   regression-tested in `issue_1286_shared_junction_merge.rs`
-    ///
-    /// #1287 (LIVE): core "ATACAGAAAATCAGGGCATA", insert GA after 4, AA after 6
-    ///   g.[261_262insGA;263_264insAA] -> g.[262_263dup;263_266A[6]]
-    ///     the dup's junction (263) sits inside the repeat's span (262-266)
+    /// #1286  g.[258_259insA;259_260insA] -> g.[263dup;263dup]
+    ///          two dup members at one junction              (fixed)
+    /// #1287  g.[261_262insGA;263_264insAA] -> g.[262_263dup;263_266A[6]]
+    ///          the dup's junction inside the repeat's span  (fixed)
     /// ```
     ///
-    /// Both are the `claims_reference_bases` family (#1269): a duplication and a
-    /// repeat report that they claim no bases, so the sibling clamps skip them
-    /// and two members settle onto the same span. #1259 addressed part of this
-    /// with `demote_repeats_spanning_siblings`; these shapes are past it.
+    /// With those closed it immediately surfaced a third, #1290 — a junction
+    /// shifting past *another junction*, which reorders two insertions and
+    /// changes the sequence:
     ///
-    /// Enabling this test is the acceptance criterion for what remains — #1287,
-    /// and whatever the property surfaces after it, pinned one at a time by
-    /// `the_ignored_indel_property_still_finds_its_defect`. Do not weaken it to
+    /// ```text
+    /// core "ATACAGAAAATCAGGGCATA"
+    ///   g.[263_264insA;265_266insC] -> g.[265_266insC;266dup]
+    ///     intended  G A A A A C A T
+    ///     emitted   G A A A C A A T      <- the inserted A crossed the C
+    /// ```
+    ///
+    /// Verified pre-existing: identical output on the base of #1287's branch,
+    /// so it was merely masked behind the two overlap defects.
+    ///
+    /// Enabling this test is #1290's acceptance criterion — do not weaken it to
     /// make it pass.
     #[test]
-    #[ignore = "finds a real unfixed defect in the #1269 dup/repeat family (#1287); see doc comment"]
+    #[ignore = "finds #1290, a real unfixed defect; see doc comment"]
     fn an_indel_haplotype_normalizes_to_its_own_sequence(
         haplotype in indel_haplotype_strategy()
     ) {
@@ -993,11 +994,12 @@ fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
 /// to pin.
 #[test]
 fn the_ignored_indel_property_still_finds_its_defect() {
-    // #1287: the dup's junction (263) lands inside the repeat's span (262-266).
+    // #1290: the first insertion's junction shifts past the second's, which
+    // reorders the two payloads and changes the sequence.
     let (core, input, issue) = (
         "ATACAGAAAATCAGGGCATA",
-        "NC_TEST.1:g.[261_262insGA;263_264insAA]",
-        "#1287",
+        "NC_TEST.1:g.[263_264insA;265_266insC]",
+        "#1290",
     );
     assert!(
         indel_property_holds(core, input).is_err(),

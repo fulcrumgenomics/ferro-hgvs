@@ -166,6 +166,7 @@ mod issue_1261_cis_member_order;
 mod issue_1276_dup_junction_overlap;
 mod issue_1281_reducing_member_shift;
 mod issue_1286_shared_junction_merge;
+mod issue_1287_repeat_span_junction;
 mod issue_129_mt_circular_wraparound;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_163_rna_utr3_flag;

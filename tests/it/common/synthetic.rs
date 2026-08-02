@@ -3,7 +3,8 @@
 //! See `docs/superpowers/specs/2026-05-01-A7-ins-shift-coverage-matrix-design.md`.
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
-use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
+use ferro_hgvs::spdi::hgvs_to_spdi;
+use ferro_hgvs::{parse_hgvs, HgvsVariant, MockProvider, Normalizer};
 
 /// 256 bases of padding to ensure the normalizer's 100bp window stays in
 /// bounds on either side of any test variant.
@@ -328,6 +329,59 @@ pub fn normalize_to_string(provider: MockProvider, input: &str) -> String {
         .normalize(&variant)
         .unwrap_or_else(|e| panic!("Normalization failed for '{}': {}", input, e));
     format!("{}", normalized)
+}
+
+/// Normalize `input` against the padded synthetic genomic contig built from
+/// `core`, assert the result denotes the same bases the input did, and return
+/// the rendered output.
+///
+/// The comparison is projected through [`hgvs_to_spdi`] rather than the
+/// normalizer's own applier, so a pass that silently changed the sequence shows
+/// up here even when every encoding agrees with every other. Members that
+/// overlap have no resulting sequence at all, which this reports as a failure
+/// rather than as equality — that is the shape most of the cis-allele issue
+/// regressions are about.
+pub fn assert_padded_preserving(core: &str, input: &str) -> String {
+    let provider = SyntheticBuilder::genomic(core).build();
+    let normalizer = Normalizer::new(provider.clone());
+    let reference = padded(core);
+    let output = normalizer
+        .normalize(&parse_hgvs(input).expect("parse"))
+        .expect("normalize")
+        .to_string();
+
+    let denote = |descriptor: &str| -> Option<String> {
+        let members: Vec<HgvsVariant> = match parse_hgvs(descriptor).ok()? {
+            HgvsVariant::Allele(allele) => allele.variants.clone(),
+            single => vec![single],
+        };
+        let mut triples = Vec::new();
+        for member in &members {
+            triples.push(hgvs_to_spdi(member, &provider).ok()?);
+        }
+        triples.sort_by_key(|t| std::cmp::Reverse(t.position));
+        let mut edited = reference.as_bytes().to_vec();
+        let mut claimed = reference.len();
+        for triple in &triples {
+            let start = usize::try_from(triple.position).ok()?;
+            let end = start.checked_add(triple.deletion.len())?;
+            if end > claimed {
+                return None; // overlapping members
+            }
+            edited.splice(start..end, triple.insertion.bytes());
+            claimed = start;
+        }
+        String::from_utf8(edited).ok()
+    };
+
+    let from_input = denote(input).expect("input applies");
+    let from_output = denote(&output)
+        .unwrap_or_else(|| panic!("`{input}` -> `{output}` has no resulting sequence"));
+    assert_eq!(
+        from_output, from_input,
+        "`{input}` -> `{output}` changed the sequence"
+    );
+    output
 }
 
 fn reverse_complement(seq: &str) -> String {
