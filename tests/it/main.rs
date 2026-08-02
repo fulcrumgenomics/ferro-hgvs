@@ -50,6 +50,7 @@ mod clinvar_hgvs_tests;
 mod clinvar_tests;
 mod clinvar_validation;
 mod cmrg_exhaustive_tests;
+mod coderabbit_config_paths;
 mod comma_products_allele;
 mod compound_cross_reference;
 mod comprehensive_edge_case_tests;
