@@ -97,6 +97,65 @@ pub(crate) fn partition_members_with(dag: &AlignmentDag, min_separation: u32) ->
         .collect()
 }
 
+/// The alternate-block span each member consumes, parallel to `members`.
+///
+/// Each member's *start* is reached across a run of reference bases that every
+/// minimal alignment matches, so the alternate cursor advances one-for-one
+/// there. Each member's *end* is read from the dominator that terminates it.
+///
+/// Returns `None` if a member's end is neither the end of the block nor a
+/// dominator match, or if the members are not an ascending partition — both
+/// mean a bug upstream rather than an unusual input.
+///
+/// # Why the end must come from a dominator
+///
+/// It is tempting to walk one minimal alignment and record the alternate
+/// coordinate at each reference boundary. That is wrong: away from dominators,
+/// different minimal alignments assign different alternate coordinates to the
+/// same reference boundary, so a walked path yields spans that rebuild the
+/// wrong alternate block. Measured while writing this plan — `AAAAAAA ->
+/// AACACAAAA` and `ACGTACGTAC -> ACGTTACGTGAC` both fail the round-trip that
+/// way, and both pass when the end is taken from the dominator's own cell.
+///
+/// A member's `ref_end` is always either `ref_len` or a dominator-matched
+/// position: a run ending at a changed position `p` has `ref_end = p + 1`, and
+/// `p + 1` cannot itself be changed or it would be in the same run; a run
+/// ending at an insertion junction `k` has `ref_end = k`, and `k` is matched or
+/// it would have been a changed position.
+pub(crate) fn member_alt_spans(
+    dag: &AlignmentDag,
+    members: &[MemberBlock],
+) -> Option<Vec<(u32, u32)>> {
+    let dominators = dag.dominators();
+    let alt_at_boundary = |r: u32| -> Option<u32> {
+        if r == dag.ref_len() {
+            Some(dag.alt_len())
+        } else {
+            dominators.alt_at(r)
+        }
+    };
+
+    let mut spans = Vec::with_capacity(members.len());
+    let mut prev_ref_end = 0u32;
+    let mut prev_alt_end = 0u32;
+    for member in members {
+        if member.ref_start < prev_ref_end || member.ref_end < member.ref_start {
+            return None;
+        }
+        // The matched run between the previous member and this one advances
+        // both cursors equally.
+        let alt_start = prev_alt_end + (member.ref_start - prev_ref_end);
+        let alt_end = alt_at_boundary(member.ref_end)?;
+        if alt_end < alt_start {
+            return None;
+        }
+        spans.push((alt_start, alt_end));
+        prev_ref_end = member.ref_end;
+        prev_alt_end = alt_end;
+    }
+    Some(spans)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,5 +307,90 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// Rebuild the alternate block from the reference block plus the members'
+    /// payloads. This is the invariant that makes the partition meaningful: if
+    /// it does not hold, the members denote a different sequence.
+    fn round_trips(reference: &[u8], alt: &[u8]) -> bool {
+        let dag = AlignmentDag::build(reference, alt);
+        let members = partition_members(&dag);
+        let Some(alt_spans) = member_alt_spans(&dag, &members) else {
+            return false;
+        };
+        let mut rebuilt = Vec::new();
+        let mut ref_cursor = 0usize;
+        for (member, (alt_start, alt_end)) in members.iter().zip(&alt_spans) {
+            rebuilt.extend_from_slice(&reference[ref_cursor..member.ref_start as usize]);
+            rebuilt.extend_from_slice(&alt[*alt_start as usize..*alt_end as usize]);
+            ref_cursor = member.ref_end as usize;
+        }
+        rebuilt.extend_from_slice(&reference[ref_cursor..]);
+        rebuilt == alt
+    }
+
+    #[test]
+    fn calibration_corpus_round_trips() {
+        for (r, a) in [
+            (&b"AAAAAAA"[..], &b"AACACAAAA"[..]),
+            (&b"AAAAAAA"[..], &b"ACAAAA"[..]),
+            (LRG199_REF, &b"TTCCTCGATGCCTG"[..]),
+            (&b"ACGTACGTACGTACGT"[..], &b"ATGTACGTACGTACTT"[..]),
+            (&b"ACGTACGT"[..], &b"ATGTTCGT"[..]),
+            (&b"ACGTACGTAC"[..], &b"ACGTTACGTGAC"[..]),
+            (&b"GACTGACTGA"[..], &b"GAATAACTGA"[..]),
+            (&b"ACGT"[..], &b"ACGT"[..]),
+            (&b""[..], &b"ACGT"[..]),
+            (&b"ACGT"[..], &b""[..]),
+        ] {
+            assert!(
+                round_trips(r, a),
+                "{} -> {} does not round-trip",
+                String::from_utf8_lossy(r),
+                String::from_utf8_lossy(a)
+            );
+        }
+    }
+
+    #[test]
+    fn round_trips_exhaustively_over_a_small_alphabet() {
+        fn words(len: u32) -> Vec<Vec<u8>> {
+            if len == 0 {
+                return vec![Vec::new()];
+            }
+            let mut out = Vec::new();
+            for shorter in words(len - 1) {
+                for base in *b"AC" {
+                    let mut w = shorter.clone();
+                    w.push(base);
+                    out.push(w);
+                }
+            }
+            out
+        }
+        let all: Vec<Vec<u8>> = (0..=5u32).flat_map(words).collect();
+        for r in &all {
+            for a in &all {
+                assert!(
+                    round_trips(r, a),
+                    "{} -> {} does not round-trip",
+                    String::from_utf8_lossy(r),
+                    String::from_utf8_lossy(a)
+                );
+            }
+        }
+    }
+
+    proptest::proptest! {
+        /// The same invariant on random four-letter sequences.
+        #[test]
+        fn round_trips_on_random_blocks(
+            reference in proptest::collection::vec(
+                proptest::sample::select(vec![b'A', b'C', b'G', b'T']), 0..40usize),
+            alt in proptest::collection::vec(
+                proptest::sample::select(vec![b'A', b'C', b'G', b'T']), 0..40usize),
+        ) {
+            proptest::prop_assert!(round_trips(&reference, &alt));
+        }
     }
 }
