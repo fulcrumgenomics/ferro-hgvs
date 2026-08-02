@@ -4,38 +4,80 @@
 //! The rewrite (#1235) replaces "normalize each member independently, then repair the
 //! damage with seven passes" with "apply the allele, align the result to the reference,
 //! partition at the alignment's dominators, render." This module pins the open defects
-//! that rewrite is meant to fix, and states in one place which open defects it is **not**
-//! meant to fix.
+//! that rewrite is meant to fix, and tries to say honestly what it does and does not cover.
+//! An earlier draft of this file claimed to be the one place every open defect the rewrite
+//! is not meant to fix was recorded; an independent audit found six in-class defects it had
+//! simply omitted, one BOUNDARY exclusion it had misclassified, and two more BOUNDARY
+//! exclusions whose stated *reason* was wrong even though the exclusion itself was right.
+//! Corrected below; this paragraph is left in as the record of that.
 //!
 //! ## PARTITION targets asserted here
 //!
 //! Every assertion below is sequence-level — never a hardcoded "correct" output string,
 //! since these are open defects and nobody has stated what the fixed rendering should be.
-//! Two forms:
+//! Three forms:
 //!
 //! - *Confluence* (#1260, #1262): two spellings of one variant must reach the same
 //!   normalized string. They don't, today. `the_two_confluence_targets_still_diverge`
-//!   asserts they still don't; `every_confluence_target_denotes_one_variant` guards that
-//!   both spellings really are the same variant, checked by `cis_apply_oracle::apply`,
-//!   independent of the normalizer under test.
+//!   asserts they still don't. `every_confluence_target_denotes_one_variant` is **not**
+//!   itself a pinned failure — it is a sanity guard on this file's own rows (both
+//!   spellings really are the same variant, checked by `cis_apply_oracle::apply`,
+//!   independent of the normalizer under test) and it keeps passing after the rewrite
+//!   lands; a malformed pin here would prove nothing about the normalizer, which is why the
+//!   guard exists at all.
 //! - *Denotation* (#1267, #1325): normalizing must not change what the description
 //!   denotes. It does, today. `assert_denotation_currently_broken` asserts the normalized
 //!   output either denotes a different sequence than the input (#1267), or denotes no
 //!   sequence at all (#1325) because its members now overlap and the independent applier
 //!   declines to splice them.
+//! - *Boundary-validity* (#1274): normalizing must not name a position past the contig's
+//!   end. It does, today. `a_cancelling_edit_at_the_contig_end_still_emits_an_out_of_bounds_span`
+//!   asserts the normalized output's highest position number exceeds the contig length.
 //!
-//! Every test here is a **pinned failure**, not a `#[ignore]`d one: it currently passes
-//! *because* it asserts the defect reproduces. The moment the rewrite fixes a case, the
-//! assertion flips and the test goes red — that's the signal to delete it (or move it to
-//! a "fixed" note), never something to silence.
+//! Apart from the guard noted above, every test here is a **pinned failure**, not a
+//! `#[ignore]`d one: it currently passes *because* it asserts the defect reproduces. The
+//! moment the rewrite fixes a case, the assertion flips and the test goes red — that's the
+//! signal to delete it (or move it to a "fixed" note), never something to silence.
+//!
+//! ## The other half of the acceptance evidence
+//!
+//! `tests/it/cis_spelling_confluence_gap.rs` pins eight *other* currently-diverging spelling
+//! pairs (#1287, #1290, #1296, #1301, #1304, #1308, #1312, #1320) on the same
+//! `cis_apply_oracle` + `padded()` machinery and the same assert-then-flip-red contract as
+//! this file, plus five pairs that have already converged. Those eight are also things the
+//! sequence-first rewrite must converge, and will also go red when it lands. Read the two
+//! files together — this one is not the sole record of confluence targets, only of the
+//! ones harvested separately from #1235's descendant chain.
+//!
+//! ## #1235 itself: what's actually running
+//!
+//! #1235 is the tracking/design issue for the whole rewrite and supplies no reproducer of
+//! its own (a table of one-line sketches, not full HGVS strings). Its three acceptance
+//! criteria are confluence, no overlapping/out-of-order members, and idempotence. An
+//! earlier draft of this doc said these are "exactly what `cis_allele_confluence_proptest.rs`
+//! ... already exercise" — true only for half of it:
+//!
+//! - The **substitution model** (`Haplotype`/`haplotype_strategy`) backs three properties
+//!   that run on every test invocation: `all_encodings_of_one_haplotype_converge`,
+//!   `the_converged_form_is_a_fixed_point`, and `members_are_disjoint_and_ascending`. These
+//!   genuinely exercise confluence, idempotence, and ordering — for substitution-only,
+//!   length-preserving haplotypes.
+//! - The **indel model** (`IndelHaplotype`/`indel_haplotype_strategy`) is what reaches
+//!   insertions, deletions, and the shifting machinery — and its confluence/no-overlap
+//!   property, `an_indel_haplotype_normalizes_to_its_own_sequence`, is `#[ignore]`d and its
+//!   own doc comment says plainly: "this currently fails, and the failure is real." It is
+//!   the property that found the entire #1286 -> #1287 -> #1290 -> #1292 -> #1296 -> #1301
+//!   -> #1304 -> #1297 -> #1308 -> #1312 -> #1316 -> #1320 -> #1321 -> #1323 -> #1325 chain
+//!   (sixteen defects). It does not run by default; enabling it is `cargo test --features
+//!   dev -- --ignored an_indel_haplotype`.
+//!
+//! So criterion 2 (no overlapping/out-of-order members) for indel haplotypes is currently
+//! enforced by no test that runs in CI. #1325 below is the live failure that property last
+//! found; there is nothing further to assert for #1235 itself beyond that, but "already
+//! exercised" overstated what's actually wired in.
 //!
 //! ## PARTITION issues not asserted
 //!
-//! - **#1235** — the tracking/design issue for the whole rewrite. It supplies no
-//!   reproducer of its own (a table of one-line sketches, not full HGVS strings); its
-//!   acceptance criteria (confluence, no overlapping/out-of-order members, idempotence)
-//!   are exactly what `cis_allele_confluence_proptest.rs` and
-//!   `issue_1235_cis_allele_confluence.rs` already exercise. Nothing new to assert here.
 //! - **#1271** — the issue's own worked example (the HGVS spec's `LRG_199` delins) is
 //!   **not a live defect** on this branch: the regression that used to split it four ways
 //!   was already fixed (a regime-aware `MAX_UNGUARDED_SPLIT_BLOCK`, per the issue's own
@@ -45,29 +87,97 @@
 //!   split spelling's coordinates are relative/illustrative rather than full genomic
 //!   positions — there is no sequence content to build a synthetic genomic reproducer from
 //!   without inventing it. Excluded rather than forced into a frame it doesn't fit.
+//! - **#1284** — three cis repair passes (`respell_colliding_duplications`,
+//!   `coalesce_members_at_one_junction`, and the junction arm of
+//!   `demote_repeats_spanning_siblings`) are gated `CisKind::Genome | Mt`, so a `c.`/`n.`/
+//!   `r.` cis allele that needs one of them emits a description ferro's own parser rejects
+//!   — and with `FERRO_ASSERT_REPARSE` armed, that panics and aborts the run instead of
+//!   failing with a diff. Out of a genomic-only v1's *axis* scope, so not asserted here —
+//!   recorded, not silently dropped, because a v1 rewrite that only wires up `g.` leaves
+//!   this exact hole open on the other axes.
+//! - **#1328** — `junction_rank` (`src/hgvs/variant.rs`) has no `HgvsVariant::Protein` arm
+//!   (falls through its `match` to `_ => None`), so protein cis members sharing a span tie
+//!   and fall back to an alphabetical tie-break that renders `dup` before `ins` — reversing
+//!   apply order. Same shape as the closed #1301, on the protein axis. Out of a
+//!   genomic-only v1's scope, recorded rather than omitted.
 //!
-//! ## BOUNDARY — explicitly not this rewrite's targets
+//! ## Coverage gaps in the acceptance evidence itself (not defects in the normalizer)
 //!
-//! These four are contig-bounds, arithmetic-underflow, or circular-wraparound bugs, not
-//! member-partitioning bugs; the rewrite's apply/align/partition/render pipeline has no
-//! reason to touch any of them. Documented here so the exclusion is a decision, not an
-//! oversight. None of the four are asserted below.
+//! - **#1268** — no committed sweep generates a **three**-member cis allele; both committed
+//!   sweeps (`cis_junction_crossing_shift.rs`'s
+//!   `no_two_member_allele_normalizes_to_a_different_sequence` and
+//!   `repeat_span_sibling_overlap.rs`'s
+//!   `no_two_member_allele_normalizes_to_overlapping_members`) are explicitly two-member.
+//!   Every recent defect in the #1286 chain, #1325 included, is three-member. This is a gap
+//!   in the corpus's own evidence, flagged prominently rather than quietly worked around:
+//!   nothing here asserts three-member coverage either, so the gap remains open after this
+//!   file lands.
+//! - **#1283** — the ~276k-case sibling-crossing sweep is read as covering sibling-crossing
+//!   shifts broadly, but cannot reach five named shapes it does not generate (a second
+//!   member that is `dup`/`ins` rather than a plain edit, more than two members, siblings
+//!   in *trans* rather than in phase, seeds shorter than 20bp, and non-`g.` axes). Same
+//!   status as #1268: a gap in the acceptance evidence, not asserted or closed here.
 //!
-//! - **#1274** — a cis insertion+deletion that cancels at a contig's last base emits a
-//!   coordinate one past the end (`g.10_11=` on a 10-base contig). The sequence itself is
-//!   right; only the stated span is out of bounds. A clamp/validation fix, not a
-//!   partition fix.
+//! `cis_allele_confluence_proptest.rs`'s own module doc already names both gaps ("#1268/
+//! #1283's complaint about coverage that reads wider than it is") — this section is not the
+//! first place they're written down, but they were missing from this corpus specifically.
+//!
+//! ## Marginal / render-path — recorded, not asserted
+//!
+//! - **#1318** — `canonicalize_delins` (`src/normalize/rules.rs`) does case-sensitive byte
+//!   comparisons on the delins-to-inversion typing path. A soft-masked (lowercase)
+//!   reference can therefore stop a genuine reverse complement from being typed `inv`, so
+//!   two spellings of what should be one variant diverge by case alone. Single-member, so
+//!   not a cis-allele partitioning defect strictly, but it is confluence-shaped and lives in
+//!   the *render* step v1's rewrite inherits unchanged rather than replaces — worth carrying
+//!   here rather than dropping for being adjacent to the class instead of squarely in it.
+//! - **#1264** — the parser accepts an `ins` whose two anchors are not adjacent positions,
+//!   but normalizing or re-rendering the same variant is rejected outbound — an inbound/
+//!   outbound asymmetry. Currently recorded only as an oracle-exemption comment in
+//!   `normalize_reparse_invariant.rs` (why that file's re-parse oracle passes over it), with
+//!   no assertion anywhere that the asymmetry itself holds or has closed. Noted here so it
+//!   isn't invisible to a reader of this corpus; not asserted, since fixing it is a parser
+//!   grammar question orthogonal to member-partitioning.
+//!
+//! ## BOUNDARY — excluded on axis/coordinate-layer grounds, not because the rewrite can't
+//! ## incidentally affect them
+//!
+//! None of the three below are asserted here. But two of the three reproducers currently
+//! reach the pipeline **through a repair pass the rewrite deletes** — so "the rewrite has no
+//! reason to touch this" is the wrong justification for excluding them, even though excluding
+//! them from this corpus's *asserted* set is still the right call (no genuine partition
+//! defect is being deferred; see each entry).
+//!
 //! - **#1282** — 5'-shifting a member to position 1 underflows `hgvs_pos_to_index`'s
-//!   `(pos - 1)` and panics in debug builds (silently wraps to a garbage index in
-//!   release). An input-validation/guard fix at the coordinate layer, not a partition fix.
-//! - **#1307** — respelling a duplication that ends at a contig's last base as an
-//!   insertion places it at a gap that does not exist (`24_25insC` on a 24-base contig). A
-//!   bounds check on `respell_at_gap`, not a partition fix.
-//! - **#1327** — the same `respell_at_gap` gap-placement defect as #1307, but on the
-//!   mitochondrial/circular (`m.`) axis: a junction at the contig's last base should wrap
-//!   to `16569_1` instead of running off the end. No concrete reproducer exists (a
-//!   code-level report only); circular wraparound is also out of a genomic-only v1's scope
-//!   regardless of reproducibility.
+//!   `(pos - 1) as usize` at the coordinate layer and panics in debug builds (silently wraps
+//!   to a garbage index in release). This is a real coordinate-layer bug independent of any
+//!   repair pass, and excluding it from the partition-defect set is correct. **Caveat:** its
+//!   reproducer (`g.[3_4insT;1T>A]`) is two members the rewrite will very plausibly merge
+//!   into one block before the 5'-shift ever reaches position 1 alone — so the panic may
+//!   simply stop reproducing once the rewrite lands, with the underflow itself untouched.
+//!   That would be **masking**, not fixing: a third outcome distinct from "fixed" and
+//!   "still broken" that this corpus does not have machinery to tell apart from a real fix,
+//!   because nothing here re-tests `hgvs_pos_to_index` directly. The underflow needs its own
+//!   test against the coordinate function, independent of this reproducer, so a masked
+//!   #1282 cannot be mistaken for a closed one.
+//! - **#1307** — respelling a duplication that ends at a contig's last base as an insertion
+//!   places it at a gap that does not exist (`24_25insC` on a 24-base contig). The out-of-
+//!   bounds gap is produced by `respell_colliding_duplications` -> `respell_at_gap` — a
+//!   repair pass that exists only to fix a collision independent per-member normalization
+//!   manufactures. Under sequence-first, `24dup` and `24C>G` both touch position 24 and land
+//!   in one changed block, so no collision is manufactured and `respell_at_gap` is never
+//!   called: the rewrite plausibly retires this reproducer **incidentally**, not because
+//!   anyone decided it was in scope. Not asserted here regardless, since there is no
+//!   partition defect being deferred — the repair-pass bug and the rewrite's likely
+//!   side-effect on it are both worth knowing, which is why they're written down instead of
+//!   just "BOUNDARY, out of scope."
+//! - **#1327** — the same `respell_at_gap` gap-placement defect as #1307, reached through
+//!   the same two repair-pass callers (`respell_colliding_duplications` and
+//!   `coalesce_members_at_one_junction`), but on the mitochondrial/circular (`m.`) axis: a
+//!   junction at the contig's last base should wrap to `16569_1` instead of running off the
+//!   end. Excluded on **axis scope alone** — circular wraparound is out of a genomic-only
+//!   v1's scope regardless of which pass produces the bug or whether the rewrite happens to
+//!   retire it too. No concrete reproducer exists in the issue (a code-level report only).
 //!
 //! ## OTHER
 //!
@@ -111,6 +221,9 @@ const CONFLUENCE_TARGETS: &[(&str, &str, &str, &str)] = &[
 
 /// Both spellings in every row must denote the same sequence, or the row is a broken pin
 /// rather than evidence about the normalizer (this has happened before in this campaign).
+///
+/// This is a sanity guard on this file's own rows, not a pinned failure: it passes because
+/// the rows are well-formed, and it keeps passing after the rewrite lands.
 #[test]
 fn every_confluence_target_denotes_one_variant() {
     for (issue, core, a, b) in CONFLUENCE_TARGETS {
@@ -189,5 +302,43 @@ fn a_repeat_growth_exceeding_its_tract_still_swallows_a_sibling_junction() {
         "TEMPLATE:g.[262_263insAA;263_264insAA;264_265insC]",
         ShuffleDirection::ThreePrime,
         "#1325",
+    );
+}
+
+/// The highest 1-based HGVS position named anywhere in `output`'s coordinate part (the
+/// substring after the accession's `:`). Used only to check a position against a contig
+/// length, not to parse HGVS in general — `TEMPLATE` (this module's only accession) has no
+/// digits, so every digit run found belongs to a position, not to the accession.
+fn max_hgvs_position(output: &str) -> u64 {
+    let coord_part = output.rsplit(':').next().unwrap_or(output);
+    coord_part
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|token| token.parse::<u64>().ok())
+        .max()
+        .unwrap_or(0)
+}
+
+/// #1274: an insertion and a deletion that cancel exactly at a contig's last base still
+/// normalize to a coordinate one past the end of the contig (`g.10_11=` on a 10-base
+/// contig), because a repair pass derives a span for the (correctly empty) residue
+/// independently of the contig's actual length. Sequence-first cancellation would apply
+/// the allele, get back the reference unchanged, align with zero changed columns, and have
+/// no block left to render a span for at all — so this is read as PARTITION,
+/// likely-fixed-incidentally, not a coordinate-layer bug the rewrite has no reason to touch.
+///
+/// The independent applier does not catch this one the way it catches #1325: an `=` edit's
+/// SPDI triple does not exercise the same out-of-bounds check a deletion's does, so
+/// `apply()` happily returns the (correct) reference back. The defect is purely that the
+/// stated span names a position the contig does not have, so that is what's asserted.
+#[test]
+fn a_cancelling_edit_at_the_contig_end_still_emits_an_out_of_bounds_span() {
+    let seq = "ACGTACGTAA";
+    let actual = normalize(seq, "TEMPLATE:g.[8_9insA;10del]");
+    let max_pos = max_hgvs_position(&actual);
+    assert!(
+        max_pos > seq.len() as u64,
+        "#1274 appears fixed — `{actual}` no longer names a position past the {}-base \
+         contig. Move this case out of the PARTITION target list and delete this test.",
+        seq.len()
     );
 }
