@@ -24,10 +24,14 @@
 //! third is a finding rather than a known design seam:
 //!
 //! 1. **Two-member spellings** (`#422-two-member`, `#999-neg-split`,
-//!    `#1260a-split`, `#1260b-split`, `#1262a-split`, `#1262b-split`). Each
-//!    shares its block with a spanning sibling row in this table that the
-//!    splitter answers identically. Their recorded two-member outputs therefore
-//!    cannot come from the splitter; see the collision census below.
+//!    `#1260a-split`, `#1262a-split`, `#1262b-split`). Each shares its block
+//!    with a spanning sibling row in this table that the splitter answers
+//!    identically. Their recorded two-member outputs therefore cannot come from
+//!    the splitter; see the collision census below.
+//!
+//!    `#1260b` is the exception, and it is the override *inverted*: the two-gap
+//!    alignment (#1260, PR #1285) made the splitter answer the **split** count,
+//!    so `#1260b-spanning` is the row that now carries the override.
 //! 2. **Coding-axis codon merges** (`#1235-c-codon-exception`, `#1235-r-coding`).
 //!    The block splits into two; the one-member coding answer is produced after
 //!    partitioning, so it is not a block-level fact.
@@ -44,8 +48,9 @@
 //! Six block pairs each carry two different recorded member counts. Since a
 //! pure function of the pair returns one answer, at most one of each pair's two
 //! recorded counts can be a splitter decision. [`COLLISIONS`] pins all six:
-//! two are recorded with **both** answers asserted correct in the repo, four are
-//! recorded as **known defects**.
+//! two are recorded with **both** answers asserted correct in the repo, three
+//! remain **known defects**, and one — `#1260b` — is **resolved at the
+//! splitter**, which now answers its split count rather than its spanning one.
 //!
 //! # Recorded but deliberately not asserted here
 //!
@@ -233,9 +238,11 @@ const CORPUS: &[BlockRow] = &[
         "same block as #1260a-spanning: collision, recorded as a known defect"),
     row("#1260-window", "AAAAAAA", "AACACAAAA", 1,
         "the untrimmed 7 nt poly-A window; both splitters return one member"),
-    row("#1260b-spanning", "AA", "CAAC", 1, "the separation-2 instance of #1260"),
-    diverging("#1260b-split", "AA", "CAAC", 2, (1, SPELLING),
-        "same block as #1260b-spanning: collision, recorded as a known defect"),
+    diverging("#1260b-spanning", "AA", "CAAC", 1,
+        (2, "the two-gap alignment keeps the whole reference between the two insertions"),
+        "the separation-2 instance of #1260; the splitter now answers the SPLIT count"),
+    row("#1260b-split", "AA", "CAAC", 2,
+        "same block as #1260b-spanning: the collision the two-gap alignment resolved"),
     row("#1262a-spanning", "AA", "C", 1, "net -1 with no preserved reference base"),
     diverging("#1262a-split", "AA", "C", 2, (1, SPELLING),
         "same block as #1262a-spanning: collision, recorded as a known defect"),
@@ -277,6 +284,13 @@ enum Pinning {
     BothCorrect,
     /// The divergence is recorded as a defect that must stay visible.
     KnownDefect,
+    /// The defect is **fixed at the splitter**: the splitter now answers the
+    /// *split* row's count rather than the spanning one, so the two spellings
+    /// no longer disagree about how to divide the block. Kept as a row rather
+    /// than deleted, because the pair is what makes the resolution legible —
+    /// and because the two recorded counts still differ until the rest of the
+    /// pipeline follows the splitter.
+    ResolvedToSplit,
 }
 
 /// One collision: two corpus rows that share a block pair but carry different
@@ -310,7 +324,7 @@ const COLLISIONS: &[Collision] = &[
     Collision {
         spanning: "#1260b-spanning",
         split: "#1260b-split",
-        pinning: Pinning::KnownDefect,
+        pinning: Pinning::ResolvedToSplit,
     },
     Collision {
         spanning: "#1262a-spanning",
@@ -415,7 +429,7 @@ fn recorded_and_splitter_counts_diverge_on_exactly_these_rows() {
             "#1235-c-codon-exception",
             "#1235-r-coding",
             "#1260a-split",
-            "#1260b-split",
+            "#1260b-spanning",
             "#1262a-split",
             "#1262-window",
             "#1262b-split",
@@ -457,26 +471,34 @@ fn colliding_block_pairs_are_one_splitter_input_with_two_recorded_answers() {
             spanning.id, split.id
         );
 
+        // Which side the splitter reproduces is the census's whole content, so
+        // it is asserted per-pinning rather than assumed to be the spanning one.
         let pieces = partition_block(spanning.ref_block.as_bytes(), spanning.alt_block.as_bytes());
+        let (reproduced, not_reproduced) = match collision.pinning {
+            Pinning::ResolvedToSplit => (split, spanning),
+            Pinning::BothCorrect | Pinning::KnownDefect => (spanning, split),
+        };
         assert_eq!(
             pieces.len(),
-            spanning.recorded_members,
+            reproduced.recorded_members,
             "{} is the recorded count the splitter reproduces",
-            spanning.id
+            reproduced.id
         );
         assert_ne!(
             pieces.len(),
-            split.recorded_members,
+            not_reproduced.recorded_members,
             "{} is the recorded count the splitter does not reproduce",
-            split.id
+            not_reproduced.id
         );
     }
 }
 
-/// Two collisions are recorded with both answers correct; four are recorded as
-/// known defects. That split is the census's whole point, so it is pinned.
+/// Two collisions are recorded with both answers correct, three remain known
+/// defects, and one — `#1260b` — is now resolved at the splitter by the two-gap
+/// alignment (#1260, PR #1285). That split is the census's whole point, so it
+/// is pinned.
 #[test]
-fn the_census_is_two_correct_pins_and_four_known_defects() {
+fn the_census_is_two_correct_pins_three_known_defects_and_one_resolved() {
     let correct: Vec<&str> = COLLISIONS
         .iter()
         .filter(|c| c.pinning == Pinning::BothCorrect)
@@ -491,13 +513,15 @@ fn the_census_is_two_correct_pins_and_four_known_defects() {
         .collect();
     assert_eq!(
         defects,
-        vec![
-            "#1260a-split",
-            "#1260b-split",
-            "#1262a-split",
-            "#1262b-split"
-        ]
+        vec!["#1260a-split", "#1262a-split", "#1262b-split"]
     );
+
+    let resolved: Vec<&str> = COLLISIONS
+        .iter()
+        .filter(|c| c.pinning == Pinning::ResolvedToSplit)
+        .map(|c| c.split)
+        .collect();
+    assert_eq!(resolved, vec!["#1260b-split"]);
 }
 
 /// The corpus is a table, so a duplicated or renamed id would silently shadow a

@@ -2918,10 +2918,76 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
             best = Some((matches, k));
         }
     }
+    // A single gap cannot express *insertion, retained reference, insertion*,
+    // so consider the two-gap form when the best single gap leaves a reference
+    // base unmatched. Scoped to net insertions by `shorter_is_ref`, which is
+    // what keeps it clear of the corpus the single-gap restriction protects —
+    // see [`two_gap_insertion_alignment`].
+    if shorter_is_ref && best.is_some_and(|(matches, _)| matches < reference.len()) {
+        if let Some(columns) = two_gap_insertion_alignment(reference, result) {
+            return Some(columns);
+        }
+    }
+
     // Only the winner is materialized.
     best.map(|(_, k)| {
         single_gap_alignment(k, gap_len, shorter_is_ref, reference.len(), result.len())
     })
+}
+
+/// The alignment that keeps the **whole** reference intact between two
+/// insertions, or `None` when the pair does not have that shape (#1260).
+///
+/// PR #1285 named the gap this fills: for #1260 the answer is "a two-gap
+/// alignment — insertion, retained base, insertion — which `best_alignment`'s
+/// single-gap restriction cannot express". One contiguous indel must either
+/// swallow the retained base into a spanning `delins` or leave one insertion
+/// unaccounted for.
+///
+/// # Why one shape is the whole search
+///
+/// The caller trims common flanks before partitioning
+/// (`canonicalize_from_sequence` via [`trim_common_flanks`]), and on a trimmed
+/// block the general three-chunk form collapses to this one. Writing an
+/// all-matched two-gap alignment as `result = ref[..a] + I1 + ref[a..b] + I2 +
+/// ref[b..]`: if `a > 0` the two blocks share a first base, and if `b <
+/// ref.len()` they share a last one — both contradict trimming. So `a == 0` and
+/// `b == ref.len()`, leaving `result = I1 + reference + I2`. That is a substring
+/// search, not a quadratic sweep over gap placements.
+///
+/// # Why this does not reopen the corpus the single-gap rule protects
+///
+/// `merge.rs`'s single-gap restriction exists to stop *compensating* gaps — a
+/// deletion **and** an insertion in one block — from manufacturing matches out
+/// of coincidence and shredding a contiguous replacement (#1034/#1040/#182).
+/// Both gaps here are insertions in a net-insertion block, so no deletion is
+/// introduced and no match is manufactured: every matched column is a reference
+/// base surviving verbatim. Cluster A is structurally out of reach — #1040 and
+/// the `inv` cases are equal-length, #1157A is a net deletion, and an
+/// equal-length or net-deletion block never reaches this function.
+///
+/// Both insertions must be non-empty; otherwise this is a single gap and the
+/// existing search already places it, 5'-most.
+///
+/// Comparison is byte-exact, matching [`best_alignment`]'s own `==` throughout.
+/// Making only this path case-insensitive would let the two-gap form win on a
+/// soft-masked block where the single-gap search sees a mismatch.
+fn two_gap_insertion_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
+    // `reference.len() + 2` is the shortest result that leaves room for two
+    // insertions of one base each; an empty reference has nothing to retain.
+    if reference.is_empty() || result.len() < reference.len() + 2 {
+        return None;
+    }
+    // 5'-most placement, matching `best_alignment`'s tie-break. The bounds put
+    // at least one base on each side of the retained reference.
+    let last_start = result.len() - reference.len() - 1;
+    let start = (1..=last_start).find(|&p| result[p..p + reference.len()] == *reference)?;
+
+    let mut columns = Vec::with_capacity(result.len());
+    columns.extend((0..start).map(|a| (None, Some(a))));
+    columns.extend((0..reference.len()).map(|i| (Some(i), Some(start + i))));
+    columns.extend((start + reference.len()..result.len()).map(|a| (None, Some(a))));
+    Some(columns)
 }
 
 /// Columns for an alignment with a single gap of `gap_len` after `k` aligned
@@ -6786,5 +6852,91 @@ mod tests {
         // The same inversion clear of the bad byte still applies.
         let clean = [GEdit::Inv { s: 6, e: 9 }];
         assert!(apply_edits_to_window(&clean, reference, 1).is_some());
+    }
+
+    /// The two-gap insertion form (#1260).
+    ///
+    /// A single gap cannot express *insertion, retained reference, insertion*:
+    /// it has one contiguous indel to place, so it must either swallow the
+    /// retained base into a spanning `delins` or leave one of the insertions
+    /// unaccounted for. PR #1285 named this directly — for #1260 the answer is
+    /// "a two-gap alignment — insertion, retained base, insertion — which
+    /// `best_alignment`'s single-gap restriction cannot express".
+    mod two_gap_insertion_alignment {
+        use super::*;
+
+        #[test]
+        fn a_retained_reference_between_two_insertions_is_expressible() {
+            // #1260's trimmed block. The single-gap search scores 0 matched
+            // columns either way it places the 2 nt gap; keeping the reference
+            // `A` intact between two 1 nt insertions matches it, which is the
+            // most any alignment of this pair can match.
+            assert_eq!(
+                best_alignment(b"A", b"CAC"),
+                Some(vec![(None, Some(0)), (Some(0), Some(1)), (None, Some(2))]),
+                "the whole reference should survive between the two insertions"
+            );
+        }
+
+        #[test]
+        fn the_two_gap_form_partitions_into_two_pure_insertions() {
+            // The point of expressing it: two members, each a pure insertion,
+            // separated by the retained base. `general.md:56` prefers those to
+            // one spanning `delins`.
+            let columns = best_alignment(b"A", b"CAC").expect("aligned");
+            assert_eq!(
+                pieces_from_columns(&columns, b"A", b"CAC"),
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 0,
+                        alt: b"C".to_vec()
+                    },
+                    Piece {
+                        ref_start: 1,
+                        ref_end: 1,
+                        alt: b"C".to_vec()
+                    },
+                ]
+            );
+        }
+
+        #[test]
+        fn a_single_gap_that_already_keeps_the_whole_reference_is_left_alone() {
+            // `AT -> ACT`: the 1 nt gap placed after `A` keeps both reference
+            // bases, so there is nothing for a second gap to buy. One gap, and
+            // the 5'-most placement, per `best_alignment`'s existing tie-break.
+            assert_eq!(
+                best_alignment(b"AT", b"ACT"),
+                Some(vec![
+                    (Some(0), Some(0)),
+                    (None, Some(1)),
+                    (Some(1), Some(2))
+                ])
+            );
+        }
+
+        #[test]
+        fn the_second_gap_is_scoped_out_of_cluster_a() {
+            // Equal-length and net-deletion blocks never reach the two-gap
+            // search, which is what keeps it clear of the "stays delins" corpus
+            // (#1034/#1040/#182) that `merge.rs`'s single-gap restriction
+            // exists to protect. Pinned as behaviour, not as a code path.
+            assert_eq!(
+                partition_block(b"CAGTGACTAG", b"TGTCACGACT").len(),
+                1,
+                "#1040"
+            );
+            assert_eq!(
+                partition_block(b"GCT", b"AGC").len(),
+                1,
+                "#1034 whole-run revcomp"
+            );
+            assert_eq!(
+                partition_block(b"AGTCAGT", b"GATTA").len(),
+                3,
+                "#1157A, net deletion"
+            );
+        }
     }
 }
