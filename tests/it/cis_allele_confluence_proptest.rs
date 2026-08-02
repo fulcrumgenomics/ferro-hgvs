@@ -61,7 +61,7 @@
 //!   the shape it was excluding. What that shape hit was #1301, now fixed.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
 //!   because it finds #1297, a cancelled member left as an identity member
-//!   overlapping the repeat that absorbed it, and #1304 behind it. It found #1286, #1287, #1290,
+//!   overlapping the repeat that absorbed it. It found #1286, #1287, #1290,
 //!   #1292 and #1296 first, all now fixed, each masked behind the one before
 //!   it; see its doc comment for the history and the live reproduction.
 //!
@@ -807,10 +807,9 @@ proptest! {
     /// on would make a green CI a matter of the budget rather than of the
     /// property holding.
     ///
-    /// **#1304** is behind it: two insertions at adjacent gaps plus a deletion
-    /// denote the wrong bases, silently. It became reachable once #1301 fixed
-    /// the ordering of two members sharing a span, which is what that shape used
-    /// to fail on first.
+    /// #1301 and #1304 sat between #1297 and this test in turn, and are both
+    /// fixed: two members sharing a span rendered out of order, and a junction
+    /// barrier that read a moved sibling's payload from the wrong snapshot.
     ///
     /// Expect the reported minimal case to name that shape rather than #1297's.
     /// #1297's seed is the one that fails, but with the filter gone its shrink
