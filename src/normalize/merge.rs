@@ -1605,6 +1605,25 @@ const MAX_UNGUARDED_SPLIT_BLOCK: usize = 32;
 /// before the split between them is believed. See `separations_are_meaningful`.
 const MIN_PIECE_SEPARATION: usize = 2;
 
+/// [`partition_block_sequence_first`]'s separation threshold on an axis with no
+/// reading frame (`g.`, `m.`, `n.`, and `r.` on a non-coding transcript).
+///
+/// `1`, not `seqfirst::MIN_SEPARATION`'s `2`. `general.md:34`'s general rule is
+/// "two variants separated by one or more nucleotides should be described
+/// individually" — one or more unchanged bases between two runs of change means
+/// they split, so runs merge only when separated by *fewer than one*, i.e. zero,
+/// unchanged bases. `general.md:35`'s exception — "separated by one nucleotide,
+/// together affecting one amino acid" — is what licenses merging across exactly
+/// one unchanged base, and it is scoped to "one amino acid": a reading frame,
+/// which `AxisFrame::reading_frame` already isolates for
+/// `apply_coding_codon_exception`. Applying `seqfirst::MIN_SEPARATION` (`2`)
+/// unconditionally therefore grants every axis the coding exception, which is
+/// what the `FERRO_SEQFIRST_SHADOW` audit's class `B2` measured: 3 088 blocks
+/// where the sequence-first splitter merged across an unchanged base the live
+/// splitter, correctly, kept split. Pinned by
+/// `sequence_first_split_axis_separation_matches_general_rule`.
+const MIN_SEPARATION_NO_FRAME: u32 = 1;
+
 /// One derived edit: a maximal run of change over the reference window, as
 /// 0-based half-open offsets into that window plus its replacement bases.
 ///
@@ -1791,7 +1810,20 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
     // about the *split* and not about a downstream pass. Never affects `pieces`.
     if seqfirst_shadow_enabled() {
-        let shadow = partition_block_sequence_first(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
+        // Reading-frame axes get the coding one-amino-acid exception
+        // (`seqfirst::MIN_SEPARATION`, 2); every other axis gets the general
+        // rule (`MIN_SEPARATION_NO_FRAME`, 1). Same distinction
+        // `apply_coding_codon_exception` uses below, via the same `AxisFrame`.
+        let min_separation = if frame.reading_frame {
+            crate::normalize::seqfirst::MIN_SEPARATION
+        } else {
+            MIN_SEPARATION_NO_FRAME
+        };
+        let shadow = partition_block_sequence_first(
+            &ref_bytes[lo..hi_ref],
+            &result[lo..hi_alt],
+            min_separation,
+        );
         if shadow.as_ref() == Some(&pieces) {
             // The denominator. Without it, `grep -c SEQFIRST_SHADOW` returning 0
             // cannot be told apart from a shadow that never ran — the failure
@@ -2655,16 +2687,25 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
 /// Returns `None` when the block cannot be partitioned this way, which today
 /// means only that [`member_alt_spans`] declined. The caller falls back.
 ///
+/// `min_separation` is the unchanged-base threshold `partition_members_with`
+/// merges below (see that function's doc). It is **not** hardcoded to
+/// `seqfirst::MIN_SEPARATION` — the caller must choose it per axis. See
+/// `MIN_SEPARATION_NO_FRAME` for why: the value that is correct on a
+/// reading-frame axis is wrong on a genomic one.
+///
 /// Called only from the `FERRO_SEQFIRST_SHADOW` comparison in
 /// [`canonicalize_from_sequence`]; it does not yet decide any result.
-fn partition_block_sequence_first(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
+fn partition_block_sequence_first(
+    reference: &[u8],
+    result: &[u8],
+    min_separation: u32,
+) -> Option<Vec<Piece>> {
     use crate::normalize::seqfirst::align::AlignmentDag;
     use crate::normalize::seqfirst::partition::{member_alt_spans, partition_members_with};
-    use crate::normalize::seqfirst::MIN_SEPARATION;
 
     let dag = AlignmentDag::build(reference, result);
     let dominators = dag.dominators();
-    let members = partition_members_with(&dag, &dominators, MIN_SEPARATION);
+    let members = partition_members_with(&dag, &dominators, min_separation);
     let spans = member_alt_spans(&dag, &dominators, &members)?;
 
     Some(
@@ -5654,8 +5695,12 @@ mod tests {
         let reference = b"GACTGACTGA";
         let result = b"GACTAACTGA";
         let old = partition_block(reference, result);
-        let new = partition_block_sequence_first(reference, result)
-            .expect("an unambiguous single substitution must partition");
+        let new = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("an unambiguous single substitution must partition");
         assert_eq!(new.len(), 1, "expected one member, got {new:?}");
         assert_eq!(
             (new[0].ref_start, new[0].ref_end, new[0].alt.clone()),
@@ -5670,10 +5715,69 @@ mod tests {
     fn sequence_first_split_keeps_the_spec_delins_example_whole() {
         let reference = b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT";
         let result = b"TTCCTCGATGCCTG";
-        let pieces = partition_block_sequence_first(reference, result)
-            .expect("the spec example must partition");
+        let pieces = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("the spec example must partition");
         assert_eq!(pieces.len(), 1, "spec requires one delins, got {pieces:?}");
         assert_eq!((pieces[0].ref_start, pieces[0].ref_end), (0, 52));
+    }
+
+    /// Task 3, class `B2`: the separation threshold is axis-dependent, not a
+    /// uniform constant. `general.md:34`'s general rule — two variants
+    /// separated by one or more nucleotides are described individually — governs
+    /// a genomic axis, so `MIN_SEPARATION_NO_FRAME` (`1`) must keep two runs one
+    /// unchanged base apart split. `general.md:35`'s exception — separated by one
+    /// nucleotide, together affecting one amino acid — governs a reading-frame
+    /// axis, so `seqfirst::MIN_SEPARATION` (`2`) must merge the very same block.
+    ///
+    /// `CAA -> TAG` is the block `issue_1235_transcript_axes::` `n.`
+    /// (non-coding, hence `AxisFrame::reading_frame == false`)
+    /// `noncoding_axis_converges_on_separated_changes` produces, taken from the
+    /// `FERRO_SEQFIRST_SHADOW` audit's class `B2` — a test named for exactly the
+    /// genomic-axis split this threshold must preserve. Its equal-length blocks
+    /// have a single dominator match at the middle base (only one minimal
+    /// alignment achieves the edit distance), so the split is a pure threshold
+    /// question with no alignment ambiguity involved.
+    ///
+    /// Not chosen: `AAT -> CAA` and `CAATT -> TA`, two of `B2`'s other curated
+    /// blocks. Both stay one member even at `MIN_SEPARATION_NO_FRAME` — their
+    /// apparent single unchanged base is not a dominator match at all (a second,
+    /// equally minimal alignment matches the same reference position to a
+    /// *different* alternate offset, so `Dominators::matched` is empty; see
+    /// `align.rs`'s `AT -> AAT` example). That is `B1`'s mechanism, not `B2`'s,
+    /// even though the audit's live-gap-width heuristic filed them under `B2`.
+    /// So this fix does not close every `B2` block — only the ones where a
+    /// dominator genuinely exists and the threshold alone was suppressing it.
+    #[test]
+    fn sequence_first_split_axis_separation_matches_general_rule() {
+        let reference = b"CAA";
+        let result = b"TAG";
+        let genomic = partition_block_sequence_first(reference, result, MIN_SEPARATION_NO_FRAME)
+            .expect("must partition");
+        assert_eq!(
+            genomic.len(),
+            2,
+            "a genomic axis must split at the one unchanged base: {genomic:?}"
+        );
+
+        let coding = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
+        assert_eq!(
+            coding.len(),
+            1,
+            "a reading-frame axis must merge across the one unchanged base: {coding:?}"
+        );
+        assert_eq!(
+            (coding[0].ref_start, coding[0].ref_end),
+            (0, reference.len())
+        );
     }
 
     /// Every piece the new splitter emits must reconstruct the result block
@@ -5697,7 +5801,11 @@ mod tests {
         let all: Vec<Vec<u8>> = (0..=5u32).flat_map(words).collect();
         for reference in &all {
             for result in &all {
-                let Some(pieces) = partition_block_sequence_first(reference, result) else {
+                let Some(pieces) = partition_block_sequence_first(
+                    reference,
+                    result,
+                    crate::normalize::seqfirst::MIN_SEPARATION,
+                ) else {
                     continue;
                 };
                 let mut rebuilt = Vec::new();
@@ -5726,7 +5834,12 @@ mod tests {
     fn sequence_first_split_emits_disjoint_ascending_pieces() {
         let reference = b"ACGTACGTACGTACGT";
         let result = b"ATGTACGTACGTACTT";
-        let pieces = partition_block_sequence_first(reference, result).expect("must partition");
+        let pieces = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
         for pair in pieces.windows(2) {
             assert!(
                 pair[0].ref_end <= pair[1].ref_start,
@@ -5786,6 +5899,13 @@ mod tests {
     /// the non-sweep, non-proptest tests produce, 38 are a `B2` merge. See
     /// `shadow_merges_across_one_unchanged_base_where_live_splits`, which pins two
     /// blocks taken straight from the #1232 and #1235 transcript-axis tests.
+    ///
+    /// This module's tests call `partition_block_sequence_first` directly at the
+    /// uniform `seqfirst::MIN_SEPARATION` (`2`), on purpose: they document the
+    /// raw algorithm-level disagreement this audit found, unchanged. The fix —
+    /// choosing the separation per axis at the `canonicalize_from_sequence` call
+    /// site rather than changing this default — is pinned separately, by
+    /// `sequence_first_split_axis_separation_matches_general_rule`.
     mod seqfirst_shadow_audit {
         use super::*;
 
@@ -5826,8 +5946,12 @@ mod tests {
         /// Returns `(live, shadow)` for the caller to pin exactly.
         fn both(reference: &[u8], result: &[u8]) -> (Vec<Piece>, Vec<Piece>) {
             let live = partition_block(reference, result);
-            let shadow = partition_block_sequence_first(reference, result)
-                .expect("no harvested disagreement had the sequence-first side decline");
+            let shadow = partition_block_sequence_first(
+                reference,
+                result,
+                crate::normalize::seqfirst::MIN_SEPARATION,
+            )
+            .expect("no harvested disagreement had the sequence-first side decline");
             assert_eq!(
                 denotes(reference, &live).as_deref(),
                 Some(result),
