@@ -2575,6 +2575,50 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     pieces
 }
 
+/// Partition a changed block by deriving member boundaries from the **denoted
+/// sequence**, via [`crate::normalize::seqfirst`].
+///
+/// Same contract as [`partition_block`] — pieces are disjoint, ascending, and
+/// reconstruct `result` when substituted into `reference` — but derived from
+/// the alignment steps common to *every* minimal alignment rather than from a
+/// single-gap search. Two spellings of one variant produce the same
+/// `(reference, result)` pair and therefore the same pieces.
+///
+/// `reference` and `result` must already have their common flanks trimmed;
+/// `canonicalize_from_sequence` does that with [`trim_common_flanks`] before
+/// calling in. An untrimmed flank changes the partition, so this is a
+/// precondition and not a convenience.
+///
+/// Returns `None` when the block cannot be partitioned this way, which today
+/// means only that [`member_alt_spans`] declined. The caller falls back.
+// Not yet called from `normalize_allele` or anywhere else — wiring it in is a
+// later task in this migration. Allowed here for the same reason
+// `seqfirst::mod` allows it at the module level: deliberately unused until
+// that wiring lands, not a code-quality issue to restructure around.
+#[allow(dead_code)]
+fn partition_block_sequence_first(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
+    use crate::normalize::seqfirst::align::AlignmentDag;
+    use crate::normalize::seqfirst::partition::{member_alt_spans, partition_members_with};
+    use crate::normalize::seqfirst::MIN_SEPARATION;
+
+    let dag = AlignmentDag::build(reference, result);
+    let dominators = dag.dominators();
+    let members = partition_members_with(&dag, &dominators, MIN_SEPARATION);
+    let spans = member_alt_spans(&dag, &dominators, &members)?;
+
+    Some(
+        members
+            .iter()
+            .zip(spans)
+            .map(|(member, (alt_start, alt_end))| Piece {
+                ref_start: member.ref_start as usize,
+                ref_end: member.ref_end as usize,
+                alt: result[alt_start as usize..alt_end as usize].to_vec(),
+            })
+            .collect(),
+    )
+}
+
 /// Alignment columns a description marks as changed.
 ///
 /// One member occupies `max(|span|, |replacement|)` columns: a substitution costs
@@ -5539,6 +5583,95 @@ mod tests {
             pieces[0].ref_start, 2,
             "the first piece must be the lone 5' substitution; got {pieces:?}"
         );
+    }
+
+    /// The two splitters must agree wherever the old one is already right.
+    /// A single changed base has one unambiguous answer, so any disagreement
+    /// here is a bug in the new path rather than a behavioural change.
+    #[test]
+    fn sequence_first_split_agrees_on_an_unambiguous_single_change() {
+        let reference = b"GACTGACTGA";
+        let result = b"GACTAACTGA";
+        let old = partition_block(reference, result);
+        let new = partition_block_sequence_first(reference, result)
+            .expect("an unambiguous single substitution must partition");
+        assert_eq!(new.len(), 1, "expected one member, got {new:?}");
+        assert_eq!(
+            (new[0].ref_start, new[0].ref_end, new[0].alt.clone()),
+            (old[0].ref_start, old[0].ref_end, old[0].alt.clone())
+        );
+    }
+
+    /// The spec's own worked example (`delins.md:44`, `LRG_199t1:c.850_901`)
+    /// must stay one member. This is the case that discriminates counting
+    /// unchanged bases from comparing event offsets.
+    #[test]
+    fn sequence_first_split_keeps_the_spec_delins_example_whole() {
+        let reference = b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT";
+        let result = b"TTCCTCGATGCCTG";
+        let pieces = partition_block_sequence_first(reference, result)
+            .expect("the spec example must partition");
+        assert_eq!(pieces.len(), 1, "spec requires one delins, got {pieces:?}");
+        assert_eq!((pieces[0].ref_start, pieces[0].ref_end), (0, 52));
+    }
+
+    /// Every piece the new splitter emits must reconstruct the result block
+    /// exactly. A split that does not round-trip denotes a different variant.
+    #[test]
+    fn sequence_first_split_round_trips_every_block_it_accepts() {
+        fn words(len: u32) -> Vec<Vec<u8>> {
+            if len == 0 {
+                return vec![Vec::new()];
+            }
+            let mut out = Vec::new();
+            for shorter in words(len - 1) {
+                for base in *b"AC" {
+                    let mut w = shorter.clone();
+                    w.push(base);
+                    out.push(w);
+                }
+            }
+            out
+        }
+        let all: Vec<Vec<u8>> = (0..=5u32).flat_map(words).collect();
+        for reference in &all {
+            for result in &all {
+                let Some(pieces) = partition_block_sequence_first(reference, result) else {
+                    continue;
+                };
+                let mut rebuilt = Vec::new();
+                let mut cursor = 0usize;
+                for piece in &pieces {
+                    rebuilt.extend_from_slice(&reference[cursor..piece.ref_start]);
+                    rebuilt.extend_from_slice(&piece.alt);
+                    cursor = piece.ref_end;
+                }
+                rebuilt.extend_from_slice(&reference[cursor..]);
+                assert_eq!(
+                    rebuilt,
+                    *result,
+                    "{} -> {} rebuilt as {}",
+                    String::from_utf8_lossy(reference),
+                    String::from_utf8_lossy(result),
+                    String::from_utf8_lossy(&rebuilt)
+                );
+            }
+        }
+    }
+
+    /// Pieces must be disjoint and ascending — the property that makes the
+    /// overlap and ordering repair passes unnecessary.
+    #[test]
+    fn sequence_first_split_emits_disjoint_ascending_pieces() {
+        let reference = b"ACGTACGTACGTACGT";
+        let result = b"ATGTACGTACGTACTT";
+        let pieces = partition_block_sequence_first(reference, result).expect("must partition");
+        for pair in pieces.windows(2) {
+            assert!(
+                pair[0].ref_end <= pair[1].ref_start,
+                "pieces overlap or are out of order: {pieces:?}"
+            );
+        }
     }
 
     fn flip_base(base: u8) -> u8 {
