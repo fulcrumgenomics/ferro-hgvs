@@ -58,10 +58,10 @@
 //!   used to carry a second one citing them — a filter excluding two insertions
 //!   at adjacent gaps — which #1294 removed after re-measuring: neither #1260
 //!   nor #1262 is about overlapping members, so the citation did not describe
-//!   the shape it was excluding. What that shape actually hits is #1301.
+//!   the shape it was excluding. What that shape hit was #1301, now fixed.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
 //!   because it finds #1297, a cancelled member left as an identity member
-//!   overlapping the repeat that absorbed it. It found #1286, #1287, #1290,
+//!   overlapping the repeat that absorbed it, and #1304 behind it. It found #1286, #1287, #1290,
 //!   #1292 and #1296 first, all now fixed, each masked behind the one before
 //!   it; see its doc comment for the history and the live reproduction.
 //!
@@ -807,10 +807,10 @@ proptest! {
     /// on would make a green CI a matter of the budget rather than of the
     /// property holding.
     ///
-    /// **#1301** is behind it, and reachable at the first generated case since
-    /// #1294 dropped the adjacent-gap-insertion filter from the strategy: two
-    /// insertions at adjacent gaps reach a duplication and an insertion that
-    /// denote the right bases but overlap and are rendered out of order.
+    /// **#1304** is behind it: two insertions at adjacent gaps plus a deletion
+    /// denote the wrong bases, silently. It became reachable once #1301 fixed
+    /// the ordering of two members sharing a span, which is what that shape used
+    /// to fail on first.
     ///
     /// Expect the reported minimal case to name that shape rather than #1297's.
     /// #1297's seed is the one that fails, but with the filter gone its shrink
