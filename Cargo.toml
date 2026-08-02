@@ -355,3 +355,10 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.flate2]
 opt-level = 3
+
+[profile.soak]
+inherits = "test"
+opt-level = 3
+debug = false
+debug-assertions = true
+overflow-checks = true

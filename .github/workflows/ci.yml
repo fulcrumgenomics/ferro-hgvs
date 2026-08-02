@@ -21,6 +21,26 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # The three exhaustive-sweep modules, owned by the `sweeps` job and excluded
+  # from the `test` / `test-oracle` partitions. Defined once here because the
+  # filter has to appear identically in three places and GitHub Actions has no
+  # YAML anchors — a copy that drifts would either double-run a sweep or, far
+  # worse, drop one from CI entirely.
+  #
+  # The invariant to preserve is that the two selections PARTITION the suite —
+  # the absolute counts drift as tests are added, the sum must not. Verified
+  # against this base: `not test(proptest)` selects 8908, adding
+  # `and not (SWEEP_FILTER)` selects 8878, and the filter itself selects the
+  # remaining 30. 8878 + 30 == 8908, so nothing falls between the two jobs and
+  # nothing is run twice.
+  #
+  # `sweeps`, the one job that selects ON this filter rather than against it,
+  # passes `--no-tests=fail`. So a rename that made the filter match nothing
+  # reddens CI there instead of quietly emptying that job — while `test` and
+  # `test-oracle`, which negate it, would just widen by 30 tests.
+  SWEEP_FILTER: >-
+    test(cis_junction_crossing_shift) + test(repeat_span_sibling_overlap)
+    + test(issue_1254_sibling_crossing_shift)
 
 jobs:
   abi3-floor-consistency:
@@ -201,9 +221,79 @@ jobs:
             ${{ runner.os }}-cargo-
       - run: cargo clippy --all-features --all-targets -- -D warnings
 
-  # Build the test binaries and the two generated spec artifacts ONCE, then fan
-  # out: every downstream job consumes this job's `nextest archive`, so the
-  # crate compiles a single time no matter how many shards run.
+  # The two generated spec artifacts, split out of `test-build`.
+  #
+  # These ran as the first two steps of `test-build`, which serialized ~52s of
+  # generation ahead of the ~105s archive compile inside one job. They share
+  # nothing with the archive but the library crate: the generators are `[[bin]]`
+  # targets that read the spec submodule at RUNTIME, and what they emit is a
+  # pair of JSON files the shards download. Running them concurrently with the
+  # archive build takes that serialization off the critical path.
+  #
+  # Generation is itself the gate on the curated overrides — plain generation,
+  # not `--check` — so this job failing means the overrides no longer resolve
+  # against the spec checkout. That signal is now its own job rather than
+  # buried in a build.
+  spec-fixtures:
+    name: Spec fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          # No `lfs: true`. The only LFS-tracked paths are
+          # `tests/fixtures/bulk/*.gz` and
+          # `tests/fixtures/validation/*_exhaustive.json.gz` (.gitattributes),
+          # 149 MB read at test RUNTIME by the bulk-fixture and exhaustive
+          # suites. Nothing here reads them: no `include_str!`/`include_bytes!`
+          # names a path under those directories, and this job only compiles.
+          # Required here, and ONLY here: the generators harvest HGVS strings
+          # from the vendored spec checkout at runtime.
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          # Hashed on this workflow file as well as the lockfile, for the reason
+          # spelled out on `test-build`: `actions/cache` SKIPS the save on an
+          # exact key hit, so a lockfile-only key freezes `target/` at whatever
+          # the first run for that lockfile produced and no later change to
+          # this job's build flags can refresh it.
+          #
+          # Suffix BEFORE the hash, so `restore-keys` is a genuine prefix of
+          # `key` — see the note on `test-build` for why the other order cannot
+          # fire.
+          key: ${{ runner.os }}-cargo-specgen-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-specgen-
+      - name: Generate HGVS v21.0 spec fixture
+        run: cargo run --features dev --bin generate_spec_fixture
+      - name: Generate HGVS spec test enumeration
+        run: cargo run --features dev --bin generate_spec_enumeration
+      # Only the fixtures are published from here. The two generator binaries
+      # `spec_generator_preconditions` executes need no staging: they are
+      # `[[bin]]` targets, so `test-build`'s archive already carries them and
+      # the shards extract them into place — see the note on that job.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: spec-fixtures
+          path: |
+            tests/fixtures/grammar/hgvs_spec_normalization.json
+            tests/fixtures/grammar/hgvs_spec_enumeration.json
+          retention-days: 1
+
+  # Build the test binaries ONCE, then fan out: `test` and `test-oracle` consume
+  # this job's `nextest archive`, so the crate compiles a single time no matter
+  # how many shards run. (The two generated spec artifacts moved to
+  # `spec-fixtures` above; the soak and sweeps run from the optimized archive
+  # `test-build-soak` produces, not this one.)
   #
   # `--extract-to . --extract-overwrite` in the consumers is load-bearing, not
   # tidiness. 26 call sites across 10 test files resolve the CLI binary with
@@ -216,6 +306,20 @@ jobs:
   # exactly where those baked paths point. Verified locally by hiding
   # `target/debug/ferro` to reproduce the shard's condition: default extraction
   # gave 6 failures, `--extract-to .` gave 6 passes.
+  #
+  # The same mechanism is why the shards need nothing staged for
+  # `spec_generator_preconditions`, which resolves the two spec generators with
+  # `env!("CARGO_BIN_EXE_generate_spec_{fixture,enumeration}")`. A nextest
+  # archive packs every non-test binary the build produced, not just the test
+  # binaries, and both generators are `[[bin]]` targets that `--features dev`
+  # builds. Verified with the archive command below: it packs
+  # `target/debug/generate_spec_fixture` and
+  # `target/debug/generate_spec_enumeration` alongside `target/debug/ferro`,
+  # all mode 755. Verified end to end too, by deleting both binaries and
+  # running that module from the archive — extraction restored them executable
+  # and all six tests passed. They were staged as a separate
+  # `generator-binaries` artifact until this was measured; `--extract-overwrite`
+  # replaced the downloaded copies before the tests ever read them.
   test-build:
     name: Build test archive
     runs-on: ubuntu-latest
@@ -231,13 +335,20 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          lfs: true
-          submodules: true
+          # No `lfs: true`. The only LFS-tracked paths are
+          # `tests/fixtures/bulk/*.gz` and
+          # `tests/fixtures/validation/*_exhaustive.json.gz` (.gitattributes),
+          # 149 MB read at test RUNTIME by the bulk-fixture and exhaustive
+          # suites. Nothing here reads them: no `include_str!`/`include_bytes!`
+          # names a path under those directories, and this job only compiles.
+          # No `submodules: true`. The spec checkout is read at generator
+          # RUNTIME, in the `spec-fixtures` job — nothing here reads it at
+          # compile time (verified: no `include_str!`/`include_bytes!` under
+          # `src/` or `tests/` names a path below `assets/`).
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           toolchain: stable
-      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: |
@@ -246,47 +357,140 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
+          # Hashed on this workflow file as well as the lockfile, and given a
+          # suffix distinct from `generated-docs`. Two separate bugs met here.
+          #
+          # `actions/cache` skips the save on an exact key hit, so a
+          # lockfile-only key can never refresh once written. And this key was
+          # SHARED with `generated-docs`, which builds in the dev profile,
+          # while this job builds in the test profile where
+          # `CARGO_PROFILE_TEST_DEBUG=0` re-fingerprints every dependency. The
+          # frozen cache therefore satisfied that job and was useless to this
+          # one: measured on run 30684270515, `generated-docs` compiled 3
+          # crates and this job compiled 316 — the entire tree from
+          # `proc-macro2` up — on every single run.
+          #
+          # The job suffix comes BEFORE the hash on purpose. `restore-keys` is
+          # matched as a PREFIX of a saved key and nothing else, so the
+          # hash-in-the-middle form cannot work once the two keys hash
+          # different file sets: `hashFiles('**/Cargo.lock')` and
+          # `hashFiles('**/Cargo.lock', '.github/workflows/ci.yml')` are
+          # different digests, so `...-<lock-hash>-test-archive` is not a
+          # prefix of `...-<lock+workflow-hash>-test-archive` and never
+          # matches. Measured on run 30712837408: this job restored via the
+          # legacy `...-test-nodebug` restore-key — 520087453 B, byte-identical
+          # to what `generated-docs` restored from the same entry, which is the
+          # cross-job sharing the comment above says was fixed — then saved to
+          # `...-test-archive`, a key its own restore-key can never reach. Once
+          # the legacy entry ages out (nothing writes it now), every workflow
+          # edit would compile all 316 crates cold, forever.
+          #
+          # Suffix-first makes the restore-key a real prefix, so a workflow
+          # edit warm-starts from this job's own last good `target/` and
+          # rebuilds only what changed. Expect one cold build on the first run
+          # after this lands, then warm.
+          key: ${{ runner.os }}-cargo-test-archive-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
-      - name: Generate HGVS v21.0 spec fixture
-        # Gitignored generated artifact, not committed. Generating it here also
-        # validates the curated overrides file — the guard the old `--check`
-        # step provided. Shipped to the shards as an artifact so they never
-        # regenerate it (and so they need no spec submodule).
-        run: cargo run --features dev --bin generate_spec_fixture
-      - name: Generate HGVS spec test enumeration
-        run: cargo run --features dev --bin generate_spec_enumeration
+            ${{ runner.os }}-cargo-test-archive-
+      # AFTER the cache restore, deliberately. `~/.cargo/bin/` is one of the
+      # cached paths, so a restore running second would extract a
+      # previously-saved `cargo-nextest` over the one just installed and pin
+      # this job to whichever version first populated the key. The job that
+      # writes an archive and the jobs that read it have to agree on the
+      # nextest version, so let the install win.
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - name: Build test archive
         # Compiles every test binary and packs them with their run metadata.
         run: cargo nextest archive --features dev --archive-file nextest.tar.zst
-      - name: Stage the generator binaries for the shards
-        # `spec_generator_preconditions` executes these two binaries. They are
-        # `required-features = ["dev"]` bin targets, and the shards run from the
-        # nextest archive with no build state, so they must not shell out to
-        # cargo. Both were already built and run by the generate steps above, so
-        # ship them alongside the archive. As `[[bin]]` targets they land in
-        # `target/debug/`, not `target/debug/examples/`.
-        run: |
-          mkdir -p staged-generators
-          cp target/debug/generate_spec_fixture \
-             target/debug/generate_spec_enumeration staged-generators/
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: nextest-archive
           path: nextest.tar.zst
           retention-days: 1
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+
+  # A SECOND archive, built at `opt-level = 3`, for the soak shards only.
+  #
+  # The soak is compute-bound in a way the other jobs are not: eight shards each
+  # run 125,000 proptest cases, so a constant factor on the code under test is
+  # multiplied a million times over. Measured locally at 5,000 cases, one
+  # confluence property costs 1.90s of user CPU in the test profile against
+  # 0.355s under this one — 5.4x. The other jobs run each test once and would
+  # only pay the longer compile.
+  #
+  # Only the `it` binary is built (`--test it`): every test the soak selects
+  # with `-E 'test(proptest)'` lives there, so compiling the rest of the test
+  # targets at `opt-level = 3` would be pure cost.
+  #
+  # `debug-assertions` and `overflow-checks` stay ON in the profile (see
+  # Cargo.toml) so this buys speed without quietly weakening what the soak
+  # checks — the `#[cfg(debug_assertions)]` oracles and every `debug_assert!`
+  # in the normalizer behave exactly as they do under the test profile.
+  test-build-soak:
+    name: Build soak archive (optimized)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          name: generator-binaries
-          path: staged-generators/
-          retention-days: 1
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+          # No `lfs: true`. The only LFS-tracked paths are
+          # `tests/fixtures/bulk/*.gz` and
+          # `tests/fixtures/validation/*_exhaustive.json.gz` (.gitattributes),
+          # 149 MB read at test RUNTIME by the bulk-fixture and exhaustive
+          # suites. Nothing here reads them: no `include_str!`/`include_bytes!`
+          # names a path under those directories, and this job only compiles.
+          # No `submodules: true` either, for the same reason as `test-build`:
+          # the spec checkout is read at generator RUNTIME, in `spec-fixtures`.
+          # `cargo nextest archive --test it` compiles and packs targets, and
+          # nothing under `src/` or `tests/` names a path below `assets/` at
+          # compile time.
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
-          name: spec-fixtures
+          toolchain: stable
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
           path: |
-            tests/fixtures/grammar/hgvs_spec_normalization.json
-            tests/fixtures/grammar/hgvs_spec_enumeration.json
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          # Keyed on the workflow file as well as the lockfile. `actions/cache`
+          # SKIPS the save on an exact key hit ("Cache hit occurred on the
+          # primary key ..., not saving cache"), so a key derived from
+          # `Cargo.lock` alone freezes `target/` at whatever the first run for
+          # that lockfile produced. Measured directly: after this job dropped
+          # `--features dev`, the restored cache still held the dev-feature
+          # artifacts, so every run re-compiled reqwest, hyper, criterion and
+          # the rest at opt-level 3 — about 60s, repeated forever rather than
+          # paid once. The build flags live in this file, so hashing it makes
+          # the cache follow them.
+          #
+          # Suffix before the hash so `restore-keys` is a real prefix of `key`
+          # — see `test-build`.
+          key: ${{ runner.os }}-cargo-soak-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-soak-
+      # AFTER the cache restore — see the same note on `test-build`. The cache
+      # covers `~/.cargo/bin/`, so restoring second would overwrite the
+      # `cargo-nextest` installed here with a stale cached copy, and this job
+      # writes the archive that `soak` and `sweeps` read.
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      - name: Build soak archive
+        # No `--features dev`. That feature pulls in `web-service` (axum, tokio,
+        # tower, tracing) and `benchmark` (reqwest, rusqlite, tokio-postgres,
+        # futures) — an entire dependency tree compiled at `opt-level = 3` to
+        # produce one test binary that never touches any of it. `tests/it`
+        # gates only 2 of its ~360 modules on the feature and neither the soak
+        # nor the sweeps selects one, so the selections are unchanged: verified
+        # by listing both under each feature set, `test(proptest)` resolves to
+        # 10 tests either way and the sweep filter to 29.
+        run: |
+          cargo nextest archive --cargo-profile soak --test it \
+            --archive-file nextest-soak.tar.zst
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: nextest-archive-soak
+          path: nextest-soak.tar.zst
           retention-days: 1
 
   # The suite, split across shards. `--partition hash:K/N` assigns each test to
@@ -295,7 +499,7 @@ jobs:
   # 2148 / 2181 / 2162 / 2155 across four shards.
   test:
     name: Test (${{ matrix.shard }}/6)
-    needs: test-build
+    needs: [test-build, spec-fixtures]
     runs-on: ubuntu-latest
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -316,13 +520,6 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: generator-binaries
-          path: target/debug/
-      - name: Restore the executable bit on the staged generators
-        # Artifact upload does not preserve the executable bit.
-        run: chmod +x target/debug/generate_spec_fixture target/debug/generate_spec_enumeration
       - name: "Note: reference-aware tests are skipped without a manifest"
         # `tests/mutalyzer_normalize_tests.rs` and the biocommons reference-aware
         # suite both silently no-op when `FERRO_MANIFEST` is unset (PR CI does
@@ -332,23 +529,20 @@ jobs:
         run: |
           echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip. The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest."
       - name: Run Rust tests (shard ${{ matrix.shard }} of 6)
-        # Builds in-shard rather than consuming the archive — see the note on
-        # `test-build` for why the archive is soak-only.
+        # Consumes the standard archive `test-build` produces — see the note
+        # there for why `--extract-to .` is load-bearing. Only the optimized
+        # archive from `test-build-soak` is reserved for `soak` and `sweeps`.
         #
         # Proptests are excluded here and owned entirely by the `soak` job,
         # which runs them at 125k cases per shard instead of 12k. Leaving them
         # in would run the same properties twice at strictly lower depth AND
         # wreck shard balance: measured locally, the shard holding them took
         # 66.6s against 8.8-13.5s for its siblings.
-        env:
-          # The staged binaries above are current by construction (built and run
-          # by `test-build` from this same commit), so the tests must use them
-          # rather than shelling out to cargo, which has no build state here.
-          FERRO_PREBUILT_EXAMPLES: "1"
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
-            --partition hash:${{ matrix.shard }}/6 -E 'not test(proptest)'
+            --partition hash:${{ matrix.shard }}/6 \
+            -E "not test(proptest) and not ($SWEEP_FILTER)"
 
   # The idempotency oracle re-run. Deliberately EXCLUDES the proptest modules:
   # their own property already *is* `norm(norm(x)) == norm(x)`, which is exactly
@@ -356,15 +550,15 @@ jobs:
   # nothing the plain run did not already check — it just cost ~80s of every CI
   # run. The deep random coverage lives in the `soak` job below instead.
   test-oracle:
-    name: Test oracle (${{ matrix.shard }}/2)
-    needs: test-build
+    name: Test oracle (${{ matrix.shard }}/3)
+    needs: [test-build, spec-fixtures]
     runs-on: ubuntu-latest
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
@@ -378,13 +572,6 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: generator-binaries
-          path: target/debug/
-      - name: Restore the executable bit on the staged generators
-        # Artifact upload does not preserve the executable bit.
-        run: chmod +x target/debug/generate_spec_fixture target/debug/generate_spec_enumeration
       - name: Run Rust tests with the normalization self-checks
         # `FERRO_ASSERT_IDEMPOTENT` turns every reference-backed test into an
         # assertion that `norm(norm(x)) == norm(x)`. The gate is
@@ -405,11 +592,11 @@ jobs:
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
-          FERRO_PREBUILT_EXAMPLES: "1"
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
-            --partition hash:${{ matrix.shard }}/2 -E 'not test(proptest)'
+            --partition hash:${{ matrix.shard }}/3 \
+            -E "not test(proptest) and not ($SWEEP_FILTER)"
 
   # 1,000,000-case idempotency soak on every PR, split 8 ways.
   #
@@ -437,7 +624,13 @@ jobs:
   # new territory still gets explored — it just reports instead of blocking.
   soak:
     name: Idempotency soak (${{ matrix.shard }}/8)
-    needs: test-build
+    # Only the optimized archive, NOT `test-build`. Every test the selection
+    # below reaches lives in `tests/it/{cis_allele_confluence,
+    # normalize_idempotency}_proptest.rs`, and neither reads the generated spec
+    # fixture or shells out to the staged generators — so the shards need
+    # neither of those artifacts, and waiting on the job that produces them
+    # would put the dev-profile compile back on the soak's critical path.
+    needs: test-build-soak
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -457,7 +650,11 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          lfs: true
+          # No `lfs: true`. The 149 MB of LFS fixtures
+          # (`tests/fixtures/bulk/*.gz`,
+          # `tests/fixtures/validation/*_exhaustive.json.gz`) are read only by
+          # the bulk-fixture and exhaustive suites, which this job never
+          # selects — verified against every module it runs.
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       # Safe to run from the archive: this job runs ONLY the proptest modules,
@@ -465,18 +662,7 @@ jobs:
       # `CARGO_BIN_EXE_ferro` paths that break the other shards are never read.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
         with:
-          name: nextest-archive
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: spec-fixtures
-          path: tests/fixtures/grammar/
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
-        with:
-          name: generator-binaries
-          path: target/debug/
-      - name: Restore the executable bit on the staged generators
-        # Artifact upload does not preserve the executable bit.
-        run: chmod +x target/debug/generate_spec_fixture target/debug/generate_spec_enumeration
+          name: nextest-archive-soak
       - name: Soak 125k cases (seed ${{ matrix.seed }})
         env:
           # 8 shards x 125k = 1,000,000 cases per property.
@@ -486,10 +672,74 @@ jobs:
           # draws, so proptest's absolute 65_536 local-reject cap aborts a long
           # run with "Too many local rejects" — a harness quota, not a failure.
           PROPTEST_MAX_LOCAL_REJECTS: "1000000"
-          FERRO_PREBUILT_EXAMPLES: "1"
+        # `--no-tests=fail` pins what nextest's default `auto` already does
+        # (verified: a filter matching nothing exits 4, "error: no tests to
+        # run"). Stated explicitly because this job's entire value is the
+        # `test(proptest)` selection: `auto` is documented as "automatically
+        # determine behavior", and a job that runs a million cases must not be
+        # one default-change or one profile setting away from a green no-op.
         run: |
-          cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
-            --extract-to . --extract-overwrite -E 'test(proptest)'
+          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+            --extract-to . --extract-overwrite --no-tests=fail -E 'test(proptest)'
+
+  # The three exhaustive-sweep modules, moved off the `test` / `test-oracle`
+  # partitions and onto the optimized archive.
+  #
+  # These were the whole workflow's critical path. `--partition hash:K/N` splits
+  # by a hash of the test NAME, which balances shards by count and is blind to
+  # cost — and all three sweeps happened to hash into the same shard. Measured
+  # on run 30681684032, with everything else in those jobs under 4s:
+  #
+  #                                            Test (3/6)   Test oracle (1/2)
+  #   cis_junction_crossing_shift                    118s                183s
+  #   repeat_span_sibling_overlap                     66s                121s
+  #   issue_1254_sibling_crossing_shift               30s                 78s
+  #
+  # They are exhaustive cross-products — the first is a six-deep nest of roughly
+  # 276,000 cases — so they are compute-bound in exactly the way the soak is,
+  # and they benefit from the optimized archive even more (user CPU, oracles on,
+  # 3 reps, spread under 2%):
+  #
+  #   cis_junction_crossing_shift        71.06s -> 8.55s   8.3x
+  #   repeat_span_sibling_overlap        40.44s -> 5.29s   7.6x
+  #   issue_1254_sibling_crossing_shift  20.14s -> 2.32s   8.7x
+  #
+  # They cost nothing extra to build: all three live in `tests/it/`, so they are
+  # already inside the archive `test-build-soak` produces for the soak.
+  #
+  # Running them ONLY here, with both oracles on, loses no coverage. The oracles
+  # add assertions at `normalize_core_checked`'s exit and change no behaviour, so
+  # an oracle-on run strictly subsumes the oracle-off one the `test` shards were
+  # doing. Verified archive-safe the same way the soak is: none of the three
+  # modules, nor `common::cis_apply_oracle`, reads `CARGO_BIN_EXE_ferro`.
+  sweeps:
+    name: Exhaustive sweeps
+    needs: test-build-soak
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          # No `lfs: true`. The 149 MB of LFS fixtures
+          # (`tests/fixtures/bulk/*.gz`,
+          # `tests/fixtures/validation/*_exhaustive.json.gz`) are read only by
+          # the bulk-fixture and exhaustive suites, which this job never
+          # selects — verified against every module it runs.
+          persist-credentials: false
+      - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: nextest-archive-soak
+      - name: Run the exhaustive sweeps with the normalization self-checks
+        env:
+          FERRO_ASSERT_IDEMPOTENT: "1"
+          FERRO_ASSERT_REPARSE: "1"
+        # `--no-tests=fail` for the reason spelled out on `soak`, and it matters
+        # more here: `SWEEP_FILTER` names three modules explicitly, so renaming
+        # one is exactly the edit that would drop a sweep from CI silently.
+        run: |
+          cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
+            --extract-to . --extract-overwrite --no-tests=fail \
+            -E "$SWEEP_FILTER"
 
   # The generated-doc `--check` gates. Split out of the old monolithic Test job
   # so they no longer sit behind the whole suite on the critical path.
@@ -501,7 +751,15 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          lfs: true
+          # No `lfs: true`. The repo has exactly four LFS files
+          # (`git lfs ls-files`): two under `tests/fixtures/bulk/` and two
+          # under `tests/fixtures/validation/`, 149 MB in total. Every
+          # reference to them lives in `benches/benchmarks.rs` and five
+          # `tests/it/*` modules, and `cargo run --example` compiles neither
+          # `tests/` nor `benches/`. Nothing under `examples/` names them or
+          # has a compile-time include at all, and none of the eight paths
+          # the three generators actually read is LFS-tracked (checked with
+          # `git check-attr filter`).
           submodules: true
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
@@ -515,9 +773,16 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
+          # Its own key AND its own restore-key, neither shared with
+          # `test-build` — see there. This job builds examples in the dev
+          # profile; that one builds test binaries with different debug
+          # settings, and one cache cannot serve both. Splitting only the
+          # primary key was not enough: both jobs kept the legacy
+          # `...-test-nodebug` restore-key and so kept restoring the same
+          # shared entry (run 30712837408, 520087453 B in both).
+          key: ${{ runner.os }}-cargo-gendocs-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-test-nodebug
+            ${{ runner.os }}-cargo-gendocs-
       - name: Verify conformance summary docs are up to date
         run: cargo run --features dev --example generate_conformance_summary -- --check
       - name: Tool-support tables up to date
@@ -540,7 +805,7 @@ jobs:
   test-required:
     name: Test
     runs-on: ubuntu-latest
-    needs: [test, test-oracle, soak, generated-docs]
+    needs: [test, test-oracle, soak, sweeps, generated-docs]
     # `always()` so a failed or cancelled dependency still reports a conclusion
     # rather than leaving the required context pending forever.
     if: always()
@@ -550,10 +815,12 @@ jobs:
           echo "test            = ${{ needs.test.result }}"
           echo "test-oracle     = ${{ needs.test-oracle.result }}"
           echo "soak            = ${{ needs.soak.result }}"
+          echo "sweeps          = ${{ needs.sweeps.result }}"
           echo "generated-docs  = ${{ needs.generated-docs.result }}"
           if [ "${{ needs.test.result }}" != "success" ] \
             || [ "${{ needs.test-oracle.result }}" != "success" ] \
             || [ "${{ needs.soak.result }}" != "success" ] \
+            || [ "${{ needs.sweeps.result }}" != "success" ] \
             || [ "${{ needs.generated-docs.result }}" != "success" ]; then
             echo "::error::one or more test jobs did not succeed"
             exit 1
