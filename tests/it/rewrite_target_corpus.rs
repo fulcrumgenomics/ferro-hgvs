@@ -18,8 +18,9 @@
 //! Three forms:
 //!
 //! - *Confluence* (#1260, #1262): two spellings of one variant must reach the same
-//!   normalized string. They don't, today. `the_two_confluence_targets_still_diverge`
-//!   asserts they still don't. `every_confluence_target_denotes_one_variant` is **not**
+//!   normalized string. #1260 now does; #1262 does not.
+//!   `the_confluence_targets_converge_only_for_1260` pins both facts.
+//!   `every_confluence_target_denotes_one_variant` is **not**
 //!   itself a pinned failure — it is a sanity guard on this file's own rows (both
 //!   spellings really are the same variant, checked by `cis_apply_oracle::apply`,
 //!   independent of the normalizer under test) and it keeps passing after the rewrite
@@ -31,8 +32,11 @@
 //!   sequence at all (#1325) because its members now overlap and the independent applier
 //!   declines to splice them.
 //! - *Boundary-validity* (#1274): normalizing must not name a position past the contig's
-//!   end. It does, today. `a_cancelling_edit_at_the_contig_end_still_emits_an_out_of_bounds_span`
-//!   asserts the normalized output's highest position number exceeds the contig length.
+//!   end. **Fixed** — by #1327's terminal re-spelling, which lands the repair's junction
+//!   inside the sequence instead of one past it. Flipped from a pinned failure to a
+//!   positive pin, `a_cancelling_edit_at_the_contig_end_stays_inside_the_contig`, per this
+//!   file's own contract: when the assertion goes red, the case moves out of the target
+//!   list rather than being silenced.
 //!
 //! Apart from the guard noted above, every test here is a **pinned failure**, not a
 //! `#[ignore]`d one: it currently passes *because* it asserts the defect reproduces. The
@@ -237,16 +241,29 @@ fn every_confluence_target_denotes_one_variant() {
     }
 }
 
-/// #1260 and #1262: pinned as *currently diverging*. Fixing either fails this test loudly.
+/// #1260 has **converged**; #1262 has not.
+///
+/// #1260's row is now a positive pin: both spellings reach the split form named by
+/// PR #1285, which the two-gap alignment made expressible. #1262's row stays pinned as
+/// diverging, and fixing it fails this test loudly — that is still the point of the
+/// corpus.
 #[test]
-fn the_two_confluence_targets_still_diverge() {
+fn the_confluence_targets_converge_only_for_1260() {
     for (issue, core, a, b) in CONFLUENCE_TARGETS {
         let seq = padded(core);
         let (norm_a, norm_b) = (normalize(&seq, a), normalize(&seq, b));
+        if *issue == "#1260" {
+            assert_eq!(norm_a, norm_b, "{issue}: `{a}` and `{b}` must converge");
+            assert_eq!(
+                norm_a, "TEMPLATE:g.[258_259insC;259_260insC]",
+                "{issue}: and they converge on the split form, not the spanning delins"
+            );
+            continue;
+        }
         assert_ne!(
             norm_a, norm_b,
             "{issue} appears fixed — `{a}` and `{b}` now both normalize to `{norm_a}`. \
-             Move this case out of the PARTITION target list and delete this test."
+             Move this case out of the PARTITION target list and give it a positive pin."
         );
     }
 }
@@ -318,27 +335,40 @@ fn max_hgvs_position(output: &str) -> u64 {
         .unwrap_or(0)
 }
 
-/// #1274: an insertion and a deletion that cancel exactly at a contig's last base still
-/// normalize to a coordinate one past the end of the contig (`g.10_11=` on a 10-base
-/// contig), because a repair pass derives a span for the (correctly empty) residue
-/// independently of the contig's actual length. Sequence-first cancellation would apply
-/// the allele, get back the reference unchanged, align with zero changed columns, and have
-/// no block left to render a span for at all — so this is read as PARTITION,
-/// likely-fixed-incidentally, not a coordinate-layer bug the rewrite has no reason to touch.
+/// #1274, **fixed**: an insertion and a deletion that cancel exactly at a contig's last
+/// base used to normalize to a coordinate one past the end (`g.10_11=` on a 10-base
+/// contig), because a repair pass derived a span for the (correctly empty) residue
+/// independently of the contig's actual length.
 ///
-/// The independent applier does not catch this one the way it catches #1325: an `=` edit's
-/// SPDI triple does not exercise the same out-of-bounds check a deletion's does, so
-/// `apply()` happily returns the (correct) reference back. The defect is purely that the
-/// stated span names a position the contig does not have, so that is what's asserted.
+/// #1327's terminal re-spelling closed it — the repair's landing junction is now expressed
+/// through the boundary identity at the last base rather than at the junction past it — and
+/// this file's contract says a case that goes green moves out of the target list. So the
+/// assertion is inverted rather than deleted: the boundary-validity property is worth a
+/// standing guard, and inverting keeps the reproducer that found the defect attached to it.
+///
+/// Two things are asserted, because the position bound alone is weak. The independent
+/// applier never caught this one the way it catches #1325 — an `=` edit's SPDI triple does
+/// not exercise the out-of-bounds check a deletion's does, so `apply()` happily returned the
+/// (correct) reference — which is exactly why "stays in range" needs pairing with "still
+/// denotes the reference", or a fix that clamped the span while corrupting the sequence
+/// would pass.
 #[test]
-fn a_cancelling_edit_at_the_contig_end_still_emits_an_out_of_bounds_span() {
+fn a_cancelling_edit_at_the_contig_end_stays_inside_the_contig() {
     let seq = "ACGTACGTAA";
-    let actual = normalize(seq, "TEMPLATE:g.[8_9insA;10del]");
+    let input = "TEMPLATE:g.[8_9insA;10del]";
+    let actual = normalize(seq, input);
     let max_pos = max_hgvs_position(&actual);
     assert!(
-        max_pos > seq.len() as u64,
-        "#1274 appears fixed — `{actual}` no longer names a position past the {}-base \
-         contig. Move this case out of the PARTITION target list and delete this test.",
+        max_pos <= seq.len() as u64,
+        "`{input}` -> `{actual}` names position {max_pos}, past the {}-base contig (#1274)",
         seq.len()
+    );
+    // The pair cancels exactly, so the allele denotes the reference unchanged. Asserted
+    // through the independent applier, not by re-normalizing.
+    let want = apply(&padded(seq), input).expect("input applies");
+    let got = apply(&padded(seq), &actual).expect("output applies");
+    assert_eq!(
+        got, want,
+        "`{input}` -> `{actual}` changed the denoted sequence"
     );
 }

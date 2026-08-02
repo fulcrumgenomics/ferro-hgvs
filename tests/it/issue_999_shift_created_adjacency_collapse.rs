@@ -62,14 +62,26 @@ fn cis_insertion_shifted_adjacent_to_substitution_coalesces_to_delins() {
 fn cis_shift_created_adjacency_reaches_fixed_point_in_one_pass() {
     // #1000. `insCG` at 611_612 legitimately 3'-shifts to `insGC` at
     // 612_613 (ref[612]=C lets the dinucleotide roll one position; 613
-    // blocks a second roll), landing adjacent to `613C>A`. The collapse
-    // must fire on the *same* pass: inserted `GC` then substituted `A` at
-    // 613 -> `613delinsGCA`.
+    // blocks a second roll), landing adjacent to `613C>A`.
+    //
+    // Re-blessed with the two-gap alignment (#1260, PR #1285). The trimmed
+    // block is `C -> GCA`, which reads two ways: as *ins `GC`* plus *sub
+    // `C>A`* — adjacent, one member, 3 changed columns — or as *ins `G`*,
+    // retained `C`, *ins `A`* — separated by one unchanged base, two members,
+    // 2 changed columns. The second is more minimal and is what
+    // `general.md:34` licenses; the first is the reading that mirrors how the
+    // *input* happened to be spelled, which is the asymmetry this campaign is
+    // removing. It is also, base for base, #1260's `A -> CAC`.
+    //
+    // What #1000 asks for is a **fixed point in one pass**, not a particular
+    // form — and that still holds, which is why this is a re-bless and not a
+    // regression. `cis_shift_created_adjacency_is_idempotent` below asserts the
+    // invariant directly and is unchanged.
     let out = normalize(
         provider_with(600, "TGACTTCAGTCACCTGACTGACTG"),
         "NC_000001.11:g.[611_612insCG;613C>A]",
     );
-    assert_eq!(out, "NC_000001.11:g.613delinsGCA");
+    assert_eq!(out, "NC_000001.11:g.[612_613insG;613_614insA]");
 }
 
 #[test]

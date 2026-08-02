@@ -1603,7 +1603,48 @@ const MAX_UNGUARDED_SPLIT_BLOCK: usize = 32;
 
 /// Unchanged reference bases two pieces of a net insertion must be separated by
 /// before the split between them is believed. See `separations_are_meaningful`.
-const MIN_PIECE_SEPARATION: usize = 2;
+///
+/// `1`, per `general.md:34`: "two variants separated by one or more nucleotides
+/// should be described individually and **not** as a 'delins'". One base is one
+/// or more, so a split across one unchanged base is what the spec asks for, not
+/// something to disbelieve.
+///
+/// It was `2`, which granted every axis `general.md:35`'s exception — "separated
+/// by one nucleotide, **together affecting one amino acid**" — although that
+/// exception is doubly conditioned and cannot reach a genomic axis at all. The
+/// codon half is applied where it belongs, triplet-precisely, by
+/// `apply_coding_codon_exception` *after* partitioning; see
+/// [`MIN_SEPARATION_NO_FRAME`], which reached the same value from the same
+/// reading for the sequence-first splitter.
+///
+/// Lowering it is only safe alongside [`split_buys_no_higher_priority_type`]:
+/// #422 and #999's negative control are the *same shape* at this threshold —
+/// net insertion, one coincidentally matched interior base — and the type of
+/// the resulting members is the only thing that separates them.
+///
+/// It applies only to blocks no larger than
+/// [`MAX_SINGLE_BASE_SEPARATION_BLOCK`]; above that a single unchanged base is
+/// not believable and the threshold stays at 2.
+const MIN_PIECE_SEPARATION: usize = 1;
+
+/// Largest block, in bases, for which one unchanged base counts as separation.
+///
+/// A single matched base is evidence of structure in a short block and evidence
+/// of nothing in a long one, where a two- or three-base run recurs by chance.
+/// The Mutalyzer conformance corpus is what forces this: a 6 nt block replaced
+/// by a 21 nt payload (`NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC` and
+/// nine siblings) has interior bases that happen to match, and the oracle keeps
+/// it as one `delins`. Without a bound, a threshold of 1 shreds it into
+/// `g.[5207_5209delinsGTC;5211C>T;5213_5214insGCTCATTATCTGGCT]` — mixed member
+/// types, so [`split_buys_no_higher_priority_type`] does not reach it either.
+///
+/// **The value is under-determined and the bounds are what is measured.** The
+/// corpus constrains it only to `(4, 21]`: `#1260b`'s block is 4 nt and must
+/// split at one base, the Mutalyzer block is 21 nt and must not. Every value in
+/// between scores identically, so `8` is a choice inside a measured window, not
+/// a calibrated constant. Narrowing it needs a case in that gap, not a
+/// re-derivation.
+const MAX_SINGLE_BASE_SEPARATION_BLOCK: usize = 8;
 
 /// [`partition_block_sequence_first`]'s separation threshold on an axis with no
 /// reading frame (`g.`, `m.`, `n.`, and `r.` on a non-coding transcript).
@@ -2704,10 +2745,46 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     if pieces.is_empty() {
         return whole();
     }
-    if result.len() > reference.len() && !separations_are_meaningful(&pieces) {
+    if result.len() > reference.len()
+        && !separations_are_meaningful(&pieces, reference.len().max(result.len()))
+    {
+        return whole();
+    }
+    // Scoped to length-changing blocks: an equal-length block has no gap to
+    // place, so every matched base is a genuine coordinate-wise identity rather
+    // than an artefact of where the gap landed, and a split across one is real.
+    // `MAX_UNGUARDED_SPLIT_BLOCK`'s own doc draws the same line.
+    if reference.len() != result.len()
+        && pieces.len() > 1
+        && every_separation_is_a_single_base(&pieces)
+        && split_buys_no_higher_priority_type(&pieces, reference)
+    {
         return whole();
     }
     pieces
+}
+
+/// Whether every gap between consecutive pieces is a single unchanged base —
+/// the regime where a match is most likely to be coincidence rather than
+/// structure.
+///
+/// This is what keeps [`split_buys_no_higher_priority_type`] from overriding
+/// `general.md:34` outright. That rule — "two variants separated by one or more
+/// nucleotides should be described individually and **not** as a 'delins'" — is
+/// unambiguous once there is real distance between the members, and an
+/// all-`delins` split at, say, two unchanged bases is one the rule plainly
+/// wants: `AGAGT -> GAAGAG` divides into `AG>GA` and `T>AG` for 4 changed
+/// columns against the spanning form's 6, so collapsing it would be both less
+/// minimal and against the rule.
+///
+/// At exactly one base the two readings genuinely compete, which is why #422 is
+/// a *deliberately pinned* non-confluence rather than a plain bug, and why
+/// `delins.md:44-47` prefers the spanning form where a payload merely *aligns*.
+/// Restricting the collapse to that regime is what lets both rules stand.
+fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
+    pieces
+        .windows(2)
+        .all(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) <= 1)
 }
 
 /// Partition a changed block by deriving member boundaries from the **denoted
@@ -2838,10 +2915,94 @@ fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
 /// that fails when the bound is raised across the board. Extending this rule to
 /// cover them, and retiring that constant, is the principled fix and needs its
 /// own measurement pass.
-fn separations_are_meaningful(pieces: &[Piece]) -> bool {
+fn separations_are_meaningful(pieces: &[Piece], block_len: usize) -> bool {
+    // `ref_end` is exclusive and a pure insertion has `ref_start == ref_end`, so
+    // this already counts unchanged *bases* rather than event indices: a
+    // junction contributes no width because it occupies none. The sequence-first
+    // splitter had to be corrected for exactly this, because it works in event
+    // space where a junction and a changed position are both one offset.
+    let required = if block_len > MAX_SINGLE_BASE_SEPARATION_BLOCK {
+        2
+    } else {
+        MIN_PIECE_SEPARATION
+    };
     pieces
         .windows(2)
-        .all(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) >= MIN_PIECE_SEPARATION)
+        .all(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) >= required)
+}
+
+/// Whether a proposed split buys nothing over the spanning `delins` it came
+/// from — that is, whether **every** member would render as a `delins` too.
+///
+/// # This is ferro policy, not a spec rule
+///
+/// It is tempting to cite `general.md:56`'s prioritisation here, and an earlier
+/// revision of this comment did — claiming `delins` was "last" in it. That
+/// citation does not reach. The list is "(1) substitution, (2) deletion, (3)
+/// inversion, (4) duplication, (5) insertion", and `delins` is not in it at
+/// all. What it ranks is the type of *one description of one change*, which is
+/// how msto's #1231/#1233 use it — comparing two two-member descriptions
+/// member-wise. It never ranks a multi-member allele against a single spanning
+/// description.
+///
+/// What licenses the collapse is an analogy plus the corpus. `delins.md:44-47`
+/// keeps the spanning form where the payload merely *"aligns"* against a
+/// coincidentally matched interior base, and that is the shape of every corpus
+/// row required to stay whole. A split whose members are all `delins` buys no
+/// descriptive gain over the spanning `delins` it came from, so in the one
+/// regime where the matched base is least believable — a single unchanged base,
+/// see [`every_separation_is_a_single_base`] — this prefers the form the
+/// analogous spec case prefers. Stated as a policy choice inside a spec gap so
+/// it is not mistaken for a mandate.
+///
+/// This is what separates #422 from #999's negative control. The two are the
+/// same shape at [`MIN_PIECE_SEPARATION`] — a net insertion with one
+/// coincidentally matched interior base — and their split *member types* are the
+/// only difference: `delins` + `delins` for #422, `ins` + `sub` for #999.
+/// `issue_422_cross_reference_ins.rs` calls that conjunction impossible; it is
+/// not, and #1235's own comment asks for precisely this fix.
+///
+/// # Typing is block-local
+///
+/// `ins`, `del` and `sub` are structural. So are `dup` and repeat notations —
+/// they add or remove copies, so they arrive as insertions or deletions and are
+/// already excluded. `inv` is the one renderer type that hides inside a
+/// structural `delins`, and it is detectable from the member's own span:
+/// [`is_inversion`] does it, on [`reverse_complement_bytes`], which refuses a
+/// byte it cannot complement rather than passing it through. Nothing here needs
+/// the renderer, so the test runs on the trimmed block before rendering.
+///
+/// Measured over an exhaustive reverse-complement-closed sweep, omitting the
+/// `inv` and self-repeat cases would collapse 694 of 1 094 firings (`AT`, ≤7 nt)
+/// and 2 592 of 26 244 (`ACGT`, ≤5 nt) — so both are load-bearing, not defensive.
+fn split_buys_no_higher_priority_type(pieces: &[Piece], reference: &[u8]) -> bool {
+    pieces.iter().all(|piece| {
+        let span = piece.ref_end - piece.ref_start;
+        span > 0
+            && !piece.alt.is_empty()
+            && !(span == 1 && piece.alt.len() == 1)
+            && !is_inversion(piece, reference)
+            && !is_tandem_duplication(piece, reference)
+            && !alt_repeats_its_own_span(piece, reference)
+    })
+}
+
+/// A member whose payload is its own reference span repeated, which renders as
+/// a `dup` (two copies) or a repeat notation rather than a `delins`.
+///
+/// [`is_tandem_duplication`] covers the *insertion* spelling of a duplication,
+/// where the copy sits outside the member's span; this covers the `delins`
+/// spelling, where the member's span carries the copies itself. Both are
+/// block-local. Case-folded, because reference FASTAs arrive soft-masked.
+fn alt_repeats_its_own_span(piece: &Piece, reference: &[u8]) -> bool {
+    let span = &reference[piece.ref_start..piece.ref_end];
+    !span.is_empty()
+        && piece.alt.len() > span.len()
+        && piece.alt.len().is_multiple_of(span.len())
+        && piece
+            .alt
+            .chunks(span.len())
+            .all(|chunk| chunk.eq_ignore_ascii_case(span))
 }
 
 /// The alignment maximizing matched bases, ties broken by the 5'-most gap.
@@ -6913,6 +7074,64 @@ mod tests {
                     (None, Some(1)),
                     (Some(1), Some(2))
                 ])
+            );
+        }
+
+        #[test]
+        fn a_split_at_one_unchanged_base_is_admitted() {
+            // `general.md:34`: "two variants separated by one or more
+            // nucleotides should be described individually and not as a
+            // delins". One base is one or more. #1260's trimmed block reaches
+            // this only because the two-gap alignment can express it.
+            assert_eq!(
+                partition_block(b"A", b"CAC").len(),
+                2,
+                "#1260a: two insertions either side of the retained A"
+            );
+            assert_eq!(
+                partition_block(b"GC", b"CGA").len(),
+                2,
+                "#999-neg: the two-member count the corpus records as required"
+            );
+        }
+
+        #[test]
+        fn a_split_that_buys_no_higher_priority_type_collapses() {
+            // #422. The same shape as #999-neg — net insertion, one
+            // coincidentally matched interior base — but its split is two
+            // `delins` members, so it buys nothing `general.md:56` ranks above
+            // the spanning `delins` it came from. #1235's own comment asks for
+            // exactly this: a fix that resolves #422 and keeps #999 green.
+            assert_eq!(partition_block(b"CTATAG", b"AAACCCC").len(), 1);
+        }
+
+        #[test]
+        fn the_collapse_spares_an_equal_length_block() {
+            // `long-delins-40nt`: both members are `delins`, but the block is
+            // equal-length, so there is no gap to place and every matched base
+            // is a genuine coordinate-wise identity rather than a placement
+            // artefact. Collapsing here would lose a real two-member answer.
+            assert_eq!(
+                partition_block(
+                    b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT",
+                    b"CATGCATGCATGCATGCATTCATGCATGCATGCATGCATG"
+                )
+                .len(),
+                2
+            );
+        }
+
+        #[test]
+        fn the_collapse_spares_a_member_that_renders_as_inv_or_dup() {
+            // A structural `delins` can still render as an `inv` — the one
+            // renderer type that hides inside one — and `inv` outranks `delins`,
+            // so such a split is worth keeping. Measured: a naive all-`delins`
+            // test collapses 694 of 1094 firings over an exhaustive `AT` sweep.
+            let pieces = partition_block(b"AAAAA", b"TATT");
+            assert!(
+                pieces.len() > 1,
+                "a member that is the reverse complement of its own span must \
+                 not be collapsed away: {pieces:?}"
             );
         }
 
