@@ -28,6 +28,7 @@ pub mod config;
 pub(crate) mod merge;
 mod overlap;
 pub mod rules;
+pub(crate) mod seqfirst;
 pub mod shuffle;
 pub mod validate;
 
