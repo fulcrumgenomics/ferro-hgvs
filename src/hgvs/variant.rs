@@ -757,7 +757,14 @@ pub(crate) fn non_flanking_genomic_insertion_anchor(variant: &HgvsVariant) -> Op
     if start.special.is_some() || end.special.is_some() {
         return None;
     }
-    (end.base != start.base + 1).then_some((start.base, end.base))
+    // Asked as a subtraction on `end`, not `start.base + 1`: the parser accepts
+    // any `u64` position, so a `start` of `u64::MAX` overflows the addition on a
+    // pair whose answer is plainly "not flanking". That panics under
+    // `debug_assertions` and *wraps* in release, where `[profile.release]` sets
+    // no `overflow-checks` — so the panic is not what would surface it in the
+    // field. `checked_sub` returns `None` both there and for a reversed pair,
+    // and neither is flanking.
+    (end.base.checked_sub(start.base) != Some(1)).then_some((start.base, end.base))
 }
 
 impl AlleleVariant {
@@ -1237,14 +1244,31 @@ pub(crate) fn cis_member_order_key(
 /// and so ranks with the 3' end: a member that adds at a span's start must sort
 /// before one that acts across the same span.
 ///
-/// **Nucleotide axes only.** A protein member reaches the same tie —
-/// `cis_member_range` gives it a real range, and `sort_cis_members_by_genomic_order`
-/// is axis-agnostic — so `p.[Gly4_Ala5insSer;Gly4_Ala5dup]` still falls to the
-/// descriptor tie-break and renders the `dup` first, exactly as #1301 did here.
-/// Ranking `ProteinEdit::Insertion` too would fix it, but that changes protein
-/// ordering, which is outside this change; tracked in #1328.
+/// **Every axis**, protein included (#1328). The protein axis reaches this tie
+/// for the same two reasons the nucleotide axes do — `cis_member_range` returns
+/// a real range for [`HgvsVariant::Protein`], and `sort_cis_members_by_genomic_order`
+/// is axis-agnostic — so while this matched only the six nucleotide-bearing
+/// arms, every protein member ranked `1` and the tie fell to the descriptor
+/// tie-break, which sorts `dup` before `ins` alphabetically:
+/// `p.[Gly4_Ala5insSer;Gly4_Ala5dup]` rendered the `dup` first. That is the same
+/// defect #1301 fixed for nucleotides, reversed the same way.
+///
+/// `ProteinEdit::Insertion` is the protein analogue of `NaEdit::Insertion`: its
+/// span is the gap it fills, so it adds at the span's start, where a `dup`
+/// places its copy after the span's last residue. The two edit enums are
+/// matched separately because they are separate types, not because the rule
+/// differs.
 fn junction_rank(v: &HgvsVariant) -> u8 {
-    use crate::hgvs::edit::NaEdit;
+    use crate::hgvs::edit::{NaEdit, ProteinEdit};
+
+    // The protein axis carries its own edit enum, so it cannot share the
+    // `NaEdit` match below; the *rule* it applies is identical.
+    if let HgvsVariant::Protein(p) = v {
+        return u8::from(!matches!(
+            p.loc_edit.edit.inner(),
+            Some(ProteinEdit::Insertion { .. })
+        ));
+    }
     let edit = match v {
         HgvsVariant::Genome(x) => x.loc_edit.edit.inner(),
         HgvsVariant::Circular(x) => x.loc_edit.edit.inner(),
@@ -5013,5 +5037,25 @@ mod tests {
                 "default style must equal Display for {input}"
             );
         }
+    }
+
+    /// `non_flanking_genomic_insertion_anchor` must classify every representable
+    /// position pair, including one anchored at `u64::MAX`.
+    ///
+    /// The parser accepts any `u64` position, so `g.<u64::MAX>_<u64::MAX-1>insA`
+    /// is reachable from public input. Asking "is `end` one past `start`?" as
+    /// `end.base != start.base + 1` overflows on that pair — a panic in
+    /// overflow-checked builds, a wrap in release ones, where the answer is
+    /// plainly "no, it is not flanking".
+    #[test]
+    fn the_insertion_anchor_check_survives_a_position_at_the_top_of_the_range() {
+        use crate::hgvs::parser::parse_hgvs;
+
+        let v =
+            parse_hgvs("NC_TEST.1:g.18446744073709551615_18446744073709551614insA").expect("parse");
+        assert_eq!(
+            non_flanking_genomic_insertion_anchor(&v),
+            Some((u64::MAX, u64::MAX - 1)),
+        );
     }
 }
