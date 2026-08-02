@@ -165,6 +165,7 @@ mod issue_1254_sibling_crossing_shift;
 mod issue_1261_cis_member_order;
 mod issue_1276_dup_junction_overlap;
 mod issue_1281_reducing_member_shift;
+mod issue_1284_transcript_axis_collision;
 mod issue_1286_shared_junction_merge;
 mod issue_1287_repeat_span_junction;
 mod issue_1290_junction_crosses_junction;
