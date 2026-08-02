@@ -81,8 +81,9 @@ pub(crate) fn partition_members_with(dag: &AlignmentDag, min_separation: u32) ->
             // reference base that every minimal alignment matches, giving the
             // member a non-minimal extent. Both readings denote the same
             // sequence and round-trip, so the round-trip invariant does not
-            // catch this — only the exact-span assertion in
-            // `insertion_junctions_do_not_claim_a_matched_base` does.
+            // catch this. The exact-span assertions in
+            // `insertion_junctions_do_not_claim_a_matched_base` and
+            // `an_insertion_only_member_has_an_empty_reference_span` do.
             //
             // When a position is both changed and a forced-insertion junction,
             // the changed reading wins — it is the wider of the two and the
@@ -214,8 +215,9 @@ mod tests {
         // The failure this pins is widening the end to 4 because the run's last
         // event is at offset 3. Offset 3 is an insertion *junction*, not a
         // changed base, so it occupies no reference base. Getting this wrong
-        // still yields one member — the count looks right — and only the Task 4
-        // round-trip catches it.
+        // still yields one member — the count looks right, and both the wider
+        // and narrower spans denote the same sequence, so the round-trip
+        // invariant does not catch it either. This exact-span assertion does.
         let dag = AlignmentDag::build(b"AAAAAAA", b"AACACAAAA");
         let members = partition_members(&dag);
         assert_eq!(
