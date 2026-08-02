@@ -419,6 +419,24 @@ impl OneBasedInterval {
 ///
 /// This is the most common conversion in bioinformatics code.
 ///
+/// # Panics
+///
+/// Panics if `pos` is `0`, which is not a valid 1-based position. Callers that
+/// cannot guarantee a validated position must use
+/// [`hgvs_pos_to_index_checked`] instead.
+///
+/// The check is deliberate and unconditional (#1282). Before it, `pos == 0`
+/// underflowed: a debug build panicked from inside the subtraction with no
+/// indication of which caller was at fault, and a release build — where
+/// `[profile.release]` sets no `overflow-checks` — **wrapped**, silently
+/// yielding an index near `usize::MAX`. Failing loudly in both profiles is the
+/// lesser of the two, and mirrors [`OneBasedPos::new`], which has always
+/// asserted the same invariant.
+///
+/// The function stays `const`, so the check is stronger than a runtime panic
+/// wherever the position is a constant: `const _: usize = hgvs_pos_to_index(0);`
+/// is a *compile* error, not a crash at run time.
+///
 /// # Examples
 ///
 /// ```
@@ -427,9 +445,47 @@ impl OneBasedInterval {
 /// assert_eq!(hgvs_pos_to_index(1), 0);   // g.1 -> index 0
 /// assert_eq!(hgvs_pos_to_index(100), 99); // g.100 -> index 99
 /// ```
+///
+/// ```should_panic
+/// use ferro_hgvs::coords::hgvs_pos_to_index;
+///
+/// let _ = hgvs_pos_to_index(0);  // Panics — there is no HGVS position 0
+/// ```
 #[inline]
+#[track_caller]
 pub const fn hgvs_pos_to_index(pos: u64) -> usize {
+    assert!(
+        pos > 0,
+        "1-based HGVS position cannot be 0 (no position 0 exists on any HGVS axis); \
+         use hgvs_pos_to_index_checked if the position is not known to be valid"
+    );
     (pos - 1) as usize
+}
+
+/// Convert a 1-based HGVS position to a 0-based array index, or `None` if the
+/// position is not a valid 1-based one.
+///
+/// The total counterpart of [`hgvs_pos_to_index`], for callers holding a
+/// position they have not validated — a coordinate arrived at by arithmetic
+/// (a 5'-shift, a clamp, an axis conversion) rather than read from a parsed
+/// description. Prefer this at any boundary where "there is no such position"
+/// is a real outcome that should become an `Err`, not a panic.
+///
+/// # Examples
+///
+/// ```
+/// use ferro_hgvs::coords::hgvs_pos_to_index_checked;
+///
+/// assert_eq!(hgvs_pos_to_index_checked(1), Some(0));
+/// assert_eq!(hgvs_pos_to_index_checked(0), None);
+/// ```
+#[inline]
+pub const fn hgvs_pos_to_index_checked(pos: u64) -> Option<usize> {
+    if pos > 0 {
+        Some((pos - 1) as usize)
+    } else {
+        None
+    }
 }
 
 /// Convert a 0-based array index to a 1-based HGVS position
@@ -508,9 +564,54 @@ pub const fn spdi_to_hgvs_pos(spdi_pos: u64) -> u64 {
 /// Convert HGVS 1-based position to SPDI 0-based
 ///
 /// SPDI uses 0-based interbase coordinates.
+///
+/// # Panics
+///
+/// Panics if `hgvs_pos` is `0`. This is the same defect [`hgvs_pos_to_index`]
+/// carries and was found by the sweep #1282 asks for — the bare `hgvs_pos - 1`
+/// wrapped to `u64::MAX` in release, producing an SPDI position astronomically
+/// past the end of any sequence rather than an error. Use
+/// [`hgvs_to_spdi_pos_checked`] where the position is not known to be valid.
+///
+/// As with [`hgvs_pos_to_index`], the function stays `const`, so a constant `0`
+/// is rejected at compile time rather than at run time.
+///
+/// ```should_panic
+/// use ferro_hgvs::coords::hgvs_to_spdi_pos;
+///
+/// let _ = hgvs_to_spdi_pos(0);  // Panics — there is no HGVS position 0
+/// ```
 #[inline]
+#[track_caller]
 pub const fn hgvs_to_spdi_pos(hgvs_pos: u64) -> u64 {
+    assert!(
+        hgvs_pos > 0,
+        "1-based HGVS position cannot be 0 (no position 0 exists on any HGVS axis); \
+         use hgvs_to_spdi_pos_checked if the position is not known to be valid"
+    );
     hgvs_pos - 1
+}
+
+/// Convert HGVS 1-based position to SPDI 0-based, or `None` if the position is
+/// not a valid 1-based one.
+///
+/// The total counterpart of [`hgvs_to_spdi_pos`].
+///
+/// # Examples
+///
+/// ```
+/// use ferro_hgvs::coords::hgvs_to_spdi_pos_checked;
+///
+/// assert_eq!(hgvs_to_spdi_pos_checked(1), Some(0));
+/// assert_eq!(hgvs_to_spdi_pos_checked(0), None);
+/// ```
+#[inline]
+pub const fn hgvs_to_spdi_pos_checked(hgvs_pos: u64) -> Option<u64> {
+    if hgvs_pos > 0 {
+        Some(hgvs_pos - 1)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -692,5 +793,61 @@ mod tests {
         let a = OneBasedPos::new(5);
         let b = OneBasedPos::new(10);
         assert!(a < b);
+    }
+
+    /// #1282: the two bare `pos - 1` conversions underflowed on `0`. A debug
+    /// build panicked from inside the subtraction, naming neither the function
+    /// nor the caller; a release build wrapped, because `[profile.release]`
+    /// sets no `overflow-checks`, and handed back an index near `usize::MAX`.
+    ///
+    /// Both now assert, so the release-build wraparound — the more dangerous
+    /// half, since it corrupts silently — cannot happen either.
+    #[test]
+    #[should_panic(expected = "1-based HGVS position cannot be 0")]
+    fn hgvs_pos_to_index_rejects_zero() {
+        let _ = hgvs_pos_to_index(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "1-based HGVS position cannot be 0")]
+    fn hgvs_to_spdi_pos_rejects_zero() {
+        let _ = hgvs_to_spdi_pos(0);
+    }
+
+    /// The checked forms are total: they answer for `0` instead of aborting,
+    /// which is what a caller holding an arithmetic result needs.
+    #[test]
+    fn the_checked_conversions_are_total() {
+        assert_eq!(hgvs_pos_to_index_checked(0), None);
+        assert_eq!(hgvs_pos_to_index_checked(1), Some(0));
+        assert_eq!(hgvs_pos_to_index_checked(100), Some(99));
+
+        assert_eq!(hgvs_to_spdi_pos_checked(0), None);
+        assert_eq!(hgvs_to_spdi_pos_checked(1), Some(0));
+        assert_eq!(hgvs_to_spdi_pos_checked(100), Some(99));
+    }
+
+    /// Both conversions must stay `const`. The `assert!` does not cost that,
+    /// and keeping it buys a strictly stronger check: in a const context the
+    /// rejection of `0` is a *compile* error rather than a run-time panic.
+    /// Dropping `const` would also be a semver-major change to a public API.
+    ///
+    /// This is a compile-time guard, not a runtime one — it fails the build if
+    /// either function loses `const`, which no `#[test]` could catch.
+    const _: () = {
+        assert!(hgvs_pos_to_index(1) == 0);
+        assert!(hgvs_pos_to_index(100) == 99);
+        assert!(hgvs_to_spdi_pos(1) == 0);
+        assert!(hgvs_to_spdi_pos(100) == 99);
+    };
+
+    /// Checked and unchecked must agree everywhere the unchecked one is defined
+    /// — otherwise migrating a call site would change behaviour.
+    #[test]
+    fn checked_and_unchecked_agree_above_zero() {
+        for pos in 1..=512u64 {
+            assert_eq!(hgvs_pos_to_index_checked(pos), Some(hgvs_pos_to_index(pos)));
+            assert_eq!(hgvs_to_spdi_pos_checked(pos), Some(hgvs_to_spdi_pos(pos)));
+        }
     }
 }

@@ -2514,9 +2514,19 @@ impl PyOneBasedPos {
 }
 
 /// Convert a 1-based HGVS position to a 0-based array index
+///
+/// Raises `ValueError` if `pos` is 0, which is not a valid 1-based position.
+///
+/// The Rust helper asserts on 0 (#1282). Calling it directly here would surface
+/// that as a `pyo3_runtime.PanicException`, which is not a catchable error in
+/// any reasonable Python sense, so the check is repeated on this side to raise
+/// the exception a caller would actually write `except` for. Before #1282 this
+/// returned a wrapped, astronomically large index instead.
 #[pyfunction]
-fn hgvs_pos_to_index(pos: u64) -> usize {
-    crate::coords::hgvs_pos_to_index(pos)
+fn hgvs_pos_to_index(pos: u64) -> PyResult<usize> {
+    crate::coords::hgvs_pos_to_index_checked(pos).ok_or_else(|| {
+        PyValueError::new_err("1-based HGVS position cannot be 0: no position 0 exists")
+    })
 }
 
 /// Convert a 0-based array index to a 1-based HGVS position

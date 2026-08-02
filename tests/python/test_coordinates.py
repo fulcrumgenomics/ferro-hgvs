@@ -40,6 +40,14 @@ class TestCoordinateFunctions:
         index = ferro_hgvs.hgvs_pos_to_index(1)
         assert index == 0
 
+    def test_hgvs_pos_to_index_rejects_zero(self) -> None:
+        # There is no HGVS position 0, so the 1-based -> 0-based conversion has
+        # no answer to give. The Rust helper asserts on it, so the binding
+        # repeats the check to raise a catchable exception rather than a
+        # PanicException (#1282).
+        with pytest.raises(ValueError, match="cannot be 0"):
+            ferro_hgvs.hgvs_pos_to_index(0)
+
     def test_index_to_hgvs_pos(self) -> None:
         pos = ferro_hgvs.index_to_hgvs_pos(0)
         assert pos == 1
