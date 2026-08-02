@@ -60,11 +60,11 @@
 //!   nor #1262 is about overlapping members, so the citation did not describe
 //!   the shape it was excluding. What that shape hit was #1301, now fixed.
 //! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
-//!   because it finds #1321, a cancelled identity member surviving inside a
-//!   duplication's span. It found #1286, #1287, #1290, #1292, #1296, #1301,
-//!   #1304, #1297, #1308, #1312, #1316 and #1320 first, all now fixed, each
-//!   masked behind the one before it; see its doc comment for the history and
-//!   the live reproduction.
+//!   because it finds #1323, a three-member allele losing its deletion and
+//!   denoting the wrong sequence. It found #1286, #1287, #1290, #1292, #1296,
+//!   #1301, #1304, #1297, #1308, #1312, #1316, #1320 and #1321 first, all now
+//!   fixed, each masked behind the one before it; see its doc comment for the
+//!   history and the live reproduction.
 //!
 //! Neither restriction is silent: both are named, pinned, and fail loudly when
 //! the underlying issue is fixed (#1268/#1283's complaint about coverage that
@@ -808,20 +808,22 @@ proptest! {
     /// deletion and placed the repeats at 259; #1313 and #1317 moved both before
     /// #1316 itself was fixed.)
     ///
-    /// The live failure is the thirteenth, **#1321**:
+    /// The live failure is the fourteenth, **#1323**:
     ///
     /// ```text
-    /// core "TCCCAGAAAAT", insert "GA" after 4, "A" after 5, delete index 6
-    ///   g.[261_262insGA;262_263insA;263del] -> g.[262_263dup;263=]
-    ///     the dup spans 262-263; the identity member names 263, inside it
+    /// core "CAGGGATCAT", delete index 3, insert "GA" after 4, insert "GA" after 5
+    ///   g.[260del;261_262insGA;262_263insGA] -> g.[261_262dup;262dup]
+    ///     intended  C A G G G A A G A T C A T
+    ///     emitted   C A G G G A G A A T C A T
     /// ```
     ///
-    /// #1297's shape one spelling over: `drop_identity_members_covered_by_siblings`
-    /// drops a cancelled member only when a sibling *claims the bases* under it,
-    /// and a duplication claims none. Verified pre-existing — the parent of
-    /// #1320's fix emits the identical output.
+    /// The deletion is dropped, the two duplications overlap at 262, and the
+    /// result denotes different bases. The first chain defect that is
+    /// **sequence-changing** rather than a rendering or ordering fault — every
+    /// one since #1304 has preserved the sequence. Verified pre-existing: the
+    /// parent of #1321's fix emits the identical output.
     ///
-    /// Each of the thirteen was masked behind the one before it, which is the
+    /// Each of the fourteen was masked behind the one before it, which is the
     /// point of keeping this committed rather than deleting it until it passes.
     ///
     /// Enabling this test was #1292's acceptance criterion, then #1316's; both
@@ -829,20 +831,21 @@ proptest! {
     /// `issue_1316_coincident_tract_repeats` and by the `99d5d382` and
     /// `23c33174` seeds below. Neither could carry the criterion, because the
     /// property's next failure was always behind it. Enabling now belongs to
-    /// **#1321**, whose seed `467e0a71` is committed below — so taking the
+    /// **#1323**, whose seed `ff4eca54` is committed below — so taking the
     /// ignore off replays it immediately and turns CI red, which is exactly what
     /// should gate taking it off.
     ///
-    /// A caution about soak depth, learned twice here. With #1316 fixed this
-    /// passed 200,000 cases and then failed a 1,000,000-case run at 27,633
-    /// successes (#1320); with #1320 fixed it failed another 1,000,000-case run
-    /// at 114,694 (#1321). Each fix pushes the next failure roughly four times
-    /// deeper, so a clean soak at one depth is not evidence about the next, and
-    /// it is certainly not evidence the chain has ended.
+    /// A caution about soak depth, and about reading a trend into it. With
+    /// #1316 fixed this passed 200,000 cases and then failed a 1,000,000-case
+    /// run at 27,633 successes (#1320); with #1320 fixed, at 114,694 (#1321);
+    /// with #1321 fixed, at 143,034 (#1323). The 4x jump did not repeat — the
+    /// last step is 1.25x — so depth is not trending predictably and cannot be
+    /// used to forecast an end. A clean soak at one depth says nothing about the
+    /// next, and is certainly not evidence the chain has ended.
     ///
     /// Do not weaken it to make it pass.
     #[test]
-    #[ignore = "finds #1321, a real unfixed defect; see doc comment"]
+    #[ignore = "finds #1323, a real unfixed defect; see doc comment"]
     fn an_indel_haplotype_normalizes_to_its_own_sequence(
         haplotype in indel_haplotype_strategy()
     ) {
@@ -1042,15 +1045,14 @@ fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
 /// to pin.
 #[test]
 fn the_ignored_indel_property_still_finds_its_defect() {
-    // #1321: a cancelled identity member survives inside a duplication's span,
-    // because `drop_identity_members_covered_by_siblings` drops one only when a
-    // sibling *claims the bases* under it and a duplication claims none --
-    // #1297's shape one spelling over. Moved here from #1320, which this change
-    // fixes.
+    // #1323: a three-member allele loses its deletion and denotes the wrong
+    // sequence as two overlapping duplications. The first chain defect that is
+    // sequence-changing rather than a rendering or ordering fault. Moved here
+    // from #1321, which this change fixes.
     let (core, input, issue) = (
-        "TCCCAGAAAAT",
-        "NC_TEST.1:g.[261_262insGA;262_263insA;263del]",
-        "#1321",
+        "CAGGGATCAT",
+        "NC_TEST.1:g.[260del;261_262insGA;262_263insGA]",
+        "#1323",
     );
     assert!(
         indel_property_holds(core, input).is_err(),
