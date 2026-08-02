@@ -185,6 +185,7 @@ mod issue_1320_dup_spans_sibling_junction;
 mod issue_1321_identity_inside_a_duplication;
 mod issue_1323_shared_junction_order;
 mod issue_132_cyclic_rotation_insertion;
+mod issue_1334_liftover_position_zero;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;
