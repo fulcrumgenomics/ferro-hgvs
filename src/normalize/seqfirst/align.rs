@@ -3,12 +3,9 @@
 //! Global alignment (both ends anchored) under **unit-cost Levenshtein**. Both
 //! choices are deliberate:
 //!
-//! - *Global*, because the eventual caller in the migration will trim common
-//!   flanks before calling in, making them identical by construction and
-//!   removing any "where do these correspond" question. Nothing here requires
-//!   that: an untrimmed flank only adds harmless leading/trailing dominator
-//!   matches, since a flank match is itself a dominator (every minimal
-//!   alignment matches it) and so cannot change the partition.
+//! - *Global*, because the caller trims common flanks before calling in, so
+//!   both ends correspond by construction. That trimming is a precondition,
+//!   not a convenience — see [`AlignmentDag::build`].
 //! - *Unit cost, not affine*. The criterion is not "which alignment is best"
 //!   but "which steps appear in **all** minimal alignments" — the cost model's
 //!   job is to define that set, not to pick a winner. Affine penalties are
@@ -49,24 +46,52 @@ pub(crate) enum Step {
 pub struct AlignmentDag {
     ref_len: u32,
     alt_len: u32,
+    /// Read only through [`AlignmentDag::edit_distance`], whose sole non-test
+    /// caller is the `dev`-gated `seqfirst_align` benchmark — so without that
+    /// feature the field is genuinely unread. Scoped on the feature rather than
+    /// allowed unconditionally, so it starts warning again if the benchmark is
+    /// ever the only thing keeping it alive under `dev` too.
+    #[cfg_attr(not(feature = "dev"), allow(dead_code))]
     total: u32,
     /// Row-major `(ref_len + 1) x (alt_len + 1)`; `true` when the cell lies on
     /// at least one minimal alignment.
     on_optimal_path: Vec<bool>,
-    /// Row-major, parallel to `on_optimal_path`. Out-edges of each cell.
-    out: Vec<Vec<(u32, u32, Step)>>,
+    /// Row-major, parallel to `on_optimal_path`. One bit per possible out-edge:
+    /// [`OUT_MATCH`], [`OUT_SUB`], [`OUT_DEL`], [`OUT_INS`].
+    ///
+    /// A flat bitmask rather than a `Vec<Vec<_>>`. A cell has at most three
+    /// out-edges (diagonal, down, right) and the diagonal's kind is fixed by
+    /// whether the two bases are equal, so four bits describe a cell exactly.
+    /// The nested form cost 24 bytes of `Vec` header per grid cell whether or
+    /// not the cell was on-path — about 400 MB before a single edge was stored
+    /// for the 4096 x 4096 block `benches/seqfirst_align.rs` measures — plus one
+    /// allocator call per on-path cell. This keeps the same `Θ(n·m)` space with
+    /// one allocation and an order-of-magnitude smaller constant.
+    out: Vec<u8>,
 }
+
+/// Diagonal out-edge whose two bases are equal (`Step::Match`).
+const OUT_MATCH: u8 = 1 << 0;
+/// Diagonal out-edge whose two bases differ (`Step::Sub`).
+const OUT_SUB: u8 = 1 << 1;
+/// Down out-edge: a reference base is deleted (`Step::Del`).
+const OUT_DEL: u8 = 1 << 2;
+/// Right out-edge: an alternate base is inserted (`Step::Ins`).
+const OUT_INS: u8 = 1 << 3;
 
 impl AlignmentDag {
     /// Build the DAG for `ref_block` -> `alt_block`.
     ///
-    /// Both slices are raw bases. Either may be empty. There is no requirement
-    /// that common flanks be pre-trimmed: an untrimmed flank only contributes
-    /// extra leading/trailing dominator matches (a flank match is matched by
-    /// every minimal alignment), which leaves the partition unchanged. The
-    /// eventual caller in the migration will trim flanks anyway, but that is a
-    /// caller convenience, not a precondition of this function. Cost is
-    /// `O(ref_len * alt_len)` in time and space.
+    /// Both slices are raw bases; either may be empty.
+    ///
+    /// **The caller must trim common flanks first.** The partition is a
+    /// function of this exact pair, and an untrimmed flank base can be absorbed
+    /// into a neighbouring member rather than sitting outside it: `AT -> AAT`
+    /// yields one member at ref `0..1`, while the flank-trimmed `T -> AT`
+    /// yields a pure insertion at ref `1`. Trimming is therefore a
+    /// precondition, not a convenience.
+    ///
+    /// Cost is `O(ref_len * alt_len)` in time and space.
     pub fn build(ref_block: &[u8], alt_block: &[u8]) -> Self {
         let n = ref_block.len();
         let m = alt_block.len();
@@ -90,7 +115,7 @@ impl AlignmentDag {
             }
         }
 
-        let mut out: Vec<Vec<(u32, u32, Step)>> = vec![Vec::new(); (n + 1) * width];
+        let mut out = vec![0u8; (n + 1) * width];
         for i in 0..=n {
             for j in 0..=m {
                 if !on_optimal_path[i * width + j] {
@@ -102,22 +127,21 @@ impl AlignmentDag {
                     let cost = u32::from(ref_block[i] != alt_block[j]);
                     let next = (i + 1) * width + (j + 1);
                     if here + cost == prefix[next] && on_optimal_path[next] {
-                        let step = if cost == 0 { Step::Match } else { Step::Sub };
-                        out[i * width + j].push((i as u32 + 1, j as u32 + 1, step));
+                        out[i * width + j] |= if cost == 0 { OUT_MATCH } else { OUT_SUB };
                     }
                 }
                 // Down: deletion of a reference base.
                 if i < n {
                     let next = (i + 1) * width + j;
                     if here + 1 == prefix[next] && on_optimal_path[next] {
-                        out[i * width + j].push((i as u32 + 1, j as u32, Step::Del));
+                        out[i * width + j] |= OUT_DEL;
                     }
                 }
                 // Right: insertion of an alternate base.
                 if j < m {
                     let next = i * width + (j + 1);
                     if here + 1 == prefix[next] && on_optimal_path[next] {
-                        out[i * width + j].push((i as u32, j as u32 + 1, Step::Ins));
+                        out[i * width + j] |= OUT_INS;
                     }
                 }
             }
@@ -133,6 +157,11 @@ impl AlignmentDag {
     }
 
     /// Minimal edit distance between the two blocks.
+    ///
+    /// Called by the `dev`-gated `seqfirst_align` benchmark and by this module's
+    /// tests; the shadow comparison in `normalize_allele` does not need it, hence
+    /// the feature-scoped allowance.
+    #[cfg_attr(not(feature = "dev"), allow(dead_code))]
     pub fn edit_distance(&self) -> u32 {
         self.total
     }
@@ -175,11 +204,12 @@ impl AlignmentDag {
 
     /// Out-edges of a cell, as `(next_i, next_j, step)`.
     ///
-    /// `(i, j)` must be within the grid (`i <= ref_len`, `j <= alt_len`); this
-    /// does not panic off-grid, it silently aliases another cell's edges (the
-    /// backing storage is a flat row-major array, so an out-of-range `j`
-    /// wraps into the next row). Checked by the `debug_assert` below in debug
-    /// builds.
+    /// `(i, j)` must be within the grid (`i <= ref_len`, `j <= alt_len`).
+    /// Off-grid is not uniformly caught in release: with `i < ref_len` an
+    /// out-of-range `j` wraps into a later row and silently returns another
+    /// cell's edges; in the last row (`i == ref_len`), or for any
+    /// `i > ref_len`, the flat index runs past the backing `Vec` and panics.
+    /// The `debug_assert` below catches both in debug builds.
     pub(crate) fn out_edges(&self, i: u32, j: u32) -> impl Iterator<Item = (u32, u32, Step)> + '_ {
         debug_assert!(
             i <= self.ref_len && j <= self.alt_len,
@@ -187,7 +217,18 @@ impl AlignmentDag {
             self.ref_len,
             self.alt_len
         );
-        self.out[self.index(i, j)].iter().copied()
+        // Reconstructed from the mask and `(i, j)`. The order matches what the
+        // nested-`Vec` form pushed — diagonal, then down, then right — so any
+        // caller that depended on edge order is unaffected.
+        let mask = self.out[self.index(i, j)];
+        [
+            (mask & OUT_MATCH != 0).then_some((i + 1, j + 1, Step::Match)),
+            (mask & OUT_SUB != 0).then_some((i + 1, j + 1, Step::Sub)),
+            (mask & OUT_DEL != 0).then_some((i + 1, j, Step::Del)),
+            (mask & OUT_INS != 0).then_some((i, j + 1, Step::Ins)),
+        ]
+        .into_iter()
+        .flatten()
     }
 }
 
@@ -275,8 +316,12 @@ impl AlignmentDag {
         let mut crossing: i64 = 0;
         for &(i, j) in &order {
             crossing -= i64::from(in_degree[self.index(i, j)]);
-            let outs: Vec<(u32, u32, Step)> = self.out_edges(i, j).collect();
-            crossing += outs.len() as i64;
+            // Counted, not collected. The edge itself is only needed on the
+            // `crossing == 1` branch below, and that is rare; collecting on every
+            // cell put a heap allocation back on the `Θ(n·m)` sweep that the flat
+            // adjacency exists to keep off it.
+            let out_degree = self.out_edges(i, j).count();
+            crossing += out_degree as i64;
 
             // If exactly one edge crosses the frontier now, it is on every
             // path. Any node with two or more out-edges contributes two or more
@@ -284,11 +329,12 @@ impl AlignmentDag {
             // one out-edge and nothing older is still crossing.
             if crossing == 1 && (i, j) != sink {
                 debug_assert_eq!(
-                    outs.len(),
-                    1,
+                    out_degree, 1,
                     "a single crossing must be this cell's only out-edge"
                 );
-                let (_, _, step) = outs[0];
+                let Some((_, _, step)) = self.out_edges(i, j).next() else {
+                    continue;
+                };
                 match step {
                     // `(i, j)` is the cell the edge leaves, so it pins the
                     // alternate coordinate as well as the reference one.
