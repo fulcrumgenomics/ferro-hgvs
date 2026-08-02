@@ -1,8 +1,11 @@
 //! Sizing the sequence-first DP.
 //!
-//! `AlignmentDag::build` is `O(n*m)` in time and space. This measures where
-//! that stops being acceptable, so the block-size cap in the migration is
-//! chosen on evidence rather than picked.
+//! `AlignmentDag::build` is `O(n*m)` in time **and space**, but Criterion has
+//! no memory axis — this measures wall-clock time only. It shows where that
+//! grows too slow to be acceptable, so the block-size cap in the migration is
+//! chosen on time evidence; the memory dimension is not measured here.
+
+use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 
@@ -32,9 +35,11 @@ fn bench_build(c: &mut Criterion) {
         group.throughput(Throughput::Elements((len * len) as u64));
         group.bench_with_input(BenchmarkId::from_parameter(len), &len, |b, _| {
             b.iter(|| {
-                let dag =
-                    ferro_hgvs::normalize::seqfirst::align::AlignmentDag::build(&reference, &alt);
-                criterion::black_box(dag.edit_distance())
+                let dag = ferro_hgvs::normalize::seqfirst::align::AlignmentDag::build(
+                    black_box(&reference),
+                    black_box(&alt),
+                );
+                black_box(dag.edit_distance())
             })
         });
     }
