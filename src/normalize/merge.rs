@@ -3751,6 +3751,185 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
     }
 }
 
+/// Coalesce cis members that settled onto **one junction** into a single
+/// insertion carrying their combined payload.
+///
+/// A member that consumes no base occupies the interbase junction where its
+/// added sequence lands. Two of them can shift onto the same junction from
+/// distinct starting points — two one-base insertions at adjacent gaps inside a
+/// homopolymer both travel to the tract's 3'-most junction:
+///
+/// ```text
+/// reference  ("ACGT" x 64) + "AAAAAA" + ("ACGT" x 64)   poly-A run at 257-263
+/// g.[258_259insA;259_260insA]  ->  g.[263dup;263dup]
+/// ```
+///
+/// That output claims one position twice, so it has no well-defined resulting
+/// sequence — `parse_hgvs` accepts it, and the SPDI apply oracle declines it
+/// (#1286). Nothing upstream prevents it: the sibling clamps bound a member
+/// against a sibling's *bases*, and neither of these has any.
+///
+/// It cannot be repaired downstream either. The sequence-first canonicalization
+/// would derive the correct single member, but it runs *after* the per-member
+/// pipeline and derives from the allele's resulting sequence — which an
+/// overlapping allele does not have. It declines, so the corruption survives the
+/// one pass that would have merged it.
+///
+/// So merge here, before that pass sees it. Both members add their payload at
+/// the same interbase point, so one insertion carrying the concatenation denotes
+/// exactly what the pair denoted. Re-spelling as an `Insertion` rather than a
+/// wider `Duplication` is the same choice `respell_colliding_duplications`
+/// makes: an insertion's payload is a literal and is correct wherever it lands,
+/// whereas `g.262_263dup` would only be equivalent when `ref[262] == ref[263]`.
+/// The next pass re-canonicalises it to a `dup` or a repeat where the reference
+/// permits.
+///
+/// **Only when every colliding payload is identical.** Concatenation is
+/// otherwise order-dependent, and the order is exactly what the shift destroyed:
+/// two insertions that were at distinct junctions had a defined order, and once
+/// they share a junction they do not. Equal payloads make the concatenation
+/// order-independent, so the repair is unambiguous. A differing-payload
+/// collision is left for the overlap detector to report rather than guessed at.
+///
+/// Genomic axes only, matching `respell_colliding_duplications` — the
+/// transcript axes need a coordinate conversion this does not carry.
+pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
+    members: &mut Vec<HgvsVariant>,
+    phase: AllelePhase,
+    uncertain: bool,
+    provider: &P,
+) {
+    if phase != AllelePhase::Cis || uncertain || members.len() < 2 {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&members[0]) else {
+        return;
+    };
+    if !matches!(kind, CisKind::Genome | CisKind::Mt) {
+        return;
+    }
+    let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
+
+    // Group by (accession, region, junction). Only members that occupy a
+    // junction and claim no bases participate.
+    let mut groups: Vec<(usize, Vec<usize>)> = Vec::new();
+    for i in 0..members.len() {
+        let Some(span) = spans[i].as_ref() else {
+            continue;
+        };
+        if span.claims_bases {
+            continue;
+        }
+        let Some(junction) = span.junction else {
+            continue;
+        };
+        match groups.iter_mut().find(|(first, _)| {
+            spans[*first].as_ref().is_some_and(|s| {
+                s.junction == Some(junction)
+                    && s.region == span.region
+                    && s.accession == span.accession
+            })
+        }) {
+            Some((_, members_at)) => members_at.push(i),
+            None => groups.push((i, vec![i])),
+        }
+    }
+
+    let mut remove: Vec<usize> = Vec::new();
+    for (_, at) in &groups {
+        if at.len() < 2 {
+            continue;
+        }
+        let payloads: Option<Vec<Vec<Base>>> = at
+            .iter()
+            .map(|&i| junction_payload(&members[i], kind, spans[i].as_ref()?, provider))
+            .collect();
+        let Some(payloads) = payloads else {
+            continue;
+        };
+        // Order-independence guard: every payload identical.
+        if payloads.windows(2).any(|pair| pair[0] != pair[1]) {
+            continue;
+        }
+        let combined: Vec<Base> = payloads.concat();
+        let edit = NaEdit::Insertion {
+            sequence: InsertedSequence::Literal(Sequence::new(combined)),
+        };
+        let target = at[0];
+        let Some(span) = spans[target].as_ref() else {
+            continue;
+        };
+        let Some(junction) = span.junction else {
+            continue;
+        };
+        // `respell_at_gap` places the edit over `[span.end, span.end + 1]`, so
+        // hand it a span whose `end` is the shared junction rather than the
+        // member's own. For a `Duplication` the two coincide (`junction_of`
+        // returns its `end`), but for an `Insertion` the junction is its
+        // `start`, so `span.end` sits one base 3' of it. `respell_at_gap`
+        // cannot catch that: it checks the result landed on the gap it was
+        // given, not that the gap was the right one.
+        let gap = MemberSpan {
+            accession: span.accession.clone(),
+            provider_key: span.provider_key.clone(),
+            region: span.region,
+            start: junction,
+            end: junction,
+            claims_bases: span.claims_bases,
+            blocks_shift: span.blocks_shift,
+            junction: Some(junction),
+        };
+        let before = members[target].clone();
+        respell_at_gap(&mut members[target], kind, &gap, edit);
+        if members[target] == before {
+            continue; // the re-spell did not take; leave the group alone
+        }
+        remove.extend(at.iter().skip(1).copied());
+    }
+    if remove.is_empty() {
+        return;
+    }
+    remove.sort_unstable();
+    let mut index = 0;
+    members.retain(|_| {
+        let keep = !remove.contains(&index);
+        index += 1;
+        keep
+    });
+}
+
+/// The bases a junction-occupying member adds, or `None` when they cannot be
+/// determined without guessing.
+///
+/// A `Duplication` copies the reference under its own span, so its payload is
+/// read from the provider. An `Insertion` carries a literal. Every other shape —
+/// an unspecified count, a bracketed range, a `DupIns` — has no single literal
+/// payload to concatenate, so the caller declines to merge it.
+fn junction_payload<P: ReferenceProvider>(
+    variant: &HgvsVariant,
+    kind: CisKind,
+    span: &MemberSpan,
+    provider: &P,
+) -> Option<Vec<Base>> {
+    match cis_axis_parts(variant, kind).map(|(_, _, _, _, edit)| edit)? {
+        NaEdit::Insertion {
+            sequence: InsertedSequence::Literal(literal),
+        } => Some(literal.bases().to_vec()),
+        NaEdit::Duplication { .. } => {
+            let (from, to) = (
+                u64::try_from(span.start - 1).ok()?,
+                u64::try_from(span.end).ok()?,
+            );
+            let copied = provider.get_sequence(&span.provider_key, from, to).ok()?;
+            if copied.len() as i64 != span.end - span.start + 1 {
+                return None;
+            }
+            copied.chars().map(Base::from_char).collect()
+        }
+        _ => None,
+    }
+}
+
 /// Replace a genomic member with `edit` over the gap `[span.end, span.end + 1]`.
 ///
 /// Reverts unless the result reads back exactly as intended.
