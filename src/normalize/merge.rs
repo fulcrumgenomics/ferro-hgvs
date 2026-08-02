@@ -3014,6 +3014,9 @@ struct MemberSpan {
     end: i64,
     /// Whether the edit consumes the reference bases under its span.
     claims_bases: bool,
+    /// Whether the edit must stop a sibling's shift at its boundary. Superset of
+    /// `claims_bases` — see `blocks_sibling_shift`.
+    blocks_shift: bool,
     /// For an insertion-like edit, the position its added sequence sits
     /// immediately 3' of; `None` for anything that consumes bases instead.
     junction: Option<i64>,
@@ -3030,6 +3033,7 @@ fn member_span(v: &HgvsVariant, kind: CisKind) -> Option<MemberSpan> {
         start,
         end,
         claims_bases: claims_reference_bases(edit),
+        blocks_shift: blocks_sibling_shift(edit),
         junction: junction_of(edit, start, end),
     })
 }
@@ -3045,8 +3049,10 @@ fn member_span(v: &HgvsVariant, kind: CisKind) -> Option<MemberSpan> {
 /// the same variant clamped or not depending on whether the reference base
 /// happened to be written out. Insertions and duplications add sequence at a junction without
 /// consuming a base, so a member landing flush against one is the *adjacency*
-/// the collapse pass is meant to catch (#999, #1135) — they are neither clamped
-/// nor treated as barriers.
+/// the collapse pass is meant to catch (#999, #1135) — they are not clamped
+/// here. A duplication is nonetheless a 5' barrier, because the bases under its
+/// span are what it copies; `blocks_sibling_shift` carries that, keeping this
+/// predicate to the narrower "consumes bases" question its name asks.
 ///
 /// `Repeat`/`MultiRepeat` are the one deliberate omission: a repeat does claim
 /// the bases under its tract, but making it say so changes clamp and barrier
@@ -3062,6 +3068,22 @@ fn claims_reference_bases(edit: &NaEdit) -> bool {
             | NaEdit::Delins { .. }
             | NaEdit::Inversion { .. }
     )
+}
+
+/// Whether `edit` must stop a *sibling's* shift at its boundary, even though it
+/// may not consume the bases under its span.
+///
+/// EXPERIMENT (#1279/#1286): `claims_reference_bases` plus `Duplication`/
+/// `DupIns`. A duplication reads its payload from the reference under its own
+/// span, so a sibling deletion landing on those bases changes what the
+/// duplication copies — it is a barrier even though it claims nothing.
+///
+/// Used for the *5'* half of `clamp_sibling_crossing_shifts` only; the 3' half
+/// deliberately stays on `claims_reference_bases`. See the comment on its
+/// `onto_bases` filter for why.
+fn blocks_sibling_shift(edit: &NaEdit) -> bool {
+    claims_reference_bases(edit)
+        || matches!(edit, NaEdit::Duplication { .. } | NaEdit::DupIns { .. })
 }
 
 /// Pull back any cis member whose shift carried it over a sibling's bases.
@@ -3120,7 +3142,7 @@ pub(crate) fn clamp_sibling_crossing_shifts(
         let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
             continue;
         };
-        if !b.claims_bases || !a.claims_bases || b.region != a.region {
+        if !b.blocks_shift || !a.blocks_shift || b.region != a.region {
             continue;
         }
         // A member that did not move cannot have crossed anything.
@@ -3167,6 +3189,15 @@ pub(crate) fn clamp_sibling_crossing_shifts(
             // 3'-shift: the window is `[b.start, a.end]`. A sibling starting
             // beyond this member's original end but at or before its new end
             // was rotated over; stop one position short of the nearest.
+            //
+            // `claims_bases`, not `blocks_shift`: a duplication is a barrier in
+            // the 5' direction only. Widening it here stops a member *reaching*
+            // a downstream duplication, which is the adjacency the collapse
+            // pass needs — measured, `g.[1004del;1008_1009insA]` then emits
+            // `g.[1007del;1008dup]` instead of collapsing to `g.1009_1010=`,
+            // because the insertion canonicalises to `1008dup` and the barrier
+            // holds `1004del` off it (#1135). A duplication's end is already a
+            // junction barrier in this direction via `across_junctions` below.
             let onto_bases = siblings
                 .iter()
                 .filter(|s| s.claims_bases)
@@ -3188,7 +3219,7 @@ pub(crate) fn clamp_sibling_crossing_shifts(
             // 5'-shift: mirror image, window `[a.start, b.end]`.
             let onto_bases = siblings
                 .iter()
-                .filter(|s| s.claims_bases)
+                .filter(|s| s.blocks_shift)
                 .map(|s| s.end)
                 .filter(|&end| end < b.start && end >= a.start)
                 .map(|end| end + 1);
@@ -3389,9 +3420,11 @@ pub(crate) fn clamp_sibling_crossing_junctions(
         //
         // A 5' junction *does* cross, in a shape this rule would not have caught
         // anyway — when the sibling is **upstream** and the junction travels
-        // toward it (`g.[4A>G;9dup]` under 5' shuffle emits `g.4_5insG`, which
-        // denotes different bases). That is pre-existing and untouched here; see
-        // `a_five_prime_junction_with_an_upstream_sibling_is_a_known_gap`.
+        // toward it. The duplication half of that (`g.[4A>G;9dup]`, which used
+        // to emit `g.4_5insG`) is closed by `blocks_sibling_shift`, which bounds
+        // the duplication's *span* rather than its junction. The insertion half
+        // remains open, narrowed and characterised in
+        // `a_five_prime_insertion_junction_with_an_upstream_sibling_is_a_known_gap`.
         if after_junction < before_junction {
             continue;
         }

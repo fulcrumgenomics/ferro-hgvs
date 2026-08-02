@@ -4,7 +4,10 @@
 //! span. An insertion or duplication consumes none — it adds sequence at the
 //! junction between two bases — so it is excluded there, deliberately: a member
 //! landing flush against one is the adjacency the collapse pass exists to catch
-//! (#999, #1135).
+//! (#999, #1135). A duplication is the one partial exception, and only in the
+//! 5' direction: the bases under its span are what it copies, so a sibling
+//! shifting 5' onto them is bounded (`blocks_sibling_shift`, #1286). Reaching
+//! it from the 3' side is still the adjacency above.
 //!
 //! It can still cross. The junction 3'-shifts through a tract like anything
 //! else, and moving it past a base a sibling edits changes what the allele
@@ -34,7 +37,8 @@
 //! still flush against it, so the #999 collapse keeps firing.
 
 use crate::common::cis_apply_oracle::{
-    apply, assert_normalizes_preserving, normalize, normalize_in, sweep_sequences,
+    apply, assert_normalizes_preserving, assert_normalizes_preserving_in, normalize, normalize_in,
+    sweep_sequences,
 };
 use ferro_hgvs::ShuffleDirection;
 
@@ -45,12 +49,15 @@ const TRACT: &str = "TTTTTTTTTAATATATTTTA";
 /// enough that a two-copy insertion does not reach repeat notation.
 const RUN: &str = "ACAAAAAAAACGTACGTACG";
 
-/// Sequence-changing cases in the `dup` + `del` + 5'-shuffle shape that the
-/// exhaustive sweep below still finds — the residual characterised by
-/// `a_five_prime_duplication_beside_a_deletion_is_a_known_residual` and tracked
-/// in #1266. Pinned as an exact count so the shape stays measured: excluding it
-/// from the assertion instead would silence roughly a twelfth of the sweep.
-const KNOWN_FIVE_PRIME_DUP_DEL_RESIDUAL: usize = 74;
+/// Sequence-changing cases the exhaustive sweep below finds in the `dup` +
+/// `del` + 5'-shuffle shape. **Zero**, and pinned as an exact count so the
+/// shape stays measured separately from the rest of the sweep.
+///
+/// This was 74 — the residual tracked as #1266 — until `blocks_sibling_shift`
+/// made a duplication a barrier to a sibling's shift *and* made a duplication's
+/// own shift subject to the clamp. A rise means a new sequence-changing defect
+/// in that shape specifically.
+const FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES: usize = 0;
 
 #[test]
 fn an_insertion_does_not_shift_past_a_substituted_base() {
@@ -123,14 +130,13 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
     // Two failure modes are counted separately: an *overlapping* output, which
     // a consumer can at least reject, and a *sequence-changing* one, which is
     // silent. Before this fix the same sweep reported 1,318 of the first and
-    // 1,033 of the second; it now reports 0 and 74.
+    // 1,033 of the second; it now reports 0 and 0.
     //
-    // Those 74 are a **known, separate residual**, counted by the assertion
-    // below rather than excluded from it, and characterised in
-    // `a_five_prime_duplication_beside_a_deletion_is_a_known_residual`. They are
-    // exactly the cases that already failed before this change — verified by
-    // diffing the failing-case sets, which found zero newly-failing cases — so
-    // nothing here regressed to reach 0/74.
+    // The `dup` + `del` + 5' shape is still *tallied* on its own, pinned at
+    // zero by `FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES` and characterised in
+    // `a_five_prime_duplication_beside_a_deletion_keeps_its_sequence`. It was
+    // the last residual class here — 74 cases, closed by `blocks_sibling_shift`
+    // — and keeping the separate tally says which shape regressed if one does.
     let mut checked = 0usize;
     let mut residual = 0usize;
     let mut skipped = 0usize;
@@ -170,17 +176,16 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
                                     skipped += 1;
                                     continue;
                                 };
-                                // The known residual is *counted*, not
-                                // excluded. Skipping the whole
-                                // dup + del + 5' shape would drop roughly
+                                // The dup + del + 5' shape is *counted*, not
+                                // excluded. Skipping it would drop roughly
                                 // a twelfth of the sweep — some 23,000
                                 // cases — out of the sequence-preservation
-                                // check to protect 74 known failures, and a
-                                // new defect anywhere in that shape would
-                                // then pass silently. Counting instead
-                                // fails on a regression (the count rises)
-                                // and on a fix (it falls), so neither can
-                                // land unnoticed.
+                                // check, and a new defect anywhere in that
+                                // shape would then pass silently. Counting
+                                // keeps it measured: the tally is pinned at
+                                // zero, so a regression fails just as the
+                                // main assertion would, while still naming
+                                // the shape it landed in.
                                 let residual_shape = first.ends_with("dup")
                                     && second.ends_with("del")
                                     && direction == ShuffleDirection::FivePrime;
@@ -223,94 +228,82 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
         changed.is_empty(),
         "sequence-changing normalizations in {checked} cases: {changed:#?}"
     );
-    // Pinned exactly, so the residual class stays measured rather than merely
-    // tolerated. A rise means a new sequence-changing defect in the
-    // dup + del + 5' shape; a fall means part of it was fixed and this test,
-    // `a_five_prime_duplication_beside_a_deletion_is_a_known_residual`, and
-    // #1266 should be updated together.
+    // Pinned exactly at zero. Any rise is a new sequence-changing defect in the
+    // dup + del + 5' shape; there is no longer a tolerated residual class here.
     assert_eq!(
-        residual, KNOWN_FIVE_PRIME_DUP_DEL_RESIDUAL,
-        "the known dup + del + 5' residual changed"
+        residual, FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES,
+        "the dup + del + 5' shape changed"
     );
 }
 
 #[test]
-fn a_five_prime_duplication_beside_a_deletion_is_a_known_residual() {
-    // Characterising the one shape the sweep above holds to an exact count
-    // rather than to zero — pinned there as `KNOWN_FIVE_PRIME_DUP_DEL_RESIDUAL`,
-    // and so excluded from its `changed` assertion — leaving the boundary of
-    // this fix written down rather than implied by that count.
-    //
-    // Under 5' shuffle, a duplication whose sibling is a deletion can still
-    // normalize to a different sequence. The mechanism is *not* a junction
-    // crossing — it is the merge cancelling part of the duplicated sequence
-    // against the deletion and emitting a shorter duplication:
+fn a_five_prime_duplication_beside_a_deletion_keeps_its_sequence() {
+    // #1266. Under 5' shuffle a duplication beside a deletion used to cancel
+    // wrongly, emitting a shorter duplication in the wrong place:
     //
     //   reference        TTATTTAAATAAAAATAAAA
     //   g.[6_7dup;9del]  applies to  TTATTTATAATAAAAATAAAA
-    //   normalizes to    g.4dup      TTATTTTAAATAAAAATAAAA   ← different
+    //   normalized to    g.4dup      TTATTTTAAATAAAAATAAAA   <- different bases
     //
-    // The duplicated `TA` and the deleted `A` partly cancel, and what survives
-    // is emitted as a one-base duplication in the wrong place. That is a defect in the
-    // duplication/deletion cancellation path, distinct from the junction rule
-    // this file is about, and it is pre-existing — every case in this class
-    // fails identically before this change.
-    //
-    // The junction clamp is 3'-only for a related reason: an attempted 5' mirror
-    // turned 80 correct outputs of this shape into wrong ones, because a
-    // duplication's span and its junction move together under a 5' shift. It was
-    // removed as defective, not deferred — see
-    // `a_five_prime_junction_with_an_upstream_sibling_is_a_known_gap` for the 5'
-    // crossing that does exist and that the mirror would not have fixed.
+    // This was the whole 74-case residual of the sweep above. The deletion was
+    // free to shift 5' through the duplicated span because a `Duplication`
+    // reports claiming no reference bases — yet the bases under its span are
+    // exactly what it copies. `blocks_sibling_shift` makes it a barrier.
     let seq = "TTATTTAAATAAAAATAAAA";
-    let input = "TEMPLATE:g.[6_7dup;9del]";
-    let actual = normalize_in(seq, input, ShuffleDirection::FivePrime);
-
-    // Pinned as *currently wrong*, so that fixing it fails this test loudly and
-    // whoever fixes it updates the boundary above.
-    assert_eq!(actual, "TEMPLATE:g.4dup", "residual shape changed");
-    assert_ne!(
-        apply(seq, &actual).expect("output applies"),
-        apply(seq, input).expect("input applies"),
-        "the residual is fixed — update this test and lower \
-         KNOWN_FIVE_PRIME_DUP_DEL_RESIDUAL in the sweep"
+    assert_normalizes_preserving_in(
+        seq,
+        "TEMPLATE:g.[6_7dup;9del]",
+        "TEMPLATE:g.7_8insT",
+        ShuffleDirection::FivePrime,
     );
 }
 
 #[test]
-fn a_five_prime_junction_with_an_upstream_sibling_is_a_known_gap() {
-    // A blind spot in the sweep above, written down so it is not mistaken for
-    // coverage.
-    //
-    // The sweep always places the sibling **downstream** of the first member.
-    // Under 5' shuffle the member therefore travels *away* from its sibling and
-    // can never cross it, so the sweep cannot see a 5' junction crossing at all.
-    // It exists: put the sibling upstream and the junction runs straight over
-    // it.
+fn a_five_prime_duplication_does_not_cross_an_upstream_sibling() {
+    // #1267, the part `blocks_sibling_shift` reaches. Under 5' shuffle a
+    // duplication's span travelled toward an **upstream** sibling and crossed
+    // it, moving the base the sibling had edited:
     //
     //   reference        ACAAAAAAAACGTACGTACG        A-run at 3-10
     //   g.[4A>G;9dup]    applies to  ACAGAAAAAAACGTACGTACG
-    //   normalizes to    g.4_5insG   ACAAGAAAAAACGTACGTACG   ← different
+    //   normalized to    g.4_5insG   ACAAGAAAAAACGTACGTACG   <- moved base
     //
-    // Pre-existing, and identical on the parent branch — this PR neither fixes
-    // nor worsens it. The 3'-only clamp does not apply, and the removed 5'
-    // mirror would not have caught it either: it bounded the junction against a
-    // sibling the member was moving away from, not one it was moving toward.
+    // The sweep above cannot reach this: it always places the sibling
+    // *downstream*, so under 5' shuffle the member travels away from it. These
+    // were found by hand and stand in for the sweep until its generator is
+    // widened to upstream siblings (#1283).
     let seq = "ACAAAAAAAACGTACGTACG";
-    for (input, current) in [
-        ("TEMPLATE:g.[4A>G;9dup]", "TEMPLATE:g.4_5insG"),
-        ("TEMPLATE:g.[4A>G;9_10insA]", "TEMPLATE:g.4_5insG"),
-        ("TEMPLATE:g.[5A>G;10dup]", "TEMPLATE:g.[3dup;5A>G]"),
+    for (input, expected) in [
+        ("TEMPLATE:g.[4A>G;9dup]", "TEMPLATE:g.[4A>G;5dup]"),
+        ("TEMPLATE:g.[5A>G;10dup]", "TEMPLATE:g.[5A>G;6dup]"),
     ] {
-        let actual = normalize_in(seq, input, ShuffleDirection::FivePrime);
-        assert_eq!(actual, current, "known-gap shape changed for {input}");
-        assert_ne!(
-            apply(seq, &actual).expect("output applies"),
-            apply(seq, input).expect("input applies"),
-            "{input} is fixed — update this test and widen the sweep to \
-             upstream siblings"
-        );
+        assert_normalizes_preserving_in(seq, input, expected, ShuffleDirection::FivePrime);
     }
+}
+
+#[test]
+fn a_five_prime_insertion_junction_with_an_upstream_sibling_is_a_known_gap() {
+    // The rest of #1267, which `blocks_sibling_shift` deliberately does not
+    // reach. That predicate makes a member a barrier because the bases under
+    // its span are what it copies — true of a `Duplication`, false of a pure
+    // `Insertion`, whose payload is a literal and whose span is zero-width.
+    // There is nothing for a sibling to land *on*.
+    //
+    // Bounding the insertion's **junction** in the 5' direction is the fix this
+    // shape needs, and #1259 measured a 5' mirror of the junction clamp turning
+    // 80 previously-correct outputs into silently wrong ones. So this stays
+    // open, narrowed to the insertion case.
+    //
+    // Pinned as *currently wrong*: fixing it fails this test loudly.
+    let seq = "ACAAAAAAAACGTACGTACG";
+    let input = "TEMPLATE:g.[4A>G;9_10insA]";
+    let actual = normalize_in(seq, input, ShuffleDirection::FivePrime);
+    assert_eq!(actual, "TEMPLATE:g.4_5insG", "known-gap shape changed");
+    assert_ne!(
+        apply(seq, &actual).expect("output applies"),
+        apply(seq, input).expect("input applies"),
+        "{input} is fixed — update this test and close the insertion half of #1267"
+    );
 }
 
 #[test]

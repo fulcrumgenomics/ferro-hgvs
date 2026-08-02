@@ -39,7 +39,7 @@ use ferro_hgvs::{
 /// and identical across the sweeps that share it.
 ///
 /// The corpus is load-bearing: each sweep's case total is asserted against a
-/// floor, and `KNOWN_FIVE_PRIME_DUP_DEL_RESIDUAL` in
+/// floor, and `FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES` in
 /// `cis_junction_crossing_shift.rs` is an exact count over *these* sequences.
 /// Changing the generator or the seed count re-rolls the corpus and moves those
 /// numbers. The order does not: it decides only which few failing cases a
