@@ -30,8 +30,16 @@
 
 // This module is complete and tested but not yet wired into `normalize_allele`;
 // that is the migration step. Remove this allow when the wiring lands.
+//
+// The module (and `align`'s `AlignmentDag::build`/`edit_distance`, needed by
+// the `seqfirst_align` criterion benchmark) is `pub` only under the `dev`
+// feature so an external benchmark crate can reach it; it stays `pub(crate)`
+// otherwise, since there is no public API here yet.
 #![allow(dead_code)]
 
+#[cfg(feature = "dev")]
+pub mod align;
+#[cfg(not(feature = "dev"))]
 pub(crate) mod align;
 pub(crate) mod partition;
 

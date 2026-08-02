@@ -38,7 +38,12 @@ pub(crate) enum Step {
 /// Nodes are grid cells `(i, j)`, meaning "`i` reference bases and `j`
 /// alternate bases consumed". A cell is present only if some minimal alignment
 /// passes through it. Edges are the steps a minimal alignment may take.
-pub(crate) struct AlignmentDag {
+///
+/// `pub` (rather than `pub(crate)`) so the `seqfirst_align` criterion
+/// benchmark can name the type; actually reachable from outside the crate
+/// only when the enclosing `seqfirst`/`align` modules are also `pub`, which
+/// they are only under the `dev` feature — see `seqfirst/mod.rs`.
+pub struct AlignmentDag {
     ref_len: u32,
     alt_len: u32,
     total: u32,
@@ -54,7 +59,7 @@ impl AlignmentDag {
     ///
     /// Both slices are raw bases with common flanks already trimmed. Either may
     /// be empty. Cost is `O(ref_len * alt_len)` in time and space.
-    pub(crate) fn build(ref_block: &[u8], alt_block: &[u8]) -> Self {
+    pub fn build(ref_block: &[u8], alt_block: &[u8]) -> Self {
         let n = ref_block.len();
         let m = alt_block.len();
         let prefix = edit_grid(ref_block, alt_block);
@@ -120,7 +125,7 @@ impl AlignmentDag {
     }
 
     /// Minimal edit distance between the two blocks.
-    pub(crate) fn edit_distance(&self) -> u32 {
+    pub fn edit_distance(&self) -> u32 {
         self.total
     }
 

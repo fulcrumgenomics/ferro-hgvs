@@ -28,6 +28,19 @@ pub mod config;
 pub(crate) mod merge;
 mod overlap;
 pub mod rules;
+// `pub` only under the `dev` feature (test/bench builds), so the
+// `seqfirst_align` criterion benchmark — an external crate — can reach
+// `AlignmentDag::build`/`edit_distance`; `pub(crate)` otherwise, since there is
+// no public API here yet.
+//
+// Not "unwired into `normalize_allele`": it IS compiled in and run there, as a
+// shadow comparison behind `FERRO_SEQFIRST_SHADOW=1` that never affects output.
+// What remains is promoting it from shadow to authoritative. (Same correction as
+// the module's own header — this comment is its sibling and said the same wrong
+// thing.)
+#[cfg(feature = "dev")]
+pub mod seqfirst;
+#[cfg(not(feature = "dev"))]
 pub(crate) mod seqfirst;
 pub mod shuffle;
 pub mod validate;

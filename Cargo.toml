@@ -339,6 +339,11 @@ harness = false
 name = "baseline_head"
 harness = false
 
+[[bench]]
+name = "seqfirst_align"
+harness = false
+required-features = ["dev"]
+
 [profile.release]
 lto = true
 codegen-units = 1
