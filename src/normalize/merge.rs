@@ -1819,16 +1819,35 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         } else {
             MIN_SEPARATION_NO_FRAME
         };
-        let shadow = partition_block_sequence_first(
-            &ref_bytes[lo..hi_ref],
-            &result[lo..hi_alt],
-            min_separation,
-        );
+        let block = &ref_bytes[lo..hi_ref];
+        let shadow = partition_block_sequence_first(block, &result[lo..hi_alt], min_separation);
+        // Both sides are also compared after `shrink_pieces_to_differences`,
+        // because a split that only differs in how wide its members are is a
+        // difference the rendering stage removes. Reported as a third outcome
+        // rather than folded into either of the other two, so one run yields
+        // both the raw disagreement count and the count that survives
+        // minimisation. The shrink runs here before the 3'-shift, whereas the
+        // returned `pieces` are shrunk after it — see
+        // `shrinking_before_and_after_the_three_prime_shift_agree`.
+        let mut min_live = pieces.clone();
+        shrink_pieces_to_differences(&mut min_live, block);
+        let mut min_shadow = shadow.clone();
+        if let Some(min_shadow) = min_shadow.as_mut() {
+            shrink_pieces_to_differences(min_shadow, block);
+        }
         if shadow.as_ref() == Some(&pieces) {
             // The denominator. Without it, `grep -c SEQFIRST_SHADOW` returning 0
             // cannot be told apart from a shadow that never ran — the failure
             // mode that would make an audit of the disagreements vacuous.
             eprintln!("SEQFIRST_AGREE");
+        } else if min_shadow.as_ref() == Some(&min_live) {
+            eprintln!(
+                "SEQFIRST_MINAGREE ref={} alt={} live={:?} shadow={:?}",
+                String::from_utf8_lossy(block),
+                String::from_utf8_lossy(&result[lo..hi_alt]),
+                DebugPieces(&pieces),
+                shadow.as_deref().map(DebugPieces),
+            );
         } else {
             eprintln!(
                 // Space-separated, and no space inside a piece list, on purpose:
@@ -1836,11 +1855,13 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
                 // test output (`--success-output immediate`), so a tab-delimited
                 // report is unparseable in the one run mode that covers the whole
                 // suite. Verified by `od -c` on both run modes.
-                "SEQFIRST_SHADOW ref={} alt={} live={:?} shadow={:?}",
-                String::from_utf8_lossy(&ref_bytes[lo..hi_ref]),
+                "SEQFIRST_SHADOW ref={} alt={} live={:?} shadow={:?} min_live={:?} min_shadow={:?}",
+                String::from_utf8_lossy(block),
                 String::from_utf8_lossy(&result[lo..hi_alt]),
                 DebugPieces(&pieces),
                 shadow.as_deref().map(DebugPieces),
+                DebugPieces(&min_live),
+                min_shadow.as_deref().map(DebugPieces),
             );
         }
     }
@@ -1850,6 +1871,11 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     }
     shift_pieces_three_prime(&mut pieces, &ref_bytes);
     coalesce_adjacent_pieces(&mut pieces);
+    // Partitioning decides where the members are; this decides how wide each
+    // one is spelled, and the two are not the same question — see
+    // `shrink_pieces_to_differences`. Placed before the weight bound below so
+    // that the bound judges the pieces that will actually be rendered.
+    shrink_pieces_to_differences(&mut pieces, &ref_bytes);
 
     // A canonicalization may re-partition and re-type the change. It may not
     // describe *more* change than the input already did.
@@ -3138,6 +3164,43 @@ fn coalesce_adjacent_pieces(pieces: &mut Vec<Piece>) {
         } else {
             i += 1;
         }
+    }
+}
+
+/// Shrink each piece to the hull of its own differences.
+///
+/// A piece is a *region*, and a region is not obliged to be the narrowest span
+/// that spells the change it holds. Where an edit sits inside an ambiguous run
+/// the two come apart: on `ACAA -> CAACAG` the inserted `CA` can sit at more
+/// than one offset, so a partition derived from the alignment steps common to
+/// every minimal alignment confines it to `reference[0..1]` — which spells a
+/// `delins` of `CAA` over one base for what those same bases denote as an
+/// insertion of `CA`.
+///
+/// This is [`trim_common_flanks`] applied *within* a piece rather than to the
+/// whole block, and like that call it reads only the reference span and the
+/// payload — never the input spelling — so it cannot reintroduce a dependence
+/// on how the variant was written.
+///
+/// Only a `delins` can move. A deletion has no payload to share a flank with,
+/// an insertion spans no reference base, and a substitution's single base
+/// differs by construction, so each is returned untouched; the widened forms
+/// this exists to narrow are the only ones narrowed. Growing a run back to a
+/// `dup` or a repeat spelling is a rendering decision made downstream, on the
+/// narrowed member.
+fn shrink_pieces_to_differences(pieces: &mut [Piece], ref_bytes: &[u8]) {
+    for piece in pieces.iter_mut() {
+        let (lo, hi_ref, hi_alt) =
+            trim_common_flanks(&ref_bytes[piece.ref_start..piece.ref_end], &piece.alt);
+        // A piece that trims away entirely spells no change; leaving it whole
+        // keeps `anchor_for_piece` from building a member with no extent.
+        if lo == hi_ref && lo == hi_alt {
+            continue;
+        }
+        piece.alt.truncate(hi_alt);
+        piece.alt.drain(..lo);
+        piece.ref_end = piece.ref_start + hi_ref;
+        piece.ref_start += lo;
     }
 }
 
@@ -6182,6 +6245,279 @@ mod tests {
                 // `both` asserts the denotation on each side and that the block
                 // does in fact disagree.
                 both(reference, result);
+            }
+        }
+    }
+
+    /// Minimal member rendering — [`shrink_pieces_to_differences`].
+    ///
+    /// The decision this pins: keep the sequence-derived partition, and spell
+    /// each member as the hull of its own differences. A whole ambiguous run is
+    /// described as one unit only where that unit has an edit type of its own
+    /// (`dup`, `NNN[k]`), never as a `delins` spanning the run.
+    mod minimal_member_rendering {
+        use super::*;
+
+        /// `(ref_start, ref_end, alt)` triples, for terse expectations.
+        fn shape(pieces: &[Piece]) -> Vec<(usize, usize, &[u8])> {
+            pieces
+                .iter()
+                .map(|p| (p.ref_start, p.ref_end, p.alt.as_slice()))
+                .collect()
+        }
+
+        /// The sequence-first split of `reference -> result`, shrunk.
+        ///
+        /// At [`MIN_SEPARATION_NO_FRAME`], the threshold
+        /// `canonicalize_from_sequence` chooses on an axis with no reading
+        /// frame — which is the axis every block below was harvested from.
+        fn shrunk_sequence_first(reference: &[u8], result: &[u8]) -> Vec<Piece> {
+            let mut pieces =
+                partition_block_sequence_first(reference, result, MIN_SEPARATION_NO_FRAME)
+                    .expect("the sequence-first split must not decline on these blocks");
+            shrink_pieces_to_differences(&mut pieces, reference);
+            pieces
+        }
+
+        /// Every trimmed `(block, alternate)` pair drawn from `{A,C,G}` with
+        /// both sides of length 1..=4, excluding the pairs that trim away to no
+        /// change at all (which `canonicalize_from_sequence` returns early on).
+        ///
+        /// Small on purpose: the blocks the shrink acts on are already trimmed
+        /// and rarely long, and an exhaustive sweep of short blocks covers the
+        /// shapes — homopolymer, tandem 2-mer, net insertion, net deletion,
+        /// equal length — more evenly than a longer random sample would.
+        fn enumerated_blocks() -> Vec<(Vec<u8>, Vec<u8>)> {
+            fn words(alphabet: &[u8], max_len: usize) -> Vec<Vec<u8>> {
+                let mut out: Vec<Vec<u8>> = Vec::new();
+                let mut level = vec![Vec::new()];
+                for _ in 0..max_len {
+                    let mut next = Vec::new();
+                    for word in &level {
+                        for base in alphabet {
+                            let mut grown = word.clone();
+                            grown.push(*base);
+                            next.push(grown);
+                        }
+                    }
+                    out.extend(next.iter().cloned());
+                    level = next;
+                }
+                out
+            }
+
+            let words = words(b"ACG", 4);
+            let mut out = Vec::new();
+            for reference in &words {
+                for result in &words {
+                    let (lo, hi_ref, hi_alt) = trim_common_flanks(reference, result);
+                    if lo == hi_ref && lo == hi_alt {
+                        continue;
+                    }
+                    out.push((reference[lo..hi_ref].to_vec(), result[lo..hi_alt].to_vec()));
+                }
+            }
+            out
+        }
+
+        /// Substitute each piece's payload into `reference` (see the audit
+        /// module's `denotes`, duplicated here so this module stands alone).
+        fn denotes(reference: &[u8], pieces: &[Piece]) -> Vec<u8> {
+            let mut cursor = 0;
+            let mut out = Vec::new();
+            for piece in pieces {
+                assert!(piece.ref_start >= cursor, "pieces overlap: {pieces:?}");
+                out.extend_from_slice(&reference[cursor..piece.ref_start]);
+                out.extend_from_slice(&piece.alt);
+                cursor = piece.ref_end;
+            }
+            out.extend_from_slice(&reference[cursor..]);
+            out
+        }
+
+        /// Class `B1`: the sequence-first split widens a member over an indel it
+        /// will not localise. Shrinking each member to its own differences
+        /// recovers the minimal spelling — on all three blocks, the very piece
+        /// list `partition_block` produces.
+        ///
+        /// The blocks are the audit's pinned `B1` example plus two more taken
+        /// from the same harvest, chosen to cover both directions and the widest
+        /// widening seen: a net insertion widened by one base, a net deletion
+        /// widened by one base, and an 8-base homopolymer where the derived
+        /// member is 8 columns wider than the change it holds.
+        #[test]
+        fn shrinking_collapses_the_b1_blocks_onto_the_minimal_split() {
+            for (reference, result) in [
+                (b"ACAA".as_slice(), b"CAACAG".as_slice()),
+                (b"ACCAA", b"CAG"),
+                (b"AAAAAAAATA", b"TAAAAAAAAATG"),
+            ] {
+                let live = partition_block(reference, result);
+                let shrunk = shrunk_sequence_first(reference, result);
+                assert_eq!(
+                    shape(&shrunk),
+                    shape(&live),
+                    "block {} -> {}",
+                    String::from_utf8_lossy(reference),
+                    String::from_utf8_lossy(result)
+                );
+                assert_eq!(denotes(reference, &shrunk), result);
+                assert_eq!(
+                    changed_columns_of_pieces(&shrunk),
+                    changed_columns_of_pieces(&live)
+                );
+            }
+        }
+
+        /// The audit's `B1` block in full, with the weights it recorded: the
+        /// sequence-first split spends 4 changed columns, shrinking brings it
+        /// back to live's 3, and the widened `delins` of `CAA` over one base
+        /// becomes the insertion of `CA` those bases denote.
+        #[test]
+        fn the_pinned_b1_block_loses_its_spanning_delins() {
+            let reference = b"ACAA";
+            let raw = partition_block_sequence_first(reference, b"CAACAG", MIN_SEPARATION_NO_FRAME)
+                .expect("must partition");
+            assert_eq!(
+                shape(&raw),
+                [(0, 1, b"CAA".as_slice()), (3, 4, b"G".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&raw), 4);
+
+            let shrunk = shrunk_sequence_first(reference, b"CAACAG");
+            assert_eq!(
+                shape(&shrunk),
+                [(0, 0, b"CA".as_slice()), (3, 4, b"G".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&shrunk), 3);
+        }
+
+        /// The guard against over-shrinking, at the piece level: a deletion, an
+        /// insertion, a duplicating insertion and a substitution are returned
+        /// exactly as they arrived. None of them can share a flank between span
+        /// and payload, so the shrink reaches only `delins`-shaped pieces.
+        #[test]
+        fn a_deletion_insertion_dup_and_substitution_are_left_alone() {
+            let ref_bytes = b"AAAAAG";
+            for piece in [
+                // A 2-base deletion inside the A-run: no payload.
+                Piece {
+                    ref_start: 1,
+                    ref_end: 3,
+                    alt: Vec::new(),
+                },
+                // An insertion of two A into the same run: no reference span.
+                Piece {
+                    ref_start: 4,
+                    ref_end: 4,
+                    alt: b"AA".to_vec(),
+                },
+                // A duplicating insertion — `is_tandem_duplication` holds.
+                Piece {
+                    ref_start: 3,
+                    ref_end: 3,
+                    alt: b"A".to_vec(),
+                },
+                // A substitution: one base, and it differs.
+                Piece {
+                    ref_start: 5,
+                    ref_end: 6,
+                    alt: b"T".to_vec(),
+                },
+            ] {
+                let mut pieces = [piece.clone()];
+                shrink_pieces_to_differences(&mut pieces, ref_bytes);
+                assert_eq!(pieces[0], piece);
+            }
+        }
+
+        /// A piece whose span and payload are identical would trim to nothing.
+        /// It is left whole instead, so `anchor_for_piece` never sees a member
+        /// with no extent.
+        #[test]
+        fn a_piece_that_trims_away_entirely_is_left_alone() {
+            let piece = Piece {
+                ref_start: 0,
+                ref_end: 1,
+                alt: b"A".to_vec(),
+            };
+            let mut pieces = [piece.clone()];
+            shrink_pieces_to_differences(&mut pieces, b"A");
+            assert_eq!(pieces[0], piece);
+        }
+
+        /// The live splitter's own pieces are already minimal, so adding the
+        /// shrink to `canonicalize_from_sequence` cannot move them.
+        ///
+        /// `best_alignment` maximises matched columns, and a piece that shared a
+        /// flank between its span and its payload would mean a better placement
+        /// of the single gap was available — so the property is a consequence of
+        /// the search, not a coincidence. Enumerated over the same 14 280 blocks
+        /// as the ordering test: `partition_block`'s answer is a fixed point of
+        /// the shrink on every one.
+        #[test]
+        fn shrinking_never_moves_a_piece_the_live_splitter_produced() {
+            let mut compared = 0usize;
+            for (block, alt) in enumerated_blocks() {
+                let pieces = partition_block(&block, &alt);
+                let mut shrunk = pieces.clone();
+                shrink_pieces_to_differences(&mut shrunk, &block);
+                assert_eq!(
+                    shape(&shrunk),
+                    shape(&pieces),
+                    "the shrink moved a live piece on {} -> {}",
+                    String::from_utf8_lossy(&block),
+                    String::from_utf8_lossy(&alt)
+                );
+                compared += 1;
+            }
+            assert_eq!(compared, 14_280);
+        }
+
+        /// Shrinking commutes with the 3'-shift.
+        ///
+        /// `canonicalize_from_sequence` shifts, coalesces, then shrinks; the
+        /// opposite order — shrink, then shift and coalesce — is not obviously
+        /// the same pipeline, because shrinking can turn a `delins` into a pure
+        /// indel and only pure indels shift. Enumerated over every block pair
+        /// drawn from `{A,C,G}` of length 1..=4 on each side, at both separation
+        /// thresholds (14 280 partitioned blocks per threshold), the two orders
+        /// agree on every block.
+        #[test]
+        fn shrinking_before_and_after_the_three_prime_shift_agree() {
+            let blocks = enumerated_blocks();
+            for min_separation in [
+                MIN_SEPARATION_NO_FRAME,
+                crate::normalize::seqfirst::MIN_SEPARATION,
+            ] {
+                let mut compared = 0usize;
+                for (block, alt) in &blocks {
+                    let Some(pieces) = partition_block_sequence_first(block, alt, min_separation)
+                    else {
+                        continue;
+                    };
+
+                    let mut shift_first = pieces.clone();
+                    shift_pieces_three_prime(&mut shift_first, block);
+                    coalesce_adjacent_pieces(&mut shift_first);
+                    shrink_pieces_to_differences(&mut shift_first, block);
+
+                    let mut shrink_first = pieces.clone();
+                    shrink_pieces_to_differences(&mut shrink_first, block);
+                    shift_pieces_three_prime(&mut shrink_first, block);
+                    coalesce_adjacent_pieces(&mut shrink_first);
+
+                    assert_eq!(
+                        shape(&shift_first),
+                        shape(&shrink_first),
+                        "orders disagree at min_separation {min_separation} on {} -> {}",
+                        String::from_utf8_lossy(block),
+                        String::from_utf8_lossy(alt)
+                    );
+                    compared += 1;
+                }
+                // Every enumerated block partitions; none declines.
+                assert_eq!(compared, blocks.len());
             }
         }
     }

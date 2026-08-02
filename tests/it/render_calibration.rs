@@ -17,15 +17,20 @@
 //! covered is the full pairwise ladder — each row shows one outcome winning,
 //! not that it beats every lower-ranked alternative in turn.
 //!
-//! **Repeat/STR notation is not exercised, because on this axis ferro does not
-//! emit it.** Measured against these same synthetic references: over core
-//! `CAGCAGCAGG`, a fourth `CAG` copy (whether spelled `g.265_266insCAG` or
-//! `g.263_265dup`) renders as `g.263_265dup`, and dropping a copy
-//! (`g.263_265del`) renders as `g.263_265del` — never `CAG[4]`/`CAG[2]`. That
-//! is consistent with prioritisation (duplication outranks insertion) and is
-//! not asserted here to be right or wrong; it is recorded so that a future
-//! change which starts emitting repeat notation is understood as a deliberate
-//! behavioural change and not a silent regression against untested ground.
+//! **Repeat/STR notation is exercised, on both sides of the boundary where
+//! ferro starts emitting it.** One unit added or removed stays a `dup`/`del`:
+//! over core `CAGCAGCAGG`, a fourth `CAG` copy (whether spelled
+//! `g.265_266insCAG` or `g.263_265dup`) renders as `g.263_265dup`, and dropping
+//! a copy (`g.263_265del`) renders as `g.263_265del` — never `CAG[4]`/`CAG[2]`,
+//! which is consistent with prioritisation (duplication outranks insertion).
+//! Two units is where the whole run is described as one repeat instead, and
+//! `repeat_notation_describes_the_whole_run` pins that.
+//!
+//! Which side of that boundary a change falls on is a rendering decision, and
+//! it is the one place this axis describes a whole ambiguous run as a single
+//! member. It does so only as `dup` or `NNN[k]` — never as a `delins` spanning
+//! the run — so those rows are the guard against a minimisation pass that
+//! narrows more than it should.
 
 use crate::common::cis_apply_oracle::normalize;
 use crate::common::synthetic::padded;
@@ -119,13 +124,60 @@ fn rendering_rules_are_pinned() {
     }
 }
 
+/// Where a change inside a homopolymer is described as the whole run, and where
+/// it is not.
+///
+/// One unit is localised (`g.263del`, `g.261dup` — the same answers rows 1 and 2
+/// of `CASES` pin); two units is spelled as the whole tract in repeat notation,
+/// which is *wider* than the change itself. Both directions grow: a 2-base
+/// deletion out of a 7-A run and a 2-base insertion into a 5-A run.
+///
+/// The grown forms are the ones to watch. They are the only members on this axis
+/// that describe more reference than they change, and they are legitimate
+/// because `NNN[k]` is an edit type of its own — a `delins` over the same span
+/// would not be. Any pass that narrows members to their differences must leave
+/// these four rows exactly as they are.
+#[test]
+fn repeat_notation_describes_the_whole_run() {
+    for (core, input, expected) in [
+        // Core `AAAAAA` at 257..262, and the pad's trailing `A` at 263 extends
+        // it, so the run is 257..263 — seven A.
+        ("AAAAAA", "TEMPLATE:g.260del", "TEMPLATE:g.263del"),
+        ("AAAAAA", "TEMPLATE:g.260_261del", "TEMPLATE:g.257_263A[5]"),
+        // Core `CAAAAG`: a four-A run at 258..261.
+        ("CAAAAG", "TEMPLATE:g.260_261insA", "TEMPLATE:g.261dup"),
+        (
+            "CAAAAG",
+            "TEMPLATE:g.260_261insAA",
+            "TEMPLATE:g.258_261A[6]",
+        ),
+    ] {
+        let seq = padded(core);
+        let got = normalize(&seq, input);
+        assert_eq!(
+            &got, expected,
+            "`{input}` over core `{core}` rendered as `{got}`, expected `{expected}`"
+        );
+    }
+}
+
 /// Rendering must not depend on which equivalent spelling was supplied: two
 /// spellings of one single-member variant must render identically.
 #[test]
 fn rendering_does_not_depend_on_the_input_spelling() {
-    for (core, a, b) in [
-        ("CTAGG", "TEMPLATE:g.258_259insT", "TEMPLATE:g.258dup"),
-        ("CAAAAG", "TEMPLATE:g.258del", "TEMPLATE:g.261del"),
+    for (core, a, b, expected) in [
+        (
+            "CTAGG",
+            "TEMPLATE:g.258_259insT",
+            "TEMPLATE:g.258dup",
+            "TEMPLATE:g.258dup",
+        ),
+        (
+            "CAAAAG",
+            "TEMPLATE:g.258del",
+            "TEMPLATE:g.261del",
+            "TEMPLATE:g.261del",
+        ),
         // A tandem-repeat expansion, reached from both spellings: inserting a
         // fourth `CAG` after the tract, versus duplicating the third copy.
         // Both denote `CAGCAGCAGCAGG` and must render alike.
@@ -133,10 +185,20 @@ fn rendering_does_not_depend_on_the_input_spelling() {
             "CAGCAGCAGG",
             "TEMPLATE:g.265_266insCAG",
             "TEMPLATE:g.263_265dup",
+            "TEMPLATE:g.263_265dup",
         ),
     ] {
         let seq = padded(core);
         let (na, nb) = (normalize(&seq, a), normalize(&seq, b));
         assert_eq!(na, nb, "`{a}` -> `{na}` but `{b}` -> `{nb}`");
+        // Agreement alone is not enough: two spellings converging on the same
+        // *wrong* form satisfies it. Rows 1 and 2 are anchored elsewhere (in
+        // `CASES` and in `repeat_notation_describes_the_whole_run`); the third was
+        // anchored nowhere, so its expected answer — stated in this module's own
+        // doc — is pinned here.
+        assert_eq!(
+            na, expected,
+            "both spellings agree, but on `{na}` rather than the pinned `{expected}`"
+        );
     }
 }
