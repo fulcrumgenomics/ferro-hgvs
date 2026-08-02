@@ -76,6 +76,21 @@ pub enum Status {
     /// Projection with no spec-stated expectation that errored, pinned as a
     /// baseline.
     ProjectionErrorPinned,
+    /// A single-member input that projects to a **multi-member** allele.
+    ///
+    /// The spec is explicit that the split spelling is the wrong one:
+    /// `DNA/delins.md:42` names `c.[145C>T;147C>G]` as "not correct" for
+    /// exactly the input whose delins spelling it recommends, and
+    /// `DNA/delins.md:47` states the delins format is preferred because it
+    /// "prevents software tools making incorrect predictions for the
+    /// consequences on protein level". A projection that turns one member into
+    /// several is producing that discouraged form.
+    ///
+    /// Split out from [`ProjectionPinned`](Status::ProjectionPinned) by #1272 so
+    /// the shape is *counted* rather than absorbed. A regression that starts
+    /// splitting a projection moves a row into this status and trips the
+    /// committed budget; before, the new string was silently re-recorded.
+    ProjectionSplitsSingleMember,
     /// A status string the generator emitted that is not (yet) a known variant.
     /// Its name is preserved so the #1107 accounted-for guard can report it.
     Unknown(String),
@@ -103,6 +118,7 @@ impl Status {
             Status::ProjectionPinned => "projection-pinned",
             Status::ProjectionUnavailablePinned => "projection-unavailable-pinned",
             Status::ProjectionErrorPinned => "projection-error-pinned",
+            Status::ProjectionSplitsSingleMember => "projection-splits-single-member",
             Status::Unknown(s) => s,
         }
     }
@@ -128,6 +144,7 @@ impl Status {
             "projection-pinned" => Status::ProjectionPinned,
             "projection-unavailable-pinned" => Status::ProjectionUnavailablePinned,
             "projection-error-pinned" => Status::ProjectionErrorPinned,
+            "projection-splits-single-member" => Status::ProjectionSplitsSingleMember,
             other => Status::Unknown(other.to_string()),
         }
     }
@@ -238,7 +255,16 @@ mod tests {
             "projection-pinned",
             "projection-unavailable-pinned",
             "projection-error-pinned",
+            "projection-splits-single-member",
         ];
+        // A variant missing from `names` is not a failure, just untested — so
+        // pin the count too, or adding a variant silently skips its round-trip.
+        assert_eq!(
+            names.len(),
+            18,
+            "a Status variant was added or removed — update `names` above so the \
+             new variant's round-trip is actually covered"
+        );
         for name in names {
             let status = Status::from_wire(name);
             assert!(

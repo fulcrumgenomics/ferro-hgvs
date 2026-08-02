@@ -1736,6 +1736,16 @@ mod builder {
                         NormativeLevel::Na,
                         None,
                         match result {
+                            // A rendered projection is pinned as a baseline —
+                            // except when it split a single-member input into
+                            // several members, which the spec discourages and
+                            // which #1272 wants counted rather than absorbed.
+                            AxisResult::Rendered(_)
+                                if !renders_multiple_members(&target)
+                                    && renders_multiple_members(&observed) =>
+                            {
+                                Status::ProjectionSplitsSingleMember
+                            }
                             AxisResult::Rendered(_) => Status::ProjectionPinned,
                             AxisResult::Unavailable(_) => Status::ProjectionUnavailablePinned,
                             AxisResult::Error(_) => Status::ProjectionErrorPinned,
@@ -1831,6 +1841,30 @@ mod builder {
             || message.contains("Reference not found")
     }
 
+    /// Does this description denote an allele of **several** members?
+    ///
+    /// A cis/trans allele always renders its members inside a bracket placed
+    /// directly after the coordinate prefix — `LRG_199:g.[…]`, `c.[…]` for the
+    /// spec's accession-less fragments, `NM_000797.3:r.[(…)]` for a predicted
+    /// RNA allele. So "bracket immediately after `<axis>.`" is the
+    /// discriminator, and the axis letter must start the token (string start or
+    /// straight after the `:`) so an accession's own dot cannot match.
+    ///
+    /// Anchoring this way is what keeps a bracket that means something else
+    /// from counting. `NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]`
+    /// (delins.md's translocation example) carries a bracketed *insert source*,
+    /// not members, and its bracket does not follow `g.` — so it is correctly
+    /// read as a single member.
+    fn renders_multiple_members(s: &str) -> bool {
+        let b = s.as_bytes();
+        b.iter().enumerate().any(|(i, c)| {
+            matches!(c, b'g' | b'c' | b'n' | b'r' | b'p' | b'm' | b'o')
+                && b.get(i + 1) == Some(&b'.')
+                && b.get(i + 2) == Some(&b'[')
+                && (i == 0 || b[i - 1] == b':')
+        })
+    }
+
     /// Does ferro's projected string match the form the spec states?
     ///
     /// The spec writes a projected form two ways. Fully qualified
@@ -1882,6 +1916,43 @@ mod builder {
                     format!("{} warnings={}", r.result, codes.join(","))
                 }
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn multi_member_detection_keys_on_the_bracket_after_the_axis() {
+            // Rendered alleles, accession-qualified and (as the spec writes many
+            // of its fragments) bare.
+            assert!(renders_multiple_members("LRG_199:g.[494841C>T;494843C>G]"));
+            assert!(renders_multiple_members("c.[145C>T;147C>G]"));
+            // A predicted RNA/protein allele nests its members in parentheses
+            // inside the same bracket.
+            assert!(renders_multiple_members(
+                "NM_000797.3:r.[(812g>c;815_816inv)]"
+            ));
+            assert!(renders_multiple_members(
+                "NP_000788.2:p.[(Arg271_Gly272delinsProAsp);(Pro276_Asp277delinsSerAsn)]"
+            ));
+
+            // Single members, including the two shapes that would fool a naive
+            // "contains a bracket" test.
+            assert!(!renders_multiple_members(
+                "LRG_199:g.646630_646681delinsTTCCTCGATGCCTG"
+            ));
+            assert!(!renders_multiple_members("NM_004006.2:c.235_238delinsTAGT"));
+            // delins.md's translocation example: the bracket is an insert
+            // *source*, not a member list, and does not follow `g.`.
+            assert!(!renders_multiple_members(
+                "NC_000002.12:g.pter_8247756delins[NC_000011.10:g.pter_15825266]"
+            ));
+            // An accession's own dot must never be read as an axis prefix.
+            assert!(!renders_multiple_members(
+                "NM_000797.3:c.812_829delins908_925"
+            ));
         }
     }
 }

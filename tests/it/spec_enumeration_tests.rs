@@ -12,6 +12,20 @@
 //! The fixture is generated and gitignored; regenerate it with
 //! `cargo run --features dev --bin generate_spec_enumeration`.
 //!
+//! **Which assertions here are real oracles (#1272).** Because the fixture is
+//! regenerated from the code under test before every CI run,
+//! [`enumeration_replays_recorded_behavior`] compares ferro against itself and
+//! can only fire on a stale local artifact. The assertions that can actually
+//! catch a behaviour change are the ones backed by something *committed*:
+//!
+//! - [`DIVERGENCE_BUDGET`] and [`PASSING_CENSUS`] — per-status row counts, which
+//!   between them total every row.
+//! - [`passing_spec_mandated_musts_stay_passing`] — replays against `expected`,
+//!   which comes from the committed overrides file, not from ferro.
+//!
+//! Read a drift in the replay test as "decide whether this change was
+//! deliberate", never as "regenerate".
+//!
 //! Rows whose recorded behaviour diverges from the spec are **not** failures
 //! here. They are classified (`repair-diverges`, `false-acceptance`,
 //! `invariant-violation-must`, …) and counted against a committed budget, so
@@ -198,7 +212,16 @@ fn enumeration_replays_recorded_behavior() {
     assert!(replayed > 300, "replayed too few rows ({replayed})");
     assert!(
         diffs.is_empty(),
-        "{} enumeration row(s) drifted. Regenerate if intentional:\n  \
+        "{} enumeration row(s) drifted.\n\n\
+         This can only mean your *local* fixture is stale: it is gitignored and \
+         regenerated before every CI run, so on CI the recorded and observed sides \
+         always agree and this assertion cannot fire. It is a stale-artifact detector, \
+         not a regression detector — see the module docs and #1272.\n\n\
+         So do NOT reach for the regenerate command first. A drift here means your \
+         code changed behaviour since the artifact was written, and the question is \
+         whether that was deliberate. The guards that actually judge it are the \
+         committed ones — DIVERGENCE_BUDGET and PASSING_CENSUS — so run the full \
+         module after regenerating and see whether they move:\n  \
          cargo run --features dev --bin generate_spec_enumeration\n\n{}",
         diffs.len(),
         diffs
@@ -265,6 +288,42 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     (Status::FormAxisDiverges, 3),
     // Projections whose rendered form differs from the one the spec states.
     (Status::ProjectionDiverges, 0),
+    // Single-member inputs that project to a multi-member allele — the form
+    // `DNA/delins.md:42` calls "not correct". See
+    // `Status::ProjectionSplitsSingleMember`; added by #1272, which is also what
+    // makes the LRG_199 delins regression visible.
+    (Status::ProjectionSplitsSingleMember, 10),
+];
+
+/// Census of the **conformant** statuses — the counting half of
+/// [`KNOWN_PASSING_STATUSES`].
+///
+/// **Why this exists (#1272).** `divergence_budget_is_unchanged` iterates only
+/// [`DIVERGENCE_BUDGET`], so every status in `KNOWN_PASSING_STATUSES` was
+/// counted by nothing at all. That is 2136 of the enumeration's 2184 rows, free
+/// to move among themselves with no signal — a projection could go from
+/// rendering a string to erroring and no test would notice, because
+/// `every_observed_status_is_accounted_for` only rejects status names it has
+/// never seen, not changes in how many rows carry each one.
+///
+/// Together with `DIVERGENCE_BUDGET` this makes the census total, so every row
+/// is counted by exactly one committed table.
+///
+/// **Known residual.** These are counts, not row-id sets, so a *compensating*
+/// swap — one row entering a status while another leaves it — is invisible.
+/// Committing 2136 row ids would close that, at the cost of re-creating the
+/// merge-conflict magnet that got the fixture decommitted in the first place.
+/// Counts catch every non-compensating move, which is the realistic regression.
+const PASSING_CENSUS: &[(Status, usize)] = &[
+    (Status::CorrectlyRejected, 8),
+    (Status::Repaired, 6),
+    (Status::FormAxisOk, 120),
+    (Status::FormAxisPinned, 0),
+    (Status::Preserved, 6),
+    (Status::ProjectionPinned, 1180),
+    (Status::ProjectionUnavailablePinned, 469),
+    (Status::ProjectionErrorPinned, 215),
+    (Status::ModeDivergencePinned, 132),
 ];
 
 /// Does a projected string match the form the spec states? Mirrors
@@ -298,6 +357,66 @@ fn divergence_budget_is_unchanged() {
          regressed, this is a real defect. Update DIVERGENCE_BUDGET deliberately.\n{}",
         mismatches.join("\n")
     );
+}
+
+/// The conformant half of the census. See [`PASSING_CENSUS`] for why counting
+/// these matters — before #1272 they were counted by nothing.
+#[test]
+fn passing_census_is_unchanged() {
+    let fx = load();
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for row in &fx.rows {
+        *counts.entry(row.status.as_str()).or_default() += 1;
+    }
+    let mut mismatches = Vec::new();
+    for (status, expected) in PASSING_CENSUS {
+        let actual = counts.get(status.as_str()).copied().unwrap_or(0);
+        if actual != *expected {
+            mismatches.push(format!("  {status}: census {expected}, actual {actual}"));
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "the conformant-status census changed. A row moved between statuses without \
+         changing the divergence budget — e.g. a projection that used to render a \
+         string now errors. Decide whether that is an improvement or a regression, \
+         then update PASSING_CENSUS deliberately (#1272).\n{}",
+        mismatches.join("\n")
+    );
+}
+
+/// Every row must be counted by exactly one of the two committed tables.
+///
+/// This is what makes the census *total*. Without it a status could be dropped
+/// from both tables and silently stop being counted, which is the failure mode
+/// #1272 is about — the guard has to notice its own coverage shrinking.
+#[test]
+fn every_status_is_counted_by_exactly_one_table() {
+    let fx = load();
+    let budgeted: usize = DIVERGENCE_BUDGET.iter().map(|(_, n)| n).sum();
+    let passing: usize = PASSING_CENSUS.iter().map(|(_, n)| n).sum();
+    assert_eq!(
+        budgeted + passing,
+        fx.rows.len(),
+        "the two census tables cover {} rows but the enumeration has {}. Every row must \
+         be counted exactly once: add the missing status to DIVERGENCE_BUDGET (if it \
+         records a spec divergence) or PASSING_CENSUS (if it is conformant).",
+        budgeted + passing,
+        fx.rows.len()
+    );
+
+    for (status, _) in PASSING_CENSUS {
+        assert!(
+            KNOWN_PASSING_STATUSES.contains(status),
+            "{status} is counted as conformant but is not in KNOWN_PASSING_STATUSES"
+        );
+    }
+    for status in KNOWN_PASSING_STATUSES {
+        assert!(
+            PASSING_CENSUS.iter().any(|(s, _)| s == status),
+            "{status} is allowlisted as conformant but PASSING_CENSUS does not count it"
+        );
+    }
 }
 
 /// Known passing/expected statuses that are deliberately **not** part of the
@@ -509,4 +628,104 @@ fn passing_spec_mandated_musts_stay_passing() {
         regressions.len(),
         regressions.join("\n")
     );
+}
+
+/// Projecting a result **back onto its own axis** must be a fixed point.
+///
+/// The one metamorphic relation in this file, and the only assertion here whose
+/// oracle is neither the fixture nor a committed count: it compares ferro's
+/// projection pipeline against *itself run twice*, which a regeneration cannot
+/// reconcile. A projection that does not converge on its own axis is wrong
+/// however it was recorded.
+///
+/// Restricted to same-axis rows on purpose. Re-projecting a *cross*-axis result
+/// asks a different question and the answer is a legitimate decline — a `g.`
+/// string carries no transcript frame to return through, so `project-c` of a
+/// `project-g` result reports "not applicable" by design, not as a defect.
+///
+/// Two relations that look adjacent were measured and rejected rather than
+/// left as follow-ons:
+///
+/// - **`r.` equals `c.` with `t`→`u`.** False. The axes legitimately differ:
+///   `r.` drops intronic offsets, because a spliced RNA has no introns
+///   (`c.94-23_188+33=` projects to `r.(94_188=)`), and its numbering base
+///   differs (`c.3921del` → `r.(3922del)`). 15 of 271 pairs differ for those
+///   reasons. Asserting the relation would pin a false invariant.
+/// - **`c` → `g` → `c` round-trip identity.** Not expressible: the return leg
+///   is the decline described above.
+#[test]
+fn a_projection_is_a_fixed_point_on_its_own_axis() {
+    let fx = load();
+    let ctx = Replayer::new();
+    let Some(projector) = ctx.projector.as_ref() else {
+        eprintln!("projection slice absent — skipping");
+        return;
+    };
+
+    let mut divergent = Vec::new();
+    let mut checked = 0usize;
+
+    for row in &fx.rows {
+        let Some(axis) = row.operation.strip_prefix("project-") else {
+            continue;
+        };
+        let Some(code) = axis.chars().next() else {
+            continue;
+        };
+        // Same-axis rows only: the input's own coordinate prefix must match.
+        let core = row.target.rsplit(':').next().unwrap_or(&row.target);
+        if !core.starts_with(&format!("{axis}.")) {
+            continue;
+        }
+        let Some(once) = replay(row, &ctx) else {
+            continue;
+        };
+        if !is_rendered(&once) {
+            continue;
+        }
+        let Ok(reparsed) = parse_hgvs(&once) else {
+            continue;
+        };
+        let twice = spec_projection::project_all_axes(projector, &reparsed)
+            .axes
+            .get(&code)
+            .map(|r| r.as_observed());
+        let Some(twice) = twice else { continue };
+        if !is_rendered(&twice) {
+            continue;
+        }
+        checked += 1;
+        if twice != once {
+            divergent.push(format!(
+                "  {}\n    first pass : {once}\n    second pass: {twice}",
+                row.id
+            ));
+        }
+    }
+
+    eprintln!("spec enumeration: {checked} same-axis projections re-projected");
+    assert!(
+        checked > 300,
+        "re-projected too few rows ({checked}) — the same-axis filter or the \
+         committed slice changed shape"
+    );
+    assert!(
+        divergent.is_empty(),
+        "{} projection(s) are not a fixed point on their own axis. Unlike the \
+         replay test, nothing about this is recorded in the fixture — a \
+         regeneration cannot make it pass (#1272).\n{}",
+        divergent.len(),
+        divergent.join("\n")
+    );
+}
+
+/// Did the projector actually render a description, as opposed to declining?
+///
+/// `AxisResult`'s non-rendered arms stringify to a prose reason rather than an
+/// HGVS string, and all three are legitimate outcomes here, so they are skipped
+/// rather than compared.
+fn is_rendered(observed: &str) -> bool {
+    !observed.starts_with("error")
+        && !observed.starts_with("unavailable")
+        && !observed.starts_with("not applicable")
 }
