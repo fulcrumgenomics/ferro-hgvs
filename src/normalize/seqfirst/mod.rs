@@ -33,6 +33,7 @@
 #![allow(dead_code)]
 
 pub(crate) mod align;
+pub(crate) mod partition;
 
 /// Unchanged reference bases two runs of change must be separated by before the
 /// split between them is believed.
