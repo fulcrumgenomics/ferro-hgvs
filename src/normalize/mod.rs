@@ -2680,6 +2680,14 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 allele.uncertain,
                 &self.provider,
             );
+            // Last, once every span above has settled: a member that cancelled
+            // to `=` while a sibling grew over the bases it names is a
+            // contradiction, and an overlap (#1297).
+            merge::drop_identity_members_covered_by_siblings(
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+            );
 
             pass += 1;
             // Stable once a full pass leaves the member set unchanged.

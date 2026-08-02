@@ -170,6 +170,7 @@ mod issue_1287_repeat_span_junction;
 mod issue_1290_junction_crosses_junction;
 mod issue_1292_junction_payload_rotation;
 mod issue_1296_repeat_claims_its_bases;
+mod issue_1297_cancelled_identity_member;
 mod issue_129_mt_circular_wraparound;
 mod issue_1301_adjacent_gap_member_order;
 mod issue_1304_junction_barrier_snapshot;

@@ -4114,6 +4114,73 @@ fn translate_junction_member<P: ReferenceProvider>(
     }
 }
 
+/// Drop a cis member asserting **no change** at a position another member
+/// changes.
+///
+/// An identity member (`265=`) says a position was examined and found
+/// unchanged. That is real information when it stands alone, so `g.[1002=;
+/// 1005del]` keeps both. It is a contradiction when a sibling claims the same
+/// bases, and the pair also overlaps — two members on one position, which
+/// #1235's second criterion forbids and the apply oracle declines.
+///
+/// The shape is not authored, it is derived: a `del` and an `ins` that merge
+/// into a `delins` restating the reference cancel to `=`, and the member that
+/// absorbed the change then grows over it (#1297).
+///
+/// ```text
+/// g.[261_262insAA;263del;264_265insA]  ->  g.[262_265A[6];265=]
+///   the repeat alone denotes the input; the `265=` residue overlaps it
+/// ```
+///
+/// Only the identity member is dropped, and only when a sibling *claims* the
+/// bases under it — a sibling that merely adds sequence at a junction inside it
+/// contradicts nothing.
+pub(crate) fn drop_identity_members_covered_by_siblings(
+    members: &mut Vec<HgvsVariant>,
+    phase: AllelePhase,
+    uncertain: bool,
+) {
+    if phase != AllelePhase::Cis || uncertain || members.len() < 2 {
+        return;
+    }
+    let Some(kind) = cis_kind_of(&members[0]) else {
+        return;
+    };
+    let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
+    let is_identity = |v: &HgvsVariant| {
+        matches!(
+            cis_axis_parts(v, kind).map(|(_, _, _, _, edit)| edit),
+            Some(NaEdit::Identity { .. })
+        )
+    };
+
+    let covered: Vec<bool> = (0..members.len())
+        .map(|i| {
+            let (Some(span), true) = (spans[i].as_ref(), is_identity(&members[i])) else {
+                return false;
+            };
+            (0..members.len()).filter(|&j| j != i).any(|j| {
+                spans[j].as_ref().is_some_and(|s| {
+                    s.claims_bases
+                        && s.region == span.region
+                        && s.accession == span.accession
+                        && s.start <= span.start
+                        && s.end >= span.end
+                })
+            })
+        })
+        .collect();
+    if !covered.iter().any(|&drop| drop) {
+        return;
+    }
+    let mut index = 0;
+    members.retain(|_| {
+        let keep = !covered[index];
+        index += 1;
+        keep
+    });
+}
+
 /// Whether two junction payloads may be reordered without changing what the
 /// allele denotes.
 ///
