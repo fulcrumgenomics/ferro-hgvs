@@ -1,0 +1,184 @@
+# Detect open pull requests whose head commit has no CI run.
+#
+# A pushed head commit does not always end up with a `pull_request: synchronize`
+# run. When it does not, the PR keeps the head SHA you pushed and simply has no
+# run for it — and because `gh pr checks` reports only the checks that *did*
+# report, a PR in this state renders **"All checks have passed"** off the back of
+# whatever non-Actions check happens to be present (CodeRabbit's "Review
+# skipped", say). Green badge, no CI, no signal that anything is missing.
+#
+# Observed on #1242, #1243 and #1237 on 2026-07-30: correct head SHAs on GitHub,
+# zero workflow runs, all showing a full green board.
+#
+# One *possible* cause — inferred, not confirmed — is `gh pr edit --base` rather
+# than the force-push itself. Restacking four PRs in one session was suggestive:
+# three were pushed without a base change and all dispatched a run; the fourth
+# was pushed and then retargeted, and did not. Retargeting fires `pull_request:
+# edited`, which is not in the default `types:` set, and *may* supersede the
+# pending `synchronize` for that head. That is a hypothesis drawn from four
+# observations, not a documented GitHub behavior, so this workflow keys on the
+# *state* (a head with no run) rather than on any presumed trigger.
+#
+# `ci.yml`'s own `on:` block documents a *different* cause of the same silent
+# green (a `branches:` filter matching the PR base) and fixes it there. This
+# workflow addresses the class rather than a cause: whatever the reason, a PR
+# whose head has never been built should be visible as a problem.
+#
+# Why a scheduled audit and not a required status check: a required check is
+# the stronger fix, since it blocks the merge rather than reporting after the
+# fact — but `main` is not a protected branch, so adopting one is a repository
+# policy decision rather than a workflow change. This is the part that can be
+# fixed in-repo, and it stays useful afterwards as the thing that tells you
+# *why* a merge is blocked.
+#
+# The recovery, once this audit flags a PR: confirm the head SHA on the PR still
+# matches what you pushed and that no run exists for it, then close and reopen.
+# `pull_request` with no explicit `types:` defaults to `[opened, synchronize,
+# reopened]`, so the reopen dispatches a fresh run without touching history.
+# Reopening a PR that *does* have a run for its head only burns a duplicate run,
+# so verify before reaching for it.
+
+name: Audit PR runs
+
+on:
+  schedule:
+    # Hourly. The failure mode is a stalled PR, not a broken build, so
+    # detection latency of up to an hour costs nothing — and a tighter cadence
+    # would spend API budget re-listing the same PRs.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Every open PR has a CI run for its head
+    runs-on: ubuntu-latest
+    # One API call per open PR, so seconds in practice. Bounded anyway because
+    # this runs hourly: a `gh` call that hangs would otherwise sit against the
+    # 6-hour default limit 24 times a day.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    outputs:
+      # Set only on the confirmed-missing path, so the report job can tell a
+      # real finding from an infrastructure failure of this job.
+      missing_runs: ${{ steps.audit.outputs.missing_runs }}
+    steps:
+      - name: Find open PRs whose head SHA has no CI run
+        id: audit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # The workflow is identified by its file name rather than its `name:`,
+          # so renaming it in ci.yml cannot turn this audit into a permanent
+          # false positive. The file existing is still asserted below.
+          CI_WORKFLOW_FILE: ci.yml
+        run: |
+          set -euo pipefail
+
+          # Fail loudly if the workflow being audited does not exist, rather
+          # than reporting every PR as missing a run it could never have had.
+          if ! workflow=$(gh api "repos/$REPO/actions/workflows/$CI_WORKFLOW_FILE" \
+                            --jq '[.id, .name] | @tsv'); then
+            echo "::error::no workflow file '$CI_WORKFLOW_FILE' in $REPO —" \
+                 "update CI_WORKFLOW_FILE in this file to match the CI workflow's path"
+            exit 1
+          fi
+          IFS=$'\t' read -r workflow_id workflow_name <<< "$workflow"
+
+          # Draft PRs are included on purpose: a draft with no CI is exactly as
+          # misleading to its author as a ready one, and cheaper to fix early.
+          # Paginated rather than `gh pr list --limit N`, which returns at most
+          # N and would let every later PR pass unaudited.
+          gh api --paginate "repos/$REPO/pulls?state=open&per_page=100" \
+            --jq '.[] | [.number, .head.sha, .head.ref, .draft] | @tsv' > prs.tsv
+
+          echo "auditing $(wc -l < prs.tsv) open pull request(s) against '$workflow_name'"
+          : > missing.txt
+
+          while IFS=$'\t' read -r number sha branch draft; do
+            # Runs are looked up by head SHA, not by branch: a branch-scoped
+            # query answers "has this branch ever built", which is true for a
+            # stale run on the previous head and is not the question.
+            #
+            # The workflow-scoped endpoint filters server-side and reports
+            # `total_count` for the whole result set, so a zero is trustworthy
+            # without walking pages — unlike the repository-wide run list,
+            # where a matching run can sit past the first page.
+            count=$(gh api \
+              "repos/$REPO/actions/workflows/$workflow_id/runs?head_sha=$sha&per_page=1" \
+              --jq '.total_count')
+            if [ "$count" -eq 0 ]; then
+              label="#$number ($branch, ${sha:0:7})"
+              [ "$draft" = "true" ] && label="$label [draft]"
+              echo "  MISSING  $label"
+              echo "- $label — https://github.com/$REPO/pull/$number" >> missing.txt
+            else
+              echo "  ok       #$number ${sha:0:7} ($count run(s))"
+            fi
+          done < prs.tsv
+
+          if [ -s missing.txt ]; then
+            {
+              echo "### Pull requests with no \`$workflow_name\` run for their head commit"
+              echo
+              cat missing.txt
+              echo
+              echo "These render as passing because only non-Actions checks reported."
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "missing_runs=true" >> "$GITHUB_OUTPUT"
+            echo "::error::$(wc -l < missing.txt) open PR(s) have no CI run for their head commit"
+            exit 1
+          fi
+
+          echo "every open PR has a CI run for its head commit"
+
+  report:
+    needs: [audit]
+    # Gated on the audit's own finding rather than on `failure()` alone: this
+    # job must not file an issue when the audit itself broke (missing workflow
+    # file, `gh` API error), which `failure()` on its own cannot distinguish.
+    if: ${{ failure() && needs.audit.outputs.missing_runs == 'true' }}
+    uses: ./.github/workflows/report-failure.yml
+    with:
+      title: "ci: open pull requests have no CI run for their head commit"
+      summary: >-
+        One or more open pull requests have a head commit that was never built.
+        They render as "All checks have passed" because only non-Actions checks
+        reported, so the green board carries no information.
+      hint: |
+        The affected PRs are listed in the job summary of the linked run.
+
+        Verify the head SHA first — the audit runs hourly, so a PR listed here
+        may already have been pushed again and built since. Recover only the
+        ones that still have no run for their current head.
+
+        Retargeting a PR with `gh pr edit --base` is one suspected way a head
+        ends up unbuilt, but that is inferred rather than confirmed, so let this
+        audit — not the base change — decide when recovery is needed.
+
+        Close and reopen the PR. `reopened` is in the default trigger set, so it
+        dispatches a fresh run without rewriting history:
+
+        ```
+        gh pr close <N> --repo <owner>/<repo> && gh pr reopen <N> --repo <owner>/<repo>
+        ```
+
+        To check any single PR by hand, compare its head against the most
+        recent run for its branch:
+
+        ```
+        gh pr view <N> --json headRefOid,headRefName
+        gh run list --branch <head-branch> --limit 3 \
+          --json headSha,workflowName,status,conclusion
+        ```
+
+        A green `gh pr checks` with a *low check count* — one or two, against
+        the ~30 a real run produces — is the tell.
+    permissions:
+      contents: read
+      issues: write
