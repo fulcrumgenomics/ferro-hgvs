@@ -207,25 +207,33 @@ fn issue_181_example_2_eight_adjacent_dels_no_overlap() {
 #[test]
 fn issue_181_example_3_mixed_dels_and_ins_no_duplicate_position() {
     // Before the fix, ferro emitted `g.[1006del;1008del;1008del;1010C[4]]`
-    // — `1008del` twice. With merge-first ordering the three adjacent
-    // dels collapse to `1006_1008del`; the trailing `1009_1010insCCC`
-    // does not fold into the del because the merge step's strict
-    // adjacency rule (`prev.end + 1 == next.start`) requires the
-    // insertion's anchored start (`p+1 = 1010`) to equal `prev.end + 1`,
-    // not `prev.end + 2`. Fully collapsing del+ins chains into a single
-    // delins is a separate improvement; here we pin the validity
-    // invariant — no duplicate or overlapping positions — which is what
-    // #181 was actually filed about.
+    // — `1008del` twice. What this pins is the validity invariant — no
+    // duplicate or overlapping positions — which is what #181 was actually
+    // filed about, and it still holds.
+    //
+    // The form moved once, and it is the improvement this comment used to
+    // name as separate: "fully collapsing del+ins chains into a single
+    // delins". Removing the input-separator veto did it. The block trims to
+    // the equal-length `AGGT -> TCCC`, whose derivation is one member at 4
+    // changed columns against the two-member form's 6, so the collapse is
+    // the more minimal description of the same sequence.
+    //
+    // **This is a policy choice, not spec compliance.** `general.md:34` says
+    // two variants separated by one or more unchanged nucleotides are
+    // described individually, and the input spelling does leave 1009's `T`
+    // untouched. But nothing in the *sequence* says so — position-wise the
+    // block reads as four substitutions — so the split form is only
+    // recoverable from how the variant happened to be written. The veto read
+    // the spelling to keep it, and reading the spelling is what made two
+    // encodings of one variant normalize differently (#1235). Confluence was
+    // chosen over preserving this form; the sequence is unchanged either way.
     let core = core_with_snippet_at(1006, "AGGTACGT", 100);
     let p = SyntheticBuilder::genomic(&core).build();
     let result = normalize_to_string(
         p,
         &format!("{}:g.[1006delA;1007delG;1008delG;1009_1010insCCC]", SEQID),
     );
-    assert_eq!(
-        result,
-        format!("{}:g.[1006_1008del;1009_1010insCCC]", SEQID)
-    );
+    assert_eq!(result, format!("{}:g.1006_1009delinsTCCC", SEQID));
     assert_no_duplicate_or_overlap(&result);
 }
 

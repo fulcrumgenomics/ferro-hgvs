@@ -45,16 +45,28 @@
 //!
 //! What the indel model can assert today is narrower than what it should:
 //!
-//! - The **spanning-delins comparison is held back**. A length-changing
-//!   haplotype and its spanning `delins` reach two fixed points in general, not
-//!   in two edge cases — the derivation reaches the *same* piece set from both
-//!   spellings, and only the input-relative gates in `canonicalize_from_sequence`
-//!   (the `changed_columns_of_edits` bound and the `input_separator_gaps` veto)
-//!   decide differently, because both are measured against how the input
-//!   happened to be written. #1260 is now **fixed** — the two-gap alignment can
-//!   express *insertion, retained base, insertion* and the separation threshold
-//!   admits the split across the retained base — so what remains is #1262,
-//!   pinned by `adjacent_gap_insertions_converge_but_the_delins_gap_remains`.
+//! - The **spanning-delins comparison is still held back in the indel model**,
+//!   and the two issues that justified holding it back are now both fixed. A
+//!   length-changing haplotype and its spanning `delins` reached two fixed points
+//!   in general, not in two edge cases — the derivation reaches the *same* piece
+//!   set from both spellings, and only the input-relative gates in
+//!   `canonicalize_from_sequence` decided differently, because they were measured
+//!   against how the input happened to be written. #1260 went with the two-gap
+//!   alignment (which can express *insertion, retained base, insertion*, the
+//!   separation threshold admitting the split across the retained base) and #1262
+//!   with the removal of the input-separator veto, the last of those gates.
+//!   Convergence is pinned by
+//!   `adjacent_gap_insertions_and_the_delins_spelling_converge`.
+//!
+//!   So the restriction has outlived its reason. Restoring it is deliberately
+//!   **not** done here: the test that holds it back,
+//!   `an_indel_haplotype_normalizes_to_its_own_sequence`, is `#[ignore]`d because
+//!   it already fails on #1325, so a comparison added to it could not be
+//!   validated — a pass would be unobservable and a failure unattributable
+//!   between #1325 and the new assertion. It waits on #1325, and is tracked
+//!   rather than left to inattention. The substitution model already compares the
+//!   delins encoding (`encodings()` includes `as_spanning_delins`), so the gap is
+//!   specific to the indel model.
 //!
 //!   This is the **only** restriction those two issues justify. The generator
 //!   used to carry a second one citing them — a filter excluding two insertions
@@ -784,7 +796,7 @@ impl IndelHaplotype {
     /// Whether two insertions sit at **adjacent gaps**.
     ///
     /// The strategy no longer filters this shape out (#1294). It is kept because
-    /// `adjacent_gap_insertions_converge_but_the_delins_gap_remains` uses it to assert that the
+    /// `adjacent_gap_insertions_and_the_delins_spelling_converge` uses it to assert that the
     /// haplotype it pins really is one, so that test cannot drift onto a
     /// different shape than the one it claims to pin.
     fn has_adjacent_gap_insertions(&self) -> bool {
@@ -992,19 +1004,21 @@ proptest! {
 /// Pins the shapes the indel model holds back, so the missing spanning-delins
 /// comparison does not become permanent by inattention.
 ///
-/// **#1260 is now fixed** and this test pins the form it converged on. #1262 is
-/// still open, and the test asserts it still diverges; fixing it fails here,
-/// which is the prompt to restore the delins encoding to
-/// `an_indel_haplotype_normalizes_to_its_own_sequence`'s comparison set.
+/// **#1260 and #1262 are both now fixed**, and this test pins the forms they
+/// converged on. It used to assert that #1262 still diverged, with its failure
+/// message naming the restoration of the delins encoding to
+/// `an_indel_haplotype_normalizes_to_its_own_sequence`'s comparison set as the
+/// follow-through. That restoration is still outstanding — see the module doc for
+/// why it waits on #1325 rather than being done here.
 ///
 /// The two rows are not two edge cases. They are the general behaviour of
 /// "length-changing members versus the spanning delins": the derivation reaches
-/// the *same* piece set from both spellings, and only the input-relative gates
-/// in `canonicalize_from_sequence` — the `changed_columns_of_edits` bound and
-/// the `input_separator_gaps` veto — decide differently, because both are
-/// measured against how the input happened to be written.
+/// the *same* piece set from both spellings, and only the input-relative gates in
+/// `canonicalize_from_sequence` — the `changed_columns_of_edits` bound and the
+/// input-separator veto — decided differently, because both were measured against
+/// how the input happened to be written. The veto is gone as of this change.
 #[test]
-fn adjacent_gap_insertions_converge_but_the_delins_gap_remains() {
+fn adjacent_gap_insertions_and_the_delins_spelling_converge() {
     let provider = SyntheticBuilder::genomic("AAAAAA").build();
     let normalizer = Normalizer::new(provider);
     let normalize_str = |input: &str| normalize(&normalizer, input).to_string();
@@ -1051,12 +1065,18 @@ fn adjacent_gap_insertions_converge_but_the_delins_gap_remains() {
 
     // #1262: a substitution and a deletion against the spanning delins. Spelled
     // literally because the indel model has no substitution event.
+    //
+    // **Fixed** by removing the input-separator veto. The derivation always
+    // reached one piece from both spellings; the veto refused the two-member one
+    // because a derived piece covered the base that spelling had left between its
+    // members, so the same variant was answered two ways depending on how it was
+    // written.
     let split = normalize_str("NC_TEST.1:g.[258A>C;260del]");
     let spanning = normalize_str("NC_TEST.1:g.258_260delinsCA");
-    assert_ne!(
-        split, spanning,
-        "#1262 appears fixed — restore the delins comparison in \
-         `an_indel_haplotype_normalizes_to_its_own_sequence`"
+    assert_eq!(split, spanning, "#1262's two spellings must converge");
+    assert_eq!(
+        split, "NC_TEST.1:g.258_259delinsC",
+        "and they converge on the form the block itself derives"
     );
 }
 
@@ -1126,7 +1146,7 @@ fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
 /// not run: the live defect could be fixed and the property would simply stay
 /// ignored, which is the coverage-that-reads-wider-than-it-is complaint in
 /// #1268/#1283. This is the same guard
-/// `adjacent_gap_insertions_converge_but_the_delins_gap_remains`
+/// `adjacent_gap_insertions_and_the_delins_spelling_converge`
 /// gives the two shapes the model holds back.
 ///
 /// One row, not a list: the property stops at its first failure, so only the
