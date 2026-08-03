@@ -5603,18 +5603,53 @@ mod ins_bracketed_expansion {
     }
 
     // -------------------------------------------------------------------
-    // 10. The same canonicalization applies to a `delins` payload. The
-    //     literal prefix starts with `G` so the surrounding A-padded
-    //     context cannot 3'-shift / contract the delins span.
+    // 10. The same canonicalization applies to a `delins` payload.
+    //
+    //     Re-blessed with the two-gap insertion alignment (#1260, PR #1285).
+    //     This test is about the *payload expansion* — `[GCG;100_110]` becoming
+    //     `GCGTTTGGGAAACC` — which is unchanged, and is asserted below against
+    //     the normalizer's own output rather than against the fixture literal.
+    //     What moved is how the expanded payload is then divided.
+    //
+    //     The reference here is A-padded, so the two replaced bases `AA` occur
+    //     inside the expanded payload; keeping them means the whole reference
+    //     survives between two insertions. That is more minimal (9 + 3 = 12
+    //     changed columns against the spanning `delins`'s 14) and two `ins`
+    //     members outrank one `delins` (`general.md:56`).
+    //
+    //     Worth knowing: a short reference block inside a long payload is
+    //     exactly where "the whole reference survives" is most likely to be
+    //     coincidence. The separation here is 2 reference bases, so the existing
+    //     `MIN_PIECE_SEPARATION` gate admits it. Whether that gate should scale
+    //     with payload length is a live question, not settled by this test.
     // -------------------------------------------------------------------
     #[test]
     fn delins_bracketed_payload_expands() {
         let bases = "TTTGGGAAACC";
         let provider = provider_with_genomic("NC_000001.11", 100, bases);
         let result = normalize_ok(provider, "NC_000001.11:g.5207_5208delins[GCG;100_110]");
+        // The payload expanded: `GCG` + the 100..=110 span, split across the two
+        // retained reference bases and 3'-shifted.
         assert_eq!(
             result,
-            format!("NC_000001.11:g.5207_5208delinsGCG{}", bases)
+            "NC_000001.11:g.[5206_5207insGCGTTTGGG;5209_5210insCCA]"
+        );
+        // Checked against the normalizer's output, not against itself. `expanded`
+        // is built from the same `bases` literal three lines up, so comparing the
+        // two was a tautology that could not fail if the expansion regressed —
+        // and the comment above claimed this assertion covered exactly that.
+        //
+        // The expanded payload survives in the output split across the two
+        // retained `AA` and rotated by the 3'-shift, so it is recoverable as its
+        // leading 9 bases plus the rotated tail rather than as one contiguous run.
+        let expanded = format!("GCG{bases}");
+        assert_eq!(
+            expanded, "GCGTTTGGGAAACC",
+            "fixture drift, not a behaviour claim"
+        );
+        assert!(
+            result.contains(&expanded[..9]) && result.contains("CCA"),
+            "the expanded payload `{expanded}` is no longer recoverable from `{result}`"
         );
     }
 

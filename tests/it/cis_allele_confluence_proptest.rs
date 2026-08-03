@@ -51,8 +51,10 @@
 //!   spellings, and only the input-relative gates in `canonicalize_from_sequence`
 //!   (the `changed_columns_of_edits` bound and the `input_separator_gaps` veto)
 //!   decide differently, because both are measured against how the input
-//!   happened to be written. Tracked by #1260 and #1262 and pinned by
-//!   `adjacent_gap_insertions_are_a_known_gap`.
+//!   happened to be written. #1260 is now **fixed** — the two-gap alignment can
+//!   express *insertion, retained base, insertion* and the separation threshold
+//!   admits the split across the retained base — so what remains is #1262,
+//!   pinned by `adjacent_gap_insertions_converge_but_the_delins_gap_remains`.
 //!
 //!   This is the **only** restriction those two issues justify. The generator
 //!   used to carry a second one citing them — a filter excluding two insertions
@@ -782,7 +784,7 @@ impl IndelHaplotype {
     /// Whether two insertions sit at **adjacent gaps**.
     ///
     /// The strategy no longer filters this shape out (#1294). It is kept because
-    /// `adjacent_gap_insertions_are_a_known_gap` uses it to assert that the
+    /// `adjacent_gap_insertions_converge_but_the_delins_gap_remains` uses it to assert that the
     /// haplotype it pins really is one, so that test cannot drift onto a
     /// different shape than the one it claims to pin.
     fn has_adjacent_gap_insertions(&self) -> bool {
@@ -987,12 +989,12 @@ proptest! {
     }
 }
 
-/// Pins the shapes the indel model holds back, so neither the filter nor the
-/// missing spanning-delins comparison becomes permanent by inattention.
+/// Pins the shapes the indel model holds back, so the missing spanning-delins
+/// comparison does not become permanent by inattention.
 ///
-/// Both are **currently broken**, and this test asserts they still are. Fixing
-/// #1260 or #1262 fails it, which is the prompt to drop
-/// `has_adjacent_gap_insertions` and to restore the delins encoding to
+/// **#1260 is now fixed** and this test pins the form it converged on. #1262 is
+/// still open, and the test asserts it still diverges; fixing it fails here,
+/// which is the prompt to restore the delins encoding to
 /// `an_indel_haplotype_normalizes_to_its_own_sequence`'s comparison set.
 ///
 /// The two rows are not two edge cases. They are the general behaviour of
@@ -1002,7 +1004,7 @@ proptest! {
 /// the `input_separator_gaps` veto — decide differently, because both are
 /// measured against how the input happened to be written.
 #[test]
-fn adjacent_gap_insertions_are_a_known_gap() {
+fn adjacent_gap_insertions_converge_but_the_delins_gap_remains() {
     let provider = SyntheticBuilder::genomic("AAAAAA").build();
     let normalizer = Normalizer::new(provider);
     let normalize_str = |input: &str| normalize(&normalizer, input).to_string();
@@ -1034,11 +1036,17 @@ fn adjacent_gap_insertions_are_a_known_gap() {
         "the pinned haplotype must have two distinct encodings, got {encodings:?}"
     );
     let normalized: Vec<String> = encodings.iter().map(|e| normalize_str(e)).collect();
-    assert_ne!(
+    // #1260 is FIXED. Both spellings converge, on the split form PR #1285 named:
+    // the two-gap alignment `best_alignment` gained can express *insertion,
+    // retained base, insertion*, and the separation threshold admits the split
+    // across the one retained base.
+    assert_eq!(
         normalized[0], normalized[1],
-        "#1260 appears fixed — drop `has_adjacent_gap_insertions` from \
-         `indel_haplotype_strategy` and restore the delins comparison to \
-         `an_indel_haplotype_normalizes_to_its_own_sequence`"
+        "#1260's two spellings must converge"
+    );
+    assert_eq!(
+        normalized[0], "NC_TEST.1:g.[258_259insC;259_260insC]",
+        "and they converge on the split form, not the spanning delins"
     );
 
     // #1262: a substitution and a deletion against the spanning delins. Spelled
@@ -1117,7 +1125,8 @@ fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
 /// The property's doc comment records the reproduction, but a doc comment does
 /// not run: the live defect could be fixed and the property would simply stay
 /// ignored, which is the coverage-that-reads-wider-than-it-is complaint in
-/// #1268/#1283. This is the same guard `adjacent_gap_insertions_are_a_known_gap`
+/// #1268/#1283. This is the same guard
+/// `adjacent_gap_insertions_converge_but_the_delins_gap_remains`
 /// gives the two shapes the model holds back.
 ///
 /// One row, not a list: the property stops at its first failure, so only the

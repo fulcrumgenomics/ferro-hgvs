@@ -1603,7 +1603,167 @@ const MAX_UNGUARDED_SPLIT_BLOCK: usize = 32;
 
 /// Unchanged reference bases two pieces of a net insertion must be separated by
 /// before the split between them is believed. See `separations_are_meaningful`.
-const MIN_PIECE_SEPARATION: usize = 2;
+///
+/// `1`, per `general.md:34`: "two variants separated by one or more nucleotides
+/// should be described individually and **not** as a 'delins'". One base is one
+/// or more, so a split across one unchanged base is what the spec asks for, not
+/// something to disbelieve.
+///
+/// It was `2`, which granted every axis `general.md:35`'s exception — "separated
+/// by one nucleotide, **together affecting one amino acid**" — although that
+/// exception is doubly conditioned and cannot reach a genomic axis at all. The
+/// codon half is applied where it belongs, triplet-precisely, by
+/// `apply_coding_codon_exception` *after* partitioning; see
+/// [`MIN_SEPARATION_NO_FRAME`], which reached the same value from the same
+/// reading for the sequence-first splitter.
+///
+/// Lowering it is only safe alongside [`split_buys_no_higher_priority_type`]:
+/// #422 and #999's negative control are the *same shape* at this threshold —
+/// net insertion, one coincidentally matched interior base — and the type of
+/// the resulting members is the only thing that separates them.
+///
+/// It applies only where the block's net length change is at most
+/// [`MAX_SINGLE_BASE_SEPARATION_CHANGE`]; beyond that the threshold rises to
+/// [`RAISED_PIECE_SEPARATION`].
+const MIN_PIECE_SEPARATION: usize = 1;
+
+/// The separation [`separations_are_meaningful`] requires once the block's net
+/// length change exceeds [`MAX_SINGLE_BASE_SEPARATION_CHANGE`].
+///
+/// Named rather than written inline because it is a policy choice doing
+/// semantic work, not an arithmetic constant: beyond that much change a single
+/// matched base is not believable as structure, so two are required before a
+/// split is believed. `2` is the value the threshold had for every block before
+/// [`MIN_PIECE_SEPARATION`] was lowered to 1, so this is the old behaviour
+/// retained where the evidence for the new one runs out — not a second
+/// calibration.
+const RAISED_PIECE_SEPARATION: usize = 2;
+
+/// Largest block, in aligned positions, over which a tied gap placement is
+/// broken by what it separates rather than by being 5'-most.
+///
+/// The score for one placement is O(1) — that is what makes `best_alignment`'s
+/// search linear — but ranking a *tie* needs the placement's member count, which
+/// costs a pass over the block. In a repeat tract every placement ties, so the
+/// tie-break is O(n²) there, which at [`MAX_SPLIT_BLOCK`] would be ~1e6 column
+/// operations for one call.
+///
+/// **This is a bound on coverage, not a silent cap.** Above it the 5'-most
+/// placement wins as before, so a tied block longer than this keeps whatever
+/// description the old rule gave. Nothing in the corpus is near it — #1262's
+/// block is 3 aligned positions — and the bound exists so a pathological
+/// homopolymer cannot make one call quadratic in the window size.
+const MAX_TIE_BREAK_SWEEP: usize = 256;
+
+/// Placements [`two_gap_insertion_alignment`] will examine before giving up.
+///
+/// The search sweeps `a` over the two blocks' common prefix and `b` over their
+/// common suffix. Both are **zero on a trimmed block**, which is what every
+/// caller passes today, so the sweep costs a handful of placements — but the
+/// point of generalising that search was to stop depending on the caller's trim,
+/// and leaving the *cost* dependent on it would reintroduce the same coupling.
+///
+/// Each placement costs an `O(block)` slice comparison. Measured worst case (no
+/// solution exists, so the sweep runs to exhaustion) at [`MAX_SPLIT_BLOCK`] with
+/// a 6-base insertion:
+///
+/// ```text
+/// common affixes 0, 0        5 placements     (trimmed — today)
+/// common affixes 1, 1       20 placements     (one flank base restored per side)
+/// common affixes 512, 512    1 315 840        (~1.3e9 byte comparisons)
+/// ```
+///
+/// # Why this declines rather than narrowing the sweep
+///
+/// An earlier revision clamped the affix *lengths* to a small constant instead.
+/// That is not a cost bound, it is a **silent change of answer**, and it was
+/// measured doing exactly that: `AAAAAAA -> AACACAAAA` (#1260's untrimmed
+/// window) decomposes only at `a = 2, b = 3`, which needs a common suffix of 4.
+/// Clamping to 2 excluded the sole solution, the function returned `None`, and
+/// the block fell back to a spanning `delins`. It went unnoticed because on that
+/// row the single-gap search happens to reach the same member count by another
+/// route — so the clamp was wrong in a way no test could see until something
+/// else moved.
+///
+/// Exceeding this budget therefore abandons the whole two-gap search and lets
+/// [`best_alignment`] keep its single-gap winner — the answer it gave before this
+/// function existed — rather than returning a decomposition found under a
+/// narrower search than the one documented. The budget is sized far above the
+/// worked cases above; nothing in the corpus approaches it.
+const MAX_TWO_GAP_PLACEMENTS: usize = 65_536;
+
+/// Largest alignment grid the sequence-first splitter will build, in cells.
+///
+/// `AlignmentDag::build` is `Θ(n·m)` in **space** as well as time, and it
+/// allocates four grids of that size: two `u32` edit grids, the on-path flags,
+/// and the adjacency mask. Only the reference side is bounded upstream
+/// ([`MAX_CANONICAL_WINDOW`]); the alternate side is whatever the members
+/// produce, and a duplication over the whole window doubles it. A 4096 x 8192
+/// grid is 33.5 M cells, or roughly 340 MB across the four — enough to matter,
+/// and reachable from a single description rather than from a pathological
+/// corpus.
+///
+/// Derived from [`MAX_CANONICAL_WINDOW`] rather than picked: the budget is a
+/// *square* grid at that bound, so it admits any block whose alternate side is
+/// within the same limit already imposed on the reference side, and refuses one
+/// where the alternate side runs past it. The 4096 x 8192 duplication above is
+/// 33.5 M cells against this 16.8 M, so it is declined.
+///
+/// The honest cost of stating it this way: at the very top of the reference range
+/// an alternate side even slightly longer than the reference is declined too.
+/// That is a cost bound, not a policy — above it
+/// [`partition_block_sequence_first`] returns `None` and the caller keeps the
+/// per-member result, the same fallback every other bound here takes.
+const MAX_SEQFIRST_GRID_CELLS: usize =
+    (MAX_CANONICAL_WINDOW as usize + 1) * (MAX_CANONICAL_WINDOW as usize + 1);
+
+/// Largest **net length change**, in bases, for which one unchanged base counts
+/// as separation.
+///
+/// A single matched base is evidence of structure when the surrounding change is
+/// small and evidence of nothing when it is large, where a one- or two-base run
+/// recurs by chance. The Mutalyzer conformance corpus is what forces this: a 6 nt
+/// block replaced by a 21 nt payload
+/// (`NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC` and nine siblings) has
+/// interior bases that happen to match, and the oracle keeps it as one `delins`.
+/// Without a bound, a threshold of 1 shreds it into
+/// `g.[5207_5209delinsGTC;5211C>T;5213_5214insGCTCATTATCTGGCT]` — mixed member
+/// types, so [`split_buys_no_higher_priority_type`] does not reach it either.
+///
+/// # Why the change and not the block length
+///
+/// Keying on block length looks equivalent and is not, because the block is
+/// about to be handed the *supremal* extent rather than the trimmed one. A
+/// variant rolled out over a homopolymer has a long block and a tiny change —
+/// #1260's window is 7 nt of reference for 2 inserted bases — while the
+/// Mutalyzer block is long *and* changes a lot. Length cannot tell those apart;
+/// the net change can, and it is the quantity the belief is actually about.
+///
+/// **The value is under-determined and the bounds are what is measured.** The
+/// corpus constrains it only to `[2, 15)`: #1260's window changes 2 bases and
+/// must split at one unchanged base, the Mutalyzer block changes 15 and must
+/// not. Every value in between scores identically, so `4` is a choice inside a
+/// measured window, not a calibrated constant.
+const MAX_SINGLE_BASE_SEPARATION_CHANGE: usize = 4;
+
+/// [`partition_block_sequence_first`]'s separation threshold on an axis with no
+/// reading frame (`g.`, `m.`, `n.`, and `r.` on a non-coding transcript).
+///
+/// `1`, not `seqfirst::MIN_SEPARATION`'s `2`. `general.md:34`'s general rule is
+/// "two variants separated by one or more nucleotides should be described
+/// individually" — one or more unchanged bases between two runs of change means
+/// they split, so runs merge only when separated by *fewer than one*, i.e. zero,
+/// unchanged bases. `general.md:35`'s exception — "separated by one nucleotide,
+/// together affecting one amino acid" — is what licenses merging across exactly
+/// one unchanged base, and it is scoped to "one amino acid": a reading frame,
+/// which `AxisFrame::reading_frame` already isolates for
+/// `apply_coding_codon_exception`. Applying `seqfirst::MIN_SEPARATION` (`2`)
+/// unconditionally therefore grants every axis the coding exception, which is
+/// what the `FERRO_SEQFIRST_SHADOW` audit's class `B2` measured: 3 088 blocks
+/// where the sequence-first splitter merged across an unchanged base the live
+/// splitter, correctly, kept split. Pinned by
+/// `sequence_first_split_axis_separation_matches_general_rule`.
+const MIN_SEPARATION_NO_FRAME: u32 = 1;
 
 /// One derived edit: a maximal run of change over the reference window, as
 /// 0-based half-open offsets into that window plus its replacement bases.
@@ -1640,6 +1800,50 @@ impl Piece {
     fn is_pure_indel(&self) -> bool {
         let ref_len = self.ref_end - self.ref_start;
         (self.alt.is_empty() && ref_len > 0) || (ref_len == 0 && !self.alt.is_empty())
+    }
+}
+
+/// Whether to run both block splitters and report their disagreements.
+///
+/// A **development-only audit switch**, enabled by `FERRO_SEQFIRST_SHADOW=1`.
+/// Read once and cached, like the idempotency gate in [`crate::normalize`], so a
+/// disabled run pays one relaxed atomic load per canonicalization. When on, the
+/// sequence-first splitter runs *in addition to* the live one and every
+/// comparison is reported; it never changes what is returned.
+///
+/// Reports go through `log::debug!` rather than `eprintln!`, so ordinary log
+/// filtering applies — the switch fires once per canonicalized block, which over
+/// a whole suite run is tens of thousands of lines that no level or target filter
+/// could reach when they were written straight to stderr. Capture them with
+/// `RUST_LOG=ferro_hgvs::normalize::merge=debug`.
+fn seqfirst_shadow_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("FERRO_SEQFIRST_SHADOW").as_deref() == Ok("1"))
+}
+
+/// A piece list rendered on one line with `alt` as text rather than bytes.
+///
+/// Only used by the `FERRO_SEQFIRST_SHADOW` report, whose whole value is being
+/// greppable: `Piece`'s derived `Debug` prints `alt` as `[65, 67, …]`, which
+/// makes a report of a 40-base block unreadable and long.
+struct DebugPieces<'a>(&'a [Piece]);
+
+impl std::fmt::Debug for DebugPieces<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("[")?;
+        for (i, piece) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(",")?;
+            }
+            write!(
+                f,
+                "{}..{}>{}",
+                piece.ref_start,
+                piece.ref_end,
+                String::from_utf8_lossy(&piece.alt)
+            )?;
+        }
+        f.write_str("]")
     }
 }
 
@@ -1749,12 +1953,90 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     }
 
     let mut pieces = partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
+    // Shadow the sequence-first splitter on the very same trimmed block, before
+    // any 3'-shift or coalescing, so a reported disagreement is a disagreement
+    // about the *split* and not about a downstream pass. Never affects `pieces`.
+    if seqfirst_shadow_enabled() {
+        // Reading-frame axes get the coding one-amino-acid exception
+        // (`seqfirst::MIN_SEPARATION`, 2); every other axis gets the general
+        // rule (`MIN_SEPARATION_NO_FRAME`, 1). Same distinction
+        // `apply_coding_codon_exception` uses below, via the same `AxisFrame`.
+        let min_separation = if frame.reading_frame {
+            crate::normalize::seqfirst::MIN_SEPARATION
+        } else {
+            MIN_SEPARATION_NO_FRAME
+        };
+        let block = &ref_bytes[lo..hi_ref];
+        let mut shadow = partition_block_sequence_first(block, &result[lo..hi_alt], min_separation);
+        // `min_separation` alone captures only the distance half of
+        // `general.md:35`'s exception; this captures the codon half, splitting
+        // back apart any merge the exception does not actually license. `lo`
+        // is added because `block`'s offsets (unlike `pieces`' at this point)
+        // have not yet been shifted into the untrimmed window `w_lo` is
+        // relative to.
+        if let Some(shadow_pieces) = shadow.as_mut() {
+            split_codon_incompatible_triplets(
+                shadow_pieces,
+                frame.reading_frame,
+                w_lo + lo as i64,
+                block,
+            );
+        }
+        // Both sides are also compared after `shrink_pieces_to_differences`,
+        // because a split that only differs in how wide its members are is a
+        // difference the rendering stage removes. Reported as a third outcome
+        // rather than folded into either of the other two, so one run yields
+        // both the raw disagreement count and the count that survives
+        // minimisation. The shrink runs here before the 3'-shift, whereas the
+        // returned `pieces` are shrunk after it — see
+        // `shrinking_before_and_after_the_three_prime_shift_agree`.
+        let mut min_live = pieces.clone();
+        shrink_pieces_to_differences(&mut min_live, block);
+        let mut min_shadow = shadow.clone();
+        if let Some(min_shadow) = min_shadow.as_mut() {
+            shrink_pieces_to_differences(min_shadow, block);
+        }
+        if shadow.as_ref() == Some(&pieces) {
+            // The denominator. Without it, `grep -c SEQFIRST_SHADOW` returning 0
+            // cannot be told apart from a shadow that never ran — the failure
+            // mode that would make an audit of the disagreements vacuous.
+            log::debug!("SEQFIRST_AGREE");
+        } else if min_shadow.as_ref() == Some(&min_live) {
+            log::debug!(
+                "SEQFIRST_MINAGREE ref={} alt={} live={:?} shadow={:?}",
+                String::from_utf8_lossy(block),
+                String::from_utf8_lossy(&result[lo..hi_alt]),
+                DebugPieces(&pieces),
+                shadow.as_deref().map(DebugPieces),
+            );
+        } else {
+            log::debug!(
+                // Space-separated, and no space inside a piece list, on purpose:
+                // `cargo nextest` strips tab characters when it re-emits captured
+                // test output (`--success-output immediate`), so a tab-delimited
+                // report is unparseable in the one run mode that covers the whole
+                // suite. Verified by `od -c` on both run modes.
+                "SEQFIRST_SHADOW ref={} alt={} live={:?} shadow={:?} min_live={:?} min_shadow={:?}",
+                String::from_utf8_lossy(block),
+                String::from_utf8_lossy(&result[lo..hi_alt]),
+                DebugPieces(&pieces),
+                shadow.as_deref().map(DebugPieces),
+                DebugPieces(&min_live),
+                min_shadow.as_deref().map(DebugPieces),
+            );
+        }
+    }
     for piece in &mut pieces {
         piece.ref_start += lo;
         piece.ref_end += lo;
     }
     shift_pieces_three_prime(&mut pieces, &ref_bytes);
     coalesce_adjacent_pieces(&mut pieces);
+    // Partitioning decides where the members are; this decides how wide each
+    // one is spelled, and the two are not the same question — see
+    // `shrink_pieces_to_differences`. Placed before the weight bound below so
+    // that the bound judges the pieces that will actually be rendered.
+    shrink_pieces_to_differences(&mut pieces, &ref_bytes);
 
     // A canonicalization may re-partition and re-type the change. It may not
     // describe *more* change than the input already did.
@@ -2569,10 +2851,108 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     if pieces.is_empty() {
         return whole();
     }
-    if result.len() > reference.len() && !separations_are_meaningful(&pieces) {
+    if result.len() > reference.len()
+        && !separations_are_meaningful(&pieces, result.len().abs_diff(reference.len()))
+    {
+        return whole();
+    }
+    // Scoped to length-changing blocks: an equal-length block has no gap to
+    // place, so every matched base is a genuine coordinate-wise identity rather
+    // than an artefact of where the gap landed, and a split across one is real.
+    // `MAX_UNGUARDED_SPLIT_BLOCK`'s own doc draws the same line.
+    if reference.len() != result.len()
+        && pieces.len() > 1
+        && every_separation_is_a_single_base(&pieces)
+        && split_buys_no_higher_priority_type(&pieces, reference)
+    {
         return whole();
     }
     pieces
+}
+
+/// Whether every gap between consecutive pieces is a single unchanged base —
+/// the regime where a match is most likely to be coincidence rather than
+/// structure.
+///
+/// This is what keeps [`split_buys_no_higher_priority_type`] from overriding
+/// `general.md:34` outright. That rule — "two variants separated by one or more
+/// nucleotides should be described individually and **not** as a 'delins'" — is
+/// unambiguous once there is real distance between the members, and an
+/// all-`delins` split at, say, two unchanged bases is one the rule plainly
+/// wants: `AGAGT -> GAAGAG` divides into `AG>GA` and `T>AG` for 4 changed
+/// columns against the spanning form's 6, so collapsing it would be both less
+/// minimal and against the rule.
+///
+/// At exactly one base the two readings genuinely compete, which is why #422 is
+/// a *deliberately pinned* non-confluence rather than a plain bug, and why
+/// `delins.md:44-47` prefers the spanning form where a payload merely *aligns*.
+/// Restricting the collapse to that regime is what lets both rules stand.
+fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
+    pieces
+        .windows(2)
+        .all(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) <= 1)
+}
+
+/// Partition a changed block by deriving member boundaries from the **denoted
+/// sequence**, via [`crate::normalize::seqfirst`].
+///
+/// Same contract as [`partition_block`] — pieces are disjoint, ascending, and
+/// reconstruct `result` when substituted into `reference` — but derived from
+/// the alignment steps common to *every* minimal alignment rather than from a
+/// single-gap search. Two spellings of one variant produce the same
+/// `(reference, result)` pair and therefore the same pieces.
+///
+/// `reference` and `result` must already have their common flanks trimmed;
+/// `canonicalize_from_sequence` does that with [`trim_common_flanks`] before
+/// calling in. An untrimmed flank changes the partition, so this is a
+/// precondition and not a convenience.
+///
+/// Returns `None` when the block cannot be partitioned this way, which today
+/// means only that [`member_alt_spans`] declined. The caller falls back.
+///
+/// `min_separation` is the unchanged-base threshold `partition_members_with`
+/// merges below (see that function's doc). It is **not** hardcoded to
+/// `seqfirst::MIN_SEPARATION` — the caller must choose it per axis. See
+/// `MIN_SEPARATION_NO_FRAME` for why: the value that is correct on a
+/// reading-frame axis is wrong on a genomic one.
+///
+/// Called only from the `FERRO_SEQFIRST_SHADOW` comparison in
+/// [`canonicalize_from_sequence`]; it does not yet decide any result.
+fn partition_block_sequence_first(
+    reference: &[u8],
+    result: &[u8],
+    min_separation: u32,
+) -> Option<Vec<Piece>> {
+    use crate::normalize::seqfirst::align::AlignmentDag;
+    use crate::normalize::seqfirst::partition::{member_alt_spans, partition_members_with};
+
+    // Refuse an oversized grid before building it, not after: the allocation is
+    // the cost. Checked, because `(n + 1) * (m + 1)` on two `usize` lengths is
+    // itself an overflow site.
+    let cells = reference
+        .len()
+        .checked_add(1)?
+        .checked_mul(result.len().checked_add(1)?)?;
+    if cells > MAX_SEQFIRST_GRID_CELLS {
+        return None;
+    }
+
+    let dag = AlignmentDag::build(reference, result);
+    let dominators = dag.dominators();
+    let members = partition_members_with(&dag, &dominators, min_separation);
+    let spans = member_alt_spans(&dag, &dominators, &members)?;
+
+    Some(
+        members
+            .iter()
+            .zip(spans)
+            .map(|(member, (alt_start, alt_end))| Piece {
+                ref_start: member.ref_start as usize,
+                ref_end: member.ref_end as usize,
+                alt: result[alt_start as usize..alt_end as usize].to_vec(),
+            })
+            .collect(),
+    )
 }
 
 /// Alignment columns a description marks as changed.
@@ -2652,10 +3032,94 @@ fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
 /// that fails when the bound is raised across the board. Extending this rule to
 /// cover them, and retiring that constant, is the principled fix and needs its
 /// own measurement pass.
-fn separations_are_meaningful(pieces: &[Piece]) -> bool {
+fn separations_are_meaningful(pieces: &[Piece], net_change: usize) -> bool {
+    // `ref_end` is exclusive and a pure insertion has `ref_start == ref_end`, so
+    // this already counts unchanged *bases* rather than event indices: a
+    // junction contributes no width because it occupies none. The sequence-first
+    // splitter had to be corrected for exactly this, because it works in event
+    // space where a junction and a changed position are both one offset.
+    let required = if net_change > MAX_SINGLE_BASE_SEPARATION_CHANGE {
+        RAISED_PIECE_SEPARATION
+    } else {
+        MIN_PIECE_SEPARATION
+    };
     pieces
         .windows(2)
-        .all(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) >= MIN_PIECE_SEPARATION)
+        .all(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) >= required)
+}
+
+/// Whether a proposed split buys nothing over the spanning `delins` it came
+/// from — that is, whether **every** member would render as a `delins` too.
+///
+/// # This is ferro policy, not a spec rule
+///
+/// It is tempting to cite `general.md:56`'s prioritisation here, and an earlier
+/// revision of this comment did — claiming `delins` was "last" in it. That
+/// citation does not reach. The list is "(1) substitution, (2) deletion, (3)
+/// inversion, (4) duplication, (5) insertion", and `delins` is not in it at
+/// all. What it ranks is the type of *one description of one change*, which is
+/// how msto's #1231/#1233 use it — comparing two two-member descriptions
+/// member-wise. It never ranks a multi-member allele against a single spanning
+/// description.
+///
+/// What licenses the collapse is an analogy plus the corpus. `delins.md:44-47`
+/// keeps the spanning form where the payload merely *"aligns"* against a
+/// coincidentally matched interior base, and that is the shape of every corpus
+/// row required to stay whole. A split whose members are all `delins` buys no
+/// descriptive gain over the spanning `delins` it came from, so in the one
+/// regime where the matched base is least believable — a single unchanged base,
+/// see [`every_separation_is_a_single_base`] — this prefers the form the
+/// analogous spec case prefers. Stated as a policy choice inside a spec gap so
+/// it is not mistaken for a mandate.
+///
+/// This is what separates #422 from #999's negative control. The two are the
+/// same shape at [`MIN_PIECE_SEPARATION`] — a net insertion with one
+/// coincidentally matched interior base — and their split *member types* are the
+/// only difference: `delins` + `delins` for #422, `ins` + `sub` for #999.
+/// `issue_422_cross_reference_ins.rs` calls that conjunction impossible; it is
+/// not, and #1235's own comment asks for precisely this fix.
+///
+/// # Typing is block-local
+///
+/// `ins`, `del` and `sub` are structural. So are `dup` and repeat notations —
+/// they add or remove copies, so they arrive as insertions or deletions and are
+/// already excluded. `inv` is the one renderer type that hides inside a
+/// structural `delins`, and it is detectable from the member's own span:
+/// [`is_inversion`] does it, on [`reverse_complement_bytes`], which refuses a
+/// byte it cannot complement rather than passing it through. Nothing here needs
+/// the renderer, so the test runs on the trimmed block before rendering.
+///
+/// Measured over an exhaustive reverse-complement-closed sweep, omitting the
+/// `inv` and self-repeat cases would collapse 694 of 1 094 firings (`AT`, ≤7 nt)
+/// and 2 592 of 26 244 (`ACGT`, ≤5 nt) — so both are load-bearing, not defensive.
+fn split_buys_no_higher_priority_type(pieces: &[Piece], reference: &[u8]) -> bool {
+    pieces.iter().all(|piece| {
+        let span = piece.ref_end - piece.ref_start;
+        span > 0
+            && !piece.alt.is_empty()
+            && !(span == 1 && piece.alt.len() == 1)
+            && !is_inversion(piece, reference)
+            && !is_tandem_duplication(piece, reference)
+            && !alt_repeats_its_own_span(piece, reference)
+    })
+}
+
+/// A member whose payload is its own reference span repeated, which renders as
+/// a `dup` (two copies) or a repeat notation rather than a `delins`.
+///
+/// [`is_tandem_duplication`] covers the *insertion* spelling of a duplication,
+/// where the copy sits outside the member's span; this covers the `delins`
+/// spelling, where the member's span carries the copies itself. Both are
+/// block-local. Case-folded, because reference FASTAs arrive soft-masked.
+fn alt_repeats_its_own_span(piece: &Piece, reference: &[u8]) -> bool {
+    let span = &reference[piece.ref_start..piece.ref_end];
+    !span.is_empty()
+        && piece.alt.len() > span.len()
+        && piece.alt.len().is_multiple_of(span.len())
+        && piece
+            .alt
+            .chunks(span.len())
+            .all(|chunk| chunk.eq_ignore_ascii_case(span))
 }
 
 /// The alignment maximizing matched bases, ties broken by the 5'-most gap.
@@ -2720,22 +3184,216 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
     let mut leading = 0usize;
     let mut trailing = (0..anchored).filter(|&i| ungapped(i)).count();
 
-    let mut best: Option<(usize, usize)> = None;
+    // How many members a placement separates the change into. Computed only to
+    // break a tie, because it costs a pass over the block where the score costs
+    // O(1) — see the tie-break note below.
+    let members_at = |k: usize| -> usize {
+        let columns =
+            single_gap_alignment(k, gap_len, shorter_is_ref, reference.len(), result.len());
+        pieces_from_columns(&columns, reference, result).len()
+    };
+
+    // `(matched columns, members separated, k)`.
+    let mut best: Option<(usize, usize, usize)> = None;
     for k in 0..=anchored {
         if k > 0 {
             leading += usize::from(reference[k - 1] == result[k - 1]);
             trailing -= usize::from(ungapped(k - 1));
         }
         let matches = leading + trailing;
-        // Strictly greater keeps the first (5'-most) alignment on a tie.
-        if best.as_ref().is_none_or(|(score, _)| matches > *score) {
-            best = Some((matches, k));
+        match best {
+            Some((score, _, _)) if matches < score => continue,
+            // A TIE, and the score cannot choose. In a repeat tract every
+            // placement matches the same number of columns, so this is the
+            // common case there rather than a corner: `AAA -> CA` ties three
+            // ways. `delins.md:17` decides it — "two variants separated by one
+            // or more nucleotides should be described individually and not as a
+            // 'delins'" — so prefer the placement that leaves a matched base
+            // *between* the changes, which is the one separating them into more
+            // members. `general.md:56` says the same from the other side, since
+            // `delins` is last in the priority order.
+            //
+            // This is not the 5'-most/3'-most flip that was tried and rejected:
+            // it does not rank placements by position at all. `AAA -> CA`'s
+            // winner happens to be 3'-most, but the criterion is what the
+            // placement separates, and `split_buys_no_higher_priority_type`
+            // still collapses a split that buys nothing.
+            Some((score, separated, _)) if matches == score => {
+                if anchored <= MAX_TIE_BREAK_SWEEP {
+                    let candidate = members_at(k);
+                    if candidate > separated {
+                        best = Some((matches, candidate, k));
+                    }
+                }
+            }
+            _ => {
+                let separated = if anchored <= MAX_TIE_BREAK_SWEEP {
+                    members_at(k)
+                } else {
+                    0
+                };
+                best = Some((matches, separated, k));
+            }
         }
     }
+    // A single gap cannot express *insertion, retained reference, insertion*,
+    // so consider the two-gap form when the best single gap leaves a reference
+    // base unmatched. Scoped to net insertions by `shorter_is_ref`, which is
+    // what keeps it clear of the corpus the single-gap restriction protects —
+    // see [`two_gap_insertion_alignment`].
+    if shorter_is_ref && best.is_some_and(|(matches, _, _)| matches < reference.len()) {
+        if let Some(columns) = two_gap_insertion_alignment(reference, result) {
+            return Some(columns);
+        }
+    }
+
     // Only the winner is materialized.
-    best.map(|(_, k)| {
+    best.map(|(_, _, k)| {
         single_gap_alignment(k, gap_len, shorter_is_ref, reference.len(), result.len())
     })
+}
+
+/// The alignment that keeps the **whole** reference intact across two
+/// insertions, or `None` when the pair does not have that shape (#1260).
+///
+/// PR #1285 named the gap this fills: for #1260 the answer is "a two-gap
+/// alignment — insertion, retained base, insertion — which `best_alignment`'s
+/// single-gap restriction cannot express". One contiguous indel must either
+/// swallow the retained base into a spanning `delins` or leave one insertion
+/// unaccounted for.
+///
+/// # The shape, and why it is not just `I1 + reference + I2`
+///
+/// The general all-matched two-gap alignment is
+///
+/// ```text
+/// result = ref[..a] + I1 + ref[a..b] + I2 + ref[b..]
+/// ```
+///
+/// with `0 <= a < b <= ref.len()` and both insertions non-empty. An earlier
+/// revision searched only `a == 0, b == ref.len()`, deriving that from the
+/// caller having trimmed common flanks: on a trimmed block `a > 0` would mean
+/// the two blocks share a first base and `b < ref.len()` a last one, both
+/// contradicting the trim.
+///
+/// That derivation is sound *only while the precondition holds*, and it makes
+/// the function silently wrong the moment a caller widens a block — which is
+/// exactly what any attempt to give back an ambiguously-trimmed flank base
+/// must do. #1260 is the worked example: trimmed its block is `A -> CAC` with
+/// `a = 0`, and with one flank base restored per side it is `AAA -> ACACA`,
+/// whose only decomposition is `a = 1, b = 2`. A search fixed at `a == 0`
+/// finds nothing there, `best_alignment` falls through to the single-gap
+/// winner, and #1260 reverts to a spanning `delins`.
+///
+/// No caller widens a block today, so this generalisation changes no current
+/// result — it removes a hidden coupling between this function and the
+/// caller's trim, and it is verified against blocks that exercise `a > 0` and
+/// `b < ref.len()` directly rather than through a caller.
+///
+/// `b > a` is required rather than incidental: with `b == a` the two insertions
+/// are adjacent in `result`, which is a single gap the existing search already
+/// places.
+///
+/// # Cost
+///
+/// Every reference base survives verbatim in this form, so `a` cannot exceed the
+/// two blocks' common prefix and `ref.len() - b` cannot exceed their common
+/// suffix. Both are 0 on a trimmed block — collapsing the search to the single
+/// case the earlier revision hardcoded — and at most one after a restored flank.
+/// The sweep is therefore bounded by the *residual* affix lengths, not by the
+/// block length. A block whose affixes would make that sweep large is declined
+/// outright — see [`MAX_TWO_GAP_PLACEMENTS`] — rather than searched under a
+/// narrower bound than this doc describes.
+///
+/// # The tie-break is an implementer's choice
+///
+/// The decomposition is **not unique**: `AA -> AAAA` admits `(a, b)` of `(0, 1)`,
+/// `(0, 2)` and `(1, 2)`, all with `I1 = I2 = "A"`, all matching every reference
+/// base and all yielding two members. Nothing in the spec reaches this. The
+/// smallest `a`, then the smallest `|I1|`, is taken — the 5'-most placement,
+/// preserving the earlier revision's behaviour. Deliberately *not* the 3'-most
+/// rule [`best_alignment`] applies to a member-count tie: adopting it here would
+/// move every such tie in a homopolymer.
+///
+/// # Why this does not reopen the corpus the single-gap rule protects
+///
+/// `merge.rs`'s single-gap restriction exists to stop *compensating* gaps — a
+/// deletion **and** an insertion in one block — from manufacturing matches out
+/// of coincidence and shredding a contiguous replacement (#1034/#1040/#182).
+/// Both gaps here are insertions in a net-insertion block, so no deletion is
+/// introduced and no match is manufactured: every matched column is a reference
+/// base surviving verbatim. That argument never depended on `a` being 0 — all
+/// three chunks are verbatim reference either way. Cluster A is structurally out
+/// of reach — #1040 and the `inv` cases are equal-length, #1157A is a net
+/// deletion, and an equal-length or net-deletion block never reaches this
+/// function.
+///
+/// Comparison is byte-exact, matching [`best_alignment`]'s own `==` throughout.
+/// Making only this path case-insensitive would let the two-gap form win on a
+/// soft-masked block where the single-gap search sees a mismatch.
+fn two_gap_insertion_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
+    // `reference.len() + 2` is the shortest result that leaves room for two
+    // insertions of one base each; an empty reference has nothing to retain.
+    if reference.is_empty() || result.len() < reference.len() + 2 {
+        return None;
+    }
+    let ref_len = reference.len();
+    let inserted = result.len() - ref_len;
+
+    // Bounds, not shortcuts: a matched `ref[..a]` is a common prefix of the two
+    // blocks, and a matched `ref[b..]` a common suffix. Not clamped — narrowing
+    // them changes the answer rather than bounding the cost, which is what
+    // [`MAX_TWO_GAP_PLACEMENTS`] is for.
+    let common_prefix = reference
+        .iter()
+        .zip(result)
+        .take_while(|(r, a)| r == a)
+        .count();
+    let common_suffix = reference
+        .iter()
+        .rev()
+        .zip(result.iter().rev())
+        .take_while(|(r, a)| r == a)
+        .count();
+
+    // Refuse the whole search rather than truncate it, so a block over budget
+    // gets `best_alignment`'s single-gap answer instead of one found under a
+    // narrower sweep than this function documents.
+    let lowest_b = (ref_len - common_suffix.min(ref_len)).max(1);
+    let placements = (common_prefix + 1)
+        .saturating_mul(inserted.saturating_sub(1))
+        .saturating_mul(ref_len + 1 - lowest_b.min(ref_len + 1));
+    if placements > MAX_TWO_GAP_PLACEMENTS {
+        return None;
+    }
+
+    // 5'-most: smallest `a`, then smallest `|I1|`, then smallest `b`.
+    for a in 0..=common_prefix {
+        for first_insert in 1..inserted {
+            for b in (a + 1).max(lowest_b)..=ref_len {
+                let retained_start = a + first_insert;
+                let retained_end = retained_start + (b - a);
+                if result[retained_start..retained_end] != reference[a..b] {
+                    continue;
+                }
+                // `result[..a] == reference[..a]` already holds by `a <=
+                // common_prefix`; the suffix is checked rather than inferred so
+                // the three chunk equalities read together.
+                let tail_start = retained_end + (inserted - first_insert);
+                if result[tail_start..] != reference[b..] {
+                    continue;
+                }
+                let mut columns = Vec::with_capacity(result.len());
+                columns.extend((0..a).map(|i| (Some(i), Some(i))));
+                columns.extend((a..retained_start).map(|j| (None, Some(j))));
+                columns.extend((a..b).map(|i| (Some(i), Some(retained_start + i - a))));
+                columns.extend((retained_end..tail_start).map(|j| (None, Some(j))));
+                columns.extend((b..ref_len).map(|i| (Some(i), Some(tail_start + i - b))));
+                return Some(columns);
+            }
+        }
+    }
+    None
 }
 
 /// Columns for an alignment with a single gap of `gap_len` after `k` aligned
@@ -2976,6 +3634,90 @@ fn apply_coding_codon_exception(
     }
 }
 
+/// Split a sequence-first merge back apart when it crosses a codon boundary.
+///
+/// `min_separation` (`seqfirst::MIN_SEPARATION`, `2`, on a reading-frame axis)
+/// captures only the *distance* half of `general.md:35`'s exception — merging
+/// any two runs separated by fewer than 2 unchanged bases, whichever codons
+/// they fall in. The exception itself is narrower: "two variants separated by
+/// one nucleotide, **together affecting one amino acid**" — both conditions,
+/// not one. A pair in different codons affects *two* amino acids and
+/// `general.md:34`'s plain rule governs it instead: described individually.
+///
+/// Scoped to the exact shape the exception describes — two single-nucleotide
+/// substitutions with their shared unchanged base carried in the middle
+/// (`ref_end - ref_start == 3`, `alt.len() == 3`, the middle alt base equal to
+/// the middle reference base, both flanking bases actually changed) — using
+/// the same [`same_codon`] arithmetic [`apply_coding_codon_exception`] already
+/// uses for the live splitter's own triplet, on the same axis distinction
+/// (`reading_frame`, from [`AxisFrame`]). A wider merged piece is not "two
+/// variants" in `general.md:35`'s sense at all — `LRG_199t1:c.850_901`
+/// (`delins.md:44`) merges a 52-base member for an unrelated reason (its
+/// `partition_block` sibling never reaches `best_alignment` in the first place;
+/// see [`MAX_UNGUARDED_SPLIT_BLOCK`]), not this exception, so it must not be
+/// touched here and is not: 52 ≠ 3.
+///
+/// Pinned by `sequence_first_split_declines_the_codon_exception_across_a_boundary`
+/// (`GCA -> TCC`, `general.md:34`'s split rule wins) and
+/// `sequence_first_split_keeps_the_codon_exception_within_one_codon`
+/// (`CCC -> GCA`, `general.md:35`'s exception wins) — the same two blocks
+/// `merge_consecutive_edits_tests::test_no_codon_frame_pair_straddles_codon_boundary`
+/// and `test_codon_frame_two_subs_one_codon` pin for the live splitter, so
+/// both sides are checked against the identical spec-derived expectation.
+fn split_codon_incompatible_triplets(
+    pieces: &mut Vec<Piece>,
+    reading_frame: bool,
+    w_lo: i64,
+    ref_bytes: &[u8],
+) {
+    if !reading_frame {
+        return;
+    }
+    let mut index = 0;
+    while index < pieces.len() {
+        let piece = &pieces[index];
+        // `ref_end <= ref_bytes.len()` is tested before any indexing. Every
+        // caller today passes pieces carved from this same window, so the span is
+        // in range — but this reads three bytes by raw index off a piece it does
+        // not own, and a piece whose span outran the window would panic rather
+        // than decline. An out-of-range span is simply not a merged triplet.
+        let is_merged_triplet = piece.ref_end == piece.ref_start + 3
+            && piece.ref_end <= ref_bytes.len()
+            && piece.alt.len() == 3
+            && piece.alt[1] == ref_bytes[piece.ref_start + 1]
+            && piece.alt[0] != ref_bytes[piece.ref_start]
+            && piece.alt[2] != ref_bytes[piece.ref_start + 2];
+        if !is_merged_triplet {
+            index += 1;
+            continue;
+        }
+        let triplet_start = w_lo + piece.ref_start as i64;
+        if same_codon(triplet_start, triplet_start + 2) {
+            index += 1;
+            continue;
+        }
+        let ref_start = piece.ref_start;
+        let first_alt = piece.alt[0];
+        let third_alt = piece.alt[2];
+        pieces.splice(
+            index..=index,
+            [
+                Piece {
+                    ref_start,
+                    ref_end: ref_start + 1,
+                    alt: vec![first_alt],
+                },
+                Piece {
+                    ref_start: ref_start + 2,
+                    ref_end: ref_start + 3,
+                    alt: vec![third_alt],
+                },
+            ],
+        );
+        index += 2;
+    }
+}
+
 /// Merge pieces the 3'-shift left touching.
 ///
 /// Two or more consecutive changed nucleotides are one delins
@@ -2992,6 +3734,43 @@ fn coalesce_adjacent_pieces(pieces: &mut Vec<Piece>) {
         } else {
             i += 1;
         }
+    }
+}
+
+/// Shrink each piece to the hull of its own differences.
+///
+/// A piece is a *region*, and a region is not obliged to be the narrowest span
+/// that spells the change it holds. Where an edit sits inside an ambiguous run
+/// the two come apart: on `ACAA -> CAACAG` the inserted `CA` can sit at more
+/// than one offset, so a partition derived from the alignment steps common to
+/// every minimal alignment confines it to `reference[0..1]` — which spells a
+/// `delins` of `CAA` over one base for what those same bases denote as an
+/// insertion of `CA`.
+///
+/// This is [`trim_common_flanks`] applied *within* a piece rather than to the
+/// whole block, and like that call it reads only the reference span and the
+/// payload — never the input spelling — so it cannot reintroduce a dependence
+/// on how the variant was written.
+///
+/// Only a `delins` can move. A deletion has no payload to share a flank with,
+/// an insertion spans no reference base, and a substitution's single base
+/// differs by construction, so each is returned untouched; the widened forms
+/// this exists to narrow are the only ones narrowed. Growing a run back to a
+/// `dup` or a repeat spelling is a rendering decision made downstream, on the
+/// narrowed member.
+fn shrink_pieces_to_differences(pieces: &mut [Piece], ref_bytes: &[u8]) {
+    for piece in pieces.iter_mut() {
+        let (lo, hi_ref, hi_alt) =
+            trim_common_flanks(&ref_bytes[piece.ref_start..piece.ref_end], &piece.alt);
+        // A piece that trims away entirely spells no change; leaving it whole
+        // keeps `anchor_for_piece` from building a member with no extent.
+        if lo == hi_ref && lo == hi_alt {
+            continue;
+        }
+        piece.alt.truncate(hi_alt);
+        piece.alt.drain(..lo);
+        piece.ref_end = piece.ref_start + hi_ref;
+        piece.ref_start += lo;
     }
 }
 
@@ -5235,6 +6014,9 @@ fn respell_at_gap<P: ReferenceProvider>(
 }
 
 #[cfg(test)]
+mod splitter_reproducer_corpus;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::hgvs::parser::parse_hgvs;
@@ -5541,6 +6323,954 @@ mod tests {
         );
     }
 
+    /// The two splitters must agree wherever the old one is already right.
+    /// A single changed base has one unambiguous answer, so any disagreement
+    /// here is a bug in the new path rather than a behavioural change.
+    #[test]
+    fn sequence_first_split_agrees_on_an_unambiguous_single_change() {
+        let reference = b"GACTGACTGA";
+        let result = b"GACTAACTGA";
+        let old = partition_block(reference, result);
+        let new = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("an unambiguous single substitution must partition");
+        assert_eq!(new.len(), 1, "expected one member, got {new:?}");
+        assert_eq!(
+            (new[0].ref_start, new[0].ref_end, new[0].alt.clone()),
+            (old[0].ref_start, old[0].ref_end, old[0].alt.clone())
+        );
+    }
+
+    /// The spec's own worked example (`delins.md:44`, `LRG_199t1:c.850_901`)
+    /// must stay one member. This is the case that discriminates counting
+    /// unchanged bases from comparing event offsets.
+    #[test]
+    fn sequence_first_split_keeps_the_spec_delins_example_whole() {
+        let reference = b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT";
+        let result = b"TTCCTCGATGCCTG";
+        let pieces = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("the spec example must partition");
+        assert_eq!(pieces.len(), 1, "spec requires one delins, got {pieces:?}");
+        assert_eq!((pieces[0].ref_start, pieces[0].ref_end), (0, 52));
+    }
+
+    /// Task 3, class `B2`: the separation threshold is axis-dependent, not a
+    /// uniform constant. `general.md:34`'s general rule — two variants
+    /// separated by one or more nucleotides are described individually — governs
+    /// a genomic axis, so `MIN_SEPARATION_NO_FRAME` (`1`) must keep two runs one
+    /// unchanged base apart split. `general.md:35`'s exception — separated by one
+    /// nucleotide, together affecting one amino acid — governs a reading-frame
+    /// axis, so `seqfirst::MIN_SEPARATION` (`2`) must merge the very same block.
+    ///
+    /// `CAA -> TAG` is the block `issue_1235_transcript_axes::` `n.`
+    /// (non-coding, hence `AxisFrame::reading_frame == false`)
+    /// `noncoding_axis_converges_on_separated_changes` produces, taken from the
+    /// `FERRO_SEQFIRST_SHADOW` audit's class `B2` — a test named for exactly the
+    /// genomic-axis split this threshold must preserve. Its equal-length blocks
+    /// have a single dominator match at the middle base (only one minimal
+    /// alignment achieves the edit distance), so the split is a pure threshold
+    /// question with no alignment ambiguity involved.
+    ///
+    /// Not chosen: `AAT -> CAA` and `CAATT -> TA`, two of `B2`'s other curated
+    /// blocks. Both stay one member even at `MIN_SEPARATION_NO_FRAME` — their
+    /// apparent single unchanged base is not a dominator match at all (a second,
+    /// equally minimal alignment matches the same reference position to a
+    /// *different* alternate offset, so `Dominators::matched` is empty; see
+    /// `align.rs`'s `AT -> AAT` example). That is `B1`'s mechanism, not `B2`'s,
+    /// even though the audit's live-gap-width heuristic filed them under `B2`.
+    /// So this fix does not close every `B2` block — only the ones where a
+    /// dominator genuinely exists and the threshold alone was suppressing it.
+    #[test]
+    fn sequence_first_split_axis_separation_matches_general_rule() {
+        let reference = b"CAA";
+        let result = b"TAG";
+        let genomic = partition_block_sequence_first(reference, result, MIN_SEPARATION_NO_FRAME)
+            .expect("must partition");
+        assert_eq!(
+            genomic.len(),
+            2,
+            "a genomic axis must split at the one unchanged base: {genomic:?}"
+        );
+
+        let coding = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
+        assert_eq!(
+            coding.len(),
+            1,
+            "a reading-frame axis must merge across the one unchanged base: {coding:?}"
+        );
+        assert_eq!(
+            (coding[0].ref_start, coding[0].ref_end),
+            (0, reference.len())
+        );
+    }
+
+    /// Codon-precision follow-up to Task 3: the coding-axis merge must also
+    /// check the codon, not just the distance. `ref=GCA alt=TCC` is the block
+    /// `issue_275_codon_frame_extensions::no_codon_frame_rna_pair_straddles_codon_boundary`
+    /// produces, from the `FERRO_SEQFIRST_SHADOW` audit's residual `B2` list —
+    /// and it is the exact block
+    /// `merge_consecutive_edits_tests::test_no_codon_frame_pair_straddles_codon_boundary`
+    /// already pins for the live splitter, at the same real position (`c.3G>T`,
+    /// `c.5A>C`: `(3-1)/3 = 0`, `(5-1)/3 = 1`, different codons).
+    /// `min_separation = 2` alone merges it into one triplet;
+    /// `split_codon_incompatible_triplets` must split it straight back apart.
+    #[test]
+    fn sequence_first_split_declines_the_codon_exception_across_a_boundary() {
+        let reference = b"GCA";
+        let result = b"TCC";
+        let mut merged = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
+        assert_eq!(
+            merged.len(),
+            1,
+            "the distance rule alone merges this into one triplet: {merged:?}"
+        );
+
+        split_codon_incompatible_triplets(&mut merged, true, 3, reference);
+        assert_eq!(
+            merged.len(),
+            2,
+            "different codons must not merge, even one nucleotide apart: {merged:?}"
+        );
+        assert_eq!(
+            (
+                merged[0].ref_start,
+                merged[0].ref_end,
+                merged[0].alt.as_slice()
+            ),
+            (0, 1, b"T".as_slice())
+        );
+        assert_eq!(
+            (
+                merged[1].ref_start,
+                merged[1].ref_end,
+                merged[1].alt.as_slice()
+            ),
+            (2, 3, b"C".as_slice())
+        );
+
+        // No reading frame: never touched, regardless of codon arithmetic.
+        let mut no_frame = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
+        split_codon_incompatible_triplets(&mut no_frame, false, 3, reference);
+        assert_eq!(
+            no_frame.len(),
+            1,
+            "no reading frame means no split: {no_frame:?}"
+        );
+    }
+
+    /// The other side of the same pin: two substitutions genuinely within one
+    /// codon must still merge. `ref=CCC alt=GCA` at `w_lo=10` is
+    /// `merge_consecutive_edits_tests::test_codon_frame_two_subs_one_codon`'s
+    /// exact block (`c.10C>G`, `c.12C>A`: `(10-1)/3 = 3`, `(12-1)/3 = 3`, same
+    /// codon) — the spec's `c.[145C>T;147C>G]` → `c.145_147delinsTGG` example,
+    /// re-based. `split_codon_incompatible_triplets` must leave it merged.
+    #[test]
+    fn sequence_first_split_keeps_the_codon_exception_within_one_codon() {
+        let reference = b"CCC";
+        let result = b"GCA";
+        let mut merged = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
+        assert_eq!(merged.len(), 1, "must merge into one triplet: {merged:?}");
+
+        split_codon_incompatible_triplets(&mut merged, true, 10, reference);
+        assert_eq!(merged.len(), 1, "same codon must stay merged: {merged:?}");
+        assert_eq!((merged[0].ref_start, merged[0].ref_end), (0, 3));
+        assert_eq!(merged[0].alt, b"GCA");
+    }
+
+    /// The calibration this task must not break: `LRG_199t1:c.850_901`
+    /// (`delins.md:44`) merges a 52-base member for a reason unrelated to the
+    /// codon exception (its `partition_block` sibling never reaches
+    /// `best_alignment` at all — see `MAX_UNGUARDED_SPLIT_BLOCK`), so
+    /// `split_codon_incompatible_triplets` must not touch it: the piece is 52
+    /// nt wide, not the 3 nt the codon exception's shape requires.
+    #[test]
+    fn split_codon_incompatible_triplets_leaves_the_spec_delins_example_whole() {
+        let reference = b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT";
+        let result = b"TTCCTCGATGCCTG";
+        let mut pieces = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("the spec example must partition");
+        assert_eq!(pieces.len(), 1);
+
+        // The real accession's CDS offset (`c.850` = this block's reference
+        // offset 0; `cds_start = 245`, `LRG_199t1` transcript offset 1094,
+        // `spec_enumeration_transcripts.fna`), so this is the exact codon
+        // arithmetic production would run, not a stand-in value.
+        split_codon_incompatible_triplets(&mut pieces, true, 850, reference);
+        assert_eq!(
+            pieces.len(),
+            1,
+            "spec still requires one delins, got {pieces:?}"
+        );
+        assert_eq!((pieces[0].ref_start, pieces[0].ref_end), (0, 52));
+    }
+
+    /// Every piece the new splitter emits must reconstruct the result block
+    /// exactly. A split that does not round-trip denotes a different variant.
+    #[test]
+    fn sequence_first_split_round_trips_every_block_it_accepts() {
+        fn words(len: u32) -> Vec<Vec<u8>> {
+            if len == 0 {
+                return vec![Vec::new()];
+            }
+            let mut out = Vec::new();
+            for shorter in words(len - 1) {
+                for base in *b"AC" {
+                    let mut w = shorter.clone();
+                    w.push(base);
+                    out.push(w);
+                }
+            }
+            out
+        }
+        let all: Vec<Vec<u8>> = (0..=5u32).flat_map(words).collect();
+        // Counted, because the `continue` below is silent: if a regression made
+        // `member_alt_spans` decline every pair, the round-trip assertion would
+        // never run and this test would still pass. The sibling sweep
+        // `shrinking_before_and_after_the_three_prime_shift_agree` guards itself
+        // the same way.
+        let mut accepted = 0usize;
+        for reference in &all {
+            for result in &all {
+                let Some(pieces) = partition_block_sequence_first(
+                    reference,
+                    result,
+                    crate::normalize::seqfirst::MIN_SEPARATION,
+                ) else {
+                    continue;
+                };
+                accepted += 1;
+                let mut rebuilt = Vec::new();
+                let mut cursor = 0usize;
+                for piece in &pieces {
+                    rebuilt.extend_from_slice(&reference[cursor..piece.ref_start]);
+                    rebuilt.extend_from_slice(&piece.alt);
+                    cursor = piece.ref_end;
+                }
+                rebuilt.extend_from_slice(&reference[cursor..]);
+                assert_eq!(
+                    rebuilt,
+                    *result,
+                    "{} -> {} rebuilt as {}",
+                    String::from_utf8_lossy(reference),
+                    String::from_utf8_lossy(result),
+                    String::from_utf8_lossy(&rebuilt)
+                );
+            }
+        }
+        assert!(
+            accepted > 3_000,
+            "the sweep accepted only {accepted} blocks; a mass decline would make \
+             this round-trip assertion vacuous"
+        );
+    }
+
+    /// An oversized grid is declined rather than allocated.
+    ///
+    /// The reference side is bounded upstream by `MAX_CANONICAL_WINDOW` (4096),
+    /// but the alternate side is not: a duplication over the window doubles it,
+    /// and `AlignmentDag::build` allocates four `Θ(n·m)` grids. The shape
+    /// `4096 -> 8192` is 33.5 M cells, past the bound, and must come back `None`
+    /// so the caller keeps the per-member result.
+    ///
+    /// Asserted on the boundary from both sides, so the test fails if the bound
+    /// is removed *or* set low enough to refuse ordinary blocks.
+    #[test]
+    fn sequence_first_split_declines_an_oversized_grid() {
+        // The budget is a square grid at the reference bound, so the largest
+        // equal-length block is exactly admissible.
+        assert_eq!(MAX_SEQFIRST_GRID_CELLS, 4097 * 4097);
+
+        // Just inside: a 4096 x 4096 grid is the boundary square.
+        let reference = b"ACGT".repeat(1024);
+        let result = b"ACGA".repeat(1024);
+        assert_eq!(reference.len(), 4096);
+        assert!(
+            partition_block_sequence_first(
+                &reference,
+                &result,
+                crate::normalize::seqfirst::MIN_SEPARATION
+            )
+            .is_some(),
+            "a 4096 x 4096 grid is within budget and must still be partitioned"
+        );
+
+        // Past it: the same reference against a duplicated alternate, the shape a
+        // whole-window `dup` produces.
+        let doubled = b"ACGT".repeat(2048);
+        assert_eq!(doubled.len(), 8192);
+        assert_eq!(
+            partition_block_sequence_first(
+                &reference,
+                &doubled,
+                crate::normalize::seqfirst::MIN_SEPARATION
+            ),
+            None,
+            "a 4096 x 8192 grid is 33.5 M cells and must be declined, not allocated"
+        );
+    }
+
+    /// Pieces must be disjoint and ascending — the property that makes the
+    /// overlap and ordering repair passes unnecessary.
+    #[test]
+    fn sequence_first_split_emits_disjoint_ascending_pieces() {
+        let reference = b"ACGTACGTACGTACGT";
+        let result = b"ATGTACGTACGTACTT";
+        let pieces = partition_block_sequence_first(
+            reference,
+            result,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        )
+        .expect("must partition");
+        for pair in pieces.windows(2) {
+            assert!(
+                pair[0].ref_end <= pair[1].ref_start,
+                "pieces overlap or are out of order: {pieces:?}"
+            );
+        }
+    }
+
+    /// The enumerated classes of disagreement between the two block splitters.
+    ///
+    /// Harvested with `FERRO_SEQFIRST_SHADOW=1` over the whole suite plus the
+    /// exhaustive two-member sweeps: **30 261 distinct `(reference, alternate)`
+    /// blocks** disagree. Every one of the 60 522 piece lists — both sides, every
+    /// block — reproduces the alternate block when its payloads are substituted
+    /// into the reference. So **neither splitter is ever wrong** in the only sense
+    /// that admits a definitive answer; each disagreement is a difference in how
+    /// the change is *divided*, and the tie-breaker below is minimality: the
+    /// changed-column count `changed_columns_of_pieces` measures, which is the
+    /// quantity HGVS asks a description to minimise.
+    ///
+    /// Counts are distinct blocks, and sum to 30 261.
+    ///
+    /// | class | mechanism | n | more minimal |
+    /// |-------|-----------|---|--------------|
+    /// | `A1` | shadow splits a block live kept whole | 7 035 | shadow |
+    /// | `A2` | shadow replaces live's coincidental substitution run with one indel pair | 6 915 | shadow |
+    /// | `A3` | shadow narrows a piece live over-widened | 4 567 | shadow |
+    /// | `A4` | shadow widens one piece but lowers the total | 379 | shadow |
+    /// | `B1` | shadow widens a member over an indel it will not localise | 8 044 | live |
+    /// | `B2` | shadow merges pieces live kept separate | 3 088 | live |
+    /// | `B3` | shadow narrows one piece and pays for it in the next | 1 | live |
+    /// | `C1` | equal weight, different division | 232 | neither |
+    ///
+    /// `A1`–`A4` (18 896, 62.4%) are the migration's payoff. The mechanism, in the
+    /// blocks pinned below, is `partition_block`'s single-gap restriction: two
+    /// independent length changes have no one-gap explanation, so the lone gap
+    /// parks at one end and the offset columns pair up as coincidental
+    /// substitutions or as one whole-block `delins`.
+    ///
+    /// `B1`–`B3` (11 133, 36.8%) are the risk, and they have two distinct causes.
+    /// `B1` is inherent to deriving the split from the alignment steps common to
+    /// every minimal alignment: when the inserted bases can sit at more than one
+    /// offset inside a run, no single alignment node is common to all of them, so
+    /// the member absorbs the whole ambiguous span instead of committing to a
+    /// tie-broken offset.
+    ///
+    /// `B2` splits in two by the narrowest unchanged run between live's pieces:
+    /// 1 453 blocks are separated by exactly one unchanged base (1 106 of those
+    /// equal-length, where `partition_block` compares position-wise and there is
+    /// no alignment choice to make), and 1 635 by two or more. The one-base half
+    /// is a threshold mismatch rather than an ambiguity —
+    /// `seqfirst::MIN_SEPARATION` is 2 on every axis, whereas this module's own
+    /// `MIN_PIECE_SEPARATION` of 2 gates only net insertions.
+    ///
+    /// `B2` is the class that bears on flipping the default, because it is what
+    /// the curated issue corpora overwhelmingly reach: of the 49 distinct blocks
+    /// the non-sweep, non-proptest tests produce, 38 are a `B2` merge. See
+    /// `shadow_merges_across_one_unchanged_base_where_live_splits`, which pins two
+    /// blocks taken straight from the #1232 and #1235 transcript-axis tests.
+    ///
+    /// This module's tests call `partition_block_sequence_first` directly at the
+    /// uniform `seqfirst::MIN_SEPARATION` (`2`), on purpose: they document the
+    /// raw algorithm-level disagreement this audit found, unchanged. The fix —
+    /// choosing the separation per axis at the `canonicalize_from_sequence` call
+    /// site rather than changing this default — is pinned separately, by
+    /// `sequence_first_split_axis_separation_matches_general_rule`.
+    mod seqfirst_shadow_audit {
+        use super::*;
+
+        /// Substitute each piece's payload into `reference`.
+        ///
+        /// Returns `None` if the pieces are not disjoint and ascending, so a
+        /// caller cannot mistake an ill-formed piece list for a denotation.
+        fn denotes(reference: &[u8], pieces: &[Piece]) -> Option<Vec<u8>> {
+            let mut cursor = 0;
+            let mut out = Vec::new();
+            for piece in pieces {
+                if piece.ref_start < cursor
+                    || piece.ref_end < piece.ref_start
+                    || piece.ref_end > reference.len()
+                {
+                    return None;
+                }
+                out.extend_from_slice(&reference[cursor..piece.ref_start]);
+                out.extend_from_slice(&piece.alt);
+                cursor = piece.ref_end;
+            }
+            out.extend_from_slice(&reference[cursor..]);
+            Some(out)
+        }
+
+        /// `(ref_start, ref_end, alt)` triples, for terse expectations.
+        fn shape(pieces: &[Piece]) -> Vec<(usize, usize, &[u8])> {
+            pieces
+                .iter()
+                .map(|p| (p.ref_start, p.ref_end, p.alt.as_slice()))
+                .collect()
+        }
+
+        /// Run both splitters on one block and check the two invariants that hold
+        /// for every disagreement found: both sides denote the alternate block,
+        /// and the sequence-first side never declines.
+        ///
+        /// Returns `(live, shadow)` for the caller to pin exactly.
+        fn both(reference: &[u8], result: &[u8]) -> (Vec<Piece>, Vec<Piece>) {
+            let live = partition_block(reference, result);
+            let shadow = partition_block_sequence_first(
+                reference,
+                result,
+                crate::normalize::seqfirst::MIN_SEPARATION,
+            )
+            .expect("no harvested disagreement had the sequence-first side decline");
+            assert_eq!(
+                denotes(reference, &live).as_deref(),
+                Some(result),
+                "live pieces must denote the alternate block: {live:?}"
+            );
+            assert_eq!(
+                denotes(reference, &shadow).as_deref(),
+                Some(result),
+                "shadow pieces must denote the alternate block: {shadow:?}"
+            );
+            assert_ne!(shape(&live), shape(&shadow), "this block must disagree");
+            (live, shadow)
+        }
+
+        /// `A1` (7 035 blocks). `partition_block` has no single-gap explanation
+        /// for two separate deletions, so it emits the whole block as one
+        /// `delins`; the sequence-first split finds both deletions.
+        #[test]
+        fn shadow_splits_a_block_live_kept_whole() {
+            let (live, shadow) = both(b"ACAC", b"CA");
+            assert_eq!(shape(&live), [(0, 4, b"CA".as_slice())]);
+            assert_eq!(
+                shape(&shadow),
+                [(0, 1, b"".as_slice()), (3, 4, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 4);
+            assert_eq!(changed_columns_of_pieces(&shadow), 2);
+        }
+
+        /// `A2` (6 915 blocks). The block is a 5' insertion plus a 3' deletion.
+        /// `partition_block`'s lone gap parks at one end, so the offset columns
+        /// pair up position-wise and read as a run of substitutions — three
+        /// pieces claiming three changed columns for what is one base in and one
+        /// base out.
+        #[test]
+        fn shadow_replaces_a_coincidental_substitution_run_with_one_indel_pair() {
+            let (live, shadow) = both(b"AACCA", b"TAACC");
+            assert_eq!(
+                shape(&live),
+                [
+                    (0, 1, b"T".as_slice()),
+                    (2, 3, b"A".as_slice()),
+                    (4, 5, b"C".as_slice()),
+                ]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 0, b"T".as_slice()), (4, 5, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 3);
+            assert_eq!(changed_columns_of_pieces(&shadow), 2);
+        }
+
+        /// `A3` (4 567 blocks). Same piece count; the live first piece spans one
+        /// base more than it needs to, and pays for it with a substitution the
+        /// sequence-first split renders as a deletion.
+        #[test]
+        fn shadow_narrows_a_piece_live_over_widened() {
+            let (live, shadow) = both(b"ACCA", b"CC");
+            assert_eq!(
+                shape(&live),
+                [(0, 2, b"".as_slice()), (3, 4, b"C".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 1, b"".as_slice()), (3, 4, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 3);
+            assert_eq!(changed_columns_of_pieces(&shadow), 2);
+        }
+
+        /// `A4` (379 blocks). The rarest of the four: the sequence-first first
+        /// piece is *wider* than live's, and the total is still lower.
+        #[test]
+        fn shadow_widens_one_piece_and_still_lowers_the_total() {
+            let (live, shadow) = both(b"AACAC", b"CA");
+            assert_eq!(
+                shape(&live),
+                [(0, 1, b"C".as_slice()), (2, 5, b"".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 2, b"".as_slice()), (4, 5, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 4);
+            assert_eq!(changed_columns_of_pieces(&shadow), 3);
+        }
+
+        /// `B1` (8 044 blocks) — **the sequence-first answer is less minimal.**
+        ///
+        /// `CA` is inserted into a run where it can sit at more than one offset,
+        /// so no alignment node is common to every minimal alignment there and
+        /// the member absorbs `reference[0..1]` rather than committing to the
+        /// 5'-most tie-break live picks. Both denote `CAACAG`; live spends 3
+        /// changed columns, the sequence-first split 4.
+        #[test]
+        fn shadow_widens_a_member_over_an_indel_it_will_not_localise() {
+            let (live, shadow) = both(b"ACAA", b"CAACAG");
+            assert_eq!(
+                shape(&live),
+                [(0, 0, b"CA".as_slice()), (3, 4, b"G".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 1, b"CAA".as_slice()), (3, 4, b"G".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 3);
+            assert_eq!(changed_columns_of_pieces(&shadow), 4);
+        }
+
+        /// `B2` (3 088 blocks, 1 265 of them equal-length) — **the sequence-first
+        /// answer is less minimal, and this is the class that reaches the curated
+        /// corpora.**
+        ///
+        /// `seqfirst::MIN_SEPARATION` is 2, so one unchanged reference base
+        /// between two runs of change merges them. `partition_block` splits
+        /// there: it compares equal-length blocks position-wise, and its own
+        /// `MIN_PIECE_SEPARATION` of 2 gates only net insertions.
+        ///
+        /// The three blocks below are, in order, the smallest instance, the block
+        /// `issue_1235_transcript_axes::noncoding_axis_converges_on_separated_changes`
+        /// produces, and the block
+        /// `issue_1235_cis_allele_confluence::issue_1232_spanning_delins_splits_at_unchanged_base`
+        /// produces. Both of those tests are named for the split the
+        /// sequence-first splitter declines to make.
+        #[test]
+        fn shadow_merges_across_one_unchanged_base_where_live_splits() {
+            let (live, shadow) = both(b"ACA", b"CC");
+            assert_eq!(
+                shape(&live),
+                [(0, 1, b"".as_slice()), (2, 3, b"C".as_slice())]
+            );
+            assert_eq!(shape(&shadow), [(0, 3, b"CC".as_slice())]);
+            assert_eq!(changed_columns_of_pieces(&live), 2);
+            assert_eq!(changed_columns_of_pieces(&shadow), 3);
+
+            // #1235's `noncoding_axis_converges_on_separated_changes`: an
+            // equal-length block, two substitutions one unchanged base apart.
+            let (live, shadow) = both(b"CAA", b"TAG");
+            assert_eq!(
+                shape(&live),
+                [(0, 1, b"T".as_slice()), (2, 3, b"G".as_slice())]
+            );
+            assert_eq!(shape(&shadow), [(0, 3, b"TAG".as_slice())]);
+            assert_eq!(changed_columns_of_pieces(&live), 2);
+            assert_eq!(changed_columns_of_pieces(&shadow), 3);
+
+            // #1232's `spanning_delins_splits_at_unchanged_base`: the split the
+            // issue is named for is the one that goes away.
+            let (live, shadow) = both(b"CAATT", b"TA");
+            assert_eq!(
+                shape(&live),
+                [(0, 3, b"".as_slice()), (4, 5, b"A".as_slice())]
+            );
+            assert_eq!(shape(&shadow), [(0, 5, b"TA".as_slice())]);
+            assert_eq!(changed_columns_of_pieces(&live), 4);
+            assert_eq!(changed_columns_of_pieces(&shadow), 5);
+        }
+
+        /// `B3` (1 block) — **the sequence-first answer is less minimal.** The
+        /// only harvested block where the two splits have the same piece count,
+        /// the sequence-first first piece is narrower, and the total is still
+        /// higher because the second piece grows by more than the first shrank.
+        #[test]
+        fn shadow_narrows_one_piece_and_pays_for_it_in_the_next() {
+            let (live, shadow) = both(b"GCCATA", b"CATAAC");
+            assert_eq!(
+                shape(&live),
+                [(0, 3, b"CAT".as_slice()), (4, 6, b"AC".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 3, b"C".as_slice()), (5, 6, b"AAC".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 5);
+            assert_eq!(changed_columns_of_pieces(&shadow), 6);
+        }
+
+        /// `C1` (232 blocks). Both denote the alternate block and both spend the
+        /// same number of changed columns; they only divide the change
+        /// differently. Which is preferable is not decided here — the spec's
+        /// prioritisation rule (`general.md:56`) is what reaches these, and the
+        /// two blocks below fall to it in opposite directions.
+        #[test]
+        fn equal_weight_different_division() {
+            let (live, shadow) = both(b"ACAGCG", b"CGCTGT");
+            assert_eq!(shape(&live), [(0, 6, b"CGCTGT".as_slice())]);
+            assert_eq!(
+                shape(&shadow),
+                [(0, 3, b"C".as_slice()), (5, 6, b"TGT".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 6);
+            assert_eq!(changed_columns_of_pieces(&shadow), 6);
+
+            let (live, shadow) = both(b"AGAGT", b"GAAGAG");
+            assert_eq!(
+                shape(&live),
+                [(0, 2, b"GA".as_slice()), (4, 5, b"AG".as_slice())]
+            );
+            assert_eq!(
+                shape(&shadow),
+                [(0, 1, b"GAA".as_slice()), (4, 5, b"".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&live), 4);
+            assert_eq!(changed_columns_of_pieces(&shadow), 4);
+        }
+
+        /// The one property that held over all 30 261 harvested disagreements:
+        /// both piece lists are disjoint, ascending, and denote the alternate
+        /// block. `denotes` returns `None` on a piece list that is not, so this
+        /// is what makes "neither splitter is ever wrong" a checked claim rather
+        /// than a reading of the log.
+        #[test]
+        fn every_pinned_class_denotes_the_alternate_block_on_both_sides() {
+            for (reference, result) in [
+                (b"ACAC".as_slice(), b"CA".as_slice()),
+                (b"AACCA", b"TAACC"),
+                (b"ACCA", b"CC"),
+                (b"AACAC", b"CA"),
+                (b"ACAA", b"CAACAG"),
+                (b"ACA", b"CC"),
+                (b"CAA", b"TAG"),
+                (b"CAATT", b"TA"),
+                (b"GCCATA", b"CATAAC"),
+                (b"ACAGCG", b"CGCTGT"),
+                (b"AGAGT", b"GAAGAG"),
+            ] {
+                // `both` asserts the denotation on each side and that the block
+                // does in fact disagree.
+                both(reference, result);
+            }
+        }
+    }
+
+    /// Minimal member rendering — [`shrink_pieces_to_differences`].
+    ///
+    /// The decision this pins: keep the sequence-derived partition, and spell
+    /// each member as the hull of its own differences. A whole ambiguous run is
+    /// described as one unit only where that unit has an edit type of its own
+    /// (`dup`, `NNN[k]`), never as a `delins` spanning the run.
+    mod minimal_member_rendering {
+        use super::*;
+
+        /// `(ref_start, ref_end, alt)` triples, for terse expectations.
+        fn shape(pieces: &[Piece]) -> Vec<(usize, usize, &[u8])> {
+            pieces
+                .iter()
+                .map(|p| (p.ref_start, p.ref_end, p.alt.as_slice()))
+                .collect()
+        }
+
+        /// The sequence-first split of `reference -> result`, shrunk.
+        ///
+        /// At [`MIN_SEPARATION_NO_FRAME`], the threshold
+        /// `canonicalize_from_sequence` chooses on an axis with no reading
+        /// frame — which is the axis every block below was harvested from.
+        fn shrunk_sequence_first(reference: &[u8], result: &[u8]) -> Vec<Piece> {
+            let mut pieces =
+                partition_block_sequence_first(reference, result, MIN_SEPARATION_NO_FRAME)
+                    .expect("the sequence-first split must not decline on these blocks");
+            shrink_pieces_to_differences(&mut pieces, reference);
+            pieces
+        }
+
+        /// Every trimmed `(block, alternate)` pair drawn from `{A,C,G}` with
+        /// both sides of length 1..=4, excluding the pairs that trim away to no
+        /// change at all (which `canonicalize_from_sequence` returns early on).
+        ///
+        /// Small on purpose: the blocks the shrink acts on are already trimmed
+        /// and rarely long, and an exhaustive sweep of short blocks covers the
+        /// shapes — homopolymer, tandem 2-mer, net insertion, net deletion,
+        /// equal length — more evenly than a longer random sample would.
+        fn enumerated_blocks() -> Vec<(Vec<u8>, Vec<u8>)> {
+            fn words(alphabet: &[u8], max_len: usize) -> Vec<Vec<u8>> {
+                let mut out: Vec<Vec<u8>> = Vec::new();
+                let mut level = vec![Vec::new()];
+                for _ in 0..max_len {
+                    let mut next = Vec::new();
+                    for word in &level {
+                        for base in alphabet {
+                            let mut grown = word.clone();
+                            grown.push(*base);
+                            next.push(grown);
+                        }
+                    }
+                    out.extend(next.iter().cloned());
+                    level = next;
+                }
+                out
+            }
+
+            let words = words(b"ACG", 4);
+            let mut out = Vec::new();
+            for reference in &words {
+                for result in &words {
+                    let (lo, hi_ref, hi_alt) = trim_common_flanks(reference, result);
+                    if lo == hi_ref && lo == hi_alt {
+                        continue;
+                    }
+                    out.push((reference[lo..hi_ref].to_vec(), result[lo..hi_alt].to_vec()));
+                }
+            }
+            out
+        }
+
+        /// Substitute each piece's payload into `reference` (see the audit
+        /// module's `denotes`, duplicated here so this module stands alone).
+        fn denotes(reference: &[u8], pieces: &[Piece]) -> Vec<u8> {
+            let mut cursor = 0;
+            let mut out = Vec::new();
+            for piece in pieces {
+                assert!(piece.ref_start >= cursor, "pieces overlap: {pieces:?}");
+                out.extend_from_slice(&reference[cursor..piece.ref_start]);
+                out.extend_from_slice(&piece.alt);
+                cursor = piece.ref_end;
+            }
+            out.extend_from_slice(&reference[cursor..]);
+            out
+        }
+
+        /// Class `B1`: the sequence-first split widens a member over an indel it
+        /// will not localise. Shrinking each member to its own differences
+        /// recovers the minimal spelling — on all three blocks, the very piece
+        /// list `partition_block` produces.
+        ///
+        /// The blocks are the audit's pinned `B1` example plus two more taken
+        /// from the same harvest, chosen to cover both directions and the widest
+        /// widening seen: a net insertion widened by one base, a net deletion
+        /// widened by one base, and an 8-base homopolymer where the derived
+        /// member is 8 columns wider than the change it holds.
+        #[test]
+        fn shrinking_collapses_the_b1_blocks_onto_the_minimal_split() {
+            for (reference, result) in [
+                (b"ACAA".as_slice(), b"CAACAG".as_slice()),
+                (b"ACCAA", b"CAG"),
+                (b"AAAAAAAATA", b"TAAAAAAAAATG"),
+            ] {
+                let live = partition_block(reference, result);
+                let shrunk = shrunk_sequence_first(reference, result);
+                assert_eq!(
+                    shape(&shrunk),
+                    shape(&live),
+                    "block {} -> {}",
+                    String::from_utf8_lossy(reference),
+                    String::from_utf8_lossy(result)
+                );
+                assert_eq!(denotes(reference, &shrunk), result);
+                assert_eq!(
+                    changed_columns_of_pieces(&shrunk),
+                    changed_columns_of_pieces(&live)
+                );
+            }
+        }
+
+        /// The audit's `B1` block in full, with the weights it recorded: the
+        /// sequence-first split spends 4 changed columns, shrinking brings it
+        /// back to live's 3, and the widened `delins` of `CAA` over one base
+        /// becomes the insertion of `CA` those bases denote.
+        #[test]
+        fn the_pinned_b1_block_loses_its_spanning_delins() {
+            let reference = b"ACAA";
+            let raw = partition_block_sequence_first(reference, b"CAACAG", MIN_SEPARATION_NO_FRAME)
+                .expect("must partition");
+            assert_eq!(
+                shape(&raw),
+                [(0, 1, b"CAA".as_slice()), (3, 4, b"G".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&raw), 4);
+
+            let shrunk = shrunk_sequence_first(reference, b"CAACAG");
+            assert_eq!(
+                shape(&shrunk),
+                [(0, 0, b"CA".as_slice()), (3, 4, b"G".as_slice())]
+            );
+            assert_eq!(changed_columns_of_pieces(&shrunk), 3);
+        }
+
+        /// The guard against over-shrinking, at the piece level: a deletion, an
+        /// insertion, a duplicating insertion and a substitution are returned
+        /// exactly as they arrived. None of them can share a flank between span
+        /// and payload, so the shrink reaches only `delins`-shaped pieces.
+        #[test]
+        fn a_deletion_insertion_dup_and_substitution_are_left_alone() {
+            let ref_bytes = b"AAAAAG";
+            for piece in [
+                // A 2-base deletion inside the A-run: no payload.
+                Piece {
+                    ref_start: 1,
+                    ref_end: 3,
+                    alt: Vec::new(),
+                },
+                // An insertion of two A into the same run: no reference span.
+                Piece {
+                    ref_start: 4,
+                    ref_end: 4,
+                    alt: b"AA".to_vec(),
+                },
+                // A duplicating insertion — `is_tandem_duplication` holds.
+                Piece {
+                    ref_start: 3,
+                    ref_end: 3,
+                    alt: b"A".to_vec(),
+                },
+                // A substitution: one base, and it differs.
+                Piece {
+                    ref_start: 5,
+                    ref_end: 6,
+                    alt: b"T".to_vec(),
+                },
+            ] {
+                let mut pieces = [piece.clone()];
+                shrink_pieces_to_differences(&mut pieces, ref_bytes);
+                assert_eq!(pieces[0], piece);
+            }
+        }
+
+        /// A piece whose span and payload are identical would trim to nothing.
+        /// It is left whole instead, so `anchor_for_piece` never sees a member
+        /// with no extent.
+        #[test]
+        fn a_piece_that_trims_away_entirely_is_left_alone() {
+            let piece = Piece {
+                ref_start: 0,
+                ref_end: 1,
+                alt: b"A".to_vec(),
+            };
+            let mut pieces = [piece.clone()];
+            shrink_pieces_to_differences(&mut pieces, b"A");
+            assert_eq!(pieces[0], piece);
+        }
+
+        /// The live splitter's own pieces are already minimal, so adding the
+        /// shrink to `canonicalize_from_sequence` cannot move them.
+        ///
+        /// `best_alignment` maximises matched columns, and a piece that shared a
+        /// flank between its span and its payload would mean a better placement
+        /// of the single gap was available — so the property is a consequence of
+        /// the search, not a coincidence. Enumerated over the same 14 280 blocks
+        /// as the ordering test: `partition_block`'s answer is a fixed point of
+        /// the shrink on every one.
+        #[test]
+        fn shrinking_never_moves_a_piece_the_live_splitter_produced() {
+            let mut compared = 0usize;
+            for (block, alt) in enumerated_blocks() {
+                let pieces = partition_block(&block, &alt);
+                let mut shrunk = pieces.clone();
+                shrink_pieces_to_differences(&mut shrunk, &block);
+                assert_eq!(
+                    shape(&shrunk),
+                    shape(&pieces),
+                    "the shrink moved a live piece on {} -> {}",
+                    String::from_utf8_lossy(&block),
+                    String::from_utf8_lossy(&alt)
+                );
+                compared += 1;
+            }
+            assert_eq!(compared, 14_280);
+        }
+
+        /// Shrinking commutes with the 3'-shift.
+        ///
+        /// `canonicalize_from_sequence` shifts, coalesces, then shrinks; the
+        /// opposite order — shrink, then shift and coalesce — is not obviously
+        /// the same pipeline, because shrinking can turn a `delins` into a pure
+        /// indel and only pure indels shift. Enumerated over every block pair
+        /// drawn from `{A,C,G}` of length 1..=4 on each side, at both separation
+        /// thresholds (14 280 partitioned blocks per threshold), the two orders
+        /// agree on every block.
+        #[test]
+        fn shrinking_before_and_after_the_three_prime_shift_agree() {
+            let blocks = enumerated_blocks();
+            for min_separation in [
+                MIN_SEPARATION_NO_FRAME,
+                crate::normalize::seqfirst::MIN_SEPARATION,
+            ] {
+                let mut compared = 0usize;
+                for (block, alt) in &blocks {
+                    let Some(pieces) = partition_block_sequence_first(block, alt, min_separation)
+                    else {
+                        continue;
+                    };
+
+                    let mut shift_first = pieces.clone();
+                    shift_pieces_three_prime(&mut shift_first, block);
+                    coalesce_adjacent_pieces(&mut shift_first);
+                    shrink_pieces_to_differences(&mut shift_first, block);
+
+                    let mut shrink_first = pieces.clone();
+                    shrink_pieces_to_differences(&mut shrink_first, block);
+                    shift_pieces_three_prime(&mut shrink_first, block);
+                    coalesce_adjacent_pieces(&mut shrink_first);
+
+                    assert_eq!(
+                        shape(&shift_first),
+                        shape(&shrink_first),
+                        "orders disagree at min_separation {min_separation} on {} -> {}",
+                        String::from_utf8_lossy(block),
+                        String::from_utf8_lossy(alt)
+                    );
+                    compared += 1;
+                }
+                // Every enumerated block partitions; none declines.
+                assert_eq!(compared, blocks.len());
+            }
+        }
+    }
+
     fn flip_base(base: u8) -> u8 {
         match base {
             b'A' => b'C',
@@ -5591,5 +7321,311 @@ mod tests {
         // The same inversion clear of the bad byte still applies.
         let clean = [GEdit::Inv { s: 6, e: 9 }];
         assert!(apply_edits_to_window(&clean, reference, 1).is_some());
+    }
+
+    /// Ties between gap placements, broken by what they separate (#1262).
+    ///
+    /// In a repeat tract every placement of the gap matches the same number of
+    /// columns, so the score cannot choose and the tie-break decides the
+    /// description. msto's `high` corpus states the rule the spec gives for
+    /// that: two variants separated by one or more unchanged nucleotides are
+    /// described individually and **not** as a `delins` (`delins.md:17`, cited
+    /// by #1232), and `general.md:56` ranks `delins` last (#1231, #1233).
+    mod tie_break_by_separation {
+        use super::*;
+
+        #[test]
+        fn a_tied_placement_that_separates_the_change_wins() {
+            // #1262's authored block. Deleting `ref[0]`, `ref[1]` or `ref[2]`
+            // each leaves exactly one matched column, so all three placements
+            // tie. Only the third leaves the match *between* the two changes,
+            // which is what makes them separate members.
+            assert_eq!(
+                partition_block(b"AAA", b"CA"),
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 1,
+                        alt: b"C".to_vec()
+                    },
+                    Piece {
+                        ref_start: 2,
+                        ref_end: 3,
+                        alt: Vec::new()
+                    },
+                ],
+                "a substitution and a deletion, separated by the unchanged base"
+            );
+        }
+
+        #[test]
+        fn a_three_way_tie_still_yields_the_separating_placement() {
+            // #1232's block at an untrimmed extent. All three placements match
+            // exactly one column, so they DO tie and the tie-break runs; only
+            // the placement that leaves the match between the two changes gives
+            // two members. An earlier revision of this comment claimed the
+            // placements did not tie and that the score decided — measured,
+            // that is false, and the test's name is the part that is wrong
+            // rather than its assertion.
+            assert_eq!(partition_block(b"TTTTT", b"TA").len(), 2);
+        }
+
+        #[test]
+        fn the_tie_break_leaves_the_contiguous_corpus_alone() {
+            // Cluster A stays whole: these have no tie to break, because their
+            // best placement is unique.
+            assert_eq!(
+                partition_block(b"CAGTGACTAG", b"TGTCACGACT").len(),
+                1,
+                "#1040"
+            );
+            assert_eq!(partition_block(b"GCT", b"AGC").len(), 1, "#1034");
+            assert_eq!(partition_block(b"CTATAG", b"AAACCCC").len(), 1, "#422");
+        }
+    }
+
+    /// The two-gap insertion form (#1260).
+    ///
+    /// A single gap cannot express *insertion, retained reference, insertion*:
+    /// it has one contiguous indel to place, so it must either swallow the
+    /// retained base into a spanning `delins` or leave one of the insertions
+    /// unaccounted for. PR #1285 named this directly — for #1260 the answer is
+    /// "a two-gap alignment — insertion, retained base, insertion — which
+    /// `best_alignment`'s single-gap restriction cannot express".
+    mod two_gap_insertion_alignment {
+        use super::*;
+
+        #[test]
+        fn a_retained_reference_between_two_insertions_is_expressible() {
+            // #1260's trimmed block. The single-gap search scores 0 matched
+            // columns either way it places the 2 nt gap; keeping the reference
+            // `A` intact between two 1 nt insertions matches it, which is the
+            // most any alignment of this pair can match.
+            assert_eq!(
+                best_alignment(b"A", b"CAC"),
+                Some(vec![(None, Some(0)), (Some(0), Some(1)), (None, Some(2))]),
+                "the whole reference should survive between the two insertions"
+            );
+        }
+
+        #[test]
+        fn the_two_gap_form_partitions_into_two_pure_insertions() {
+            // The point of expressing it: two members, each a pure insertion,
+            // separated by the retained base. `general.md:56` prefers those to
+            // one spanning `delins`.
+            let columns = best_alignment(b"A", b"CAC").expect("aligned");
+            assert_eq!(
+                pieces_from_columns(&columns, b"A", b"CAC"),
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 0,
+                        alt: b"C".to_vec()
+                    },
+                    Piece {
+                        ref_start: 1,
+                        ref_end: 1,
+                        alt: b"C".to_vec()
+                    },
+                ]
+            );
+        }
+
+        #[test]
+        fn a_retained_chunk_need_not_be_the_whole_reference() {
+            // #1260's block with one flank base restored per side — the shape
+            // any widening of a trimmed block produces inside a poly-A run.
+            // The only all-matched decomposition is `a = 1, b = 2`:
+            // `A` + `C` + `A` + `C` + `A`. A search fixed at `a == 0` finds
+            // nothing here, and #1260 reverts to a spanning `delins`.
+            assert_eq!(
+                best_alignment(b"AAA", b"ACACA"),
+                Some(vec![
+                    (Some(0), Some(0)),
+                    (None, Some(1)),
+                    (Some(1), Some(2)),
+                    (None, Some(3)),
+                    (Some(2), Some(4)),
+                ]),
+                "every reference base must survive, with `a = 1`"
+            );
+            assert_eq!(
+                partition_block(b"AAA", b"ACACA").len(),
+                2,
+                "and it must still partition into the two insertions"
+            );
+        }
+
+        #[test]
+        fn an_untrimmed_flank_on_one_side_only_is_also_expressible() {
+            // The asymmetric case: a restored base on the 5' side alone, so
+            // `a = 1` and `b == ref.len()`.
+            assert_eq!(
+                partition_block(b"AA", b"ACAC").len(),
+                2,
+                "a > 0 with the retained chunk running to the block's end"
+            );
+            // ...and on the 3' side alone, so `a == 0` and `b < ref.len()`.
+            assert_eq!(
+                partition_block(b"AA", b"CACA").len(),
+                2,
+                "b < ref.len() with the retained chunk starting at the block's start"
+            );
+        }
+
+        #[test]
+        fn two_adjacent_insertions_are_left_to_the_single_gap_search() {
+            // `b == a` would put the two insertions next to each other in the
+            // result, which is one contiguous gap. The single-gap search already
+            // places it, so this must decline rather than re-express it as two
+            // members that a coalesce would immediately merge back.
+            assert_eq!(
+                partition_block(b"AA", b"AACC").len(),
+                1,
+                "an insertion at one junction is one member, not two"
+            );
+        }
+
+        #[test]
+        fn the_decomposition_tie_is_broken_five_prime() {
+            // `AA -> AAAA` admits (a,b) of (0,1), (0,2) and (1,2), all matching
+            // both reference bases. Nothing in the spec reaches this, so the
+            // smallest `a` wins — the 5'-most placement, as before.
+            assert_eq!(
+                two_gap_insertion_alignment(b"AA", b"AAAA"),
+                Some(vec![
+                    (None, Some(0)),
+                    (Some(0), Some(1)),
+                    (None, Some(2)),
+                    (Some(1), Some(3)),
+                ]),
+                "a = 0, b = 1, |I1| = 1"
+            );
+        }
+
+        #[test]
+        fn a_long_shared_affix_does_not_hide_the_decomposition() {
+            // #1260's UNTRIMMED window. Its only all-matched decomposition is
+            // `a = 2, b = 3` — `AA` + `C` + `A` + `C` + `AAAA` — which needs a
+            // common prefix of 2 and a common suffix of 4. An earlier revision
+            // bounded cost by clamping those affix lengths to 2, which excluded
+            // the sole solution and silently returned `None`.
+            //
+            // It was invisible: on this block the single-gap search reaches the
+            // same member count by another route, so no corpus row moved. Only
+            // a change elsewhere in the tie-break exposed it. Hence this asserts
+            // the exact columns rather than a piece count.
+            assert_eq!(
+                two_gap_insertion_alignment(b"AAAAAAA", b"AACACAAAA"),
+                Some(vec![
+                    (Some(0), Some(0)),
+                    (Some(1), Some(1)),
+                    (None, Some(2)),
+                    (Some(2), Some(3)),
+                    (None, Some(4)),
+                    (Some(3), Some(5)),
+                    (Some(4), Some(6)),
+                    (Some(5), Some(7)),
+                    (Some(6), Some(8)),
+                ]),
+                "every reference base must survive, with a = 2 and b = 3"
+            );
+        }
+
+        #[test]
+        fn a_single_gap_that_already_keeps_the_whole_reference_is_left_alone() {
+            // `AT -> ACT`: the 1 nt gap placed after `A` keeps both reference
+            // bases, so there is nothing for a second gap to buy. One gap, and
+            // the 5'-most placement, per `best_alignment`'s existing tie-break.
+            assert_eq!(
+                best_alignment(b"AT", b"ACT"),
+                Some(vec![
+                    (Some(0), Some(0)),
+                    (None, Some(1)),
+                    (Some(1), Some(2))
+                ])
+            );
+        }
+
+        #[test]
+        fn a_split_at_one_unchanged_base_is_admitted() {
+            // `general.md:34`: "two variants separated by one or more
+            // nucleotides should be described individually and not as a
+            // delins". One base is one or more. #1260's trimmed block reaches
+            // this only because the two-gap alignment can express it.
+            assert_eq!(
+                partition_block(b"A", b"CAC").len(),
+                2,
+                "#1260a: two insertions either side of the retained A"
+            );
+            assert_eq!(
+                partition_block(b"GC", b"CGA").len(),
+                2,
+                "#999-neg: the two-member count the corpus records as required"
+            );
+        }
+
+        #[test]
+        fn a_split_that_buys_no_higher_priority_type_collapses() {
+            // #422. The same shape as #999-neg — net insertion, one
+            // coincidentally matched interior base — but its split is two
+            // `delins` members, so it buys nothing `general.md:56` ranks above
+            // the spanning `delins` it came from. #1235's own comment asks for
+            // exactly this: a fix that resolves #422 and keeps #999 green.
+            assert_eq!(partition_block(b"CTATAG", b"AAACCCC").len(), 1);
+        }
+
+        #[test]
+        fn the_collapse_spares_an_equal_length_block() {
+            // `long-delins-40nt`: both members are `delins`, but the block is
+            // equal-length, so there is no gap to place and every matched base
+            // is a genuine coordinate-wise identity rather than a placement
+            // artefact. Collapsing here would lose a real two-member answer.
+            assert_eq!(
+                partition_block(
+                    b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT",
+                    b"CATGCATGCATGCATGCATTCATGCATGCATGCATGCATG"
+                )
+                .len(),
+                2
+            );
+        }
+
+        #[test]
+        fn the_collapse_spares_a_member_that_renders_as_inv_or_dup() {
+            // A structural `delins` can still render as an `inv` — the one
+            // renderer type that hides inside one — and `inv` outranks `delins`,
+            // so such a split is worth keeping. Measured: a naive all-`delins`
+            // test collapses 694 of 1094 firings over an exhaustive `AT` sweep.
+            let pieces = partition_block(b"AAAAA", b"TATT");
+            assert!(
+                pieces.len() > 1,
+                "a member that is the reverse complement of its own span must \
+                 not be collapsed away: {pieces:?}"
+            );
+        }
+
+        #[test]
+        fn the_second_gap_is_scoped_out_of_cluster_a() {
+            // Equal-length and net-deletion blocks never reach the two-gap
+            // search, which is what keeps it clear of the "stays delins" corpus
+            // (#1034/#1040/#182) that `merge.rs`'s single-gap restriction
+            // exists to protect. Pinned as behaviour, not as a code path.
+            assert_eq!(
+                partition_block(b"CAGTGACTAG", b"TGTCACGACT").len(),
+                1,
+                "#1040"
+            );
+            assert_eq!(
+                partition_block(b"GCT", b"AGC").len(),
+                1,
+                "#1034 whole-run revcomp"
+            );
+            assert_eq!(
+                partition_block(b"AGTCAGT", b"GATTA").len(),
+                3,
+                "#1157A, net deletion"
+            );
+        }
     }
 }
