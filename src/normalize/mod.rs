@@ -9162,6 +9162,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         result.start as usize,
                         result.end as usize,
                         gate.input_span_is_coding(),
+                        // #1270: as on the insertion path above, the verdict is
+                        // the INPUT span's; the bounds let the helper re-ask
+                        // about the tract the repeat would actually occupy.
+                        gate.cds_bounds(),
                     ) {
                         let bases: Option<Vec<Base>> = rep
                             .unit
