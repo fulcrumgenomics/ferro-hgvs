@@ -26,11 +26,13 @@
 //!   independent of the normalizer under test) and it keeps passing after the rewrite
 //!   lands; a malformed pin here would prove nothing about the normalizer, which is why the
 //!   guard exists at all.
-//! - *Denotation* (#1267, #1325): normalizing must not change what the description
-//!   denotes. It does, today. `assert_denotation_currently_broken` asserts the normalized
-//!   output either denotes a different sequence than the input (#1267), or denotes no
-//!   sequence at all (#1325) because its members now overlap and the independent applier
-//!   declines to splice them.
+//! - *Denotation* (#1325): normalizing must not change what the description denotes. It
+//!   does, today. `assert_denotation_currently_broken` asserts the normalized output
+//!   denotes no sequence at all, because #1325's members overlap and the independent
+//!   applier declines to splice them. **#1267 was the other half of this row and is
+//!   fixed** — the 5' half of `clamp_sibling_crossing_junctions` bounds the junction, so
+//!   the case left the PARTITION list rather than being re-pinned; see the note where its
+//!   test used to be.
 //! - *Boundary-validity* (#1274): normalizing must not name a position past the contig's
 //!   end. **Fixed** — by #1327's terminal re-spelling, which lands the repair's junction
 //!   inside the sequence instead of one past it. Flipped from a pinned failure to a
@@ -192,15 +194,15 @@
 //!
 //! ## An unexpected pass, found while building this corpus
 //!
-//! #1267's issue body gives three lines over reference `ACAAAAAAAACGTACGTACG`. Only the
-//! insertion form asserted below (`g.[4A>G;9_10insA]` -> `g.4_5insG`) still reproduces on
-//! this branch. The two duplication-form lines the issue also lists —
-//! `g.[4A>G;9dup]` -> `g.[4A>G;5dup]` and `g.[5A>G;10dup]` -> `g.[5A>G;6dup]` — were
-//! independently checked here (via this module's own applier) and already normalize
-//! correctly, preserving the denoted sequence; `blocks_sibling_shift` fixed them, and
-//! `cis_junction_crossing_shift.rs`'s `a_five_prime_duplication_does_not_cross_an_upstream_sibling`
-//! already pins them as passing. They are not asserted here as failures — reported here so
-//! the unexpected pass isn't silently dropped, per the corpus's own rules.
+//! #1267's issue body gives three lines over reference `ACAAAAAAAACGTACGTACG`. When this
+//! corpus was built, only the insertion form (`g.[4A>G;9_10insA]`) still reproduced; the
+//! two duplication-form lines — `g.[4A>G;9dup]` -> `g.[4A>G;5dup]` and
+//! `g.[5A>G;10dup]` -> `g.[5A>G;6dup]` — were independently checked here (via this
+//! module's own applier) and already normalized correctly, `blocks_sibling_shift` having
+//! fixed them. They were reported rather than asserted, per the corpus's own rules.
+//!
+//! All three now pass, the insertion form included, so nothing from #1267 is asserted
+//! here any more.
 
 use crate::common::cis_apply_oracle::{apply, normalize, normalize_in};
 use crate::common::synthetic::padded;
@@ -289,18 +291,15 @@ fn assert_denotation_currently_broken(
     );
 }
 
-/// #1267: a 5'-shifting insertion's junction crosses an upstream sibling substitution,
-/// moving the base the sibling edited — well-formed, disjoint, warning-free, and wrong.
-#[test]
-fn a_five_prime_insertion_junction_still_crosses_an_upstream_sibling() {
-    let seq = "ACAAAAAAAACGTACGTACG";
-    assert_denotation_currently_broken(
-        seq,
-        "TEMPLATE:g.[4A>G;9_10insA]",
-        ShuffleDirection::FivePrime,
-        "#1267",
-    );
-}
+// #1267 was pinned here as a denotation target and is **fixed** — the 5' half of
+// `clamp_sibling_crossing_junctions` bounds the junction, so `g.[4A>G;9_10insA]`
+// now reaches `g.3_4insG`, which denotes the input's bases. Per this file's
+// contract the case moves out of the PARTITION list rather than being re-pinned;
+// the positive assertions live with the rest of their shape in
+// `cis_junction_crossing_shift.rs`
+// (`an_insertion_junction_does_not_cross_an_upstream_sibling`,
+// `an_insertion_junction_does_not_cross_an_upstream_junction_sibling` and
+// `a_duplication_junction_does_not_cross_an_upstream_junction_sibling`).
 
 /// #1325: two insertions collapse into a repeat correctly, but adding a third pushes a
 /// junction inside the tract; the tract grew by more bases than it can express as a
