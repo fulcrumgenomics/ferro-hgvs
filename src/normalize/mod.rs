@@ -1780,21 +1780,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
     }
 
     /// Whether a lone (non-allele) member is a shape the sequence-first pass
-    /// can improve: a `delins` or an `inv`, the two forms that may be hiding an
-    /// unchanged interior base and so need re-partitioning (#1230, #1232).
+    /// can improve.
     ///
-    /// Genomic axes only — and, since this PR lifts `merge`'s axis gate, that is
-    /// now a deliberate restriction rather than a free one.
+    /// Any edit type may enter: the derivation is a function of (reference,
+    /// denoted sequence), so restricting by the input's *spelling* — as this
+    /// used to do, admitting only `delins`/`inv` — is exactly the
+    /// input-relativity #1235 is about. A lone `g.263_264insGAAA` and the
+    /// two-member `g.[261_262insGA;263_264insAA]` denote the same variant, and
+    /// until this widened, only one of them was allowed to be re-derived.
     ///
-    /// #1237 narrowed this to `g.`/`m.` on the grounds that
+    /// The **axis** restriction below is a separate, still-live gate — kept
+    /// exactly as narrow as before (`g.`/`m.` only) — and unaffected by the
+    /// above. Widening the edit-type half was measured to move nothing; the
+    /// costs recorded below are what widening the *axis* half would move, and
+    /// they are **not** paid by this change:
+    ///
+    /// #1237 narrowed the axis to `g.`/`m.` on the grounds that
     /// `merge::canonicalize_from_sequence` refused the transcript axes anyway.
-    /// This PR removes that refusal for **alleles**, so lone `c.`/`n.`/`r.`
-    /// `delins` and `inv` members are the one shape still held back, and the
+    /// A prior PR removed that refusal for **alleles**, so lone `c.`/`n.`/`r.`
+    /// members are the one shape still held back on axis grounds, and the
     /// asymmetry is real: a lone spelling that the allele spelling of the same
     /// variant would re-partition can stay unsplit.
     ///
-    /// Widening it was tried and is **not** a drive-by change. It moves four
-    /// tests, and one of them is not ours to move unilaterally:
+    /// Widening the axis was tried and is **not** a drive-by change. It moves
+    /// four tests, and one of them is not ours to move unilaterally:
     ///
     /// * `normalize_tests::test_normalize_inversion_unchanged` and
     ///   `rna_coding_consistency::parity_safe_regime::inversion_parity` — a lone
@@ -1809,17 +1818,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///   from an independent oracle, which is a conformance decision needing its
     ///   own measurement pass, not a side effect of this one.
     ///
-    /// So the lone-member case stays gated until that pass happens.
+    /// So the axis stays gated until that pass happens; only the edit-type
+    /// half opened here.
     fn is_splittable_single_member(variant: &HgvsVariant) -> bool {
         let edit = match variant {
             HV::Genome(g) => &g.loc_edit.edit,
             HV::Mt(m) => &m.loc_edit.edit,
             _ => return false,
         };
-        matches!(
-            edit.inner(),
-            Some(NaEdit::Delins { .. }) | Some(NaEdit::Inversion { .. })
-        )
+        edit.inner().is_some()
     }
 
     /// Re-derive the variant from the sequence it produces (#1229-#1235).
