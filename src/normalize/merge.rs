@@ -4458,6 +4458,18 @@ pub(crate) fn demote_coincident_tract_repeats<P: ReferenceProvider>(
 /// its insertion lands at `306|307` against a substitution at `307`, which is
 /// the last position the rule permits — so the collapse still fires.
 ///
+/// A sibling's own junction bounds it as well, not only a sibling's bases
+/// (#1290): two junction-occupying members add their payloads at two interbase
+/// points, and their relative order is the only thing fixing the order of those
+/// payloads, so sweeping past one reorders them. That bound stops one position
+/// short of the sibling's junction unless the two payloads commute.
+///
+/// Both shift directions are governed. The 5' half was missing until #1267 —
+/// which is the shape where the sibling is *upstream* and the junction travels
+/// toward it — and the two bounds needed it independently: base-claiming
+/// siblings accounted for half the measured defect, junction-occupying siblings
+/// the other half.
+///
 /// A junction sits immediately 3' of one position: `end` for a duplication
 /// (the copy follows the duplicated bases), `start` for an insertion (whose
 /// span is the gap `start_end`).
@@ -4506,29 +4518,43 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
             .filter(|s| s.claims_bases && s.region == a.region && s.accession == a.accession)
             .collect();
 
-        // 3' only, and the 5' case is genuinely unsolved rather than merely
-        // unwritten. A duplication's span and its junction move together under a
-        // 5' shift, so bounding the junction there mis-places the copy: a mirror
-        // of the rule below was measured to turn 80 previously-correct outputs
-        // into silently wrong ones, and was removed as defective rather than
-        // deferred.
+        // Both directions, and the rule is the same in each: a junction may
+        // reach a sibling's edge but not pass it (#1267).
         //
-        // A 5' junction *does* cross, in a shape this rule would not have caught
-        // anyway — when the sibling is **upstream** and the junction travels
-        // toward it. The duplication half of that (`g.[4A>G;9dup]`, which used
-        // to emit `g.4_5insG`) is closed by `blocks_sibling_shift`, which bounds
-        // the duplication's *span* rather than its junction. The insertion half
-        // remains open, narrowed and characterised in
-        // `a_five_prime_insertion_junction_with_an_upstream_sibling_is_a_known_gap`.
-        if after_junction < before_junction {
-            continue;
-        }
+        // The 5' half was absent, and its absence read as deliberate — #1259
+        // measured a 5' mirror turning 80 previously-correct outputs silently
+        // wrong, on the reasoning that a duplication's span and junction move
+        // together so bounding the junction mis-places the copy. But that mirror
+        // bounded the junction against a sibling the member was moving *away*
+        // from, not one it was moving *toward*; it was a different rule, and its
+        // failure does not bear on this one.
+        //
+        // Restricting the 5' half by input spelling — admitting only a member the
+        // input wrote as an insertion — was tried and refuted by measurement.
+        // Over 73,376 duplication-mover cases with an upstream sibling, bounding
+        // every junction mover leaves **zero** sequence changes while the
+        // restricted form leaves **12**, all of them a `dup` whose junction swept
+        // past an upstream sibling's junction. Deciding this from the input's
+        // encoding was both more complex and less correct, so the direction is
+        // simply mirrored.
+        let five_prime = after_junction < before_junction;
         // The junction crossed a base-claiming sibling if it started 5' of the
-        // sibling's first base and ended at or past it.
-        let onto_bases = siblings
-            .iter()
-            .filter(|s| s.start > before_junction && s.start <= after_junction)
-            .map(|s| s.start - 1);
+        // sibling's first base and ended at or past it. Mirrored under a 5'
+        // shift: the junction started 3' of the sibling's *last* base and ended
+        // at or before it, and must stay at or above that base.
+        let onto_bases: Vec<i64> = if five_prime {
+            siblings
+                .iter()
+                .filter(|s| s.end > after_junction && s.end <= before_junction)
+                .map(|s| s.end)
+                .collect()
+        } else {
+            siblings
+                .iter()
+                .filter(|s| s.start > before_junction && s.start <= after_junction)
+                .map(|s| s.start - 1)
+                .collect()
+        };
         // It can equally cross another *junction* (#1290). Two junction-
         // occupying members add their payloads at two interbase points, and
         // their relative order is the only thing fixing the order of those
@@ -4604,7 +4630,15 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
             })
             .filter_map(|(settled, variant, s)| {
                 let junction = s.junction?;
-                if junction <= before_junction || junction > after_junction {
+                // Was it swept over? Under a 3' shift the sibling's junction
+                // must lie above where this one started and at or below where it
+                // ended; under a 5' shift, mirrored.
+                let swept = if five_prime {
+                    junction >= after_junction && junction < before_junction
+                } else {
+                    junction > before_junction && junction <= after_junction
+                };
+                if !swept {
                     return None;
                 }
                 // Commuting is tested against the payload this member would
@@ -4645,22 +4679,31 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
                     // approached. Its pre-normalization position is exactly the
                     // order commuting makes unobservable, so it is not a bound.
                     true => settled.then_some(junction),
+                    // One short of it, on the side this member came from.
+                    false if five_prime => Some(junction + 1),
                     false => Some(junction - 1),
                 }
             });
-        let limit = onto_bases.chain(across_junctions).min();
+        // The most restrictive bound: the lowest ceiling under a 3' shift, the
+        // highest floor under a 5' one.
+        let bounds = onto_bases.into_iter().chain(across_junctions);
+        let limit = if five_prime {
+            bounds.max()
+        } else {
+            bounds.min()
+        };
         let Some(limit) = limit else {
+            continue;
+        };
+        let Some(payload) = payload.as_ref() else {
             continue;
         };
         // Never move past where the junction started, and never onto a junction
         // this member's payload is out of phase with: the walk back finds the
-        // most 3' position it can legally occupy. `before_junction` always can,
-        // since that is where the shift began.
-        let ceiling = limit.max(before_junction).min(after_junction);
-        let Some(payload) = payload.as_ref() else {
-            continue;
-        };
-        let Some(destination) = (before_junction..=ceiling).rev().find(|&j| {
+        // most extreme position it can legally occupy in the direction it was
+        // travelling. `before_junction` always can, since that is where the
+        // shift began.
+        let legal = |j: i64| {
             payload_at_junction(
                 payload,
                 after_junction,
@@ -4670,7 +4713,15 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
                 provider,
             )
             .is_some()
-        }) else {
+        };
+        let destination = if five_prime {
+            let floor = limit.min(before_junction).max(after_junction);
+            (floor..=before_junction).find(|&j| legal(j))
+        } else {
+            let ceiling = limit.max(before_junction).min(after_junction);
+            (before_junction..=ceiling).rev().find(|&j| legal(j))
+        };
+        let Some(destination) = destination else {
             continue;
         };
         let delta = destination - after_junction;

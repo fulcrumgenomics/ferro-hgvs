@@ -36,8 +36,6 @@
 //! repeats too, and the junction is then bounded at the sibling's 5' edge —
 //! still flush against it, so the #999 collapse keeps firing.
 
-use std::collections::BTreeMap;
-
 use crate::common::cis_apply_oracle::{
     apply, assert_normalizes_preserving, assert_normalizes_preserving_in, normalize, normalize_in,
     sweep_sequences,
@@ -61,46 +59,20 @@ const RUN: &str = "ACAAAAAAAACGTACGTACG";
 /// in that shape specifically.
 const FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES: usize = 0;
 
-/// Sequence-changing cases the tandem-tract sweep finds in the 5'-shuffle
-/// insertion-junction shape — the insertion half of #1267, which
-/// `blocks_sibling_shift` deliberately does not reach.
-///
-/// **Not zero.** This is a live, tracked defect, pinned here as an exact count
-/// so the shape stays inside the sweep rather than being excluded from it: a
-/// *new* defect landing in the same shape would raise the number and fail.
-/// `a_five_prime_insertion_junction_with_an_upstream_sibling_is_a_known_gap`
-/// characterises one case by hand on a homopolymer; this counts the whole shape
-/// over a non-homopolymer `(CAG)` tract.
-///
-/// The count breaks down by the sibling's **position**, not its edit type,
-/// which is what a junction-crossing defect predicts: the junction travels past
-/// a *position*, so the sibling's shape does not change how many cases it
-/// corrupts. The two sibling *positions* outside the tract (9 and 42, four
-/// shapes each) contribute **zero**, because the junction cannot travel out of
-/// the tract to reach them — which is why neither appears as a key.
-///
-/// Pinned **per position** rather than as a total, and the map is compared
-/// whole. That buys two things a scalar cannot:
-///
-/// * a defect that adds cases at `inside_5p` while removing the same number at
-///   `inside_3p` no longer passes with the total unchanged — the very asymmetry
-///   the paragraph above tells the reader to treat as a new defect, now
-///   executable rather than merely documented; and
-/// * a sequence change at an *unlisted* position fails on the extra key. That
-///   matters since the sweep reaches the boundary junctions: at junction 10 the
-///   outside-5' sibling at 9 satisfies `sibling_pos < junction`, so it is inside
-///   the `known_1267_shape` predicate and a scalar would have absorbed it as
-///   part of the known gap instead of surfacing it.
-///
-/// The numbers are fully accounted for, which is what makes a move readable:
-/// each is `<junctions 3' of the sibling> x <2 siblings at that position> x
-/// <2 member orders>`. Position 15 is reached from junctions 16..=40, so
-/// `25 x 2 x 2 = 100`; position 36 from junctions 37..=40, so `4 x 2 x 2 = 16`.
-/// Exactly one of the nine `(rotation, copies)` payload combinations corrupts
-/// per junction — the out-of-phase one — which is why rotation and copy count
-/// do not appear as factors.
-const TRACT_FIVE_PRIME_INSERTION_SEQUENCE_CHANGES_BY_POSITION: [(usize, usize); 2] =
-    [(15, 100), (36, 16)];
+// The 5'-shuffle insertion-junction shape — the insertion half of #1267 — used
+// to be excluded from this file's sequence-preservation assertion and counted
+// instead, as `TRACT_FIVE_PRIME_INSERTION_SEQUENCE_CHANGES_BY_POSITION =
+// [(15, 100), (36, 16)]`: 116 cases pinned per sibling position so the shape
+// stayed measured while it was broken.
+//
+// It is fixed, so the exclusion is gone and those cases are asserted like every
+// other — a regression there now reports the offending descriptions rather than
+// a bare count. The two halves of that 116 needed separate bounds, and measuring
+// per-position is what showed the second half existed: bounding the junction
+// against base-claiming siblings alone took the map to `{15: 50, 36: 8}`,
+// exactly half, because the other half's sibling was a `dup` or an `ins` —
+// junction-occupying, so invisible to `claims_bases`. Mirroring the
+// junction-vs-junction bound (#1290) closed the rest.
 
 #[test]
 fn an_insertion_does_not_shift_past_a_substituted_base() {
@@ -375,28 +347,122 @@ fn a_five_prime_duplication_does_not_cross_an_upstream_sibling() {
 }
 
 #[test]
-fn a_five_prime_insertion_junction_with_an_upstream_sibling_is_a_known_gap() {
-    // The rest of #1267, which `blocks_sibling_shift` deliberately does not
-    // reach. That predicate makes a member a barrier because the bases under
-    // its span are what it copies — true of a `Duplication`, false of a pure
-    // `Insertion`, whose payload is a literal and whose span is zero-width.
-    // There is nothing for a sibling to land *on*.
+fn an_insertion_junction_does_not_cross_an_upstream_sibling() {
+    // The rest of #1267: the member written as an insertion. Under 5' shuffle
+    // its payload travelled 5' past an upstream sibling, so the allele denoted
+    // different bases while staying well-formed, disjoint and warning-free:
     //
-    // Bounding the insertion's **junction** in the 5' direction is the fix this
-    // shape needs, and #1259 measured a 5' mirror of the junction clamp turning
-    // 80 previously-correct outputs into silently wrong ones. So this stays
-    // open, narrowed to the insertion case.
+    //   reference             ACAAAAAAAACGTACGTACG        A-run at 3-10
+    //   g.[4A>G;9_10insA]     applies to  ACAGAAAAAAACGTACGTACG
+    //   emitted  g.4_5insG                ACAAGAAAAAACGTACGTACG   <- moved base
     //
-    // Pinned as *currently wrong*: fixing it fails this test loudly.
+    // `blocks_sibling_shift` does not reach it, and neither does the span clamp:
+    // the member is an `Insertion` on the way in but canonicalises to a
+    // `Duplication` (`g.9_10insA` alone -> `g.3dup`), so it *grew*, and a member
+    // that grew is refused there for reasons #1266/#1279 measured. What bounds
+    // it is the junction clamp's 5' half, which governs **every** junction mover
+    // regardless of how the input spelled it — restricting it to inputs written
+    // as insertions was tried and refuted by measurement (see
+    // `clamp_sibling_crossing_junctions`: over 73,376 duplication-mover cases the
+    // unrestricted bound leaves zero sequence changes against the restricted
+    // form's twelve).
+    //
+    // Member order is an input the normalizer must be indifferent to, so both
+    // orders are asserted.
     let seq = "ACAAAAAAAACGTACGTACG";
-    let input = "TEMPLATE:g.[4A>G;9_10insA]";
-    let actual = normalize_in(seq, input, ShuffleDirection::FivePrime);
-    assert_eq!(actual, "TEMPLATE:g.4_5insG", "known-gap shape changed");
-    assert_ne!(
-        apply(seq, &actual).expect("output applies"),
-        apply(seq, input).expect("input applies"),
-        "{input} is fixed — update this test and close the insertion half of #1267"
-    );
+    for input in ["TEMPLATE:g.[4A>G;9_10insA]", "TEMPLATE:g.[9_10insA;4A>G]"] {
+        let actual = normalize_in(seq, input, ShuffleDirection::FivePrime);
+        // Pinned, not merely sequence-preserving. The `apply` comparison below
+        // is satisfied by an output identical to the input — which is exactly
+        // what a clamp that failed to fire would produce — so on its own it
+        // cannot tell "bounded correctly" from "nothing happened". The junction
+        // must land at `3|4`, one short of the substituted base at 4, where it
+        // coalesces with the sibling.
+        assert_eq!(
+            actual, "TEMPLATE:g.3_4insG",
+            "{input} must bound its junction at the sibling's 5' edge"
+        );
+        assert_ne!(actual, input, "the clamp must actually move the junction");
+        assert_eq!(
+            apply(seq, &actual).expect("output applies"),
+            apply(seq, input).expect("input applies"),
+            "{input} -> {actual} changed the denoted sequence"
+        );
+    }
+}
+
+/// `(CAG)x10` at 1-based 11..=40, flanked by `T`. The tract the tandem sweep
+/// uses; a junction can travel it without the payload being in phase everywhere,
+/// which is what makes it the corpus for the 5' insertion-junction shape.
+fn cag_tract() -> String {
+    format!("{}{}{}", "T".repeat(10), "CAG".repeat(10), "T".repeat(20))
+}
+
+#[test]
+fn an_insertion_junction_does_not_cross_an_upstream_junction_sibling() {
+    // The other half of #1267's 5' shape. Here the upstream sibling adds
+    // sequence at a junction instead of claiming bases, so `claims_bases` — the
+    // bound that stops the substitution case above — does not see it at all:
+    //
+    //   g.[16_17insCAG;15dup]  ->  g.[11_13dup;15dup]
+    //
+    // The two members stay disjoint (11-13 against 15), so nothing flags it, but
+    // the payload has moved from 3' of the sibling to 5' of it. Two junctions'
+    // relative order is the only thing fixing the order of their payloads, which
+    // is the same reasoning the 3' half already applies (#1290) — mirrored.
+    let seq = cag_tract();
+    for input in [
+        "TEMPLATE:g.[16_17insCAG;15dup]",
+        "TEMPLATE:g.[15dup;16_17insCAG]",
+        "TEMPLATE:g.[37_38insCAG;36_37insTT]",
+        "TEMPLATE:g.[36_37insTT;37_38insCAG]",
+    ] {
+        let actual = normalize_in(&seq, input, ShuffleDirection::FivePrime);
+        assert_eq!(
+            apply(&seq, &actual).expect("output applies"),
+            apply(&seq, input).expect("input applies"),
+            "{input} -> {actual} changed the denoted sequence"
+        );
+    }
+}
+
+#[test]
+fn a_duplication_junction_does_not_cross_an_upstream_junction_sibling() {
+    // The 5' junction bound applies to a **duplication** mover too, not only one
+    // the input spelled as an insertion.
+    //
+    // Restricting it to input insertions looks like the conservative reading of
+    // #1259 — a duplication's span and junction move together under a 5' shift,
+    // and a blanket mirror of the 3' rule was measured there to turn 80
+    // previously-correct outputs silently wrong. But that mirror bounded the
+    // junction against a sibling the member was moving *away* from, which is a
+    // different rule from this one. Restricting by input spelling instead leaves
+    // the shape below broken: a `dup` whose junction sweeps past an upstream
+    // sibling's junction, reordering the two payloads.
+    //
+    //   reference   GGGGGGGG + (A x 24) + GGGGGGGG
+    //   g.[3dup;2_3insTT]   applies to  GGTTGGGGGGGAAA…
+    //   unbounded           g.[1dup;2_3insTT]   GGGTTGGGGGG AAA…   <- payloads swapped
+    //
+    // Measured over 73,376 duplication-mover cases with an upstream sibling:
+    // bounding every junction mover leaves **zero** sequence changes, while
+    // restricting the bound to input insertions leaves **12** — all of this
+    // shape. So the unrestricted rule is both simpler and strictly more correct,
+    // and it does not decide the output from the input's encoding.
+    let seq = format!("{}{}{}", "G".repeat(8), "A".repeat(24), "G".repeat(8));
+    for input in [
+        "TEMPLATE:g.[3dup;2_3insTT]",
+        "TEMPLATE:g.[2_3insTT;3dup]",
+        "TEMPLATE:g.[4dup;2_3insTT]",
+        "TEMPLATE:g.[2_3insTT;4dup]",
+    ] {
+        let actual = normalize_in(&seq, input, ShuffleDirection::FivePrime);
+        assert_eq!(
+            apply(&seq, &actual).expect("output applies"),
+            apply(&seq, input).expect("input applies"),
+            "{input} -> {actual} changed the denoted sequence"
+        );
+    }
 }
 
 #[test]
@@ -473,9 +539,6 @@ fn no_tandem_tract_allele_normalizes_to_a_different_sequence() {
 
     let mut checked = 0usize;
     let mut skipped = 0usize;
-    // Bucketed by the sibling's position, not summed: see
-    // `TRACT_FIVE_PRIME_INSERTION_SEQUENCE_CHANGES_BY_POSITION`.
-    let mut residual: BTreeMap<usize, usize> = BTreeMap::new();
     let mut overlapping: Vec<String> = Vec::new();
     let mut changed: Vec<String> = Vec::new();
 
@@ -514,36 +577,28 @@ fn no_tandem_tract_allele_normalizes_to_a_different_sequence() {
                 let inside_5p = tract_start + 4;
                 let inside_3p = tract_end - 4;
                 let base_at = |pos: usize| seq.as_bytes()[pos - 1] as char;
+                // Each sibling names its own position, so the shapes are grouped
+                // by comment rather than carried alongside a redundant index.
                 let siblings = [
-                    (tract_start - 2, format!("{}T>A", tract_start - 2)), // 5' of tract
-                    (tract_start - 2, format!("{}del", tract_start - 2)),
-                    (tract_start - 2, format!("{}dup", tract_start - 2)),
-                    (
-                        tract_start - 2,
-                        format!("{}_{}insA", tract_start - 2, tract_start - 1),
-                    ),
-                    (tract_end + 2, format!("{}T>A", tract_end + 2)), // 3' of tract
-                    (tract_end + 2, format!("{}del", tract_end + 2)),
-                    (tract_end + 2, format!("{}dup", tract_end + 2)),
-                    (
-                        tract_end + 2,
-                        format!("{}_{}insA", tract_end + 2, tract_end + 3),
-                    ),
-                    (inside_5p, format!("{inside_5p}{}>T", base_at(inside_5p))), // inside
-                    (inside_5p, format!("{inside_5p}dup")),
-                    (inside_3p, format!("{inside_3p}del")),
-                    (
-                        inside_3p,
-                        // `T` is absent from a `(CAG)` tract, so this stays an
-                        // `Insertion`. Inserting `base_at(inside_3p)` here —
-                        // the reference base immediately 5' of the junction —
-                        // denotes the same edit as `{inside_3p}dup`, so the
-                        // array would have claimed four sibling shapes while
-                        // carrying three.
-                        format!("{inside_3p}_{}insTT", inside_3p + 1),
-                    ),
+                    format!("{}T>A", tract_start - 2), // 5' of tract
+                    format!("{}del", tract_start - 2),
+                    format!("{}dup", tract_start - 2),
+                    format!("{}_{}insA", tract_start - 2, tract_start - 1),
+                    format!("{}T>A", tract_end + 2), // 3' of tract
+                    format!("{}del", tract_end + 2),
+                    format!("{}dup", tract_end + 2),
+                    format!("{}_{}insA", tract_end + 2, tract_end + 3),
+                    format!("{inside_5p}{}>T", base_at(inside_5p)), // inside
+                    format!("{inside_5p}dup"),
+                    format!("{inside_3p}del"),
+                    // `T` is absent from a `(CAG)` tract, so this stays an
+                    // `Insertion`. Inserting `base_at(inside_3p)` here — the
+                    // reference base immediately 5' of the junction — denotes the
+                    // same edit as `{inside_3p}dup`, so the array would have
+                    // claimed four sibling shapes while carrying three.
+                    format!("{inside_3p}_{}insTT", inside_3p + 1),
                 ];
-                for (sibling_pos, sibling) in siblings {
+                for sibling in siblings {
                     for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
                         // Author the sibling first or second: member order is
                         // an input the normalizer must be indifferent to.
@@ -557,35 +612,18 @@ fn no_tandem_tract_allele_normalizes_to_a_different_sequence() {
                                 skipped += 1;
                                 continue;
                             };
-                            // The insertion half of #1267, counted rather than
-                            // skipped — the same treatment the two-member sweep
-                            // gives its `dup` + `del` + 5' residual, and for the
-                            // same reason: excluding a shape drops it out of the
-                            // check entirely, so a *new* defect landing in it
-                            // would pass silently. Counting keeps it measured
-                            // and names the shape if the number moves.
-                            //
-                            // Under 5' shuffle an insertion's junction travels
-                            // toward the tract's 5' end and crosses an upstream
-                            // sibling. `blocks_sibling_shift` deliberately does
-                            // not reach a pure `Insertion` (zero-width span,
-                            // nothing to land on), and #1259 measured a 5'
-                            // mirror of the junction clamp turning 80
-                            // previously-correct outputs silently wrong — so
-                            // this is not a local fix. Pinned by
-                            // `a_five_prime_insertion_junction_with_an_upstream_sibling_is_a_known_gap`
-                            // on a homopolymer; this is the same shape on a
-                            // non-homopolymer tract.
-                            let known_1267_shape =
-                                direction == ShuffleDirection::FivePrime && sibling_pos < junction;
+                            // Every shape is asserted, including the 5'
+                            // insertion-junction one that used to be excluded and
+                            // counted (see the note above the sweep). A sibling
+                            // upstream of the junction is the #1267 shape; it is
+                            // bounded now, so a sequence change there is a
+                            // regression like any other and reports the
+                            // description rather than incrementing a count.
                             match apply(&seq, &output) {
                                 None if overlapping.len() < 10 => {
                                     overlapping.push(format!("{input} -> {output}"));
                                 }
                                 None => {}
-                                Some(got) if got != want && known_1267_shape => {
-                                    *residual.entry(sibling_pos).or_default() += 1;
-                                }
                                 Some(got) if got != want && changed.len() < 10 => {
                                     changed.push(format!(
                                         "{input} [{direction:?}] -> {output} \
@@ -621,18 +659,10 @@ fn no_tandem_tract_allele_normalizes_to_a_different_sequence() {
         overlapping.is_empty(),
         "overlapping or unconvertible output in {checked} tract cases: {overlapping:#?}"
     );
+    // No excluded shape: this covers the 5' insertion-junction cases too, which
+    // is where the 116 pinned residuals used to live.
     assert!(
         changed.is_empty(),
         "sequence-changing normalizations in {checked} tract cases: {changed:#?}"
-    );
-    // Pinned exactly, so the known gap stays measured rather than excluded. A
-    // *rise* is a new defect in the #1267 shape; a *fall* means the insertion
-    // half of #1267 is being fixed — in which case update this number and the
-    // sibling test `a_five_prime_insertion_junction_with_an_upstream_sibling_is_a_known_gap`
-    // together.
-    assert_eq!(
-        residual,
-        BTreeMap::from(TRACT_FIVE_PRIME_INSERTION_SEQUENCE_CHANGES_BY_POSITION),
-        "the 5' insertion-junction shape over a tandem tract changed"
     );
 }
