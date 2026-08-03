@@ -109,3 +109,107 @@ fn the_order_does_not_depend_on_how_it_was_authored() {
         normalize("NC_TEST.1:g.[264_265insAA;263_264insAC]"),
     );
 }
+
+// ---------------------------------------------------------------------------
+// The protein axis reaches the same tie (#1328).
+//
+// These three assert on the rendered descriptor alone, where the nucleotide
+// cases above also cross-check against SPDI (`assert_preserving`,
+// `member_starts`). That oracle is unavailable here rather than skipped:
+// `hgvs_to_spdi` rejects `HgvsVariant::Protein` outright — "protein variants
+// cannot be represented in SPDI" (`src/spdi/convert.rs`) — so there is no
+// second code path on this axis to derive a member's junction from. What is
+// under test is also precisely the discriminator positions cannot supply: both
+// members tie on start *and* end, which is what drops the order onto
+// `junction_rank`.
+// ---------------------------------------------------------------------------
+
+/// Normalize a protein descriptor. Ordering is positional, so no reference
+/// sequence is needed — the same approach
+/// `issue_1261_cis_member_order::protein_members_sharing_a_start_render_in_end_order`
+/// takes.
+fn normalize_protein(input: &str) -> String {
+    use ferro_hgvs::{MockProvider, Normalizer};
+    Normalizer::new(MockProvider::new())
+        .normalize(&parse_hgvs(input).expect("parse"))
+        .expect("normalize")
+        .to_string()
+}
+
+/// The protein axis hits this tie for exactly the reasons the nucleotide axes
+/// do, and was excluded only because #1301 did not want to move protein output.
+///
+/// Both preconditions hold: `cis_member_range` returns a real range for
+/// `HgvsVariant::Protein`, so two protein members sharing a span tie on
+/// `(start, end)`; and `sort_cis_members_by_genomic_order` is axis-agnostic.
+/// With `junction_rank` matching only the six nucleotide-bearing arms, every
+/// protein member ranked `1` and the tie fell to the rendered-descriptor
+/// tie-break — which sorts `dup` before `ins` alphabetically, reversing the
+/// order the two apply in.
+///
+/// `Gly4_Ala5insSer` fills the gap between residues 4 and 5, so it adds at the
+/// start of its span; `Gly4_Ala5dup` copies both residues and places the copy
+/// after residue 5, so it adds at the end. The insertion must render first.
+#[test]
+fn a_protein_insertion_sorts_before_a_duplication_sharing_its_span() {
+    assert_eq!(
+        normalize_protein("NP_000001.1:p.[Gly4_Ala5insSer;Gly4_Ala5dup]"),
+        "NP_000001.1:p.[Gly4_Ala5insSer;Gly4_Ala5dup]",
+    );
+}
+
+/// The same pair authored the other way round must render identically — the
+/// property that makes the order a *total* one rather than input-dependent.
+///
+/// The *property* already held before the fix — the descriptor tie-break is
+/// itself total, so both authorings agreed on `[dup;ins]`. The **test** did
+/// not: it pins the post-fix rendering, so it fails on the pre-fix code like
+/// its sibling above (verified by removing the protein arm and re-running).
+/// What it adds is that the two failure modes cannot be traded for one another
+/// — a rank that left protein order depending on how the allele was written
+/// would be a worse bug than the one being fixed, and agreeing-but-wrong is
+/// caught by the sibling test rather than by this one.
+#[test]
+fn the_protein_order_does_not_depend_on_how_it_was_authored() {
+    let expected = "NP_000001.1:p.[Gly4_Ala5insSer;Gly4_Ala5dup]";
+    for input in [
+        "NP_000001.1:p.[Gly4_Ala5insSer;Gly4_Ala5dup]",
+        "NP_000001.1:p.[Gly4_Ala5dup;Gly4_Ala5insSer]",
+    ] {
+        assert_eq!(normalize_protein(input), expected, "authored as `{input}`");
+    }
+}
+
+/// Protein members that are *not* insertions still rank with the 3' end, so a
+/// pair of them sharing a span keeps the descriptor tie-break that #1261
+/// established. This is the arm's negative control: it passes both before and
+/// after the fix, which is the point — the new rank must move `ins` and nothing
+/// else.
+///
+/// The pair has to share **both** endpoints to reach the contract. `Ala3dup`
+/// and `Ala3_Ala4dup` do not: their ends differ, so `cis_member_order_key`
+/// settles them on range alone and neither `junction_rank` nor the descriptor
+/// tie-break is consulted. `Ala3_Ala4del` and `Ala3_Ala4dup` tie on
+/// `(start, end)`, so the rank runs, both members must come out `1`, and the
+/// descriptors break it — `del` before `dup`, alphabetically. Authoring them
+/// the other way round makes the assertion sensitive rather than a restatement
+/// of the input: a rank of `0` on either member would put `dup` first and fail
+/// here.
+///
+/// Both authorings are checked for the same reason the insertion pair's are —
+/// the order has to be a property of the members, not of how they were written.
+///
+/// Scope note: despite what this comment used to claim, nothing here exercises
+/// the **nucleotide** ranking. That parity is guarded by the nucleotide tests
+/// earlier in this file, which the protein arm cannot reach — it returns before
+/// the `NaEdit` match rather than altering it.
+#[test]
+fn protein_members_that_are_not_insertions_keep_their_existing_order() {
+    let expected = "NP_000001.1:p.[Ala3_Ala4del;Ala3_Ala4dup]";
+    for input in [
+        "NP_000001.1:p.[Ala3_Ala4dup;Ala3_Ala4del]",
+        "NP_000001.1:p.[Ala3_Ala4del;Ala3_Ala4dup]",
+    ] {
+        assert_eq!(normalize_protein(input), expected, "authored as `{input}`");
+    }
+}
