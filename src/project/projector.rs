@@ -13562,7 +13562,11 @@ mod tests {
     /// #1070: a cis pair with an **insertion** member netting in-frame with a
     /// deletion (`c.[4del;6_7insGGGG]`, −1 and +4, net +3) exercises the
     /// insertion-anchor collapse in the combined build. `!is_frameshift`, and a
-    /// single bounded in-frame delins.
+    /// single bounded in-frame consequence.
+    ///
+    /// The protein expectation moved with #1235's `dup` typing — see the
+    /// comments at the assertions. The `!is_frameshift` half, which is what
+    /// #1070 is about, did not.
     #[test]
     fn project_cis_insertion_member_nets_in_frame() {
         use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
@@ -13589,12 +13593,29 @@ mod tests {
         let proj = vp
             .project_variant(&allele, "NM_SEP.1")
             .expect("projection should succeed");
+        // #1070's load-bearing property, and it is unmoved: net +3 restores the
+        // frame however the allele is spelled.
         assert!(!proj.is_frameshift, "net +3 restores the frame");
-        // Combined CDS ATGATGGGGTATTGCTAA → Met-Met-Gly-Tyr-Cys-Ter; vs ref
-        // Met-Asp-Tyr-Cys → Asp2 replaced by Met-Gly (net +1 residue).
+        // Asserted so the protein expectation below cannot be read without the
+        // nucleotide form that produces it. `ATGGATTATTGCTAA` →
+        // `ATGATGGGGTATTGCTAA` has a *single-gap* explanation of the same weight
+        // as the input's two-gap one (five changed columns either way), and
+        // since #1235's sequence-first pass learned to type a derived tandem
+        // insertion as a `dup` it takes it: the inserted `ATG` repeats `c.1_3`.
+        assert_eq!(
+            format!("{}", proj.coding.as_ref().expect("coding expected")),
+            "NM_SEP.1:c.[1_3dup;5_6delinsGG]"
+        );
+        // Combined CDS ATGATGGGGTATTGCTAA → Met-Met-Gly-Tyr-Cys-Ter, so the
+        // residue-level answer is still `Asp2delinsMetGly`. It is not what is
+        // reported, because `c.1_3dup` reaches the initiation codon and the
+        // start-codon rule outranks the residue diff: a variant touching the
+        // translation start is reported as `p.(Met1?)` rather than as the
+        // translation someone might read off the mutated sequence.
+        assert!(proj.affects_init, "c.1_3dup reaches the initiation codon");
         assert_eq!(
             format!("{}", proj.protein.expect("protein expected")),
-            "NP_SEP.1:p.(Asp2delinsMetGly)"
+            "NP_SEP.1:p.(Met1?)"
         );
     }
 

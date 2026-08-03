@@ -59,6 +59,25 @@ pub(crate) enum Region {
     TxDownstream,
 }
 
+/// How an [`Anchor`]'s span and `alt` relate — i.e. which HGVS form
+/// [`build_naedit`] must emit for it.
+///
+/// Everything the *merge* pass produces is a [`AnchorForm::Replacement`]: it
+/// coalesces members into one span-plus-replacement and lets the two lengths
+/// pick substitution / deletion / insertion / delins. The sequence-first
+/// derivation additionally recognises a shape those lengths cannot express — a
+/// tandem duplication, which `duplication.md:18` states as a MUST — so the form
+/// travels with the anchor rather than being re-inferred downstream, where the
+/// duplicated source span is no longer in hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnchorForm {
+    /// The span is replaced by `alt`; typing follows from the two lengths.
+    Replacement,
+    /// The span is duplicated in tandem. `alt` is empty and unused: a `dup`
+    /// names only the source bases, which the span already gives.
+    Duplication,
+}
+
 /// Anchor for a single sub-variant.
 ///
 /// `start` and `end` are 1-based inclusive position bounds on the
@@ -72,6 +91,7 @@ struct Anchor {
     start: i64,
     end: i64,
     alt: Vec<Base>,
+    form: AnchorForm,
 }
 
 /// Merge consecutive sub-variants in an allele.
@@ -543,6 +563,7 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
         start: a_start,
         end: a_end,
         alt: alt_bases,
+        form: AnchorForm::Replacement,
     };
     // Rebuild the variant kind the group came in as. `g.`/`m.` use the
     // single-axis `Region::Genome` anchor; `c.`/`n.`/`r.` use the positive
@@ -950,6 +971,7 @@ fn anchor_from_loc_edit<L>(
                 start,
                 end,
                 alt: vec![*alternative],
+                form: AnchorForm::Replacement,
             })
         }
         NaEdit::Deletion { .. } => Some(Anchor {
@@ -957,6 +979,7 @@ fn anchor_from_loc_edit<L>(
             start,
             end,
             alt: Vec::new(),
+            form: AnchorForm::Replacement,
         }),
         NaEdit::Delins { sequence, .. } => {
             let bases = sequence.bases()?.to_vec();
@@ -965,6 +988,7 @@ fn anchor_from_loc_edit<L>(
                 start,
                 end,
                 alt: bases,
+                form: AnchorForm::Replacement,
             })
         }
         NaEdit::Insertion { sequence } => {
@@ -977,6 +1001,7 @@ fn anchor_from_loc_edit<L>(
                 start: end,
                 end: start,
                 alt: bases,
+                form: AnchorForm::Replacement,
             })
         }
         _ => None,
@@ -1247,7 +1272,19 @@ fn build_naedit<P>(
     merged: Anchor,
     mut to_pos: impl FnMut(Region, i64) -> P,
 ) -> (Interval<P>, NaEdit) {
-    let edit = if merged.start > merged.end {
+    // A duplication is decided by the *builder*, from the reference, not by the
+    // two span lengths below — `dup` and the `ins` of the same bases have the
+    // same lengths and `duplication.md:18` says only one of them is allowed.
+    let edit = if merged.form == AnchorForm::Duplication {
+        NaEdit::Duplication {
+            // Canonical form states neither the bases nor the length: the span
+            // already names them, and every other builder here likewise leaves
+            // the optional reference-bases channel empty.
+            sequence: None,
+            length: None,
+            uncertain_extent: None,
+        }
+    } else if merged.start > merged.end {
         debug_assert_eq!(
             merged.start,
             merged.end + 1,
@@ -4007,6 +4044,9 @@ fn anchor_for_piece(
         return None; // non-IUPAC byte; refuse rather than mangle.
     }
     if piece.ref_start == piece.ref_end && !alt.is_empty() {
+        if let Some(anchor) = duplication_anchor(piece, body, w_lo, ref_bytes) {
+            return Some(anchor);
+        }
         if let Some(anchor) = boundary_delins_anchor(piece, &alt, body, w_lo, ref_bytes, ends) {
             return Some(anchor);
         }
@@ -4018,6 +4058,38 @@ fn anchor_for_piece(
         start,
         end,
         alt,
+        form: AnchorForm::Replacement,
+    })
+}
+
+/// The `dup` anchor for a piece that is a tandem duplication, or `None`.
+///
+/// `duplication.md:18` — "when a variant can be described as a duplication, it
+/// must be described as a duplication" — is a MUST, not a preference, so this is
+/// tried before every other typing a pure insertion can take.
+///
+/// [`is_tandem_duplication`] already recognised the shape; until #1235's
+/// sequence-first ladder it was used **only** to refuse, via
+/// [`needs_unsupported_form`], and the `dup` had to come back from the
+/// per-member pipeline — which types each member in isolation and so cannot
+/// produce one for a duplication the derivation assembled out of several
+/// members. It now builds as well as recognises.
+///
+/// The duplicated span is the reference run the payload repeats: the
+/// `alt.len()` bases immediately 5' of the insertion point, which is exactly
+/// what [`is_tandem_duplication`] compared the payload against.
+fn duplication_anchor(piece: &Piece, body: Region, w_lo: i64, ref_bytes: &[u8]) -> Option<Anchor> {
+    if !is_tandem_duplication(piece, ref_bytes) {
+        return None;
+    }
+    let source_start = piece.ref_start.checked_sub(piece.alt.len())?;
+    Some(Anchor {
+        region: body,
+        start: w_lo + source_start as i64,
+        end: w_lo + piece.ref_start as i64 - 1,
+        // A `dup` names its source bases by span; there is nothing to insert.
+        alt: Vec::new(),
+        form: AnchorForm::Duplication,
     })
 }
 
@@ -4063,24 +4135,29 @@ fn boundary_delins_anchor(
         start: position,
         end: position,
         alt: bases,
+        form: AnchorForm::Replacement,
     })
 }
 
-/// Whether any piece would have to be rendered as an inversion or a tandem
-/// duplication.
+/// Whether any piece would have to be rendered as an inversion.
 ///
-/// [`build_naedit`] only produces insertion / deletion / delins / identity, and
-/// the spec is emphatic that these two forms are not interchangeable with those:
-/// an inversion is the reverse complement of its span (`inversion.md:5`), and a
-/// tandem duplication **must** be described as a `dup`, never an insertion
-/// (`duplication.md:18`). Rather than teach the builder two more shapes, refuse
-/// the group and let the existing per-member pipeline — which already gets both
-/// right — handle it. Refusing costs nothing here: these are exactly the cases
-/// where a single member is already canonical.
+/// [`build_naedit`] produces insertion / deletion / delins / identity from the
+/// two span lengths, and an inversion is not interchangeable with any of them —
+/// it is the reverse complement of its span (`inversion.md:5`), which the
+/// lengths cannot see. Rather than teach the builder that shape, refuse the
+/// group and let the per-member pipeline — which already gets it right — answer.
+///
+/// **Tandem duplication used to be refused here too, and is not any more.** The
+/// argument for refusing it was the same ("`duplication.md:18` says a
+/// duplication must be a `dup`, and the builder cannot make one"), and its cost
+/// was much higher than it looked: the derivation can assemble a duplication out
+/// of members that are *individually* not duplications, which is precisely the
+/// case the per-member pipeline cannot answer, so refusing sent the allele back
+/// to the one place guaranteed to get it wrong. [`duplication_anchor`] now
+/// builds the `dup`, so the MUST is honoured by construction rather than by
+/// deferral.
 fn needs_unsupported_form(pieces: &[Piece], ref_bytes: &[u8]) -> bool {
-    pieces
-        .iter()
-        .any(|piece| is_inversion(piece, ref_bytes) || is_tandem_duplication(piece, ref_bytes))
+    pieces.iter().any(|piece| is_inversion(piece, ref_bytes))
 }
 
 /// A piece is an inversion when its replacement is the reverse complement of
@@ -6890,6 +6967,7 @@ mod tests {
             start: 1010,
             end: 1009,
             alt: Vec::new(),
+            form: AnchorForm::Replacement,
         };
         let (interval, edit) = build_naedit(anchor, |_, p| GenomePos::new(p as u64));
 
@@ -6909,6 +6987,7 @@ mod tests {
             start: 1010,
             end: 1009,
             alt: vec![Base::A],
+            form: AnchorForm::Replacement,
         };
         let (_, edit) = build_naedit(anchor, |_, p| GenomePos::new(p as u64));
         match edit {
