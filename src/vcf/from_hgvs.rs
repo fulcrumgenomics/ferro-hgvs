@@ -24,6 +24,7 @@ use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, RnaVariant, T
 use crate::project::edit::u_to_t_edit;
 use crate::reference::transcript::{GenomeBuild, Transcript};
 use crate::reference::ReferenceProvider;
+use crate::sequence::reverse_complement;
 
 use super::record::VcfRecord;
 
@@ -1068,24 +1069,6 @@ fn rna_pos_to_tx(pos: &RnaPos) -> TxPos {
         offset: pos.offset,
         downstream: false,
     }
-}
-
-/// Compute reverse complement of a DNA sequence
-fn reverse_complement(seq: &str) -> String {
-    seq.chars()
-        .rev()
-        .map(|c| match c {
-            'A' => 'T',
-            'T' => 'A',
-            'C' => 'G',
-            'G' => 'C',
-            'a' => 't',
-            't' => 'a',
-            'c' => 'g',
-            'g' => 'c',
-            _ => c,
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -2418,6 +2401,39 @@ mod tests {
         assert_eq!(record.reference, "AACC");
         // reverse_complement("AACC") == "GGTT".
         assert_eq!(record.alternate, vec!["GGTT"]);
+    }
+
+    /// An inversion over a span containing an IUPAC ambiguity code must complement
+    /// that code, not emit it verbatim into the ALT field (#1347).
+    ///
+    /// `R` (A or G) complements to `Y` (C or T). Passing it through unchanged
+    /// claims the ambiguity is self-complementary, which is wrong for every code
+    /// except `S`, `W` and `N` — and it writes that claim into produced VCF.
+    #[test]
+    fn inversion_alt_complements_iupac_ambiguity_codes() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        // Same tiling as `test_build_vcf_record_inversion`, with the third base
+        // replaced by `R`: genomic 1049..1052 = "AARC".
+        let seq = "AARCGGTT".repeat(200);
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, &seq);
+
+        let variant = HgvsVariant::Cds(CdsVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(1), CdsPos::new(4)),
+                NaEdit::Inversion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+
+        let record = converter.convert(&variant).unwrap().record;
+        assert_eq!(record.reference, "AARC");
+        // reverse_complement("AARC") == "GYTT": R -> Y, not R -> R.
+        assert_eq!(record.alternate, vec!["GYTT"]);
     }
 
     /// `c.1 CAG[5]`: a repeat expansion is an insertion anchored on the base at
