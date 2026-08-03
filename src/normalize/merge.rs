@@ -3214,8 +3214,10 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
             // or more nucleotides should be described individually and not as a
             // 'delins'" — so prefer the placement that leaves a matched base
             // *between* the changes, which is the one separating them into more
-            // members. `general.md:56` says the same from the other side, since
-            // `delins` is last in the priority order.
+            // members. `general.md:56` is *not* a second authority for this:
+            // `delins` does not appear in its list at all, and what it ranks is
+            // the type of one description of one change — see
+            // `split_buys_no_higher_priority_type`'s doc.
             //
             // This is not the 5'-most/3'-most flip that was tried and rejected:
             // it does not rank placements by position at all. `AAA -> CA`'s
@@ -6898,9 +6900,10 @@ mod tests {
 
         /// `C1` (232 blocks). Both denote the alternate block and both spend the
         /// same number of changed columns; they only divide the change
-        /// differently. Which is preferable is not decided here — the spec's
-        /// prioritisation rule (`general.md:56`) is what reaches these, and the
-        /// two blocks below fall to it in opposite directions.
+        /// differently. Which is preferable is not decided here — `delins.md:17`
+        /// and ferro's own `split_buys_no_higher_priority_type` policy are what
+        /// reach these, and the two blocks below fall to them in opposite
+        /// directions.
         #[test]
         fn equal_weight_different_division() {
             let (live, shadow) = both(b"ACAGCG", b"CGCTGT");
@@ -7284,7 +7287,9 @@ mod tests {
     /// description. msto's `high` corpus states the rule the spec gives for
     /// that: two variants separated by one or more unchanged nucleotides are
     /// described individually and **not** as a `delins` (`delins.md:17`, cited
-    /// by #1232), and `general.md:56` ranks `delins` last (#1231, #1233).
+    /// by #1232). `general.md:56` does not rank `delins` last — `delins` is
+    /// absent from that list, which ranks the type of one description of one
+    /// change, the way #1231/#1233 apply it member-wise.
     mod tie_break_by_separation {
         use super::*;
 
@@ -7365,8 +7370,9 @@ mod tests {
         #[test]
         fn the_two_gap_form_partitions_into_two_pure_insertions() {
             // The point of expressing it: two members, each a pure insertion,
-            // separated by the retained base. `general.md:56` prefers those to
-            // one spanning `delins`.
+            // separated by the retained base. That preference is `delins.md:17`
+            // plus ferro policy, not `general.md:56`, whose list does not
+            // contain `delins`.
             let columns = best_alignment(b"A", b"CAC").expect("aligned");
             assert_eq!(
                 pieces_from_columns(&columns, b"A", b"CAC"),
@@ -7523,8 +7529,10 @@ mod tests {
         fn a_split_that_buys_no_higher_priority_type_collapses() {
             // #422. The same shape as #999-neg — net insertion, one
             // coincidentally matched interior base — but its split is two
-            // `delins` members, so it buys nothing `general.md:56` ranks above
-            // the spanning `delins` it came from. #1235's own comment asks for
+            // `delins` members, so it buys no higher-priority type than the
+            // spanning `delins` it came from — ferro policy, per
+            // `split_buys_no_higher_priority_type`'s doc, not `general.md:56`.
+            // #1235's own comment asks for
             // exactly this: a fix that resolves #422 and keeps #999 green.
             assert_eq!(partition_block(b"CTATAG", b"AAACCCC").len(), 1);
         }
