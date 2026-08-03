@@ -531,9 +531,16 @@ pub(crate) struct InsToDupResult {
 /// 2. For each rotation `r in 0..unit.len()`, build the rotated unit and
 ///    call `find_tandem_extent` to locate the maximal tandem run abutting
 ///    the insertion point.
-/// 3. Pick the rotation yielding the largest tandem run (ties broken by
-///    iteration order — same convention as `insertion_to_repeat`).
-/// 4. Return the unit-aligned duplication slot inside that tract whose
+/// 3. Resolve each rotation all the way to the duplication it would emit
+///    (step 5), and hold it to the `tandem_edit_preserves_insertion` phase
+///    gate (#882) — a rotation that would decode to a different sequence than
+///    the input is not a candidate at all.
+/// 4. Among the rotations that clear that gate, pick the one yielding the
+///    largest tandem run (ties broken by direction, below). The gate is
+///    evaluated only for a rotation that would otherwise take the lead, which
+///    selects the same winner while skipping the gate's `ref_seq`-sized
+///    reconstructions for rotations that have already lost.
+/// 5. Return the unit-aligned duplication slot inside that tract whose
 ///    position matches the requested shuffle direction:
 ///    - `ThreePrime`: `dup_start_idx = tract.end - unit.len()` — the
 ///      most-3' unit (current default; pre-#340 behavior).
@@ -546,11 +553,21 @@ pub(crate) struct InsToDupResult {
 ///    HGVS positions.
 ///
 /// Returns `None` when no rotation matches an adjacent tract (true
-/// non-tandem insertion), **and also** when the best-matching rotation's
-/// emitted duplication is out of phase — i.e. it would decode to a different
-/// sequence than the input insertion, so it is not a tandem duplication per
+/// non-tandem insertion), **and also** when every matching rotation's emitted
+/// duplication is out of phase — i.e. it would decode to a different sequence
+/// than the input insertion, so it is not a tandem duplication per
 /// `duplication.md` (the `tandem_edit_preserves_insertion` gate, #882). In
 /// both cases the caller leaves it as a plain `ins`.
+///
+/// The phase gate is applied per rotation *during* selection, not once to the
+/// winner (#1349). Scoring first and gating afterwards let a high-scoring but
+/// out-of-phase rotation shadow a lower-scoring in-phase one and take the whole
+/// result down with it: for `insTCC` at `GTACGT|CCCCTCCTCCTCCTCCC`, the alt's
+/// own phase abuts a one-copy `TCC` tract (the correct dup) while the `CCT`
+/// rotation abuts a two-copy tract further 3' that is out of phase with the
+/// insertion. `CCT` won on count, failed the gate, and the correct candidate was
+/// never reconsidered — costing the 5' path its `ins → dup` promotion and
+/// leaving a non-idempotent boundary `delins` behind.
 pub(crate) fn insertion_to_duplication(
     ref_seq: &[u8],
     pos: u64,
@@ -570,8 +587,23 @@ pub(crate) fn insertion_to_duplication(
         return None;
     }
 
+    /// One rotation resolved all the way to the duplication it would emit, and
+    /// already past the phase gate — i.e. a candidate the caller could receive.
+    struct DupCandidate {
+        /// Emitted unit, post-alignment (the aligner may re-rotate it).
+        unit: Vec<u8>,
+        /// 0-based start of the emitted duplication slot.
+        dup_start_idx: usize,
+        /// 0-based end of the emitted duplication slot (inclusive).
+        dup_end_idx: usize,
+        /// Start of the matched reference tract, used only for the tie-break.
+        ref_start: usize,
+        /// Copies of `unit` in the matched tract — the primary score.
+        ref_count: u64,
+    }
+
     let u_len = base_unit.len();
-    let mut best: Option<(Vec<u8>, usize, u64)> = None;
+    let mut best: Option<DupCandidate> = None;
     for r in 0..u_len {
         let mut rotated = Vec::with_capacity(u_len);
         rotated.extend_from_slice(&base_unit[r..]);
@@ -583,6 +615,13 @@ pub(crate) fn insertion_to_duplication(
         if ref_count == 0 {
             continue;
         }
+
+        // Resolve this rotation to the duplication it would emit, so the phase
+        // gate below judges the same values the caller would receive.
+        let (unit, dup_start_idx) =
+            align_dup_slot(ref_seq, ref_start, ref_count, rotated, direction);
+        let dup_end_idx = dup_start_idx + unit.len() - 1;
+
         // Selection rules:
         // - Higher `ref_count` wins outright (preserves the multi-copy
         //   tract phase per #132 / #180).
@@ -597,21 +636,73 @@ pub(crate) fn insertion_to_duplication(
         //   #403.
         let is_better = match best.as_ref() {
             None => true,
-            Some((_, best_ref_start, best_ref_count)) => match ref_count.cmp(best_ref_count) {
+            Some(current) => match ref_count.cmp(&current.ref_count) {
                 std::cmp::Ordering::Greater => true,
                 std::cmp::Ordering::Less => false,
                 std::cmp::Ordering::Equal => match direction {
-                    ShuffleDirection::FivePrime => ref_start < *best_ref_start,
-                    ShuffleDirection::ThreePrime => ref_start > *best_ref_start,
+                    ShuffleDirection::FivePrime => ref_start < current.ref_start,
+                    ShuffleDirection::ThreePrime => ref_start > current.ref_start,
                 },
             },
         };
-        if is_better {
-            best = Some((rotated, ref_start, ref_count));
+        if !is_better {
+            // Cannot become `best` whatever the gate says, and the gate rebuilds
+            // two `ref_seq`-sized buffers per call — so don't pay for it.
+            continue;
         }
+
+        // #882 phase gate, applied per candidate (#1349): only emit a dup when it
+        // decodes to the same sequence as the input insertion. A rotation that
+        // fails here is not a duplication of this insertion at all, so it must
+        // not compete — and must not shadow a lower-scoring rotation that is.
+        // Gating a rotation that already lost the comparison above would change
+        // nothing, since a failing rotation never becomes `best` either way.
+        if !tandem_edit_preserves_insertion(
+            ref_seq,
+            pos as usize,
+            inserted_seq,
+            dup_start_idx,
+            dup_end_idx + 1,
+            &unit,
+            2,
+        ) {
+            continue;
+        }
+
+        best = Some(DupCandidate {
+            unit,
+            dup_start_idx,
+            dup_end_idx,
+            ref_start,
+            ref_count,
+        });
     }
 
-    let (mut unit, ref_start, ref_count) = best?;
+    let best = best?;
+
+    Some(InsToDupResult {
+        unit: best.unit,
+        start: index_to_hgvs_pos(best.dup_start_idx),
+        end: index_to_hgvs_pos(best.dup_end_idx),
+        ref_count: best.ref_count,
+    })
+}
+
+/// Resolve a matched tandem tract to the duplication slot to emit for `direction`,
+/// returning the (possibly re-rotated) unit and the 0-based start of the slot.
+///
+/// Split out of `insertion_to_duplication` so each rotation can be resolved —
+/// and phase-checked — independently during selection (#1349).
+fn align_dup_slot(
+    ref_seq: &[u8],
+    ref_start: usize,
+    ref_count: u64,
+    rotated: Vec<u8>,
+    direction: crate::normalize::config::ShuffleDirection,
+) -> (Vec<u8>, usize) {
+    use crate::normalize::config::ShuffleDirection;
+
+    let mut unit = rotated;
     let tract_end_idx = ref_start + (ref_count as usize) * unit.len();
     // `find_tandem_extent` returns `ref_start` aligned on a `unit`-length
     // anchor probe, so picking `ref_start` for the 5' end never lands the
@@ -653,29 +744,7 @@ pub(crate) fn insertion_to_duplication(
             aligned_start
         }
     };
-    let dup_end_idx = dup_start_idx + unit.len() - 1;
-
-    // #882: only emit the dup when it decodes to the same sequence as the input
-    // insertion. `dup_start_idx`/`dup_end_idx`/`unit` are the post-alignment
-    // emitted values; a dup expands the emitted single unit to two copies.
-    if !tandem_edit_preserves_insertion(
-        ref_seq,
-        pos as usize,
-        inserted_seq,
-        dup_start_idx,
-        dup_end_idx + 1,
-        &unit,
-        2,
-    ) {
-        return None;
-    }
-
-    Some(InsToDupResult {
-        unit,
-        start: index_to_hgvs_pos(dup_start_idx),
-        end: index_to_hgvs_pos(dup_end_idx),
-        ref_count,
-    })
+    (unit, dup_start_idx)
 }
 
 /// Smallest unit `U` such that `seq = U * k` for some integer k ≥ 1.
@@ -5959,6 +6028,67 @@ mod tests {
             String::from_utf8_lossy(&inserted),
             String::from_utf8_lossy(&duplicated),
             "dup and insertion spellings must reconstruct byte-identical sequences"
+        );
+    }
+
+    /// Regression for #1349: a higher-scoring rotation that fails the #882
+    /// equivalence check must not shadow a lower-scoring rotation that passes it.
+    ///
+    /// In `GTACGTCCCCTCCTC` the insertion point is between indices 7 and 8
+    /// (`pos = 7`) and the alt `TCC` equals the immediately preceding tract at
+    /// indices 5..8 — a textbook single-copy duplication. But a *different*
+    /// rotation of the same unit, `CCT`, has a two-copy tract at indices 8..14,
+    /// so it wins the `ref_count` comparison outright. That tract is out of phase
+    /// with the insertion, so it fails `tandem_edit_preserves_insertion` — and
+    /// before this fix the whole function returned `None`, discarding the correct
+    /// `TCC` candidate that was never reconsidered.
+    ///
+    /// Downstream that `None` cost the 5' path its `ins → dup` promotion, and the
+    /// CDS-start clamp turned the surviving insertion into a boundary `delins`
+    /// that was not a fixed point (`c.2_3insTCC` → `c.1delinsCCTC` → `c.-1_2dup`).
+    #[test]
+    fn insertion_to_duplication_falls_back_past_a_non_preserving_rotation() {
+        let r = b"GTACGTCCCCTCCTC";
+        let got = insertion_to_duplication(r, 7, b"TCC", ShuffleDirection::FivePrime)
+            .expect("the in-phase TCC rotation is a valid dup and must not be discarded");
+        assert_eq!(got.unit, b"TCC");
+        assert_eq!(
+            (got.start, got.end),
+            (6, 8),
+            "the dup covers the preceding TCC tract at 0-based 5..8"
+        );
+
+        // The emitted dup must describe the SAME haplotype as the input insertion.
+        let inserted = {
+            let mut s = r.to_vec();
+            s.splice(8..8, b"TCC".iter().copied());
+            s
+        };
+        let duplicated = {
+            let (s, e) = (got.start as usize - 1, got.end as usize); // 1-based incl → 0-based excl
+            let mut v = r.to_vec();
+            let copy = r[s..e].to_vec();
+            v.splice(e..e, copy);
+            v
+        };
+        assert_eq!(
+            String::from_utf8_lossy(&inserted),
+            String::from_utf8_lossy(&duplicated),
+            "dup and insertion spellings must reconstruct byte-identical sequences"
+        );
+    }
+
+    /// The 3' direction reaches the same fallback: the winning rotation is chosen
+    /// by `ref_count` before any equivalence check, so the out-of-phase `CCT`
+    /// tract shadows the correct `TCC` one in both directions.
+    #[test]
+    fn insertion_to_duplication_falls_back_past_a_non_preserving_rotation_three_prime() {
+        let r = b"GTACGTCCCCTCCTC";
+        let got = insertion_to_duplication(r, 7, b"TCC", ShuffleDirection::ThreePrime)
+            .expect("the in-phase TCC rotation is a valid dup and must not be discarded");
+        assert_eq!(
+            (got.unit.as_slice(), got.start, got.end),
+            (&b"TCC"[..], 6, 8)
         );
     }
 

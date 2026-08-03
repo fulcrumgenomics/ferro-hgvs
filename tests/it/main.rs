@@ -191,6 +191,7 @@ mod issue_1323_shared_junction_order;
 mod issue_1327_mt_respell_past_contig_end;
 mod issue_132_cyclic_rotation_insertion;
 mod issue_1334_liftover_position_zero;
+mod issue_1349_rotation_fallback_dup;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;
