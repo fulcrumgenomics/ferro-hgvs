@@ -1623,9 +1623,21 @@ const MAX_UNGUARDED_SPLIT_BLOCK: usize = 32;
 /// the resulting members is the only thing that separates them.
 ///
 /// It applies only where the block's net length change is at most
-/// [`MAX_SINGLE_BASE_SEPARATION_CHANGE`]; beyond that a single unchanged base is
-/// not believable and the threshold stays at 2.
+/// [`MAX_SINGLE_BASE_SEPARATION_CHANGE`]; beyond that the threshold rises to
+/// [`RAISED_PIECE_SEPARATION`].
 const MIN_PIECE_SEPARATION: usize = 1;
+
+/// The separation [`separations_are_meaningful`] requires once the block's net
+/// length change exceeds [`MAX_SINGLE_BASE_SEPARATION_CHANGE`].
+///
+/// Named rather than written inline because it is a policy choice doing
+/// semantic work, not an arithmetic constant: beyond that much change a single
+/// matched base is not believable as structure, so two are required before a
+/// split is believed. `2` is the value the threshold had for every block before
+/// [`MIN_PIECE_SEPARATION`] was lowered to 1, so this is the old behaviour
+/// retained where the evidence for the new one runs out — not a second
+/// calibration.
+const RAISED_PIECE_SEPARATION: usize = 2;
 
 /// Largest block, in aligned positions, over which a tied gap placement is
 /// broken by what it separates rather than by being 5'-most.
@@ -1679,6 +1691,31 @@ const MAX_TIE_BREAK_SWEEP: usize = 256;
 /// narrower search than the one documented. The budget is sized far above the
 /// worked cases above; nothing in the corpus approaches it.
 const MAX_TWO_GAP_PLACEMENTS: usize = 65_536;
+
+/// Largest alignment grid the sequence-first splitter will build, in cells.
+///
+/// `AlignmentDag::build` is `Θ(n·m)` in **space** as well as time, and it
+/// allocates four grids of that size: two `u32` edit grids, the on-path flags,
+/// and the adjacency mask. Only the reference side is bounded upstream
+/// ([`MAX_CANONICAL_WINDOW`]); the alternate side is whatever the members
+/// produce, and a duplication over the whole window doubles it. A 4096 x 8192
+/// grid is 33.5 M cells, or roughly 340 MB across the four — enough to matter,
+/// and reachable from a single description rather than from a pathological
+/// corpus.
+///
+/// Derived from [`MAX_CANONICAL_WINDOW`] rather than picked: the budget is a
+/// *square* grid at that bound, so it admits any block whose alternate side is
+/// within the same limit already imposed on the reference side, and refuses one
+/// where the alternate side runs past it. The 4096 x 8192 duplication above is
+/// 33.5 M cells against this 16.8 M, so it is declined.
+///
+/// The honest cost of stating it this way: at the very top of the reference range
+/// an alternate side even slightly longer than the reference is declined too.
+/// That is a cost bound, not a policy — above it
+/// [`partition_block_sequence_first`] returns `None` and the caller keeps the
+/// per-member result, the same fallback every other bound here takes.
+const MAX_SEQFIRST_GRID_CELLS: usize =
+    (MAX_CANONICAL_WINDOW as usize + 1) * (MAX_CANONICAL_WINDOW as usize + 1);
 
 /// Largest **net length change**, in bases, for which one unchanged base counts
 /// as separation.
@@ -1768,11 +1805,17 @@ impl Piece {
 
 /// Whether to run both block splitters and report their disagreements.
 ///
-/// Enabled by `FERRO_SEQFIRST_SHADOW=1`. Read once and cached, like the
-/// idempotency gate in [`crate::normalize`], so a disabled run pays one relaxed
-/// atomic load per canonicalization. When on, the sequence-first splitter runs
-/// *in addition to* the live one and any disagreement goes to stderr; it never
-/// changes what is returned.
+/// A **development-only audit switch**, enabled by `FERRO_SEQFIRST_SHADOW=1`.
+/// Read once and cached, like the idempotency gate in [`crate::normalize`], so a
+/// disabled run pays one relaxed atomic load per canonicalization. When on, the
+/// sequence-first splitter runs *in addition to* the live one and every
+/// comparison is reported; it never changes what is returned.
+///
+/// Reports go through `log::debug!` rather than `eprintln!`, so ordinary log
+/// filtering applies — the switch fires once per canonicalized block, which over
+/// a whole suite run is tens of thousands of lines that no level or target filter
+/// could reach when they were written straight to stderr. Capture them with
+/// `RUST_LOG=ferro_hgvs::normalize::merge=debug`.
 fn seqfirst_shadow_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("FERRO_SEQFIRST_SHADOW").as_deref() == Ok("1"))
@@ -1957,9 +2000,9 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
             // The denominator. Without it, `grep -c SEQFIRST_SHADOW` returning 0
             // cannot be told apart from a shadow that never ran — the failure
             // mode that would make an audit of the disagreements vacuous.
-            eprintln!("SEQFIRST_AGREE");
+            log::debug!("SEQFIRST_AGREE");
         } else if min_shadow.as_ref() == Some(&min_live) {
-            eprintln!(
+            log::debug!(
                 "SEQFIRST_MINAGREE ref={} alt={} live={:?} shadow={:?}",
                 String::from_utf8_lossy(block),
                 String::from_utf8_lossy(&result[lo..hi_alt]),
@@ -1967,7 +2010,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
                 shadow.as_deref().map(DebugPieces),
             );
         } else {
-            eprintln!(
+            log::debug!(
                 // Space-separated, and no space inside a piece list, on purpose:
                 // `cargo nextest` strips tab characters when it re-emits captured
                 // test output (`--success-output immediate`), so a tab-delimited
@@ -2883,6 +2926,17 @@ fn partition_block_sequence_first(
     use crate::normalize::seqfirst::align::AlignmentDag;
     use crate::normalize::seqfirst::partition::{member_alt_spans, partition_members_with};
 
+    // Refuse an oversized grid before building it, not after: the allocation is
+    // the cost. Checked, because `(n + 1) * (m + 1)` on two `usize` lengths is
+    // itself an overflow site.
+    let cells = reference
+        .len()
+        .checked_add(1)?
+        .checked_mul(result.len().checked_add(1)?)?;
+    if cells > MAX_SEQFIRST_GRID_CELLS {
+        return None;
+    }
+
     let dag = AlignmentDag::build(reference, result);
     let dominators = dag.dominators();
     let members = partition_members_with(&dag, &dominators, min_separation);
@@ -2985,7 +3039,7 @@ fn separations_are_meaningful(pieces: &[Piece], net_change: usize) -> bool {
     // splitter had to be corrected for exactly this, because it works in event
     // space where a junction and a changed position are both one offset.
     let required = if net_change > MAX_SINGLE_BASE_SEPARATION_CHANGE {
-        2
+        RAISED_PIECE_SEPARATION
     } else {
         MIN_PIECE_SEPARATION
     };
@@ -3622,7 +3676,13 @@ fn split_codon_incompatible_triplets(
     let mut index = 0;
     while index < pieces.len() {
         let piece = &pieces[index];
+        // `ref_end <= ref_bytes.len()` is tested before any indexing. Every
+        // caller today passes pieces carved from this same window, so the span is
+        // in range — but this reads three bytes by raw index off a piece it does
+        // not own, and a piece whose span outran the window would panic rather
+        // than decline. An out-of-range span is simply not a merged triplet.
         let is_merged_triplet = piece.ref_end == piece.ref_start + 3
+            && piece.ref_end <= ref_bytes.len()
             && piece.alt.len() == 3
             && piece.alt[1] == ref_bytes[piece.ref_start + 1]
             && piece.alt[0] != ref_bytes[piece.ref_start]
@@ -6494,6 +6554,12 @@ mod tests {
             out
         }
         let all: Vec<Vec<u8>> = (0..=5u32).flat_map(words).collect();
+        // Counted, because the `continue` below is silent: if a regression made
+        // `member_alt_spans` decline every pair, the round-trip assertion would
+        // never run and this test would still pass. The sibling sweep
+        // `shrinking_before_and_after_the_three_prime_shift_agree` guards itself
+        // the same way.
+        let mut accepted = 0usize;
         for reference in &all {
             for result in &all {
                 let Some(pieces) = partition_block_sequence_first(
@@ -6503,6 +6569,7 @@ mod tests {
                 ) else {
                     continue;
                 };
+                accepted += 1;
                 let mut rebuilt = Vec::new();
                 let mut cursor = 0usize;
                 for piece in &pieces {
@@ -6521,6 +6588,56 @@ mod tests {
                 );
             }
         }
+        assert!(
+            accepted > 3_000,
+            "the sweep accepted only {accepted} blocks; a mass decline would make \
+             this round-trip assertion vacuous"
+        );
+    }
+
+    /// An oversized grid is declined rather than allocated.
+    ///
+    /// The reference side is bounded upstream by `MAX_CANONICAL_WINDOW` (4096),
+    /// but the alternate side is not: a duplication over the window doubles it,
+    /// and `AlignmentDag::build` allocates four `Θ(n·m)` grids. The shape
+    /// `4096 -> 8192` is 33.5 M cells, past the bound, and must come back `None`
+    /// so the caller keeps the per-member result.
+    ///
+    /// Asserted on the boundary from both sides, so the test fails if the bound
+    /// is removed *or* set low enough to refuse ordinary blocks.
+    #[test]
+    fn sequence_first_split_declines_an_oversized_grid() {
+        // The budget is a square grid at the reference bound, so the largest
+        // equal-length block is exactly admissible.
+        assert_eq!(MAX_SEQFIRST_GRID_CELLS, 4097 * 4097);
+
+        // Just inside: a 4096 x 4096 grid is the boundary square.
+        let reference = b"ACGT".repeat(1024);
+        let result = b"ACGA".repeat(1024);
+        assert_eq!(reference.len(), 4096);
+        assert!(
+            partition_block_sequence_first(
+                &reference,
+                &result,
+                crate::normalize::seqfirst::MIN_SEPARATION
+            )
+            .is_some(),
+            "a 4096 x 4096 grid is within budget and must still be partitioned"
+        );
+
+        // Past it: the same reference against a duplicated alternate, the shape a
+        // whole-window `dup` produces.
+        let doubled = b"ACGT".repeat(2048);
+        assert_eq!(doubled.len(), 8192);
+        assert_eq!(
+            partition_block_sequence_first(
+                &reference,
+                &doubled,
+                crate::normalize::seqfirst::MIN_SEPARATION
+            ),
+            None,
+            "a 4096 x 8192 grid is 33.5 M cells and must be declined, not allocated"
+        );
     }
 
     /// Pieces must be disjoint and ascending — the property that makes the

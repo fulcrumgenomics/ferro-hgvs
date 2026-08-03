@@ -7,6 +7,24 @@
 //! against — it says what today's splitter does on every block the corpus
 //! reaches, not what any candidate design ought to do.
 //!
+//! # These blocks are the harvest's, not necessarily the pipeline's
+//!
+//! The rows were harvested when `canonicalize_from_sequence` handed the splitter
+//! a maximally trimmed block. It no longer always does: `restore_unforced_flank`
+//! gives back one base per side where the trim boundary sat inside a run, so a
+//! case whose harvested block is `AA -> C` now reaches the splitter as
+//! `AAAA -> ACA`. Both are legitimate splitter inputs and both are worth
+//! pinning, but a row's block is what the *harvest* recorded — do not read it as
+//! what the live pipeline passes today.
+//!
+//! `#1262a` is where the two come apart most visibly. Its harvested block is
+//! still a collision the splitter cannot resolve (`AA -> C` is
+//! placement-invariant: every alignment of it yields the same single piece), so
+//! the row stays a `KnownDefect` below. End to end, though, **#1262 converges** —
+//! the widened block is what its answer needed. A defect at the block level and
+//! a fix at the pipeline level are not in contradiction; they are two different
+//! questions about two different inputs.
+//!
 //! # Why this lives here and not in `tests/it/`
 //!
 //! [`partition_block`] and [`Piece`](super::Piece) are private to `merge.rs`.
@@ -19,38 +37,48 @@
 //!
 //! `recorded_members` is the member count recorded for the case's *normalized
 //! output*. For most rows the block alone determines it and the assertion is
-//! direct. Nine rows carry a `splitter_returns` override: on those, the block
-//! does **not** determine the recorded count. They fall in three groups, and the
-//! third is a finding rather than a known design seam:
+//! direct. **Eleven** rows carry a `splitter_returns` override: on those, the
+//! block does **not** determine the recorded count. The exact set is pinned by
+//! `recorded_and_splitter_counts_diverge_on_exactly_these_rows` — trust that
+//! list over this prose. They fall in three groups, and the third is a finding
+//! rather than a known design seam:
 //!
-//! 1. **Two-member spellings** (`#422-two-member`, `#999-neg-split`,
-//!    `#1260a-split`, `#1262a-split`, `#1262b-split`). Each shares its block
-//!    with a spanning sibling row in this table that the splitter answers
-//!    identically. Their recorded two-member outputs therefore cannot come from
-//!    the splitter; see the collision census below.
+//! 1. **Two-member spellings.** Each shares its block with a sibling row in this
+//!    table that the splitter answers identically, so its recorded two-member
+//!    output cannot come from the splitter; see the collision census below.
 //!
-//!    `#1260b` is the exception, and it is the override *inverted*: the two-gap
-//!    alignment (#1260, PR #1285) made the splitter answer the **split** count,
-//!    so `#1260b-spanning` is the row that now carries the override.
+//!    Which side of a pair carries the override is not uniform, and that is the
+//!    record of what has been fixed. `#422-two-member` and `#1262a-split` carry
+//!    it, the shape this group was named for. `#999-neg-spanning`,
+//!    `#1260a-spanning`, `#1260b-spanning` and `#1262b-spanning` carry it
+//!    *inverted*: the two-gap alignment (#1260, PR #1285) and a separation
+//!    threshold of one unchanged base made the splitter answer the **split**
+//!    count on those, so it is the spanning row that the splitter no longer
+//!    reproduces. `#1000` carries one for the same reason.
 //! 2. **Coding-axis codon merges** (`#1235-c-codon-exception`, `#1235-r-coding`).
 //!    The block splits into two; the one-member coding answer is produced after
 //!    partitioning, so it is not a block-level fact.
-//! 3. **`#1262-window`** — `("AAAAAAA", "ACAAAA")`, the untrimmed poly-A window
-//!    pinned at one member for the sequence-first partitioner
-//!    (`seqfirst::partition`'s `calibration_corpus_partitions_as_measured`).
-//!    `partition_block` returns **two** pieces for the same input. The two
-//!    splitters disagree on this window. Its `#1260` sibling
-//!    (`("AAAAAAA", "AACACAAAA")`) agrees at one member, so the disagreement is
-//!    specific to this pair, not to untrimmed windows in general.
+//! 3. **The untrimmed poly-A windows**, `#1260-window`
+//!    (`("AAAAAAA", "AACACAAAA")`) and `#1262-window` (`("AAAAAAA", "ACAAAA")`).
+//!    Both are pinned at one member for the sequence-first partitioner
+//!    (`seqfirst::partition`'s `calibration_corpus_partitions_as_measured`) and
+//!    both get **two** pieces from `partition_block`, so the two splitters
+//!    disagree on each of them — identically. An earlier revision of this comment
+//!    named only `#1262-window` and said its `#1260` sibling agreed, concluding
+//!    the disagreement was specific to that pair; the corpus rows say otherwise
+//!    (`diverging(… 1, (2, …))` for both), and both appear in this group's
+//!    membership assertion below.
 //!
 //! # Collision census
 //!
 //! Six block pairs each carry two different recorded member counts. Since a
 //! pure function of the pair returns one answer, at most one of each pair's two
 //! recorded counts can be a splitter decision. [`COLLISIONS`] pins all six:
-//! two are recorded with **both** answers asserted correct in the repo, three
-//! remain **known defects**, and one — `#1260b` — is **resolved at the
-//! splitter**, which now answers its split count rather than its spanning one.
+//! **one** is recorded with both answers asserted correct in the repo (`#422`,
+//! the deliberate pin), **one** remains a known defect (`#1262a`), and **four**
+//! are **resolved at the splitter**, which now answers their split count rather
+//! than their spanning one. `the_census_is_one_correct_pin_one_known_defect_and_four_resolved`
+//! is the executable statement of that; this sentence is a gloss on it.
 //!
 //! # Recorded but deliberately not asserted here
 //!
@@ -152,7 +180,10 @@ const fn diverging(
     }
 }
 
-/// Reason string shared by the six two-member-spelling rows.
+/// Reason string shared by the two-member-spelling rows that still carry the
+/// override in its original direction — `#422-two-member` and `#1262a-split`.
+/// The other pairs' overrides moved to their spanning siblings as the splitter
+/// learned to derive the split count, and carry their own reasons.
 const SPELLING: &str = "recorded count is the two-member spelling's output; the block \
                         is shared with this row's spanning sibling";
 
@@ -316,8 +347,9 @@ struct Collision {
     pinning: Pinning,
 }
 
-/// The collision census: six pairs, two recorded correct, four recorded as
-/// known defects.
+/// The collision census: six pairs — one with both answers recorded correct
+/// (`#422`), one still a known defect (`#1262a`), and four resolved at the
+/// splitter.
 const COLLISIONS: &[Collision] = &[
     Collision {
         spanning: "#422-spanning",
