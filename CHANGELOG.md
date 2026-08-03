@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.11.0...v0.12.0) - 2026-08-03
+
+### Added
+
+- *(sequence)* [**breaking**] finish the complement unification, and fix an RNA inversion false alarm ([#1356](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1356))
+- *(normalize)* sequence-first cis-allele splitter, and the measurements that bound it ([#1341](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1341))
+- *(normalize)* add a tsv output format reporting which variants changed ([#1242](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1242))
+
+### Fixed
+
+- *(normalize)* bound a 5'-shifting member at a sibling's insertion junction ([#1357](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1357))
+- *(normalize)* stop an out-of-phase rotation from killing a valid dup ([#1354](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1354))
+- *(normalize)* bound a cis junction's 5' shift at its siblings ([#1350](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1350))
+- *(extractor)* stop three delins shapes from classifying as inversions ([#1346](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1346))
+- *(normalize)* stop refusing a derivation for disagreeing with its input ([#1345](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1345))
+- *(normalize)* keep a junction re-spelling inside the sequence ([#1339](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1339))
+- *(normalize)* answer the del→repeat codon gate on the tract, not the input span ([#1340](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1340))
+- *(normalize)* repair del+dup collisions on the CDS-relative axes ([#1338](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1338))
+- *(normalize)* unify the complement helpers and case-fold the delins path ([#1336](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1336))
+- *(liftover)* return an error for position 0 instead of panicking ([#1335](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1335))
+- *(normalize)* order protein cis members by junction, like the nucleotide axes ([#1333](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1333))
+- *(project)* decline axes ferro cannot render, instead of emitting them ([#1332](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1332))
+- *(normalize)* describe a payload that lands before the first base ([#1331](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1331))
+- *(normalize)* repair del+dup collisions on the non-coding axis ([#1315](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1315))
+- *(normalize)* order a shared junction's payloads by where they came from ([#1326](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1326))
+- *(normalize)* let a duplication cover the identity member inside it ([#1324](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1324))
+- *(normalize)* re-spell a duplication that spans a sibling's junction ([#1322](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1322))
+- *(normalize)* combine two repeats that grew one tract ([#1319](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1319))
+- *(normalize)* test commuting against the payload a member lands with ([#1317](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1317))
+- *(normalize)* bound a commuting sibling at the junction it settles on ([#1313](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1313))
+- *(normalize)* drop a cancelled member left inside the one that absorbed it ([#1309](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1309))
+- *(normalize)* read a junction barrier's payload from its own snapshot ([#1306](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1306))
+- *(normalize)* order two members sharing a span by where they add sequence ([#1305](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1305))
+- *(normalize)* let a repeat claim the bases under its tract ([#1299](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1299))
+- *(normalize)* keep a moved member's junction payload in phase ([#1298](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1298))
+- *(normalize)* stop a junction shifting past another junction ([#1293](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1293))
+- *(normalize)* stop a repeat's tract swallowing a sibling's junction ([#1291](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1291))
+- *(normalize)* merge cis members that settle on one junction ([#1289](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1289))
+- *(normalize)* make a duplication a barrier to a sibling's shift ([#1288](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1288))
+- *(normalize)* describe a one-base inversion residue as a substitution ([#1250](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1250))
+- *(python)* make the native enums honour the contract their stubs declare ([#1253](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1253))
+- *(python)* return changed_positions as list[int], not bytes ([#1252](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1252))
+- *(normalize)* cis member ordering and a repositioned member's clamp ([#1285](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1285))
+- *(normalize)* canonicalize cis alleles on the transcript axes ([#1243](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1243))
+- *(normalize)* stop a cis member's normalization crossing its siblings ([#1259](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1259))
+- *(equivalence)* decline overlapping SPDI triples instead of panicking
+- *(normalize)* canonicalize cis alleles from the resulting sequence ([#1237](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1237))
+
+### Other
+
+- *(normalize)* stop citing prioritisation for a rule it does not state ([#1348](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1348))
+- *(normalize)* widen the sibling-crossing sweep to dup/ins siblings and a tandem tract ([#1337](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1337))
+- *(spec)* give the generated spec fixtures a committed oracle ([#1330](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1330))
+- *(review)* add a CodeRabbit review checklist for recurring miss patterns ([#1278](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1278))
+- *(coderabbit)* repoint stale test paths, cover untuned modules, enforce liveness ([#1275](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1275))
+- *(normalize)* use the shared cis-allele apply oracle in three suites ([#1329](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1329))
+- *(normalize)* strengthen the cis-allele test oracles to their stated contracts ([#1310](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1310))
+- *(test)* draw confluence cores by index instead of a string union ([#1300](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1300))
+- *(normalize)* drop the indel model's adjacent-gap-insertion filter ([#1302](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1302))
+- *(normalize)* lock the dup-junction overlap contract end to end ([#1277](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1277))
+- *(normalize)* property-test cis-allele confluence ([#1238](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1238))
+- *(dev)* make the spec generators binaries so cargo locates them ([#1228](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1228))
+
 ## [0.11.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.10.1...v0.11.0) - 2026-07-27
 
 ### Added
