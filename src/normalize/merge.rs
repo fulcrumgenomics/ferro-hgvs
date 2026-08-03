@@ -14,6 +14,7 @@ use crate::normalize::boundary::Boundaries;
 use crate::normalize::config::ShuffleDirection;
 use crate::normalize::shuffle::shuffle;
 use crate::reference::ReferenceProvider;
+use crate::sequence::complement_base;
 
 /// Coordinate-system region used as the merge-eligibility key.
 ///
@@ -2333,37 +2334,6 @@ fn canonical_base_byte(base: u8) -> u8 {
         b'U' => b'T',
         other => other,
     }
-}
-
-/// Watson-Crick complement of an IUPAC base, case-insensitive, as uppercase.
-/// `None` for a byte that is not a recognised base.
-///
-/// Matched here rather than delegated to [`crate::sequence::reverse_complement`],
-/// which is a *display* helper: its fallback arm is `other => other`, so it
-/// passes an unrecognised byte through unchanged. Routing through it made this
-/// function total — it could not return `None`, so the `?` refusals at the call
-/// sites were unreachable, and a byte that is not a base would have been
-/// "complemented" to itself and folded into an inversion instead of declining
-/// the edit. Enumerating the set is what makes that refusal real.
-fn complement_base(base: u8) -> Option<u8> {
-    Some(match base.to_ascii_uppercase() {
-        b'A' => b'T',
-        b'T' | b'U' => b'A',
-        b'G' => b'C',
-        b'C' => b'G',
-        b'R' => b'Y',
-        b'Y' => b'R',
-        b'S' => b'S',
-        b'W' => b'W',
-        b'K' => b'M',
-        b'M' => b'K',
-        b'B' => b'V',
-        b'V' => b'B',
-        b'D' => b'H',
-        b'H' => b'D',
-        b'N' => b'N',
-        _ => return None,
-    })
 }
 
 /// Trim the common prefix and suffix of the reference and result blocks.

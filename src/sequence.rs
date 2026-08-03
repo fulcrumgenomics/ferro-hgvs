@@ -25,6 +25,63 @@ pub fn reverse_complement(seq: &str) -> String {
     seq.chars().rev().map(complement_char).collect()
 }
 
+/// Complement one base, folding case and refusing anything outside the modelled
+/// alphabet. **The single byte-level complement for the crate** (#1318).
+///
+/// Two properties, and both matter:
+///
+/// * **Case-folding.** The input is upper-cased before matching and the answer
+///   is always upper-case, so a soft-masked reference byte compares equal to the
+///   same base written in upper case. Reference FASTAs are routinely
+///   soft-masked and those bytes reach normalization (see
+///   `issue_1235_cis_allele_confluence::soft_masked_reference_yields_the_same_canonical_form`).
+/// * **`None` for an unmodelled byte.** There is no complement to report for
+///   `X`, so callers cannot mistake "no answer" for "self-complementary". That
+///   confusion is exactly what produced #1249: a helper whose fallback returned
+///   the byte unchanged made `complement(b'w') == b'w'` true for *every*
+///   unmodelled symbol, and an inversion resolving to one was silently
+///   discarded as identity, or emitted as the degenerate `<pos>W>W`.
+///
+/// This replaces the two byte-level helpers that disagreed on exactly those
+/// axes: `normalize::rules::complement` (upper-cased, but returned unmodelled
+/// bytes unchanged — the one with the bugs) and
+/// `normalize::merge::complement_base` (this contract, and the one that never
+/// had a bug, so its behaviour is what survived).
+///
+/// [`complement_char`] keeps a **deliberately different** contract: it preserves
+/// case and passes unmodelled characters through, because it backs
+/// [`reverse_complement`], whose job is to render a sequence a caller will read
+/// back. Rendering must not silently upper-case a soft-masked region or drop a
+/// byte it does not model. That is a display concern; this is a comparison
+/// concern, and collapsing the two would break one of them.
+pub(crate) fn complement_base(base: u8) -> Option<u8> {
+    Some(match base.to_ascii_uppercase() {
+        b'A' => b'T',
+        b'T' | b'U' => b'A',
+        b'G' => b'C',
+        b'C' => b'G',
+        b'R' => b'Y',
+        b'Y' => b'R',
+        b'S' => b'S',
+        b'W' => b'W',
+        b'K' => b'M',
+        b'M' => b'K',
+        b'B' => b'V',
+        b'V' => b'B',
+        b'D' => b'H',
+        b'H' => b'D',
+        b'N' => b'N',
+        _ => return None,
+    })
+}
+
+/// Case-**preserving** complement of one character; unmodelled characters pass
+/// through unchanged.
+///
+/// See [`complement_base`] for why this contract differs from the comparison
+/// helper rather than sharing it: this one backs [`reverse_complement`], which
+/// renders a sequence for a caller to read, so it must not upper-case a
+/// soft-masked region or drop bytes it does not model.
 fn complement_char(c: char) -> char {
     match c {
         'A' => 'T',

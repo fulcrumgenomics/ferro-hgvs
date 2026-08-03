@@ -23,6 +23,7 @@ use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
 use crate::hgvs::edit::{InsertedPart, InsertedSequence, NaEdit, Sequence};
 use crate::reference::ReferenceProvider;
+use crate::sequence::complement_base;
 
 /// Check if an edit type needs normalization
 ///
@@ -114,15 +115,21 @@ pub fn insertion_is_duplication(ref_seq: &[u8], pos: u64, inserted_seq: &[u8]) -
 
     // Check if sequence before the insertion point matches the inserted sequence
     // (this would be a duplication of the preceding sequence)
+    //
+    // Case-insensitive on both sides (#1318): `ref_seq` may be soft-masked while
+    // `inserted_seq` comes from the author's upper-case description, and a raw
+    // byte test then reports "not a duplication" for one that is — the same
+    // class of miss the delins path carried, measured on `acgtacgt` + `ACGT`.
     if pos_idx >= ins_len && pos_idx <= ref_seq.len() {
         let before_start = pos_idx - ins_len;
-        if ref_seq[before_start..pos_idx] == inserted_seq[..] {
+        if ref_seq[before_start..pos_idx].eq_ignore_ascii_case(inserted_seq) {
             return true;
         }
     }
 
     // Also check if sequence after matches (for 5' duplications)
-    if pos_idx + ins_len <= ref_seq.len() && ref_seq[pos_idx..pos_idx + ins_len] == inserted_seq[..]
+    if pos_idx + ins_len <= ref_seq.len()
+        && ref_seq[pos_idx..pos_idx + ins_len].eq_ignore_ascii_case(inserted_seq)
     {
         return true;
     }
@@ -894,67 +901,28 @@ pub(crate) fn deletion_to_repeat(
     })
 }
 
-/// Get the complement of a nucleotide, over the whole IUPAC alphabet that
-/// [`crate::hgvs::edit::Base`] models.
-///
-/// Ambiguity codes complement by complementing their member set: `R` (A/G)
-/// becomes `Y` (C/T), `B` (not A) becomes `V` (not T), and so on. `W` (A/T),
-/// `S` (C/G) and `N` are the only genuinely self-complementary symbols.
-///
-/// Modelling the ambiguity codes matters because callers ask
-/// [`is_self_complementary`] whether "inverting this base changes nothing".
-/// Mapping an unmodelled symbol to itself made that test lie: `R` looked
-/// self-complementary, so an inversion resolving to a lone `R` was silently
-/// discarded as identity even though its reverse complement is `Y`.
-///
-/// The complement is returned uppercase regardless of input case, matching the
-/// long-standing behaviour for A/C/G/T/U. Bytes outside the alphabet are still
-/// returned unchanged — there is no meaningful complement to report for them.
-fn complement(base: u8) -> u8 {
-    match base {
-        b'A' | b'a' => b'T',
-        b'T' | b't' => b'A',
-        b'G' | b'g' => b'C',
-        b'C' | b'c' => b'G',
-        b'U' | b'u' => b'A', // RNA
-        // IUPAC ambiguity codes, complemented member-set-wise.
-        b'R' | b'r' => b'Y', // A/G  -> C/T
-        b'Y' | b'y' => b'R', // C/T  -> A/G
-        b'K' | b'k' => b'M', // G/T  -> A/C
-        b'M' | b'm' => b'K', // A/C  -> G/T
-        b'B' | b'b' => b'V', // C/G/T -> A/C/G
-        b'V' | b'v' => b'B', // A/C/G -> C/G/T
-        b'D' | b'd' => b'H', // A/G/T -> A/C/T
-        b'H' | b'h' => b'D', // A/C/T -> A/G/T
-        // Self-complementary: W (A/T), S (C/G), N (any).
-        b'W' | b'w' => b'W',
-        b'S' | b's' => b'S',
-        b'N' | b'n' => b'N',
-        _ => base, // Not a nucleotide we model.
-    }
-}
-
 /// True when `last` is the complement of `first`, i.e. inverting the pair
 /// changes nothing.
 ///
-/// Compares case-insensitively. [`complement`] always answers uppercase, so a
-/// raw `complement(x) == y` test silently fails for soft-masked reference bases:
-/// `complement(b'a')` is `b'T'`, which never equals `b't'`. Reference sequences
-/// really do arrive soft-masked (see
-/// `issue_1235_cis_allele_confluence::soft_masked_reference_yields_the_same_canonical_form`),
-/// so every complement comparison in the inversion-shortening path goes through
-/// here and treats `a` exactly like `A`.
+/// Both sides fold case, and an unmodelled byte on either side answers `false`
+/// — both properties come from [`complement_base`], which is now the crate's
+/// single byte-level complement (#1318). This used to work around a local
+/// helper whose fallback returned unmodelled bytes unchanged; with that helper
+/// gone the wrapper is a thin, honest comparison.
 fn is_complementary_pair(first: u8, last: u8) -> bool {
-    let first = first.to_ascii_uppercase();
-    complement(first) == last.to_ascii_uppercase()
+    // `complement_base` never answers with an unmodelled byte, so if `last` is
+    // one the comparison is false — which is the wanted behaviour, and the
+    // reason this does not need a separate "is `last` a base?" test.
+    complement_base(first) == Some(last.to_ascii_uppercase())
 }
 
 /// True when inverting `base` on its own changes nothing, i.e. it is one of the
 /// self-complementary symbols `W` (A/T), `S` (C/G) and `N`.
 ///
-/// Bytes outside the modelled alphabet answer `true` as well, because
-/// [`complement`] returns them unchanged — there is no complement to substitute
-/// in, so the caller must not describe one.
+/// A byte outside the modelled alphabet answers **`false`**, not `true`: there
+/// is no complement to report, so "inverting it changes nothing" is not a claim
+/// this can make. The previous helper returned such bytes unchanged, which made
+/// every unmodelled symbol look self-complementary — the #1249 trap.
 fn is_self_complementary(base: u8) -> bool {
     is_complementary_pair(base, base)
 }
@@ -975,7 +943,7 @@ pub fn complementary_substitution(
     }
     Some((
         Base::from_char(base as char)?,
-        Base::from_char(complement(base) as char)?,
+        Base::from_char(complement_base(base)? as char)?,
     ))
 }
 
@@ -1214,7 +1182,7 @@ pub fn decompose_delins(
     let mut has_identity = false;
     let mut i = 0;
     while i < n {
-        if deleted[i] == inserted_seq[i] {
+        if deleted[i].eq_ignore_ascii_case(&inserted_seq[i]) {
             // Identity position: record the unchanged ref byte so the caller
             // can rebuild a codon-frame triplet's alt sequence (issue #165),
             // and let it bound the maximal contiguous run. Abandon the whole
@@ -1234,9 +1202,18 @@ pub fn decompose_delins(
         }
 
         // Maximal contiguous run of mismatches `[run_start, run_end)`.
+        //
+        // Case-insensitive for the same reason as the identity test above, and
+        // it must be: this is the same rule written twice, and folding case in
+        // only one of them is worse than folding it in neither. On a
+        // soft-masked reference the run would swallow positions that the test
+        // above calls identities, so `has_identity` never became true and the
+        // final gate returned `None` for a span whose uppercase twin decomposes
+        // — defeating the fix above for exactly the input it targets (#1318).
+        let run_end_differs = |k: usize| !deleted[k].eq_ignore_ascii_case(&inserted_seq[k]);
         let run_start = i;
         let mut run_end = i + 1;
-        while run_end < n && deleted[run_end] != inserted_seq[run_end] {
+        while run_end < n && run_end_differs(run_end) {
             run_end += 1;
         }
 
@@ -1344,7 +1321,15 @@ pub fn canonicalize_delins(
 
     // 1. Identity (insert == deleted reference). Caught at full range; trimming
     //    would otherwise consume the entire range and lose this classification.
-    if deleted == inserted_seq {
+    //
+    //    Case-insensitive (#1318): on a soft-masked reference `deleted` arrives
+    //    lower-case while `inserted_seq` comes from the author's upper-case
+    //    description, so a raw byte test missed an identity that is one. That
+    //    is not merely a mis-classification — the range then fell through to
+    //    the trimming below, which now consumes it entirely, and the pure-
+    //    insertion branch's `debug_assert!("Identity case caught above")` is
+    //    exactly the claim this step has to make true.
+    if deleted.eq_ignore_ascii_case(inserted_seq) {
         return DelinsCanonical::Identity;
     }
 
@@ -1355,7 +1340,10 @@ pub fn canonicalize_delins(
     //    sub > del > inv > dup > ins priority.
     if inserted_seq.len() == 2 * deleted.len() {
         let (first_half, second_half) = inserted_seq.split_at(deleted.len());
-        if first_half == deleted && second_half == deleted {
+        // Case-insensitive for the same reason as step 1 (#1318): a
+        // soft-masked reference must classify as a duplication exactly when the
+        // upper-case one does.
+        if first_half.eq_ignore_ascii_case(deleted) && second_half.eq_ignore_ascii_case(deleted) {
             return DelinsCanonical::Duplication { start, end };
         }
     }
@@ -1445,13 +1433,26 @@ pub fn canonicalize_delins(
 /// cannot consume more than `min(deleted.len(), inserted.len())` bytes from
 /// either side (so the two regions never overlap on either string).
 fn shared_affix_lengths(deleted: &[u8], inserted: &[u8]) -> (usize, usize) {
+    // Case-insensitive on both sides (#1318): on a soft-masked reference
+    // `deleted` arrives lower-case while `inserted` comes from the author's
+    // upper-case description, so a raw byte test found no shared affix for
+    // sequences that are identical. That mattered beyond a missed trim — it left
+    // a palindromic delins untrimmed on the way into the inversion branch, whose
+    // `expect` assumes trimming has already handled the collapse-to-identity
+    // case, and the mismatch panicked.
+    let same = |a: u8, b: u8| a.eq_ignore_ascii_case(&b);
     let max_total = deleted.len().min(inserted.len());
     let mut k = 0;
-    while k < max_total && deleted[k] == inserted[k] {
+    while k < max_total && same(deleted[k], inserted[k]) {
         k += 1;
     }
     let mut l = 0;
-    while k + l < max_total && deleted[deleted.len() - 1 - l] == inserted[inserted.len() - 1 - l] {
+    while k + l < max_total
+        && same(
+            deleted[deleted.len() - 1 - l],
+            inserted[inserted.len() - 1 - l],
+        )
+    {
         l += 1;
     }
     (k, l)
@@ -1460,14 +1461,19 @@ fn shared_affix_lengths(deleted: &[u8], inserted: &[u8]) -> (usize, usize) {
 /// Bytewise reverse-complement equality check.
 ///
 /// Returns true iff `inserted` is the reverse complement of `deleted`, both
-/// of equal length. Allocation-free; uses the existing `complement()` helper.
+/// of equal length, comparing case-insensitively on **both** sides.
+///
+/// Allocation-free. Folding case matters here for the same reason it does in
+/// [`is_complementary_pair`]: on a soft-masked reference `deleted` arrives
+/// lower-case while `inserted` comes from the author's upper-case description
+/// (#1318).
 fn is_revcomp(deleted: &[u8], inserted: &[u8]) -> bool {
     deleted.len() == inserted.len()
         && deleted
             .iter()
             .rev()
             .zip(inserted.iter())
-            .all(|(d, i)| complement(*d) == *i)
+            .all(|(d, i)| complement_base(*d) == Some(i.to_ascii_uppercase()))
 }
 
 /// Check if a duplication in a homopolymer should become repeat notation
@@ -4132,11 +4138,15 @@ mod tests {
 
     #[test]
     fn test_complement() {
-        assert_eq!(complement(b'A'), b'T');
-        assert_eq!(complement(b'T'), b'A');
-        assert_eq!(complement(b'G'), b'C');
-        assert_eq!(complement(b'C'), b'G');
-        assert_eq!(complement(b'N'), b'N'); // N stays N
+        assert_eq!(complement_base(b'A'), Some(b'T'));
+        assert_eq!(complement_base(b'T'), Some(b'A'));
+        assert_eq!(complement_base(b'G'), Some(b'C'));
+        assert_eq!(complement_base(b'C'), Some(b'G'));
+        assert_eq!(complement_base(b'N'), Some(b'N')); // N stays N
+                                                       // The contract that replaced the old `_ => base` fallback (#1318): an
+                                                       // unmodelled byte has no complement to report, so callers cannot mistake
+                                                       // "no answer" for "self-complementary".
+        assert_eq!(complement_base(b'X'), None);
     }
 
     #[test]
@@ -4203,21 +4213,21 @@ mod tests {
             (b'H', b'D'), // A/C/T -> A/G/T
         ] {
             assert_eq!(
-                complement(base),
-                expected,
+                complement_base(base),
+                Some(expected),
                 "complement({}) should be {}",
                 base as char,
                 expected as char
             );
             // Lowercase complements to the same uppercase symbol as A/C/G/T/U do.
-            assert_eq!(complement(base.to_ascii_lowercase()), expected);
+            assert_eq!(complement_base(base.to_ascii_lowercase()), Some(expected));
         }
 
         // Only W, S and N are genuinely self-complementary.
         for base in *b"WSN" {
             assert_eq!(
-                complement(base),
-                base,
+                complement_base(base),
+                Some(base),
                 "{} is self-complementary",
                 base as char
             );
@@ -4316,6 +4326,173 @@ mod tests {
         // a soft-masked non-self-complementary centre still survives.
         assert_eq!(shorten_inversion(b"awt", 0, 3), None);
         assert_eq!(shorten_inversion(b"art", 0, 3), Some((1, 2)));
+    }
+
+    /// The delins path must answer identically for a soft-masked reference and
+    /// the same sequence uppercased (#1318).
+    ///
+    /// #1250 fixed the *inversion-shortening* comparisons and was deliberately
+    /// scope-limited; the delins→inv typing path kept its raw byte tests. On a
+    /// soft-masked reference `deleted` arrives lowercase while `inserted` comes
+    /// from the author's uppercase description, so `is_revcomp` and the
+    /// shared-affix/identity comparisons all saw a mismatch that is not one.
+    ///
+    /// Parity between the two cases is the assertion, rather than a pinned
+    /// output shape: whatever the canonical form of a given delins is, the
+    /// reference's masking must not change it.
+    #[test]
+    fn canonicalize_delins_treats_soft_masked_bases_like_uppercase() {
+        // (reference, start, end, inserted) — each exercises a different one of
+        // the case-sensitive comparison sites.
+        let cases: &[(&[u8], usize, usize, &[u8])] = &[
+            // is_revcomp: `atgcat` reverse-complements to `ATGCAT`, so this is
+            // an inversion — but only if the comparison folds case.
+            (b"atgcat", 0, 6, b"ATGCAT"),
+            // A longer revcomp that survives outer-pair shortening.
+            (b"aggcct", 0, 6, b"AGGCCT"),
+            // The Duplication branch (`inserted_seq.len() == 2 * deleted.len()`),
+            // which is checked before trimming and has its own pair of
+            // comparisons. Nothing above reaches it: every other case here has
+            // an insert the same length as the deleted range, so the branch's
+            // length gate is false and its case-folding is never exercised.
+            (b"acgt", 0, 4, b"ACGTACGT"),
+            // shared_affix_lengths: a shared prefix/suffix that differs only in
+            // case must still be trimmed.
+            (b"acgtacgt", 0, 8, b"ACGTTTGT"),
+            // The identity-run detector inside the decomposition loop.
+            (b"acgtacgt", 0, 8, b"ACGAACGT"),
+            // Whole-range identity: insert equals the deleted reference, modulo
+            // case.
+            (b"acgtacgt", 0, 8, b"ACGTACGT"),
+            // A plain substitution reached through the trimming path.
+            (b"acgt", 0, 4, b"ACTT"),
+        ];
+        for (lower, start, end, inserted) in cases {
+            let upper: Vec<u8> = lower.to_ascii_uppercase();
+            assert_eq!(
+                canonicalize_delins(lower, *start, *end, inserted),
+                canonicalize_delins(&upper, *start, *end, inserted),
+                "`{}` and `{}` with insert `{}` must canonicalize identically",
+                std::str::from_utf8(lower).unwrap(),
+                std::str::from_utf8(&upper).unwrap(),
+                std::str::from_utf8(inserted).unwrap(),
+            );
+        }
+    }
+
+    /// `decompose_delins` must hold the same soft-mask parity, and did not.
+    ///
+    /// The identity test at the top of its loop was case-folded while the
+    /// mismatch-run scan below it was not — the same rule written twice, fixed
+    /// in one copy. On a soft-masked reference the run then swallowed positions
+    /// that the identity test calls identities, so `has_identity` never became
+    /// true and the function's final gate returned `None` for a span whose
+    /// uppercase twin decomposes. Measured before the fix:
+    /// `decompose_delins(b"acgt", 0, 4, b"TCGA")` was `None` against
+    /// `Some(4)` for `b"ACGT"`.
+    #[test]
+    fn decompose_delins_treats_soft_masked_bases_like_uppercase() {
+        let cases: &[(&[u8], &[u8])] = &[
+            // An identity sitting *inside* what the run scan saw as a mismatch
+            // run — the shape the unfixed copy swallowed.
+            (b"acgt", b"TCGA"),
+            (b"acgtac", b"TCGTAC"),
+            // A palindrome, so the inversion branch is reached on both sides.
+            (b"atgcat", b"TTGCAA"),
+        ];
+        for (lower, inserted) in cases {
+            let upper: Vec<u8> = lower.to_ascii_uppercase();
+            assert_eq!(
+                decompose_delins(lower, 0, lower.len(), inserted),
+                decompose_delins(&upper, 0, upper.len(), inserted),
+                "`{}` and `{}` with insert `{}` must decompose identically",
+                std::str::from_utf8(lower).unwrap(),
+                std::str::from_utf8(&upper).unwrap(),
+                std::str::from_utf8(inserted).unwrap(),
+            );
+        }
+    }
+
+    /// The same parity for the insertion→duplication test, which compares a
+    /// reference slice against the author's inserted sequence and so carried
+    /// the identical defect: `insertion_is_duplication(b"acgtacgt", 4, b"ACGT")`
+    /// answered `false` where the uppercase reference answered `true`, silently
+    /// leaving a duplication spelled as an insertion.
+    #[test]
+    fn insertion_is_duplication_treats_soft_masked_bases_like_uppercase() {
+        for (lower, pos, inserted) in [
+            (&b"acgtacgt"[..], 4u64, &b"ACGT"[..]), // 3' duplication
+            (&b"aaggtt"[..], 2u64, &b"AA"[..]),     // 5' duplication
+        ] {
+            let upper: Vec<u8> = lower.to_ascii_uppercase();
+            assert_eq!(
+                insertion_is_duplication(lower, pos, inserted),
+                insertion_is_duplication(&upper, pos, inserted),
+                "`{}` at {pos} with insert `{}` must classify identically",
+                std::str::from_utf8(lower).unwrap(),
+                std::str::from_utf8(inserted).unwrap(),
+            );
+        }
+    }
+
+    /// Unifying on `complement_base` changed what happens to a byte outside the
+    /// modelled alphabet, and that change is deliberate — pinned here so it is a
+    /// decision rather than a side effect.
+    ///
+    /// `complement` returned such a byte unchanged, so it read as
+    /// self-complementary and an inversion over it collapsed to identity — the
+    /// #1249 class of silent loss. `complement_base` answers `None`, so the span
+    /// survives as a residue and the caller leaves the inversion as authored
+    /// rather than claiming an identity it cannot justify.
+    #[test]
+    fn an_unmodelled_byte_no_longer_reads_as_self_complementary() {
+        assert!(!is_self_complementary(b'X'));
+        // Was `None` (identity) before #1318; the span now survives.
+        assert_eq!(shorten_inversion(b"X", 0, 1), Some((0, 1)));
+        assert_eq!(shorten_inversion(b"XX", 0, 2), Some((0, 2)));
+        // No typed substitution exists for it, so the caller must refuse.
+        assert_eq!(complementary_substitution(b'X'), None);
+        // The genuinely self-complementary symbols are unaffected.
+        for base in *b"WSN" {
+            assert!(is_self_complementary(base), "{} ", base as char);
+        }
+        // And a real complementary pair still collapses.
+        assert_eq!(shorten_inversion(b"AT", 0, 2), None);
+    }
+
+    /// The headline case, spelled out: a soft-masked delins that genuinely *is*
+    /// a reverse complement must be typed as an inversion.
+    ///
+    /// `atgc` deliberately, not a palindrome like `aggcct`: a palindrome is its
+    /// own reverse complement, so the insert equals the deleted bases and the
+    /// *identity* branch is the correct answer — such a case cannot show that
+    /// inversion typing works.
+    #[test]
+    fn a_soft_masked_delins_that_is_a_revcomp_is_typed_as_an_inversion() {
+        assert!(
+            matches!(
+                canonicalize_delins(b"atgc", 0, 4, b"GCAT"),
+                DelinsCanonical::Inversion { .. }
+            ),
+            "a lowercase reference whose delins is a true reverse complement \
+             must still be recognised as an inversion",
+        );
+        // The upper-case reference must of course agree.
+        assert_eq!(
+            canonicalize_delins(b"atgc", 0, 4, b"GCAT"),
+            canonicalize_delins(b"ATGC", 0, 4, b"GCAT"),
+        );
+    }
+
+    /// `is_revcomp` itself, at the byte level.
+    #[test]
+    fn is_revcomp_folds_case_on_both_sides() {
+        assert!(is_revcomp(b"atgcat", b"ATGCAT"));
+        assert!(is_revcomp(b"ATGCAT", b"atgcat"));
+        assert!(is_revcomp(b"atgcat", b"atgcat"));
+        // Still discriminating — this is not a fold that makes everything true.
+        assert!(!is_revcomp(b"atgcat", b"ATGCAA"));
+        assert!(!is_revcomp(b"acgt", b"ACG"));
     }
 
     #[test]

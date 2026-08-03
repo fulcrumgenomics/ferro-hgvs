@@ -8416,15 +8416,24 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             ));
                         }
                         // Not a base we can complement into a typed
-                        // substitution. Unreachable as written:
-                        // `shorten_inversion` yields a one-base residue only
-                        // for a base whose complement differs from it, which
-                        // `complement` answers only for the IUPAC alphabet
-                        // `Base` models — a byte outside it is left unchanged,
-                        // reads as self-complementary, and collapses to
-                        // identity before reaching here. Kept as a defensive
-                        // fallback: leave the inversion as authored rather than
-                        // assert or invent an edit.
+                        // substitution. **Reachable since #1318**, and the
+                        // comment here used to say the opposite.
+                        //
+                        // The old justification was that an unmodelled byte was
+                        // returned unchanged by `complement`, so it read as
+                        // self-complementary and collapsed to identity before
+                        // reaching here. `complement_base` answers `None` for
+                        // such a byte instead, so `is_self_complementary` is
+                        // now `false` for it and `shorten_inversion` hands back
+                        // a one-base residue rather than `None` — measured:
+                        // `shorten_inversion(b"X", 0, 1)` was `None`, is now
+                        // `Some((0, 1))`.
+                        //
+                        // Landing here is the right outcome: leave the
+                        // inversion as authored rather than claim an identity
+                        // for a byte we cannot complement, which is the #1249
+                        // class of silent loss. Emitting nothing typed is a
+                        // refusal, not a fallback nobody reaches.
                         return Ok((start, end, canonicalize_edit(edit), warnings));
                     }
                     return Ok((
