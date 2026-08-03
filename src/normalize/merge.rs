@@ -1643,6 +1643,43 @@ const MIN_PIECE_SEPARATION: usize = 1;
 /// homopolymer cannot make one call quadratic in the window size.
 const MAX_TIE_BREAK_SWEEP: usize = 256;
 
+/// Placements [`two_gap_insertion_alignment`] will examine before giving up.
+///
+/// The search sweeps `a` over the two blocks' common prefix and `b` over their
+/// common suffix. Both are **zero on a trimmed block**, which is what every
+/// caller passes today, so the sweep costs a handful of placements — but the
+/// point of generalising that search was to stop depending on the caller's trim,
+/// and leaving the *cost* dependent on it would reintroduce the same coupling.
+///
+/// Each placement costs an `O(block)` slice comparison. Measured worst case (no
+/// solution exists, so the sweep runs to exhaustion) at [`MAX_SPLIT_BLOCK`] with
+/// a 6-base insertion:
+///
+/// ```text
+/// common affixes 0, 0        5 placements     (trimmed — today)
+/// common affixes 1, 1       20 placements     (one flank base restored per side)
+/// common affixes 512, 512    1 315 840        (~1.3e9 byte comparisons)
+/// ```
+///
+/// # Why this declines rather than narrowing the sweep
+///
+/// An earlier revision clamped the affix *lengths* to a small constant instead.
+/// That is not a cost bound, it is a **silent change of answer**, and it was
+/// measured doing exactly that: `AAAAAAA -> AACACAAAA` (#1260's untrimmed
+/// window) decomposes only at `a = 2, b = 3`, which needs a common suffix of 4.
+/// Clamping to 2 excluded the sole solution, the function returned `None`, and
+/// the block fell back to a spanning `delins`. It went unnoticed because on that
+/// row the single-gap search happens to reach the same member count by another
+/// route — so the clamp was wrong in a way no test could see until something
+/// else moved.
+///
+/// Exceeding this budget therefore abandons the whole two-gap search and lets
+/// [`best_alignment`] keep its single-gap winner — the answer it gave before this
+/// function existed — rather than returning a decomposition found under a
+/// narrower search than the one documented. The budget is sized far above the
+/// worked cases above; nothing in the corpus approaches it.
+const MAX_TWO_GAP_PLACEMENTS: usize = 65_536;
+
 /// Largest **net length change**, in bases, for which one unchanged base counts
 /// as separation.
 ///
@@ -3162,7 +3199,7 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
     })
 }
 
-/// The alignment that keeps the **whole** reference intact between two
+/// The alignment that keeps the **whole** reference intact across two
 /// insertions, or `None` when the pair does not have that shape (#1260).
 ///
 /// PR #1285 named the gap this fills: for #1260 the answer is "a two-gap
@@ -3171,16 +3208,58 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
 /// swallow the retained base into a spanning `delins` or leave one insertion
 /// unaccounted for.
 ///
-/// # Why one shape is the whole search
+/// # The shape, and why it is not just `I1 + reference + I2`
 ///
-/// The caller trims common flanks before partitioning
-/// (`canonicalize_from_sequence` via [`trim_common_flanks`]), and on a trimmed
-/// block the general three-chunk form collapses to this one. Writing an
-/// all-matched two-gap alignment as `result = ref[..a] + I1 + ref[a..b] + I2 +
-/// ref[b..]`: if `a > 0` the two blocks share a first base, and if `b <
-/// ref.len()` they share a last one — both contradict trimming. So `a == 0` and
-/// `b == ref.len()`, leaving `result = I1 + reference + I2`. That is a substring
-/// search, not a quadratic sweep over gap placements.
+/// The general all-matched two-gap alignment is
+///
+/// ```text
+/// result = ref[..a] + I1 + ref[a..b] + I2 + ref[b..]
+/// ```
+///
+/// with `0 <= a < b <= ref.len()` and both insertions non-empty. An earlier
+/// revision searched only `a == 0, b == ref.len()`, deriving that from the
+/// caller having trimmed common flanks: on a trimmed block `a > 0` would mean
+/// the two blocks share a first base and `b < ref.len()` a last one, both
+/// contradicting the trim.
+///
+/// That derivation is sound *only while the precondition holds*, and it makes
+/// the function silently wrong the moment a caller widens a block — which is
+/// exactly what any attempt to give back an ambiguously-trimmed flank base
+/// must do. #1260 is the worked example: trimmed its block is `A -> CAC` with
+/// `a = 0`, and with one flank base restored per side it is `AAA -> ACACA`,
+/// whose only decomposition is `a = 1, b = 2`. A search fixed at `a == 0`
+/// finds nothing there, `best_alignment` falls through to the single-gap
+/// winner, and #1260 reverts to a spanning `delins`.
+///
+/// No caller widens a block today, so this generalisation changes no current
+/// result — it removes a hidden coupling between this function and the
+/// caller's trim, and it is verified against blocks that exercise `a > 0` and
+/// `b < ref.len()` directly rather than through a caller.
+///
+/// `b > a` is required rather than incidental: with `b == a` the two insertions
+/// are adjacent in `result`, which is a single gap the existing search already
+/// places.
+///
+/// # Cost
+///
+/// Every reference base survives verbatim in this form, so `a` cannot exceed the
+/// two blocks' common prefix and `ref.len() - b` cannot exceed their common
+/// suffix. Both are 0 on a trimmed block — collapsing the search to the single
+/// case the earlier revision hardcoded — and at most one after a restored flank.
+/// The sweep is therefore bounded by the *residual* affix lengths, not by the
+/// block length. A block whose affixes would make that sweep large is declined
+/// outright — see [`MAX_TWO_GAP_PLACEMENTS`] — rather than searched under a
+/// narrower bound than this doc describes.
+///
+/// # The tie-break is an implementer's choice
+///
+/// The decomposition is **not unique**: `AA -> AAAA` admits `(a, b)` of `(0, 1)`,
+/// `(0, 2)` and `(1, 2)`, all with `I1 = I2 = "A"`, all matching every reference
+/// base and all yielding two members. Nothing in the spec reaches this. The
+/// smallest `a`, then the smallest `|I1|`, is taken — the 5'-most placement,
+/// preserving the earlier revision's behaviour. Deliberately *not* the 3'-most
+/// rule [`best_alignment`] applies to a member-count tie: adopting it here would
+/// move every such tie in a homopolymer.
 ///
 /// # Why this does not reopen the corpus the single-gap rule protects
 ///
@@ -3189,12 +3268,11 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
 /// of coincidence and shredding a contiguous replacement (#1034/#1040/#182).
 /// Both gaps here are insertions in a net-insertion block, so no deletion is
 /// introduced and no match is manufactured: every matched column is a reference
-/// base surviving verbatim. Cluster A is structurally out of reach — #1040 and
-/// the `inv` cases are equal-length, #1157A is a net deletion, and an
-/// equal-length or net-deletion block never reaches this function.
-///
-/// Both insertions must be non-empty; otherwise this is a single gap and the
-/// existing search already places it, 5'-most.
+/// base surviving verbatim. That argument never depended on `a` being 0 — all
+/// three chunks are verbatim reference either way. Cluster A is structurally out
+/// of reach — #1040 and the `inv` cases are equal-length, #1157A is a net
+/// deletion, and an equal-length or net-deletion block never reaches this
+/// function.
 ///
 /// Comparison is byte-exact, matching [`best_alignment`]'s own `==` throughout.
 /// Making only this path case-insensitive would let the two-gap form win on a
@@ -3205,16 +3283,63 @@ fn two_gap_insertion_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Co
     if reference.is_empty() || result.len() < reference.len() + 2 {
         return None;
     }
-    // 5'-most placement, matching `best_alignment`'s tie-break. The bounds put
-    // at least one base on each side of the retained reference.
-    let last_start = result.len() - reference.len() - 1;
-    let start = (1..=last_start).find(|&p| result[p..p + reference.len()] == *reference)?;
+    let ref_len = reference.len();
+    let inserted = result.len() - ref_len;
 
-    let mut columns = Vec::with_capacity(result.len());
-    columns.extend((0..start).map(|a| (None, Some(a))));
-    columns.extend((0..reference.len()).map(|i| (Some(i), Some(start + i))));
-    columns.extend((start + reference.len()..result.len()).map(|a| (None, Some(a))));
-    Some(columns)
+    // Bounds, not shortcuts: a matched `ref[..a]` is a common prefix of the two
+    // blocks, and a matched `ref[b..]` a common suffix. Not clamped — narrowing
+    // them changes the answer rather than bounding the cost, which is what
+    // [`MAX_TWO_GAP_PLACEMENTS`] is for.
+    let common_prefix = reference
+        .iter()
+        .zip(result)
+        .take_while(|(r, a)| r == a)
+        .count();
+    let common_suffix = reference
+        .iter()
+        .rev()
+        .zip(result.iter().rev())
+        .take_while(|(r, a)| r == a)
+        .count();
+
+    // Refuse the whole search rather than truncate it, so a block over budget
+    // gets `best_alignment`'s single-gap answer instead of one found under a
+    // narrower sweep than this function documents.
+    let lowest_b = (ref_len - common_suffix.min(ref_len)).max(1);
+    let placements = (common_prefix + 1)
+        .saturating_mul(inserted.saturating_sub(1))
+        .saturating_mul(ref_len + 1 - lowest_b.min(ref_len + 1));
+    if placements > MAX_TWO_GAP_PLACEMENTS {
+        return None;
+    }
+
+    // 5'-most: smallest `a`, then smallest `|I1|`, then smallest `b`.
+    for a in 0..=common_prefix {
+        for first_insert in 1..inserted {
+            for b in (a + 1).max(lowest_b)..=ref_len {
+                let retained_start = a + first_insert;
+                let retained_end = retained_start + (b - a);
+                if result[retained_start..retained_end] != reference[a..b] {
+                    continue;
+                }
+                // `result[..a] == reference[..a]` already holds by `a <=
+                // common_prefix`; the suffix is checked rather than inferred so
+                // the three chunk equalities read together.
+                let tail_start = retained_end + (inserted - first_insert);
+                if result[tail_start..] != reference[b..] {
+                    continue;
+                }
+                let mut columns = Vec::with_capacity(result.len());
+                columns.extend((0..a).map(|i| (Some(i), Some(i))));
+                columns.extend((a..retained_start).map(|j| (None, Some(j))));
+                columns.extend((a..b).map(|i| (Some(i), Some(retained_start + i - a))));
+                columns.extend((retained_end..tail_start).map(|j| (None, Some(j))));
+                columns.extend((b..ref_len).map(|i| (Some(i), Some(tail_start + i - b))));
+                return Some(columns);
+            }
+        }
+    }
+    None
 }
 
 /// Columns for an alignment with a single gap of `gap_len` after `k` aligned
@@ -7117,10 +7242,14 @@ mod tests {
         }
 
         #[test]
-        fn an_untied_placement_is_still_chosen_by_score() {
-            // #1232's block: the placements do not tie — one matches strictly
-            // more columns — so the score decides and the tie-break never runs.
-            // Already correct before this rule, and it must stay that way.
+        fn a_three_way_tie_still_yields_the_separating_placement() {
+            // #1232's block at an untrimmed extent. All three placements match
+            // exactly one column, so they DO tie and the tie-break runs; only
+            // the placement that leaves the match between the two changes gives
+            // two members. An earlier revision of this comment claimed the
+            // placements did not tie and that the score decided — measured,
+            // that is false, and the test's name is the part that is wrong
+            // rather than its assertion.
             assert_eq!(partition_block(b"TTTTT", b"TA").len(), 2);
         }
 
@@ -7182,6 +7311,107 @@ mod tests {
                         alt: b"C".to_vec()
                     },
                 ]
+            );
+        }
+
+        #[test]
+        fn a_retained_chunk_need_not_be_the_whole_reference() {
+            // #1260's block with one flank base restored per side — the shape
+            // any widening of a trimmed block produces inside a poly-A run.
+            // The only all-matched decomposition is `a = 1, b = 2`:
+            // `A` + `C` + `A` + `C` + `A`. A search fixed at `a == 0` finds
+            // nothing here, and #1260 reverts to a spanning `delins`.
+            assert_eq!(
+                best_alignment(b"AAA", b"ACACA"),
+                Some(vec![
+                    (Some(0), Some(0)),
+                    (None, Some(1)),
+                    (Some(1), Some(2)),
+                    (None, Some(3)),
+                    (Some(2), Some(4)),
+                ]),
+                "every reference base must survive, with `a = 1`"
+            );
+            assert_eq!(
+                partition_block(b"AAA", b"ACACA").len(),
+                2,
+                "and it must still partition into the two insertions"
+            );
+        }
+
+        #[test]
+        fn an_untrimmed_flank_on_one_side_only_is_also_expressible() {
+            // The asymmetric case: a restored base on the 5' side alone, so
+            // `a = 1` and `b == ref.len()`.
+            assert_eq!(
+                partition_block(b"AA", b"ACAC").len(),
+                2,
+                "a > 0 with the retained chunk running to the block's end"
+            );
+            // ...and on the 3' side alone, so `a == 0` and `b < ref.len()`.
+            assert_eq!(
+                partition_block(b"AA", b"CACA").len(),
+                2,
+                "b < ref.len() with the retained chunk starting at the block's start"
+            );
+        }
+
+        #[test]
+        fn two_adjacent_insertions_are_left_to_the_single_gap_search() {
+            // `b == a` would put the two insertions next to each other in the
+            // result, which is one contiguous gap. The single-gap search already
+            // places it, so this must decline rather than re-express it as two
+            // members that a coalesce would immediately merge back.
+            assert_eq!(
+                partition_block(b"AA", b"AACC").len(),
+                1,
+                "an insertion at one junction is one member, not two"
+            );
+        }
+
+        #[test]
+        fn the_decomposition_tie_is_broken_five_prime() {
+            // `AA -> AAAA` admits (a,b) of (0,1), (0,2) and (1,2), all matching
+            // both reference bases. Nothing in the spec reaches this, so the
+            // smallest `a` wins — the 5'-most placement, as before.
+            assert_eq!(
+                two_gap_insertion_alignment(b"AA", b"AAAA"),
+                Some(vec![
+                    (None, Some(0)),
+                    (Some(0), Some(1)),
+                    (None, Some(2)),
+                    (Some(1), Some(3)),
+                ]),
+                "a = 0, b = 1, |I1| = 1"
+            );
+        }
+
+        #[test]
+        fn a_long_shared_affix_does_not_hide_the_decomposition() {
+            // #1260's UNTRIMMED window. Its only all-matched decomposition is
+            // `a = 2, b = 3` — `AA` + `C` + `A` + `C` + `AAAA` — which needs a
+            // common prefix of 2 and a common suffix of 4. An earlier revision
+            // bounded cost by clamping those affix lengths to 2, which excluded
+            // the sole solution and silently returned `None`.
+            //
+            // It was invisible: on this block the single-gap search reaches the
+            // same member count by another route, so no corpus row moved. Only
+            // a change elsewhere in the tie-break exposed it. Hence this asserts
+            // the exact columns rather than a piece count.
+            assert_eq!(
+                two_gap_insertion_alignment(b"AAAAAAA", b"AACACAAAA"),
+                Some(vec![
+                    (Some(0), Some(0)),
+                    (Some(1), Some(1)),
+                    (None, Some(2)),
+                    (Some(2), Some(3)),
+                    (None, Some(4)),
+                    (Some(3), Some(5)),
+                    (Some(4), Some(6)),
+                    (Some(5), Some(7)),
+                    (Some(6), Some(8)),
+                ]),
+                "every reference base must survive, with a = 2 and b = 3"
             );
         }
 
