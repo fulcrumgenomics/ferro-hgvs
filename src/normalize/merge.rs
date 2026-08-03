@@ -1627,6 +1627,22 @@ const MAX_UNGUARDED_SPLIT_BLOCK: usize = 32;
 /// not believable and the threshold stays at 2.
 const MIN_PIECE_SEPARATION: usize = 1;
 
+/// Largest block, in aligned positions, over which a tied gap placement is
+/// broken by what it separates rather than by being 5'-most.
+///
+/// The score for one placement is O(1) — that is what makes `best_alignment`'s
+/// search linear — but ranking a *tie* needs the placement's member count, which
+/// costs a pass over the block. In a repeat tract every placement ties, so the
+/// tie-break is O(n²) there, which at [`MAX_SPLIT_BLOCK`] would be ~1e6 column
+/// operations for one call.
+///
+/// **This is a bound on coverage, not a silent cap.** Above it the 5'-most
+/// placement wins as before, so a tied block longer than this keeps whatever
+/// description the old rule gave. Nothing in the corpus is near it — #1262's
+/// block is 3 aligned positions — and the bound exists so a pathological
+/// homopolymer cannot make one call quadratic in the window size.
+const MAX_TIE_BREAK_SWEEP: usize = 256;
+
 /// Largest **net length change**, in bases, for which one unchanged base counts
 /// as separation.
 ///
@@ -3077,16 +3093,56 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
     let mut leading = 0usize;
     let mut trailing = (0..anchored).filter(|&i| ungapped(i)).count();
 
-    let mut best: Option<(usize, usize)> = None;
+    // How many members a placement separates the change into. Computed only to
+    // break a tie, because it costs a pass over the block where the score costs
+    // O(1) — see the tie-break note below.
+    let members_at = |k: usize| -> usize {
+        let columns =
+            single_gap_alignment(k, gap_len, shorter_is_ref, reference.len(), result.len());
+        pieces_from_columns(&columns, reference, result).len()
+    };
+
+    // `(matched columns, members separated, k)`.
+    let mut best: Option<(usize, usize, usize)> = None;
     for k in 0..=anchored {
         if k > 0 {
             leading += usize::from(reference[k - 1] == result[k - 1]);
             trailing -= usize::from(ungapped(k - 1));
         }
         let matches = leading + trailing;
-        // Strictly greater keeps the first (5'-most) alignment on a tie.
-        if best.as_ref().is_none_or(|(score, _)| matches > *score) {
-            best = Some((matches, k));
+        match best {
+            Some((score, _, _)) if matches < score => continue,
+            // A TIE, and the score cannot choose. In a repeat tract every
+            // placement matches the same number of columns, so this is the
+            // common case there rather than a corner: `AAA -> CA` ties three
+            // ways. `delins.md:17` decides it — "two variants separated by one
+            // or more nucleotides should be described individually and not as a
+            // 'delins'" — so prefer the placement that leaves a matched base
+            // *between* the changes, which is the one separating them into more
+            // members. `general.md:56` says the same from the other side, since
+            // `delins` is last in the priority order.
+            //
+            // This is not the 5'-most/3'-most flip that was tried and rejected:
+            // it does not rank placements by position at all. `AAA -> CA`'s
+            // winner happens to be 3'-most, but the criterion is what the
+            // placement separates, and `split_buys_no_higher_priority_type`
+            // still collapses a split that buys nothing.
+            Some((score, separated, _)) if matches == score => {
+                if anchored <= MAX_TIE_BREAK_SWEEP {
+                    let candidate = members_at(k);
+                    if candidate > separated {
+                        best = Some((matches, candidate, k));
+                    }
+                }
+            }
+            _ => {
+                let separated = if anchored <= MAX_TIE_BREAK_SWEEP {
+                    members_at(k)
+                } else {
+                    0
+                };
+                best = Some((matches, separated, k));
+            }
         }
     }
     // A single gap cannot express *insertion, retained reference, insertion*,
@@ -3094,14 +3150,14 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
     // base unmatched. Scoped to net insertions by `shorter_is_ref`, which is
     // what keeps it clear of the corpus the single-gap restriction protects —
     // see [`two_gap_insertion_alignment`].
-    if shorter_is_ref && best.is_some_and(|(matches, _)| matches < reference.len()) {
+    if shorter_is_ref && best.is_some_and(|(matches, _, _)| matches < reference.len()) {
         if let Some(columns) = two_gap_insertion_alignment(reference, result) {
             return Some(columns);
         }
     }
 
     // Only the winner is materialized.
-    best.map(|(_, k)| {
+    best.map(|(_, _, k)| {
         single_gap_alignment(k, gap_len, shorter_is_ref, reference.len(), result.len())
     })
 }
@@ -7023,6 +7079,63 @@ mod tests {
         // The same inversion clear of the bad byte still applies.
         let clean = [GEdit::Inv { s: 6, e: 9 }];
         assert!(apply_edits_to_window(&clean, reference, 1).is_some());
+    }
+
+    /// Ties between gap placements, broken by what they separate (#1262).
+    ///
+    /// In a repeat tract every placement of the gap matches the same number of
+    /// columns, so the score cannot choose and the tie-break decides the
+    /// description. msto's `high` corpus states the rule the spec gives for
+    /// that: two variants separated by one or more unchanged nucleotides are
+    /// described individually and **not** as a `delins` (`delins.md:17`, cited
+    /// by #1232), and `general.md:56` ranks `delins` last (#1231, #1233).
+    mod tie_break_by_separation {
+        use super::*;
+
+        #[test]
+        fn a_tied_placement_that_separates_the_change_wins() {
+            // #1262's authored block. Deleting `ref[0]`, `ref[1]` or `ref[2]`
+            // each leaves exactly one matched column, so all three placements
+            // tie. Only the third leaves the match *between* the two changes,
+            // which is what makes them separate members.
+            assert_eq!(
+                partition_block(b"AAA", b"CA"),
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 1,
+                        alt: b"C".to_vec()
+                    },
+                    Piece {
+                        ref_start: 2,
+                        ref_end: 3,
+                        alt: Vec::new()
+                    },
+                ],
+                "a substitution and a deletion, separated by the unchanged base"
+            );
+        }
+
+        #[test]
+        fn an_untied_placement_is_still_chosen_by_score() {
+            // #1232's block: the placements do not tie — one matches strictly
+            // more columns — so the score decides and the tie-break never runs.
+            // Already correct before this rule, and it must stay that way.
+            assert_eq!(partition_block(b"TTTTT", b"TA").len(), 2);
+        }
+
+        #[test]
+        fn the_tie_break_leaves_the_contiguous_corpus_alone() {
+            // Cluster A stays whole: these have no tie to break, because their
+            // best placement is unique.
+            assert_eq!(
+                partition_block(b"CAGTGACTAG", b"TGTCACGACT").len(),
+                1,
+                "#1040"
+            );
+            assert_eq!(partition_block(b"GCT", b"AGC").len(), 1, "#1034");
+            assert_eq!(partition_block(b"CTATAG", b"AAACCCC").len(), 1, "#422");
+        }
     }
 
     /// The two-gap insertion form (#1260).
