@@ -108,7 +108,11 @@ def spdi_to_hgvs_variant(spdi: SpdiVariant) -> HgvsVariant:
 # ============================================================================
 
 def hgvs_pos_to_index(pos: int) -> int:
-    """Convert a 1-based HGVS position to a 0-based array index."""
+    """Convert a 1-based HGVS position to a 0-based array index.
+
+    Raises:
+        ValueError: If ``pos`` is 0, which is not a valid 1-based position.
+    """
     ...
 
 def index_to_hgvs_pos(idx: int) -> int:

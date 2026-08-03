@@ -7881,6 +7881,82 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ) -> Result<(u64, u64, NaEdit, Vec<NormalizationWarning>), FerroError> {
         let mut warnings = Vec::new();
 
+        // An insertion resting at interbase 0 — "before base 1" — reaches here
+        // with `start == 0`, which is not a position any HGVS axis has (#1282).
+        //
+        // It is produced by the cis-allele derivation, not by the shuffle: an
+        // allele whose applied sequence is the reference with bases added at the
+        // very front (`g.[3_4insT;1T>A]` on a leading `T` run denotes exactly
+        // that) has its changed block trimmed to the 3' side, leaving the
+        // payload before the first base. That is a real, describable variant —
+        // it simply has no `ins` spelling, because `g.0_1ins` does not exist.
+        //
+        // The answer is the one every other boundary clamp in this module gives:
+        // "insert A' immediately 5' of anchor" IS "delete anchor, insert
+        // A' ++ ref[anchor]". So rewrite to `1delins<A' ++ ref[1]>` here, before
+        // the position ever reaches `hgvs_pos_to_index`.
+        //
+        // This has to happen *before* the shuffle rather than in
+        // `clamp_insertion_at_sequence_bounds`, which is keyed on the
+        // post-shuffle resting shape (`start == end == 1`) and so never sees a
+        // member that arrives already at interbase 0. The two are the same
+        // repair at different stages; #418 patched a third instance of the class
+        // inside the delins canonicalisation recursion, one site at a time.
+        //
+        // The constructed delins goes back through this function rather than
+        // being returned as-is. `insertion_to_boundary_delins` spells
+        // `1delins<A' ++ ref[1]>` without asking whether that reduces, and a
+        // payload sharing an affix with `ref[1]` makes it trimmable (a payload
+        // *equal* to it would make it a `dup`). Every other call site of the
+        // helper runs after a completed shuffle walk, whose completion property
+        // already rules a reducible result out; this one fires on a cis-derived
+        // member before any shuffle, so it does not inherit that protection. The
+        // recursion is what makes the result canonical rather than merely valid,
+        // and so a fixed point — see
+        // `a_reducible_boundary_payload_still_lands_canonical`. It cannot
+        // re-enter this branch: it is dispatched at `start == 1`.
+        if start == 0 {
+            if let NaEdit::Insertion {
+                sequence: InsertedSequence::Literal(seq),
+            } = edit
+            {
+                return match insertion_to_boundary_delins(ref_seq, seq, 1, BoundarySide::FivePrime)
+                {
+                    // Names avoid shadowing `edit`: the sibling arm below
+                    // interpolates the *outer* one, and two `edit`s a line apart
+                    // meaning different things is a trap.
+                    Some(delins) => {
+                        let (delins_start, delins_end, canonical, delins_warnings) =
+                            self.normalize_na_edit(ref_seq, &delins, 1, 1, boundaries, gate)?;
+                        warnings.extend(delins_warnings);
+                        Ok((delins_start, delins_end, canonical, warnings))
+                    }
+                    // The rewrite spells the result as `1delins<payload ++ ref[1]>`,
+                    // so it needs the entity's first base. That is unavailable
+                    // only when the provider handed back an empty sequence or a
+                    // first byte that is not a nucleotide — a reference problem,
+                    // not a coordinate one. Say which, rather than reusing the
+                    // "no such position" wording below and sending the reader
+                    // after the coordinate.
+                    None => Err(FerroError::InvalidCoordinates {
+                        msg: format!(
+                            "cannot rewrite the interbase-0 insertion {edit} as a boundary \
+                             delins: the reference sequence has no usable first base"
+                        ),
+                    }),
+                };
+            }
+            // Any *other* edit at position 0 — anything that is not a literal
+            // insertion — is a coordinate that should never have been
+            // constructed. Fail with an error rather than letting it underflow
+            // into a garbage index in release (#1282).
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "normalization produced position 0 for {edit}, which no HGVS axis has"
+                ),
+            });
+        }
+
         // Validate reference allele before normalization
         let validation = validate::validate_reference(edit, ref_seq, start, end);
         if !validation.valid {

@@ -85,8 +85,9 @@ pub use spdi::{
 
 // Re-export coordinate types for type-safe position handling
 pub use coords::{
-    cdot_genomic_to_closed, cdot_tx_coords, hgvs_pos_to_index, hgvs_to_spdi_pos, index_to_hgvs_pos,
-    spdi_to_hgvs_pos, OneBasedInterval, OneBasedPos, ZeroBasedInterval, ZeroBasedPos,
+    cdot_genomic_to_closed, cdot_tx_coords, hgvs_pos_to_index, hgvs_pos_to_index_checked,
+    hgvs_to_spdi_pos, hgvs_to_spdi_pos_checked, index_to_hgvs_pos, spdi_to_hgvs_pos,
+    OneBasedInterval, OneBasedPos, ZeroBasedInterval, ZeroBasedPos,
 };
 
 /// Result type alias for ferro-hgvs operations
