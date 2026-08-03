@@ -109,6 +109,41 @@ fn an_insertion_sorts_before_a_duplication_sharing_its_span() {
 }
 
 #[test]
+fn an_insertion_still_sorts_before_a_duplication_sharing_its_span_beside_a_third_member() {
+    // The #1301 reproduction, restored on the nucleotide axis. `264_265insCA`
+    // fills the gap `264|265` so it adds at interbase 264; `264_265dup` places
+    // its copy after its last base, at 265. Both span `264_265`, so start and
+    // end tie and only `junction_rank` separates them.
+    //
+    // The deletion at 270 is what keeps the pair from being derived into one
+    // insertion (see `an_insertion_sorts_before_a_duplication_sharing_its_span`
+    // above, whose two-member form now merges). It sits clear of the A-run the
+    // payloads shift through — a deletion at 266 or 267 would block the shift
+    // and the pair would never reach the tie at all — so the members still
+    // re-spell exactly as they did, and the tie is still broken by the key.
+    let input = "NC_TEST.1:g.[263_264insAC;264_265insAA;270del]";
+    let output = normalize(input);
+    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup;270del]");
+    assert_preserving(input, &output);
+
+    let starts = member_starts(&output);
+    assert!(
+        starts.windows(2).all(|pair| pair[0] <= pair[1]),
+        "`{output}` renders its members out of interbase order: {starts:?}"
+    );
+}
+
+#[test]
+fn the_shared_span_order_beside_a_third_member_is_authored_order_independent() {
+    // The key must be total on the three-member shape too, or the tie above is
+    // being decided by input order rather than by `junction_rank`.
+    assert_eq!(
+        normalize("NC_TEST.1:g.[263_264insAC;264_265insAA;270del]"),
+        normalize("NC_TEST.1:g.[270del;264_265insAA;263_264insAC]"),
+    );
+}
+
+#[test]
 fn the_order_does_not_depend_on_how_it_was_authored() {
     assert_eq!(
         normalize("NC_TEST.1:g.[263_264insAC;264_265insAA]"),

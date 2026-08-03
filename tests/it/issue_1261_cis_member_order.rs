@@ -61,21 +61,60 @@ fn assert_ordered_and_preserving(core: &str, input: &str) -> String {
 }
 
 #[test]
-fn two_duplications_sharing_a_start_render_in_junction_order() {
+fn two_insertions_sharing_a_start_merge_into_one_member() {
     // The #1261 reproduction. `258dup` sits at interbase 258 and `258_259dup`
     // at 259, so the narrower one must come first.
     //
     // Since #1235 the pair no longer reaches the sort at all: the merged form is
     // derived from the sequence rather than assembled per member, and the two
-    // members denote one three-base insertion. The ordering key is still the
-    // thing under test in this file — `members_with_distinct_starts_are_unaffected`,
-    // `a_duplication_beside_a_later_substitution_keeps_its_place` and
-    // `protein_members_sharing_a_start_render_in_end_order` all still exercise
-    // it, the last on a shared start — and `assert_ordered_and_preserving` still
-    // proves this input's answer denotes the input's sequence.
+    // members denote one three-base insertion. Kept as a pin on *that* — a
+    // single member is the answer, and `assert_ordered_and_preserving` proves it
+    // denotes the input's sequence. The shared-start tie itself is exercised by
+    // the test below, which keeps the two duplications by adding a member the
+    // derivation cannot merge them with.
     let output =
         assert_ordered_and_preserving("CAGTATGCAGGCAA", "TEMPLATE:g.[258_259insA;259_260insAG]");
     assert_eq!(output, "TEMPLATE:g.258_259insAGA");
+}
+
+#[test]
+fn two_duplications_sharing_a_start_render_in_junction_order_beside_a_third_member() {
+    // The #1261 reproduction, restored on the nucleotide axis. `258dup` sits at
+    // interbase 258 and `258_259dup` at 259, so the narrower one must come
+    // first — and with the descriptor tie-break it did not, since
+    // `"258_259dup" < "258dup"`.
+    //
+    // The deletion at 268 is what keeps the pair from being derived into one
+    // insertion (the shape above): it sits well clear of the A-run the payloads
+    // shift through, so it does not move them, but the derivation declines the
+    // three-member group and the two duplications survive to be sorted. This is
+    // the same device `issue_1304_junction_barrier_snapshot`'s
+    // `a_moved_sibling_still_bars_the_crossing_it_started_at` uses.
+    //
+    // Without it the shared-start tie would be pinned only on the protein axis
+    // (`protein_members_sharing_a_start_render_in_end_order`), which cannot
+    // cross-check against SPDI — so this is the case that keeps the nucleotide
+    // half of the key honest.
+    let output = assert_ordered_and_preserving(
+        "CAGTATGCAGGCAA",
+        "TEMPLATE:g.[258_259insA;259_260insAG;268del]",
+    );
+    assert_eq!(output, "TEMPLATE:g.[258dup;258_259dup;268del]");
+}
+
+#[test]
+fn the_shared_start_order_beside_a_third_member_is_authored_order_independent() {
+    // The sort must be total on the three-member shape too, or the tie above is
+    // being decided by input order rather than by the key.
+    let forward = assert_ordered_and_preserving(
+        "CAGTATGCAGGCAA",
+        "TEMPLATE:g.[258_259insA;259_260insAG;268del]",
+    );
+    let reverse = assert_ordered_and_preserving(
+        "CAGTATGCAGGCAA",
+        "TEMPLATE:g.[268del;259_260insAG;258_259insA]",
+    );
+    assert_eq!(forward, reverse);
 }
 
 #[test]

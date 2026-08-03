@@ -4015,8 +4015,21 @@ fn rebuild_members(
     ends: SequenceEnds,
 ) -> Option<Vec<HgvsVariant>> {
     let mut members = Vec::with_capacity(pieces.len());
+    // Window offset one past the last reference base the *previous* piece
+    // claimed, for `duplication_anchor`'s disjointness check. `0` before the
+    // first piece. Correct because `pieces` is in ascending offset order —
+    // `partition_block` builds it that way and neither `shift_pieces_three_prime`
+    // nor `coalesce_adjacent_pieces` reorders — which the assertion below pins
+    // rather than assumes, since a silent reordering would turn the check into a
+    // no-op instead of a failure.
+    let mut previous_ref_end = 0usize;
     for piece in pieces {
-        let anchor = anchor_for_piece(piece, body, w_lo, ref_bytes, ends)?;
+        debug_assert!(
+            piece.ref_start >= previous_ref_end,
+            "pieces must be in ascending offset order for the dup disjointness check"
+        );
+        let anchor = anchor_for_piece(piece, body, w_lo, ref_bytes, ends, previous_ref_end)?;
+        previous_ref_end = piece.ref_end;
         members.push(build_merged(template, anchor));
     }
     Some(members)
@@ -4031,17 +4044,21 @@ fn rebuild_members(
 /// express, applied here before falling back to that typing: a payload resting
 /// outside the sequence's own first or last base has no second anchor to name,
 /// and is re-spelled as a single-position `delins` ([`boundary_delins_anchor`],
-/// #1202/#1205/#1217).
+/// #1205/#1217).
 ///
 /// Inversion and tandem duplication are *not* built here — [`needs_unsupported_form`]
 /// refuses the whole group when a piece would need either, leaving them to the
 /// per-member pipeline.
+///
+/// `previous_ref_end` is the window offset one past the last reference base the
+/// preceding piece claimed, which only [`duplication_anchor`] needs — see there.
 fn anchor_for_piece(
     piece: &Piece,
     body: Region,
     w_lo: i64,
     ref_bytes: &[u8],
     ends: SequenceEnds,
+    previous_ref_end: usize,
 ) -> Option<Anchor> {
     let alt: Vec<Base> = piece
         .alt
@@ -4052,7 +4069,7 @@ fn anchor_for_piece(
         return None; // non-IUPAC byte; refuse rather than mangle.
     }
     if piece.ref_start == piece.ref_end && !alt.is_empty() {
-        if let Some(anchor) = duplication_anchor(piece, body, w_lo, ref_bytes) {
+        if let Some(anchor) = duplication_anchor(piece, body, w_lo, ref_bytes, previous_ref_end) {
             return Some(anchor);
         }
         if let Some(anchor) = boundary_delins_anchor(piece, &alt, body, w_lo, ref_bytes, ends) {
@@ -4086,11 +4103,43 @@ fn anchor_for_piece(
 /// The duplicated span is the reference run the payload repeats: the
 /// `alt.len()` bases immediately 5' of the insertion point, which is exactly
 /// what [`is_tandem_duplication`] compared the payload against.
-fn duplication_anchor(piece: &Piece, body: Region, w_lo: i64, ref_bytes: &[u8]) -> Option<Anchor> {
+///
+/// # Why the span has to be checked against the preceding piece
+///
+/// Unlike every other form this module builds, a `dup` **names reference bases
+/// its own piece does not claim** — its span reaches `alt.len()` bases back from
+/// an insertion point that consumes nothing. In a multi-piece group that reach
+/// can extend into the piece before it, and the result would be an allele whose
+/// members contradict each other: `g.[10_12delinsX;9_12dup]` duplicates three
+/// bases the sibling has just replaced.
+///
+/// Nothing downstream catches that. `GEdit::Dup` neither claims its span nor
+/// reads the window through the applied cells — it copies from the untouched
+/// `ref_bytes`, which is where the piece's own `alt` bytes came from — so the
+/// round-trip guard's `reapplied == result` holds by construction. The test
+/// helpers' disjointness checks go through `hgvs_to_spdi`, where a `dup` is a
+/// zero-width interbase insert, so they see no overlap either. Before the `dup`
+/// builder existed this whole class was refused wholesale by
+/// [`needs_unsupported_form`]; dropping that refusal is what makes it reachable.
+///
+/// No input reaching the partition has been shown to produce it — candidates
+/// collapse to a single piece under `trim_common_flanks` — but "unreachable, I
+/// think" is not a guard, and the fallback costs nothing: the piece is spelled as
+/// the plain insertion it already is, which denotes the same bases.
+fn duplication_anchor(
+    piece: &Piece,
+    body: Region,
+    w_lo: i64,
+    ref_bytes: &[u8],
+    previous_ref_end: usize,
+) -> Option<Anchor> {
     if !is_tandem_duplication(piece, ref_bytes) {
         return None;
     }
     let source_start = piece.ref_start.checked_sub(piece.alt.len())?;
+    if source_start < previous_ref_end {
+        return None;
+    }
     Some(Anchor {
         region: body,
         start: w_lo + source_start as i64,
@@ -4112,6 +4161,26 @@ fn duplication_anchor(piece: &Piece, body: Region, w_lo: i64, ref_bytes: &[u8]) 
 /// spec itself rejects (`DNA/insertion.md:95-101`) and `g.<len>_<len+1>ins…`
 /// names a position past the end. On `m.` the tempting wraparound spelling is not
 /// available either (#129/#1217).
+///
+/// **Which boundary this is, and which it is not.** `ends` is derived from
+/// [`window_sequence_ends`], i.e. from the *entity's* own length, so this covers
+/// exactly the **sequence** bounds — the contig ends on `g.`/`m.` (#1205, #1217)
+/// and the transcript ends on `c.`/`n.`/`r.` (the transcript-bound half of
+/// #1202). It does **not** cover the CDS/UTR *axis-change* boundaries at
+/// `cds_start` / `cds_end` (#1170, #387, #1209): those have a representable far
+/// side (`c.-1`, `c.*1`), so clamping there is a policy with carve-outs rather
+/// than a representability rule, and `normalize_cds` keeps it — see
+/// [`clamp_insertion_at_sequence_bounds`](crate::normalize)'s table.
+///
+/// On `c.`/`r.` the transcript's last base may sit in the **3'UTR**, and the
+/// anchor this returns is still placed on `body` at `w_lo + offset`. That is
+/// sound: the `AxisFrame` identity `sequence = axis + delta` is discontinuous
+/// only at the *5'* end of the CDS (`c.-1` is `cds_start - 1`, since the axis has
+/// no zero — the reason [`region_sequence_delta`] exists), and running *past*
+/// `cds_end` is continuous, `c.<n>` denoting exactly the base `c.*(n - cds_len)`
+/// does. The formatter then renders the canonical `*` form. Pinned by
+/// `issue_1235_transcript_axes::cds_axis_clamps_a_derived_insertion_at_the_transcript_end`,
+/// on a transcript with a real UTR at both ends.
 ///
 /// `ends` says which of the fetched window's edges are the *entity's* edges; a
 /// window that merely stopped where the fetch stopped must not be clamped at, or
@@ -7002,6 +7071,73 @@ mod tests {
             NaEdit::Insertion { .. } => {}
             other => panic!("expected NaEdit::Insertion, got {other:?}"),
         }
+    }
+
+    /// A `dup`'s span reaches back from an insertion point that consumes
+    /// nothing, so it is the one form here that can name reference bases a
+    /// *preceding* piece already claims. It must decline rather than emit
+    /// `[10_12delinsX;9_12dup]`.
+    ///
+    /// Pinned on `duplication_anchor` directly. No input has been shown to reach
+    /// this through `partition_block` — candidates collapse to a single piece
+    /// under `trim_common_flanks` — and every rail that would otherwise catch it
+    /// is blind to it: `GEdit::Dup` copies from the untouched window, so the
+    /// round-trip guard passes by construction, and `hgvs_to_spdi` renders a
+    /// `dup` as a zero-width insert, so the disjointness helpers in `tests/it`
+    /// see no overlap. An end-to-end test is therefore not available to write;
+    /// this is what stands in for one.
+    #[test]
+    fn a_duplication_reaching_into_a_preceding_piece_declines() {
+        // Window `AAACAG`. The piece is a pure insertion of `CAG` at offset 6,
+        // whose source span is [3, 6) — a genuine tandem duplication.
+        let ref_bytes = b"AAACAG";
+        let piece = Piece {
+            ref_start: 6,
+            ref_end: 6,
+            alt: b"CAG".to_vec(),
+        };
+        assert!(
+            is_tandem_duplication(&piece, ref_bytes),
+            "fixture must be a tandem duplication, or the test proves nothing"
+        );
+
+        // Preceding piece ends at 3: source span [3, 6) is clear of it.
+        let clear = duplication_anchor(&piece, Region::Genome, 1, ref_bytes, 3)
+            .expect("a disjoint source span still builds a dup");
+        assert_eq!(clear.form, AnchorForm::Duplication);
+        assert_eq!((clear.start, clear.end), (4, 6));
+
+        // Preceding piece ends at 4: source span [3, 6) reaches one base into it.
+        assert!(
+            duplication_anchor(&piece, Region::Genome, 1, ref_bytes, 4).is_none(),
+            "a dup whose source span overlaps the preceding piece must decline",
+        );
+    }
+
+    /// The fallback the decline above lands on is not a refusal of the whole
+    /// group — `anchor_for_piece` still returns the piece, spelled as the plain
+    /// insertion it already is, which denotes the same bases.
+    #[test]
+    fn a_declined_duplication_falls_back_to_the_insertion_spelling() {
+        let ref_bytes = b"AAACAG";
+        let piece = Piece {
+            ref_start: 6,
+            ref_end: 6,
+            alt: b"CAG".to_vec(),
+        };
+        let anchor = anchor_for_piece(
+            &piece,
+            Region::Genome,
+            1,
+            ref_bytes,
+            SequenceEnds::INTERIOR,
+            4,
+        )
+        .expect("the piece is still built");
+        assert_eq!(anchor.form, AnchorForm::Replacement);
+        // Insertion shape: `start == end + 1`, payload intact.
+        assert_eq!((anchor.start, anchor.end), (7, 6));
+        assert_eq!(anchor.alt, vec![Base::C, Base::A, Base::G]);
     }
 
     /// The terminal base of a CDS-relative record is named by the record's own

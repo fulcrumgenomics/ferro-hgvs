@@ -65,7 +65,7 @@ fn the_pair_without_the_swallowed_sibling_still_uses_the_repeat() {
 }
 
 #[test]
-fn a_junction_at_the_dups_five_prime_end_is_left_alone() {
+fn a_junction_at_the_dups_five_prime_end_merges_instead_of_respelling() {
     // The 5' boundary, and #1301's own reproduction over its own core.
     // `264_265dup` sorts to 264, the same position the insertion adds at, so
     // `junction_rank` already orders the pair — there is no sort/act
@@ -82,7 +82,22 @@ fn a_junction_at_the_dups_five_prime_end_is_left_alone() {
 }
 
 #[test]
-fn two_duplications_sharing_a_start_keep_both_dup_spellings() {
+fn a_junction_at_the_dups_five_prime_end_is_left_alone_beside_a_third_member() {
+    // The 5' boundary itself, restored: the deletion at 270 sits clear of the
+    // A-run the payloads shift through, so the pair still re-spells exactly as
+    // it did, but the derivation declines the three-member group instead of
+    // merging it. `264_265dup` and the insertion share a junction at 264, which
+    // `junction_rank` already orders, so the predicate must *not* re-spell the
+    // dup here — doing so would undo #1301.
+    let output = assert_padded_preserving(
+        "GCATGAAAAT",
+        "NC_TEST.1:g.[263_264insAC;264_265insAA;270del]",
+    );
+    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup;270del]");
+}
+
+#[test]
+fn two_insertions_sharing_a_start_merge_into_one_member() {
     // The same 5' boundary between two duplications, which is #1261's
     // reproduction: `258dup`'s junction is 258 and `258_259dup` starts there.
     // A `>=` test would re-spell the wider one and lose the pinned form.
@@ -94,6 +109,19 @@ fn two_duplications_sharing_a_start_keep_both_dup_spellings() {
     let output =
         assert_padded_preserving("CAGTATGCAGGCAA", "NC_TEST.1:g.[258_259insA;259_260insAG]");
     assert_eq!(output, "NC_TEST.1:g.258_259insAGA");
+}
+
+#[test]
+fn two_duplications_sharing_a_start_keep_both_dup_spellings_beside_a_third_member() {
+    // The same 5' boundary between two duplications — #1261's reproduction —
+    // restored by a third member the derivation will not merge them with.
+    // `258dup`'s junction is 258 and `258_259dup` starts there; a `>=` test
+    // would re-spell the wider one and lose both pinned forms.
+    let output = assert_padded_preserving(
+        "CAGTATGCAGGCAA",
+        "NC_TEST.1:g.[258_259insA;259_260insAG;268del]",
+    );
+    assert_eq!(output, "NC_TEST.1:g.[258dup;258_259dup;268del]");
 }
 
 #[test]

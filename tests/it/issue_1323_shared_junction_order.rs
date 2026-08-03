@@ -58,7 +58,7 @@ fn a_commuting_pair_still_merges_as_before() {
 }
 
 #[test]
-fn a_non_commuting_pair_that_can_be_kept_apart_still_is() {
+fn a_non_commuting_pair_kept_apart_by_the_clamp_still_merges() {
     // #1312's case, which the clamp resolves by keeping the two members on
     // distinct junctions. That must keep happening: merging is the repair for a
     // pair that *cannot* be separated, not a licence to fold together members

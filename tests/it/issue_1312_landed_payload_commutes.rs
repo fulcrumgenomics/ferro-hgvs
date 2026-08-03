@@ -26,7 +26,7 @@
 use crate::common::synthetic::assert_padded_preserving;
 
 #[test]
-fn a_rotation_that_breaks_commuting_keeps_the_pair_apart() {
+fn a_rotation_that_breaks_commuting_still_merges_to_one_member() {
     // #1312. `AC` at 260 becomes `CA` at 261, which does not commute with the
     // `AC` already there, so the member may not land on that junction.
     //

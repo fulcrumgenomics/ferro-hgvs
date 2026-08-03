@@ -13606,12 +13606,31 @@ mod tests {
             format!("{}", proj.coding.as_ref().expect("coding expected")),
             "NM_SEP.1:c.[1_3dup;5_6delinsGG]"
         );
-        // Combined CDS ATGATGGGGTATTGCTAA → Met-Met-Gly-Tyr-Cys-Ter, so the
-        // residue-level answer is still `Asp2delinsMetGly`. It is not what is
-        // reported, because `c.1_3dup` reaches the initiation codon and the
-        // start-codon rule outranks the residue diff: a variant touching the
-        // translation start is reported as `p.(Met1?)` rather than as the
-        // translation someone might read off the mutated sequence.
+        // `c.1_3dup` reaches the initiation codon, so the start-codon rule wins
+        // and the report is `p.(Met1?)` — not the `Asp2delinsMetGly` this test
+        // used to expect.
+        //
+        // That is right, and not merely conservative. Duplicating `ATG` leaves a
+        // start codon at c.1_3 *and* puts a second, in-frame one immediately
+        // after it: the product carries one N-terminal Met or two depending on
+        // which the ribosome uses, and nothing in the description says which. So
+        // "the consequence, on the protein level … can not be predicted"
+        // (`protein/substitution.md:52`, the sentence that defines `p.(Met1?)`)
+        // is an accurate statement about this variant. The old expectation
+        // asserted initiation at the *first* `ATG`, which is an assumption the
+        // description does not carry.
+        //
+        // The spec would force a computed answer only where a variant "activates
+        // an upstream/downstream translation initiation site"
+        // (`protein/extension.md:17`, normative) — a duplication activates no new
+        // site, it copies the existing one. It is otherwise silent on a start
+        // codon that is duplicated rather than disrupted: `substitution.md:45-65`
+        // offers `p.0`, `p.0?`, `p.(Met1?)` and the computed del/ins/ext forms as
+        // a menu with no rule for choosing, and its only prohibitions are the
+        // plain-substitution spellings (`substitution.md:49`,
+        // `checklist.md:65`). Choosing for the author is what
+        // `tests/it/issue_1079_start_loss_substitution.rs` and W3022
+        // (`error_handling/types.rs`) already decline to do.
         assert!(proj.affects_init, "c.1_3dup reaches the initiation codon");
         assert_eq!(
             format!("{}", proj.protein.expect("protein expected")),

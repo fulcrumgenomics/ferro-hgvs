@@ -36,7 +36,7 @@
 use crate::common::synthetic::assert_padded_preserving;
 
 #[test]
-fn a_commuting_payload_does_not_sweep_past_a_sibling_that_stays() {
+fn a_commuting_payload_pair_merges_without_sweeping_past_its_sibling() {
     // #1308. `264_265insTG` does not move, so the first member may not shift
     // from 263 to 265 across it.
     let output =

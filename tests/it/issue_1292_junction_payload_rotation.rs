@@ -71,7 +71,7 @@ fn the_pulled_back_payload_does_not_pick_up_a_flanking_base() {
 }
 
 #[test]
-fn a_tandem_repeat_keeps_the_duplication_spelling() {
+fn a_tandem_repeat_insertion_beside_a_deletion_merges_to_one_insertion() {
     // #1280's counterexample, and the reason the payload is *rotated* rather
     // than carried literally. A duplication is phase-correct by construction
     // where it already sits, so a member that does not have to move keeps it.
