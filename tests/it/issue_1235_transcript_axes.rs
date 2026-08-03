@@ -224,12 +224,22 @@ fn rna_axis_reduces_a_mixed_type_allele_and_keeps_the_u_alphabet() {
 /// members silently fused into one well-formed edit.
 ///
 /// The refusal keys off the edit geometry, not off the `OverlapConflict`
-/// warning: the per-member pipeline rewrites the interior `insAA` into a
-/// `5_6dup`, so a gate reading a detector that only recognises `NaEdit::
-/// Insertion` would decline on the first pass and accept on the second —
-/// costing idempotency. `detect_insertion_overlaps` now registers a `dup` as a
-/// junction occupant as well, so the diagnostic survives the respelling too;
-/// this test pins both halves.
+/// warning: a gate reading a detector that only recognised `NaEdit::Insertion`
+/// would decline on the first pass and accept on the second — costing
+/// idempotency. `detect_insertion_overlaps` registers a `dup` as a junction
+/// occupant as well, so the diagnostic survives whichever spelling the pipeline
+/// settles on; this test pins both halves.
+///
+/// **Settled form updated by #1284.** The pipeline used to leave this as
+/// `c.[5_9inv;5_6dup]`, and this test pinned that. It no longer does:
+/// `respell_colliding_duplications` repairs a duplication whose span collides
+/// with a sibling's bases into the equivalent insertion, and #1284 lifted that
+/// repair's genomic-only gate onto the CDS-relative axes. So the `c.` spelling
+/// now settles where the `g.` spelling of the same shape already did —
+/// `g.[261_265inv;262_263insAA]`, measured — and the axis divergence #1284
+/// describes is gone. Everything this test actually guards is unchanged: the
+/// allele stays multi-member, strict still rejects it as `W5002`, the authored
+/// member order is still preserved, and the result is still idempotent.
 #[test]
 fn overlap_conflicting_allele_is_not_canonicalized() {
     use ferro_hgvs::error::FerroError;
@@ -258,33 +268,90 @@ fn overlap_conflicting_allele_is_not_canonicalized() {
         normalized.starts_with("NM_TEST.1:c.[") && normalized.contains(';'),
         "an overlap-conflicting allele must stay a multi-member allele, got `{normalized}`"
     );
-    // The per-member pipeline shifts the inversion 3' and respells the interior
-    // insertion as the duplication it is; neither member is re-derived away.
+    // The per-member pipeline shifts the inversion 3' and leaves the interior
+    // insertion at its own junction; neither member is re-derived away.
     assert_eq!(
-        normalized, "NM_TEST.1:c.[5_9inv;5_6dup]",
-        "the sequence-first pass must decline an allele with no defined result"
+        normalized, "NM_TEST.1:c.[5_9inv;6_7insAA]",
+        "the per-member pipeline must settle both members here — the inversion \
+         3'-shifted, the interior insertion respelled at its own junction — \
+         rather than the sequence-first pass re-deriving the allele as one edit"
     );
 
     // Idempotent on the nose: normalizing the output must return it byte for
     // byte. This is the property that broke while the overlap detector was
-    // spelling-sensitive — pass one emitted `[5_9inv;5_6dup]` with the members
+    // spelling-sensitive — pass one emitted the conflict with the members
     // deliberately left in authored order (the `#395` verbatim contract), then
-    // pass two failed to see a conflict in the `dup` spelling, un-gated the
-    // genomic-order sort, and reordered them to `[5_6dup;5_9inv]`.
+    // pass two failed to see a conflict in the settled spelling, un-gated the
+    // genomic-order sort, and reordered them.
     let twice = normalize_to_string(provider(), &normalized);
     assert_eq!(
         twice, normalized,
         "normalizing an overlap-conflicting allele must be idempotent"
     );
 
-    // Both spellings of the settled form are recognised as the same conflict,
-    // so each is a fixed point rather than being sorted into the other.
-    for settled in ["NM_TEST.1:c.[5_9inv;5_6dup]", "NM_TEST.1:c.[5_6dup;5_9inv]"] {
+    // The `g.`-axis parity the doc comment above rests on, asserted rather than
+    // recited. This is the independent code path — the repair was genomic-only
+    // before #1284, so the `g.` answer was reached without any of the
+    // CDS-relative conversion under test — and it is what makes the `c.` pin
+    // above more than a self-consistency check. Left unasserted, a move in the
+    // `g.` repair would leave this test green and the stated rationale silently
+    // false.
+    //
+    // `SyntheticBuilder::cds` serves its genomic sequence under `chr_synth`
+    // (`TX_CONTIG`) at `PAD_OFFSET`, so `c.N` is `g.N + 256` here: the same
+    // shape authored as `g.[260_266inv;261_262insAA]`.
+    let genomic = normalize_to_string(provider(), "chr_synth:g.[260_266inv;261_262insAA]");
+    assert_eq!(
+        genomic, "chr_synth:g.[261_265inv;262_263insAA]",
+        "the g. spelling of the same shape must settle where the doc comment says"
+    );
+    // And the two axes now agree member-for-member, which is the divergence
+    // #1284 set out to remove: strip the 256-base padding offset off the
+    // genomic answer and it is the `c.` answer.
+    assert_eq!(
+        genomic
+            .replace("chr_synth:g.", "")
+            .replace("261_265", "5_9")
+            .replace("262_263", "6_7"),
+        normalized.replace("NM_TEST.1:c.", ""),
+        "the c. and g. spellings of one shape must no longer diverge"
+    );
+
+    // The `dup` spelling of the same conflict converges onto the settled `ins`
+    // spelling rather than being a second fixed point of its own (#1284): the
+    // collision repair rewrites it, in whichever member order it was authored.
+    // Convergence is the point — one variant, one canonical string — and it is
+    // reached in a single pass, so idempotency is preserved either way.
+    for (dup_spelling, converges_to) in [
+        (
+            "NM_TEST.1:c.[5_9inv;5_6dup]",
+            "NM_TEST.1:c.[5_9inv;6_7insAA]",
+        ),
+        (
+            "NM_TEST.1:c.[5_6dup;5_9inv]",
+            "NM_TEST.1:c.[6_7insAA;5_9inv]",
+        ),
+    ] {
         assert_eq!(
-            normalize_to_string(provider(), settled),
-            settled,
-            "a `dup` interior to an `inv` is the same conflict as the `ins` spelling"
+            normalize_to_string(provider(), dup_spelling),
+            converges_to,
+            "a `dup` interior to an `inv` must settle on the `ins` spelling of the same conflict"
         );
+        assert_eq!(
+            normalize_to_string(provider(), converges_to),
+            converges_to,
+            "and that settled spelling must be a fixed point"
+        );
+    }
+
+    // Both spellings are recognised as the same conflict by strict mode, and
+    // the authored member order survives in each.
+    for settled in [
+        "NM_TEST.1:c.[5_9inv;5_6dup]",
+        "NM_TEST.1:c.[5_6dup;5_9inv]",
+        "NM_TEST.1:c.[5_9inv;6_7insAA]",
+        "NM_TEST.1:c.[6_7insAA;5_9inv]",
+    ] {
         // Strict mode must reject it too — and for the *same* reason as the
         // `ins` spelling, not merely reject it for some other one.
         let parsed = parse_hgvs(settled).expect("parse");

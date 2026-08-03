@@ -18,16 +18,25 @@ use crate::sequence::complement_base;
 
 /// Coordinate-system region used as the merge-eligibility key.
 ///
-/// Adjacency in the merge pass requires both ends to share a region.
-/// HGVS forbids ranges that span the 5'UTR↔CDS, CDS↔3'UTR (for `c.`/`r.`)
-/// or upstream↔transcript / transcript↔downstream (for `n.`) boundaries
-/// — `c.-1_1`, `c.40_*1`, etc. do not exist as valid range syntax — so
-/// we tag each position with its region and refuse to merge across.
+/// Adjacency in the merge pass requires both ends to share a region, so we
+/// tag each position with its region and refuse to merge across.
+///
 /// The integer `start`/`end` axis is region-local: positive for `Cds` /
 /// `ThreePrimeUtr` / `Tx` / `TxDownstream`, negative for `FivePrimeUtr`
 /// / `TxUpstream`. Adjacency `prev.end + 1 == next.start` works
 /// naturally for all six because the axis is monotonic 5'→3' within
 /// each region (`c.-3 → c.-2 → c.-1` maps to `-3 → -2 → -1`).
+///
+/// That refusal is therefore a **property of this pass's arithmetic, not of
+/// HGVS**: `prev.end + 1 == next.start` is only meaningful within one region,
+/// since `c.-1` and `c.1` are adjacent nucleotides whose axis values differ by
+/// 2. A region-spanning range is perfectly valid nomenclature — the spec writes
+/// `NM_001849.3:c.-1_*1=` (`consultation/SVD-WG001.md:37`) and
+/// `NM_004006.2:c.-244_*2691del` (`consultation/open-issues.md:53`), and
+/// ferro's own parser accepts both. (This comment previously asserted the
+/// opposite, that `c.-1_1` "does not exist as valid range syntax"; corrected
+/// 2026-08-02, and [`respell_at_gap`] now deliberately *emits* such a range
+/// when a repair's junction lands on the CDS start.)
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Region {
     /// `g.` (genomic) and `m.` (mitochondrial) — single axis, no
@@ -1992,9 +2001,16 @@ fn edit_span_union(edits: &[GEdit]) -> Option<(i64, i64)> {
 /// The two facts travel together because both are answered by the same
 /// `cds_start` lookup, and a second provider round-trip to re-answer the other
 /// half would be pure waste on a path that already fetches a window.
+/// Answers per *axis*, which is enough for its one caller because
+/// [`canonicalize_from_sequence`] restricts itself to the positive body region.
+/// The repair passes are not so restricted and must use
+/// [`region_sequence_delta`], which answers per *region* — see its doc comment
+/// for why a per-axis offset cannot be right in the UTRs.
 struct AxisFrame {
     /// Offset between the member axis and the fetched sequence: 0 for
     /// `g.`/`m.`/`n.`, `cds_start - 1` for the CDS-relative `c.`/`r.` axes.
+    ///
+    /// Correct only inside the positive body region; see the note above.
     delta: i64,
     /// Whether positions on this axis carry a **reading frame** — i.e. whether
     /// [`same_codon`] means anything here. True only when the axis is
@@ -2054,6 +2070,153 @@ fn axis_frame<P: ReferenceProvider>(
                 }),
             }
         }
+    }
+}
+
+/// Offset from a member's own **region** axis to the 1-based sequence the
+/// provider serves, or `None` for a region that is not part of that sequence.
+///
+/// `position_on_the_sequence = axis_position + delta`.
+///
+/// # Why this is keyed on `Region` and not on `CisKind`
+///
+/// [`AxisFrame`] answers the same question one level coarser — per *axis* —
+/// and that is all its caller needs, because [`canonicalize_from_sequence`]
+/// restricts itself to the positive body region. The repair passes have no
+/// such restriction: they operate wherever a collision settles, including
+/// both UTRs.
+///
+/// Per-axis is the wrong granularity there, and #1284 records the resulting
+/// dead end. A single `cds_start - 1` for the whole `c.` axis is right at
+/// `c.1` and off by one below it, because the CDS axis has **no zero**:
+/// `c.-1` is `cds_start - 1`, not `cds_start - 2`. Patching that with a sign
+/// test (`axis + delta + 1` when negative) gets the endpoints right and still
+/// leaves the 3'UTR — a third offset entirely, `cds_end` — wrong.
+///
+/// Keyed on the region the discontinuity disappears rather than being patched
+/// across, because each region *is* individually affine onto the transcript:
+///
+/// | region | axis → transcript | delta |
+/// |---|---|---|
+/// | `Genome`, `Tx` | the axis is the sequence | `0` |
+/// | `Cds`, `Rna` (`c.N`) | `cds_start + N - 1` | `cds_start - 1` |
+/// | `FivePrimeUtr` (`c.-N`) | `cds_start - N` | `cds_start` |
+/// | `ThreePrimeUtr` (`c.*N`) | `cds_end + N` | `cds_end` |
+///
+/// and every pass that uses it already groups members within one region, so a
+/// span never straddles two.
+///
+/// `TxUpstream` / `TxDownstream` (`n.-N` / `n.*N`) are refused: those positions
+/// lie outside the transcript the provider serves, so there are no bases to
+/// read at all. That is a genuine refusal, not a missing conversion.
+fn region_sequence_delta<P: ReferenceProvider>(
+    region: Region,
+    provider_key: &str,
+    provider: &P,
+) -> Option<i64> {
+    // `ordered_cds_bounds` for every CDS-relative region, not just
+    // `ThreePrimeUtr`. Reading `cds_start` on its own accepts a record whose
+    // bounds are inverted, and on such a record the `c.` axis is incoherent —
+    // its 5'UTR and 3'UTR halves overlap, so one transcript position carries two
+    // names. Refusing in one region and not the others is the worst of both: the
+    // 3'UTR declined while the 5'UTR and the CDS body silently picked a
+    // spelling, which is precisely what `ordered_cds_bounds`' own doc comment
+    // says this conversion must not do.
+    //
+    // Written as "refuse if inverted" rather than as `ordered_cds_bounds`
+    // directly, because that would also require `cds_end` to be *present*: a
+    // record carrying `cds_start` but no `cds_end` has an unknown 3'UTR yet a
+    // perfectly well-defined `c.N` body, and refusing it would be a new
+    // restriction rather than the guard-parity fix.
+    // Read lazily: `Genome`/`Tx` need no transcript at all, and asking for one
+    // under a genomic accession is a guaranteed miss.
+    let bounds = || -> Option<(Option<i64>, Option<i64>)> {
+        let transcript = provider.get_transcript(provider_key).ok()?;
+        Some((
+            transcript.cds_start.and_then(|v| i64::try_from(v).ok()),
+            transcript.cds_end.and_then(|v| i64::try_from(v).ok()),
+        ))
+    };
+    // Bounds that exist and are the wrong way round. Distinguished from "no CDS
+    // on this record", because the two want opposite answers: absent bounds are
+    // a non-coding transcript, which `Rna` legitimately falls back for; inverted
+    // bounds are a malformed one, which every region must refuse.
+    let inverted = || matches!(bounds(), Some((Some(start), Some(end))) if end < start);
+    let cds_start = || match bounds()? {
+        (Some(start), Some(end)) if end < start => None,
+        (start, _) => start,
+    };
+    match region {
+        Region::Genome | Region::Tx => Some(0),
+        Region::Cds => Some(cds_start()? - 1),
+        // Falls back to transcript-relative when there is no `cds_start` —
+        // either a non-coding transcript, whose `r.` numbers it directly, or a
+        // provider that cannot resolve it. That is the same fallback
+        // `axis_frame` makes and for the same reason: refusing would put every
+        // non-coding `r.` description outside these repairs. `Cds` above
+        // refuses instead, also matching `axis_frame`, because a `c.`
+        // description asserts a CDS this record does not have.
+        //
+        // The fallback must not swallow the *inverted* case, though: `map_or(0)`
+        // on its own turns a refusal into a silent delta of 0, which is the
+        // guess this conversion exists not to make. Absent bounds fall back;
+        // inverted bounds refuse, like every other region here.
+        Region::Rna if inverted() => None,
+        Region::Rna => Some(cds_start().map_or(0, |start| start - 1)),
+        Region::FivePrimeUtr => cds_start(),
+        Region::ThreePrimeUtr => Some(ordered_cds_bounds(provider_key, provider)?.1),
+        Region::TxUpstream | Region::TxDownstream => None,
+    }
+}
+
+/// Both CDS bounds, **refused unless they are ordered**.
+///
+/// `cds_end < cds_start` is a malformed record whose `c.` axis is incoherent:
+/// the 5'UTR and 3'UTR halves overlap, so one transcript position has two
+/// names. On such a record `c.*1` and `c.-10` can denote the same base, and a
+/// conversion that does not refuse simply picks one of the two spellings —
+/// silently, since the result re-parses and so is invisible to the
+/// `FERRO_ASSERT_REPARSE` oracle.
+///
+/// Refusing is not a fix for that ambiguity, which predates this conversion and
+/// is reachable without it; it keeps *this* conversion from being one more
+/// place that resolves it arbitrarily.
+/// `boundary::get_cds_boundaries_with_axis_info` guards the same condition the
+/// same way (`(Some(s), Some(e)) if e >= s`); this applies that precedent here.
+fn ordered_cds_bounds<P: ReferenceProvider>(
+    provider_key: &str,
+    provider: &P,
+) -> Option<(i64, i64)> {
+    let transcript = provider.get_transcript(provider_key).ok()?;
+    let start = i64::try_from(transcript.cds_start?).ok()?;
+    let end = i64::try_from(transcript.cds_end?).ok()?;
+    (end >= start).then_some((start, end))
+}
+
+/// The inverse of [`region_sequence_delta`] for the CDS-relative axes: which
+/// `(region, axis position)` names transcript position `tx`.
+///
+/// Needed because a repair's *junction* can land on a region boundary even
+/// though its span does not. A duplication resting at `c.-1` copies its bases
+/// to the junction between `c.-1` and `c.1` — one interbase point, two
+/// regions — and naming it requires converting through the transcript rather
+/// than adding 1 to an axis value that has no zero to add it to.
+///
+/// `body` is the region name this axis gives the CDS proper: `Region::Cds` on
+/// `c.`, `Region::Rna` on `r.`. Passed in rather than fixed, because the two
+/// axes share every other region name and `member_endpoints` reads the body
+/// back under the axis's own label.
+fn cds_axis_position(tx: i64, cds_start: i64, cds_end: i64, body: Region) -> Option<(Region, i64)> {
+    if tx < 1 {
+        return None;
+    }
+    if tx < cds_start {
+        // `c.-N`, counting back from the base before the CDS start.
+        Some((Region::FivePrimeUtr, tx - cds_start))
+    } else if tx <= cds_end {
+        Some((body, tx - cds_start + 1))
+    } else {
+        Some((Region::ThreePrimeUtr, tx - cds_end))
     }
 }
 
@@ -3442,10 +3605,11 @@ fn repeat_growth_as_insertion(
 /// #1296 had deliberately clamped out of the tract. Two repeats on one tract
 /// have no such barrier to preserve — they occupy the same bases — so the
 /// rewrite is safe here and only here.
-pub(crate) fn demote_coincident_tract_repeats(
+pub(crate) fn demote_coincident_tract_repeats<P: ReferenceProvider>(
     members: &mut [HgvsVariant],
     phase: AllelePhase,
     uncertain: bool,
+    provider: &P,
 ) {
     if phase != AllelePhase::Cis || uncertain || members.len() < 2 {
         return;
@@ -3453,9 +3617,6 @@ pub(crate) fn demote_coincident_tract_repeats(
     let Some(kind) = cis_kind_of(&members[0]) else {
         return;
     };
-    if !matches!(kind, CisKind::Genome | CisKind::Mt) {
-        return;
-    }
     let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
     // A member participates only if it is a repeat that grew its tract by a
     // whole number of units; `growth` carries the payload and the unit.
@@ -3501,7 +3662,7 @@ pub(crate) fn demote_coincident_tract_repeats(
             let edit = NaEdit::Insertion {
                 sequence: InsertedSequence::Literal(Sequence::new(payload.clone())),
             };
-            respell_at_gap(&mut members[i], kind, span, span.end, edit);
+            respell_at_gap(&mut members[i], span, span.end, edit, provider);
             members[i] != originals[slot]
         });
         if !rewritten {
@@ -3662,6 +3823,14 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
         // payload does not commute keeps the stricter rule above: one short, and
         // from either snapshot.
         let payload = junction_payload(&after[i], kind, a, provider);
+        // Every junction compared below sits on `a`'s own region axis, so one
+        // offset serves them all (#1284). A region with no conversion — an
+        // `n.` position outside the transcript — has no bases to rotate
+        // against, and refusing here is the same conservative answer the
+        // payload reads below give.
+        let Some(axis_delta) = region_sequence_delta(a.region, &a.provider_key, provider) else {
+            continue;
+        };
         let across_junctions = (0..pre.len())
             .filter(|&j| j != i)
             .flat_map(|j| {
@@ -3699,6 +3868,7 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
                                 after_junction,
                                 junction,
                                 &a.provider_key,
+                                axis_delta,
                                 provider,
                             )
                         })
@@ -3732,7 +3902,15 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
             continue;
         };
         let Some(destination) = (before_junction..=ceiling).rev().find(|&j| {
-            payload_at_junction(payload, after_junction, j, &a.provider_key, provider).is_some()
+            payload_at_junction(
+                payload,
+                after_junction,
+                j,
+                &a.provider_key,
+                axis_delta,
+                provider,
+            )
+            .is_some()
         }) else {
             continue;
         };
@@ -3981,22 +4159,23 @@ fn shift_signed(base: &mut i64, delta: i64) -> bool {
 /// (`g.[261_262del;262_263insA;…]` reduces to `g.[261del;…]`), so the loop has
 /// to see the re-spelled form to settle on that reduction.
 ///
-/// Runs on every axis whose 1-based coordinate is a direct offset into the
-/// sequence the provider serves — the genomic axes and `n.`.
+/// Runs on **every** axis. The pass reads the duplicated bases over the
+/// member's own coordinates, so all it needs is the offset from those
+/// coordinates onto the sequence the provider serves —
+/// [`region_sequence_delta`], which answers per *region* and so has an answer
+/// for the CDS-relative axes too.
 ///
-/// That is the whole requirement, because the pass reads the duplicated bases
-/// over the member's own coordinates. `axis_frame` states which axes qualify:
-/// it returns `delta: 0` for `Genome`, `Mt` **and** `Tx`, since a non-coding
-/// transcript's positions index its sequence directly, exactly as a contig's
-/// do. The original gate said "genomic axes only", which was over-broad — it
-/// grouped `n.` with the CDS-relative axes it does not resemble (#1284).
+/// This was gated to the genomic axes, then to those plus `n.` (#1315), on the
+/// grounds that only they index the served sequence directly. That was true of
+/// the arithmetic as it stood and is no longer a reason to refuse: `c.` and
+/// `r.` are CDS-relative, and keying the offset on the region rather than on
+/// the axis makes each of `FivePrimeUtr` / `Cds` / `ThreePrimeUtr`
+/// individually affine — see [`region_sequence_delta`] for why the earlier
+/// single-delta attempt recorded in #1284 could not work.
 ///
-/// `c.` and `r.` are still refused. Those are CDS-relative (`delta:
-/// cds_start - 1`) and the axis has no zero, so `c.-1` is `cds_start - 1`
-/// rather than `cds_start - 2`: a single delta is off by one below the CDS
-/// start, and applying one naively was measured to re-spell a duplication from
-/// the wrong bases and to move answers that were already correct. That
-/// conversion is the remaining half of #1284 and is not attempted here.
+/// There is no axis gate left, because the conversion itself is the gate: a
+/// region it cannot place (`n.` outside the transcript, a `c.` on a record
+/// with no CDS) yields `None` and the member is skipped.
 pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
     members: &mut [HgvsVariant],
     phase: AllelePhase,
@@ -4009,12 +4188,6 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
     let Some(kind) = cis_kind_of(&members[0]) else {
         return;
     };
-    // `Tx` belongs here and `Cds`/`Rna` do not: see the doc comment. The test
-    // is "does this axis index the served sequence directly", which is exactly
-    // the axes `axis_frame` gives `delta: 0`.
-    if !matches!(kind, CisKind::Genome | CisKind::Mt | CisKind::Tx) {
-        return;
-    }
     let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
 
     for i in 0..members.len() {
@@ -4078,8 +4251,24 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
             continue;
         }
         // The duplicated bases, read from the reference: `[start, end]` 1-based
-        // inclusive is `[start - 1, end)` half-open 0-based.
-        let (Ok(from), Ok(to)) = (u64::try_from(dup.start - 1), u64::try_from(dup.end)) else {
+        // inclusive is `[start - 1, end)` half-open 0-based, after `delta` puts
+        // the member's region axis onto the served sequence (#1284).
+        let Some(delta) = region_sequence_delta(dup.region, &dup.provider_key, provider) else {
+            continue;
+        };
+        // Checked, matching the two sibling conversions (`cds_relative_gap` and
+        // `payload_at_junction`). `dup.start`/`dup.end` come off a parsed
+        // description and `delta` off the record's CDS bounds, so neither is
+        // bounded by anything this function controls; an unchecked `i64` add
+        // panics in a debug build where the refusal one line below is the answer
+        // every other unrepresentable coordinate here already gets.
+        let (Some(from_axis), Some(to_axis)) = (
+            dup.start.checked_sub(1).and_then(|s| s.checked_add(delta)),
+            dup.end.checked_add(delta),
+        ) else {
+            continue;
+        };
+        let (Ok(from), Ok(to)) = (u64::try_from(from_axis), u64::try_from(to_axis)) else {
             continue;
         };
         let Ok(copied) = provider.get_sequence(&dup.provider_key, from, to) else {
@@ -4097,7 +4286,7 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
         };
         // The copy lands at the junction 3' of the duplicated span, which is
         // the gap `[end, end + 1]`.
-        respell_at_gap(&mut members[i], kind, dup, dup.end, edit);
+        respell_at_gap(&mut members[i], dup, dup.end, edit, provider);
     }
 }
 
@@ -4145,8 +4334,9 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
 /// bars precisely that crossing (#1290), so the two stay at distinct junctions
 /// in their original order. The two predicates are deliberately the same one.
 ///
-/// Genomic axes only, matching `respell_colliding_duplications` — the
-/// transcript axes need a coordinate conversion this does not carry.
+/// Every axis, matching `respell_colliding_duplications`: the coordinate
+/// conversion the transcript axes need is [`region_sequence_delta`], applied
+/// in `junction_payload` where this pass reads bases (#1284).
 pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
     before: &[HgvsVariant],
     members: &mut Vec<HgvsVariant>,
@@ -4160,9 +4350,6 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
     let Some(kind) = cis_kind_of(&members[0]) else {
         return;
     };
-    if !matches!(kind, CisKind::Genome | CisKind::Mt) {
-        return;
-    }
     let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
 
     // Group by (accession, region, junction). Only members that occupy a
@@ -4262,7 +4449,7 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
             continue;
         };
         let before = members[target].clone();
-        respell_at_gap(&mut members[target], kind, span, junction, edit);
+        respell_at_gap(&mut members[target], span, junction, edit, provider);
         if members[target] == before {
             continue; // the re-spell did not take; leave the group alone
         }
@@ -4304,9 +4491,13 @@ fn payload_at_junction<P: ReferenceProvider>(
     from: i64,
     to: i64,
     key: &str,
+    delta: i64,
     provider: &P,
 ) -> Option<Vec<Base>> {
+    // `from`/`to` are junctions on the member's own region axis; `delta` puts
+    // the base they step over onto the sequence the provider serves.
     let base_at = |position: i64| -> Option<Base> {
+        let position = position.checked_add(delta)?;
         let (start, end) = (
             u64::try_from(position.checked_sub(1)?).ok()?,
             u64::try_from(position).ok()?,
@@ -4368,11 +4559,15 @@ fn translate_junction_member<P: ReferenceProvider>(
         return;
     };
     let destination = junction + delta;
+    let Some(axis_delta) = region_sequence_delta(from.region, &from.provider_key, provider) else {
+        return;
+    };
     let Some(moved) = payload_at_junction(
         &payload,
         junction,
         destination,
         &from.provider_key,
+        axis_delta,
         provider,
     ) else {
         return;
@@ -4393,7 +4588,7 @@ fn translate_junction_member<P: ReferenceProvider>(
         sequence: InsertedSequence::Literal(Sequence::new(moved)),
     };
     let translated = variant.clone();
-    respell_at_gap(variant, kind, from, destination, edit);
+    respell_at_gap(variant, from, destination, edit, provider);
     if *variant == translated {
         *variant = original;
     }
@@ -4520,9 +4715,17 @@ fn junction_payload<P: ReferenceProvider>(
             sequence: InsertedSequence::Literal(literal),
         } => Some(literal.bases().to_vec()),
         NaEdit::Duplication { .. } => {
+            // The span is on the member's own region axis; shift it onto the
+            // served sequence before reading (#1284).
+            let delta = region_sequence_delta(span.region, &span.provider_key, provider)?;
+            // Checked, for the same reason as the sibling conversions in
+            // `respell_colliding_duplications` and `cds_relative_gap`: the span
+            // comes off a parsed description and `delta` off the record's CDS
+            // bounds, so an unchecked `i64` add would panic in a debug build
+            // where every other unrepresentable coordinate here declines.
             let (from, to) = (
-                u64::try_from(span.start - 1).ok()?,
-                u64::try_from(span.end).ok()?,
+                u64::try_from(span.start.checked_sub(1)?.checked_add(delta)?).ok()?,
+                u64::try_from(span.end.checked_add(delta)?).ok()?,
             );
             let copied = provider.get_sequence(&span.provider_key, from, to).ok()?;
             if copied.len() as i64 != span.end - span.start + 1 {
@@ -4534,54 +4737,132 @@ fn junction_payload<P: ReferenceProvider>(
     }
 }
 
-/// Replace a genomic member with `edit` over the gap `[junction, junction + 1]`.
+/// Both endpoints of a member's location as `(region, axis position)`, **not**
+/// requiring the two to share a region.
+///
+/// [`member_span`] folds them through `join_pos`, which refuses a
+/// region-spanning range because the pass's own adjacency arithmetic is
+/// region-local. That refusal is right for a *span* and wrong for verifying a
+/// *gap*: an interbase point on the CDS start is legitimately named `c.-1_1`,
+/// and reading it back through `member_span` would report `None` and force a
+/// correct repair to revert. Used only by [`respell_at_gap`].
+fn member_endpoints(v: &HgvsVariant) -> Option<((Region, i64), (Region, i64))> {
+    fn ends<T>(
+        interval: &Interval<T>,
+        read: impl Fn(&UncertainBoundary<T>) -> Option<(Region, i64)>,
+    ) -> Option<((Region, i64), (Region, i64))> {
+        Some((read(&interval.start)?, read(&interval.end)?))
+    }
+    match v {
+        HgvsVariant::Genome(g) => ends(&g.loc_edit.location, simple_genome_pos),
+        HgvsVariant::Mt(m) => ends(&m.loc_edit.location, simple_genome_pos),
+        HgvsVariant::Cds(c) => ends(&c.loc_edit.location, simple_cds_pos),
+        HgvsVariant::Tx(t) => ends(&t.loc_edit.location, simple_tx_pos),
+        HgvsVariant::Rna(r) => ends(&r.loc_edit.location, simple_rna_pos),
+        _ => None,
+    }
+}
+
+/// Replace a member with `edit` over the gap `[junction, junction + 1]`.
 ///
 /// The junction is passed rather than read off `span`, because where it sits
 /// depends on the spelling: `span.end` is the junction for a duplication, but
 /// one position past it for an insertion, whose span is the gap itself.
 ///
-/// Reverts unless the result reads back exactly as intended. `span` is used
-/// only to check the result landed on the same region.
-fn respell_at_gap(
+/// Reverts unless the result reads back exactly as intended.
+///
+/// # The CDS-relative axes, and the boundary junction (#1284)
+///
+/// On `g.`/`m.`/`n.` the gap is `[junction, junction + 1]` on the axis itself.
+/// On `c.`/`r.` that arithmetic is wrong at exactly one place, and it is a
+/// place these repairs reach: a duplication resting at `c.-1` lands its copy at
+/// the junction between `c.-1` and `c.1`, and `-1 + 1` is `c.0`, which does not
+/// exist. Adding 1 on an axis with no zero is the off-by-one #1284 records.
+///
+/// So the two ends are resolved *through the transcript* —
+/// [`region_sequence_delta`] out, [`cds_axis_position`] back — which names each
+/// end in whichever region it actually falls in and yields `c.-1_1` here. That
+/// is valid nomenclature (`consultation/SVD-WG001.md:37` writes
+/// `NM_001849.3:c.-1_*1=`), and the same machinery names the `cds_end`
+/// boundary `c.<last>_*1` without a second case.
+///
+/// The verification is [`member_endpoints`] rather than [`member_span`] for
+/// that reason: the correct answer here is a range whose ends sit in two
+/// regions, and `member_span` refuses those by construction.
+fn respell_at_gap<P: ReferenceProvider>(
     variant: &mut HgvsVariant,
-    kind: CisKind,
     span: &MemberSpan,
     junction: i64,
     edit: NaEdit,
+    provider: &P,
 ) {
     let original = variant.clone();
     let (gap_start, gap_end) = (junction, junction + 1);
-    let (Ok(start), Ok(end)) = (u64::try_from(gap_start), u64::try_from(gap_end)) else {
-        return;
+
+    // Where each end of the gap lands, in `(region, axis)` form. Genomic and
+    // `n.` gaps stay in the member's own region by construction; a
+    // CDS-relative one is resolved through the transcript.
+    let cds_relative_gap = |body: Region| -> Option<((Region, i64), (Region, i64))> {
+        let (cds_start, cds_end) = ordered_cds_bounds(&span.provider_key, provider)?;
+        let delta = region_sequence_delta(span.region, &span.provider_key, provider)?;
+        let left = junction.checked_add(delta)?;
+        let right = left.checked_add(1)?;
+        Some((
+            cds_axis_position(left, cds_start, cds_end, body)?,
+            cds_axis_position(right, cds_start, cds_end, body)?,
+        ))
     };
-    let placed = match variant {
-        HgvsVariant::Genome(g) => {
-            set_endpoints(
-                &mut g.loc_edit.location,
-                |p: &mut GenomePos, v: u64| p.base = v,
-                start,
-                end,
-            ) && {
+
+    // The unsigned genomic pair, `None` on a negative axis. Computed per-arm
+    // rather than as an early return for the whole function: hoisting it was
+    // the shape this function had while it was genomic-only, and it silently
+    // refused *every* CDS-relative repair in the 5'UTR, where the axis value is
+    // negative by definition — the arms below never ran.
+    // Rejects a zero endpoint as well as a negative one. `u64::try_from(0)`
+    // succeeds, so without the explicit test a junction at 0 would name `g.0_1` /
+    // `m.0_1`, and neither axis has a position 0 — the same refusal the `Tx` arm
+    // below makes for `n.0`, which this closure has to match rather than leave to
+    // one axis.
+    let unsigned_gap = || -> Option<(u64, u64)> {
+        (gap_start != 0 && gap_end != 0)
+            .then(|| Some((u64::try_from(gap_start).ok()?, u64::try_from(gap_end).ok()?)))?
+    };
+    let same_region_gap = ((span.region, gap_start), (span.region, gap_end));
+    let (placed, intended) = match variant {
+        HgvsVariant::Genome(g) => (
+            unsigned_gap().is_some_and(|(start, end)| {
+                set_endpoints(
+                    &mut g.loc_edit.location,
+                    |p: &mut GenomePos, v: u64| p.base = v,
+                    start,
+                    end,
+                )
+            }) && {
                 g.loc_edit.edit = Mu::Certain(edit.clone());
                 true
-            }
-        }
-        HgvsVariant::Mt(m) => {
-            set_endpoints(
-                &mut m.loc_edit.location,
-                |p: &mut GenomePos, v: u64| p.base = v,
-                start,
-                end,
-            ) && {
+            },
+            same_region_gap,
+        ),
+        HgvsVariant::Mt(m) => (
+            unsigned_gap().is_some_and(|(start, end)| {
+                set_endpoints(
+                    &mut m.loc_edit.location,
+                    |p: &mut GenomePos, v: u64| p.base = v,
+                    start,
+                    end,
+                )
+            }) && {
                 m.loc_edit.edit = Mu::Certain(edit.clone());
                 true
-            }
-        }
+            },
+            same_region_gap,
+        ),
         // `n.` is a signed axis with no zero, so a gap that would name `n.0` is
         // refused — the same guard `place_signed` applies for `respell_as`.
-        // Otherwise it behaves exactly as the genomic arms: the position is a
-        // direct offset into the transcript sequence (see the doc comment).
-        HgvsVariant::Tx(t) => {
+        // Unlike `c.`/`r.` there is nothing on the far side to name it as: the
+        // `n.` regions either side of `0` are the transcript and the sequence
+        // *outside* it, so a conversion would have no bases to offer.
+        HgvsVariant::Tx(t) => (
             gap_start != 0
                 && gap_end != 0
                 && set_endpoints(
@@ -4591,15 +4872,52 @@ fn respell_at_gap(
                     gap_end,
                 )
                 && {
-                    t.loc_edit.edit = Mu::Certain(edit);
+                    t.loc_edit.edit = Mu::Certain(edit.clone());
                     true
-                }
-        }
-        _ => false,
+                },
+            same_region_gap,
+        ),
+        HgvsVariant::Cds(c) => match cds_relative_gap(Region::Cds) {
+            Some(intended) => (
+                set_endpoints(
+                    &mut c.loc_edit.location,
+                    |p: &mut CdsPos, (region, base): (Region, i64)| {
+                        p.base = base;
+                        p.utr3 = region == Region::ThreePrimeUtr;
+                        p.offset = None;
+                    },
+                    intended.0,
+                    intended.1,
+                ) && {
+                    c.loc_edit.edit = Mu::Certain(edit.clone());
+                    true
+                },
+                intended,
+            ),
+            None => (false, same_region_gap),
+        },
+        HgvsVariant::Rna(r) => match cds_relative_gap(Region::Rna) {
+            Some(intended) => (
+                set_endpoints(
+                    &mut r.loc_edit.location,
+                    |p: &mut RnaPos, (region, base): (Region, i64)| {
+                        p.base = base;
+                        p.utr3 = region == Region::ThreePrimeUtr;
+                        p.offset = None;
+                    },
+                    intended.0,
+                    intended.1,
+                ) && {
+                    r.loc_edit.edit = Mu::Certain(edit.clone());
+                    true
+                },
+                intended,
+            ),
+            None => (false, same_region_gap),
+        },
+        _ => (false, same_region_gap),
     };
-    let landed = placed
-        && member_span(variant, kind)
-            .is_some_and(|s| s.region == span.region && s.start == gap_start && s.end == gap_end);
+    let landed = placed && member_endpoints(variant) == Some(intended);
     if !landed {
         *variant = original;
     }
