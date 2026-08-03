@@ -275,12 +275,28 @@ fn codon_frame_sub_then_del_rna() {
 
 #[test]
 fn no_codon_frame_sub_then_del_pair_straddles_codon_boundary() {
-    // SUB at 12 (codon 4), DEL at 14 (codon 5) → different codons, no
-    // merge. Position 14 is the last C in the CCCCC run at positions
-    // 10-14, next base is G at 15, so the del does not right-shift.
+    // SUB at 12 (codon 4), DEL at 14 (codon 5) → different codons, so
+    // `general.md:35`'s one-amino-acid exception does not license merging them
+    // and the *codon-frame merge* declines. That is what this test is named for
+    // and it still holds — no codon-straddling merge is performed here.
+    //
+    // The rendered form moved when the input-separator veto was removed: the
+    // sequence-first derivation answers `c.12_13delinsG`. That is not the codon
+    // merge firing; it is the derivation the block itself yields. The block is
+    // `CC -> G`, which every alignment of the pair answers identically — one
+    // member — because the deleted `C` is ambiguous anywhere in the `CCCCC` run
+    // at c.10-14. Only the input spelling knows the surviving `C` was c.13
+    // rather than c.14, and reading the spelling is exactly what made two
+    // encodings of one variant normalize differently (#1235).
+    //
+    // **Policy choice, recorded as one.** Verified equivalent on both levels the
+    // spec cares about: the two forms denote the same sequence, and both
+    // translate to `MQKPRGFLKTPGGF*` — the same frameshift, so no protein
+    // consequence is lost by preferring the derived form. Confluence was chosen
+    // over preserving the two-member spelling.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:c.[12C>G;14del]"),
-        "NM_TEST.1:c.[12C>G;14del]",
+        "NM_TEST.1:c.12_13delinsG",
     );
 }
 

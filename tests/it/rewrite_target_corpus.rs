@@ -18,8 +18,8 @@
 //! Three forms:
 //!
 //! - *Confluence* (#1260, #1262): two spellings of one variant must reach the same
-//!   normalized string. #1260 now does; #1262 does not.
-//!   `the_confluence_targets_converge_only_for_1260` pins both facts.
+//!   normalized string. **Both now do**, so `the_confluence_targets_converge` is a
+//!   positive pin rather than a pinned failure.
 //!   `every_confluence_target_denotes_one_variant` is **not**
 //!   itself a pinned failure — it is a sanity guard on this file's own rows (both
 //!   spellings really are the same variant, checked by `cis_apply_oracle::apply`,
@@ -241,30 +241,27 @@ fn every_confluence_target_denotes_one_variant() {
     }
 }
 
-/// #1260 has **converged**; #1262 has not.
+/// **Both confluence targets have converged.** Positive pins, not pinned failures.
 ///
-/// #1260's row is now a positive pin: both spellings reach the split form named by
-/// PR #1285, which the two-gap alignment made expressible. #1262's row stays pinned as
-/// diverging, and fixing it fails this test loudly — that is still the point of the
-/// corpus.
+/// #1260 converged first, on the split form PR #1285 named, which the two-gap
+/// alignment made expressible. #1262 followed when the input-separator veto was
+/// removed: the derivation had always reached the same piece set from both of its
+/// spellings, and the veto was the only thing answering them differently.
 #[test]
-fn the_confluence_targets_converge_only_for_1260() {
+fn the_confluence_targets_converge() {
+    let expected = [
+        ("#1260", "TEMPLATE:g.[258_259insC;259_260insC]"),
+        ("#1262", "TEMPLATE:g.258_259delinsC"),
+    ];
     for (issue, core, a, b) in CONFLUENCE_TARGETS {
         let seq = padded(core);
         let (norm_a, norm_b) = (normalize(&seq, a), normalize(&seq, b));
-        if *issue == "#1260" {
-            assert_eq!(norm_a, norm_b, "{issue}: `{a}` and `{b}` must converge");
-            assert_eq!(
-                norm_a, "TEMPLATE:g.[258_259insC;259_260insC]",
-                "{issue}: and they converge on the split form, not the spanning delins"
-            );
-            continue;
-        }
-        assert_ne!(
-            norm_a, norm_b,
-            "{issue} appears fixed — `{a}` and `{b}` now both normalize to `{norm_a}`. \
-             Move this case out of the PARTITION target list and give it a positive pin."
-        );
+        assert_eq!(norm_a, norm_b, "{issue}: `{a}` and `{b}` must converge");
+        let (_, want) = expected
+            .iter()
+            .find(|(id, _)| id == issue)
+            .unwrap_or_else(|| panic!("no expected form recorded for {issue}"));
+        assert_eq!(norm_a, *want, "{issue}: converged on an unexpected form");
     }
 }
 

@@ -1777,17 +1777,6 @@ struct Piece {
 }
 
 impl Piece {
-    /// Whether this piece claims any offset inside one of `ranges` as changed.
-    ///
-    /// A pure insertion spans no reference base, so it overlaps nothing — which
-    /// is exactly right for the separator veto: an insertion never swallows a
-    /// base the input left between two members.
-    fn overlaps_any(&self, ranges: &[(usize, usize)]) -> bool {
-        ranges
-            .iter()
-            .any(|&(lo, hi)| self.ref_start < hi && lo < self.ref_end)
-    }
-
     /// Whether this piece is a pure deletion or a pure insertion.
     ///
     /// Only these may be 3'-shifted. `shuffle`'s rotation invariant — advance
@@ -2081,19 +2070,34 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     if needs_unsupported_form(&pieces, &ref_bytes) {
         return None;
     }
-    // Re-partitioning is the point of this pass, but *merging* two members
-    // across a base the input left between them is not: two variants separated
-    // by one or more unchanged nucleotides are described individually
-    // (`general.md:34`). Only a shift that closes the gap may merge them, and
-    // that shows up as pieces still outnumbering nothing — so the check applies
-    // exactly when the derivation has produced fewer pieces than there were
-    // members.
-    if pieces.len() < edits.len() {
-        let gaps = input_separator_gaps(&edits, w_lo);
-        if pieces.iter().any(|piece| piece.overlaps_any(&gaps)) {
-            return None;
-        }
-    }
+    // There was a veto here, and it was the last gate in this pass that read the
+    // *input spelling* rather than the sequence: when the derivation produced
+    // fewer pieces than there were members, and any piece covered a base the
+    // input had left between two of them, the pass refused and returned the
+    // input verbatim. It cited `general.md:34` — two variants separated by one
+    // or more unchanged nucleotides are described individually.
+    //
+    // The citation is sound and the mechanism was not. `general.md:34` is about
+    // what the *sequence* separates; the veto measured what the *input's
+    // spelling* separated, which is a different quantity whenever a member sits
+    // in an ambiguous run. So two spellings of one variant were refused
+    // differently, which is precisely the non-confluence #1235 is about — a gate
+    // installed to enforce a spec rule was breaking the property the whole pass
+    // exists to provide.
+    //
+    // Where the sequence really does separate two runs of change, the partition
+    // already keeps them apart, and it does so from the block alone: that is
+    // `MIN_PIECE_SEPARATION` plus `separations_are_meaningful` on this — the
+    // *live* — path through `partition_block`. The veto added nothing there; it
+    // only ever fired where the block said "one member" and the input spelling
+    // said "two".
+    //
+    // Not `MIN_SEPARATION_NO_FRAME`, which an earlier revision of this comment
+    // cited. That constant has the same value (`1`) and the same derivation, but
+    // its only non-test use is inside the `seqfirst_shadow_enabled()` block, so
+    // it holds no live line and could not have been the net this argument leans
+    // on. The two are twins by design (see its own doc comment); the live one is
+    // the one worth naming here.
     // A derivation that collapses to a single pure insertion belongs to the
     // per-member pipeline, which owns the terminal-insertion clamps (#1205,
     // #1217) and duplication recovery. Re-deriving one here would undo a clamp
@@ -3817,56 +3821,6 @@ fn anchor_for_piece(piece: &Piece, body: Region, w_lo: i64) -> Option<Anchor> {
         end,
         alt,
     })
-}
-
-/// Reference runs the input left unchanged *between* two of its members, as
-/// half-open 0-based offset ranges into the window.
-///
-/// Returned as ranges rather than as the individual positions they contain: two
-/// members at opposite ends of a 4096 nt window are separated by thousands of
-/// unchanged bases, and materializing every one of them — then rescanning the
-/// list once per derived piece — is quadratic work for what is an interval
-/// overlap test.
-///
-/// Two variants separated by one or more unchanged nucleotides are described
-/// individually and **not** as one delins (`general.md:34`, restated in every
-/// DNA page). So a re-derivation may split a member and may merge members the
-/// 3'-shift made adjacent, but it must never swallow a base the input itself
-/// held between two members: `[1006_1008del;1009_1010insCCC]` leaves 1009
-/// untouched, and collapsing it to `1006_1009delinsTCCC` merges across it
-/// (#180).
-///
-/// An insertion consumes no reference base, so its footprint is the junction it
-/// sits in rather than a span.
-fn input_separator_gaps(edits: &[GEdit], w_lo: i64) -> Vec<(usize, usize)> {
-    let mut footprints: Vec<(i64, i64)> = edits
-        .iter()
-        .map(|edit| match edit {
-            // An insertion between `gap` and `gap + 1` touches neither base;
-            // represent it as the empty span just past `gap`.
-            GEdit::Ins { gap, .. } => (*gap + 1, *gap),
-            GEdit::Dup { s: _, e } => (*e + 1, *e),
-            GEdit::Del { s, e } | GEdit::Delins { s, e, .. } | GEdit::Inv { s, e } => (*s, *e),
-            GEdit::Sub { pos, .. } => (*pos, *pos),
-        })
-        .collect();
-    if footprints.len() < 2 {
-        return Vec::new();
-    }
-    footprints.sort_unstable();
-    let mut gaps = Vec::new();
-    for pair in footprints.windows(2) {
-        let (_, previous_end) = pair[0];
-        let (next_start, _) = pair[1];
-        // Half-open `[previous_end + 1, next_start)` in axis coordinates,
-        // clamped to the window's own 0-based offsets.
-        let lo = (previous_end + 1 - w_lo).max(0);
-        let hi = next_start - w_lo;
-        if hi > lo {
-            gaps.push((lo as usize, hi as usize));
-        }
-    }
-    gaps
 }
 
 /// Whether any piece would have to be rendered as an inversion or a tandem
