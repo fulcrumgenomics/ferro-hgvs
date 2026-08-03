@@ -3848,10 +3848,14 @@ fn split_codon_incompatible_triplets(
 fn coalesce_adjacent_pieces(pieces: &mut Vec<Piece>) {
     let mut i = 1;
     while i < pieces.len() {
-        if pieces[i - 1].ref_end >= pieces[i].ref_start {
+        debug_assert!(
+            pieces[i - 1].ref_end <= pieces[i].ref_start,
+            "strict overlap between adjacent pieces: the 3'-shuffle cannot produce this",
+        );
+        if pieces[i - 1].ref_end == pieces[i].ref_start {
             let next = pieces.remove(i);
             let prev = &mut pieces[i - 1];
-            prev.ref_end = prev.ref_end.max(next.ref_end);
+            prev.ref_end = next.ref_end;
             prev.alt.extend(next.alt);
         } else {
             i += 1;
@@ -7441,6 +7445,31 @@ mod tests {
                 "pieces overlap or are out of order: {pieces:?}"
             );
         }
+    }
+
+    /// `coalesce_adjacent_pieces` must reject a strictly overlapping pair
+    /// rather than merge it.
+    ///
+    /// Unreachable in production (the 3'-shuffle cannot produce it — see the
+    /// function's doc comment), but the old `>=` condition's `max()`/`extend()`
+    /// body would silently double-count the shared columns, changing the
+    /// denoted sequence instead of merely mis-describing it.
+    #[test]
+    #[should_panic(expected = "strict overlap")]
+    fn coalesce_rejects_a_strictly_overlapping_pair() {
+        let mut pieces = vec![
+            Piece {
+                ref_start: 0,
+                ref_end: 4,
+                alt: b"AAAA".to_vec(),
+            },
+            Piece {
+                ref_start: 2,
+                ref_end: 6,
+                alt: b"CCCC".to_vec(),
+            },
+        ];
+        coalesce_adjacent_pieces(&mut pieces);
     }
 
     /// The enumerated classes of disagreement between the two block splitters.
