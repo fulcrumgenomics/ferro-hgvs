@@ -6,7 +6,12 @@
 //! prefix or suffix with the deleted residues must be re-described
 //! with the trimmed range and trimmed insert (`delins.md:53-56`). After
 //! affix-trim, the residual is canonicalized per Prioritization
-//! (`general.md:56-57`): `sub > del > dup > ins > delins`.
+//! (`general.md:56-57`), whose list is `sub > del > inv > dup > ins` — on the
+//! protein axis, `sub > del > dup > ins`, since there is no protein
+//! `inversion.md`. `delins` is **not** a rung on it: `protein/delins.md:5`
+//! defines a delins as a change "which is **not** a substitution or
+//! frameshift", so it is the residual left when no ranked type applies, which
+//! is why reaching a `dup` here is an improvement rather than a re-ranking.
 
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::{parse_hgvs, Normalizer};

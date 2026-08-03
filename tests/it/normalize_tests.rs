@@ -4737,8 +4737,10 @@ mod cigar_cds_mapping {
 // compound variants
 // =============================================================================
 // HGVS spec: an inversion describes a *maximal contiguous run* whose alt is
-// the reverse complement of the reference (`DNA/inversion.md`,
-// `general.md:56`). A delins whose WHOLE contiguous run is a revcomp becomes
+// the reverse complement of the reference (`DNA/inversion.md`;
+// `general.md:56` ranks `inversion` third of the five types it lists, and
+// `delins` is not on that list — it is the residual). A delins whose WHOLE
+// contiguous run is a revcomp becomes
 // an `inv`; a revcomp SUB-run of a longer contiguous change is NOT carved out
 // — that change stays a single `delins` (issue #1034 regression fix). A run
 // that is a full inversion but separated from other edits by an unchanged
@@ -5615,7 +5617,9 @@ mod ins_bracketed_expansion {
     //     inside the expanded payload; keeping them means the whole reference
     //     survives between two insertions. That is more minimal (9 + 3 = 12
     //     changed columns against the spanning `delins`'s 14) and two `ins`
-    //     members outrank one `delins` (`general.md:56`).
+    //     members are preferred to one spanning `delins` — `delins.md:17` plus
+    //     ferro policy, not `general.md:56`, whose prioritisation list is
+    //     `sub > del > inv > dup > ins` and does not contain `delins` at all.
     //
     //     Worth knowing: a short reference block inside a long payload is
     //     exactly where "the whole reference survives" is most likely to be

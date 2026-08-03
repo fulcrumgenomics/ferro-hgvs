@@ -1152,7 +1152,7 @@ pub enum DelinsSubedit {
 /// - Issue #160 (item A2 + A10 inv-branch of tracking issue #81), as
 ///   corrected by issue #1034: an `Inversion` is emitted only when a whole
 ///   maximal contiguous mismatch run is a reverse complement, per the HGVS
-///   edit-priority rule (`general.md:56`: `inv > delins`) applied to the
+///   edit-priority rule applied to the
 ///   *maximal contiguous run* (`DNA/inversion.md`). A reverse-complement
 ///   sub-run of a longer contiguous change is NOT carved out — that change
 ///   stays a single `delins`.

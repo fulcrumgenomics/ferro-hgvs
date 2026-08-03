@@ -217,8 +217,17 @@ class TestNormalizeDelinsSubOnlyDecompose:
     """Issue #81 item A10 (sub-only branch, tracked in #165): a delins whose
     span contains two or more independent single-base mismatches separated
     by at least one unchanged nucleotide decomposes to the individual
-    `[X>A; B>Y]` form per `general.md:56` (sub > delins). The codon-frame
-    exception (`general.md:35-38`) preserves an embedded
+    `[X>A; B>Y]` form.
+
+    The rule that splits it is `delins.md:17` — two variants separated by one or
+    more nucleotides are described individually and **not** as a "delins". It is
+    not prioritisation: `general.md:56` lists five types
+    (`sub > del > inv > dup > ins`) and `delins` is not one of them, so there is
+    no "sub > delins" rung to appeal to. Prioritisation only settles what each
+    resulting member is once the split has happened — a single-base change is a
+    substitution.
+
+    The codon-frame exception (`general.md:35-38`) preserves an embedded
     `[Sub; Identity; Sub]` triplet whose endpoints share a codon.
 
     Reference: NM_000088.3 has CDS sequence
