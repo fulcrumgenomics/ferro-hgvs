@@ -290,12 +290,21 @@ pub fn derive_affine(
 /// below [`MAX_MISMATCH_FRACTION`]. For a minus-strand candidate the `NG_` is the
 /// reverse complement of the slice. A length difference or a frame-shifting indel
 /// drives the mismatch far above the threshold ⇒ `false` ⇒ decline. Comparison is
-/// case-insensitive; `N`/ambiguity bases count as mismatches (conservative).
+/// case-insensitive.
 ///
-/// Note: ambiguity bases on **either** side count against the threshold, so a
-/// `genome_slice` carrying a run of `N`s (e.g. an assembly gap) inflates the
-/// mismatch fraction toward [`MAX_MISMATCH_FRACTION`] and can push an otherwise
-/// valid placement to decline.
+/// Ambiguity codes are compared on their real complements (`R`↔`Y`, `K`↔`M`, …),
+/// so a correctly-paired ambiguous position counts as a match. A code that is
+/// *self*-complementary under the IUPAC table — `N`, `S`, `W` — therefore matches
+/// itself, which means a `genome_slice` gap of `N`s against an `NG_` gap of `N`s
+/// does **not** inflate the mismatch fraction. An `N` against a concrete base
+/// still does.
+///
+/// A byte outside the modelled alphabet has no complement and counts as a
+/// mismatch on the minus strand. The plus strand compares the two bytes
+/// directly and never needs a complement, so there it still matches itself —
+/// an asymmetry, but the honest one: on the plus strand nothing was inferred,
+/// while on the minus strand a byte that cannot be complemented cannot be
+/// judged equal to anything.
 pub fn validate_sequence(ng_seq: &[u8], genome_slice: &[u8], strand: Strand) -> bool {
     if ng_seq.len() != genome_slice.len() || ng_seq.is_empty() {
         return false;
@@ -307,11 +316,17 @@ pub fn validate_sequence(ng_seq: &[u8], genome_slice: &[u8], strand: Strand) -> 
             .filter(|(a, b)| !bases_match(**a, **b))
             .count(),
         Strand::Minus => {
-            // NG[i] should equal complement(genome_slice[len-1-i]).
+            // NG[i] should equal complement(genome_slice[len-1-i]). A byte the
+            // shared alphabet does not model has no complement to compare
+            // against, so it counts as a mismatch (#1347) — the private helper
+            // this replaced mapped it to `N`, which then matched an `N` on the
+            // NG_ side, the exact spurious match it claimed to prevent.
             ng_seq
                 .iter()
                 .zip(genome_slice.iter().rev())
-                .filter(|(a, b)| !bases_match(**a, complement(**b)))
+                .filter(|(a, b)| {
+                    crate::sequence::complement_base(**b).is_none_or(|c| !bases_match(**a, c))
+                })
                 .count()
         }
         Strand::Unknown => return false,
@@ -322,18 +337,6 @@ pub fn validate_sequence(ng_seq: &[u8], genome_slice: &[u8], strand: Strand) -> 
 /// Case-insensitive base equality (`a`==`A`).
 fn bases_match(a: u8, b: u8) -> bool {
     a.eq_ignore_ascii_case(&b)
-}
-
-/// Watson-Crick complement (case-insensitive, returns uppercase). Non-ACGT maps
-/// to `b'N'` so it can never spuriously match.
-fn complement(b: u8) -> u8 {
-    match b.to_ascii_uppercase() {
-        b'A' => b'T',
-        b'C' => b'G',
-        b'G' => b'C',
-        b'T' => b'A',
-        _ => b'N',
-    }
 }
 
 /// Assemble a [`GenomicPlacement`] for `ng` on chromosome `nc` from a validated
@@ -555,6 +558,33 @@ impl DerivedPlacements {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A byte outside the modelled alphabet must count as a mismatch, not be
+    /// laundered into `N` where it matches an `N` on the other side (#1347).
+    ///
+    /// The private complement mapped every non-ACGT byte to `N` "so it can never
+    /// spuriously match" — but `N` is exactly what it produced, so an `N` in the
+    /// `NG_` matched *any* unmodelled genome byte. A placement validated against
+    /// bases nobody could complement.
+    #[test]
+    fn an_unmodelled_genome_byte_does_not_match_an_n_in_the_ng() {
+        assert!(
+            !validate_sequence(b"NNNN", b"XXXX", Strand::Minus),
+            "unmodelled genome bytes must not validate a placement"
+        );
+    }
+
+    /// The flip side: an IUPAC code has a real complement and must be credited
+    /// with it. `R` (A or G) complements to `Y` (C or T); collapsing it to `N`
+    /// counted a correct pairing as a mismatch.
+    #[test]
+    fn an_iupac_code_complements_to_its_partner_on_the_minus_strand() {
+        // NG "YYYY" vs genome "RRRR" read in reverse: complement(R) == Y.
+        assert!(
+            validate_sequence(b"YYYY", b"RRRR", Strand::Minus),
+            "R must complement to Y rather than collapsing to N"
+        );
+    }
 
     #[test]
     fn legacy_artifact_without_schema_version_is_accepted() {

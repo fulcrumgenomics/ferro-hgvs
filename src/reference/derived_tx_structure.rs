@@ -146,20 +146,15 @@ impl DerivedTxStructures {
     }
 }
 
-fn revcomp(s: &str) -> String {
-    s.bytes()
-        .rev()
-        .map(|b| match b.to_ascii_uppercase() {
-            b'A' => 'T',
-            b'C' => 'G',
-            b'G' => 'C',
-            b'T' => 'A',
-            _ => 'N',
-        })
-        .collect()
-}
-
 /// Concatenate a transcript's exon genome slices in tx order (rev-comp on minus).
+///
+/// Minus-strand exons go through the shared [`crate::sequence::reverse_complement`]
+/// (#1347). The private helper this replaced mapped every non-ACGT byte to `N`,
+/// discarding an ambiguity code's meaning and making it indistinguishable from a
+/// genuine `N`. It also upper-cased, where the plus-strand arm below passes the
+/// genome slice through verbatim; both arms now preserve case alike. That is
+/// inert against the FASTA providers, which upper-case on read
+/// (`fasta.rs`, `multi_fasta.rs`).
 pub fn reconstruct_spliced_mrna(cdot: &CdotTranscript, genome: &dyn GenomeSlice) -> Option<String> {
     // Exons are stored ascending by tx coordinate. On the minus strand the
     // forward-genome slice of each exon must be reverse-complemented; the exon
@@ -170,7 +165,7 @@ pub fn reconstruct_spliced_mrna(cdot: &CdotTranscript, genome: &dyn GenomeSlice)
         let raw = genome.slice(&cdot.contig, gs, ge)?;
         match cdot.strand {
             Strand::Plus => out.push_str(&raw),
-            Strand::Minus => out.push_str(&revcomp(&raw)),
+            Strand::Minus => out.push_str(&crate::sequence::reverse_complement(&raw)),
             Strand::Unknown => return None,
         }
     }
@@ -570,6 +565,30 @@ mod derivation_tests {
             protein: Some("NP_M.1".to_string()),
         };
         (cdot, genome)
+    }
+
+    /// Reconstructing a minus-strand mRNA must complement an IUPAC ambiguity
+    /// code, not collapse it to `N` (#1347).
+    ///
+    /// The private `revcomp` mapped every non-ACGT byte to `N`, so an `R` in the
+    /// genome became `N` in the reconstructed mRNA — silently discarding the
+    /// "A or G" information and making a genuine `N` indistinguishable from a
+    /// code that simply was not modelled.
+    #[test]
+    fn minus_strand_reconstruction_complements_iupac_codes() {
+        let (mut cdot, _) = minus_sibling_fixture();
+        // One exon, g[1,5) = "ARGT" -> reverse "TGRA" -> complement "ACYT".
+        cdot.exons = vec![[1, 5, 0, 4]];
+        cdot.exon_cigars = vec![None];
+        let genome = FakeGenome {
+            contig: "NC_TEST.1".to_string(),
+            seq: "ARGTAAAAAA".to_string(),
+        };
+        assert_eq!(
+            reconstruct_spliced_mrna(&cdot, &genome).unwrap(),
+            "ACYT",
+            "R must complement to Y rather than collapsing to N"
+        );
     }
 
     #[test]

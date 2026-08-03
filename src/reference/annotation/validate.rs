@@ -9,6 +9,7 @@ use std::path::Path;
 
 use crate::reference::provider::ReferenceProvider;
 use crate::reference::transcript::{Strand, Transcript};
+use crate::sequence::reverse_complement;
 
 use super::diagnostics::{DiagnosticPayload, LoaderDiagnostic, LoaderReport, SourceLocation};
 
@@ -149,21 +150,6 @@ fn extract_first_codon(
     }
 
     (codon.len() as u64 == TARGET).then_some(codon)
-}
-
-/// Return the reverse complement of a DNA string.
-fn reverse_complement(s: &str) -> String {
-    s.chars()
-        .rev()
-        .map(|c| match c {
-            'A' | 'a' => 'T',
-            'T' | 't' => 'A',
-            'G' | 'g' => 'C',
-            'C' | 'c' => 'G',
-            'N' | 'n' => 'N',
-            other => other,
-        })
-        .collect()
 }
 
 #[cfg(test)]
