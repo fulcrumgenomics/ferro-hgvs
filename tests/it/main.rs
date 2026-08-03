@@ -166,6 +166,7 @@ mod issue_1249_inv_one_base_residue;
 mod issue_1254_sibling_crossing_shift;
 mod issue_1261_cis_member_order;
 mod issue_1264_reparse_asymmetry;
+mod issue_1270_del_repeat_codon_gate;
 mod issue_1276_dup_junction_overlap;
 mod issue_1281_reducing_member_shift;
 mod issue_1284_transcript_axis_collision;

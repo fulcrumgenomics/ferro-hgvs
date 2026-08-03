@@ -856,11 +856,34 @@ pub(crate) struct DelToRepeatResult {
 /// The bounds check rejects 0-length deletions (`del_start == del_end`).
 /// Callers passing insertion-point-shaped zero-width ranges should use
 /// `extend_tandem_tract` directly instead.
+///
+/// # The codon gate is answered for the tract, not the input (#1270)
+///
+/// A sixth condition applies on the `c.`/`r.` axes and is deliberately not in
+/// the list above, because it is about the *emitted* description rather than the
+/// trigger: `repeated.md` requires `unit_len % 3 == 0` for repeat notation in a
+/// coding context.
+///
+/// `is_coding` is the caller's verdict for the span the *input* deletion
+/// occupied. Where `cds_span` is supplied it takes precedence, and the gate is
+/// re-answered for the tandem tract this function discovers — the span the
+/// emitted repeat actually occupies. The two differ exactly when the tract runs
+/// past `cds_end`, whose 3'UTR part the carve-out exempts. Pass `None`
+/// (genomic, `n.`, or any caller with no CDS context) to keep `is_coding`
+/// verbatim.
+///
+/// This mirrors [`insertion_to_repeat`], which took the same argument for #1185
+/// and #1210; before #1270 only that path re-asked, so a `T` run spanning
+/// `cds_end` gave `c.5_6insTT` -> `c.4_*5T[16]` while the matching `c.5_6del`
+/// gave a plain `c.*4_*5del`. The gate is therefore evaluated *after*
+/// `extend_tandem_tract` rather than before it, since the tract is what it now
+/// asks about.
 pub(crate) fn deletion_to_repeat(
     ref_seq: &[u8],
     del_start: usize,
     del_end: usize,
     is_coding: bool,
+    cds_span: Option<(u64, u64)>,
 ) -> Option<DelToRepeatResult> {
     if del_start >= del_end || del_end > ref_seq.len() {
         return None;
@@ -872,14 +895,38 @@ pub(crate) fn deletion_to_repeat(
         return None;
     }
 
-    // HGVS spec (repeated.md): in c. context, repeat notation requires
-    // unit_len % 3 == 0. Falls back to plain del when the gate blocks.
-    if is_coding && !p.is_multiple_of(3) {
+    let tract = extend_tandem_tract(ref_seq, del_start..del_end, unit_slice)?;
+    if tract.ref_count < 2 {
         return None;
     }
 
-    let tract = extend_tandem_tract(ref_seq, del_start..del_end, unit_slice)?;
-    if tract.ref_count < 2 {
+    // HGVS spec (repeated.md): in c. context, repeat notation requires
+    // unit_len % 3 == 0. Falls back to plain del when the gate blocks.
+    //
+    // Answered for the **tract**, not for the input span — the #1185/#1210
+    // argument that `insertion_to_repeat` above already applies, and the gate
+    // is therefore checked after `extend_tandem_tract` rather than before it.
+    // `is_coding` is the caller's verdict for the span the *input* deletion
+    // occupied, and a CDS-resident deletion inside a tract that runs past
+    // `cds_end` sits on a tract the carve-out exempts. Measured on a `T` run
+    // spanning `cds_end`: `c.5_6insTT` produced `c.4_*5T[16]` while the
+    // matching `c.5_6del` produced a plain `c.*4_*5del`, because only the
+    // insertion path re-asked (#1270).
+    //
+    // Frames line up as they do there: `tract.start` / `tract.end` are 0-based
+    // indices into the transcript-frame `ref_seq` with `end` exclusive, and
+    // `cds_span` is 1-based inclusive in that same frame. `None` keeps the
+    // caller's verdict verbatim, so genomic / `n.` callers and the unit tests
+    // below are unaffected.
+    let gate_is_coding = match cds_span {
+        Some((cds_start, cds_end)) => {
+            let tract_start = tract.start as u64 + 1;
+            let tract_end = tract.end as u64;
+            tract_start >= cds_start && tract_end <= cds_end
+        }
+        None => is_coding,
+    };
+    if gate_is_coding && !p.is_multiple_of(3) {
         return None;
     }
 
@@ -4614,7 +4661,7 @@ mod tests {
         // After 3' shift, del lands at [5..7). post-shift slice "AA", unit "A", k=2.
         // Tract [2..7), ref_count=5, post_count=3 → A[3] at HGVS [3..7] (1-based).
         let ref_seq = b"TTAAAAATT";
-        let r = deletion_to_repeat(ref_seq, 5, 7, false).expect("should fire");
+        let r = deletion_to_repeat(ref_seq, 5, 7, false, None).expect("should fire");
         assert_eq!(r.unit, b"A");
         assert_eq!(r.count, 3);
         assert_eq!(r.start, 3); // 1-based HGVS
@@ -4627,7 +4674,7 @@ mod tests {
         // post-shift slice "GCAGCA", unit "GCA", k=2. Tract [2..11), ref_count=3,
         // post_count=1 → GCA[1] at HGVS [3..11] (1-based).
         let ref_seq = b"TTGCAGCAGCATT";
-        let r = deletion_to_repeat(ref_seq, 5, 11, false).expect("should fire");
+        let r = deletion_to_repeat(ref_seq, 5, 11, false, None).expect("should fire");
         assert_eq!(r.unit, b"GCA");
         assert_eq!(r.count, 1);
         assert_eq!(r.start, 3);
@@ -4639,7 +4686,7 @@ mod tests {
         // k=1 → stays as del.
         // ref "TTAAAAATT", delete 1 A at [6..7).
         let ref_seq = b"TTAAAAATT";
-        assert!(deletion_to_repeat(ref_seq, 6, 7, false).is_none());
+        assert!(deletion_to_repeat(ref_seq, 6, 7, false, None).is_none());
     }
 
     #[test]
@@ -4647,7 +4694,7 @@ mod tests {
         // post_count == 0 → stays as del.
         // ref "TTAATT", delete both A's at [2..4). ref_count=2, k=2, post_count=0.
         let ref_seq = b"TTAATT";
-        assert!(deletion_to_repeat(ref_seq, 2, 4, false).is_none());
+        assert!(deletion_to_repeat(ref_seq, 2, 4, false, None).is_none());
     }
 
     #[test]
@@ -4656,7 +4703,7 @@ mod tests {
         // ref "TTGCATT", delete "GCA" at [2..5). smallest_repeat_unit("GCA")="GCA",
         // ref_count=1, returns None.
         let ref_seq = b"TTGCATT";
-        assert!(deletion_to_repeat(ref_seq, 2, 5, false).is_none());
+        assert!(deletion_to_repeat(ref_seq, 2, 5, false, None).is_none());
     }
 
     #[test]
@@ -4664,7 +4711,7 @@ mod tests {
         // ref "TTATATATATATT" (5 ATs at [2..12)). Delete "ATAT" at [8..12).
         // smallest_repeat_unit("ATAT")="AT", k=2, ref_count=5, post_count=3 → AT[3].
         let ref_seq = b"TTATATATATATT";
-        let r = deletion_to_repeat(ref_seq, 8, 12, false).expect("should fire");
+        let r = deletion_to_repeat(ref_seq, 8, 12, false, None).expect("should fire");
         assert_eq!(r.unit, b"AT");
         assert_eq!(r.count, 3);
         assert_eq!(r.start, 3); // 1-based HGVS [3..12]
@@ -4905,7 +4952,7 @@ mod tests {
         // return None via the unrelated `k < 2` early exit, so it would not
         // discriminate the gate.
         let ref_seq = b"CAAAAAC";
-        let result = deletion_to_repeat(ref_seq, 2, 4, true);
+        let result = deletion_to_repeat(ref_seq, 2, 4, true, None);
         assert!(
             result.is_none(),
             "is_coding=true + unit_len=1 must return None"
@@ -4917,7 +4964,7 @@ mod tests {
         // ref "CCAGCAGCAGT": 3-CAG tract at indices 1..10. Delete 2 CAGs at
         // [1..7) (6 bases CAGCAG). With codon-aligned unit, gate passes.
         let ref_seq = b"CCAGCAGCAGT";
-        let result = deletion_to_repeat(ref_seq, 1, 7, true);
+        let result = deletion_to_repeat(ref_seq, 1, 7, true, None);
         assert!(
             result.is_some(),
             "is_coding=true + unit_len=3 must allow rewrite"
