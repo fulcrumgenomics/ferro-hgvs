@@ -23,12 +23,17 @@
 //!      `sort_cis_members_by_genomic_order` is skipped only for conflicting
 //!      alleles — so the member order flipped on the second pass.
 //!
-//! Exercised on the `c.` axis. The `g.` spelling of the same shape is currently
-//! collapsed by the sequence-first canonicalization before the dup is ever
-//! rendered, which would mask the behaviour under test; the transcript axes are
-//! not reached by that pass, so the dup survives and the detector is what
-//! decides. Reference-free (`MockProvider` via `SyntheticBuilder`), so this
-//! holds independent of the manifest.
+//! Exercised on the `c.` axis. Reference-free (`MockProvider` via
+//! `SyntheticBuilder`), so this holds independent of the manifest.
+//!
+//! **Axis rationale corrected by #1284.** This header used to say the `c.` axis
+//! was chosen because "the transcript axes are not reached by that pass, so the
+//! dup survives". That was true and is no longer: #1284 lifted the collision
+//! repair's genomic-only gate, so a normalization-produced dup that collides
+//! with a sibling is now respelled on `c.` exactly as on `g.`. The tests below
+//! that author a `dup` **directly** are unaffected — they hand the detector a
+//! dup rather than relying on normalization to make one — and they are what
+//! carries the #1243 coverage.
 
 use crate::common::synthetic::SyntheticBuilder;
 use ferro_hgvs::error::FerroError;
@@ -107,10 +112,19 @@ fn strict_rejects_a_duplication_and_an_insertion_at_one_junction() {
 /// own strict mode accepts.
 ///
 /// `[4_10inv;5_6insAA]` is an insertion strictly interior to an inversion —
-/// rejected under strict since #486. Normalizing it leniently rewrites that
+/// rejected under strict since #486. Normalizing it leniently rewrote that
 /// insertion into a `dup`, and before #1243 the result passed strict
 /// validation. A caller who normalized leniently and re-validated strictly got a
 /// clean answer for an allele with no defined resulting sequence.
+///
+/// **Settled form updated by #1284**, which is why the pinned string below is
+/// an `ins` and not the `dup` this test was written around: the dup the
+/// pipeline used to leave here now collides with the inversion's bases and is
+/// repaired into the equivalent insertion, as it already was on `g.`. The
+/// contract this test exists for is untouched and is asserted twice — strict
+/// rejects the input, and strict still rejects whatever lenient mode emits for
+/// it. The dup-specific half of #1243 is carried by the direct-authoring tests
+/// above, which do not depend on normalization producing a dup.
 #[test]
 fn lenient_output_of_a_conflict_is_still_rejected_by_strict() {
     const INPUT: &str = "NM_TEST.1:c.[4_10inv;5_6insAA]";
@@ -121,9 +135,9 @@ fn lenient_output_of_a_conflict_is_still_rejected_by_strict() {
 
     let normalized = normalize_lenient(INPUT);
     assert_eq!(
-        normalized, "NM_TEST.1:c.[5_9inv;5_6dup]",
-        "precondition: normalization rewrites the interior insertion as a dup, \
-         which is what used to escape detection"
+        normalized, "NM_TEST.1:c.[5_9inv;6_7insAA]",
+        "precondition: normalization settles the interior insertion at its own \
+         junction, still strictly inside the inversion"
     );
     assert!(
         strict_rejects_as_overlap(&normalized),

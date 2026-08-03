@@ -2710,7 +2710,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // `demote_repeats_spanning_siblings`: an insertion blocks no
             // sibling's shift, so demoting a repeat before the clamps would
             // release a sibling that #1296 clamped out of its tract.
-            merge::demote_coincident_tract_repeats(&mut result, allele.phase, allele.uncertain);
+            merge::demote_coincident_tract_repeats(
+                &mut result,
+                allele.phase,
+                allele.uncertain,
+                &self.provider,
+            );
             // Last: two junction-occupying members that settled on the SAME
             // junction. The clamps above bound a member against a sibling's
             // bases, and an insertion or duplication has none, so a pair can
