@@ -145,32 +145,43 @@ pub fn is_duplication(reference: &str, position: u64, inserted: &str) -> bool {
     preceding == inserted
 }
 
-/// Check if a delins is actually an inversion.
+/// Whether an equal-length delins is really an inversion — its replacement is
+/// the reverse complement of what it deletes.
 ///
-/// An inversion occurs when the inserted sequence is the reverse complement
-/// of the deleted sequence.
+/// Three things this has to get right, and a local complement got all three
+/// wrong. `classify_edit` calls it for *every* equal-length delins, so each was
+/// a live misclassification rather than a latent one.
+///
+/// * **More than one nucleotide.** `inversion.md:15-16`: "the region inverted
+///   contains **more than one nucleotide**. The description `g.234inv` is
+///   therefore not allowed; a one-nucleotide inversion should be described as a
+///   substitution." Without the guard every `A>T`, `T>A`, `G>C` and `C>G` came
+///   back as an inversion instead of reaching the substitution arm below.
+/// * **A code with no complement is not self-complementary.** The local helper's
+///   fallback returned the character unchanged, so `complement(R) == R` held for
+///   every code it did not model and `RR` to `RR` — no change at all — read as
+///   an inversion.
+/// * **Case.** Reference FASTAs are routinely soft-masked, so one inversion can
+///   arrive as `ATG`/`cat` or `atg`/`CAT` and must classify the same way.
+///
+/// Built on [`crate::sequence::complement_base`], the crate's *comparison*
+/// complement: it folds case and returns `None` for a byte it does not model, so
+/// `X` cannot pass as its own complement. Deliberately **not**
+/// [`crate::sequence::reverse_complement`], which is the *display* helper — it
+/// preserves case and passes unmodelled characters through, because its job is
+/// to render a sequence a caller reads back. Using it here would answer the `X`
+/// case wrongly, which is the same conflation the local helper made.
+///
+/// Compared byte-wise against the reversed input so neither the fold nor the
+/// reversal allocates.
 pub fn is_inversion(deleted: &str, inserted: &str) -> bool {
-    if deleted.len() != inserted.len() || deleted.is_empty() {
+    let (deleted, inserted) = (deleted.as_bytes(), inserted.as_bytes());
+    if deleted.len() != inserted.len() || deleted.len() < 2 {
         return false;
     }
-
-    // Check if inserted is reverse complement of deleted
-    let rev_comp = reverse_complement(deleted);
-    rev_comp == inserted
-}
-
-/// Compute the reverse complement of a DNA sequence.
-fn reverse_complement(seq: &str) -> String {
-    seq.chars()
-        .rev()
-        .map(|c| match c {
-            'A' | 'a' => 'T',
-            'T' | 't' => 'A',
-            'G' | 'g' => 'C',
-            'C' | 'c' => 'G',
-            other => other,
-        })
-        .collect()
+    deleted.iter().rev().zip(inserted).all(|(&base, &other)| {
+        crate::sequence::complement_base(base).is_some_and(|c| c == other.to_ascii_uppercase())
+    })
 }
 
 /// Find a repeat unit in a sequence.
@@ -317,11 +328,75 @@ mod tests {
         assert!(!is_inversion("ATG", "CA"));
     }
 
+    /// A one-nucleotide "inversion" is a substitution (`inversion.md:15-16`:
+    /// "the region inverted contains **more than one nucleotide**. The
+    /// description `g.234inv` is therefore not allowed").
+    ///
+    /// `classify_edit` reaches [`is_inversion`] for *any* equal-length delins,
+    /// so without a length guard every `A>T`, `T>A`, `G>C` and `C>G` classified
+    /// as an inversion instead of falling through to its own substitution arm.
     #[test]
-    fn test_reverse_complement() {
-        assert_eq!(reverse_complement("ATGC"), "GCAT");
-        assert_eq!(reverse_complement("AAAA"), "TTTT");
-        assert_eq!(reverse_complement(""), "");
+    fn a_single_nucleotide_is_never_an_inversion() {
+        for (deleted, inserted) in [("A", "T"), ("T", "A"), ("G", "C"), ("C", "G")] {
+            assert!(
+                !is_inversion(deleted, inserted),
+                "{deleted}>{inserted} is a substitution, not a 1 nt inversion"
+            );
+        }
+    }
+
+    /// A code with no modelled complement must not read as its own complement.
+    ///
+    /// This is #1249's trap in another module: a complement whose fallback
+    /// returns the character unchanged makes `complement(R) == R` for every code
+    /// it does not model, so `RR` to `RR` — no change at all — classified as an
+    /// inversion. `R` complements to `Y`.
+    #[test]
+    fn a_code_without_a_complement_is_not_its_own_complement() {
+        assert!(!is_inversion("RR", "RR"), "revcomp(RR) is YY, not RR");
+        assert!(!is_inversion("XX", "XX"), "X has no complement to report");
+        assert!(is_inversion("RY", "RY"), "revcomp(RY) really is RY");
+    }
+
+    /// The third class, and the one the two cases above cannot show: a code that
+    /// genuinely *is* its own complement.
+    ///
+    /// `S` (G/C), `W` (A/T) and `N` all complement to themselves in
+    /// [`crate::sequence::complement_base`], so an unchanged run of them really
+    /// is an inversion and must be reported as one. Without this, a "fix" that
+    /// simply refused every ambiguity code would satisfy
+    /// `a_code_without_a_complement_is_not_its_own_complement` and be wrong —
+    /// the three cases together pin unmodelled (`X`), modelled-but-not-self-
+    /// complementary (`R`), and modelled-and-self-complementary as distinct.
+    #[test]
+    fn a_self_complementary_code_is_an_inversion_unchanged() {
+        // Homogeneous runs only. Self-complementary is not the same as
+        // palindromic: each base complementing to itself makes `revcomp` equal to
+        // the plain *reverse*, so an unchanged run is an inversion exactly when
+        // the run reads the same backwards.
+        for code in ["SS", "WW", "NN"] {
+            assert!(
+                is_inversion(code, code),
+                "`{code}` is a self-complementary palindrome, so it is its own \
+                 reverse complement"
+            );
+        }
+        // `SW` shows the distinction: both bases are self-complementary, but the
+        // run is not a palindrome, so `revcomp(SW)` is `WS`.
+        assert!(is_inversion("SW", "WS"), "revcomp(SW) is WS");
+        assert!(
+            !is_inversion("SW", "SW"),
+            "revcomp(SW) is WS, so SW unchanged is not an inversion"
+        );
+    }
+
+    /// Reference FASTAs are routinely soft-masked, so one inversion can arrive
+    /// with either case on either side and must classify the same way.
+    #[test]
+    fn soft_masking_does_not_hide_an_inversion() {
+        assert!(is_inversion("ATG", "cat"));
+        assert!(is_inversion("atg", "CAT"));
+        assert!(is_inversion("aTg", "cAt"));
     }
 
     #[test]

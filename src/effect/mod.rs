@@ -892,7 +892,7 @@ pub fn validate_inversion(
     match (reference_sequence, provided_sequence) {
         (Some(reference), Some(provided)) => {
             // The provided sequence should be the reverse complement of reference
-            let expected_revcomp = reverse_complement(reference);
+            let expected_revcomp = crate::sequence::reverse_complement(reference);
 
             if provided.to_uppercase() == expected_revcomp.to_uppercase() {
                 InversionValidation::Valid
@@ -912,22 +912,6 @@ pub fn validate_inversion(
         },
         (None, None) => InversionValidation::Valid, // Nothing to validate
     }
-}
-
-/// Compute reverse complement of a DNA sequence.
-fn reverse_complement(sequence: &str) -> String {
-    sequence
-        .chars()
-        .rev()
-        .map(|c| match c.to_ascii_uppercase() {
-            'A' => 'T',
-            'T' => 'A',
-            'C' => 'G',
-            'G' => 'C',
-            'N' => 'N',
-            other => other,
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -1179,8 +1163,27 @@ mod tests {
         assert_eq!(result, InversionValidation::Valid);
     }
 
+    /// An IUPAC code must complement to its partner, not to itself.
+    ///
+    /// The local helper this validator used modelled only `ACGTN` and returned
+    /// anything else unchanged, so `R` "complemented" to `R` and an inversion
+    /// that changed nothing validated as `Valid`. The same conflation as #1249,
+    /// in a third module. `R` complements to `Y`.
+    #[test]
+    fn an_iupac_code_is_not_its_own_complement() {
+        assert!(matches!(
+            validate_inversion(Some("RR"), Some("RR"), 1, 2),
+            InversionValidation::SequenceMismatch { .. }
+        ));
+        assert!(matches!(
+            validate_inversion(Some("RY"), Some("RY"), 1, 2),
+            InversionValidation::Valid
+        ));
+    }
+
     #[test]
     fn test_reverse_complement() {
+        use crate::sequence::reverse_complement;
         assert_eq!(reverse_complement("ATGC"), "GCAT");
         assert_eq!(reverse_complement("AAAA"), "TTTT");
         assert_eq!(reverse_complement("GCGC"), "GCGC");
