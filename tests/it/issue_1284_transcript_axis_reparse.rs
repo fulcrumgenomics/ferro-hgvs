@@ -400,64 +400,66 @@ fn inverted_cds_bounds_are_refused_not_guessed() {
     );
 }
 
-/// The one shape this repair still names wrongly: a collision that settles on
-/// the **final transcript base**.
+/// A collision that settles on the **final transcript base** is spelled in
+/// range — the #1343 gap, closed by #1327's terminal re-spelling.
 ///
-/// `c.[*10dup;*11dup]` 3'-shifts both members onto `*11` — the last base of this
-/// transcript — and the repair respells one of them as an insertion at the
-/// junction 3' of it. That junction's right endpoint is `*12`, which the record
-/// does not have. `cds_axis_position` has a floor (`tx < 1`) but no ceiling, so
-/// it answers `ThreePrimeUtr(12)` rather than refusing, and the result renders
-/// as `c.*11_*12insAA`.
+/// `c.[*10dup;*11dup]` 3'-shifts both members onto `*11`, the last base of this
+/// transcript. Anchoring the repair's insertion at the junction 3' of it would
+/// need `*12`, which the record does not have: `cds_axis_position` has a floor
+/// (`tx < 1`) and no ceiling, so it answered `ThreePrimeUtr(12)` rather than
+/// refusing, and the result rendered as `c.*11_*12insAA` — readable, so
+/// `FERRO_ASSERT_REPARSE` could not see it, and wrong.
 ///
-/// The denoted sequence is right and the string re-parses — `parse_hgvs` has no
-/// provider and so cannot bound a 3'UTR position — which is exactly why
-/// `FERRO_ASSERT_REPARSE` does not catch it and why it is pinned by hand here
-/// instead of left to the census below.
+/// `respell_at_sequence_end` now spells the terminal case as the duplication it
+/// is, which needs no position past the end. Three answers for one input, in
+/// order:
 ///
-/// **This is not a regression.** On `origin/main` the same input came back as
-/// `c.[*11dup;*11dup]`: two members claiming one reference position, which is
-/// the #1234 overlapping-members class. Measured over this file's 12,110-case
-/// grid, `main` produced **120** outputs `parse_hgvs` rejects and **0**
-/// out-of-range positions; this change produces **0** and **2**. So the repair
-/// removes 120 unreadable outputs and converts one narrow defect into another
-/// narrow one, on 2 inputs, both of which stay readable.
-///
-/// Refusing the respell instead is not available: it returns those 4 terminal
-/// del+dup cases (`c.[*10del;*11dup]`) to the unparseable `c.[*11del;*11dup]`,
-/// and `FERRO_ASSERT_REPARSE` is armed in CI, so an unparseable output aborts
-/// the run rather than failing a comparison.
-///
-/// The real fix is to spell a terminus-anchored insertion as the duplication it
-/// is (`c.*10_*11dup`, which is sequence-identical and needs no `*12`). That is
-/// a change to what `respell_at_gap` may emit rather than to this conversion, so
-/// it is tracked as #1343 rather than widened into this PR. Pinned here so it
-/// stays measured: if the count moves, one of the two is wrong.
+/// ```text
+/// origin/main   c.[*11dup;*11dup]   two members on one position (#1234 class)
+/// #1284 alone   c.*11_*12insAA      names a base the transcript does not have
+/// with #1327    c.*10_*11A[4]       in range, one member, same bases
+/// ```
 #[test]
-fn a_collision_on_the_final_transcript_base_still_names_a_position_past_the_end() {
+fn a_collision_on_the_final_transcript_base_is_spelled_in_range() {
     // 3'UTR is `*1..*11` (transcript 25..35 of a 35-base record), so `*12` is
-    // one past the end.
+    // one past the end and must not appear.
     for input in ["NM_TEST.1:c.[*10dup;*11dup]", "NM_TEST.1:c.[*11dup;*10dup]"] {
         let output = normalize(input, STRUCTURED_CORE, STRUCTURED_CDS);
         assert_eq!(
-            output, "NM_TEST.1:c.*11_*12insAA",
-            "`{input}`: the known #1343 gap"
+            output, "NM_TEST.1:c.*10_*11A[4]",
+            "`{input}` must be spelled without a position past the transcript end"
         );
-        // The half that is not in doubt: the string is readable, and the base it
-        // names past the end is the *anchor*, not a base it claims to edit.
         assert!(
-            parse_hgvs(&output).is_ok(),
-            "`{output}` must at least re-parse"
+            !output.contains("*12"),
+            "`{input}` -> `{output}` names a position past the transcript end"
         );
+        assert!(parse_hgvs(&output).is_ok(), "`{output}` must re-parse");
     }
 }
 
-/// The terminal shape that the repair does get right, and which is why refusing
-/// the one above is not an option.
+/// The other terminal shape: a collision at the last base whose two members
+/// **cancel**.
 ///
-/// `*10` and `*11` are both `A`, so deleting the first and duplicating the
-/// second cancel exactly. On `origin/main` this settled as the unparseable
-/// `c.[*11del;*11dup]` — one of the 120 — and it is now a single identity member.
+/// `*10` and `*11` are both `A`, so deleting the first and duplicating the second
+/// cancel exactly and the allele denotes the reference. On `origin/main` this
+/// settled as the unparseable `c.[*11del;*11dup]` — one of the 120 — and #1284
+/// resolves it to the single identity member asserted here.
+///
+/// **This is the guard that caught #1344.** The terminal re-spelling #1327 adds
+/// is right for the `dup`+`dup` case above, but applied here it turned the
+/// cancellation into `c.[*11del;*11delinsAA]` — two coincident edits on one
+/// position, which ferro's own strict mode rejects (`OverlapConflictingEdits /
+/// W5002`) and which was a stable fixed point, so a permanent answer rather than
+/// a transient one.
+///
+/// The cause was that the boundary identity trades a zero-width junction
+/// insertion for a `delins` that *claims* the last base, and those are not
+/// interchangeable when a sibling already claims it: an insertion flush against
+/// a deleted base is the #999 adjacency the collapse pass merges, two members on
+/// one base is an overlap it cannot. `respell_colliding_duplications` now refuses
+/// the re-spelling in that case, which leaves the junction form for the merge to
+/// consume — so the out-of-range coordinate #1327 was avoiding still never
+/// reaches the output.
 #[test]
 fn a_cancelling_collision_on_the_final_transcript_base_is_repaired() {
     for input in ["NM_TEST.1:c.[*10del;*11dup]", "NM_TEST.1:r.[*10del;*11dup]"] {

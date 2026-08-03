@@ -520,6 +520,23 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     } else {
         (del_start, w_lo + hi_ref as i64 - 1)
     };
+    // The collapse has its own way of naming a position past the end (#1327):
+    // when the group nets to a pure insertion at the window's 3' edge,
+    // `del_start` is one past the last base, and the insertion-shaped anchor
+    // `(del_start, del_start - 1)` renders as `m.16569_16570=` on rCRS.
+    //
+    // Distinct from the `respell_at_gap` overrun this issue names — a different
+    // pass, reached without it — but the same defect, so it is fixed here too
+    // rather than left for the symptom to survive the fix. Refusing the
+    // collapse is the right answer *here* (unlike in `respell_at_gap`, where it
+    // reintroduced #1286): the members are left as they are, which is in range,
+    // and refusing is this module's convention for a group it cannot place.
+    if let Ok(length) = provider.get_sequence_length(&accession) {
+        let past_end = |p: i64| u64::try_from(p + delta).is_ok_and(|v| v > length);
+        if past_end(a_start) || past_end(a_end) {
+            return variants;
+        }
+    }
     let anchor = Anchor {
         region: body,
         start: a_start,
@@ -3662,7 +3679,14 @@ pub(crate) fn demote_coincident_tract_repeats<P: ReferenceProvider>(
             let edit = NaEdit::Insertion {
                 sequence: InsertedSequence::Literal(Sequence::new(payload.clone())),
             };
-            respell_at_gap(&mut members[i], span, span.end, edit, provider);
+            respell_at_gap(
+                &mut members[i],
+                span,
+                span.end,
+                edit,
+                provider,
+                TerminalRespell::Allowed,
+            );
             members[i] != originals[slot]
         });
         if !rewritten {
@@ -4286,7 +4310,26 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
         };
         // The copy lands at the junction 3' of the duplicated span, which is
         // the gap `[end, end + 1]`.
-        respell_at_gap(&mut members[i], dup, dup.end, edit, provider);
+        //
+        // The terminal boundary re-spelling (#1327) is refused when a
+        // base-claiming sibling already occupies the base that gap runs past
+        // (#1344). Re-spelling turns this member into a `delins` on that base,
+        // so the pair goes from an adjacency the collapse pass merges to an
+        // overlap it cannot; the zero-width junction form is what lets the
+        // cancellation happen. The out-of-range coordinate is transient there —
+        // the merge consumes it before anything is rendered.
+        // `dup.end`, not `dup.end + 1`: the boundary identity deletes the *last*
+        // base and re-inserts it carrying the payload, so the base the re-spelt
+        // member claims is the one at the 5' side of the gap.
+        let sibling_claims_the_landing_base = siblings()
+            .filter(|s| s.claims_bases)
+            .any(|s| s.start <= dup.end && s.end >= dup.end);
+        let terminal = if sibling_claims_the_landing_base {
+            TerminalRespell::Refused
+        } else {
+            TerminalRespell::Allowed
+        };
+        respell_at_gap(&mut members[i], dup, dup.end, edit, provider, terminal);
     }
 }
 
@@ -4449,7 +4492,14 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
             continue;
         };
         let before = members[target].clone();
-        respell_at_gap(&mut members[target], span, junction, edit, provider);
+        respell_at_gap(
+            &mut members[target],
+            span,
+            junction,
+            edit,
+            provider,
+            TerminalRespell::Allowed,
+        );
         if members[target] == before {
             continue; // the re-spell did not take; leave the group alone
         }
@@ -4588,7 +4638,14 @@ fn translate_junction_member<P: ReferenceProvider>(
         sequence: InsertedSequence::Literal(Sequence::new(moved)),
     };
     let translated = variant.clone();
-    respell_at_gap(variant, from, destination, edit, provider);
+    respell_at_gap(
+        variant,
+        from,
+        destination,
+        edit,
+        provider,
+        TerminalRespell::Allowed,
+    );
     if *variant == translated {
         *variant = original;
     }
@@ -4746,6 +4803,181 @@ fn junction_payload<P: ReferenceProvider>(
 /// *gap*: an interbase point on the CDS start is legitimately named `c.-1_1`,
 /// and reading it back through `member_span` would report `None` and force a
 /// correct repair to revert. Used only by [`respell_at_gap`].
+/// Re-spell a member whose landing junction is one past the sequence end as the
+/// equivalent boundary `delins` on the last base (#1327).
+///
+/// `edit` must be the literal `Insertion` the repair passes build; anything else
+/// has no payload to fold into the `delins` and is left alone. Reverts unless
+/// the rewritten member reads back as a single position at the last base — the
+/// same all-or-nothing discipline [`respell_at_gap`] applies to its own writes.
+fn respell_at_sequence_end<P: ReferenceProvider>(
+    variant: &mut HgvsVariant,
+    span: &MemberSpan,
+    edit: &NaEdit,
+    delta: i64,
+    length: u64,
+    provider: &P,
+) {
+    let NaEdit::Insertion {
+        sequence: InsertedSequence::Literal(payload),
+    } = edit
+    else {
+        return;
+    };
+    // The last base, read as the one-byte slice `insertion_to_boundary_delins`
+    // anchors at position 1.
+    let Ok(last) = provider.get_sequence(&span.provider_key, length.saturating_sub(1), length)
+    else {
+        return;
+    };
+    let Some(delins) = crate::normalize::insertion_to_boundary_delins(
+        last.as_bytes(),
+        payload,
+        1,
+        crate::normalize::BoundarySide::ThreePrime,
+    ) else {
+        return;
+    };
+    // Back onto the member's own axis: the last base is `length - delta` there.
+    // `raw_length` keeps the unsigned form for the CDS-relative conversion below.
+    let raw_length = length;
+    let Ok(length) = i64::try_from(length) else {
+        return;
+    };
+    let axis = length - delta;
+    let original = variant.clone();
+    let placed = match variant {
+        HgvsVariant::Genome(g) => {
+            u64::try_from(axis).is_ok_and(|v| {
+                set_endpoints(
+                    &mut g.loc_edit.location,
+                    |p: &mut GenomePos, v: u64| p.base = v,
+                    v,
+                    v,
+                )
+            }) && {
+                g.loc_edit.edit = Mu::Certain(delins.clone());
+                true
+            }
+        }
+        HgvsVariant::Mt(m) => {
+            u64::try_from(axis).is_ok_and(|v| {
+                set_endpoints(
+                    &mut m.loc_edit.location,
+                    |p: &mut GenomePos, v: u64| p.base = v,
+                    v,
+                    v,
+                )
+            }) && {
+                m.loc_edit.edit = Mu::Certain(delins.clone());
+                true
+            }
+        }
+        // The transcript axes reach this too, and must be handled rather than
+        // refused. `c.*11` on a 35-base transcript *is* the last base, so a
+        // duplication resting there lands its copy past the end exactly as the
+        // mitochondrial case does — and refusing left #1284's collision
+        // unrepaired and the output unparseable, which the re-parse oracle
+        // caught immediately. (An earlier draft of this arm asserted no such
+        // case had been measured; the suite falsified that.)
+        HgvsVariant::Tx(t) => {
+            axis != 0
+                && set_endpoints(
+                    &mut t.loc_edit.location,
+                    |p: &mut TxPos, v: i64| p.base = v,
+                    axis,
+                    axis,
+                )
+                && {
+                    t.loc_edit.edit = Mu::Certain(delins.clone());
+                    true
+                }
+        }
+        HgvsVariant::Cds(c) => {
+            let Some((region, axis)) = cds_axis_end(span, provider, raw_length, Region::Cds) else {
+                return;
+            };
+            let utr3 = region == Region::ThreePrimeUtr;
+            axis != 0
+                && set_endpoints(
+                    &mut c.loc_edit.location,
+                    |p: &mut CdsPos, v: i64| {
+                        p.base = v;
+                        p.utr3 = utr3;
+                        p.offset = None;
+                    },
+                    axis,
+                    axis,
+                )
+                && {
+                    c.loc_edit.edit = Mu::Certain(delins.clone());
+                    true
+                }
+        }
+        HgvsVariant::Rna(r) => {
+            let Some((region, axis)) = cds_axis_end(span, provider, raw_length, Region::Rna) else {
+                return;
+            };
+            let utr3 = region == Region::ThreePrimeUtr;
+            axis != 0
+                && set_endpoints(
+                    &mut r.loc_edit.location,
+                    |p: &mut RnaPos, v: i64| {
+                        p.base = v;
+                        p.utr3 = utr3;
+                        p.offset = None;
+                    },
+                    axis,
+                    axis,
+                )
+                && {
+                    r.loc_edit.edit = Mu::Certain(delins.clone());
+                    true
+                }
+        }
+        _ => false,
+    };
+    // Compare against the region the arm actually wrote, not against
+    // `span.region`. For `c.`/`r.` those differ exactly when the last base lies
+    // outside the member's own region — which is the case this guard exists for,
+    // so keying the check on `span.region` would make it vacuously true for the
+    // one input it has to judge.
+    let written = match variant {
+        HgvsVariant::Cds(_) => cds_axis_end(span, provider, raw_length, Region::Cds),
+        HgvsVariant::Rna(_) => cds_axis_end(span, provider, raw_length, Region::Rna),
+        _ => Some((span.region, axis)),
+    };
+    let landed = placed && written.is_some_and(|w| member_endpoints(variant) == Some((w, w)));
+    if !landed {
+        *variant = original;
+    }
+}
+
+/// Which `(region, axis position)` names the sequence's **last base** on a
+/// CDS-relative axis.
+///
+/// `respell_at_sequence_end` otherwise reaches the last base as
+/// `length - delta`, using the *member's own* region delta. That is right only
+/// while the last base lies in the member's region. It does not have to: a
+/// positive coordinate outside the CDS is classified as a body region, so on a
+/// 35-base record with `cds_start = 13`, `cds_end = 24` the last base came out
+/// as `c.23` — which converts back the same way, so `member_endpoints` accepted
+/// it — where the record's own axis calls it `c.*11`. `c.23` names a coding
+/// position in a CDS that has only 12 bases.
+///
+/// Resolving through the transcript instead is what `respell_at_gap`'s
+/// `cds_relative_gap` already does for the junction case; this is the same
+/// conversion for the terminal case.
+fn cds_axis_end<P: ReferenceProvider>(
+    span: &MemberSpan,
+    provider: &P,
+    length: u64,
+    body: Region,
+) -> Option<(Region, i64)> {
+    let (cds_start, cds_end) = ordered_cds_bounds(&span.provider_key, provider)?;
+    cds_axis_position(i64::try_from(length).ok()?, cds_start, cds_end, body)
+}
+
 fn member_endpoints(v: &HgvsVariant) -> Option<((Region, i64), (Region, i64))> {
     fn ends<T>(
         interval: &Interval<T>,
@@ -4789,12 +5021,24 @@ fn member_endpoints(v: &HgvsVariant) -> Option<((Region, i64), (Region, i64))> {
 /// The verification is [`member_endpoints`] rather than [`member_span`] for
 /// that reason: the correct answer here is a range whose ends sit in two
 /// regions, and `member_span` refuses those by construction.
+/// Whether [`respell_at_gap`] may apply the terminal boundary re-spelling
+/// (#1327) when the gap runs one past the last base.
+///
+/// `Refused` when a sibling already claims that base: see the comment at the
+/// gate for why the two spellings are not interchangeable there (#1344).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TerminalRespell {
+    Allowed,
+    Refused,
+}
+
 fn respell_at_gap<P: ReferenceProvider>(
     variant: &mut HgvsVariant,
     span: &MemberSpan,
     junction: i64,
     edit: NaEdit,
     provider: &P,
+    terminal_respell: TerminalRespell,
 ) {
     let original = variant.clone();
     let (gap_start, gap_end) = (junction, junction + 1);
@@ -4812,6 +5056,73 @@ fn respell_at_gap<P: ReferenceProvider>(
             cds_axis_position(right, cds_start, cds_end, body)?,
         ))
     };
+
+    // The gap's 3' end must name a base the sequence actually has (#1327).
+    //
+    // Nothing else checks it. `landed` below only confirms the member reads
+    // back at the gap it was *told* to use, which an out-of-range gap does; and
+    // `parse_hgvs` does not know the sequence's length, so `m.16569_16570insAA`
+    // re-parses cleanly and the `FERRO_ASSERT_REPARSE` oracle stays silent. A
+    // member that 3'-shifts onto the final base is exactly how the repair
+    // reaches this: its landing junction is one past the end.
+    //
+    // The wrapped spelling is not available. SVD-WG006 authorises the reversed
+    // `<high>_<low>` range for **deletions and duplications only** (line 33,
+    // examples `NC_012920.1:m.16563_13del` and `J01749.1:o.4344_197dup`);
+    // `insertion.md` is silent, so the general 5'→3' rule stands and ferro's
+    // parser rejects `m.16569_1insA` (#129). Every re-spelling here produces an
+    // insertion, so there is no legal wrapped form to emit.
+    //
+    // **Declining is not good enough either**, which measurement is what
+    // showed: refusing here left `coalesce_members_at_one_junction`'s two
+    // members unmerged, and they had each already been canonicalised to
+    // `m.16569dup` — an allele claiming one position twice, which is the very
+    // #1286 defect that pass exists to remove, and which re-parses so no oracle
+    // sees it. Refusing traded an out-of-range spelling for an overlapping one.
+    //
+    // So re-spell at the boundary instead, via the identity every other clamp
+    // in this crate already uses: inserting `A'` immediately 3' of the last
+    // base *is* deleting that base and inserting `ref[last] ++ A'`
+    // (`insertion_to_boundary_delins`, shared with #1170 / #387 / #1202 /
+    // #1205 / #1217). That is in range, valid on a circular or linear
+    // reference alike, and denotes exactly what the out-of-range insertion did.
+    //
+    // Only acts when the overrun is *known*: a provider that cannot report a
+    // length leaves the check unevaluated rather than rewriting a repair it
+    // cannot judge.
+    //
+    // The trigger is the last base *exactly* (`junction + delta == length`), not
+    // "at or past it". A junction genuinely beyond the end is a different case:
+    // re-spelling it at the last base would silently relocate an edit the author
+    // placed elsewhere, which is a worse answer than declining. Only the
+    // one-past-the-end overrun has a boundary identity that denotes the same
+    // bases.
+    //
+    // Skipped entirely when a sibling already claims the last base (#1344). The
+    // boundary identity trades a zero-width junction insertion for a `delins`
+    // that *claims* that base, and those two are not interchangeable when
+    // something else is already there: an insertion flush against a sibling's
+    // deleted base is the #999 adjacency the collapse pass merges, while two
+    // members claiming one base is an overlap it cannot. Re-spelling therefore
+    // converted a mergeable pair into an unmergeable one, and the out-of-range
+    // coordinate it was avoiding never reached the output in that case anyway —
+    // the merge consumed it. Measured: `c.[*10del;*11dup]` gave
+    // `c.[*11del;*11delinsAA]`, which ferro's own strict mode rejects as
+    // `OverlapConflictingEdits / W5002`, where the junction form settles on the
+    // correct `c.*11=`.
+    if terminal_respell == TerminalRespell::Allowed {
+        if let Some(delta) = region_sequence_delta(span.region, &span.provider_key, provider) {
+            let Some(last) = junction.checked_add(delta) else {
+                return;
+            };
+            if let Ok(length) = provider.get_sequence_length(&span.provider_key) {
+                if u64::try_from(last) == Ok(length) {
+                    respell_at_sequence_end(variant, span, &edit, delta, length, provider);
+                    return;
+                }
+            }
+        }
+    }
 
     // The unsigned genomic pair, `None` on a negative axis. Computed per-arm
     // rather than as an early return for the whole function: hoisting it was
@@ -4972,6 +5283,55 @@ mod tests {
             NaEdit::Insertion { .. } => {}
             other => panic!("expected NaEdit::Insertion, got {other:?}"),
         }
+    }
+
+    /// The terminal base of a CDS-relative record is named by the record's own
+    /// axis, not by the member's region delta.
+    ///
+    /// `respell_at_sequence_end` used to reach the last base as
+    /// `length - delta`, taking `delta` from the *member's* region. On a 35-base
+    /// record with `cds_start = 13`, `cds_end = 24` a member classified as CDS
+    /// body has `delta = cds_start - 1 = 12`, so the last base came out as
+    /// `c.23` — and `member_endpoints` converts `c.23` back the same way, so the
+    /// self-consistency check accepted it. `c.23` names a coding position in a
+    /// CDS that has only 12 bases; the record's own axis calls transcript 35
+    /// `c.*11`.
+    ///
+    /// Asserted on the conversion rather than end-to-end, deliberately: no
+    /// *reachable* input distinguishes the two today, because positive
+    /// out-of-CDS coordinates are re-spelled to `*N` upstream (`c.23dup`
+    /// normalizes to `c.*11dup`), so `span.region` is already `ThreePrimeUtr`
+    /// by the time the helper runs. Every candidate input was measured
+    /// byte-identical with and without the fix. The guard is kept as hardening —
+    /// it matches what `respell_at_gap`'s `cds_relative_gap` already does for
+    /// the junction case — and pinned here rather than dressed up as an
+    /// end-to-end regression it is not.
+    #[test]
+    fn the_terminal_base_is_named_by_the_records_own_axis() {
+        // Transcript 35 on a record whose CDS is transcript 13..24.
+        assert_eq!(
+            cds_axis_position(35, 13, 24, Region::Cds),
+            Some((Region::ThreePrimeUtr, 11)),
+            "transcript 35 is `c.*11`, not the `c.23` that `length - delta` gave"
+        );
+        // The `r.` axis names the body differently and the UTRs identically.
+        assert_eq!(
+            cds_axis_position(35, 13, 24, Region::Rna),
+            Some((Region::ThreePrimeUtr, 11))
+        );
+        // Inside the CDS the two agree, which is why the defect only showed at
+        // the ends: transcript 20 is `c.8`, and `20 - 12` is also 8.
+        assert_eq!(
+            cds_axis_position(20, 13, 24, Region::Cds),
+            Some((Region::Cds, 8))
+        );
+        // And the 5' side, where the axis has no zero.
+        assert_eq!(
+            cds_axis_position(12, 13, 24, Region::Cds),
+            Some((Region::FivePrimeUtr, -1))
+        );
+        // No transcript position 0 or below.
+        assert_eq!(cds_axis_position(0, 13, 24, Region::Cds), None);
     }
 
     #[test]

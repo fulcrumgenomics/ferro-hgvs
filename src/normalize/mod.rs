@@ -545,7 +545,7 @@ impl CodonGate {
 
 /// Which side of `anchor` a shuffled insertion payload came to rest on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BoundarySide {
+pub(crate) enum BoundarySide {
     /// Payload rests immediately 5' of `anchor` (`…ins` before `ref[anchor]`).
     FivePrime,
     /// Payload rests immediately 3' of `anchor` (`…ins` after `ref[anchor]`).
@@ -576,7 +576,7 @@ enum BoundarySide {
 ///
 /// Returns `None` — leaving the caller's values untouched — when `anchor` lies
 /// outside `seq` or the reference byte there is not a base we can spell.
-fn insertion_to_boundary_delins(
+pub(crate) fn insertion_to_boundary_delins(
     seq: &[u8],
     a_prime: &Sequence,
     anchor: u64,
