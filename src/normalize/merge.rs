@@ -13,6 +13,7 @@ use crate::hgvs::variant::{
 use crate::normalize::boundary::Boundaries;
 use crate::normalize::config::ShuffleDirection;
 use crate::normalize::shuffle::shuffle;
+use crate::normalize::{boundary_delins_bases, BoundarySide, SequenceEnds};
 use crate::reference::ReferenceProvider;
 use crate::sequence::complement_base;
 
@@ -1867,6 +1868,19 @@ impl Piece {
         let ref_len = self.ref_end - self.ref_start;
         (self.alt.is_empty() && ref_len > 0) || (ref_len == 0 && !self.alt.is_empty())
     }
+
+    /// Whether this piece is a pure insertion sitting immediately outside one
+    /// end of the fetched window.
+    ///
+    /// A cheap necessary condition for the terminal-insertion clamp: only such
+    /// a piece can be resting on a *sequence* bound, so only for such a piece is
+    /// it worth asking the provider whether the window edge is the sequence's
+    /// edge (see [`window_sequence_ends`]).
+    fn rests_on_a_window_edge(&self, ref_bytes: &[u8]) -> bool {
+        self.ref_start == self.ref_end
+            && !self.alt.is_empty()
+            && (self.ref_start == 0 || self.ref_start == ref_bytes.len())
+    }
 }
 
 /// Whether to run both block splitters and report their disagreements.
@@ -2183,7 +2197,20 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         return None;
     }
 
-    let rebuilt = rebuild_members(&pieces, &variants[0], body, w_lo)?;
+    // Only a pure insertion resting on a window edge can be clamped, and only
+    // then is it worth asking the provider how long the whole sequence is — the
+    // one question `ref_bytes` alone cannot answer, since a window that stops
+    // short of the end and one that is flush with it look identical from here.
+    let ends = if pieces
+        .iter()
+        .any(|piece| piece.rests_on_a_window_edge(&ref_bytes))
+    {
+        window_sequence_ends(provider, &accession, start0, ref_bytes.len())
+    } else {
+        SequenceEnds::INTERIOR
+    };
+
+    let rebuilt = rebuild_members(&pieces, &variants[0], body, w_lo, &ref_bytes, ends)?;
     if rebuilt == variants {
         return None;
     }
@@ -2683,6 +2710,35 @@ fn fetch_canonical_window<P: ReferenceProvider>(
     let mut bytes = seq.into_bytes();
     bytes.make_ascii_uppercase();
     Some(bytes)
+}
+
+/// Which edges of the fetched window are edges of the sequence itself.
+///
+/// [`fetch_canonical_window`] serves 0-based `[start0, start0 + len)` of
+/// `accession`, and a window is padded on both sides, so an edge is the
+/// sequence's own only when the padding was clipped there. The 5' side is
+/// decidable from `start0` alone; the 3' side needs the sequence's length, which
+/// is the single provider round-trip this costs — and the caller only pays it
+/// when a derived piece is actually resting on an edge.
+///
+/// A length the provider cannot answer yields [`SequenceEnds::INTERIOR`]: not
+/// knowing where the sequence ends is a reason to leave a derived insertion
+/// alone, never a reason to rewrite one.
+fn window_sequence_ends<P: ReferenceProvider>(
+    provider: &P,
+    accession: &str,
+    start0: i64,
+    window_len: usize,
+) -> SequenceEnds {
+    let three_prime = provider
+        .get_sequence_length(accession)
+        .ok()
+        .and_then(|len| i64::try_from(len).ok())
+        .is_some_and(|len| start0 + window_len as i64 == len);
+    SequenceEnds {
+        five_prime: start0 == 0,
+        three_prime,
+    }
 }
 
 /// Apply every edit to the window, returning the resulting bytes.
@@ -3910,10 +3966,13 @@ fn rebuild_members(
     template: &HgvsVariant,
     body: Region,
     w_lo: i64,
+    ref_bytes: &[u8],
+    ends: SequenceEnds,
 ) -> Option<Vec<HgvsVariant>> {
     let mut members = Vec::with_capacity(pieces.len());
     for piece in pieces {
-        members.push(build_merged(template, anchor_for_piece(piece, body, w_lo)?));
+        let anchor = anchor_for_piece(piece, body, w_lo, ref_bytes, ends)?;
+        members.push(build_merged(template, anchor));
     }
     Some(members)
 }
@@ -3923,10 +3982,22 @@ fn rebuild_members(
 /// [`build_naedit`] already picks insertion / deletion / delins from the span
 /// and replacement, which covers the mandates that 1 nt → 1 nt is a
 /// substitution (`delins.md:15`) and that consecutive changes are one delins
-/// (`delins.md:16`). Inversion and tandem duplication are *not* built here —
-/// [`needs_unsupported_form`] refuses the whole group when a piece would need
-/// either, leaving them to the per-member pipeline.
-fn anchor_for_piece(piece: &Piece, body: Region, w_lo: i64) -> Option<Anchor> {
+/// (`delins.md:16`). A pure insertion needs one rule that span alone cannot
+/// express, applied here before falling back to that typing: a payload resting
+/// outside the sequence's own first or last base has no second anchor to name,
+/// and is re-spelled as a single-position `delins` ([`boundary_delins_anchor`],
+/// #1202/#1205/#1217).
+///
+/// Inversion and tandem duplication are *not* built here — [`needs_unsupported_form`]
+/// refuses the whole group when a piece would need either, leaving them to the
+/// per-member pipeline.
+fn anchor_for_piece(
+    piece: &Piece,
+    body: Region,
+    w_lo: i64,
+    ref_bytes: &[u8],
+    ends: SequenceEnds,
+) -> Option<Anchor> {
     let alt: Vec<Base> = piece
         .alt
         .iter()
@@ -3935,6 +4006,11 @@ fn anchor_for_piece(piece: &Piece, body: Region, w_lo: i64) -> Option<Anchor> {
     if alt.len() != piece.alt.len() {
         return None; // non-IUPAC byte; refuse rather than mangle.
     }
+    if piece.ref_start == piece.ref_end && !alt.is_empty() {
+        if let Some(anchor) = boundary_delins_anchor(piece, &alt, body, w_lo, ref_bytes, ends) {
+            return Some(anchor);
+        }
+    }
     let start = w_lo + piece.ref_start as i64;
     let end = w_lo + piece.ref_end as i64 - 1;
     Some(Anchor {
@@ -3942,6 +4018,51 @@ fn anchor_for_piece(piece: &Piece, body: Region, w_lo: i64) -> Option<Anchor> {
         start,
         end,
         alt,
+    })
+}
+
+/// The single-position `delins` anchor for a derived insertion that has come to
+/// rest outside the sequence's own bounds, or `None` when it has not.
+///
+/// The per-member pipeline owns this rewrite through
+/// [`clamp_insertion_at_sequence_bounds`](crate::normalize); it is the reason
+/// the sequence-first pass used to refuse every derivation that collapsed to one
+/// pure insertion. An insertion resting immediately 5' of base 1, or immediately
+/// 3' of the last base, has only one flanking anchor — `g.1ins…` is the form the
+/// spec itself rejects (`DNA/insertion.md:95-101`) and `g.<len>_<len+1>ins…`
+/// names a position past the end. On `m.` the tempting wraparound spelling is not
+/// available either (#129/#1217).
+///
+/// `ends` says which of the fetched window's edges are the *entity's* edges; a
+/// window that merely stopped where the fetch stopped must not be clamped at, or
+/// a perfectly valid interior insertion is rewritten at the wrong place.
+///
+/// The rewrite itself is
+/// [`boundary_delins_bases`](crate::normalize::boundary_delins_bases) — the same
+/// coordinate identity the per-member clamp applies, shared rather than copied.
+fn boundary_delins_anchor(
+    piece: &Piece,
+    alt: &[Base],
+    body: Region,
+    w_lo: i64,
+    ref_bytes: &[u8],
+    ends: SequenceEnds,
+) -> Option<Anchor> {
+    let (offset, side) = if ends.five_prime && piece.ref_start == 0 {
+        (0usize, BoundarySide::FivePrime)
+    } else if ends.three_prime && piece.ref_start == ref_bytes.len() {
+        (ref_bytes.len().checked_sub(1)?, BoundarySide::ThreePrime)
+    } else {
+        return None;
+    };
+    // `boundary_delins_bases` numbers its anchor 1-based into the slice.
+    let bases = boundary_delins_bases(ref_bytes, alt, offset as u64 + 1, side)?;
+    let position = w_lo + offset as i64;
+    Some(Anchor {
+        region: body,
+        start: position,
+        end: position,
+        alt: bases,
     })
 }
 

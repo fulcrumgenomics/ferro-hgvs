@@ -121,6 +121,30 @@ fn the_clamped_delins_describes_the_same_sequence() {
 }
 
 // ---------------------------------------------------------------------------
+// Reached through the sequence-first derivation too (#1235)
+// ---------------------------------------------------------------------------
+
+/// The clamp belongs to the *description*, not to one pipeline.
+///
+/// #1235 re-derives a cis allele from the sequence it produces and re-types
+/// every piece globally, so a derived piece can be a terminal insertion that no
+/// per-member clamp ever saw. Without the clamp in the piece builder the allele
+/// comes back carrying `g.15_16ins…` — the same 3' defect this file fixes,
+/// re-introduced one layer up.
+///
+/// The substitution is here to give the derivation a second piece: a derivation
+/// collapsing to a lone insertion is a separate case, covered by
+/// `three_prime_saturated_insertion_clamps_at_contig_end` above.
+#[test]
+fn a_derived_terminal_insertion_is_clamped_too() {
+    assert_canonical(
+        "NC_PROBE.1:g.[3C>T;13_14insGGA]",
+        ShuffleDirection::ThreePrime,
+        "NC_PROBE.1:g.[3C>T;15delinsGAGG]",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Controls: the clamp must not fire away from the bounds
 // ---------------------------------------------------------------------------
 

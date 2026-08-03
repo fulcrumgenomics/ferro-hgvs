@@ -182,6 +182,26 @@ fn the_clamp_does_not_emit_a_wraparound_insertion() {
 }
 
 // ---------------------------------------------------------------------------
+// Reached through the sequence-first derivation too (#1235)
+// ---------------------------------------------------------------------------
+
+/// The `m.` mirror of #1205's `a_derived_terminal_insertion_is_clamped_too`.
+///
+/// #1235's sequence-first pass re-derives a cis allele from the sequence it
+/// produces, so a derived piece can be a terminal insertion no per-member clamp
+/// ever saw. On `m.` there is no wraparound alternative to fall back on (#129),
+/// so the piece builder must apply the same single-position `delins` this file
+/// pins for the per-member path.
+#[test]
+fn a_derived_terminal_insertion_is_clamped_too() {
+    assert_canonical(
+        &format!("{MT}:m.[3C>T;13_14insGGA]"),
+        ShuffleDirection::ThreePrime,
+        &format!("{MT}:m.[3C>T;15delinsGAGG]"),
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Controls: the clamp must not fire away from the termini
 // ---------------------------------------------------------------------------
 

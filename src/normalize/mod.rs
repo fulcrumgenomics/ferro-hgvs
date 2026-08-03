@@ -598,9 +598,36 @@ pub(crate) fn insertion_to_boundary_delins(
     anchor: u64,
     side: BoundarySide,
 ) -> Option<NaEdit> {
+    let bases = boundary_delins_bases(seq, a_prime.bases(), anchor, side)?;
+    Some(NaEdit::Delins {
+        sequence: InsertedSequence::Literal(Sequence::new(bases)),
+        deleted: None,
+        deleted_length: None,
+        substitution_reference: None,
+    })
+}
+
+/// The replacement bases the boundary identity produces: `payload` concatenated
+/// with `ref[anchor]`, on whichever side the payload rests.
+///
+/// The whole of [`insertion_to_boundary_delins`]'s arithmetic, split out because
+/// the sequence-first derivation in [`merge`] needs the same rewrite in a
+/// different currency: it types its derived pieces straight into `Vec<Base>` and
+/// only later hands them to a builder that decides the `NaEdit`, so routing
+/// through the `NaEdit`-returning form above would mean constructing a `Delins`
+/// solely to take it apart again. Both callers therefore share one
+/// implementation of the identity rather than two copies that can drift.
+///
+/// Returns `None` when `anchor` lies outside `seq` or the reference byte there
+/// is not a base we can spell — the same two refusals the caller above documents.
+pub(crate) fn boundary_delins_bases(
+    seq: &[u8],
+    payload: &[Base],
+    anchor: u64,
+    side: BoundarySide,
+) -> Option<Vec<Base>> {
     let anchor_0b = (anchor as usize).saturating_sub(1);
     let ref_base = Base::from_char(*seq.get(anchor_0b)? as char)?;
-    let payload = a_prime.bases();
     let mut bases = Vec::with_capacity(payload.len() + 1);
     match side {
         BoundarySide::FivePrime => {
@@ -612,12 +639,7 @@ pub(crate) fn insertion_to_boundary_delins(
             bases.extend_from_slice(payload);
         }
     }
-    Some(NaEdit::Delins {
-        sequence: InsertedSequence::Literal(Sequence::new(bases)),
-        deleted: None,
-        deleted_length: None,
-        substitution_reference: None,
-    })
+    Some(bases)
 }
 
 /// Which ends of the `seq` slice handed to [`clamp_insertion_at_sequence_bounds`]
@@ -629,12 +651,15 @@ pub(crate) fn insertion_to_boundary_delins(
 /// contig there. Clamping at a window edge that is merely where the fetch stopped
 /// would assert a boundary that does not exist and rewrite a perfectly valid
 /// interior insertion into a `delins` at the wrong place.
+/// The sequence-first canonicalization in [`merge`] fetches a window too, and
+/// applies the same clamp to the pieces it derives, so this is `pub(crate)`
+/// rather than private to this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SequenceEnds {
+pub(crate) struct SequenceEnds {
     /// `seq[0]` is the entity's first base.
-    five_prime: bool,
+    pub(crate) five_prime: bool,
     /// `seq[len-1]` is the entity's last base.
-    three_prime: bool,
+    pub(crate) three_prime: bool,
 }
 
 impl SequenceEnds {
@@ -642,6 +667,14 @@ impl SequenceEnds {
     const WHOLE: Self = Self {
         five_prime: true,
         three_prime: true,
+    };
+
+    /// Neither end of the slice is known to be a real boundary, so no clamp may
+    /// fire. The conservative answer whenever the entity's length is unknown or
+    /// the window plainly sits inside it.
+    pub(crate) const INTERIOR: Self = Self {
+        five_prime: false,
+        three_prime: false,
     };
 }
 
