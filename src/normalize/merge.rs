@@ -2013,10 +2013,11 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     //   one alphabet before any comparison;
     // * the CDS/UTR and transcript-end insertion clamps (#1202, #1205, #1207,
     //   #1209, #383, #387) and the exon-junction exception to the 3' rule
-    //   (`general.md:44`) — covered by the pass's existing refusals: the body
-    //   region check in `collect_canonical_edits` keeps every member inside the
-    //   positive body, and the lone-pure-insertion bail hands terminal
-    //   insertions back to the per-member pipeline that owns those clamps.
+    //   (`general.md:44`) — the body region check in `collect_canonical_edits`
+    //   keeps every member inside the positive body, and the terminal-insertion
+    //   clamp is applied here, by `boundary_delins_anchor`. (It used to be
+    //   *deferred* here, by refusing every derivation that collapsed to one pure
+    //   insertion; that refusal is gone — see where it stood, below.)
     let body = body_region(kind);
     let (template_accession, _, _, _, _) = cis_axis_parts(&variants[0], kind)?;
     let template_accession = template_accession.clone();
@@ -2226,13 +2227,20 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // it holds no live line and could not have been the net this argument leans
     // on. The two are twins by design (see its own doc comment); the live one is
     // the one worth naming here.
-    // A derivation that collapses to a single pure insertion belongs to the
-    // per-member pipeline, which owns the terminal-insertion clamps (#1205,
-    // #1217) and duplication recovery. Re-deriving one here would undo a clamp
-    // the pipeline had already applied.
-    if pieces.len() == 1 && pieces[0].is_pure_indel() && !pieces[0].alt.is_empty() {
-        return None;
-    }
+
+    // A derivation collapsing to a single pure insertion used to be refused
+    // here, on the grounds that the per-member pipeline owned two capabilities
+    // this one lacked: the terminal-insertion clamps (#1205, #1217, and #129's
+    // ban on a bare `ins` at the mito origin) and duplication recovery. Both now
+    // live in the piece builder — `boundary_delins_anchor` and
+    // `duplication_anchor` — so the refusal has nothing left to protect, and it
+    // was the single largest source of #1235's non-confluence: every allele
+    // whose members denote one insertion was handed back to a pipeline that
+    // normalizes members in isolation and therefore cannot merge them.
+    //
+    // Do not restore it. If a terminal or tandem case regresses, the fix belongs
+    // in the builder; refusing here also refuses every merge the derivation gets
+    // right.
 
     // Only a pure insertion resting on a window edge can be clamped, and only
     // then is it worth asking the provider how long the whole sequence is — the

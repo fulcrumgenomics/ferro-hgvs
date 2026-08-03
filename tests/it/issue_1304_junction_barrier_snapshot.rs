@@ -43,8 +43,16 @@ fn a_moved_sibling_still_bars_the_crossing_it_started_at() {
 #[test]
 fn the_pair_alone_is_barred_too() {
     // Without the deletion, so the barrier is the only thing under test.
+    //
+    // Since #1235 the two-member spelling merges: with nothing else in the
+    // allele the pair denotes one three-base insertion, and the merged form is
+    // derived from that sequence rather than assembled per member — so the
+    // barrier, which decides where a member may *shift* to, no longer decides
+    // this allele's output. `a_moved_sibling_still_bars_the_crossing_it_started_at`
+    // above still exercises it: with the deletion present the derivation stays
+    // three members and the barrier holds.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[260_261insGA;261_262insA]");
-    assert_eq!(output, "NC_TEST.1:g.[260_261insGA;261_262insA]");
+    assert_eq!(output, "NC_TEST.1:g.262_263insGAA");
 }
 
 #[test]

@@ -1,8 +1,16 @@
 //! Two spellings of one variant that normalize to two different strings.
 //!
 //! #1235's criterion 1 requires every encoding of a variant to reach one
-//! normalized string. These eight pairs do not, and each pair's *split*
+//! normalized string. These two pairs do not, and each pair's *split*
 //! spelling is an expectation this repository blessed and shipped.
+//!
+//! Six of the original eight converged when the sequence-first pass stopped
+//! refusing a derivation that collapses to a single pure insertion — #1287,
+//! #1290, #1301, #1308, #1312 and #1320 have moved to [`CONVERGED`] below. The
+//! refusal existed to protect two capabilities the derivation lacked (the
+//! terminal-insertion clamp and `dup` typing); both now live in the piece
+//! builder, so every one of those six merged forms is derived from the sequence
+//! rather than assembled per member.
 //!
 //! The pairs were found by deriving each variant's minimal-alignment partition
 //! from the resulting sequence, rendering the derived single-block form, and
@@ -29,6 +37,25 @@ use ferro_hgvs::ShuffleDirection;
 /// `(issue, core, split spelling, merged spelling)`.
 const DIVERGENT: &[(&str, &str, &str, &str)] = &[
     (
+        "#1296",
+        "AAAAAAATAATCGCAACAGAAG",
+        "TEMPLATE:g.[272_273del;274_275insAA]",
+        "TEMPLATE:g.273delinsA",
+    ),
+    (
+        "#1304",
+        "GCATGAAAAT",
+        "TEMPLATE:g.[260_261insGA;261_262insA;264del]",
+        "TEMPLATE:g.262_263insGA",
+    ),
+];
+
+/// `(issue, core, split spelling, merged spelling)` for pairs that agree today.
+const CONVERGED: &[(&str, &str, &str, &str)] = &[
+    // Converged when the lone-pure-insertion refusal was removed: each merged
+    // form below is now derived from the sequence rather than assembled per
+    // member, so the split spelling reaches it too.
+    (
         "#1287",
         "ATACAGAAAATCAGGGCATA",
         "TEMPLATE:g.[261_262insGA;263_264insAA]",
@@ -41,22 +68,10 @@ const DIVERGENT: &[(&str, &str, &str, &str)] = &[
         "TEMPLATE:g.266_267insCA",
     ),
     (
-        "#1296",
-        "AAAAAAATAATCGCAACAGAAG",
-        "TEMPLATE:g.[272_273del;274_275insAA]",
-        "TEMPLATE:g.273delinsA",
-    ),
-    (
         "#1301",
         "GCATGAAAAT",
         "TEMPLATE:g.[263_264insAC;264_265insAA]",
         "TEMPLATE:g.264_265insCAAA",
-    ),
-    (
-        "#1304",
-        "GCATGAAAAT",
-        "TEMPLATE:g.[260_261insGA;261_262insA;264del]",
-        "TEMPLATE:g.262_263insGA",
     ),
     (
         "#1308",
@@ -76,10 +91,6 @@ const DIVERGENT: &[(&str, &str, &str, &str)] = &[
         "TEMPLATE:g.[263_264insAC;265_266insAA;266_267insAA]",
         "TEMPLATE:g.264_265insCAAAAA",
     ),
-];
-
-/// `(issue, core, split spelling, merged spelling)` for pairs that agree today.
-const CONVERGED: &[(&str, &str, &str, &str)] = &[
     (
         "#1286",
         "AAAAAA",
@@ -130,17 +141,17 @@ fn every_pinned_pair_denotes_one_variant() {
 }
 
 #[test]
-fn the_eight_spelling_pairs_still_diverge() {
-    // The count "eight" is asserted in three places' prose — this test's name,
+fn the_two_spelling_pairs_still_diverge() {
+    // The count "two" is asserted in three places' prose — this test's name,
     // the module doc above, and `tests/it/rewrite_target_corpus.rs` — and in none
     // of them executably. Adding or removing a row would leave all three wrong
     // and silent. `splitter_reproducer_corpus.rs` guards its own table the same
     // way.
     assert_eq!(
         DIVERGENT.len(),
-        8,
+        2,
         "row count changed; update this test's name, the module doc, and \
-         tests/it/rewrite_target_corpus.rs's reference to these eight pairs"
+         tests/it/rewrite_target_corpus.rs's reference to these two pairs"
     );
     for (issue, core, split, merged) in DIVERGENT {
         let seq = padded(core);
@@ -152,6 +163,46 @@ fn the_eight_spelling_pairs_still_diverge() {
              this row."
         );
     }
+}
+
+/// #1235's criterion 1 stated directly rather than as a table row: a **lone**
+/// spelling of a variant and its multi-member spelling must reach one string.
+///
+/// This is `#1287`'s pair. It gets its own named test rather than only a row in
+/// [`CONVERGED`] because it is the acceptance criterion itself and should not
+/// have to be read out of a table: the two spellings must denote one variant
+/// (proved below with an applier that is not the normalizer), reach one string,
+/// and that string must be a fixed point.
+///
+/// **Which half moved.** The multi-member spelling is the one that moved onto
+/// the lone one, by entering the sequence-first pass as a cis allele. The lone
+/// `g.263_264insGAAA` is a fixed point either way, so this pair does *not*
+/// exercise `is_splittable_single_member`'s widening from `delins`/`inv` to any
+/// edit type — that gate is exercised by
+/// `issue_1205_genome_contig_bounds_clamp::a_lone_insertion_written_past_the_contig_end_is_clamped`
+/// and its `m.` twin, which are the shapes where a lone member's derived answer
+/// differs from its per-member one at all.
+#[test]
+fn a_lone_insertion_and_its_multi_member_spelling_converge() {
+    let seq = padded("ATACAGAAAATCAGGGCATA");
+    let lone = "TEMPLATE:g.263_264insGAAA";
+    let split = "TEMPLATE:g.[261_262insGA;263_264insAA]";
+
+    // Not assumed: proved with an applier that is not the normalizer, so a
+    // convergence onto a *wrong* shared string cannot pass this test.
+    assert_eq!(
+        apply(&seq, lone).expect("lone spelling applies"),
+        apply(&seq, split).expect("split spelling applies"),
+        "`{lone}` and `{split}` must denote one variant"
+    );
+
+    let from_lone = normalize(&seq, lone);
+    let from_split = normalize(&seq, split);
+    assert_eq!(
+        from_lone, from_split,
+        "one variant, two spellings, two normalized strings"
+    );
+    assert_eq!(from_lone, lone, "the shared answer must be a fixed point");
 }
 
 #[test]

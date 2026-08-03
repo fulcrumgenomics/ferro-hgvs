@@ -92,7 +92,13 @@ fn assert_preserving(input: &str, output: &str) {
 fn an_insertion_sorts_before_a_duplication_sharing_its_span() {
     let input = "NC_TEST.1:g.[263_264insAC;264_265insAA]";
     let output = normalize(input);
-    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup]");
+    // Since #1235 the pair reaches one member: the merged form is derived from
+    // the sequence rather than assembled per member, so the tie this file is
+    // about never has to be broken on *this* input. It is still broken, and
+    // still asserted, on the protein cases below — where both members tie on
+    // start and end — and the interbase-order check below is unchanged and
+    // trivially satisfied by a single member.
+    assert_eq!(output, "NC_TEST.1:g.264_265insCAAA");
     assert_preserving(input, &output);
 
     let starts = member_starts(&output);

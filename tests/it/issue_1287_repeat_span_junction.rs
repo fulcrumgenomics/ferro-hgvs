@@ -28,11 +28,19 @@ use crate::common::synthetic::assert_padded_preserving;
 #[test]
 fn a_repeat_does_not_swallow_a_siblings_junction() {
     // #1287. Demoted, the repeat becomes a duplication that clears the sibling.
+    //
+    // Since #1235 the two members never reach the demotion: the merged form is
+    // derived from the sequence rather than assembled per member, and this pair
+    // denotes one four-base insertion. That is the `#1287` row of
+    // `cis_spelling_confluence_gap.rs`, which this convergence moved out of the
+    // divergent table. The swallowing this test guards against is still caught —
+    // `assert_padded_preserving` applies both spellings independently of the
+    // normalizer.
     let output = assert_padded_preserving(
         "ATACAGAAAATCAGGGCATA",
         "NC_TEST.1:g.[261_262insGA;263_264insAA]",
     );
-    assert_eq!(output, "NC_TEST.1:g.[262_263dup;265_266dup]");
+    assert_eq!(output, "NC_TEST.1:g.263_264insGAAA");
 }
 
 #[test]

@@ -44,9 +44,16 @@ const CORE: &str = "AACAGTAAAATAT";
 fn a_dup_does_not_swallow_a_siblings_junction() {
     // #1320. The seed's own case. The duplication the demotion produces spans
     // 263-266 and the sibling adds at interbase 264, inside it.
+    //
+    // Since #1235 the three members reach one: the merged form is derived from
+    // the sequence rather than assembled per member, and this allele denotes a
+    // single six-base insertion. It is the `#1320` row of
+    // `cis_spelling_confluence_gap.rs`, now converged. The swallowing this file
+    // guards against cannot hide inside one member — with nothing to swallow,
+    // `assert_padded_preserving` still proves the sequence is the input's.
     let output =
         assert_padded_preserving(CORE, "NC_TEST.1:g.[263_264insAC;265_266insAA;266_267insAA]");
-    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;266_267insAAAA]");
+    assert_eq!(output, "NC_TEST.1:g.264_265insCAAAAA");
 }
 
 #[test]
@@ -63,8 +70,15 @@ fn a_junction_at_the_dups_five_prime_end_is_left_alone() {
     // `264_265dup` sorts to 264, the same position the insertion adds at, so
     // `junction_rank` already orders the pair — there is no sort/act
     // discrepancy to repair, and re-spelling here would undo #1301.
+    //
+    // Since #1235 the pair merges before either spelling is chosen — the merged
+    // form is derived from the sequence, not assembled per member — so the
+    // re-spelling this test bars is not reached on this input. #1301's own file
+    // records the same movement, and the 5' boundary the predicate must not
+    // cross is still pinned by `the_pair_without_the_swallowed_sibling_still_uses_the_repeat`
+    // and `a_deletion_colliding_with_a_dups_bases_still_respells`.
     let output = assert_padded_preserving("GCATGAAAAT", "NC_TEST.1:g.[263_264insAC;264_265insAA]");
-    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup]");
+    assert_eq!(output, "NC_TEST.1:g.264_265insCAAA");
 }
 
 #[test]
@@ -72,9 +86,14 @@ fn two_duplications_sharing_a_start_keep_both_dup_spellings() {
     // The same 5' boundary between two duplications, which is #1261's
     // reproduction: `258dup`'s junction is 258 and `258_259dup` starts there.
     // A `>=` test would re-spell the wider one and lose the pinned form.
+    //
+    // Since #1235 both dup spellings are gone, because there is only one member
+    // left to spell: the merged form is derived from the sequence the pair
+    // denotes — one three-base insertion — rather than assembled per member.
+    // #1261's own file records the same movement.
     let output =
         assert_padded_preserving("CAGTATGCAGGCAA", "NC_TEST.1:g.[258_259insA;259_260insAG]");
-    assert_eq!(output, "NC_TEST.1:g.[258dup;258_259dup]");
+    assert_eq!(output, "NC_TEST.1:g.258_259insAGA");
 }
 
 #[test]

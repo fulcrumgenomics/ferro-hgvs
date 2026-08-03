@@ -1990,6 +1990,47 @@ impl<P: ReferenceProvider> Normalizer<P> {
             single if Self::is_splittable_single_member(single) => std::slice::from_ref(variant),
             _ => return None,
         };
+        // When strict mode declares an input has no canonical form, the
+        // derivation must not manufacture one.
+        //
+        // This is a deliberate narrowing of "the derivation is authoritative":
+        // it is authoritative over *how* to spell a variant, not over *whether*
+        // an ill-formed input has a spelling at all. An allele carrying an
+        // overlap conflict is rejected by strict mode as `OverlapConflictingEdits
+        // / W5002` precisely because the spec defines no canonical form for it;
+        // re-deriving it from the sequence hands lenient mode a single tidy
+        // member that strict mode then *accepts*, which launders the conflict out
+        // of existence instead of leaving it visible to be rejected.
+        //
+        // The check has to be here, on `detect_overlap_conflicts`, because the
+        // two refusals in play answer different questions in different coordinate
+        // spaces and disagree for exactly this shape:
+        //
+        // * `merge::apply_edits_to_window` refuses on **interbase** geometry, so
+        //   `24dup` (the zero-length junction `[24, 24]`) and `24C>G` (the span
+        //   `[23, 24]`) are flush, not overlapping, and it admits the pair.
+        // * `detect_overlap_conflicts` works in **HGVS-coordinate** space, where
+        //   both members name base 24, and reports the conflict — and it is this
+        //   one that strict mode and the #395 / #1276 / #1235 guards use.
+        //
+        // #1307 is the instance that showed the gap: `g.[24dup;24C>G]` on a
+        // 24-base contig derived to `g.23_24insG`, which is in range and denotes
+        // the same bases, yet turned a strict-rejected input into a
+        // strict-accepted output. The lone-pure-insertion bail in
+        // `canonicalize_from_sequence` had been masking it; removing that bail
+        // made it reachable rather than creating it.
+        //
+        // Recomputed from the member list on every pass rather than read off a
+        // carried `OverlapConflict` warning. That distinction is what keeps the
+        // gate idempotent: the warning does not survive re-normalization, so
+        // gating on it would refuse the first pass and admit the second.
+        if members.len() > 1
+            && crate::normalize::overlap::detect_overlap_conflicts(members, AllelePhase::Cis)
+                .iter()
+                .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }))
+        {
+            return None;
+        }
         // `phase` is `Cis` on both arms — the allele arm refuses anything else
         // above — and `uncertain` is likewise always false, which is exactly what
         // `AlleleVariant::new` builds.
@@ -2020,9 +2061,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// disjoint, but it does not cover a conflict that was in the input all
     /// along — an insertion interior to another member's span is reported
     /// (`OverlapConflict`) rather than resolved, and so survives into here.
-    /// `merge::apply_edits_to_window` refuses those on the edit geometry, which
-    /// is where the check has to live: the warning itself does not survive
-    /// re-normalization, so gating on it here would cost idempotency.
+    ///
+    /// **This used to say `merge::apply_edits_to_window` refuses those on the
+    /// edit geometry, "which is where the check has to live". It does not, and
+    /// it is not.** That refusal is interbase-geometric, so it admits a pair that
+    /// is flush in interbase space while coincident in HGVS-coordinate space —
+    /// a `dup` and a substitution on one base, which is #1307. The gate that
+    /// actually holds this line is in [`Self::sequence_first_pass`], on
+    /// `detect_overlap_conflicts`; see the reasoning there, including why
+    /// recomputing it per pass (rather than gating on the carried warning, the
+    /// idempotency cost this note was warning about) keeps the pass a fixed
+    /// point. Do not restore the older claim — leaving it in place is how the
+    /// hole gets re-opened.
     fn normalize_core_canonical(
         &self,
         variant: &HgvsVariant,

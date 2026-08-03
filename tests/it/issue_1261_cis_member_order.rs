@@ -64,9 +64,18 @@ fn assert_ordered_and_preserving(core: &str, input: &str) -> String {
 fn two_duplications_sharing_a_start_render_in_junction_order() {
     // The #1261 reproduction. `258dup` sits at interbase 258 and `258_259dup`
     // at 259, so the narrower one must come first.
+    //
+    // Since #1235 the pair no longer reaches the sort at all: the merged form is
+    // derived from the sequence rather than assembled per member, and the two
+    // members denote one three-base insertion. The ordering key is still the
+    // thing under test in this file — `members_with_distinct_starts_are_unaffected`,
+    // `a_duplication_beside_a_later_substitution_keeps_its_place` and
+    // `protein_members_sharing_a_start_render_in_end_order` all still exercise
+    // it, the last on a shared start — and `assert_ordered_and_preserving` still
+    // proves this input's answer denotes the input's sequence.
     let output =
         assert_ordered_and_preserving("CAGTATGCAGGCAA", "TEMPLATE:g.[258_259insA;259_260insAG]");
-    assert_eq!(output, "TEMPLATE:g.[258dup;258_259dup]");
+    assert_eq!(output, "TEMPLATE:g.258_259insAGA");
 }
 
 #[test]

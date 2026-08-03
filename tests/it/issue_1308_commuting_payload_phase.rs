@@ -41,10 +41,13 @@ fn a_commuting_payload_does_not_sweep_past_a_sibling_that_stays() {
     // from 263 to 265 across it.
     let output =
         assert_padded_preserving("CAGAAGATGAATAA", "NC_TEST.1:g.[263_264insTG;264_265insTG]");
-    // The input's own spelling. Landing on the sibling's junction would rotate
-    // this member's `TG` into `GT`, which does not commute with the `TG` already
-    // there, so the pair stays apart rather than merging (#1312).
-    assert_eq!(output, "NC_TEST.1:g.[263_264insTG;264_265insTG]");
+    // Not the input's own spelling any more. The shift clamp still refuses to
+    // sweep the first member across the second — that is what this file is
+    // about, and it is unchanged — but since #1235 the allele's output is
+    // derived from the sequence the pair denotes rather than assembled from the
+    // clamped members, and that sequence is one four-base insertion. It is the
+    // `#1308` row of `cis_spelling_confluence_gap.rs`, now converged.
+    assert_eq!(output, "NC_TEST.1:g.265_266insTTGG");
 }
 
 #[test]
