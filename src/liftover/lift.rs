@@ -14,7 +14,7 @@
 //! For type-safe coordinate handling, see [`crate::coords`].
 
 use super::chain::ChainFile;
-use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
+use crate::coords::{hgvs_pos_to_index_checked, index_to_hgvs_pos};
 use crate::error::FerroError;
 use crate::reference::transcript::GenomeBuild;
 use std::path::Path;
@@ -127,6 +127,14 @@ impl Liftover {
     /// Lift a single position from one build to another.
     ///
     /// Positions are 1-based (HGVS convention).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FerroError::InvalidCoordinates`] if `pos` is `0` — there is no
+    /// 1-based position 0 — if the build pair is not one this instance carries
+    /// chains for, if no chain covers `contig:pos`, or if the position falls in
+    /// an alignment gap. All four share the one variant, so callers that need to
+    /// tell them apart have only the message.
     pub fn lift(
         &self,
         from: GenomeBuild,
@@ -136,8 +144,11 @@ impl Liftover {
     ) -> Result<LiftoverResult, FerroError> {
         let chain_file = self.get_chain_file(from, to)?;
 
-        // Convert from 1-based HGVS to 0-based for chain operations
-        let pos_0based = hgvs_pos_to_index(pos) as u64;
+        // Convert from 1-based HGVS to 0-based for chain operations. `pos` is a
+        // raw `u64` off a public API — the web service hands one straight from
+        // the query string — so it is not known to be a valid 1-based position
+        // and the conversion has to be the checked one (#1282).
+        let pos_0based = position_to_index(contig, pos)?;
 
         // Find chains covering this position
         let chains = chain_file.find_chains(contig, pos_0based);
@@ -196,6 +207,11 @@ impl Liftover {
     }
 
     /// Lift an interval from one build to another.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FerroError::InvalidCoordinates`] if either endpoint is `0`, or
+    /// if the build pair is not one this instance carries chains for.
     pub fn lift_interval(
         &self,
         from: GenomeBuild,
@@ -206,9 +222,11 @@ impl Liftover {
     ) -> Result<IntervalLiftoverResult, FerroError> {
         let chain_file = self.get_chain_file(from, to)?;
 
-        // Convert 1-based HGVS positions to 0-based for chain operations
-        let start_0based = hgvs_pos_to_index(start) as u64;
-        let end_0based = hgvs_pos_to_index(end) as u64;
+        // Convert 1-based HGVS positions to 0-based for chain operations. Both
+        // endpoints are unvalidated, so both take the checked conversion —
+        // guarding only `start` would still panic on `lift_interval(.., 10001, 0)`.
+        let start_0based = position_to_index(contig, start)?;
+        let end_0based = position_to_index(contig, end)?;
 
         // Find chains covering the start and end
         let start_chains = chain_file.find_chains(contig, start_0based);
@@ -298,6 +316,28 @@ impl Liftover {
     }
 }
 
+/// Convert a caller-supplied 1-based position to a 0-based chain index, or an
+/// error naming the offending coordinate.
+///
+/// Shared by [`Liftover::lift`] and [`Liftover::lift_interval`] so the three
+/// call sites cannot drift apart — the failure mode this guards against is
+/// exactly one endpoint keeping the unchecked conversion.
+fn position_to_index(contig: &str, pos: u64) -> Result<u64, FerroError> {
+    hgvs_pos_to_index_checked(pos)
+        .map(|idx| idx as u64)
+        .ok_or_else(|| FerroError::InvalidCoordinates {
+            // Report `pos` rather than the literal `0`. Zero is the only value
+            // `hgvs_pos_to_index_checked` refuses today, so the two read the
+            // same — but a hardcoded `0` becomes a lie the moment that function
+            // grows a second refusal, and an error message that names a value
+            // the caller did not pass is worse than one that names none.
+            msg: format!(
+                "liftover position must be 1-based, but got {pos} for contig {contig}: \
+                 no position 0 exists on any HGVS axis"
+            ),
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,6 +375,44 @@ mod tests {
         let result = liftover.lift(GenomeBuild::GRCh37, GenomeBuild::GRCh38, "chr1", 1);
 
         assert!(result.is_err());
+    }
+
+    /// Position `0` must be refused, not panic.
+    ///
+    /// `lift` takes a raw `u64` on a `pub` API and converts it with
+    /// `hgvs_pos_to_index`, which asserts on `0` (#1282). The web service reaches
+    /// here with an unvalidated position — `parse_genomic_position` accepts
+    /// `chr7:0` — so leaving the bare conversion in place turns a malformed
+    /// request into a panicked handler task rather than a 200 with an error body.
+    ///
+    /// #1282 asked for exactly this: guard the conversion and return an error,
+    /// rather than relying on callers never producing a zero.
+    #[test]
+    fn lift_rejects_position_zero() {
+        let liftover = Liftover::one_way(test_chain_file());
+        let err = liftover
+            .lift(GenomeBuild::GRCh37, GenomeBuild::GRCh38, "chr1", 0)
+            .expect_err("position 0 must be an error, not a panic");
+        assert!(
+            matches!(err, FerroError::InvalidCoordinates { .. }),
+            "expected InvalidCoordinates, got {err:?}"
+        );
+    }
+
+    /// Both endpoints of an interval get the same guard — a start of `0` and an
+    /// end of `0` are each rejected, so fixing only the start would still panic.
+    #[test]
+    fn lift_interval_rejects_position_zero_at_either_end() {
+        let liftover = Liftover::one_way(test_chain_file());
+        for (start, end) in [(0u64, 10100u64), (10001, 0)] {
+            let err = liftover
+                .lift_interval(GenomeBuild::GRCh37, GenomeBuild::GRCh38, "chr1", start, end)
+                .unwrap_err();
+            assert!(
+                matches!(err, FerroError::InvalidCoordinates { .. }),
+                "expected InvalidCoordinates for ({start}, {end}), got {err:?}"
+            );
+        }
     }
 
     #[test]
