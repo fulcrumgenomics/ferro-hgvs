@@ -135,6 +135,88 @@ fn an_insertion_reaching_the_end_of_its_run_still_collapses() {
     assert_normalizes_preserving(RUN, "TEMPLATE:g.[2_3insA;11C>G]", "TEMPLATE:g.11delinsAG");
 }
 
+/// A 5'-shuffled insertion merging with a deletion sibling must not move the
+/// base it contributes (#1342).
+///
+/// Surfaced by giving the sweep's first-member `ins` a payload that is not the
+/// span's own reference base. In the `T`-run at 1-9, inserting an `A` at the
+/// `2|3` junction and deleting a `T` at 4 is net "one `T` becomes an `A`" — and
+/// the `A` lands at position 3. It cannot shuffle 5': an `A` in a `T`-run is
+/// unique, so moving it is a different sequence, not a different spelling of
+/// the same one. The 3' direction already answered `g.3T>A`.
+#[test]
+fn an_insertion_merging_with_a_deletion_keeps_its_base_in_place() {
+    assert_normalizes_preserving_in(
+        TRACT,
+        "TEMPLATE:g.[2_3insA;4del]",
+        "TEMPLATE:g.3T>A",
+        ShuffleDirection::FivePrime,
+    );
+}
+
+/// Negative controls for the 5' junction barrier: it must bound only the shifts
+/// that actually reorder the two edits, never a member that may legitimately
+/// travel to the 5' end of its tract.
+///
+/// This is the failure mode the barrier's own assertion cannot see. A member
+/// held back too far still *preserves sequence*, so the exhaustive sweep below
+/// would pass while every answer quietly under-shifted. These pin the shifts
+/// that must still complete.
+#[test]
+fn the_five_prime_junction_barrier_does_not_over_clamp() {
+    // Payload equals the run base, so the insertion and the deletion cancel:
+    // the pair must still reduce all the way to an identity rather than being
+    // stranded as two members either side of the junction.
+    assert_normalizes_preserving_in(
+        TRACT,
+        "TEMPLATE:g.[2_3insT;4del]",
+        "TEMPLATE:g.2_3=",
+        ShuffleDirection::FivePrime,
+    );
+    // Net +1 `T` in the run. The 5'-most spelling is a duplication at 1, which
+    // is 5' of the `2|3` junction — reachable because the merged member no
+    // longer straddles it.
+    assert_normalizes_preserving_in(
+        TRACT,
+        "TEMPLATE:g.[2_3insTT;5del]",
+        "TEMPLATE:g.1dup",
+        ShuffleDirection::FivePrime,
+    );
+    // The deletion is outside the tract entirely, so there is no sweep and
+    // nothing for the barrier to bound — both members stay put.
+    assert_normalizes_preserving_in(
+        TRACT,
+        "TEMPLATE:g.[2_3insA;12del]",
+        "TEMPLATE:g.[2_3insA;12del]",
+        ShuffleDirection::FivePrime,
+    );
+}
+
+/// The barrier bounds a member by its **span start**, which is the right edge
+/// to bound only for a member that claims bases. A `dup` carries its own
+/// junction at its *end*, so bounding its start holds it back by `len - 1`
+/// more than the invariant requires.
+///
+/// `3_4dup` really is illegal here — it would share interbase 4 with the
+/// insertion — so `4_5dup` is the 5'-most legal spelling, and the member must
+/// still reach it. Bounding the start would strand it at `5_6dup`, its input
+/// position: sequence-preserving, so the exhaustive sweep cannot see it, and
+/// silently non-canonical.
+///
+/// The sweep is blind to this class twice over: its only oracle is `apply`, and
+/// its second member is always a single-base `dup` — exactly the length at
+/// which `len - 1` is zero and the over-clamp disappears.
+#[test]
+fn a_multi_base_duplication_still_reaches_its_five_prime_most_position() {
+    const DUP_RUN: &str = "TTAATATATAATAATATTAT";
+    assert_normalizes_preserving_in(
+        DUP_RUN,
+        "TEMPLATE:g.[4_5insC;5_6dup]",
+        "TEMPLATE:g.[4_5insC;4_5dup]",
+        ShuffleDirection::FivePrime,
+    );
+}
+
 #[test]
 fn no_two_member_allele_normalizes_to_a_different_sequence() {
     // The widened class. The sweep in `repeat_span_sibling_overlap.rs` uses a
@@ -183,7 +265,27 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
                 } else {
                     format!("{first_start}_{first_end}")
                 };
-                let inserted = &seq[first_start - 1..first_end];
+                // #1342: the payload must not equal either reference base
+                // flanking the insertion point, for the same reason the second
+                // member's payload excludes both of its neighbours below.
+                // This entry used to insert `seq[first_start - 1..first_end]`,
+                // the span's own reference bases — so for `first_len == 1` it
+                // denoted exactly `{first_start}dup`, the entry directly above
+                // it. Half the `first_len` values contributed two distinct
+                // first-member shapes while the array read as three, and the
+                // single-base span is the case where a junction has the least
+                // context to disambiguate it.
+                //
+                // `first_start <= 13` and `sweep_sequences` yields 20-base
+                // sequences, so index `first_start` — the 3' neighbour — is
+                // always in bounds.
+                let first_base = seq.as_bytes()[first_start - 1] as char;
+                let first_next_base = seq.as_bytes()[first_start] as char;
+                let first_ins_payload = ['A', 'C', 'G', 'T']
+                    .into_iter()
+                    .find(|b| *b != first_base && *b != first_next_base)
+                    .expect("four bases, at most two excluded");
+                let inserted: String = std::iter::repeat_n(first_ins_payload, first_len).collect();
                 let firsts = [
                     format!("{span}del"),
                     format!("{span}dup"),

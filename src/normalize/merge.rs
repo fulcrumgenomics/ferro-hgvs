@@ -4111,12 +4111,36 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
                 .map(|s| s.end)
                 .filter(|&end| end < b.start && end >= a.start)
                 .map(|end| end + 1);
-            // No junction barrier in this direction: measured, it introduced
-            // fresh 5'-shuffle failures rather than removing them (an
-            // insertion-like sibling and a 5'-shifting span interact through
-            // the merge's cancellation path, not through the crossing this
-            // rule models). 3'-only, deliberately — see the module tests.
-            onto_bases.max().map(|limit| a.start - limit)
+            // Mirror of the 3' junction barrier. A junction between `j` and
+            // `j + 1` is crossed once this member's start reaches `j`; stopping
+            // at `j + 1` leaves it flush against the junction on the 3' side,
+            // which is the adjacency the collapse pass wants.
+            //
+            // Base-claiming members only. The two branches bound opposite edges
+            // — 3' limits `a.end`, 5' limits `a.start` — and for a member that
+            // carries its own junction those are not interchangeable. A `dup`'s
+            // junction is its *end* (`junction_of`), so bounding its start
+            // holds it back by `len - 1` more than the invariant needs: on
+            // `TTAATATATAATAATATTAT`, `g.[4_5insC;5_6dup]` stops at its input
+            // position instead of reaching the 5'-most legal `4_5dup`.
+            // Sequence-preserving, so the exhaustive sweeps cannot see it —
+            // measured at 905 de-canonicalised outputs across a 64,512-case
+            // dup corpus, every one with `dup_len > 1`.
+            //
+            // Junction-carrying members are already bounded correctly, on the
+            // right edge, by `clamp_sibling_crossing_junctions` — which runs
+            // immediately after this pass against the same snapshot and carries
+            // a `commutes` escape hatch this bound would otherwise override.
+            let across_junctions = siblings
+                .iter()
+                .filter(|_| a.junction.is_none())
+                .filter_map(|s| s.junction)
+                .filter(|&j| j < b.start && j >= a.start)
+                .map(|j| j + 1);
+            onto_bases
+                .chain(across_junctions)
+                .max()
+                .map(|limit| a.start - limit)
         };
         // Never move past where the member started: those positions were not
         // reachable by this shift and are not equivalent to it.
