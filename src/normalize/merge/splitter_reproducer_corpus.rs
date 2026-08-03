@@ -238,11 +238,12 @@ const CORPUS: &[BlockRow] = &[
         "net +2; the splitter now answers the SPLIT count"),
     row("#1260a-split", "A", "CAC", 2,
         "same block as #1260a-spanning: the collision the two-gap alignment resolved"),
-    row("#1260-window", "AAAAAAA", "AACACAAAA", 1,
-        "the UNTRIMMED 7 nt poly-A window, 9 nt on the alt side, so above \
-         MAX_SINGLE_BASE_SEPARATION_BLOCK and held whole. The pipeline never \
-         sees this: trim_common_flanks reduces it to #1260a's (A, CAC), which \
-         is 3 nt and does split -- which is how #1260 converges"),
+    diverging("#1260-window", "AAAAAAA", "AACACAAAA", 1,
+        (2, "the untrimmed window changes only 2 bases, so one unchanged base is \
+             still believable separation and the two insertions stay apart"),
+        "the UNTRIMMED 7 nt poly-A window. The pipeline reaches the same answer \
+         through #1260a's trimmed (A, CAC); that both extents agree is what makes \
+         the supremal extent safe to adopt"),
     diverging("#1260b-spanning", "AA", "CAAC", 1,
         (2, "the two-gap alignment keeps the whole reference between the two insertions"),
         "the separation-2 instance of #1260; the splitter now answers the SPLIT count"),
@@ -441,6 +442,7 @@ fn recorded_and_splitter_counts_diverge_on_exactly_these_rows() {
             "#1235-c-codon-exception",
             "#1235-r-coding",
             "#1260a-spanning",
+            "#1260-window",
             "#1260b-spanning",
             "#1262a-split",
             "#1262-window",

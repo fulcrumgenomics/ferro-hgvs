@@ -1622,29 +1622,39 @@ const MAX_UNGUARDED_SPLIT_BLOCK: usize = 32;
 /// net insertion, one coincidentally matched interior base — and the type of
 /// the resulting members is the only thing that separates them.
 ///
-/// It applies only to blocks no larger than
-/// [`MAX_SINGLE_BASE_SEPARATION_BLOCK`]; above that a single unchanged base is
+/// It applies only where the block's net length change is at most
+/// [`MAX_SINGLE_BASE_SEPARATION_CHANGE`]; beyond that a single unchanged base is
 /// not believable and the threshold stays at 2.
 const MIN_PIECE_SEPARATION: usize = 1;
 
-/// Largest block, in bases, for which one unchanged base counts as separation.
+/// Largest **net length change**, in bases, for which one unchanged base counts
+/// as separation.
 ///
-/// A single matched base is evidence of structure in a short block and evidence
-/// of nothing in a long one, where a two- or three-base run recurs by chance.
-/// The Mutalyzer conformance corpus is what forces this: a 6 nt block replaced
-/// by a 21 nt payload (`NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC` and
-/// nine siblings) has interior bases that happen to match, and the oracle keeps
-/// it as one `delins`. Without a bound, a threshold of 1 shreds it into
+/// A single matched base is evidence of structure when the surrounding change is
+/// small and evidence of nothing when it is large, where a one- or two-base run
+/// recurs by chance. The Mutalyzer conformance corpus is what forces this: a 6 nt
+/// block replaced by a 21 nt payload
+/// (`NG_008939.1:g.5207_5212delinsGTCCTGTGCTCATTATCTGGC` and nine siblings) has
+/// interior bases that happen to match, and the oracle keeps it as one `delins`.
+/// Without a bound, a threshold of 1 shreds it into
 /// `g.[5207_5209delinsGTC;5211C>T;5213_5214insGCTCATTATCTGGCT]` — mixed member
 /// types, so [`split_buys_no_higher_priority_type`] does not reach it either.
 ///
+/// # Why the change and not the block length
+///
+/// Keying on block length looks equivalent and is not, because the block is
+/// about to be handed the *supremal* extent rather than the trimmed one. A
+/// variant rolled out over a homopolymer has a long block and a tiny change —
+/// #1260's window is 7 nt of reference for 2 inserted bases — while the
+/// Mutalyzer block is long *and* changes a lot. Length cannot tell those apart;
+/// the net change can, and it is the quantity the belief is actually about.
+///
 /// **The value is under-determined and the bounds are what is measured.** The
-/// corpus constrains it only to `(4, 21]`: `#1260b`'s block is 4 nt and must
-/// split at one base, the Mutalyzer block is 21 nt and must not. Every value in
-/// between scores identically, so `8` is a choice inside a measured window, not
-/// a calibrated constant. Narrowing it needs a case in that gap, not a
-/// re-derivation.
-const MAX_SINGLE_BASE_SEPARATION_BLOCK: usize = 8;
+/// corpus constrains it only to `[2, 15)`: #1260's window changes 2 bases and
+/// must split at one unchanged base, the Mutalyzer block changes 15 and must
+/// not. Every value in between scores identically, so `4` is a choice inside a
+/// measured window, not a calibrated constant.
+const MAX_SINGLE_BASE_SEPARATION_CHANGE: usize = 4;
 
 /// [`partition_block_sequence_first`]'s separation threshold on an axis with no
 /// reading frame (`g.`, `m.`, `n.`, and `r.` on a non-coding transcript).
@@ -2746,7 +2756,7 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
         return whole();
     }
     if result.len() > reference.len()
-        && !separations_are_meaningful(&pieces, reference.len().max(result.len()))
+        && !separations_are_meaningful(&pieces, result.len().abs_diff(reference.len()))
     {
         return whole();
     }
@@ -2915,13 +2925,13 @@ fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
 /// that fails when the bound is raised across the board. Extending this rule to
 /// cover them, and retiring that constant, is the principled fix and needs its
 /// own measurement pass.
-fn separations_are_meaningful(pieces: &[Piece], block_len: usize) -> bool {
+fn separations_are_meaningful(pieces: &[Piece], net_change: usize) -> bool {
     // `ref_end` is exclusive and a pure insertion has `ref_start == ref_end`, so
     // this already counts unchanged *bases* rather than event indices: a
     // junction contributes no width because it occupies none. The sequence-first
     // splitter had to be corrected for exactly this, because it works in event
     // space where a junction and a changed position are both one offset.
-    let required = if block_len > MAX_SINGLE_BASE_SEPARATION_BLOCK {
+    let required = if net_change > MAX_SINGLE_BASE_SEPARATION_CHANGE {
         2
     } else {
         MIN_PIECE_SEPARATION
