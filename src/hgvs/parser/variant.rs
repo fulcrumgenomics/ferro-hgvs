@@ -7672,12 +7672,16 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
         )
     }
 
-    /// Apply both sub-rules to one nucleotide variant's loc/edit pair.
-    macro_rules! check_na_anchor {
-        ($v:expr, $prefix:expr) => {{
-            if is_insertion(&$v.loc_edit.edit) {
-                let start = &$v.loc_edit.location.start;
-                let end = &$v.loc_edit.location.end;
+    /// Apply both sub-rules to one loc/edit pair.
+    ///
+    /// Takes the `LocEdit` rather than the variant so the ring path — whose
+    /// `segments` are bare `LocEdit`s with no enclosing variant — shares the
+    /// exact rule the single-variant axes get, instead of a re-derived copy.
+    macro_rules! check_loc_edit_anchor {
+        ($le:expr, $prefix:expr) => {{
+            if is_insertion(&$le.edit) {
+                let start = &$le.location.start;
+                let end = &$le.location.end;
                 if pos_eq(start, end) {
                     return Err(make_error($prefix));
                 }
@@ -7685,6 +7689,13 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
                     return Err(make_gap_error($prefix));
                 }
             }
+        }};
+    }
+
+    /// Apply both sub-rules to one nucleotide variant's loc/edit pair.
+    macro_rules! check_na_anchor {
+        ($v:expr, $prefix:expr) => {{
+            check_loc_edit_anchor!($v.loc_edit, $prefix)
         }};
     }
 
@@ -7729,6 +7740,27 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
                 validate_no_point_insertion(inner, _source)?;
             }
         }
+        // A ring's `::`-joined segments are `LocEdit<GenomeInterval, NaEdit>`
+        // — the same loc/edit pair every arm above inspects — but they hang off
+        // `GenomeRing` rather than a nested `HgvsVariant`, so recursion cannot
+        // reach them and they fell through the catch-all below (#1264). Both
+        // MUST-level sub-rules were therefore unenforced inside a join:
+        // `g.100_102insATG::200_201insG` and `g.100insATG::200_201insG` both
+        // parsed, while the identical spellings outside a join were rejected.
+        //
+        // Invisible to the `FERRO_ASSERT_REPARSE` oracle, because these round
+        // trip: ferro renders back exactly what it accepted. Only a parser test
+        // can see it.
+        HgvsVariant::GenomeRing(ring) => {
+            for segment in &ring.segments {
+                check_loc_edit_anchor!(segment, "g.");
+            }
+        }
+        // `sup` wraps either a plain genome variant or a ring. The plain inner
+        // was already covered (it is parsed through this same validator before
+        // being wrapped); the ring inner was not, so recurse explicitly rather
+        // than relying on that.
+        HgvsVariant::Supernumerary(inner) => validate_no_point_insertion(inner, _source)?,
         _ => {}
     }
     Ok(())

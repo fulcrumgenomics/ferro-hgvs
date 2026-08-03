@@ -57,12 +57,24 @@ skips its own check.
 
 `FERRO_ASSERT_REPARSE=1` is the second half of the same seam: it asserts that a
 normalized description is one `parse_hgvs` accepts — *when normalization is what
-broke it*. Two exemptions keep that scope honest: `0` and `?` are legal
-whole-allele outputs that `parse_hgvs` rejects standalone because it wants an
-accession, and an input that does not itself re-parse is passed over, since a
-description the parser accepts inbound but cannot re-read outbound is a
-parse/display round-trip asymmetry normalize merely carries through. Both are a
-different bug; reporting them here would bury the one this oracle is for.
+broke it*. Its exemptions are a **closed list**, deliberately (#1264):
+
+- `0` and `?` are legal whole-allele outputs that `parse_hgvs` rejects standalone
+  because it wants an accession — a limit of the entry point, not a malformed output.
+- An **empty allele** (`[]`), reachable only by direct construction; the projector's
+  own tests build one on purpose to pin that it declines.
+- A **non-flanking genomic insertion**, which is the projection *pivot*: its
+  coordinates are sound and the downstream cdot derivation of the c./n./p. axes needs
+  it, but its spelling is not one HGVS admits, so the projector withholds the
+  *reported* genomic axis instead (`non_flanking_genomic_insertion_anchor`).
+
+**This used to be a blanket** — "skip when the input does not itself re-parse" — and
+that blanket was hiding live defects rather than scoping the oracle. Instrumenting it
+to report instead of return silently, then re-running the suite, found 18 hits in four
+shapes, two of which were real projector bugs (the RNA-only `spl` edit carried onto the
+`g.`/`c.` axes, and an insertion whose anchors straddle a splice junction). Both are
+fixed; the exemption is now narrow enough that the same class of defect fails loudly.
+If you find yourself widening it, that is the signal to fix the producer instead.
 
 Like the idempotency oracle it is compiled out in release builds
 (`#[cfg(debug_assertions)]`) and read once into a `OnceLock`, so it adds no

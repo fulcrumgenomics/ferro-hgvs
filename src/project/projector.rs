@@ -1962,7 +1962,21 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             if allele.phase == AllelePhase::Cis {
                 sort_genomic_allele_members(&mut members);
             }
-            let mut projected = AlleleVariant::new(members, allele.phase);
+            // `checked`, not `new`: this is exactly the boundary its doc comment
+            // names — a member list assembled from data rather than fixed by the
+            // grammar. An empty input allele is unreachable through the parser
+            // (it refuses empty brackets everywhere they can appear) but is
+            // constructible by hand, and `new` would hand back an allele that
+            // renders `[]`, which is not HGVS and which any caller chaining a
+            // second parse fails on. Declining with the projector's own error
+            // type reports the problem where it can still be acted on (#1264).
+            let mut projected = AlleleVariant::checked(members, allele.phase).ok_or_else(|| {
+                FerroError::UnsupportedProjection {
+                    reason: "cannot project an allele with no members: an empty allele renders \
+                             `[]`, which is not a description ferro can read back"
+                        .to_string(),
+                }
+            })?;
             projected.uncertain = allele.uncertain;
             return Ok(HgvsVariant::Allele(projected));
         }
@@ -1975,7 +1989,16 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             return result;
         }
 
-        match self.project_to_genomic_nc(variant)? {
+        let pivot = self.project_to_genomic_nc(variant)?;
+        // The pivot's coordinates are sound even when its *spelling* is not, so
+        // the adjacency check belongs here — where a genomic form is handed to a
+        // caller — rather than inside `project_to_genomic_nc`, which also feeds
+        // the downstream cdot derivation of the c./n./p. axes. Guarding the pivot
+        // itself would have thrown those away too (#1264).
+        if let Some(reason) = non_flanking_insertion_reason(&pivot) {
+            return Err(FerroError::UnsupportedProjection { reason });
+        }
+        match pivot {
             // Raw pivot: re-anchor into the parent frame but do NOT normalize
             // (#785/#867). The pivot was 3'-normalized in *transcript* space,
             // which is the genome's 5' end on a minus-strand transcript, so the
@@ -2648,62 +2671,109 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // on a transcript with large introns is hundreds of kb (#1177). On a
         // non-coding transcript `r.` and `n.` do coincide, but `to_cds_frame`
         // self-gates on `is_coding`, so no conversion runs there either way.
-        let (accession, gene_symbol, edit_mu, start_cds, end_cds, input_base_is_tx_relative) =
-            match variant {
-                HgvsVariant::Cds(v) => {
-                    let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "c.", "start")?;
-                    let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "c.", "end")?;
-                    (
-                        v.accession.clone(),
-                        v.gene_symbol.clone(),
-                        v.loc_edit.edit.clone(),
-                        s,
-                        e,
-                        false,
-                    )
-                }
-                HgvsVariant::Tx(v) => {
-                    let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "n.", "start")?;
-                    let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "n.", "end")?;
-                    let to_cds = |p: TxPos| CdsPos {
-                        base: p.base,
-                        offset: p.offset,
-                        utr3: p.downstream,
-                        special: None,
-                    };
-                    (
-                        v.accession.clone(),
-                        v.gene_symbol.clone(),
-                        v.loc_edit.edit.clone(),
-                        to_cds(s),
-                        to_cds(e),
-                        true,
-                    )
-                }
-                HgvsVariant::Rna(v) => {
-                    let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "r.", "start")?;
-                    let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "r.", "end")?;
-                    // RnaPos mirrors CdsPos in both shape AND numbering: on a
-                    // coding transcript `r.` is the `c.` axis, so this reshape is
-                    // the whole conversion and the position must NOT be rebased
-                    // again (`false` below, #1177).
-                    let to_cds = |p: crate::hgvs::location::RnaPos| CdsPos {
-                        base: p.base,
-                        offset: p.offset,
-                        utr3: p.utr3,
-                        special: None,
-                    };
-                    (
-                        v.accession.clone(),
-                        v.gene_symbol.clone(),
-                        v.loc_edit.edit.clone(),
-                        to_cds(s),
-                        to_cds(e),
-                        false,
-                    )
-                }
-                _ => unreachable!("variant kind already filtered above"),
-            };
+        let (
+            accession,
+            gene_symbol,
+            edit_mu,
+            axis_label,
+            start_cds,
+            end_cds,
+            input_base_is_tx_relative,
+        ) = match variant {
+            HgvsVariant::Cds(v) => {
+                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "c.", "start")?;
+                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "c.", "end")?;
+                (
+                    v.accession.clone(),
+                    v.gene_symbol.clone(),
+                    v.loc_edit.edit.clone(),
+                    "c.",
+                    s,
+                    e,
+                    false,
+                )
+            }
+            HgvsVariant::Tx(v) => {
+                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "n.", "start")?;
+                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "n.", "end")?;
+                let to_cds = |p: TxPos| CdsPos {
+                    base: p.base,
+                    offset: p.offset,
+                    utr3: p.downstream,
+                    special: None,
+                };
+                (
+                    v.accession.clone(),
+                    v.gene_symbol.clone(),
+                    v.loc_edit.edit.clone(),
+                    "n.",
+                    to_cds(s),
+                    to_cds(e),
+                    true,
+                )
+            }
+            HgvsVariant::Rna(v) => {
+                let s = resolve_uncertain_boundary(&v.loc_edit.location.start, "r.", "start")?;
+                let e = resolve_uncertain_boundary(&v.loc_edit.location.end, "r.", "end")?;
+                // RnaPos mirrors CdsPos in both shape AND numbering: on a
+                // coding transcript `r.` is the `c.` axis, so this reshape is
+                // the whole conversion and the position must NOT be rebased
+                // again (`false` below, #1177).
+                let to_cds = |p: crate::hgvs::location::RnaPos| CdsPos {
+                    base: p.base,
+                    offset: p.offset,
+                    utr3: p.utr3,
+                    special: None,
+                };
+                (
+                    v.accession.clone(),
+                    v.gene_symbol.clone(),
+                    v.loc_edit.edit.clone(),
+                    "r.",
+                    to_cds(s),
+                    to_cds(e),
+                    false,
+                )
+            }
+            _ => unreachable!("variant kind already filtered above"),
+        };
+
+        // 1b. Reject the RNA-only *effects*. The kind ladder above asks "does
+        //     this axis have a genomic counterpart"; this asks the same of the
+        //     edit, which is a separate question and was never asked (#1264).
+        //
+        //     `spl` ("splicing affected", `RNA/splicing.md`) and `0` ("no
+        //     product") describe what happens to the transcript, not a sequence
+        //     change at a genomic locus, so there is no `g.spl` or `g.0` to
+        //     emit. The trap is that the *position* maps perfectly well: the
+        //     projector converted it and carried the edit token through
+        //     verbatim, rendering `NC_000023.11:g.spl` — a string ferro's own
+        //     parser rejects.
+        //
+        //     The check sits *after* the axis extraction, not on
+        //     `HgvsVariant::Rna` before it, because these edits are not confined
+        //     to the `r.` axis: `n.0` is a valid spec form for a non-coding
+        //     transcript and parses to `HgvsVariant::Tx` (`parse_rna_no_product`
+        //     is probed from the `n.` whole-entity path), so an `Rna`-only guard
+        //     let it straight through: `NC_000001.11(NM_…):n.0` reported its
+        //     genomic axis as `NC_000001.11:g.0`, which ferro cannot re-parse —
+        //     the same defect as `g.spl`, reached by the other axis. The
+        //     enumeration corpus carries no `n.0` input, so the census that found
+        //     the `r.` half could not see this one. Asking the question of
+        //     `edit_mu`, which every arm above populates, states the rule once
+        //     for every axis that can reach here.
+        //
+        //     `hgvs_to_vcf` already declines exactly these two edits for
+        //     exactly this reason (`vcf/from_hgvs.rs`), so this makes the two
+        //     conversion paths agree rather than inventing a rule.
+        if let Some(edit @ (NaEdit::Splice { .. } | NaEdit::NoProduct)) = edit_mu.inner() {
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "`{axis_label}{edit}` is an RNA-level effect, not a sequence change, so it \
+                     has no genomic representation"
+                ),
+            });
+        }
 
         // 2. Reject `?` position sentinels explicitly — these have base == 0
         //    and no offset, which would otherwise propagate into the genomic
@@ -3199,13 +3269,121 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         variant: &HgvsVariant,
         transcript_id: &str,
     ) -> Result<VariantProjection, FerroError> {
-        // Dispatch on variant kind.
-        match variant {
-            HgvsVariant::Allele(allele) => {
-                self.project_allele_inner(allele, variant, transcript_id)
-            }
-            _ => self.project_single_inner(variant, transcript_id),
+        // An RNA-only effect is representable on its own axis and nowhere else,
+        // so it is answered here rather than by the per-axis conversions (#1264).
+        // Letting it fall through would surface the axis guards' `Err` as a
+        // whole-projection failure and lose the one axis that *is* valid.
+        if let Some(projection) = self.project_rna_only_effect(variant, transcript_id) {
+            return Ok(projection);
         }
+        // Dispatch on variant kind.
+        let mut projection = match variant {
+            HgvsVariant::Allele(allele) => {
+                self.project_allele_inner(allele, variant, transcript_id)?
+            }
+            _ => self.project_single_inner(variant, transcript_id)?,
+        };
+        // Withhold a genomic axis that came out as a non-flanking insertion
+        // (#1264). Done here, on the assembled projection, so only the genomic
+        // axis declines: the same variant's c./n./r./p. forms are unaffected by
+        // the junction and stay reported. See `non_flanking_insertion_reason`.
+        if let Some(reason) = projection
+            .genomic
+            .as_ref()
+            .and_then(non_flanking_insertion_reason)
+        {
+            projection.genomic = None;
+            projection.axis_decline_reasons.genomic = Some(reason);
+        }
+        Ok(projection)
+    }
+
+    /// Project an RNA-only effect (`r.spl`, `r.spl?`, `r.0`): the `r.` axis is
+    /// the input, every other axis declines with a reason (#1264).
+    ///
+    /// `RNA/splicing.md` defines `spl` as "splicing affected" and `0` as "no
+    /// product" — statements about the transcript, not sequence changes at a
+    /// locus, so no genomic, coding or protein counterpart exists. The
+    /// projector had no `NaEdit::Splice` handling at all: it converted the
+    /// *position*, which maps perfectly well, and carried the edit token
+    /// through verbatim, emitting `NC_000023.11:g.spl` and `NM_….1:c.1spl` —
+    /// strings ferro's own parser rejects.
+    ///
+    /// Answering here, rather than by returning `Err` from the per-axis
+    /// conversions, keeps the decline *per axis*: the caller still gets
+    /// `rna = Some(r.spl)`. `hgvs_to_vcf` declines the same two edits
+    /// (`vcf/from_hgvs.rs`), so the conversion paths now agree.
+    ///
+    /// Returns `None` for every other input, leaving the normal dispatch alone.
+    ///
+    /// Unlike the empty-allele branch of [`Self::project_allele_inner`], this
+    /// one deliberately does **not** check that `transcript_id` is a transcript
+    /// cdot knows: that branch validates because it must read `gene_name` out of
+    /// cdot to answer at all, whereas every field here comes from the input
+    /// variant, and the answer — "the `r.` axis is the input, the rest decline"
+    /// — is true whether or not a reference has been loaded. The check that does
+    /// matter is that the input is on the transcript being asked about, which is
+    /// enforced below.
+    fn project_rna_only_effect(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Option<VariantProjection> {
+        use crate::hgvs::uncertainty::Mu;
+
+        let HgvsVariant::Rna(rna) = variant else {
+            return None;
+        };
+        let edit = rna.loc_edit.edit.inner()?;
+        if !matches!(edit, NaEdit::Splice { .. } | NaEdit::NoProduct) {
+            return None;
+        }
+        // Only claim the input when it is on the transcript being projected
+        // against. This short-circuit runs *ahead* of the dispatch that checks
+        // `transcript_id` for every other transcript-coordinate input, so
+        // without the check here the projection would be stamped with a
+        // transcript the variant is not on — and `project_normalized_all_inner`
+        // calls this once per overlapping transcript, so a single `r.spl` would
+        // be reported against every one of them.
+        //
+        // Declining to claim it (rather than erroring here) hands the input back
+        // to the normal path, which raises the established `transcript_id
+        // mismatch` error — one wording for one contract, in one place.
+        if rna.accession.transcript_accession() != transcript_id {
+            return None;
+        }
+        let reason = format!(
+            "`r.{edit}` is an RNA-level effect, not a sequence change, so it has no \
+             representation on this axis"
+        );
+        // The `rna` axis is documented as the *predicted* consequence (`r.(…)`),
+        // and the path this replaces already wrapped `r.spl` as `r.(spl)`.
+        // Preserve that so the only rows this change moves are the ones that
+        // were genuinely broken.
+        let mut predicted = rna.clone();
+        predicted.loc_edit.edit = Mu::Uncertain(edit.clone());
+        Some(VariantProjection {
+            genomic: None,
+            coding: None,
+            noncoding: None,
+            protein: None,
+            rna: Some(HgvsVariant::Rna(predicted)),
+            transcript_id: transcript_id.to_string(),
+            gene_symbol: rna.gene_symbol.clone(),
+            is_frameshift: false,
+            // The effect names no exon/intron position to classify.
+            is_intronic: false,
+            is_utr: false,
+            affects_init: false,
+            normalization_warnings: Vec::new(),
+            axis_decline_reasons: AxisDeclineReasons {
+                genomic: Some(reason.clone()),
+                coding: Some(reason.clone()),
+                noncoding: Some(reason.clone()),
+                protein: Some(reason),
+                rna: None,
+            },
+        })
     }
 
     /// Project a compound [`AlleleVariant`] by recursively projecting each
@@ -3422,6 +3600,23 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             None
         };
 
+        // The genomic half of the #1198 rule applied to `.noncoding` above: the
+        // all-or-nothing build means an absent allele `g.` axis is always some
+        // member's absence, and that member may have recorded why. Carry it up
+        // rather than reporting an unexplained `None` — the explanation already
+        // exists, and dropping it here is the same defect #1198 fixed one axis
+        // over. This matters most for the mixed allele #1264 introduces, where
+        // one member straddles a splice junction and the others are ordinary:
+        // the junction reason is the only answer anyone has for the drop.
+        let genomic_decline = if genomic.is_none() {
+            inner_projections
+                .iter()
+                .find_map(|p| p.axis_decline_reasons.genomic.as_deref())
+                .map(|reason| format!("an allele member has no g. form: {reason}"))
+        } else {
+            None
+        };
+
         // Predicted RNA allele (#693): predict from the assembled coding allele
         // — `predict_rna` handles the `Allele` shape directly, emitting one
         // outer predicted wrapper `r.([a;b])` (recommendations/RNA/alleles.md).
@@ -3444,6 +3639,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             normalization_warnings: Vec::new(),
             axis_decline_reasons: AxisDeclineReasons {
                 noncoding: noncoding_decline,
+                genomic: genomic_decline,
                 ..Default::default()
             },
             genomic,
@@ -4338,6 +4534,15 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
 
         // Mirror the genome path's transcript_id-mismatch guard: an n./r. input
         // must be projected against its own transcript.
+        //
+        // This precedes the RNA-only-effect guard below deliberately. Both can
+        // apply to the same input, and the mismatch is the more fundamental
+        // objection — it holds whatever the edit is, so answering "this edit has
+        // no other representation" for a variant that was never on this
+        // transcript describes the wrong problem. It is also the order the
+        // genome path already uses (`project_single_inner` checks the mismatch
+        // before delegating to `project_to_genomic_nc`, which holds that path's
+        // RNA-only guard), so the two routes now agree.
         let input_tx = accession.transcript_accession();
         if input_tx != transcript_id {
             return Err(FerroError::UnsupportedProjection {
@@ -4346,6 +4551,28 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                      against {}; transcript-coordinate inputs must be projected against \
                      their own transcript",
                     input_tx, transcript_id,
+                ),
+            });
+        }
+
+        // Mirror the genome path's RNA-only-effect guard (#1264): `r.spl` and
+        // `r.0` describe the transcript, not a sequence change, so they have no
+        // `c.`/`n.`/`p.` counterpart either. Without this a bare-`NM_` `r.spl`
+        // rendered as `NM_….1:c.1spl`, which ferro cannot re-parse — the same
+        // defect the genomic path had, reached by the other route.
+        //
+        // In practice this guard now fires only for the `Tx` path — `n.0`, a
+        // valid spec form. `project_rna_only_effect` claims every matching `r.`
+        // spelling before dispatch reaches here, and the one case it declines
+        // (a foreign transcript) is caught by the mismatch guard above. The
+        // `r.` wording is kept anyway: the guard states the rule for the loc/
+        // edit pair it is given, and should not silently stop holding if a
+        // future caller reaches it by another route.
+        if let Some(edit @ (NaEdit::Splice { .. } | NaEdit::NoProduct)) = edit_mu.inner() {
+            return Err(FerroError::UnsupportedProjection {
+                reason: format!(
+                    "`{axis_label}{edit}` is an RNA-level effect, not a sequence change, so \
+                     it has no representation on another axis"
                 ),
             });
         }
@@ -5544,6 +5771,28 @@ fn nr_representative_genome_pos(
                 base, cdot_tx.contig
             ),
         })
+}
+
+/// Why `variant`'s genomic form cannot be reported: it is an insertion whose
+/// anchor positions are not a flanking pair (#1264). `None` when it is fine.
+///
+/// Wraps the well-formedness predicate
+/// [`crate::hgvs::variant::non_flanking_genomic_insertion_anchor`] with the
+/// explanation that fits *this* caller: on the projection path the anchors were
+/// adjacent on the transcript and stopped being adjacent when they were mapped.
+///
+/// There is no repair, which is why callers decline rather than adjust: the
+/// insertion could attach to the 3' end of the upstream exon or the 5' end of
+/// the downstream one, and those are two *different* genomic variants. HGVS has
+/// no spelling for "at the junction".
+fn non_flanking_insertion_reason(variant: &HgvsVariant) -> Option<String> {
+    let (start, end) = crate::hgvs::variant::non_flanking_genomic_insertion_anchor(variant)?;
+    Some(format!(
+        "the insertion's anchor positions are adjacent on the transcript but map to \
+         non-adjacent genomic positions {start} and {end} (they straddle an intron), and an \
+         insertion anchor MUST be two flanking positions per DNA/insertion.md:15, so this \
+         variant has no genomic representation"
+    ))
 }
 
 /// Resolve an [`UncertainBoundary<T>`] to an owned `T`, distinguishing the two

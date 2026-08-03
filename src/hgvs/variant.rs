@@ -720,6 +720,46 @@ pub struct AlleleVariant {
     pub uncertain: bool,
 }
 
+/// The anchor positions of `variant`, when it is a genomic insertion whose two
+/// positions are **not** a flanking pair; `None` otherwise (#1264).
+///
+/// `DNA/insertion.md:15` requires an insertion anchor to name *two flanking
+/// nucleotides* — "e.g., `123_124`, not `123_125`" — and the parser enforces it
+/// on the way in (`validate_no_point_insertion`). A description that violates it
+/// is therefore one ferro cannot read back, whoever built it.
+///
+/// Kept here, beside the type it describes, rather than in the projector that
+/// needs it: it is a statement about a variant's well-formedness, and
+/// `normalize` consults it too. Putting it in `project` would have made
+/// `normalize` depend on `project`, inverting the layering.
+///
+/// Only a pair of certain, plain endpoints is decidable, matching
+/// `validate_no_point_insertion`'s `definitely_not_flanking`: an uncertain
+/// boundary or a `(a_b)` range is not something this rule can speak to.
+pub(crate) fn non_flanking_genomic_insertion_anchor(variant: &HgvsVariant) -> Option<(u64, u64)> {
+    use crate::hgvs::edit::NaEdit;
+    use crate::hgvs::uncertainty::Mu;
+
+    let HgvsVariant::Genome(gv) = variant else {
+        return None;
+    };
+    if !matches!(gv.loc_edit.edit.inner(), Some(NaEdit::Insertion { .. })) {
+        return None;
+    }
+    let (Some(Mu::Certain(start)), Some(Mu::Certain(end))) = (
+        gv.loc_edit.location.start.as_single(),
+        gv.loc_edit.location.end.as_single(),
+    ) else {
+        return None;
+    };
+    // A special marker (`pter`/`qter`/`cen`) sets `base` to 0 and names no
+    // numeric position, so the pair is not comparable.
+    if start.special.is_some() || end.special.is_some() {
+        return None;
+    }
+    (end.base != start.base + 1).then_some((start.base, end.base))
+}
+
 impl AlleleVariant {
     /// Create a new allele variant
     pub fn new(variants: Vec<HgvsVariant>, phase: AllelePhase) -> Self {
@@ -728,6 +768,31 @@ impl AlleleVariant {
             phase,
             uncertain: false,
         }
+    }
+
+    /// Build an allele, returning `None` when it has no members (#1264).
+    ///
+    /// An allele with an empty member list has no HGVS rendering: `Display`
+    /// emits `[]`, and `parse_hgvs` rejects `[]` — so the value round-trips to
+    /// nothing and any consumer chaining a second call fails on it. The parser
+    /// already refuses empty brackets everywhere they can appear, which leaves
+    /// direct construction as the only way to reach the shape.
+    ///
+    /// This mirrors [`GenomeRing::new`], which refuses a ring of fewer than two
+    /// segments for the same reason ("a 0/1-segment ring would not round-trip").
+    ///
+    /// [`AlleleVariant::new`] is deliberately left infallible. It is used
+    /// throughout the parser and normalizer on member lists that are non-empty
+    /// by construction, and changing its signature would churn call sites that
+    /// cannot hit this case for no added safety. Prefer `checked` at the
+    /// boundaries where the list is assembled from data — a projection, a
+    /// filter, an external payload — which is where an empty list can actually
+    /// arise.
+    pub fn checked(variants: Vec<HgvsVariant>, phase: AllelePhase) -> Option<Self> {
+        if variants.is_empty() {
+            return None;
+        }
+        Some(Self::new(variants, phase))
     }
 
     /// Create a new allele variant wrapped in an uncertainty marker

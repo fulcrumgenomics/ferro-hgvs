@@ -136,6 +136,22 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     "NM_000088.3:c.459_460insACGT",
     "NM_000088.3:c.459_460delinsAC",
     "NM_000088.3:c.459_460inv",
+    // --- `::`-joined rings and `sup` wrappers (#1264). `validate_no_point_insertion`
+    // gained a `GenomeRing` arm and an explicit `Supernumerary` recursion, so both
+    // insertion-anchor MUST-rules (`DNA/insertion.md:15` adjacency, `:95-101`
+    // single-position) are now enforced inside a join. That enforcement lives in the
+    // generic parser only, so it holds for these inputs solely because the fast path
+    // defers: `classify_fast_edit` reads the trailing bytes, and an `insG` tail is not
+    // a recognized substitution / plain del / plain dup / identity tail. Pin the
+    // deferral — if fast-path eligibility ever widened to reach a ring, the fast path
+    // would mint a variant that skipped the validator, and `divergence` would catch it
+    // here rather than in whatever consumer first failed to re-parse the result. The
+    // rejected rows agree by both-reject; the accepted rows agree by equal ASTs. ---
+    "NC_000022.11:g.100_101insATG::200_201insG", // valid ring: both accept, must agree
+    "NC_000022.11:g.100_102insATG::200_201insG", // ring, non-adjacent anchor: both reject
+    "NC_000022.11:g.100insATG::200_201insG",     // ring, single-position anchor: both reject
+    "NC_000022.11:g.[100_101insATG::200_201insG]sup", // valid `sup`-wrapped ring
+    "NC_000022.11:g.[100_102insATG::200_201insG]sup", // `sup` recursion reaches the ring
     // --- whitespace / trimming edges (ASCII and Unicode) ---
     "  NC_000001.11:g.12345A>G  ",
     "\tNM_000088.3:c.459A>G\n",

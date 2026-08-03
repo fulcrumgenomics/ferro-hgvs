@@ -320,9 +320,47 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     (Status::FormAxisOk, 120),
     (Status::FormAxisPinned, 0),
     (Status::Preserved, 6),
-    (Status::ProjectionPinned, 1180),
-    (Status::ProjectionUnavailablePinned, 469),
-    (Status::ProjectionErrorPinned, 215),
+    // #1264 moved 19 rows between three statuses. Stated gross, because the net
+    // deltas alone do not determine them — the three nets are linearly dependent
+    // (any `Error -> Pinned` count satisfies all three if the other two absorb
+    // it), so a reader given only the nets cannot recover what actually moved:
+    //
+    //   14 rows  ProjectionPinned      -> ProjectionUnavailablePinned
+    //    4 rows  ProjectionErrorPinned -> ProjectionUnavailablePinned
+    //    1 row   ProjectionErrorPinned -> ProjectionPinned
+    //
+    // Net: ProjectionPinned -13, ProjectionErrorPinned -5,
+    // ProjectionUnavailablePinned +18. The deltas cancel, so the 2184-row total
+    // across this census and `DIVERGENCE_BUDGET` is unchanged — nothing was
+    // dropped from the enumeration, only moved. Every row that moved to
+    // `Unavailable` was a projection that had no business rendering:
+    //
+    // * `r.spl` / `r.spl?` / `r.0` are RNA-level *effects*, not sequence
+    //   changes, so they have no g./c./n./p. counterpart. The projector had no
+    //   `NaEdit::Splice` handling at all and carried the edit token onto the
+    //   target axis verbatim, emitting `NC_000023.11:g.spl`, `…:c.1spl` and
+    //   `…:n.245spl` — none of which ferro can re-parse. It also invented a
+    //   protein consequence, `NP_003997.1:p.(Met1?)`, for a variant that states
+    //   no coding change. These now decline with a reason.
+    // * `project-g/LRG_199t1:r.1149_1150insn[100]` rendered
+    //   `LRG_199:g.699646_700297insNNN…`, an insertion anchored on two bases 652
+    //   apart because they straddle an intron — the exact string reported in
+    //   #1264, and one ferro's own parser rejects per `DNA/insertion.md:15`.
+    //
+    // `r.0` on `NM_004006.1` accounts for all five `Error` departures, and is
+    // the reason declining per axis rather than per projection matters. It
+    // previously failed the *whole* projection with "Transcript has no CDS", so
+    // all five of its rows were errors. Now the one axis that can carry the
+    // statement renders it — `project-r/…` moves to `Pinned` as `r.(0)` — while
+    // the four that cannot (`project-c`, `project-g`, `project-n`, `project-p`)
+    // move to `Unavailable` with a reason. One row improved to rendered, not two.
+    //
+    // The four `project-r/…r.spl` rows are deliberately unmoved: the `rna` axis
+    // is documented as the predicted form and already rendered `r.(spl)`, so the
+    // replacement path preserves that wrapper rather than quietly changing it.
+    (Status::ProjectionPinned, 1167),
+    (Status::ProjectionUnavailablePinned, 487),
+    (Status::ProjectionErrorPinned, 210),
     (Status::ModeDivergencePinned, 132),
 ];
 
