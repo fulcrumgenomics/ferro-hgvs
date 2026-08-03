@@ -12,3 +12,4 @@ cc 963ed918c565168dda03912561f65f99d0a3a5398c144fdd1dd0157e4c5563ae # shrinks to
 cc 8d1ceaa8eae1c6162271d431b2cb4395e0359a560661739dc5402acd0d9bdf33 # shrinks to case = Case { core: "CCCCAACACACGGGG", sys: RnaCodingPlus, hgvs: "NM_TEST.1:r.15delinsgaa" }
 cc 24fe771b144622c1c4e142a45e3fc249cb5854ebf628a862b56e84b448fe9937 # shrinks to case = Case { core: "CCCCAAAAAAGGGG", sys: Genomic, hgvs: "NC_TEST.1:g.264_266delinsG" }
 cc eefd532b0deeee1b5d2768acd582bf9bfeb81cbfe4a46cb6b5a5d537561f5db7 # shrinks to case = Case { core: "CCCCAAAAAAAGGGG", sys: RnaCodingPlus, hgvs: "NM_TEST.1:r.15con4_5" }
+cc 9e5c683cf90cbeea9efbabaad533f4288eecda1d6e7844f3f79118a7f7f6f81d # shrinks to case = Case { core: "CCCCTCCTCCTCCTCCCGGGG", sys: CdsUtr3Plus, hgvs: "NM_TEST.1:c.2_3insTCC" }
