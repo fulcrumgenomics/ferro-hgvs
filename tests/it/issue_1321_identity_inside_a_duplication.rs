@@ -32,7 +32,9 @@
 //! nothing there. `blocks_sibling_shift` excludes them for the same reason
 //! `claims_reference_bases` did.
 
-use crate::common::synthetic::assert_padded_preserving;
+use crate::common::cis_apply_oracle::assert_normalizes_preserving_in;
+use crate::common::synthetic::{assert_padded_preserving, padded};
+use ferro_hgvs::ShuffleDirection;
 
 /// The core the proptest shrank to, and the reference the seed describes.
 const CORE: &str = "TCCCAGAAAAT";
@@ -71,5 +73,40 @@ fn an_identity_member_beside_an_insertion_survives() {
     assert!(
         output.contains("259="),
         "an insertion must not drop an identity member inside its span: `{output}`"
+    );
+}
+
+#[test]
+fn a_cancelled_identity_member_is_dropped_under_five_prime_too() {
+    // The same input under the 5' rule. The gate above cannot catch it: the dup
+    // settles at `261_262` rather than `262_263`, so the cancelled member at 263
+    // is no longer *inside* any sibling's span and `blocks_sibling_shift`
+    // coverage — the predicate #1321 widened to — legitimately does not fire.
+    //
+    // Coverage was only ever a proxy for "this member is a cancellation
+    // residue". A member that cancels to `=` while its allele keeps real
+    // content is noise wherever its siblings ended up, so it is dropped where it
+    // is created instead of being hunted afterwards by where it landed. That is
+    // also what keeps the two guards above intact: a user-authored `=` never
+    // passes through the cancellation branch.
+    //
+    // `g.261_262dup` alone denotes the input, which the helper asserts against
+    // an applier independent of the normalizer.
+    assert_normalizes_preserving_in(
+        &padded(CORE),
+        "TEMPLATE:g.[261_262insGA;262_263insA;263del]",
+        "TEMPLATE:g.261_262dup",
+        ShuffleDirection::FivePrime,
+    );
+
+    // The plain spelling of the same variant, which never merges at all: the two
+    // must converge, and that convergence is what #1321 is about. Asserting only
+    // the multi-member form would pin the cancellation branch without pinning the
+    // thing the branch exists to achieve — the two spellings agreeing.
+    assert_normalizes_preserving_in(
+        &padded(CORE),
+        "TEMPLATE:g.263_264insGA",
+        "TEMPLATE:g.261_262dup",
+        ShuffleDirection::FivePrime,
     );
 }

@@ -172,14 +172,21 @@ fn converged_pairs_stay_converged() {
 /// Confluence is a property of the normalizer, not of one shuffle direction, and
 /// `--direction 5prime` is a supported public option on both the CLI
 /// (`src/bin/ferro.rs`) and the Python bindings. Every row above was blessed
-/// against the 3' direction only, so this pair of gaps was never measured.
+/// against the 3' direction only, so these gaps were never measured.
+///
+/// **#1321 has left this set.** Its 5' divergence was the cancelled-member
+/// residue: `g.[262_263insA;263del]` merges to `g.263delinsA`, which restates
+/// the reference and so renders as `g.263=`, and the split spelling kept that
+/// `=` while the merged spelling never grew one. Dropping the residue where the
+/// merge creates it converges the pair on `g.261_262dup` — see
+/// `issue_1321_identity_inside_a_duplication.rs`.
 ///
 /// Both spellings still denote the input's bases and both are stable fixed
 /// points, so this is criterion 1 of #1235 — non-confluence — and nothing else.
 /// That is why neither oracle sees it: `FERRO_ASSERT_IDEMPOTENT` re-normalizes a
 /// single spelling and finds it stable, and `FERRO_ASSERT_REPARSE` finds it
 /// well-formed. Only comparing two spellings of one variant exposes it.
-const DIVERGENT_UNDER_FIVE_PRIME: &[&str] = &["#1321", "#1323"];
+const DIVERGENT_UNDER_FIVE_PRIME: &[&str] = &["#1323"];
 
 #[test]
 fn the_five_prime_confluence_gap_is_unchanged() {
@@ -272,13 +279,15 @@ fn the_five_prime_divergences_are_non_confluence_and_nothing_worse() {
     // fixed point, that is a different and much worse defect than the one
     // recorded here, and it must not hide behind a known non-confluence.
     //
-    // Every output is now checked directly. #1362 gave an identity edit's SPDI
-    // triple the span it claims, so `hgvs_to_spdi` no longer emits a zero-width
-    // triple that collides with a sibling's insertion junction, and the applier
-    // can express `g.[261_262dup;263=]` after all. Before that, this loop had to
-    // count the one output it could not express and check its denotation through
-    // an identity-stripped rewrite; both are gone, and an inexpressible output is
-    // now a failure rather than a tolerated skip.
+    // Every output is now checked directly, and two changes were needed to get
+    // there. The one output that could not be put to the applier was `#1321`'s,
+    // which carried a cancelled-member `=` residue: #1362 gave an identity's SPDI
+    // triple the span it claims, so it no longer collides with a sibling's
+    // insertion junction and such an output is expressible at all; #1379 then
+    // stopped the residue being emitted, so this corpus no longer produces one.
+    // The identity-stripping rewrite and the tolerated-skip count this loop used
+    // to carry are both gone, and an inexpressible output is now a failure rather
+    // than a known exception.
     for (issue, core, split, merged) in CONVERGED {
         if !DIVERGENT_UNDER_FIVE_PRIME.contains(issue) {
             continue;
@@ -295,9 +304,10 @@ fn the_five_prime_divergences_are_non_confluence_and_nothing_worse() {
             let got = apply(&seq, &out).unwrap_or_else(|| {
                 panic!(
                     "{issue}: `{out}` is inexpressible to the applier. Since #1362 \
-                     every output here is expressible, so this is a new blind spot \
-                     rather than a known one — find what shape the applier declines \
-                     before treating it as tolerable."
+                     every output here is expressible, and since #1379 none carries \
+                     a cancelled-member `=` residue at all, so this is a new blind \
+                     spot rather than a known one — find what shape the applier \
+                     declines before treating it as tolerable."
                 )
             });
             assert_eq!(
@@ -306,65 +316,4 @@ fn the_five_prime_divergences_are_non_confluence_and_nothing_worse() {
             );
         }
     }
-}
-
-#[test]
-fn an_identity_member_is_redundant_but_no_longer_beyond_the_applier() {
-    // A finding in its own right. Under 5' shuffle #1321's split spelling settles
-    // with a redundant identity member beside a real edit:
-    //
-    //     g.[261_262insGA;262_263insA;263del]  ->  g.[261_262dup;263=]
-    //
-    // `=` states that nothing changes, so the member carries no information and
-    // the `263=` is pure noise in the output. That half is unfixed and is what
-    // this test still pins.
-    //
-    // The *other* half — that such an output was invisible to the applier — is
-    // fixed. #1362 found the cause, and it was not the one recorded here
-    // originally: `hgvs_to_spdi` did not decline an identity member, it converted
-    // `g.263=` to the zero-width triple `262::`, which aliased the sibling dup's
-    // insertion junction at the same interbase. Two members at one interbase have
-    // no defined order, so `apply_with` declined the whole description. Giving the
-    // identity the span it claims (`262:A:A`) separates them, and #1351's blind
-    // spot closes for every sweep that inherited it.
-    //
-    // Emitting the member is still what puts the allele into
-    // `collect_canonical_edits`'s catch-all (`_ => return None`), so the
-    // derivation refuses to re-derive it. Two further gates refuse behind that one
-    // (the `changed_columns_of_pieces` weight bound, then
-    // `needs_unsupported_form`), so removing the member alone does not restore
-    // confluence — measured.
-    //
-    // The input is read from #1321's `CONVERGED` row rather than repeated as a
-    // literal, so editing that row cannot leave this test quietly exercising a
-    // variant while its prose still claims to be about #1321. The expected output
-    // stays literal — that string is the finding.
-    let (_, core, split, _) = CONVERGED
-        .iter()
-        .find(|(issue, ..)| *issue == "#1321")
-        .expect("#1321 is still a CONVERGED row; this test is the pin for its 5' output");
-    let seq = padded(core);
-    let out = normalize_in(&seq, split, ShuffleDirection::FivePrime);
-    assert_eq!(
-        out, "TEMPLATE:g.[261_262dup;263=]",
-        "the redundant identity member moved; re-check both claims below"
-    );
-    // The identity is noise, so stripping it must denote the same bases — and the
-    // applier must now be able to say so about *both* forms. If this goes red with
-    // the output above unchanged, the identity's SPDI triple regressed to a
-    // zero-width one and #1351's blind spot is back.
-    let want = apply(&seq, split).expect("input applies");
-    assert_eq!(
-        apply(&seq, &out).as_deref(),
-        Some(want.as_str()),
-        "`{out}` must be expressible to the applier and denote the input's bases \
-         (#1362); a `None` here means the `263=` member is aliasing the dup's \
-         junction again"
-    );
-    assert_eq!(
-        apply(&seq, "TEMPLATE:g.261_262dup").as_deref(),
-        Some(want.as_str()),
-        "the identity member carries no information, so dropping it must denote \
-         the same bases"
-    );
 }
