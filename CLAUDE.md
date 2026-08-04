@@ -81,11 +81,15 @@ into a `OnceLock`, so a disabled run pays only one atomic load. CI runs the suit
 a second time with it set; the nightly reference-aware job sets it too, which is
 where the manifest-backed conformance corpora are actually covered.
 
-The check sits at the single shared exit of `normalize_core_checked`, so it covers
-both `normalize()` and every `VariantProjector` path (the projection-driven
-genomic/coding/protein axes). Its verification pass re-enters that same method, so
-a thread-local `IN_IDEMPOTENCY_CHECK` guard breaks the recursion — the inner call
-skips its own check.
+The check runs from `Normalizer::assert_seam_oracles`, which all three oracles
+share. It is called from two places, because ferro has two normalization exits and
+only one of them is the "shared" one: `normalize_core_checked`, covering
+`normalize()` and every `VariantProjector` path (the projection-driven
+genomic/coding/protein axes), and `normalize_with_diagnostics`, which reaches
+`normalize_core_canonical` directly and so was returning results no oracle had
+inspected — for all three checks, not just the newest. Its verification pass
+re-enters normalization, so a thread-local `IN_IDEMPOTENCY_CHECK` guard breaks the
+recursion — the inner call skips its own check.
 
 #### Normalization re-parse oracle
 
@@ -121,8 +125,68 @@ FERRO_ASSERT_REPARSE=1 cargo nextest run --features dev
 Kept separate from `FERRO_ASSERT_IDEMPOTENT` because neither subsumes the other,
 and the idempotency oracle has a blind spot this one covers: it verifies by
 *re-normalizing* its own output, which it cannot do for an output that fails to
-parse, so an unparseable result is invisible to it. Both sit at
-`normalize_core_checked`'s single exit and CI sets both together.
+parse, so an unparseable result is invisible to it. Both run from
+`assert_seam_oracles` alongside the in-bounds check, and CI sets all three together.
+
+#### Normalization in-bounds oracle
+
+`FERRO_ASSERT_IN_BOUNDS=1` is the third at the same seam: no coordinate a
+normalized description names may be past the end of its own sequence.
+
+```bash
+FERRO_ASSERT_IN_BOUNDS=1 cargo nextest run --features dev
+```
+
+It exists because the class kept being found by hand, one shape at a time —
+**#1274** (`T:g.[8_9insA;10del]` -> `g.10_11=` on a 10-base contig), **#1343**
+(`c.[*10dup;*11dup]` -> `c.*11_*12insAA`) and **#1307**
+(`g.[24dup;24C>G]` -> `g.[24C>G;24_25insC]`) — each filed, fixed and
+regression-tested separately. Three instances of one defect class is the argument
+for an invariant at the seam rather than a fourth per-shape test.
+
+Neither of the other two asks the question. `FERRO_ASSERT_REPARSE` cannot:
+`parse_hgvs` holds no provider, so `g.24_25insC` is well-formed to it.
+`FERRO_ASSERT_IDEMPOTENT` catches some instances incidentally — the #1307 output
+re-normalizes to `g.23_24insG`, so it is not a fixed point — but an out-of-range
+output that *is* a fixed point passes it, which is the #1327 shape
+(`m.16569_16570insAA`).
+
+What makes it non-trivial, and what it deliberately does not check, is documented
+on `merge::first_out_of_bounds_coordinate`. In brief:
+
+- **Positions are converted onto the served sequence's axis first.** A `c.`
+  position may legitimately exceed the CDS length (`*n` into the 3'UTR, `-n` into
+  the 5'UTR), so `region_sequence_delta` runs before any comparison.
+- **A reversed range is not an error.** SVD-WG006 admits `<high>_<low>` for a
+  circular deletion or duplication, so the two endpoints are checked
+  independently and their order is never compared.
+- **An authored overrun is exempt** — W4004 `PositionPastEnd` is what reports
+  those. Detecting it requires reading each endpoint independently, because a
+  special position (`pter`) on one end otherwise hides a past-end coordinate on
+  the other.
+- **Not covered:** protein axes, and an inserted-range payload
+  (`g.10_11ins[20_30]`).
+
+Like the two above it, compiled out in release (`#[cfg(debug_assertions)]`) and
+read once into a `OnceLock`. CI sets all three together, in the sharded
+`test-oracle` job and the `sweeps` job (those two and nowhere else — the plain
+`test` and `soak` jobs run without the flags); the nightly sets it too, where it
+is the only place the check runs against true transcript and contig lengths.
+
+**An oracle failure is visible in PR CI and silent in the nightly.** In PR CI,
+`test-oracle` and `sweeps` carry no `continue-on-error`, so a fire turns the job
+red. The nightly reference-aware job does carry it, deliberately — its purpose is
+to surface drift in the xfail report rather than to gate, and the corpus runner
+wraps normalization in `catch_panics`, so an oracle panic there lands in the
+uploaded xfail artifact as a FAILing case instead of failing the workflow. That
+applies equally to all three flags, and it is why a red oracle in the nightly must
+be read out of the xfail report rather than from the workflow conclusion.
+
+Red is not the same as blocked, though: `main`'s ruleset requires only eight
+checks — Build, Test, Clippy, Clippy (all features), Format, Python Lint, Python
+Wheel Test, abi3 floor — and neither `Test oracle` nor `Exhaustive sweeps` is
+among them. So an oracle fire shows up as a failed job that a human must not
+merge past, not as a ruleset-enforced merge block.
 
 ### Generated spec fixture (not committed)
 

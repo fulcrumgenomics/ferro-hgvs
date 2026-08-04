@@ -247,9 +247,17 @@ fn strict_mode_n_in_bounds_does_not_emit_warning() {
     // Non-coding transcript: no cds_start / cds_end. An in-bounds n.
     // position must pass the new check_tx_pos_past_end check silently
     // — no panic, no warning.
+    //
+    // The stated reference base has to be the real one. The fixture is
+    // `ACGTACGTACGTACGTACGT`, so `n.10` is `C`, and this read `n.10G>C` until the
+    // seam oracles started covering `normalize_with_diagnostics`: in strict mode
+    // the wrong base is a `RefSeqMismatch`, which `normalize()` promotes to a hard
+    // error but this exit does not, so `FERRO_ASSERT_IDEMPOTENT` failed
+    // re-normalizing an output `normalize()` would have rejected outright. The
+    // position, not the base, is what this test is about, so it states `C`.
     let provider = provider_with_short_noncoding_transcript();
     let normalizer = Normalizer::with_config(provider, NormalizeConfig::strict());
-    let variant = parse_hgvs("NR_TEST.1:n.10G>C").expect("parse");
+    let variant = parse_hgvs("NR_TEST.1:n.10C>G").expect("parse");
     let result = normalizer
         .normalize_with_diagnostics(&variant)
         .expect("in-bounds n. variant must not error");

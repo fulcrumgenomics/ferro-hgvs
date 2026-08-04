@@ -5852,6 +5852,168 @@ fn cds_axis_end<P: ReferenceProvider>(
     cds_axis_position(i64::try_from(length).ok()?, cds_start, cds_end, body)
 }
 
+// ----------------------------------------------------------------------------
+// In-bounds seam oracle (#1353)
+// ----------------------------------------------------------------------------
+
+/// A coordinate an output names that its own sequence does not have.
+///
+/// Carries what the panic message needs and nothing more; every field is read
+/// by `Normalizer::assert_in_bounds`.
+///
+/// Gated like the rest of this chain: `assert_in_bounds` and its
+/// `in_bounds_self_check_enabled` flag are `#[cfg(debug_assertions)]`, and so is
+/// the `use merge::OutOfBoundsCoordinate` that imports this, so in release these
+/// items had no caller at all and only added compile time and dead code to the
+/// binary. `test` rides along so the unit tests below still build under
+/// `cargo test --release`, where `cfg(test)` holds but `debug_assertions` does not.
+#[cfg(any(debug_assertions, test))]
+#[derive(Debug)]
+pub(crate) struct OutOfBoundsCoordinate {
+    /// The provider key the length was read under, not the accession as
+    /// written — that is the thing the number was actually compared against.
+    pub(crate) accession: String,
+    /// The offending position, converted onto the served sequence's own 1-based
+    /// axis, so `c.*12` on an 11-base 3'UTR reports the transcript position
+    /// rather than `12`.
+    pub(crate) position: i64,
+    /// The sequence's length, i.e. the largest position that does exist.
+    pub(crate) length: u64,
+    /// The member as rendered, so a failure inside an allele names which member.
+    pub(crate) member: String,
+}
+
+/// The first coordinate in `variant` naming a position past the end of its own
+/// sequence, or `None` if every coordinate exists.
+///
+/// This is the predicate behind `FERRO_ASSERT_IN_BOUNDS` (#1353). Three
+/// instances of the class had been found by hand — #1274, #1343 and #1307 — each
+/// filed and fixed separately, which is the argument for asking the question
+/// once at the seam.
+///
+/// # Why it needs the axis conversion rather than a raw comparison
+///
+/// A `c.` position may legitimately exceed the CDS length: `*n` counts into the
+/// 3'UTR and `-n` into the 5'UTR, so `c.*11` on a 35-base transcript with a
+/// 12-base CDS is in range while `12` compared against `24` says nothing. Every
+/// endpoint is therefore put onto the **served sequence's** axis with
+/// [`region_sequence_delta`] before it is compared, which is the same conversion
+/// the repair passes use.
+///
+/// # What it deliberately does not check
+///
+/// - **A reversed range is not an error.** SVD-WG006 admits `<high>_<low>` for a
+///   circular deletion or duplication (`NC_012920.1:m.16563_13del`), so the two
+///   endpoints are each checked against `[1, length]` independently and their
+///   order is never compared. That also makes the check identical on `m.`/`o.`
+///   and on the linear axes, which is the honest answer: a circular sequence has
+///   a last base like any other, and #1327 established that the wrapped
+///   *insertion* spelling that would blur it is not valid HGVS anyway.
+/// - **A junction insertion naming `end + 1` is fine when that base exists.**
+///   The question is whether a position exists, not whether an edit touches the
+///   last one — `g.23_24insC` on a 24-base contig is correct and must stay
+///   silent, while `g.24_25insC` is the #1307 defect.
+/// - **Intronic offsets, unknown, uncertain and special positions** (`pter`,
+///   `qter`) yield no plain axis position, so they are skipped — see
+///   [`readable_endpoints`], which reads each end independently for a reason
+///   worth knowing.  An intronic offset is outside the transcript by
+///   construction and has no length to be compared with.
+/// - **Protein axes**, for the same reason: `member_endpoints` covers the
+///   nucleotide axes only. The three known instances of this class are all
+///   nucleotide, so widening it is a separate change with its own evidence.
+/// - **An inserted range payload** (`g.10_11ins[20_30]`), which names positions
+///   in the location of no member. Not covered; if a defect of that shape turns
+///   up, this is where to extend.
+/// - **A provider that cannot report a length** leaves the member unchecked,
+///   rather than failing a run for a reference that simply does not know. The
+///   oracle only ever fires on a *known* overrun.
+#[cfg(any(debug_assertions, test))]
+pub(crate) fn first_out_of_bounds_coordinate<P: ReferenceProvider>(
+    variant: &HgvsVariant,
+    provider: &P,
+) -> Option<OutOfBoundsCoordinate> {
+    let members: &[HgvsVariant] = match variant {
+        HgvsVariant::Allele(allele) => &allele.variants,
+        single => std::slice::from_ref(single),
+    };
+    members
+        .iter()
+        .find_map(|member| member_out_of_bounds_coordinate(member, provider))
+}
+
+/// [`first_out_of_bounds_coordinate`] for one member.
+#[cfg(any(debug_assertions, test))]
+fn member_out_of_bounds_coordinate<P: ReferenceProvider>(
+    member: &HgvsVariant,
+    provider: &P,
+) -> Option<OutOfBoundsCoordinate> {
+    let accession = member.accession()?.transcript_accession();
+    let length = provider.get_sequence_length(&accession).ok()?;
+    let ceiling = i64::try_from(length).ok()?;
+    readable_endpoints(member)
+        .into_iter()
+        .flatten()
+        .find_map(|(region, axis)| {
+            let delta = region_sequence_delta(region, &accession, provider)?;
+            let position = axis.checked_add(delta)?;
+            // The floor is part of the same invariant: a position at or below
+            // zero exists on no sequence either, and the repairs that produce
+            // `g.0_1` (#1282) are the same family as the ones that produce
+            // `g.24_25`.
+            (position < 1 || position > ceiling).then(|| OutOfBoundsCoordinate {
+                accession: accession.clone(),
+                position,
+                length,
+                member: member.to_string(),
+            })
+        })
+}
+
+/// Each end of a member's interval that has a plain `(region, axis position)`,
+/// independently of whether the other end does.
+///
+/// [`member_endpoints`] deliberately demands **both** ends, because its callers
+/// place a two-ended gap and cannot act on half of one. This oracle wants the
+/// opposite: an endpoint it can read is one it can check, and an endpoint it
+/// cannot read is simply not its business.
+///
+/// The difference is load-bearing rather than stylistic, and a measured false
+/// positive is what showed it. `NC_PASTEND.1:g.pter_5000del` on a 200-base contig
+/// normalizes to `g.1_5000del` — `pter` resolves to `1`, and `5000` is carried
+/// through from the input. Asking `member_endpoints` about that *input* yields
+/// `None`, because `pter` is a special position: the authored overrun becomes
+/// invisible, the "did normalization introduce this?" exemption never fires, and
+/// the oracle blames normalization for a coordinate the caller wrote. Reading the
+/// ends independently sees the input's `5000`, and W4004 `PositionPastEnd`
+/// remains the mechanism that reports it.
+#[cfg(any(debug_assertions, test))]
+fn readable_endpoints(v: &HgvsVariant) -> [Option<(Region, i64)>; 2] {
+    fn ends<T>(
+        interval: &Interval<T>,
+        read: impl Fn(&UncertainBoundary<T>) -> Option<(Region, i64)>,
+    ) -> [Option<(Region, i64)>; 2] {
+        [read(&interval.start), read(&interval.end)]
+    }
+    match v {
+        HgvsVariant::Genome(g) => ends(&g.loc_edit.location, simple_genome_pos),
+        HgvsVariant::Mt(m) => ends(&m.loc_edit.location, simple_genome_pos),
+        // `o.` reads exactly like `m.`: both are circular genomic axes carrying a
+        // plain `GenomePos` interval. Omitting it left every `o.` member with no
+        // readable endpoint, so the oracle could not fire on one at all — while
+        // the doc above claimed the check was "identical on `m.`/`o.`". This is
+        // the branch that makes that true. Note the sibling `member_endpoints`
+        // deliberately still omits `o.`: its callers are the repair passes, which
+        // exclude circular members by design (see `respell_colliding_duplications`
+        // and the note at the top of this module), and widening it would change
+        // what those passes rewrite rather than what this oracle inspects.
+        HgvsVariant::Circular(o) => ends(&o.loc_edit.location, simple_genome_pos),
+        HgvsVariant::Cds(c) => ends(&c.loc_edit.location, simple_cds_pos),
+        HgvsVariant::Tx(t) => ends(&t.loc_edit.location, simple_tx_pos),
+        HgvsVariant::Rna(r) => ends(&r.loc_edit.location, simple_rna_pos),
+        _ => [None, None],
+    }
+}
+
 fn member_endpoints(v: &HgvsVariant) -> Option<((Region, i64), (Region, i64))> {
     fn ends<T>(
         interval: &Interval<T>,
@@ -6158,6 +6320,234 @@ mod tests {
     use crate::hgvs::parser::parse_hgvs;
     use crate::hgvs::variant::Accession;
     use crate::reference::MockProvider;
+
+    // ------------------------------------------------------------------
+    // In-bounds seam oracle (#1353)
+    // ------------------------------------------------------------------
+
+    /// A 24-base genomic contig, matching #1307's fixture length.
+    fn bounds_genomic_provider() -> MockProvider {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.1", "TTTTTTTTTAATATATTTTAATAC");
+        provider
+    }
+
+    /// A 35-base transcript whose CDS is `13..=24`, so the 3'UTR runs `*1`..`*11`
+    /// and the 5'UTR `-1`..`-12`. The axis conversion is the whole point of the
+    /// oracle, and only a transcript with real UTRs on both sides exercises it.
+    fn bounds_transcript_provider() -> MockProvider {
+        use crate::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NM_TEST.1".to_string(),
+            gene_symbol: Some("TEST".to_string()),
+            strand: Strand::Plus,
+            sequence: Some("GCAAAGCGCGCGATGAAACCCTAAGGCATTTTTAA".to_string()),
+            cds_start: Some(13),
+            cds_end: Some(24),
+            exons: vec![Exon::new(1, 1, 35)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: ManeStatus::Select,
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            cds_start_incomplete: false,
+            exon_cigars: Vec::new(),
+            cached_introns: std::sync::OnceLock::new(),
+        });
+        provider
+    }
+
+    fn overrun(descriptor: &str, provider: &MockProvider) -> Option<OutOfBoundsCoordinate> {
+        let variant = parse_hgvs(descriptor).expect("fixture must parse");
+        first_out_of_bounds_coordinate(&variant, provider)
+    }
+
+    /// The three shapes the class was found in, spelled as descriptions rather
+    /// than reached through a defect, so they keep testing the predicate after
+    /// each producer is fixed.
+    #[test]
+    fn the_known_out_of_range_shapes_are_flagged() {
+        let genomic = bounds_genomic_provider();
+        // #1307 on a 24-base contig, and the same overrun inside an allele.
+        for descriptor in [
+            "NC_TEST.1:g.24_25insC",
+            "NC_TEST.1:g.[24C>G;24_25insC]",
+            // #1274's shape: a two-base identity running one past the end.
+            "NC_TEST.1:g.24_25=",
+            "NC_TEST.1:g.25del",
+            "NC_TEST.1:g.30_40del",
+        ] {
+            let found = overrun(descriptor, &genomic)
+                .unwrap_or_else(|| panic!("`{descriptor}` must be flagged as out of bounds"));
+            assert_eq!(
+                found.length, 24,
+                "`{descriptor}` compared against {found:?}"
+            );
+            assert!(
+                found.position > 24,
+                "`{descriptor}` must report the offending position, got {found:?}"
+            );
+        }
+        // #1343's shape on the transcript axis: `*12` does not exist when the
+        // 3'UTR ends at `*11`.
+        let transcript = bounds_transcript_provider();
+        let found = overrun("NM_TEST.1:c.*11_*12insAA", &transcript)
+            .expect("`c.*11_*12insAA` must be flagged");
+        assert_eq!(
+            (found.position, found.length),
+            (36, 35),
+            "the report must be on the transcript's own axis, not the `*` count: {found:?}"
+        );
+    }
+
+    /// Everything legitimate must stay silent. These are the cases that make the
+    /// check non-trivial, and each would be a false positive under a naive
+    /// comparison.
+    #[test]
+    fn legitimate_coordinates_are_not_flagged() {
+        let genomic = bounds_genomic_provider();
+        for descriptor in [
+            // A junction insertion whose right anchor IS the last base. The
+            // question is whether a position exists, not whether an edit reaches
+            // the end.
+            "NC_TEST.1:g.23_24insC",
+            "NC_TEST.1:g.24dup",
+            "NC_TEST.1:g.24C>G",
+            "NC_TEST.1:g.1_24del",
+            "NC_TEST.1:g.[24dup;24C>G]",
+            // An accession the provider does not serve: no length, no verdict.
+            "NC_ABSENT.1:g.9999del",
+        ] {
+            assert!(
+                overrun(descriptor, &genomic).is_none(),
+                "`{descriptor}` names only positions that exist and must not be flagged"
+            );
+        }
+        let transcript = bounds_transcript_provider();
+        for descriptor in [
+            // `*n` and `-n` legitimately exceed the CDS length — the reason the
+            // conversion exists. `*11` is the transcript's last base.
+            "NM_TEST.1:c.*11del",
+            "NM_TEST.1:c.*10_*11insAA",
+            "NM_TEST.1:c.-12del",
+            "NM_TEST.1:c.13del",
+            // An intronic offset has no plain axis position and is skipped.
+            "NM_TEST.1:c.13+5del",
+            // So is an uncertain boundary.
+            "NM_TEST.1:c.(13_15)del",
+        ] {
+            assert!(
+                overrun(descriptor, &transcript).is_none(),
+                "`{descriptor}` must not be flagged"
+            );
+        }
+    }
+
+    /// The 5' end of the same invariant. A position at or below zero exists on no
+    /// sequence, and the repairs that reach `g.0_1` (#1282) are the same family as
+    /// the ones that reach `g.24_25`.
+    #[test]
+    fn a_five_prime_overrun_is_flagged_too() {
+        let transcript = bounds_transcript_provider();
+        // `c.-13` is one before the transcript's first base (the 5'UTR is 12 long).
+        let found = overrun("NM_TEST.1:c.-13del", &transcript).expect("`c.-13del` must be flagged");
+        assert_eq!(
+            found.position, 0,
+            "expected the transcript-axis 0: {found:?}"
+        );
+    }
+
+    /// SVD-WG006 admits the reversed `<high>_<low>` range for a circular deletion
+    /// or duplication, so the endpoints are checked independently and their order
+    /// is never compared. Both must still exist.
+    #[test]
+    fn a_reversed_circular_range_is_judged_only_on_its_endpoints() {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_012920.1", "TTTTTTTTTAATATATTTTAATAC");
+        // In range, wrapping: legal, and the check must not read it as 24 > 3.
+        assert!(
+            overrun("NC_012920.1:m.24_3del", &provider).is_none(),
+            "a wrapped range whose ends both exist must not be flagged"
+        );
+        // Out of range on the high end, wrapping or not.
+        assert!(
+            overrun("NC_012920.1:m.25_3del", &provider).is_some(),
+            "a wrapped range naming a position past the end must still be flagged"
+        );
+    }
+
+    /// The whole diagnostic payload, not just the two numeric fields the tests
+    /// above read.
+    ///
+    /// `accession` and `member` exist so a failure inside an allele says *which*
+    /// member overran and *what length it was compared against*; they are read
+    /// only by `Normalizer::assert_in_bounds`, which is `#[cfg(debug_assertions)]`.
+    /// That left them provably dead in a release build — `cargo clippy --release
+    /// --features dev --all-targets -- -D warnings` failed with "fields
+    /// `accession` and `member` are never read" — and, more to the point, unasserted
+    /// anywhere. Reading them here fixes both.
+    #[test]
+    fn the_report_names_the_member_and_the_accession_it_compared() {
+        let genomic = bounds_genomic_provider();
+        let found = overrun("NC_TEST.1:g.[24C>G;24_25insC]", &genomic)
+            .expect("the allele's second member overruns");
+        assert_eq!(
+            found.accession, "NC_TEST.1",
+            "the report must name the provider key the length was read under"
+        );
+        assert_eq!(
+            found.member, "NC_TEST.1:g.24_25insC",
+            "the report must name the offending member, not the whole allele: {found:?}"
+        );
+        assert_eq!((found.position, found.length), (25, 24), "{found:?}");
+    }
+
+    /// The `o.` half of the case above. `o.` is a circular genomic axis like
+    /// `m.`, and the predicate's doc claims the check is "identical on `m.`/`o.`"
+    /// — but `readable_endpoints` had no `Circular` branch, so every `o.` member
+    /// yielded no readable endpoint and the oracle could not fire on one at all.
+    /// Measured before the fix: `o.25_3del` on a 24-base sequence returned
+    /// `None`, i.e. an out-of-bounds `o.` output was invisible to
+    /// `FERRO_ASSERT_IN_BOUNDS`.
+    ///
+    /// Both directions are pinned, because a branch that returned the endpoints
+    /// in the wrong order would pass a one-sided test.
+    #[test]
+    fn a_reversed_circular_o_range_is_judged_only_on_its_endpoints() {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("J01749.1", "TTTTTTTTTAATATATTTTAATAC");
+        // In range, wrapping: legal under SVD-WG006, and the check must not read
+        // it as 24 > 3.
+        assert!(
+            overrun("J01749.1:o.24_3del", &provider).is_none(),
+            "a wrapped `o.` range whose ends both exist must not be flagged"
+        );
+        // Past the end on the high side — the endpoint the wrap makes `start`.
+        let found = overrun("J01749.1:o.25_3del", &provider)
+            .expect("a wrapped `o.` range naming a position past the end must be flagged");
+        assert_eq!((found.position, found.length), (25, 24), "{found:?}");
+        // And on the *other* endpoint, so the branch is not reading only one end.
+        let found = overrun("J01749.1:o.20_25del", &provider)
+            .expect("an `o.` range whose second end is past the end must be flagged");
+        assert_eq!((found.position, found.length), (25, 24), "{found:?}");
+    }
+
+    /// An authored overrun must be reported by the same predicate on the *input*,
+    /// which is what lets the assertion exempt it instead of blaming
+    /// normalization. Reading each end independently is load-bearing here: `pter`
+    /// is unreadable, and demanding both ends made the authored `5000` invisible.
+    #[test]
+    fn an_authored_overrun_is_visible_through_a_special_position() {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_PASTEND.1", "A".repeat(200));
+        let found = overrun("NC_PASTEND.1:g.pter_5000del", &provider)
+            .expect("the readable end must be checked even though `pter` is not");
+        assert_eq!((found.position, found.length), (5000, 200), "{found:?}");
+    }
 
     /// #1135: an insertion-shaped anchor with nothing left to insert (a
     /// cancelling del+ins after 3'-shifting) must not become an `Insertion`

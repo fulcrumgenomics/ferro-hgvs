@@ -139,6 +139,18 @@ jobs:
           # themselves re-parse are exempt; see the note beside the same pair
           # in ci.yml.
           FERRO_ASSERT_REPARSE: "1"
+          # And that no coordinate it names is past the end of its own sequence
+          # (#1353). This job is the only one with a real prepared reference, so
+          # it is the only place the check runs against true transcript and contig
+          # lengths rather than a fixture's; an authored overrun is exempt, since
+          # W4004 `PositionPastEnd` is what reports those.
+          #
+          # Non-gating here, like the two above it: `continue-on-error` on this
+          # step means a fire lands in the xfail report rather than failing the
+          # workflow (see the comment on the step). The gate for this oracle is
+          # ci.yml's `test-oracle` and `sweeps` jobs, which set the same flag and
+          # carry no `continue-on-error`.
+          FERRO_ASSERT_IN_BOUNDS: "1"
         run: |
           cargo nextest run --features dev \
             -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/) | test(/hgvs_rs_projection_tests::/)'

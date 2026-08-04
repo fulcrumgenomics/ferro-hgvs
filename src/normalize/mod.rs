@@ -65,6 +65,8 @@ use crate::reference::transcript::Strand;
 use crate::reference::ReferenceProvider;
 use boundary::Boundaries;
 pub use config::{NormalizeConfig, ShuffleDirection};
+#[cfg(debug_assertions)]
+use merge::OutOfBoundsCoordinate;
 use rules::{
     canonicalize_conversion_to_delins, canonicalize_edit, canonicalize_insertion_expand,
     is_real_substitution, is_uncertain_real_substitution, needs_normalization,
@@ -1505,6 +1507,32 @@ fn reparse_self_check_enabled() -> bool {
     })
 }
 
+/// Whether the opt-in in-bounds self-check is active.
+///
+/// Enabled when `FERRO_ASSERT_IN_BOUNDS` is set to anything other than
+/// `0`/empty. Read once and cached, like the two gates above it.
+///
+/// The third of a set, and separate from both for the same reason they are
+/// separate from each other: neither existing oracle asks this question
+/// *directly*. `parse_hgvs` has no provider and so cannot bounds-check, which
+/// makes an out-of-range output perfectly re-parseable; and while the
+/// idempotency oracle does happen to catch some instances — the #1307 output is
+/// not a fixed point — that is incidental, not the invariant. An overrun that
+/// re-normalizes to itself would pass both.
+///
+/// Cheaper than either, too: one length lookup per member, no re-normalization
+/// and no parse.
+#[cfg(debug_assertions)]
+fn in_bounds_self_check_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("FERRO_ASSERT_IN_BOUNDS")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
 #[cfg(debug_assertions)]
 thread_local! {
     /// Re-entrancy guard for the idempotency self-check.
@@ -1696,6 +1724,58 @@ impl<P: ReferenceProvider> Normalizer<P> {
         panic!(
             "FERRO_ASSERT_REPARSE: normalization produced a description ferro cannot re-parse\n  \
              input:  {variant}\n  output: {rendered}\n  error:  {e}",
+        );
+    }
+
+    /// Assert that no coordinate in a normalized description names a position
+    /// its own sequence does not have.
+    ///
+    /// The third seam oracle (#1353), and the one that asks the question
+    /// directly. It exists because the class kept being found by hand, one shape
+    /// at a time — #1274 (`T:g.[8_9insA;10del]` → `g.10_11=` on ten bases),
+    /// #1343 (`c.[*10dup;*11dup]` → `c.*11_*12insAA`) and #1307
+    /// (`g.[24dup;24C>G]` → `g.[24C>G;24_25insC]`) — each filed, fixed and
+    /// regression-tested separately. Three instances of one defect class is the
+    /// argument for an invariant at the seam rather than a fourth per-shape test.
+    ///
+    /// Neither existing oracle covers it. `FERRO_ASSERT_REPARSE` cannot:
+    /// `parse_hgvs` holds no provider, so `g.24_25insC` is well-formed to it.
+    /// `FERRO_ASSERT_IDEMPOTENT` catches some instances incidentally — the #1307
+    /// output re-normalizes to `g.23_24insG`, so it is not a fixed point — but an
+    /// out-of-range output that *is* a fixed point passes it, which is exactly
+    /// the #1327 shape (`m.16569_16570insAA`).
+    ///
+    /// See [`merge::first_out_of_bounds_coordinate`] for what is checked, what is
+    /// deliberately not, and why a reversed circular range is not an error.
+    ///
+    /// Compiled out in release, like the two beside it.
+    #[cfg(debug_assertions)]
+    fn assert_in_bounds(&self, variant: &HgvsVariant, normalized: &HgvsVariant) {
+        if !in_bounds_self_check_enabled() {
+            return;
+        }
+        let Some(overrun) = merge::first_out_of_bounds_coordinate(normalized, &self.provider)
+        else {
+            return;
+        };
+        // Only fire when normalization *introduced* it, matching
+        // `assert_reparseable`'s discipline: an input that already names a
+        // position off the end is a caller error, and W4004 `PositionPastEnd` is
+        // the mechanism that reports it. Blaming normalization for preserving it
+        // would make the oracle's failures mean two different things.
+        if merge::first_out_of_bounds_coordinate(variant, &self.provider).is_some() {
+            return;
+        }
+        let OutOfBoundsCoordinate {
+            accession,
+            position,
+            length,
+            member,
+        } = overrun;
+        panic!(
+            "FERRO_ASSERT_IN_BOUNDS: normalization produced a coordinate the sequence does not \
+             have\n  input:  {variant}\n  output: {normalized}\n  member: {member}\n  names \
+             position {position} on {accession}, which has {length} bases",
         );
     }
 
@@ -2215,15 +2295,41 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
-        // Idempotency oracle. Placed at the single shared exit of the core so it
-        // covers `normalize()` AND every `VariantProjector` path; see
-        // `assert_idempotent` for the re-entrancy guard.
-        #[cfg(debug_assertions)]
-        self.assert_reparseable(variant, &result.result);
-        #[cfg(debug_assertions)]
-        self.assert_idempotent(variant, &result.result);
+        self.assert_seam_oracles(variant, &result.result);
 
         Ok((result.result, result.warnings))
+    }
+
+    /// The three seam oracles, run on a normalized result before it is returned.
+    ///
+    /// Ordered cheapest-and-most-specific first, so the failure a run reports is
+    /// the most precise one available: a bad coordinate is a bad coordinate
+    /// whether or not the string also re-parses or re-normalizes, and
+    /// `assert_idempotent` would otherwise report an out-of-range output as a
+    /// non-idempotency, which is the symptom rather than the fault. See
+    /// `assert_idempotent` for the re-entrancy guard.
+    ///
+    /// A method rather than an inline block because there is more than one public
+    /// exit to cover. `normalize_core_checked` is the seam for `normalize()` and
+    /// every `VariantProjector` path, but `normalize_with_diagnostics` reaches
+    /// `normalize_core_canonical` directly and so returned a normalized variant
+    /// that no oracle had ever inspected — for all three checks, not just the new
+    /// one. Calling this from both is what makes "the oracles cover every
+    /// normalized output ferro hands back" true rather than nearly true.
+    ///
+    /// Each call stays individually `#[cfg(debug_assertions)]`-gated, so the whole
+    /// body compiles away in release exactly as the inline block did.
+    fn assert_seam_oracles(&self, variant: &HgvsVariant, normalized: &HgvsVariant) {
+        #[cfg(debug_assertions)]
+        self.assert_in_bounds(variant, normalized);
+        #[cfg(debug_assertions)]
+        self.assert_reparseable(variant, normalized);
+        #[cfg(debug_assertions)]
+        self.assert_idempotent(variant, normalized);
+        // Release builds read neither parameter once the three calls above are
+        // compiled out.
+        #[cfg(not(debug_assertions))]
+        let _ = (variant, normalized);
     }
 
     /// Normalize a variant with detailed warnings
@@ -2239,6 +2345,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // must emit the same canonical variant `normalize()` does, and `infos`
         // must describe the shift from the input to *that* variant.
         let (result, warnings) = self.normalize_core_canonical(variant)?;
+        // This exit does not pass through `normalize_core_checked`, so the oracles
+        // have to be run here too — otherwise a public entry point hands back a
+        // normalized variant none of the three ever saw.
+        self.assert_seam_oracles(variant, &result);
         let infos = detect_shuffle_infos(variant, &result, self.config.shuffle_direction);
         Ok(NormalizeResult::with_diagnostics(result, warnings, infos))
     }
@@ -10577,6 +10687,50 @@ mod tests {
     use super::*;
     use crate::hgvs::parser::parse_hgvs;
     use crate::reference::MockProvider;
+
+    /// `Normalizer` has exactly two public normalizing methods — `normalize` and
+    /// `normalize_with_diagnostics` — and only the first went through
+    /// `normalize_core_checked`. So before `assert_seam_oracles` was factored out,
+    /// this one returned a normalized variant none of the three seam oracles had
+    /// inspected: `FERRO_ASSERT_IN_BOUNDS`, `FERRO_ASSERT_REPARSE` and
+    /// `FERRO_ASSERT_IDEMPOTENT` alike.
+    ///
+    /// The flags themselves are process-wide `OnceLock`s read from the
+    /// environment, so a unit test cannot toggle one; asserting the *invariant*
+    /// with the same predicate the oracle uses is the env-independent equivalent,
+    /// and it fails if this path ever starts emitting an out-of-range coordinate
+    /// again. In CI, where all three flags are set, this path now also gets the
+    /// live assertions for free — which is the actual fix.
+    ///
+    /// The inputs are the shapes the in-bounds class was found in (#1307's
+    /// terminal-dup collision and #1274's two-base identity), each authored at the
+    /// end of a 24-base contig where an overrun is one step away.
+    #[test]
+    fn the_diagnostics_exit_returns_in_bounds_coordinates_too() {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.1", "TTTTTTTTTAATATATTTTAATAC".to_string());
+        let normalizer = Normalizer::new(provider);
+        for descriptor in [
+            "NC_TEST.1:g.[24dup;24C>G]",
+            "NC_TEST.1:g.[24dup;24delinsGG]",
+            "NC_TEST.1:g.24dup",
+            "NC_TEST.1:g.23_24insC",
+            "NC_TEST.1:g.24C>G",
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            let diagnosed = normalizer
+                .normalize_with_diagnostics(&variant)
+                .unwrap_or_else(|e| panic!("`{descriptor}` must normalize: {e}"));
+            let overrun =
+                merge::first_out_of_bounds_coordinate(&diagnosed.result, normalizer.provider());
+            assert!(
+                overrun.is_none(),
+                "`{descriptor}` -> `{}` through normalize_with_diagnostics names a \
+                 coordinate off the end: {overrun:?}",
+                diagnosed.result
+            );
+        }
+    }
 
     #[test]
     fn test_normalize_substitution_unchanged() {
