@@ -355,7 +355,14 @@ fn parse_inserted_sequence(
             // Parenthesized range: (10_20)
             parse_parenthesized_count(input)
         }
-        b'0'..=b'9' => {
+        // `*` joins the digits here so the **unbracketed** form of a UTR-marker
+        // range parses too (#1376). Without it `ins[*100_*200]` parsed while its
+        // own rendering, `ins*100_*200`, did not — a parse/display asymmetry, and
+        // one the intronic sibling does not have (`ins244-8_249` round-trips
+        // because it starts with a digit). A `*` that is not the start of such a
+        // range still falls through: `parse_cds_position_range` requires digits
+        // after the marker and an `_`-joined second position.
+        b'0'..=b'9' | b'*' => {
             // Could be CDS position range (423-1933_423-1687inv) or simple count (10)
             // Try CDS position range first if it looks like one (has _ with possible +/- offsets)
             if let Ok((remaining, part)) = parse_cds_position_range(input) {
@@ -714,32 +721,74 @@ fn parse_external_ref_part(input: &str) -> IResult<&str, crate::hgvs::edit::Inse
     ))
 }
 
-/// Parse a CDS-style position range (e.g., 401_419, 244-8_249, 100+5_200-10, with optional inv suffix)
+/// Parse a CDS-style position range (e.g., 401_419, 244-8_249, 100+5_200-10,
+/// `*100_*200`, with optional inv suffix)
+///
+/// A leading `*` marks a 3'UTR position. It is admitted here so the range
+/// reaches [`InsertedPart::CdsPositionRange`], whose refusal downstream already
+/// names this shape — "CDS-offset range (intronic **or UTR-marker**) is
+/// spec-undefined". Before #1376 the grammar stopped at the `*` instead, so
+/// `c.249_250ins[*100_*200]` died with a bare `nom` `Tag` error while its
+/// intronic sibling `ins[244-8_249]` parsed and got the sentence. Accepting it
+/// here is the consistent half of that pair: parse, then refuse with a reason.
 fn parse_cds_position_range(input: &str) -> IResult<&str, crate::hgvs::edit::InsertedPart> {
     use crate::hgvs::edit::InsertedPart;
 
-    // Try to parse CDS-style position (may have offsets like -8 or +5)
-    // Format: base[+-offset]_base[+-offset][inv]
-    let mut end_pos = 0;
+    /// Consume one position: an optional 3'UTR `*` marker, then digits, then an
+    /// optional `+N`/`-N` intronic offset. Returns `None` if no digits follow,
+    /// which is what makes a bare `*` or an empty token a parse failure rather
+    /// than a zero-length match.
+    ///
+    /// An offset marker must be followed by digits too. Without that check a
+    /// bare `+`/`-` was consumed as if it were an offset and the position still
+    /// matched, so `ins[100+_200]`, `ins[100_200+]` and `ins[*100_*200-]` all
+    /// parsed — none of which is a position. That predates the `*` work, but
+    /// this helper is where the offset scan now lives, so it is fixed here.
+    fn take_position(bytes: &[u8], mut at: usize) -> Option<usize> {
+        if at < bytes.len() && bytes[at] == b'*' {
+            at += 1;
+        }
+        let digits_start = at;
+        while at < bytes.len() && bytes[at].is_ascii_digit() {
+            at += 1;
+        }
+        if at == digits_start {
+            return None;
+        }
+        if at < bytes.len() && (bytes[at] == b'+' || bytes[at] == b'-') {
+            let offset_digits_start = at + 1;
+            let mut probe = offset_digits_start;
+            while probe < bytes.len() && bytes[probe].is_ascii_digit() {
+                probe += 1;
+            }
+            if probe == offset_digits_start {
+                // A marker with no magnitude is not an offset, and a position
+                // that ends in one is not a position.
+                return None;
+            }
+            at = probe;
+        }
+        Some(at)
+    }
+
     let bytes = input.as_bytes();
 
-    // Parse first position (digits with optional +/- offset)
-    while end_pos < bytes.len() && bytes[end_pos].is_ascii_digit() {
-        end_pos += 1;
-    }
-    if end_pos == 0 {
+    // Parse first position (optional `*`, digits, optional +/- offset).
+    //
+    // `take_position` consumes the offset itself, so there is deliberately no
+    // second offset pass here. There used to be — the pre-refactor code scanned
+    // digits inline and then handled one offset — and leaving it in place after
+    // the extraction let the FIRST position take two offsets while the second
+    // (which only calls `take_position`) takes one: `ins[100+5-3_200]` parsed
+    // while `ins[100_200+5-3]` did not. A c. position carries at most one
+    // intronic offset, so that asymmetry accepted a position the spec rejects,
+    // in a fuzzed parser.
+    let Some(mut end_pos) = take_position(bytes, 0) else {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Digit,
         )));
-    }
-    // Check for offset (+N or -N)
-    if end_pos < bytes.len() && (bytes[end_pos] == b'+' || bytes[end_pos] == b'-') {
-        end_pos += 1;
-        while end_pos < bytes.len() && bytes[end_pos].is_ascii_digit() {
-            end_pos += 1;
-        }
-    }
+    };
 
     // Must have underscore separator
     if end_pos >= bytes.len() || bytes[end_pos] != b'_' {
@@ -750,28 +799,23 @@ fn parse_cds_position_range(input: &str) -> IResult<&str, crate::hgvs::edit::Ins
     }
     end_pos += 1; // skip underscore
 
-    // Parse second position
-    let second_start = end_pos;
-    while end_pos < bytes.len() && bytes[end_pos].is_ascii_digit() {
-        end_pos += 1;
-    }
-    if end_pos == second_start {
+    // Parse second position, same shape as the first.
+    let Some(second_end) = take_position(bytes, end_pos) else {
         return Err(nom::Err::Error(nom::error::Error::new(
             input,
             nom::error::ErrorKind::Digit,
         )));
-    }
-    // Check for offset on second position
-    if end_pos < bytes.len() && (bytes[end_pos] == b'+' || bytes[end_pos] == b'-') {
-        end_pos += 1;
-        while end_pos < bytes.len() && bytes[end_pos].is_ascii_digit() {
-            end_pos += 1;
-        }
-    }
+    };
+    end_pos = second_end;
 
     let range_str = &input[..end_pos];
     let mut remaining = &input[end_pos..];
-    let has_offset = range_str.contains('+') || range_str.contains('-');
+    // Anything that is not a pair of plain positive integers needs offset- or
+    // UTR-aware translation, which the same-reference lookup does not do — so it
+    // routes to `CdsPositionRange` and is refused with a reason. `*` joins `+`
+    // and `-` here for that purpose (#1376).
+    let needs_axis_translation =
+        range_str.contains('+') || range_str.contains('-') || range_str.contains('*');
 
     // Check for inversion suffix
     let has_inv = if remaining.starts_with("inv") {
@@ -781,8 +825,8 @@ fn parse_cds_position_range(input: &str) -> IResult<&str, crate::hgvs::edit::Ins
         false
     };
 
-    // Determine which variant to use based on whether there are offsets
-    if has_offset {
+    // Determine which variant to use based on whether the positions are plain.
+    if needs_axis_translation {
         let range_with_inv = if has_inv {
             format!("{}inv", range_str)
         } else {

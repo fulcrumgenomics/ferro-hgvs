@@ -195,6 +195,7 @@ mod issue_1334_liftover_position_zero;
 mod issue_1349_rotation_fallback_dup;
 mod issue_1355_rotation_gate_repeat;
 mod issue_1362_identity_span;
+mod issue_1376_utr_ins_payload;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;
