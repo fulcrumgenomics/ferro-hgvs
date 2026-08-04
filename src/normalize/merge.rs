@@ -2224,8 +2224,8 @@ fn collect_canonical_edits(
 /// Whether every member's *stated* reference base agrees with the window.
 ///
 /// `NaEdit` optionally carries the reference bases the submitter asserted
-/// (`c.5A>T`, `c.5_7delACG`). Where present they must match, otherwise the
-/// variant is a reference mismatch and belongs to the per-member pipeline's
+/// (`c.5A>T`, `c.5_7delACG`, `c.263A=`). Where present they must match, otherwise
+/// the variant is a reference mismatch and belongs to the per-member pipeline's
 /// strict-reject / warn path rather than to canonicalization.
 fn stated_reference_bases_match(
     variants: &[HgvsVariant],
@@ -2245,7 +2245,27 @@ fn stated_reference_bases_match(
         // canonicalized out from under strict mode.
         let stated = match edit {
             NaEdit::Substitution { reference, .. } => Some(vec![*reference]),
-            NaEdit::Deletion {
+            // `c.263A=` asserts that position 263 is `A`, so an identity that
+            // spells its sequence is a stated-reference channel like any other
+            // (#1352). It was missing while the doc comment above claimed the
+            // list was complete, and the safety therefore rested on a refusal in
+            // a *different* function — `collect_canonical_edits` declines
+            // `Identity` at its catch-all — which is exactly the coupling that
+            // comment warns against. Inert until something upstream stops
+            // refusing identity members, which is the point: the validator
+            // should be correct before the refusal is relaxed, not as part of
+            // relaxing it.
+            //
+            // `..` rather than `whole_entity: false`: a whole-entity identity
+            // (`c.=`) carries no sequence in anything the parser produces, but if
+            // one ever arrives with bases, comparing them is the fail-safe
+            // answer — a mismatch refuses canonicalization, whereas skipping the
+            // arm is the very hole being closed.
+            NaEdit::Identity {
+                sequence: Some(seq),
+                ..
+            }
+            | NaEdit::Deletion {
                 sequence: Some(seq),
                 ..
             }
@@ -6447,6 +6467,79 @@ mod tests {
         }
     }
 
+    // Stated-reference validator (#1352)
+    // ------------------------------------------------------------------
+
+    /// `stated_reference_bases_match` against a window that starts at position 1,
+    /// so a member's stated bases are compared with `reference[s - 1..]`.
+    fn stated_bases_agree(descriptor: &str, reference: &str) -> bool {
+        let variant = parse_hgvs(descriptor).expect("fixture must parse");
+        let members: Vec<HgvsVariant> = match variant {
+            HgvsVariant::Allele(allele) => allele.variants.clone(),
+            single => vec![single],
+        };
+        stated_reference_bases_match(&members, CisKind::Genome, reference.as_bytes(), 1)
+    }
+
+    /// An identity spelling its base asserts that base, so a wrong assertion must
+    /// be caught (#1352).
+    ///
+    /// The channel was missing from the alternation while the function's own doc
+    /// comment claimed the list was complete, so a wrongly-stated `g.3T=` on a
+    /// reference `A` fell through to `_ => None` and was accepted. The validator's
+    /// correctness rested instead on `collect_canonical_edits` refusing identity
+    /// members — a guard in a different function, which is the coupling the doc
+    /// comment warns about.
+    #[test]
+    fn a_wrongly_stated_identity_base_is_rejected() {
+        //                     1234567
+        let reference = "GGATTAC";
+        // Position 3 is `A`.
+        assert!(
+            stated_bases_agree("NC_TEST.1:g.3A=", reference),
+            "a correctly stated identity base must be accepted"
+        );
+        assert!(
+            !stated_bases_agree("NC_TEST.1:g.3T=", reference),
+            "a wrongly stated identity base must be rejected — before #1352 this \
+             channel fell through to the catch-all and was accepted"
+        );
+    }
+
+    /// An identity that states no base asserts nothing, so it must stay neutral.
+    /// The arm keys off `sequence: Some(..)`, and a bare `g.3=` has `None`.
+    #[test]
+    fn a_bare_identity_asserts_nothing() {
+        assert!(
+            stated_bases_agree("NC_TEST.1:g.3=", "GGATTAC"),
+            "a bare identity carries no assertion and must not be judged"
+        );
+    }
+
+    /// The channels that were already covered must keep working — the new arm
+    /// shares its binding with four of them, so a mis-edit there would be silent.
+    #[test]
+    fn the_pre_existing_stated_reference_channels_still_match() {
+        //                     1234567
+        let reference = "GGATTAC";
+        for (descriptor, expected) in [
+            ("NC_TEST.1:g.3A>G", true),
+            ("NC_TEST.1:g.3T>G", false),
+            ("NC_TEST.1:g.3_5delATT", true),
+            ("NC_TEST.1:g.3_5delAAA", false),
+            ("NC_TEST.1:g.3_5dupATT", true),
+            ("NC_TEST.1:g.3_5dupAAA", false),
+            ("NC_TEST.1:g.3_5delATTinsGG", true),
+            ("NC_TEST.1:g.3_5delAAAinsGG", false),
+        ] {
+            assert_eq!(
+                stated_bases_agree(descriptor, reference),
+                expected,
+                "`{descriptor}` against `{reference}`"
+            );
+        }
+    }
+
     /// The 5' end of the same invariant. A position at or below zero exists on no
     /// sequence, and the repairs that reach `g.0_1` (#1282) are the same family as
     /// the ones that reach `g.24_25`.
@@ -6547,6 +6640,16 @@ mod tests {
         let found = overrun("NC_PASTEND.1:g.pter_5000del", &provider)
             .expect("the readable end must be checked even though `pter` is not");
         assert_eq!((found.position, found.length), (5000, 200), "{found:?}");
+    }
+
+    /// A stated base running past the window is a refusal, not a panic. Shared
+    /// with every channel, but the new arm is a fresh way to reach it.
+    #[test]
+    fn a_stated_identity_past_the_window_is_refused() {
+        assert!(
+            !stated_bases_agree("NC_TEST.1:g.99A=", "GGATTAC"),
+            "an assertion outside the window must be refused rather than indexed"
+        );
     }
 
     /// #1135: an insertion-shaped anchor with nothing left to insert (a
