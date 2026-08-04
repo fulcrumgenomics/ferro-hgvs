@@ -1394,12 +1394,44 @@ where
             ))
         }
         NaEdit::Identity {
-            sequence: id_seq, ..
+            sequence: id_seq,
+            whole_entity,
         } => {
-            let ref_base = id_seq
-                .as_ref()
-                .map(|s| apply_alphabet(&sequence_to_string(s), alphabet))
-                .unwrap_or_default();
+            // An identity claims the bases under its span — `g.10_12=` asserts
+            // that three bases are unchanged — so its triple must name them, the
+            // same way `Deletion`, `Delins` and `Inversion` fetch a sequence the
+            // input omitted (#1362). This arm used to default to the empty
+            // string, which lost the span and, worse, made the triple
+            // zero-width: a zero-width triple at an interbase is
+            // indistinguishable from an *insertion* at that interbase.
+            //
+            // That is what made the project's own SPDI applier decline any
+            // description containing an unspelled identity. `g.[261_262dup;263=]`
+            // — a real 5'-shuffle output — converted to `262::AG` and `262::`,
+            // two members apparently competing for one interbase, so the applier
+            // refused the whole thing. The identity actually claims base 263 and
+            // the two are disjoint; only the lossy conversion collided them.
+            //
+            // A **whole-entity** identity (`g.=`) is the exception and keeps its
+            // zero-width triple: it asserts the entire reference is unchanged and
+            // names no span, so there is nothing to fetch. Narrowing it to base 1
+            // would invent a claim, and fetching a whole chromosome to prove it
+            // unchanged would be absurd.
+            let ref_raw = match id_seq {
+                Some(seq) => sequence_to_string(seq),
+                None if *whole_entity => String::new(),
+                None => match provider {
+                    Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
+                    None => {
+                        return Err(ConversionError::MissingReferenceData {
+                            description: format!(
+                                "Cannot convert identity to SPDI: the unchanged bases at                                  {start_one_based}..={end_one_based} are unknown (no reference                                  data). Spell them (e.g. `g.10A=`) or convert with a provider."
+                            ),
+                        });
+                    }
+                },
+            };
+            let ref_base = apply_alphabet(&ref_raw, alphabet);
             Ok(SpdiVariant::new(
                 sequence,
                 spdi_pos,
@@ -2077,6 +2109,90 @@ mod tests {
         assert_eq!(spdi.position, 99);
         assert_eq!(spdi.deletion, "A");
         assert_eq!(spdi.insertion, "A");
+    }
+
+    #[test]
+    fn identity_spdi_claims_the_bases_it_asserts_unchanged() {
+        // #1362: an unspelled identity used to convert to a zero-width triple,
+        // losing its span. It now fetches the bases, like the `Deletion`,
+        // `Delins` and `Inversion` arms already did.
+        //
+        // GGATTACAGGCATTAGCCT — 1-based base 10 is `G`, and 10..=12 is `GCA`.
+        let mut provider = crate::reference::mock::MockProvider::new();
+        provider.add_genomic_sequence("NC_KEY.1", "GGATTACAGGCATTAGCCT");
+        let convert = |descriptor: &str| {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            hgvs_to_spdi(&variant, &provider)
+        };
+
+        // One base, and a three-base span whose width used to vanish.
+        let one = convert("NC_KEY.1:g.10=").expect("must convert with a provider");
+        assert_eq!(
+            (one.position, one.deletion.as_str(), one.insertion.as_str()),
+            (9, "G", "G")
+        );
+        let three = convert("NC_KEY.1:g.10_12=").expect("must convert with a provider");
+        assert_eq!(
+            (
+                three.position,
+                three.deletion.as_str(),
+                three.insertion.as_str()
+            ),
+            (9, "GCA", "GCA"),
+            "a three-base identity must claim three bases, not zero"
+        );
+
+        // A spelled identity is unchanged — it never needed the provider.
+        let spelled = convert("NC_KEY.1:g.10G=").expect("must convert");
+        assert_eq!(
+            (spelled.deletion.as_str(), spelled.insertion.as_str()),
+            ("G", "G")
+        );
+    }
+
+    /// A **whole-entity** identity keeps its zero-width triple, deliberately.
+    ///
+    /// `g.=` asserts that the entire reference is unchanged and names no span, so
+    /// there is nothing to fetch. Narrowing it to base 1 would invent a claim, and
+    /// fetching a whole chromosome to prove it unchanged would be absurd. This is
+    /// the one arm of #1362 that must *not* consult the provider.
+    #[test]
+    fn a_whole_entity_identity_stays_zero_width() {
+        let mut provider = crate::reference::mock::MockProvider::new();
+        provider.add_genomic_sequence("NC_KEY.1", "GGATTACAGGCATTAGCCT");
+        let variant = parse_hgvs("NC_KEY.1:g.=").expect("fixture must parse");
+        let spdi = hgvs_to_spdi(&variant, &provider).expect("must convert");
+        assert_eq!(
+            (spdi.deletion.as_str(), spdi.insertion.as_str()),
+            ("", ""),
+            "a whole-entity identity names no span: {spdi:?}"
+        );
+    }
+
+    /// Without a provider, an unspelled identity now reports the same
+    /// missing-reference error its sibling arms do, rather than silently
+    /// returning a wrong-width triple (#1362).
+    ///
+    /// This is the breaking half of that change: `hgvs_to_spdi_simple`, and the
+    /// Python `hgvs_to_spdi` that wraps it, used to answer `9::` here.
+    #[test]
+    fn an_unspelled_identity_without_a_provider_is_an_error() {
+        let variant = parse_hgvs("NC_KEY.1:g.10=").expect("fixture must parse");
+        let err = hgvs_to_spdi_simple(&variant)
+            .expect_err("an unspelled identity has no bases without a reference");
+        assert!(
+            matches!(err, ConversionError::MissingReferenceData { .. }),
+            "expected MissingReferenceData, got {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("identity") && msg.contains("g.10A="),
+            "the message should name the construct and how to avoid the error: {msg}"
+        );
+        // A spelled identity still works without a provider — the error is about
+        // the absent bases, not about identities.
+        let spelled = parse_hgvs("NC_KEY.1:g.10A=").expect("fixture must parse");
+        assert!(hgvs_to_spdi_simple(&spelled).is_ok());
     }
 
     #[test]

@@ -343,43 +343,50 @@ fn the_five_prime_divergences_are_non_confluence_and_nothing_worse() {
         }
     }
     assert_eq!(
-        beyond_the_applier, 1,
-        "exactly one of these outputs should be inexpressible to the applier. If \
-         `an_identity_member_leaves_the_output_beyond_the_applier` is also red, the \
-         redundant `=` member stopped being emitted — good, re-check that row. If \
-         it is green, a second output became inexpressible — bad, find which."
+        beyond_the_applier, 0,
+        "every one of these outputs should now be expressible to the applier. This \
+         was 1 until #1362 taught `hgvs_to_spdi` to fetch an unspelled identity's \
+         bases instead of emitting a zero-width triple: the `263=` member below used \
+         to collide with its `261_262dup` sibling at one interbase, so the applier \
+         refused the whole description. If this is red again, either a new output \
+         became inexpressible — find which — or that conversion regressed."
     );
 }
 
 #[test]
-fn an_identity_member_leaves_the_output_beyond_the_applier() {
-    // A finding in its own right, recorded because it silently weakens the test
-    // above. Under 5' shuffle #1321's split spelling settles with a redundant
-    // identity member beside a real edit:
+fn an_identity_member_is_now_expressible_to_the_applier() {
+    // Under 5' shuffle #1321's split spelling settles with a redundant identity
+    // member beside a real edit:
     //
     //     g.[261_262insGA;262_263insA;263del]  ->  g.[261_262dup;263=]
     //
     // `=` states that nothing changes, so the member carries no information and
-    // the `263=` is pure noise in the output. It also has no SPDI triple, so
-    // `hgvs_to_spdi` declines and this project's own independent applier cannot
-    // evaluate the description — the one oracle that judges denotation is blind
-    // to any output containing one.
+    // the `263=` is pure noise in the output. That part is unchanged and is still
+    // worth removing on its own merits.
     //
-    // Emitting it is what puts the allele into `collect_canonical_edits`'s
-    // catch-all (`_ => return None`) too, so the derivation refuses to re-derive
-    // it. Two further gates refuse behind that one (the
-    // `changed_columns_of_pieces` weight bound, then `needs_unsupported_form`),
-    // so removing the member alone does not restore confluence — measured.
+    // What *has* changed is the second half of the old finding. This test used to
+    // assert that the output was **beyond the applier** — the one oracle that
+    // judges denotation rather than form — because `hgvs_to_spdi` mapped an
+    // unspelled identity to a zero-width triple, which at an interbase is
+    // indistinguishable from an insertion there. `261_262dup` gave `262::AG` and
+    // `263=` gave `262::`, apparently two members competing for one interbase, so
+    // the applier declined the whole description. #1362 makes the identity fetch
+    // its base, so it now claims `262..263` and the two are disjoint — as they
+    // always were in fact.
     //
-    // Filed as #1351: the blindness is a defect in the oracle rather than in this
-    // row, and every sequence-preservation sweep in the cis suite inherits it,
-    // routing such outputs into a `skipped` counter that bounds their *share* but
-    // never their *shape*. This test is the pinned instance that issue names.
+    // So the assertion inverts: the output is expressible, and the thing worth
+    // pinning is that it **denotes the input's bases**, which is what the
+    // blindness prevented anyone from checking. That also removes the exemption
+    // from the sweep above, whose `beyond_the_applier` count is now 0.
+    //
+    // The oracle-level half of #1351 is what this closes. Its other half stands:
+    // the sweeps should still distinguish "skipped because the input was
+    // unconvertible" from "skipped because the output was inexpressible".
     //
     // The input is read from #1321's `CONVERGED` row rather than repeated as a
     // literal, so editing that row cannot leave this test quietly exercising a
-    // variant while its prose still claims to be about #1321. The expected output
-    // stays literal — that string is the finding.
+    // different variant while its prose still claims to be about #1321. The
+    // expected output stays literal — that string is the finding.
     let (_, core, split, _) = CONVERGED
         .iter()
         .find(|(issue, ..)| *issue == "#1321")
@@ -390,9 +397,12 @@ fn an_identity_member_leaves_the_output_beyond_the_applier() {
         out, "TEMPLATE:g.[261_262dup;263=]",
         "the redundant identity member moved; re-check both claims below"
     );
-    assert!(
-        apply(&seq, &out).is_none(),
-        "`{out}` is now expressible to the applier — if the `=` member is gone, \
-         delete this test and tighten the one above"
+    let denoted = apply(&seq, &out)
+        .unwrap_or_else(|| panic!("`{out}` must be expressible to the applier since #1362"));
+    let expected = apply(&seq, split).expect("the input spelling has always been expressible");
+    assert_eq!(
+        denoted, expected,
+        "`{split}` -> `{out}` must denote the same bases as its input; this is the \
+         check the zero-width-identity blindness made impossible"
     );
 }
