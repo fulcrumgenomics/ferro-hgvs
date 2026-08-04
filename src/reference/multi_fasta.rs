@@ -164,6 +164,14 @@ pub struct MultiFastaProvider {
     /// Per-`NG_`-version hosted-transcript map (#792); `None` when the manifest
     /// names no artifact (resolution falls back to the global reference map).
     ng_hosted: Option<crate::reference::ng_hosted_transcripts::NgHostedTranscripts>,
+    /// Byte-budgeted LRU of decoded sequence blocks (#976). `None` when the
+    /// budget is zero, in which case every read goes to the file as before.
+    ///
+    /// Complements `open_files` rather than duplicating it: that cache avoids the
+    /// `File::open` syscall, this one avoids the read *and* the newline-strip /
+    /// uppercase pass over the bytes. Workloads with many variants in one gene
+    /// re-read overlapping windows constantly, and paid for both every time.
+    region_cache: Option<SequenceRegionCache>,
 }
 
 /// Resolution inputs that uniquely identify a resolved transcript: the requested
@@ -189,6 +197,211 @@ fn new_transcript_cache() -> TranscriptCache {
     let capacity =
         NonZeroUsize::new(TRANSCRIPT_CACHE_CAPACITY).expect("cache capacity is non-zero");
     Mutex::new(LruCache::new(capacity))
+}
+
+// ----------------------------------------------------------------------------
+// Decoded-sequence region cache (#976)
+// ----------------------------------------------------------------------------
+
+/// Bases per cached block.
+///
+/// Blocks rather than exact `(contig, start, end)` ranges, which is the choice
+/// #976 leaves open. Exact ranges only hit when a later request asks for the
+/// *identical* window, and the workload this cache exists for — many variants in
+/// one gene — produces windows that overlap without repeating. Aligned blocks
+/// turn that overlap into hits.
+///
+/// 8 KiB is deliberately modest. A block read costs more bytes than a narrow
+/// request would, so a large block would tax the scattered-lookup workload this
+/// must not regress; at 8 KiB the read is a couple of filesystem pages, which the
+/// page cache would have faulted in anyway, while still covering a whole exon and
+/// its flanks in one entry. What the hit actually saves is the newline-strip and
+/// ASCII-uppercase pass over the bytes, which is the decode work #976 names.
+const SEQUENCE_BLOCK_BASES: u64 = 8 * 1024;
+
+/// Default byte budget for the region cache, used when
+/// `FERRO_SEQUENCE_CACHE_BYTES` is unset.
+///
+/// The budget is **per provider**, not per process: every `MultiFastaProvider`
+/// builds its own `SequenceRegionCache`, so N live providers can hold N budgets.
+/// Production builds one provider and shares it through an `Arc` (`run_project`
+/// in `src/bin/ferro.rs`), so the common case is one budget — but a harness that
+/// constructs several providers should size the variable accordingly.
+///
+/// 64 MiB holds ~8k blocks — comfortably a gene panel's worth of loci — and is
+/// small enough not to matter beside the reference data a provider already holds.
+/// #976 asks for the budget to be modest, and for eviction by summed decoded
+/// bytes rather than entry count.
+const DEFAULT_SEQUENCE_CACHE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Environment variable naming the region cache's byte budget. `0` disables the
+/// cache entirely, which is also the escape hatch if it is ever suspected of
+/// serving stale or wrong bases.
+const SEQUENCE_CACHE_BYTES_ENV: &str = "FERRO_SEQUENCE_CACHE_BYTES";
+
+/// Identifies one decoded block: the record it belongs to, then which block.
+///
+/// `(file_id, record_offset)` identifies the record without allocating — two
+/// records cannot share a byte offset within one file — so a cache lookup costs
+/// no string hashing on the hot path. Keying by accession name would also have
+/// made aliases (`chr1` / `NC_000001.11`) cache the same bases twice.
+type SequenceBlockKey = (u32, u64, u64);
+
+/// Byte-budgeted LRU of decoded sequence blocks (#976).
+///
+/// Holds post-decode bases: newlines stripped and ASCII-uppercased, exactly what
+/// `get_sequence_from_index` would have returned for that range. Storing the
+/// decoded form is what makes a hit cheap, and it is safe because that function
+/// has always uppercased unconditionally — there is no caller that wants the
+/// original soft-masked case, so a cached block cannot differ from a fresh read.
+struct SequenceRegionCache {
+    inner: Mutex<SequenceRegionCacheInner>,
+    /// Maximum summed length of the cached blocks.
+    budget_bytes: usize,
+    /// Blocks served without touching the file. Test-only, and the direct
+    /// evidence for #976's acceptance criterion ("fewer reads / less decode
+    /// work") — a hit is exactly one avoided read-and-decode.
+    #[cfg(test)]
+    hits: std::sync::atomic::AtomicUsize,
+    /// Blocks that had to be read and decoded.
+    #[cfg(test)]
+    misses: std::sync::atomic::AtomicUsize,
+}
+
+struct SequenceRegionCacheInner {
+    /// Unbounded in *entries* on purpose: the bound is the byte total below, so
+    /// capacity must not evict first and hide it.
+    blocks: LruCache<SequenceBlockKey, Arc<[u8]>>,
+    /// Summed length of every block currently held.
+    bytes: usize,
+}
+
+impl SequenceRegionCache {
+    fn new(budget_bytes: usize) -> Self {
+        Self {
+            inner: Mutex::new(SequenceRegionCacheInner {
+                blocks: LruCache::unbounded(),
+                bytes: 0,
+            }),
+            budget_bytes,
+            #[cfg(test)]
+            hits: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            misses: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// The cached block, or `None` on a miss.
+    ///
+    /// A poisoned lock is a miss rather than an error: this is a cache, and
+    /// failing a reference read because another thread panicked while holding it
+    /// would turn a performance feature into a correctness hazard.
+    fn get(&self, key: &SequenceBlockKey) -> Option<Arc<[u8]>> {
+        let found = {
+            let mut inner = self.inner.lock().ok()?;
+            inner.blocks.get(key).map(Arc::clone)
+        };
+        #[cfg(test)]
+        {
+            use std::sync::atomic::Ordering;
+            if found.is_some() {
+                self.hits.fetch_add(1, Ordering::Relaxed);
+            } else {
+                self.misses.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        found
+    }
+
+    /// Insert a decoded block, evicting least-recently-used blocks until the
+    /// total is back within budget.
+    ///
+    /// A block larger than the whole budget is simply not stored — evicting
+    /// everything to hold one oversized entry would be worse than not caching it.
+    fn insert(&self, key: SequenceBlockKey, block: Arc<[u8]>) {
+        if block.len() > self.budget_bytes {
+            return;
+        }
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        let added = block.len();
+        if let Some(previous) = inner.blocks.put(key, block) {
+            // Re-inserting the same key (two threads missed the same block and
+            // both read it) must not double-count its bytes.
+            inner.bytes = inner.bytes.saturating_sub(previous.len());
+        }
+        inner.bytes += added;
+        while inner.bytes > self.budget_bytes {
+            match inner.blocks.pop_lru() {
+                Some((_, evicted)) => inner.bytes = inner.bytes.saturating_sub(evicted.len()),
+                // Cannot happen while `bytes > 0`, but looping forever on an
+                // accounting slip would be worse than leaving the cache large.
+                None => {
+                    inner.bytes = 0;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Summed bytes currently held. Test-only; the budget is otherwise invisible.
+    #[cfg(test)]
+    fn held_bytes(&self) -> usize {
+        self.inner.lock().map(|inner| inner.bytes).unwrap_or(0)
+    }
+
+    /// `(hits, misses)` since construction. Test-only.
+    #[cfg(test)]
+    fn counters(&self) -> (usize, usize) {
+        use std::sync::atomic::Ordering;
+        (
+            self.hits.load(Ordering::Relaxed),
+            self.misses.load(Ordering::Relaxed),
+        )
+    }
+}
+
+/// The configured region-cache budget, read once.
+///
+/// Unparseable values fall back to the default rather than failing a run — a
+/// malformed tuning knob should not stop a reference from being read — but they
+/// warn, so a typo is not silently ignored.
+fn sequence_cache_budget_bytes() -> usize {
+    use std::sync::OnceLock;
+    static BUDGET: OnceLock<usize> = OnceLock::new();
+    *BUDGET.get_or_init(|| match std::env::var(SEQUENCE_CACHE_BYTES_ENV) {
+        Err(_) => DEFAULT_SEQUENCE_CACHE_BYTES,
+        Ok(raw) => match raw.trim().parse::<usize>() {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                warn!(
+                    "{SEQUENCE_CACHE_BYTES_ENV}={raw:?} is not a byte count; \
+                     using the default {DEFAULT_SEQUENCE_CACHE_BYTES}"
+                );
+                DEFAULT_SEQUENCE_CACHE_BYTES
+            }
+        },
+    })
+}
+
+/// Build the region cache, or `None` when the budget is zero (disabled).
+///
+/// A budget too small to hold a single block is treated as zero. Such a cache
+/// would still be allocated and still take its lock on every read, while
+/// `insert` rejects every full block as oversized — all of the cost and none of
+/// the benefit. Disabling it is what the operator asking for a sub-block budget
+/// actually wants, and it is announced rather than silently reinterpreted.
+fn new_sequence_region_cache() -> Option<SequenceRegionCache> {
+    let budget = sequence_cache_budget_bytes();
+    if budget > 0 && (budget as u64) < SEQUENCE_BLOCK_BASES {
+        warn!(
+            "{SEQUENCE_CACHE_BYTES_ENV}={budget} is smaller than one \
+             {SEQUENCE_BLOCK_BASES}-byte block; disabling the region cache"
+        );
+        return None;
+    }
+    (budget > 0).then(|| SequenceRegionCache::new(budget))
 }
 
 /// Options controlling how a manifest is loaded (#1001).
@@ -276,6 +489,7 @@ impl MultiFastaProvider {
             legacy_gene_models: FxHashMap::default(),
             contig_aliases: None,
             ng_hosted: None,
+            region_cache: new_sequence_region_cache(),
         }
     }
 
@@ -1215,7 +1429,12 @@ impl MultiFastaProvider {
         None
     }
 
-    /// Get a sequence from the appropriate FASTA file
+    /// Get a sequence from the appropriate FASTA file.
+    ///
+    /// Served from the decoded-block cache when one is configured (#976); see
+    /// [`Self::cached_range`]. The bytes are identical either way — the cache
+    /// stores exactly what [`Self::decode_range`] produced — so this is purely a
+    /// timing change.
     fn get_sequence_from_index(
         &self,
         name: &str,
@@ -1238,15 +1457,146 @@ impl MultiFastaProvider {
             return Ok(String::new());
         }
 
+        let bytes = match self.region_cache.as_ref() {
+            Some(cache) => self.cached_range(name, entry, start, actual_end, cache)?,
+            None => self.decode_range(name, entry, start, actual_end)?,
+        };
+        // `bytes` is already decoded — newlines stripped, ASCII-uppercased — by
+        // `decode_range`, whichever path produced it. All that is left here is
+        // the `from_utf8` validity check, which is O(n) but extremely fast for
+        // short-ASCII inputs and does not reallocate.
+        String::from_utf8(bytes).map_err(|e| FerroError::Io {
+            msg: format!("FASTA contains non-UTF8 bytes for {}: {}", name, e),
+        })
+    }
+
+    /// Assemble `[start, actual_end)` from cached blocks, reading and decoding
+    /// only the blocks that are missing (#976).
+    ///
+    /// The requested window is covered by the aligned blocks it overlaps, each
+    /// looked up on its own. A window inside one block is one lookup; a window
+    /// spanning a boundary is two, of which the second is usually already present
+    /// because the previous variant in the same gene pulled it in.
+    fn cached_range(
+        &self,
+        name: &str,
+        entry: &FastaIndexEntry,
+        start: u64,
+        actual_end: u64,
+        cache: &SequenceRegionCache,
+    ) -> Result<Vec<u8>, FerroError> {
+        let first = start / SEQUENCE_BLOCK_BASES;
+        // `actual_end` is exclusive and `> start`, so `actual_end - 1` is the last
+        // base actually wanted and cannot underflow.
+        let last = (actual_end - 1) / SEQUENCE_BLOCK_BASES;
+        let mut out = Vec::with_capacity((actual_end - start) as usize);
+        for index in first..=last {
+            let block_start = index * SEQUENCE_BLOCK_BASES;
+            let block = self.block_bytes(name, entry, index, cache)?;
+            let block_end = block_start + block.len() as u64;
+            // Intersect the request with this block, in block-local coordinates.
+            let lo = (start.max(block_start) - block_start) as usize;
+            let hi = (actual_end.min(block_end) - block_start) as usize;
+            // A short final block cannot yield a backwards slice, but a truncated
+            // read would, and slicing on it would panic rather than error.
+            if hi < lo || hi > block.len() {
+                return Err(FerroError::Io {
+                    msg: format!(
+                        "cached block {index} for {name} covers {} bases, too few for the \
+                         requested range {start}..{actual_end}",
+                        block.len()
+                    ),
+                });
+            }
+            out.extend_from_slice(&block[lo..hi]);
+        }
+        Ok(out)
+    }
+
+    /// One decoded block, from the cache or from the file.
+    ///
+    /// The lock is dropped before the read, as #976 asks, so parallel workers do
+    /// not serialize behind one another's I/O. Two threads missing the same block
+    /// therefore both read it; the loser's `insert` overwrites an identical value,
+    /// which the byte accounting handles, and duplicate work on a cold block is a
+    /// far better trade than holding a global lock across a `pread`.
+    fn block_bytes(
+        &self,
+        name: &str,
+        entry: &FastaIndexEntry,
+        index: u64,
+        cache: &SequenceRegionCache,
+    ) -> Result<Arc<[u8]>, FerroError> {
+        let key = (entry.file_id, entry.offset, index);
+        if let Some(hit) = cache.get(&key) {
+            return Ok(hit);
+        }
+        let block_start = index * SEQUENCE_BLOCK_BASES;
+        let block_end = (block_start + SEQUENCE_BLOCK_BASES).min(entry.length);
+        let block: Arc<[u8]> = self
+            .decode_range(name, entry, block_start, block_end)?
+            .into();
+        cache.insert(key, Arc::clone(&block));
+        Ok(block)
+    }
+
+    /// Read `[start, actual_end)` from the file and decode it: newlines stripped,
+    /// ASCII-uppercased.
+    ///
+    /// The uncached path, and the only thing that touches the file. `actual_end`
+    /// must already be clamped to `entry.length` by the caller.
+    fn decode_range(
+        &self,
+        name: &str,
+        entry: &FastaIndexEntry,
+        start: u64,
+        actual_end: u64,
+    ) -> Result<Vec<u8>, FerroError> {
         // Calculate file position
         let line_start = start / entry.line_bases;
         let byte_offset = start % entry.line_bases;
         let file_offset = entry.offset + line_start * entry.line_bytes + byte_offset;
 
-        // Calculate how many bytes we need to read
+        // How many bytes the requested bases actually occupy, computed **exactly**
+        // from the index rather than estimated.
+        //
+        // The obvious form — `seq_len + lines_spanned`, one extra byte per line —
+        // over-reads, because it assumes a line terminator *after the last line*.
+        // A FASTA whose final record ends without a trailing newline has one byte
+        // fewer than that, so `read_exact_at` fails with "failed to fill whole
+        // buffer" even though every requested base is present. #976 widened the
+        // blast radius: a block read makes *any* request in the final block reach
+        // the record's end, so narrow reads that used to succeed started failing.
+        //
+        // Locating the last requested base and measuring to it avoids the whole
+        // problem. On the 20 000-base fixture below (`line_bases` 60,
+        // `line_bytes` 61, header 11 bytes) the final block asks for
+        // 16 384..20 000: the estimate wants 3 677 bytes and runs one past a
+        // 20 344-byte file, while this computes 3 676 ending at exactly EOF.
+        //
+        // Two things follow, and both matter more than the byte saved:
+        //
+        // * `read_exact_at`'s short-read error stays **armed**. Sizing the buffer
+        //   down to what the file holds — the other way to make the no-trailing-
+        //   newline case pass — disarms the only thing that catches a genuinely
+        //   truncated or half-downloaded FASTA, which then reads successfully and
+        //   yields too few bases. The count check after the decode loop is kept as
+        //   a backstop, but it is no longer the sole guard.
+        // * It is correct for **CRLF**, which the estimate is not: a `.fai` for a
+        //   CRLF FASTA carries `line_bytes = line_bases + 2`, so one-byte-per-line
+        //   under-reads by roughly a byte per line and silently returns a short
+        //   sequence for any span of three or more lines. Deriving both offsets
+        //   from `line_bytes` makes the terminator width irrelevant.
         let seq_len = actual_end - start;
-        let num_lines = (seq_len + byte_offset).div_ceil(entry.line_bases);
-        let bytes_to_read = seq_len + num_lines; // Extra for newlines
+        let bytes_to_read = if seq_len == 0 {
+            0
+        } else {
+            let last = actual_end - 1;
+            let end_offset = entry.offset
+                + (last / entry.line_bases) * entry.line_bytes
+                + last % entry.line_bases;
+            end_offset - file_offset + 1
+        };
 
         // Reuse a cached open handle and read positionally at `file_offset`
         // (one pread, no open/seek/close, no shared cursor) instead of
@@ -1276,6 +1626,14 @@ impl MultiFastaProvider {
             }
         };
 
+        // No clamp, and deliberately no `metadata()` stat here. An earlier
+        // revision sized this buffer down to `file.len() - file_offset` to make
+        // the no-trailing-newline case readable; the exact span above makes that
+        // unnecessary, which is worth two things on a performance change. It
+        // removes an `fstat` from every decode on the uncached path this PR
+        // exists to speed up, and it leaves `read_exact_at` free to fail on a
+        // file that really is short — a clamped buffer always fills, so a
+        // truncated FASTA read successfully and simply returned too few bases.
         let mut buffer = vec![0u8; bytes_to_read as usize];
         read_exact_at(&file, &mut buffer, file_offset).map_err(|e| FerroError::Io {
             msg: format!("Failed to read from FASTA file: {}", e),
@@ -1298,13 +1656,26 @@ impl MultiFastaProvider {
                 }
             }
         }
-        // FASTA bases are ASCII; `to_ascii_uppercase()` is a no-op on
-        // already-uppercase bytes. The `from_utf8` validity check is O(n)
-        // but extremely fast for short-ASCII inputs and doesn't reallocate.
-        let sequence = String::from_utf8(sequence_bytes).map_err(|e| FerroError::Io {
-            msg: format!("FASTA contains non-UTF8 bytes for {}: {}", name, e),
-        })?;
-        Ok(sequence)
+        // Fail closed on a short file — the backstop behind `read_exact_at`.
+        //
+        // That call is the primary guard again now that the buffer is sized
+        // exactly (see above), and it catches a file truncated below the byte the
+        // request needs. This check covers what it cannot: a file long enough to
+        // fill the buffer whose *bases* are fewer than claimed, because the span
+        // holds more line terminators than the index describes. Either way the
+        // provider must not hand back a short — or, past a cut, empty — sequence,
+        // since normalization would shuffle against bases that are not the
+        // reference's and emit a well-formed, wrong description.
+        if sequence_bytes.len() != target_len {
+            return Err(FerroError::Io {
+                msg: format!(
+                    "FASTA file for {name} is shorter than its index claims: \
+                     requested bases {start}..{actual_end} ({target_len}), found {}",
+                    sequence_bytes.len()
+                ),
+            });
+        }
+        Ok(sequence_bytes)
     }
 
     /// Check if a sequence exists
@@ -4698,6 +5069,498 @@ NC_000001.11\tRefSeq\tmatch\t9000\t9099\t100\t+\t.\tID=a1;Target=NG_008000.1 1 1
         }
         let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
         (provider, dir)
+    }
+
+    // ------------------------------------------------------------------
+    // Decoded-sequence region cache (#976)
+    // ------------------------------------------------------------------
+
+    /// A record spanning several 8 KiB blocks, wrapped at 60 bases like a real
+    /// FASTA, with a soft-masked (lowercase) stretch so the decode's uppercasing
+    /// is exercised through the cache rather than only around it.
+    ///
+    /// 20 000 bases is two full blocks plus a short third, which is what makes
+    /// the boundary cases below reachable at all — the module's other fixture is
+    /// 40 bases and lives entirely inside block 0.
+    fn build_multi_block_provider() -> (MultiFastaProvider, tempfile::TempDir, String) {
+        const LINE: u64 = 60;
+        const LENGTH: usize = 20_000;
+        let mut sequence = String::with_capacity(LENGTH);
+        for i in 0..LENGTH {
+            let base = match i % 4 {
+                0 => 'A',
+                1 => 'C',
+                2 => 'G',
+                _ => 'T',
+            };
+            // Soft-mask one stretch that straddles the first block boundary, so a
+            // cached block and a fresh read must agree about case.
+            if (8_000..8_500).contains(&i) {
+                sequence.push(base.to_ascii_lowercase());
+            } else {
+                sequence.push(base);
+            }
+        }
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("genome.fna");
+        let fai_path = dir.path().join("genome.fna.fai");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">NC_BLOCK.1").unwrap();
+            for chunk in sequence.as_bytes().chunks(LINE as usize) {
+                writeln!(f, "{}", std::str::from_utf8(chunk).unwrap()).unwrap();
+            }
+        }
+        {
+            let mut f = File::create(&fai_path).unwrap();
+            // Header ">NC_BLOCK.1\n" is 12 bytes.
+            writeln!(f, "NC_BLOCK.1\t{LENGTH}\t12\t{LINE}\t{}", LINE + 1).unwrap();
+        }
+        let provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        (provider, dir, sequence.to_ascii_uppercase())
+    }
+
+    /// A FASTA whose final record ends **without** a trailing newline must still
+    /// be readable — including a narrow read that only reaches the record's end
+    /// because of block alignment.
+    ///
+    /// `decode_range` used to size its buffer as `bases + one newline per line`,
+    /// which assumes a newline *after* the last line. A file without one has
+    /// fewer bytes, and `read_exact_at` then failed with "failed to fill whole
+    /// buffer" even though every requested base is present. It now measures to
+    /// the last requested base instead, so the span is exact and this reads.
+    ///
+    /// That was already true for a request reaching the final base. #976 widened
+    /// it, which is why this test exists here: a block read makes *any* request in
+    /// the last block reach the record's end. Measured on this fixture before the
+    /// clamp:
+    ///
+    /// ```text
+    /// bases 19_000..19_010   cache off -> Ok("ACGTACGTAC")   cache on -> Err(…)
+    /// the final five bases   cache off -> Err(…)             cache on -> Err(…)
+    /// ```
+    ///
+    /// So the narrow read is the regression and the tail read is the older bug;
+    /// both are covered below, with and without the cache, because a fix that
+    /// only helped the cached path would leave the original in place.
+    #[test]
+    fn a_record_without_a_trailing_newline_is_still_readable() {
+        const LINE: usize = 60;
+        const LENGTH: usize = 20_000;
+        let sequence: String = (0..LENGTH).map(|i| ['A', 'C', 'G', 'T'][i % 4]).collect();
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("no_trailing_newline.fna");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            // Header is ">NC_NONL.1\n" = 11 bytes, matching the `.fai` offset below.
+            writeln!(f, ">NC_NONL.1").unwrap();
+            let lines: Vec<&str> = sequence
+                .as_bytes()
+                .chunks(LINE)
+                .map(|c| std::str::from_utf8(c).unwrap())
+                .collect();
+            let last = lines.len() - 1;
+            for (i, line) in lines.iter().enumerate() {
+                if i == last {
+                    write!(f, "{line}").unwrap();
+                } else {
+                    writeln!(f, "{line}").unwrap();
+                }
+            }
+        }
+        {
+            let mut f = File::create(dir.path().join("no_trailing_newline.fna.fai")).unwrap();
+            writeln!(f, "NC_NONL.1\t{LENGTH}\t11\t{LINE}\t{}", LINE + 1).unwrap();
+        }
+        let mut provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+
+        // The two reads that mattered, checked with the cache both ways so
+        // neither the regression nor the older bug can come back on one path.
+        for cached in [false, true] {
+            provider.region_cache = if cached {
+                new_sequence_region_cache()
+            } else {
+                None
+            };
+            let narrow = provider
+                .get_sequence("NC_NONL.1", 19_000, 19_010)
+                .unwrap_or_else(|e| panic!("narrow read (cached={cached}) must succeed: {e:?}"));
+            assert_eq!(narrow, sequence[19_000..19_010]);
+            let tail = provider
+                .get_sequence("NC_NONL.1", (LENGTH - 5) as u64, LENGTH as u64)
+                .unwrap_or_else(|e| panic!("tail read (cached={cached}) must succeed: {e:?}"));
+            assert_eq!(tail, sequence[LENGTH - 5..]);
+            // And the whole record, which is the widest form of the same read.
+            let whole = provider
+                .get_sequence("NC_NONL.1", 0, LENGTH as u64)
+                .unwrap_or_else(|e| panic!("whole read (cached={cached}) must succeed: {e:?}"));
+            assert_eq!(whole.len(), LENGTH);
+            assert_eq!(whole, sequence);
+        }
+    }
+
+    /// A FASTA truncated below what its `.fai` claims must ERROR, not quietly
+    /// return the bases that happen to be there.
+    ///
+    /// The clamp that makes the no-trailing-newline case above readable sizes the
+    /// read buffer from the file's actual length, which also disarms
+    /// `read_exact_at`'s "failed to fill whole buffer" — the only thing that used
+    /// to catch a genuinely short file. Without the length check in
+    /// `decode_range`, a truncated or half-downloaded reference yields a SHORT
+    /// sequence with no error, and normalization then shuffles against bases that
+    /// are not the reference's. That is the silent wrong answer the reference
+    /// layer must never produce; a missing file is an error, and so is a partial
+    /// one.
+    ///
+    /// Checked with the cache both ways. `cached_range` is not a substitute:
+    /// it recomputes each block's extent from the length actually returned, so
+    /// its bounds guard only fires when the request starts *past* the short
+    /// block's end. A **partially** short block slips through it — reading
+    /// 17 900..18 100 against this fixture would return 134 bases instead of
+    /// 200 — which is why the guard belongs in `decode_range`.
+    /// A **CRLF** FASTA must read back the same bases as an LF one.
+    ///
+    /// This is not hypothetical and it is not new: a samtools `.fai` for a CRLF
+    /// file carries `line_bytes = line_bases + 2`, and `prepare`'s own index
+    /// writer produces the same, because it takes `line.len() + 1` from a `lines()`
+    /// iterator whose items still end in `\r`. Nothing in `src/` strips `\r\n` as
+    /// a unit — the decode loop simply skips both bytes — so the byte *span* is
+    /// the only thing that has to be right.
+    ///
+    /// The old `bases + one byte per line` estimate is wrong by a byte per line
+    /// here, so it under-read: on `main` any request spanning three or more lines
+    /// silently returned a short sequence, and #976's block reads would have made
+    /// that every request. Measuring to the last requested base uses `line_bytes`
+    /// and is therefore terminator-agnostic.
+    ///
+    /// Deliberately spans several lines and ends mid-line, since a single-line
+    /// read cannot expose a per-line error.
+    #[test]
+    fn a_crlf_fasta_reads_the_same_bases_as_an_lf_one() {
+        const LINE: usize = 60;
+        const LENGTH: usize = 500;
+        let sequence: String = (0..LENGTH).map(|i| ['A', 'C', 'G', 'T'][i % 4]).collect();
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("crlf.fna");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            // `\r\n` throughout, header included, exactly as a file authored on
+            // Windows would be.
+            write!(f, ">NC_CRLF.1\r\n").unwrap();
+            for chunk in sequence.as_bytes().chunks(LINE) {
+                write!(f, "{}\r\n", std::str::from_utf8(chunk).unwrap()).unwrap();
+            }
+        }
+        {
+            let mut f = File::create(dir.path().join("crlf.fna.fai")).unwrap();
+            // Header ">NC_CRLF.1\r\n" is 12 bytes; `line_bytes` is 60 + 2.
+            writeln!(f, "NC_CRLF.1\t{LENGTH}\t12\t{LINE}\t{}", LINE + 2).unwrap();
+        }
+
+        let mut provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        for cached in [false, true] {
+            provider.region_cache = if cached {
+                new_sequence_region_cache()
+            } else {
+                None
+            };
+            // Spans five lines and ends mid-line — the shape a per-line byte
+            // error corrupts.
+            let got = provider
+                .get_sequence("NC_CRLF.1", 30, 290)
+                .unwrap_or_else(|e| panic!("CRLF read (cached={cached}) must succeed: {e:?}"));
+            assert_eq!(
+                got,
+                sequence[30..290],
+                "CRLF read (cached={cached}) returned the wrong bases"
+            );
+            // The whole record, including the final line, which is where a
+            // terminator-width error also shows up.
+            let all = provider
+                .get_sequence("NC_CRLF.1", 0, LENGTH as u64)
+                .unwrap_or_else(|e| panic!("full CRLF read (cached={cached}) must succeed: {e:?}"));
+            assert_eq!(all, sequence);
+        }
+    }
+
+    #[test]
+    fn a_truncated_record_is_an_error_not_a_short_read() {
+        const LINE: usize = 60;
+        const LENGTH: usize = 20_000;
+        let sequence: String = (0..LENGTH).map(|i| ['A', 'C', 'G', 'T'][i % 4]).collect();
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("truncated.fna");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            // Header is ">NC_TRUNC.1\n" = 12 bytes, matching the `.fai` offset below.
+            writeln!(f, ">NC_TRUNC.1").unwrap();
+            for chunk in sequence.as_bytes().chunks(LINE) {
+                writeln!(f, "{}", std::str::from_utf8(chunk).unwrap()).unwrap();
+            }
+        }
+        {
+            let mut f = File::create(dir.path().join("truncated.fna.fai")).unwrap();
+            writeln!(f, "NC_TRUNC.1\t{LENGTH}\t12\t{LINE}\t{}", LINE + 1).unwrap();
+        }
+        // Lop off the last ~2 000 bases *after* writing the index, so the `.fai`
+        // still advertises the full record — exactly a half-written download.
+        let full_len = std::fs::metadata(&fasta_path).unwrap().len();
+        let keep = full_len - 2_000;
+        File::options()
+            .write(true)
+            .open(&fasta_path)
+            .unwrap()
+            .set_len(keep)
+            .unwrap();
+
+        let mut provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        for cached in [false, true] {
+            provider.region_cache = if cached {
+                new_sequence_region_cache()
+            } else {
+                None
+            };
+            let err = provider
+                .get_sequence("NC_TRUNC.1", 19_000, 19_010)
+                .expect_err(&format!(
+                    "a read into the truncated tail (cached={cached}) must error, \
+                     not return a short sequence"
+                ));
+            assert!(
+                matches!(err, FerroError::Io { .. }),
+                "expected an Io error, got {err:?}"
+            );
+            // The bases that ARE present must still read back correctly, so the
+            // check bounds the damage to the missing region rather than failing
+            // the whole record.
+            let early = provider
+                .get_sequence("NC_TRUNC.1", 0, 100)
+                .unwrap_or_else(|e| panic!("intact prefix (cached={cached}) must read: {e:?}"));
+            assert_eq!(early, sequence[0..100]);
+        }
+    }
+
+    /// The cache must be invisible in value terms. Every window is compared with
+    /// `decode_range` — the uncached path, i.e. the behaviour that shipped before
+    /// #976 — and with the expected bases computed independently of the provider.
+    ///
+    /// The windows are chosen to hit what a block scheme can get wrong: inside one
+    /// block, straddling a boundary, exactly a block, spanning three blocks,
+    /// starting and ending on a boundary, the short final block, and past the end
+    /// (which must clamp, not error).
+    #[test]
+    fn cached_reads_match_the_uncached_decoder() {
+        let (provider, _dir, expected) = build_multi_block_provider();
+        let entry = provider.prepared.entry("NC_BLOCK.1").unwrap();
+        let length = expected.len() as u64;
+        let block = SEQUENCE_BLOCK_BASES;
+        let windows: Vec<(u64, u64)> = vec![
+            (0, 1),
+            (0, 60),
+            (7, 123),
+            (block - 1, block + 1),
+            (block, block * 2),
+            (block - 10, block * 2 + 10),
+            (0, block * 2 + 5),
+            (block * 2, length),
+            (length - 1, length),
+            (100, length),
+            (0, length),
+            // Past the end: `get_sequence` clamps to the record length.
+            (length - 5, length + 500),
+        ];
+        for (start, end) in windows {
+            let clamped = end.min(length);
+            let uncached = String::from_utf8(
+                provider
+                    .decode_range("NC_BLOCK.1", &entry, start, clamped)
+                    .unwrap(),
+            )
+            .unwrap();
+            let cached = provider.get_sequence("NC_BLOCK.1", start, end).unwrap();
+            assert_eq!(
+                cached, uncached,
+                "cached and uncached disagree for {start}..{end}"
+            );
+            assert_eq!(
+                cached,
+                expected[start as usize..clamped as usize],
+                "wrong bases for {start}..{end}"
+            );
+        }
+    }
+
+    /// Soft-masked bases come back uppercase through the cache, as they always
+    /// did through the direct read. Worth its own test because the cache stores
+    /// the *decoded* form: had it stored raw file bytes, the first read of a
+    /// lowercase stretch would have poisoned every later read of it.
+    #[test]
+    fn soft_masked_bases_are_uppercased_through_the_cache() {
+        let (provider, _dir, expected) = build_multi_block_provider();
+        // 8_000..8_500 is lowercase on disk and straddles the first block
+        // boundary at 8_192.
+        let window = provider.get_sequence("NC_BLOCK.1", 7_990, 8_510).unwrap();
+        assert_eq!(window, expected[7_990..8_510]);
+        assert!(
+            !window.chars().any(|c| c.is_ascii_lowercase()),
+            "cache served soft-masked bases without uppercasing: {window}"
+        );
+        // Again, now from the cache rather than the file.
+        assert_eq!(
+            provider.get_sequence("NC_BLOCK.1", 7_990, 8_510).unwrap(),
+            window
+        );
+    }
+
+    /// #976's acceptance criterion: clustered access does fewer reads.
+    ///
+    /// Twenty overlapping windows in one locus — the "many variants in one gene"
+    /// shape — must decode the covering block once and be served from memory
+    /// after that.
+    #[test]
+    fn clustered_reads_decode_each_block_once() {
+        let (provider, _dir, expected) = build_multi_block_provider();
+        let cache = provider
+            .region_cache
+            .as_ref()
+            .expect("cache enabled by default");
+        for i in 0..20u64 {
+            let start = 1_000 + i * 3;
+            let got = provider
+                .get_sequence("NC_BLOCK.1", start, start + 40)
+                .unwrap();
+            assert_eq!(got, expected[start as usize..(start + 40) as usize]);
+        }
+        let (hits, misses) = cache.counters();
+        assert_eq!(
+            misses, 1,
+            "20 overlapping windows inside one block must decode it once, not {misses} times"
+        );
+        assert_eq!(
+            hits, 19,
+            "the other 19 lookups must be served from the cache"
+        );
+    }
+
+    /// A scattered workload must not be made *worse* in value terms, and each
+    /// distinct block is still only decoded once even when the reads never
+    /// overlap.
+    #[test]
+    fn scattered_reads_are_correct_and_decode_each_block_once() {
+        let (provider, _dir, expected) = build_multi_block_provider();
+        let cache = provider.region_cache.as_ref().unwrap();
+        // One read in each of the three blocks, then the same three again.
+        let starts = [
+            10u64,
+            SEQUENCE_BLOCK_BASES + 10,
+            SEQUENCE_BLOCK_BASES * 2 + 10,
+        ];
+        for _ in 0..2 {
+            for start in starts {
+                let got = provider
+                    .get_sequence("NC_BLOCK.1", start, start + 5)
+                    .unwrap();
+                assert_eq!(got, expected[start as usize..(start + 5) as usize]);
+            }
+        }
+        let (_, misses) = cache.counters();
+        assert_eq!(misses, 3, "three distinct blocks, decoded once each");
+    }
+
+    /// The budget bounds memory by summed decoded bytes, not by entry count, and
+    /// reads stay correct while blocks are being evicted underneath them.
+    #[test]
+    fn the_byte_budget_bounds_the_cache() {
+        let (mut provider, _dir, expected) = build_multi_block_provider();
+        // Room for one block and a bit, so walking the record must evict.
+        let budget = SEQUENCE_BLOCK_BASES as usize + 100;
+        provider.region_cache = Some(SequenceRegionCache::new(budget));
+        let length = expected.len() as u64;
+        let mut position = 0;
+        while position < length {
+            let end = (position + 300).min(length);
+            let got = provider.get_sequence("NC_BLOCK.1", position, end).unwrap();
+            assert_eq!(got, expected[position as usize..end as usize]);
+            let held = provider.region_cache.as_ref().unwrap().held_bytes();
+            assert!(
+                held <= budget,
+                "cache held {held} bytes against a {budget}-byte budget"
+            );
+            position = end;
+        }
+    }
+
+    /// A block that cannot fit the budget is simply not stored — evicting
+    /// everything to hold one oversized entry would be worse than not caching it.
+    /// Reads must still be correct in that configuration.
+    #[test]
+    fn a_block_larger_than_the_budget_is_not_stored() {
+        let (mut provider, _dir, expected) = build_multi_block_provider();
+        provider.region_cache = Some(SequenceRegionCache::new(64));
+        let got = provider.get_sequence("NC_BLOCK.1", 0, 100).unwrap();
+        assert_eq!(got, expected[0..100]);
+        assert_eq!(
+            provider.region_cache.as_ref().unwrap().held_bytes(),
+            0,
+            "an 8 KiB block must not be stored under a 64-byte budget"
+        );
+        // And the read still works the second time, from the file again.
+        assert_eq!(provider.get_sequence("NC_BLOCK.1", 0, 100).unwrap(), got);
+    }
+
+    /// Re-inserting one key must count its bytes once.
+    ///
+    /// Reachable in production, not a hypothetical: the design drops the lock
+    /// before the read, so two threads can miss the same block and both insert
+    /// it. `insert` subtracts the replaced block's length for exactly that case,
+    /// and nothing else covered it — if that subtraction regressed, `held_bytes`
+    /// would drift upward and the byte budget, an explicit #976 acceptance
+    /// criterion, would be exceeded silently rather than loudly.
+    ///
+    /// Driven directly against `SequenceRegionCache` so the race does not have to
+    /// be staged with threads to be pinned.
+    #[test]
+    fn reinserting_the_same_block_counts_its_bytes_once() {
+        let cache = SequenceRegionCache::new(SEQUENCE_BLOCK_BASES as usize * 4);
+        let key = (0u32, 12u64, 0u64);
+        let block: Arc<[u8]> = vec![b'A'; 1_000].into();
+
+        cache.insert(key, Arc::clone(&block));
+        assert_eq!(cache.held_bytes(), 1_000);
+
+        // The losing thread's insert: same key, same size.
+        cache.insert(key, Arc::clone(&block));
+        assert_eq!(
+            cache.held_bytes(),
+            1_000,
+            "re-inserting one key must not double-count its bytes"
+        );
+
+        // Same key, different size — accounting must follow the new block rather
+        // than assume the replacement is the same length.
+        let bigger: Arc<[u8]> = vec![b'C'; 2_500].into();
+        cache.insert(key, bigger);
+        assert_eq!(cache.held_bytes(), 2_500);
+
+        // A distinct key still adds, so the subtraction is scoped to replacement.
+        cache.insert((0, 12, 1), Arc::clone(&block));
+        assert_eq!(cache.held_bytes(), 3_500);
+    }
+
+    /// `FERRO_SEQUENCE_CACHE_BYTES=0` disables the cache; the read path must fall
+    /// back to the direct decode and stay correct. Exercised by clearing the
+    /// field rather than by setting the variable, because the budget is read once
+    /// into a `OnceLock` for the life of the process.
+    #[test]
+    fn a_disabled_cache_reads_directly() {
+        let (mut provider, _dir, expected) = build_multi_block_provider();
+        provider.region_cache = None;
+        for (start, end) in [(0u64, 100u64), (8_180, 8_210), (19_900, 20_000)] {
+            assert_eq!(
+                provider.get_sequence("NC_BLOCK.1", start, end).unwrap(),
+                expected[start as usize..end as usize]
+            );
+        }
     }
 
     /// Repeated and offset reads through the cached file handle return the
