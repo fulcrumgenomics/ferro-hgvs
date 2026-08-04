@@ -1,6 +1,6 @@
 """Type stubs for ferro-hgvs Python bindings."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from typing import Any, Callable, Literal, overload
 
 from typing_extensions import Self
@@ -1236,11 +1236,83 @@ class BatchProcessor:
         """
         ...
 
+    def parse_streaming(self, variants: Iterable[str], workers: int = 0) -> BatchStream:
+        """Parse an iterable of HGVS strings lazily, yielding results in input order.
+
+        The streaming counterpart to `parse`. `parse` takes a fully materialized
+        list and returns a fully materialized BatchResult, so both are resident at
+        once; this consumes the iterable a chunk at a time and yields, so peak
+        memory does not grow with the input's length. Measured on 1M inputs:
+        ~1782 MiB materializing through `parse` against ~38 MiB streaming, at
+        about 1.8x the wall clock (the cost of one result object per item).
+
+        Accepts anything iterable of `str` — a list, a generator, or an open file.
+        The GIL is released for the parsing itself, as with `parse`.
+
+        Args:
+            variants: Iterable of HGVS strings.
+            workers: Worker threads. 0 (default) uses all cores; 1 is serial; N uses N threads.
+        """
+        ...
+
+    def parse_and_normalize_streaming(
+        self, variants: Iterable[str], workers: int = 0
+    ) -> BatchStream:
+        """Parse and normalize an iterable of HGVS strings lazily, in input order.
+
+        See `parse_streaming` for the rationale and the measured numbers.
+
+        Args:
+            variants: Iterable of HGVS strings.
+            workers: Worker threads. 0 (default) uses all cores; 1 is serial; N uses N threads.
+        """
+        ...
+
     def parse_with_progress(
         self, variants: list[str], callback: Callable[[BatchProgress], None]
     ) -> BatchResult:
         """Parse multiple HGVS strings with progress callback."""
         ...
+
+class BatchItem:
+    """One result from a BatchStream.
+
+    A streaming API cannot hand back a BatchResult, whose purpose is to hold
+    every result at once. This is the per-item equivalent: exactly one of
+    `variant` / `error` is set.
+    """
+
+    @property
+    def variant(self) -> HgvsVariant | None:
+        """The parsed (and, for the normalize stream, normalized) variant, or None."""
+        ...
+
+    @property
+    def input(self) -> str | None:
+        """The input string, present only on failure."""
+        ...
+
+    @property
+    def error(self) -> str | None:
+        """The rendered error, or None on success."""
+        ...
+
+    @property
+    def ok(self) -> bool:
+        """Whether this item parsed (and normalized) successfully."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+class BatchStream(Iterator[BatchItem]):
+    """Lazy, order-preserving stream of BatchItem, one per input.
+
+    Its own iterator: `iter(stream) is stream`. Once exhausted it stays
+    exhausted.
+    """
+
+    def __iter__(self) -> BatchStream: ...
+    def __next__(self) -> BatchItem: ...
 
 # ============================================================================
 # Error Handling Classes
