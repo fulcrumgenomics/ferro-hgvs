@@ -1558,48 +1558,11 @@ const CANONICAL_PAD: i64 = 128;
 /// coincidence. Structure alone therefore cannot tell a real separation from an
 /// accidental one; [`separations_are_meaningful`] is what draws that line.
 ///
-/// This bound therefore applies only where a real guard exists — see
-/// [`MAX_UNGUARDED_SPLIT_BLOCK`] for the regime where one does not.
+/// Every length-changing regime now has that guard, so this is the single bound
+/// for all of them (#1271). It used to be joined by a second, smaller bound for
+/// net deletions, which `separations_are_meaningful` did not reach; extending
+/// that rule retired it. See its doc comment for the measurement.
 const MAX_SPLIT_BLOCK: usize = 1024;
-
-/// The same bound for a **net deletion**, where nothing else guards the split.
-///
-/// [`separations_are_meaningful`] is restricted to net insertions, so the three
-/// block regimes are not equally protected:
-///
-/// | regime | guard against a coincidental split |
-/// | --- | --- |
-/// | equal length | none needed — [`best_alignment`] compares position-wise, so there is no gap to place and no search to go wrong |
-/// | net insertion | [`separations_are_meaningful`] |
-/// | **net deletion** | **nothing** |
-///
-/// In the third regime this constant *is* the guard, which is why it stays at
-/// the original 32. That was never the intent — it guarded by accident, being
-/// smaller than the blocks at risk — but raising it to [`MAX_SPLIT_BLOCK`]
-/// across the board removed the cover and split the spec's own
-/// `delins.md:44-47` worked example:
-///
-/// ```text
-/// LRG_199t1:c.850_901delinsTTCCTCGATGCCTG        52 nt -> 14 nt
-///   spanning  LRG_199:g.646630_646681delins…
-///   split     LRG_199:g.[646630_646636delinsTTCCTCG;646640_646678delinsC;
-///                        646680_646681delinsTG]
-/// ```
-///
-/// Which is precisely the harm that passage names, on that passage's own
-/// example: the corpus shows one correct
-/// `p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)` becoming three bogus
-/// consequences.
-///
-/// Splitting the bound by regime keeps the raise where it is safe — a long
-/// equal-length block has no alignment choice to get wrong, and a long net
-/// insertion is guarded — while leaving net deletions exactly as they were.
-///
-/// The principled fix is to extend [`separations_are_meaningful`] to net
-/// deletions and then retire this constant. That is not a local change: the
-/// notes there record that a naive extension breaks #1232 and #1157 and breaks
-/// confluence outright, so it needs its own measurement pass.
-const MAX_UNGUARDED_SPLIT_BLOCK: usize = 32;
 
 /// Unchanged reference bases two pieces of a net insertion must be separated by
 /// before the split between them is believed. See `separations_are_meaningful`.
@@ -2858,14 +2821,9 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
             alt: result.to_vec(),
         }]
     };
-    // The cap depends on whether anything else guards this block against a
-    // coincidental split. See `MAX_UNGUARDED_SPLIT_BLOCK`.
-    let cap = if result.len() < reference.len() {
-        MAX_UNGUARDED_SPLIT_BLOCK
-    } else {
-        MAX_SPLIT_BLOCK
-    };
-    if reference.len() > cap || result.len() > cap {
+    // One bound for every regime now that every length-changing regime has a
+    // real guard — see `separations_are_meaningful` (#1271).
+    if reference.len() > MAX_SPLIT_BLOCK || result.len() > MAX_SPLIT_BLOCK {
         return whole();
     }
     let Some(columns) = best_alignment(reference, result) else {
@@ -2875,7 +2833,10 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     if pieces.is_empty() {
         return whole();
     }
-    if result.len() > reference.len()
+    // Every length-changing block, not just net insertions (#1271). Equal-length
+    // blocks are exempt because `best_alignment` compares position-wise there —
+    // there is no gap to place, so no search to seize on a coincidental match.
+    if reference.len() != result.len()
         && !separations_are_meaningful(&pieces, result.len().abs_diff(reference.len()))
     {
         return whole();
@@ -2883,7 +2844,7 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     // Scoped to length-changing blocks: an equal-length block has no gap to
     // place, so every matched base is a genuine coordinate-wise identity rather
     // than an artefact of where the gap landed, and a split across one is real.
-    // `MAX_UNGUARDED_SPLIT_BLOCK`'s own doc draws the same line.
+    // `separations_are_meaningful` above draws the same line.
     if reference.len() != result.len()
         && pieces.len() > 1
         && every_separation_is_a_single_base(&pieces)
@@ -3031,14 +2992,8 @@ fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
 /// worked example is a net *deletion* (52 nt -> 14 nt), so the spec does not
 /// itself draw the line where this does.
 ///
-/// Two properties were measured rather than assumed, and both pin the shape:
+/// One property is measured rather than assumed:
 ///
-/// * **Restricted to net insertions.** Extending it to net deletions breaks
-///   #1232 and #1157, which split a shorter payload at a genuinely unchanged
-///   base, and breaks confluence outright: a two-member input collapsing to one
-///   piece re-arms the `input_separator_positions` veto and returns verbatim,
-///   while the spanning spelling stays spanning — two stable strings for one
-///   variant.
 /// * **Measured before the 3'-shift.** Re-checking afterwards lets every one of
 ///   the corpus's coincidental splits back through, because a shift widens the
 ///   gap to a piece's left neighbour.
@@ -3048,14 +3003,40 @@ fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
 /// placement *is* the 5'-most one, so the margin is zero. Match-density variants
 /// trade corpus rows against unit tests without a threshold that satisfies both.
 ///
-/// # Net deletions are not covered here
+/// # Net deletions are covered too, since #1271
 ///
-/// Deliberately, per the first bullet above. A long net deletion is instead held
-/// by [`MAX_UNGUARDED_SPLIT_BLOCK`], which stays at the original 32 precisely
-/// because this rule does not reach it — see that constant for the spec example
-/// that fails when the bound is raised across the board. Extending this rule to
-/// cover them, and retiring that constant, is the principled fix and needs its
-/// own measurement pass.
+/// They were not always. This rule applied only to net insertions, and a long
+/// net *deletion* was held instead by a second, smaller block bound
+/// (`MAX_UNGUARDED_SPLIT_BLOCK`, 32) that guarded by accident — it was simply
+/// below the sizes at risk. The spec's own worked example is what that accident
+/// was protecting: on `delins.md:44-47`'s `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`
+/// (52 nt -> 14 nt) the aligner, left to itself, returns **four** pieces —
+///
+/// ```text
+/// [0, 39) [40, 41) [42, 49) [50, 52)
+/// ```
+///
+/// — which is exactly the harm that passage names, and which the corpus shows as
+/// one correct `p.(Arg53_Arg54delinsSerCysAlaHisTyrLeuAla)` becoming three bogus
+/// consequences.
+///
+/// Extending this rule to every length-changing regime replaces that accident
+/// with a rule about the derived pieces: on that block `net_change` is 38, the
+/// required separation is therefore [`RAISED_PIECE_SEPARATION`], and the widest
+/// gap between consecutive pieces is one base — so the split is refused on its
+/// merits and the block stays whole. `partition_block_refuses_a_coincidental_net_deletion_split`
+/// pins both halves of that.
+///
+/// The extension was expected to be costly and measured not to be. #1271 records
+/// that a naive attempt "breaks #1232 and #1157 … and breaks confluence
+/// outright"; re-measured on this tree, all 13 tests of those two issues pass
+/// (including `sequence_identical_delins_and_allele_normalize_equal`, the
+/// confluence one), all 168 manifest-backed conformance tests pass with the
+/// FAIL-set ledgers unmoved, and the spec enumeration *improves* by one row —
+/// `projection-splits-single-member` 10 -> 9 divergences, `projection-pinned`
+/// 1167 -> 1168 passing. Whatever made the naive attempt fail was fixed
+/// elsewhere in the meantime, plausibly by #1237's regime-aware bound and the
+/// sequence-first splitter that followed it.
 fn separations_are_meaningful(pieces: &[Piece], net_change: usize) -> bool {
     // `ref_end` is exclusive and a pure insertion has `ref_start == ref_end`, so
     // this already counts unchanged *bases* rather than event indices: a
@@ -3679,9 +3660,10 @@ fn apply_coding_codon_exception(
 /// (`reading_frame`, from [`AxisFrame`]). A wider merged piece is not "two
 /// variants" in `general.md:35`'s sense at all — `LRG_199t1:c.850_901`
 /// (`delins.md:44`) merges a 52-base member for an unrelated reason (its
-/// `partition_block` sibling never reaches `best_alignment` in the first place;
-/// see [`MAX_UNGUARDED_SPLIT_BLOCK`]), not this exception, so it must not be
-/// touched here and is not: 52 ≠ 3.
+/// `partition_block` sibling reaches the aligner and is then refused by
+/// [`separations_are_meaningful`], whose gaps there are all one base wide —
+/// before #1271 it was refused earlier still, by a block bound), not this
+/// exception, so it must not be touched here and is not: 52 ≠ 3.
 ///
 /// Pinned by `sequence_first_split_declines_the_codon_exception_across_a_boundary`
 /// (`GCA -> TCC`, `general.md:34`'s split rule wins) and
@@ -6886,22 +6868,52 @@ mod tests {
         assert_eq!(forward.as_deref(), Some(&b"ACGTTTGTGAC"[..]));
     }
 
-    /// `partition_block` bounds by *regime*, not by length alone.
+    /// A long net deletion's split is refused **on its merits**, not by a length
+    /// bound (#1271).
     ///
-    /// Only net deletions are unguarded (`separations_are_meaningful` covers net
-    /// insertions, and an equal-length block has no alignment choice to make), so
-    /// only they keep the original 32 nt bound. Tested here rather than through
-    /// `normalize` because the end-to-end path routes through `best_alignment`'s
-    /// max-match search, which makes the *fixture* rather than the bound decide
-    /// the outcome.
+    /// This test used to pin the opposite mechanism: net deletions were the one
+    /// unguarded regime, so a second bound of 32 nt kept them whole while its
+    /// siblings were free to split at 1024. Extending `separations_are_meaningful`
+    /// to every length-changing regime retired that bound, and this now pins that
+    /// the rule reaches the same answer for the right reason.
+    ///
+    /// The distinction is worth asserting rather than assuming, because both
+    /// mechanisms return the identical single piece: `whole()` is the refusal path
+    /// for either. So the first case below checks the *aligner's* unrefused output
+    /// too — four pieces, which is precisely `delins.md:44-47`'s harm — and checks
+    /// that `separations_are_meaningful` is what rejects it.
+    ///
+    /// Tested here rather than through `normalize` because the end-to-end path
+    /// routes through `best_alignment`'s max-match search, which would make the
+    /// *fixture* rather than the rule decide the outcome.
     #[test]
-    fn partition_block_bounds_a_long_net_deletion_but_not_its_siblings() {
+    fn partition_block_refuses_a_coincidental_net_deletion_split() {
         let reference: Vec<u8> = b"ACGT".repeat(13); // 52 nt, past the 32 nt bound
         assert_eq!(reference.len(), 52);
 
-        // Net deletion: unguarded, so the bound must keep it whole.
+        // Net deletion, the shape of `delins.md:44-47`'s worked example.
         let deletion_result = b"TTCCTCGATGCCTG".to_vec(); // 14 nt
         assert!(deletion_result.len() < reference.len());
+
+        // What the aligner proposes when nothing refuses it: a four-way split of
+        // a single delins, the corruption that passage warns about.
+        let columns = best_alignment(&reference, &deletion_result)
+            .expect("the aligner must reach this block now that no bound stops it");
+        let proposed = pieces_from_columns(&columns, &reference, &deletion_result);
+        assert!(
+            proposed.len() > 1,
+            "fixture must actually tempt the aligner into a split, else the \
+             refusal below proves nothing; got {proposed:?}"
+        );
+        // And the rule — not a length bound — is what refuses it.
+        let net_change = deletion_result.len().abs_diff(reference.len());
+        assert!(
+            !separations_are_meaningful(&proposed, net_change),
+            "the {} proposed pieces are separated by coincidence and must be \
+             refused on their merits; got {proposed:?}",
+            proposed.len()
+        );
+
         let pieces = partition_block(&reference, &deletion_result);
         assert_eq!(
             pieces.len(),
@@ -6935,16 +6947,44 @@ mod tests {
         insertion_result[2] = flip_base(reference[2]);
         insertion_result.splice(45..45, b"GG".iter().copied());
         assert!(insertion_result.len() > reference.len());
-        assert!(
-            reference.len() > MAX_UNGUARDED_SPLIT_BLOCK,
-            "fixture must exceed the unguarded bound or it proves nothing"
-        );
         let pieces = partition_block(&reference, &insertion_result);
         assert!(
             pieces.len() >= 2,
             "a net insertion past 32 nt must reach the aligner and keep its \
              separated pieces; a single piece is the bound-refusal `whole()` \
              fallback. got {pieces:?}"
+        );
+        assert_eq!(
+            pieces[0].ref_start, 2,
+            "the first piece must be the lone 5' substitution; got {pieces:?}"
+        );
+
+        // And the case that proves the retired bound is really gone: a net
+        // *deletion* past 32 nt whose separations ARE meaningful must still
+        // split.
+        //
+        // Without this the suite cannot tell "the rule refused a coincidental
+        // split" from "a 32 nt bound refused every net deletion" — both return
+        // one piece via `whole()`, so the refusal case above is satisfied by the
+        // very mechanism this change retires. Only a net deletion that splits
+        // distinguishes them.
+        //
+        // Same shape as the insertion fixture, so the two regimes are compared
+        // like for like: a lone substitution near the 5' end plus one contiguous
+        // 2 nt deletion near the 3' end. `net_change` is 2, which is at or below
+        // `MAX_SINGLE_BASE_SEPARATION_CHANGE`, so `MIN_PIECE_SEPARATION` applies
+        // and the wide unchanged run between them clears it easily.
+        let mut deletion_split_result = reference.clone();
+        deletion_split_result[2] = flip_base(reference[2]);
+        deletion_split_result.drain(45..47);
+        assert!(deletion_split_result.len() < reference.len());
+        assert_eq!(reference.len() - deletion_split_result.len(), 2);
+        let pieces = partition_block(&reference, &deletion_split_result);
+        assert!(
+            pieces.len() >= 2,
+            "a net deletion past 32 nt with meaningful separations must reach \
+             the aligner and keep its pieces; a single piece here would mean a \
+             length bound is still refusing net deletions wholesale. got {pieces:?}"
         );
         assert_eq!(
             pieces[0].ref_start, 2,
@@ -7135,8 +7175,8 @@ mod tests {
 
     /// The calibration this task must not break: `LRG_199t1:c.850_901`
     /// (`delins.md:44`) merges a 52-base member for a reason unrelated to the
-    /// codon exception (its `partition_block` sibling never reaches
-    /// `best_alignment` at all — see `MAX_UNGUARDED_SPLIT_BLOCK`), so
+    /// codon exception (its `partition_block` sibling reaches the aligner and is
+    /// then refused by `separations_are_meaningful` — see #1271), so
     /// `split_codon_incompatible_triplets` must not touch it: the piece is 52
     /// nt wide, not the 3 nt the codon exception's shape requires.
     #[test]
