@@ -13,15 +13,49 @@ ferro-hgvs is a high-performance HGVS variant nomenclature parser and normalizer
 cargo build                          # Debug build
 cargo build --release                # Release build
 cargo build --features dev           # Build with all testable features
-cargo build --features python        # Build with Python bindings (use maturin instead)
 cargo build --features benchmark     # Build ferro-benchmark binary
 ```
 
 ### Python Bindings
 ```bash
+cargo check --features python        # Typecheck the bindings (fast; does NOT link)
+cargo clippy --features python       # Lint the bindings (also does NOT link)
 maturin develop --features python    # Build and install locally for development
 maturin build --features python      # Build wheel
 ```
+
+**Do not use `cargo build --features python`** — on macOS it cannot link. `pyo3` is declared with
+`features = ["abi3-py310", "extension-module"]`, and `extension-module` deliberately does *not*
+link against libpython: the CPython symbols are meant to resolve against the host interpreter
+when the module is imported. Maturin supplies the linker allowance that makes that legal
+(`-undefined dynamic_lookup`); a plain `cargo build` does not, so it compiles the whole crate and
+only then dies linking the cdylib:
+
+```
+error: linking with `cc` failed: exit status: 1
+  = note: Undefined symbols for architecture arm64:
+            "_PyBaseObject_Type", referenced from: ...
+          ld: symbol(s) not found for architecture arm64
+error: could not compile `ferro-hgvs` (lib) due to 1 previous error
+```
+
+Compilation had already succeeded at that point, so the failure says nothing about the code —
+it just costs a full build cycle to find out. Use `cargo check --features python` (and
+`cargo clippy --features python`) to verify the bindings compile, and `maturin develop
+--features python` whenever you need a module you can actually import (e.g. to run
+`pytest tests/python/`).
+
+The hard failure above is macOS-specific: `ld` there refuses undefined symbols in a dylib unless
+`-undefined dynamic_lookup` is passed. Two things could pass it and neither does under a plain
+`cargo build`. PyO3 ships the flags in
+`pyo3_build_config::add_extension_module_link_args()` — Darwin-only, by design — but a crate has
+to call that from its own `build.rs`, and this crate has no `build.rs`. Maturin passes them
+itself, which is why the `maturin` commands above work. So `cargo build` gets them from nowhere
+and the link dies.
+
+Linkers that do permit undefined symbols in a shared object get no such error, but the advice is
+unchanged everywhere: `cargo build` still produces no importable extension module, so reach for
+`maturin` rather than treating a quiet link as success.
 
 ## Testing
 
