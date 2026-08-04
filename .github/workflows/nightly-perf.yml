@@ -39,14 +39,13 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  # Perf keeps a SEPARATE, RefSeq-only manifest cache (its own `-refseq-` key
-  # below) — deliberately NOT shared with nightly-mutalyzer.yml's Ensembl-inclusive
-  # cache. The startup-budget gate must measure the RefSeq `ferro normalize`
-  # startup it was tuned for (#585); provisioning Ensembl would make a RefSeq
-  # startup eagerly merge ~198k Ensembl transcripts into the primary build and
-  # inflate the baseline (#933). Bump on any `ferro prepare` change that alters
-  # the RefSeq manifest shape. (v2: --derive-ng-placements added; #875.)
-  MANIFEST_CACHE_VERSION: v3
+  # NOTE: `MANIFEST_CACHE_VERSION` is gone along with the RefSeq-only manifest
+  # cache it keyed — see the block above this workflow's `ferro prepare` step
+  # (#1218). The reason the two nightlies kept SEPARATE caches still stands and
+  # must be honoured if either comes back: this workflow's startup-budget gate
+  # measures the RefSeq `ferro normalize` startup it was tuned for (#585), and
+  # provisioning Ensembl would make a RefSeq startup eagerly merge ~198k Ensembl
+  # transcripts into the primary build and inflate the baseline (#933).
   # Budget knobs (seconds). Today's startup floor is ~1.0s; the #585 bug was
   # ~4.8s. 2.5s sits ~2.5x above healthy and ~2x below the bug — outside runner
   # noise in both directions.
@@ -83,23 +82,22 @@ jobs:
             ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
             ${{ runner.os }}-cargo-
 
-      - name: Cache prepared reference manifest
-        # SEPARATE, RefSeq-only cache (own `-refseq-` namespace) — deliberately
-        # NOT shared with nightly-mutalyzer.yml's Ensembl-inclusive cache, so the
-        # startup-budget gate measures RefSeq `ferro normalize` startup without the
-        # eager Ensembl-merge cost (#585/#933). Repopulated by this workflow's own
-        # RefSeq-only `ferro prepare` below on a cache miss.
-        id: cache-manifest
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-        with:
-          path: benchmark-output/
-          key: ${{ runner.os }}-ferro-manifest-refseq-${{ env.MANIFEST_CACHE_VERSION }}-${{ hashFiles('Cargo.lock', 'src/prepare/**', 'src/bin/ferro.rs', 'tests/fixtures/mutalyzer-normalize/ng_accessions.txt') }}
-
+      # The prepared reference is NOT cached, for the reason recorded in
+      # nightly-mutalyzer.yml and measured in #1218: a 3+ GiB entry cannot
+      # survive LRU eviction inside a 10 GiB repository budget that PR CI already
+      # fills, so it was re-saved nightly and never once restored. Run
+      # 30686892059 logged `Cache not found for input keys:
+      # Linux-ferro-manifest-refseq-…` like every other. Removing it does not
+      # slow this workflow — the `ferro prepare` below was already running every
+      # time — it stops the workflow taking budget from workflows that can use it.
+      #
+      # If it is ever restored, it must stay a SEPARATE RefSeq-only entry: the
+      # startup-budget gate below measures RefSeq startup (#585), and an
+      # Ensembl-inclusive reference inflates that baseline (#933).
       - name: Build ferro (release)
         run: cargo build --release --bin ferro
 
-      - name: Run `ferro prepare` (cache miss only)
-        if: steps.cache-manifest.outputs.cache-hit != 'true'
+      - name: Run `ferro prepare`
         run: |
           ./target/release/ferro prepare \
             --output-dir benchmark-output \
