@@ -587,11 +587,20 @@ jobs:
         # Separate from the above because neither subsumes the other, and the
         # idempotency oracle has a blind spot this one covers — it verifies by
         # re-normalizing its own output, which it cannot do for an output that
-        # will not parse. Both sit at the same seam,
-        # `normalize_core_checked`'s single exit.
+        # will not parse.
+        #
+        # `FERRO_ASSERT_IN_BOUNDS` is the third: no coordinate an output names may
+        # be past the end of its own sequence (#1353). Neither of the other two
+        # asks that question — `parse_hgvs` holds no provider, so an out-of-range
+        # position is well-formed to it, and while a bad coordinate sometimes
+        # perturbs idempotency it need not. The class had been found by hand three
+        # times (#1274, #1343, #1307) before it was asserted here.
+        #
+        # All three sit at the same seam, `normalize_core_checked`'s single exit.
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
+          FERRO_ASSERT_IN_BOUNDS: "1"
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
@@ -733,6 +742,11 @@ jobs:
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
+          # The sweeps are where this one earns its keep: they enumerate members
+          # onto terminal positions in bulk, which is where every instance of the
+          # class so far has come from. See the note on the pair in the `test`
+          # job above.
+          FERRO_ASSERT_IN_BOUNDS: "1"
         # `--no-tests=fail` for the reason spelled out on `soak`, and it matters
         # more here: `SWEEP_FILTER` names three modules explicitly, so renaming
         # one is exactly the edit that would drop a sweep from CI silently.
