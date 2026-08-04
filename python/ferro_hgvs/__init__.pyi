@@ -697,6 +697,52 @@ class Normalizer:
         """Normalize an HGVS variant object."""
         ...
 
+    def to_spdi(self, variant: HgvsVariant) -> SpdiVariant:
+        """Convert to SPDI, resolving edits that need the reference (#1159).
+
+        The module-level `hgvs_to_spdi` does no reference lookup and so fails on
+        `del`, `delins`, `inv` and `dup`; this uses the reference this Normalizer
+        holds and resolves them.
+
+        Preserves how the variant was written, so it is a transliteration and NOT
+        an encoding-invariant key — use `canonical_spdi` for that. A multi-member
+        allele is not one triple and is refused.
+        """
+        ...
+
+    def canonical_spdi(self, variant: HgvsVariant) -> SpdiVariant:
+        """An encoding-invariant SPDI key, derived from the resulting bases (#1159).
+
+        Two descriptions on one accession denoting the same edit give the same
+        key, whatever their spelling, member count or member order — so a
+        spanning `delins` and its decomposed allele match. Normalized HGVS
+        strings cannot serve for this, because normalization is not
+        encoding-invariant for complex indels (#1157).
+
+        Blunt-trimmed to the block that actually changed: deterministic and
+        independent of how wide a span the input named, but not claimed to be
+        "maximally shifted" in the SPDI specification's sense.
+
+        Raises:
+            ProjectionError: if there is no single well-defined resulting
+                sequence — a trans/mosaic/chimeric or null allele, members on
+                different accessions, members that overlap, an edit SPDI cannot
+                represent, or a span wider than 100 000 bases.
+        """
+        ...
+
+    def apply_to_reference(self, variant: HgvsVariant) -> AppliedVariant:
+        """Apply the variant and return the window before and after (#1159).
+
+        The ground truth for equivalence, and the more general of the two
+        primitives: two descriptions denote the same edit exactly when their
+        `resulting` bases match. `canonical_spdi` is this reduced to a key.
+
+        Raises:
+            ProjectionError: as `canonical_spdi`.
+        """
+        ...
+
     def normalize(self, hgvs_string: str) -> str:
         """Parse and normalize an HGVS string."""
         ...
@@ -1135,6 +1181,31 @@ class BatchProgress:
     def percent(self) -> float:
         """Get the percentage complete."""
         ...
+
+class AppliedVariant:
+    """A variant applied to its reference: the same window before and after (#1159)."""
+
+    @property
+    def accession(self) -> str:
+        """The accession every member acts on."""
+        ...
+
+    @property
+    def start(self) -> int:
+        """0-based start of the window both sequences cover."""
+        ...
+
+    @property
+    def reference(self) -> str:
+        """The reference bases over the window."""
+        ...
+
+    @property
+    def resulting(self) -> str:
+        """The same window after every member has been applied."""
+        ...
+
+    def __repr__(self) -> str: ...
 
 class BatchResult:
     """Result of batch processing."""
