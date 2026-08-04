@@ -3899,6 +3899,9 @@ struct MemberSpan {
     end: i64,
     /// Whether the edit consumes the reference bases under its span.
     claims_bases: bool,
+    /// Whether an insertion landing flush against this edit is the adjacency the
+    /// collapse pass merges — see [`merges_with_a_flush_insertion`].
+    absorbs_a_flush_insertion: bool,
     /// Whether the edit must stop a sibling's shift at its boundary. Superset of
     /// `claims_bases` — see `blocks_sibling_shift`.
     blocks_shift: bool,
@@ -3918,6 +3921,7 @@ fn member_span(v: &HgvsVariant, kind: CisKind) -> Option<MemberSpan> {
         start,
         end,
         claims_bases: claims_reference_bases(edit),
+        absorbs_a_flush_insertion: merges_with_a_flush_insertion(edit),
         blocks_shift: blocks_sibling_shift(edit),
         junction: junction_of(edit, start, end),
     })
@@ -3955,6 +3959,40 @@ fn claims_reference_bases(edit: &NaEdit) -> bool {
             | NaEdit::Repeat { .. }
             | NaEdit::MultiRepeat { .. }
     )
+}
+
+/// Whether an insertion placed flush against `edit` is the #999 adjacency the
+/// collapse pass merges.
+///
+/// Strictly narrower than [`claims_reference_bases`], and narrower again than
+/// "removes bases": only a **plain deletion** qualifies. `respell_at_gap`'s
+/// terminal-overrun gate is the only caller, and the question it is really
+/// asking is not what the sibling does to the reference but whether something
+/// downstream is guaranteed to consume an out-of-range junction coordinate
+/// before it renders (#1344 vs #1307). Nothing here may answer "yes" on a guess:
+/// a wrong "yes" emits a position the sequence does not have, and that output
+/// re-parses, so `FERRO_ASSERT_REPARSE` does not see it either. (The idempotency
+/// oracle does, as it happens — see `tests/it/issue_1307_terminal_dup_respell.rs`
+/// — but only for an input some test actually normalizes.)
+///
+/// Deliberately excluded, each measured on a 24-base contig with the member at
+/// the last base:
+///
+/// - **`Delins`** — removes its bases, yet nothing merged the pair:
+///   `g.[24dup;24delinsGG]` gave `g.[24delinsGG;24_25insA]`, the #1307 defect
+///   with a different sibling. Removing bases is therefore not sufficient; the
+///   collapse pass wants a deletion to absorb the payload into.
+/// - **`NPaddedDeletion`** (`delN[15]`) — a deletion that states its length as a
+///   count. Plausibly mergeable, but untested here, and the conservative branch
+///   costs nothing.
+/// - **`Repeat`/`MultiRepeat`** — whether they remove bases depends on the copy
+///   count, so it is not a property of the edit kind at all.
+///
+/// Answering "no" for any of these yields `LeaveMemberUnchanged`, which is
+/// always in range; the cost is only that a repairable collision goes
+/// unrepaired.
+fn merges_with_a_flush_insertion(edit: &NaEdit) -> bool {
+    matches!(edit, NaEdit::Deletion { .. })
 }
 
 /// Whether `edit` must stop a *sibling's* shift at its boundary, even though it
@@ -4444,7 +4482,7 @@ pub(crate) fn demote_coincident_tract_repeats<P: ReferenceProvider>(
                 span.end,
                 edit,
                 provider,
-                TerminalRespell::Allowed,
+                TerminalOverrun::RespellAtBoundary,
             );
             members[i] != originals[slot]
         });
@@ -5131,15 +5169,41 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
         // `dup.end`, not `dup.end + 1`: the boundary identity deletes the *last*
         // base and re-inserts it carrying the payload, so the base the re-spelt
         // member claims is the one at the 5' side of the gap.
-        let sibling_claims_the_landing_base = siblings()
+        //
+        // Whether that sibling would *absorb* the junction form decides between
+        // the remaining two answers (#1307) — a stricter test than "removes the
+        // base", since a `delins` removes it and still does not absorb. Only an
+        // absorbing sibling makes the out-of-range coordinate transient; against
+        // one that does not — a substitution, a `delins`, an
+        // inversion — the repair has to be abandoned instead.
+        //
+        // Quantified over **every** claimant, not the first one found: it takes
+        // only one non-absorbing claimant to leave the junction form unconsumed,
+        // so a single absorbing sibling is not licence to write it. Taking the
+        // first match instead made the answer depend on member order, which is
+        // authoring order and carries no meaning.
+        //
+        // No input reaches a two-claimant set today — two claimants on one base
+        // is the overlap the parser rejects up front (`SelfCancellingAllele` for
+        // a `dup`/`del` pair), and where the pair arrives by *shifting* instead
+        // the cancellation runs before this pass. Measured by instrumenting this
+        // site and running the suite: 1068 hits, 832 with one claimant and 236
+        // with none, never more. So this is order-independence for its own sake
+        // rather than a fix for an observable defect, and it is the safe
+        // direction — it can only turn `WriteTransientJunction` into
+        // `LeaveMemberUnchanged`, which is always in range.
+        let mut landing_claimants = siblings()
             .filter(|s| s.claims_bases)
-            .any(|s| s.start <= dup.end && s.end >= dup.end);
-        let terminal = if sibling_claims_the_landing_base {
-            TerminalRespell::Refused
+            .filter(|s| s.start <= dup.end && s.end >= dup.end)
+            .peekable();
+        let on_overrun = if landing_claimants.peek().is_none() {
+            TerminalOverrun::RespellAtBoundary
+        } else if landing_claimants.all(|s| s.absorbs_a_flush_insertion) {
+            TerminalOverrun::WriteTransientJunction
         } else {
-            TerminalRespell::Allowed
+            TerminalOverrun::LeaveMemberUnchanged
         };
-        respell_at_gap(&mut members[i], dup, dup.end, edit, provider, terminal);
+        respell_at_gap(&mut members[i], dup, dup.end, edit, provider, on_overrun);
     }
 }
 
@@ -5308,7 +5372,7 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
             junction,
             edit,
             provider,
-            TerminalRespell::Allowed,
+            TerminalOverrun::RespellAtBoundary,
         );
         if members[target] == before {
             continue; // the re-spell did not take; leave the group alone
@@ -5454,7 +5518,7 @@ fn translate_junction_member<P: ReferenceProvider>(
         destination,
         edit,
         provider,
-        TerminalRespell::Allowed,
+        TerminalOverrun::RespellAtBoundary,
     );
     if *variant == translated {
         *variant = original;
@@ -5831,15 +5895,32 @@ fn member_endpoints(v: &HgvsVariant) -> Option<((Region, i64), (Region, i64))> {
 /// The verification is [`member_endpoints`] rather than [`member_span`] for
 /// that reason: the correct answer here is a range whose ends sit in two
 /// regions, and `member_span` refuses those by construction.
-/// Whether [`respell_at_gap`] may apply the terminal boundary re-spelling
-/// (#1327) when the gap runs one past the last base.
+/// What [`respell_at_gap`] does when the gap it is told to write runs one base
+/// past the end of the sequence.
 ///
-/// `Refused` when a sibling already claims that base: see the comment at the
-/// gate for why the two spellings are not interchangeable there (#1344).
+/// Three outcomes, not two, because the right answer depends on what else the
+/// allele has on that last base — and each of the three was arrived at by a
+/// separate measurement. The gate in `respell_at_gap` documents each in full;
+/// in brief:
+///
+/// | variant | when | why |
+/// | --- | --- | --- |
+/// | `RespellAtBoundary` | nothing else claims the last base | the boundary `delins` denotes the same bases and is in range (#1327) |
+/// | `WriteTransientJunction` | **every** sibling claiming the last base *absorbs a flush insertion* | the pair is the #999 adjacency the collapse pass merges, so the out-of-range coordinate is consumed before anything renders (#1344) |
+/// | `LeaveMemberUnchanged` | **any** sibling claiming the last base does not absorb one | nothing merges that pair, so both other outcomes are wrong: the boundary `delins` would overlap the sibling and the junction form would reach the output (#1307) |
+///
+/// "Absorbs a flush insertion" ([`merges_with_a_flush_insertion`]) rather than
+/// "removes the last base": a `delins` removes its bases and still does not
+/// absorb, so it takes the `LeaveMemberUnchanged` branch. The looser wording
+/// named a superset and was what the earlier cut of #1307 got wrong.
+///
+/// Only the overrun is affected. An in-range gap is placed identically under
+/// all three.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum TerminalRespell {
-    Allowed,
-    Refused,
+enum TerminalOverrun {
+    RespellAtBoundary,
+    WriteTransientJunction,
+    LeaveMemberUnchanged,
 }
 
 fn respell_at_gap<P: ReferenceProvider>(
@@ -5848,7 +5929,7 @@ fn respell_at_gap<P: ReferenceProvider>(
     junction: i64,
     edit: NaEdit,
     provider: &P,
-    terminal_respell: TerminalRespell,
+    on_overrun: TerminalOverrun,
 ) {
     let original = variant.clone();
     let (gap_start, gap_end) = (junction, junction + 1);
@@ -5908,27 +5989,51 @@ fn respell_at_gap<P: ReferenceProvider>(
     // one-past-the-end overrun has a boundary identity that denotes the same
     // bases.
     //
-    // Skipped entirely when a sibling already claims the last base (#1344). The
-    // boundary identity trades a zero-width junction insertion for a `delins`
-    // that *claims* that base, and those two are not interchangeable when
-    // something else is already there: an insertion flush against a sibling's
-    // deleted base is the #999 adjacency the collapse pass merges, while two
-    // members claiming one base is an overlap it cannot. Re-spelling therefore
-    // converted a mergeable pair into an unmergeable one, and the out-of-range
-    // coordinate it was avoiding never reached the output in that case anyway —
-    // the merge consumed it. Measured: `c.[*10del;*11dup]` gave
+    // Skipped when a sibling that **removes** the last base already claims it
+    // (#1344). The boundary identity trades a zero-width junction insertion for
+    // a `delins` that *claims* that base, and those two are not interchangeable
+    // when something else is already there: an insertion flush against a
+    // sibling's deleted base is the #999 adjacency the collapse pass merges,
+    // while two members claiming one base is an overlap it cannot. Re-spelling
+    // therefore converted a mergeable pair into an unmergeable one, and the
+    // out-of-range coordinate it was avoiding never reached the output in that
+    // case anyway — the merge consumed it. Measured: `c.[*10del;*11dup]` gave
     // `c.[*11del;*11delinsAA]`, which ferro's own strict mode rejects as
     // `OverlapConflictingEdits / W5002`, where the junction form settles on the
     // correct `c.*11=`.
-    if terminal_respell == TerminalRespell::Allowed {
-        if let Some(delta) = region_sequence_delta(span.region, &span.provider_key, provider) {
-            let Some(last) = junction.checked_add(delta) else {
-                return;
-            };
-            if let Ok(length) = provider.get_sequence_length(&span.provider_key) {
-                if u64::try_from(last) == Ok(length) {
-                    respell_at_sequence_end(variant, span, &edit, delta, length, provider);
-                    return;
+    //
+    // **A sibling that claims the last base without absorbing a flush insertion
+    // is a third case** (#1307), and both of the other two answers are wrong for
+    // it. "Without absorbing" rather than "without removing": a `delins` removes
+    // its bases and still does not absorb, so it lands here too — that shape is
+    // what showed "removes the base" to be the wrong predicate, and
+    // `merges_with_a_flush_insertion` is the one that holds. There
+    // is no deletion for the junction form to abut, so nothing merges the pair
+    // and the out-of-range coordinate is not transient — it reaches the output,
+    // where it re-parses and is a fixed point, so neither existing oracle sees
+    // it. Measured on a 24-base contig: `g.[24dup;24C>G]` gave
+    // `g.[24C>G;24_25insC]`, naming a position the contig does not have. The
+    // boundary `delins` is no better, for the #1344 reason one paragraph up —
+    // the substitution already claims that base, so it would overlap. What is
+    // left is to leave the member as the duplication it was: the collision the
+    // caller wanted repaired stays unrepaired, which is the pre-existing
+    // spelling of the input rather than a new defect, and every coordinate it
+    // names exists.
+    if let Some(delta) = region_sequence_delta(span.region, &span.provider_key, provider) {
+        let Some(last) = junction.checked_add(delta) else {
+            return;
+        };
+        if let Ok(length) = provider.get_sequence_length(&span.provider_key) {
+            if u64::try_from(last) == Ok(length) {
+                match on_overrun {
+                    TerminalOverrun::RespellAtBoundary => {
+                        respell_at_sequence_end(variant, span, &edit, delta, length, provider);
+                        return;
+                    }
+                    TerminalOverrun::LeaveMemberUnchanged => return,
+                    // Falls through to the placement below, which writes the
+                    // out-of-range junction form deliberately.
+                    TerminalOverrun::WriteTransientJunction => {}
                 }
             }
         }
