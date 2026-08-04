@@ -231,7 +231,8 @@ fn non_shuffling_insertion_at_the_mito_start_is_untouched() {
 
 /// `o.` is returned unchanged by `normalize_core` — no shuffle runs, so no
 /// saturation and nothing for the clamp to fix. Pins that this fix does not
-/// extend there by reflex; a real circular normalizer is #951.
+/// extend there by reflex; a real circular normalizer is #466's circular
+/// candidate (the closed #951 was the previous tracker).
 #[test]
 fn circular_o_axis_is_untouched() {
     let mut provider = MockProvider::new();
