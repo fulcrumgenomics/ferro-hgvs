@@ -14,8 +14,8 @@
 //! inclusive end into the provider's own end convention, and an off-by-one
 //! there is invisible on an interior span.
 
-use ferro_hgvs::spdi::convert::{hgvs_to_spdi, hgvs_to_spdi_simple};
-use ferro_hgvs::{parse_hgvs, ConversionError, MockProvider};
+use ferro_hgvs::spdi::convert::{hgvs_to_spdi, hgvs_to_spdi_simple, spdi_to_hgvs};
+use ferro_hgvs::{parse_hgvs, ConversionError, MockProvider, SpdiVariant};
 
 /// A 28-base `ACGT…` contig: 1-based position `p` holds `"ACGT"[(p - 1) % 4]`,
 /// so the final base (28) is `T` and 27..28 is `GT`.
@@ -83,5 +83,42 @@ fn a_whole_entity_identity_has_no_triple() {
     assert!(
         matches!(result, Err(ConversionError::UnsupportedEditType { .. })),
         "expected UnsupportedEditType for a whole-entity identity, got {result:?}"
+    );
+}
+
+/// A zero-width triple names no bases, so it cannot come back as an identity
+/// over one. `spdi_to_hgvs` used to read `NC_000001.11:99::` as `g.100=`, an
+/// identity asserting a base the triple never claimed — the same
+/// invent-a-base error as #1362's forward direction, in the reverse direction.
+///
+/// The triple is built directly rather than parsed so the case survives a
+/// parser that later rejects the spelling: the public constructors and
+/// `SpdiVariant`'s own fields admit it regardless, and this arm is what must
+/// refuse it.
+#[test]
+fn a_zero_width_triple_is_not_an_identity() {
+    let spdi = SpdiVariant::new("NC_000001.11", 99, "", "");
+    assert!(
+        spdi.is_identity(),
+        "deletion == insertion, so it takes the identity arm"
+    );
+    let result = spdi_to_hgvs(&spdi);
+    assert!(
+        matches!(result, Err(ConversionError::UnsupportedEditType { .. })),
+        "a triple naming zero bases must be refused, not read as `g.100=`, got {result:?}"
+    );
+}
+
+/// Round-tripping a multi-base identity keeps its span. Before #1362 the
+/// triple was zero-width, so the reverse direction never saw a multi-base
+/// identity from this input at all.
+#[test]
+fn a_multi_base_identity_keeps_its_span_through_spdi() {
+    let spdi = hgvs_to_spdi(&parse_hgvs("NC_000001.11:g.27_28=").unwrap(), &provider()).unwrap();
+    let back = spdi_to_hgvs(&spdi).expect("round trip");
+    assert_eq!(
+        back.to_string(),
+        "NC_000001.11:g.27_28GT=",
+        "a two-base identity must come back as a two-base interval, not a point"
     );
 }

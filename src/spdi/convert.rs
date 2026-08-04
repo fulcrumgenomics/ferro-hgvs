@@ -1705,14 +1705,36 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
 
     // Determine the edit type based on deletion and insertion
     let (interval, edit) = if spdi.is_identity() {
-        // Identity
-        let seq = if spdi.deletion.is_empty() {
-            None
+        // A zero-width triple (`NC_000001.11:99::`) names no bases at all, so
+        // there is no interval it could be an identity over. Emitting one
+        // anyway rendered `g.100=`, an identity asserting a base the triple
+        // never claimed — the reverse-direction twin of the invent-a-base
+        // error #1362 fixed on the way out. `is_identity()` is `deletion ==
+        // insertion`, so a both-empty triple reaches this arm and not the
+        // deletion/insertion ones below; refusing here covers it.
+        if spdi.deletion.is_empty() {
+            return Err(ConversionError::UnsupportedEditType {
+                description: "a zero-width SPDI triple names no bases, so it cannot be \
+                              converted to an identity over an interval"
+                    .to_string(),
+            });
+        }
+        let seq = Some(string_to_sequence(&spdi.deletion)?);
+        // An identity claims every base in its triple, so a multi-base one
+        // needs a span interval — a point interval would render `g.27GT=`,
+        // whose location says one base while its sequence says two. Mirrors
+        // the `is_deletion()` arm below.
+        let del_len = spdi.deletion.len();
+        let interval = if del_len > 1 {
+            Interval::new(
+                GenomePos::new(hgvs_pos),
+                GenomePos::new(hgvs_pos + del_len as u64 - 1),
+            )
         } else {
-            Some(string_to_sequence(&spdi.deletion)?)
+            Interval::point(GenomePos::new(hgvs_pos))
         };
         (
-            Interval::point(GenomePos::new(hgvs_pos)),
+            interval,
             NaEdit::Identity {
                 sequence: seq,
                 whole_entity: false,
@@ -3038,6 +3060,44 @@ mod tests {
         let provider = provider_with_genomic(&"N".repeat(2000));
         let spdi = SpdiVariant::new("NC_000001.11", 99, "A", "A");
         let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.100A=");
+    }
+
+    /// A zero-width triple is an identity by the predicate (`deletion ==
+    /// insertion`) but names no bases, so the conversion arm must refuse it
+    /// rather than emit `g.100=` over a base the triple never claimed.
+    ///
+    /// Asserted on **both** public entry points: `spdi_to_hgvs_with_ref`
+    /// delegates to `spdi_to_hgvs` for its base conversion, so the refusal
+    /// reaches it too — and a future cut that stopped delegating would silently
+    /// lose the guard on the reference-aware path.
+    #[test]
+    fn zero_width_identity_is_refused_on_both_entry_points() {
+        let spdi = SpdiVariant::new("NC_000001.11", 99, "", "");
+        assert!(spdi.is_identity(), "both sides empty is an identity");
+        assert!(
+            matches!(
+                spdi_to_hgvs(&spdi),
+                Err(ConversionError::UnsupportedEditType { .. })
+            ),
+            "a triple naming zero bases must not convert to an identity"
+        );
+        let provider = provider_with_genomic(&"N".repeat(2000));
+        assert!(
+            matches!(
+                spdi_to_hgvs_with_ref(&spdi, &provider),
+                Err(ConversionError::UnsupportedEditType { .. })
+            ),
+            "the reference-aware path must inherit the refusal"
+        );
+    }
+
+    /// A one-base identity still converts — the guard must be scoped to the
+    /// zero-width case and not have cost the arm its ordinary behaviour.
+    #[test]
+    fn a_one_base_identity_still_converts() {
+        let spdi = SpdiVariant::new("NC_000001.11", 99, "A", "A");
+        let hgvs = spdi_to_hgvs(&spdi).expect("a one-base identity converts");
         assert_eq!(hgvs.to_string(), "NC_000001.11:g.100A=");
     }
 
