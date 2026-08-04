@@ -362,23 +362,135 @@ pub fn insertion_to_repeat(
     // inside `normalize_repeat` below, not here — see the delegation note.
 
     // The inserted sequence may be written as any cyclic rotation of the
-    // reference repeat unit (e.g. `insCAGCAG` against a `GCA` tract). Try
-    // every rotation of `base_unit` and pick the one that yields the
-    // largest contiguous tandem run anchored at the insertion point.
+    // reference repeat unit (e.g. `insCAGCAG` against a `GCA` tract). Try every
+    // rotation of `base_unit` and pick the one that yields the largest
+    // contiguous tandem run anchored at the insertion point.
+    //
+    // Each rotation is resolved to the repeat it would actually emit — and
+    // gated — before it can win (#1355). Scoring first and gating only the
+    // winner let a rotation that abuts a longer but out-of-phase tract discard a
+    // valid in-phase one and take the whole result down with it, which is
+    // byte-for-byte the defect #1349 corrected in `insertion_to_duplication`.
+    // The two functions are a deliberate symmetric pair, so they now share the
+    // shape as well: resolve per candidate, `continue` on rejection.
     let u_len = base_unit.len();
-    let mut best: Option<(Vec<u8>, usize, u64)> = None;
+    let mut best: Option<RepeatCandidate> = None;
     for r in 0..u_len {
         let mut rotated = Vec::with_capacity(u_len);
         rotated.extend_from_slice(&base_unit[r..]);
         rotated.extend_from_slice(&base_unit[..r]);
-        if let Some((ref_start, ref_count)) = find_tandem_extent(ref_seq, pos as usize, &rotated) {
-            if ref_count > 0 && best.as_ref().is_none_or(|(_, _, bc)| ref_count > *bc) {
-                best = Some((rotated, ref_start, ref_count));
-            }
+        let Some((ref_start, ref_count)) = find_tandem_extent(ref_seq, pos as usize, &rotated)
+        else {
+            continue;
+        };
+        if ref_count == 0 {
+            continue;
         }
+        // Ties still fall to iteration order, as before: strictly-greater keeps
+        // the first rotation found. Adding a direction-aware tie-break here
+        // would be a separate behaviour change from the ordering fix
+        // (`insertion_to_duplication` grew one for #403; this function has never
+        // had one).
+        if best
+            .as_ref()
+            .is_some_and(|current| ref_count <= current.ref_count)
+        {
+            // Cannot become `best` whatever the gates say, and resolving it
+            // costs a `normalize_repeat` call plus two `ref_seq`-sized buffers.
+            continue;
+        }
+        let Some(candidate) = resolve_repeat_rotation(
+            ref_seq,
+            pos,
+            inserted_seq,
+            ref_start,
+            ref_count,
+            rotated,
+            added_copies,
+            is_coding,
+            cds_span,
+            direction,
+        ) else {
+            continue;
+        };
+        best = Some(candidate);
     }
 
-    let (unit, ref_start, ref_count) = best?;
+    let best = best?;
+    Some((
+        best.rotated_unit[0],
+        best.total_count,
+        index_to_hgvs_pos(best.start_idx),
+        best.emitted_end_hgvs,
+        best.rotated_unit,
+    ))
+}
+
+/// One rotation's resolved repeat emission, after both gates have accepted it.
+struct RepeatCandidate {
+    /// Copies of the rotated unit in the matched reference tract — the score.
+    ref_count: u64,
+    /// 0-based start of the emitted repeat window.
+    start_idx: usize,
+    /// 1-based inclusive HGVS end of the emitted repeat window.
+    emitted_end_hgvs: u64,
+    /// The phase-aligned unit `normalize_repeat` settled on, which may differ
+    /// from the rotation fed in.
+    rotated_unit: Vec<u8>,
+    /// Total copies the emitted repeat asserts.
+    total_count: u64,
+}
+
+/// Resolve one cyclic rotation to the repeat it would emit, or `None` if either
+/// gate rejects it.
+///
+/// Split out of [`insertion_to_repeat`] so every rotation is judged on the values
+/// the caller would actually receive (#1355), mirroring [`align_dup_slot`]'s role
+/// in `insertion_to_duplication` (#1349). The difference between the two is why
+/// this one is bigger: a duplication slot is pure arithmetic, whereas a repeat
+/// has to go through `normalize_repeat`, which owns the window, the count and the
+/// codon decision.
+///
+/// # Both rejections are a `continue` at the call site, and both mean `None`
+///
+/// - The **#882 phase gate** (`tandem_edit_preserves_insertion`): a rotation that
+///   fails it is not a repeat of *this* insertion at all, so it must not compete,
+///   and must not shadow a lower-scoring rotation that is. This is the #1355 fix.
+/// - The **#1210 codon gate**, reached as `RepeatNormResult::Insertion`: in a `c.`
+///   context a non-codon-length unit may not be written as repeat notation, so
+///   the caller emits the literal `ins` instead.
+///
+/// The codon gate previously aborted the whole function (`return None`) because
+/// it was only ever reached by the winner. Inside a selection loop that would be
+/// wrong in a new way — a losing rotation could abort a search that had a valid
+/// answer — so it became a `continue` too. **This is observably different only
+/// when the highest-scoring rotation is codon-gated while a lower-scoring one is
+/// not**, and the two answers there are "literal `ins`" versus "a repeat over the
+/// other tract". `continue` is the right one, for the same reason the phase gate
+/// is: all rotations of a unit share its length, so the codon gate can differ
+/// between them only through `gate_is_coding` — that is, through which *tract*
+/// each rotation found. The gate is a statement about a tract, not about the
+/// insertion, and a tract that clears both gates describes the same edit
+/// correctly.
+///
+/// The FAIL-set ledgers this could have moved are the manifest-gated conformance
+/// axes — `axis_normalized`, `axis_genomic`, `axis_errors` and both idempotency
+/// axes. They were re-run against a real prepared reference when this landed; the
+/// measurement lives in the commit message rather than here, since a doc comment
+/// asserting "the suite is green" rots the moment anything else changes.
+#[allow(clippy::too_many_arguments)]
+fn resolve_repeat_rotation(
+    ref_seq: &[u8],
+    pos: u64,
+    inserted_seq: &[u8],
+    ref_start: usize,
+    ref_count: u64,
+    unit: Vec<u8>,
+    added_copies: u64,
+    is_coding: bool,
+    cds_span: Option<(u64, u64)>,
+    direction: crate::normalize::config::ShuffleDirection,
+) -> Option<RepeatCandidate> {
     let ref_end_excl = ref_start + ref_count as usize * unit.len();
 
     // #1210: answer the codon gate for the span the REPEAT will occupy, not for
@@ -402,7 +514,9 @@ pub fn insertion_to_repeat(
     // Frames line up: `ref_start` / `ref_end_excl` are 0-based indices into the
     // transcript-frame `ref_seq`, and `cds_span` is 1-based inclusive in that
     // same frame, so the 1-based inclusive tract is
-    // `(ref_start + 1) ..= ref_end_excl`.
+    // `(ref_start + 1) ..= ref_end_excl`. Per rotation since #1355, which is also
+    // more correct than it was: each rotation finds its own tract, so each gets
+    // its own residency answer instead of the winner's.
     let gate_is_coding = match cds_span {
         Some((cds_start, cds_end)) => {
             let tract_start = ref_start as u64 + 1;
@@ -422,8 +536,8 @@ pub fn insertion_to_repeat(
     // direction-aware phase alignment + codon gate — so the emitted
     // window/unit/count agree with `normalize_repeat` on the same reference tract
     // in the same direction. `added_copies >= 2` ⇒ the target is
-    // `>= ref_count + 2`, so only `Repeat` (or the codon-gated `Insertion` → None)
-    // is reachable; `Deletion`/`Duplication`/`Unchanged` cannot occur.
+    // `>= ref_count + 2`, so only `Repeat` (or the codon-gated `Insertion` →
+    // `None`) is reachable; `Deletion`/`Duplication`/`Unchanged` cannot occur.
     let target = ref_count + added_copies;
     let end_pos_incl = ref_end_excl - 1;
     let (start_idx, emitted_end_hgvs, rotated_unit, total_count) = match normalize_repeat(
@@ -474,13 +588,13 @@ pub fn insertion_to_repeat(
         return None;
     }
 
-    Some((
-        rotated_unit[0],
-        total_count,
-        index_to_hgvs_pos(start_idx),
+    Some(RepeatCandidate {
+        ref_count,
+        start_idx,
         emitted_end_hgvs,
         rotated_unit,
-    ))
+        total_count,
+    })
 }
 
 /// Description of how a single-copy insertion can be re-expressed as a
@@ -5917,6 +6031,62 @@ mod tests {
         assert_eq!(r.unit, b"GT");
         assert_eq!(r.start, 10);
         assert_eq!(r.end, 11);
+    }
+
+    /// #1355: an out-of-phase rotation with a longer tract must not discard a
+    /// valid in-phase repeat.
+    ///
+    /// The same defect #1349 fixed in `insertion_to_duplication`, one function
+    /// over. `insertion_to_repeat` scored every cyclic rotation, kept the single
+    /// highest-`ref_count` winner, and only then applied the #882 phase gate — so
+    /// a rotation that abuts a longer but out-of-phase tract took the whole result
+    /// down with it.
+    ///
+    /// On `GTACGTCCCCTCCTCCTCCTCCCGGGG` with a 2-copy `TCCTCC` inserted at 7:
+    ///   - rotation `TCC` abuts a one-copy in-phase tract at `[5, 8)` — valid;
+    ///   - rotation `CCT` abuts a four-copy tract at index 8 — out of phase, and
+    ///     it wins on `ref_count`.
+    #[test]
+    fn an_out_of_phase_rotation_does_not_discard_a_valid_repeat() {
+        let r = b"GTACGTCCCCTCCTCCTCCTCCCGGGG";
+        // The candidate that was being thrown away is genuinely valid.
+        assert!(
+            tandem_edit_preserves_insertion(r, 7, b"TCCTCC", 5, 8, b"TCC", 3),
+            "the discarded `TCC` candidate must pass the #882 gate"
+        );
+        // Both directions must find it. `find_tandem_extent` scores the rotations
+        // identically either way, so the loser-takes-all bug was direction-blind.
+        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+            let emitted = insertion_to_repeat(r, 7, b"TCCTCC", false, None, direction)
+                .unwrap_or_else(|| panic!("{direction:?}: a valid in-phase repeat must be found"));
+            let (_, count, start, end, unit) = emitted;
+            assert_eq!(
+                (unit.as_slice(), count, start, end),
+                (b"TCC".as_slice(), 3, 6, 8),
+                "{direction:?}: expected the in-phase `TCC[3]` over the 1-based tract 6_8"
+            );
+        }
+    }
+
+    /// The emitted repeat must decode back to the input insertion, whichever
+    /// rotation won. This is the property the phase gate exists to guarantee, and
+    /// asserting it separately means a future selection change cannot satisfy the
+    /// pinned values above while breaking the contract underneath them.
+    #[test]
+    fn every_emitted_repeat_decodes_to_its_input_insertion() {
+        let r = b"GTACGTCCCCTCCTCCTCCTCCCGGGG";
+        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+            let (_, count, start, end, unit) =
+                insertion_to_repeat(r, 7, b"TCCTCC", false, None, direction).expect("fires");
+            let start_idx = hgvs_pos_to_index(start);
+            let end_excl = hgvs_pos_to_index(end) + 1;
+            assert!(
+                tandem_edit_preserves_insertion(r, 7, b"TCCTCC", start_idx, end_excl, &unit, count),
+                "{direction:?}: emitted `{}[{count}]` over [{start_idx}, {end_excl}) does not \
+                 decode to the input insertion",
+                String::from_utf8_lossy(&unit)
+            );
+        }
     }
 
     #[test]
