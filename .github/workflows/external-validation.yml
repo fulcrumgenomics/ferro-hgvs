@@ -114,14 +114,20 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Cache cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # Cargo caching via `rust-cache`; rationale recorded above the equivalent
+      # step in `ci.yml` (#1218).
+      #
+      # Note what the key it replaces did NOT have: a job suffix. Both jobs in
+      # this workflow used the identical `${{ runner.os }}-cargo-<lock-hash>`,
+      # so they shared one entry despite installing different toolchain
+      # components and building different targets — whichever ran first decided
+      # what the other restored, and `actions/cache` then skipped the save on the
+      # key hit so neither could correct it. `rust-cache` keys per job by
+      # default; the `key` below only adds a legible name so
+      # `gh api .../actions/caches` stays diagnosable.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: external-validation-api
 
       - name: Run API comparison tests
         run: |
@@ -194,14 +200,12 @@ jobs:
           toolchain: stable
           components: clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # The second half of the shared-key problem described in the job above:
+      # this job installs `clippy` and builds the spec generators, and used the
+      # same key. Distinct name, so the two no longer overwrite each other (#1218).
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: external-validation-spec
 
       # The spec-normalization fixture is a generated artifact (gitignored);
       # regenerate it before the suite so the reader tests find it.

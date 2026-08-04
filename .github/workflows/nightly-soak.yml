@@ -65,40 +65,33 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           toolchain: stable
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # Cargo caching via `rust-cache`; rationale recorded above the equivalent
+      # step in `ci.yml` (#1218).
+      #
+      # The hand-rolled key this replaces was already correct about staleness —
+      # it hashed this workflow file as well as the lockfile, suffix-before-hash
+      # so its restore-key was a real prefix, after the measurement that a
+      # lockfile-only key had frozen dev-feature artifacts into an
+      # `opt-level = 3` tree and was re-compiling reqwest/hyper/criterion every
+      # run. That reasoning is preserved in `ci.yml`; what it could not fix is
+      # size, and this job's `soak` profile tree is the largest in the repo.
+      # `rust-cache` stores dependency artifacts only, and its key already
+      # covers the dependency set, rustc version and job.
+      #
+      # `cache-bin: false` is the load-bearing option here, not a default worth
+      # skipping past. `rust-cache` caches `~/.cargo/bin` unless told not to, so
+      # a restored `cargo-nextest` would overwrite the one `install-action` puts
+      # there and pin this job to whichever version first populated the key.
+      # This job writes the archive the eight shards below read, and producer and
+      # consumer must agree on the nextest version. The old step documented that
+      # hazard and dodged it by *ordering* — install after restore. Not caching
+      # the binaries removes it at the source instead, so the ordering below is
+      # no longer what protects correctness (it is kept only because it costs
+      # nothing).
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          # Keyed on the workflow file as well as the lockfile. `actions/cache`
-          # SKIPS the save on an exact key hit ("Cache hit occurred on the
-          # primary key ..., not saving cache"), so a key derived from
-          # `Cargo.lock` alone freezes `target/` at whatever the first run for
-          # that lockfile produced. Measured directly: after this job dropped
-          # `--features dev`, the restored cache still held the dev-feature
-          # artifacts, so every run re-compiled reqwest, hyper, criterion and
-          # the rest at opt-level 3 — about 60s, repeated forever rather than
-          # paid once. The build flags live in this file, so hashing it makes
-          # the cache follow them.
-          #
-          # Suffix before the hash so `restore-keys` is a real PREFIX of `key`.
-          # The two `hashFiles(...)` calls digest different file sets and so
-          # produce different values, which means a `...-<lock-hash>-soak`
-          # restore-key is not a prefix of a `...-<lock+workflow-hash>-soak`
-          # primary key and can never match it. See the longer note on
-          # `test-build` in ci.yml.
-          key: ${{ runner.os }}-cargo-nightly-soak-${{ hashFiles('**/Cargo.lock', '.github/workflows/nightly-soak.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-nightly-soak-
-      # AFTER the cache restore, deliberately. `~/.cargo/bin/` is one of the
-      # cached paths, so a restore running second would extract a
-      # previously-saved `cargo-nextest` over the one just installed and pin
-      # this job to whichever version first populated the key. This job writes
-      # the archive the eight shards below read, and producer and consumer have
-      # to agree on the nextest version, so let the install win.
+          key: nightly-soak
+          cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - name: Build soak archive
         # No `--features dev` — see the same step in ci.yml. The feature drags
