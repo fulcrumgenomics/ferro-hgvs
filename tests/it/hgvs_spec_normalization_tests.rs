@@ -83,6 +83,22 @@ fn observe(normalizer: &Normalizer<MockProvider>, input: &str) -> (String, Vec<S
     }
 }
 
+/// The spellings *other than* its default rendering that the spec admits for
+/// whatever `input` normalizes to — empty when it does not normalize at all.
+///
+/// Deliberately a sibling of [`observe`] rather than an extra return value from
+/// it: only the spec-conformance oracle needs these, and the other callers of
+/// `observe` compare ferro against ferro, where a second spelling has no meaning.
+fn observe_equivalents(normalizer: &Normalizer<MockProvider>, input: &str) -> Vec<String> {
+    match parse_hgvs(input) {
+        Err(_) => Vec::new(),
+        Ok(v) => match normalizer.normalize_with_diagnostics(&v) {
+            Err(_) => Vec::new(),
+            Ok(n) => n.result.spec_equivalent_renderings(),
+        },
+    }
+}
+
 /// True when `s` is a bare coordinate reference (coord prefix + only position
 /// characters, no edit) — mirrors the harvester's drop predicate so this test
 /// pins the *outcome* (a clean fixture) independent of the generator internals.
@@ -262,10 +278,15 @@ fn pinned_v21_normalization_behavior() {
 /// fixture after `cargo run --features dev --bin generate_spec_fixture`.
 const STATUS_CENSUS: &[(&str, usize)] = &[
     ("correctly-rejected", 99),
-    ("diverges", 36),
+    // 36 -> 19 in #1079: the generator now accepts either stop-codon spelling the
+    // spec sanctions (`Ter` or `*`, per `checklist.md:63`) instead of only ferro's
+    // default rendering, so 17 rows that differed by that glyph alone are
+    // `preserved`. They moved to `preserved` below (697 -> 714); the 934-row total
+    // is unchanged, and no ferro behaviour changed — the comparison did.
+    ("diverges", 19),
     ("false-acceptance", 52),
     ("needs-reference", 50),
-    ("preserved", 697),
+    ("preserved", 714),
 ];
 
 /// The committed census must match the generated fixture exactly.
@@ -319,30 +340,32 @@ fn status_census_is_unchanged() {
 /// a regression until shown otherwise.
 ///
 /// Every entry is one of six understood classes, grouped below. They are the
-/// fixture's 36 `diverges` rows, which the status census counts but — before
+/// fixture's 19 `diverges` rows, which the status census counts but — before
 /// #1272 — nothing checked the *values* of.
+///
+/// Class 1 used to hold 19 stop-glyph rows on its own. #1079 removed them by
+/// fixing the *comparison* rather than the list: a row is no longer divergent for
+/// picking one of two spellings the spec presents as equals. Prefer that shape of
+/// fix — an entry here should record a difference someone could act on, not one
+/// the comment next to it has to argue is fine.
 const KNOWN_DIVERGENT_INPUTS: &[&str] = &[
-    // 1. `*` is canonicalised to `Ter` in protein descriptions. Deliberate
-    //    render policy: both spellings are legal on input (#1114 made the `*`
-    //    form parse), and ferro emits one of them.
+    // 1. A stop-codon glyph difference **alone** is no longer listed here. `Ter`
+    //    and `*` are co-equal in the spec (`checklist.md:63`), so #1079 taught the
+    //    generator to accept either rather than pinning 17 rows as divergences
+    //    that the comment here had to excuse as "deliberate render policy". Two
+    //    rows survive, and neither is about the stop glyph:
+    //
+    //    the spec states a **one-letter** amino-acid code (`W24`), which ferro
+    //    renders three-letter. `ProteinRenderStyle` can emit one-letter codes, but
+    //    the generator deliberately does not offer that spelling: no other
+    //    spec-stated form in the corpus uses one-letter codes, so admitting it
+    //    would let rows pass on a form the spec never states here;
     "NP_003997.1:p.W24*",
-    "NP_003997.2:p.(Asn444Lysfs*15)",
-    "NP_003997.2:p.(His321Leufs*3)",
-    "p.(*110Glnext*17)",
-    "p.(Tyr4*)",
-    "p.*110Glnext*17",
-    "p.*327Argext*?",
-    "p.Arg1459*",
-    "p.Arg456Glyfs*17",
-    "p.Arg97Profs*23",
-    "p.Gln151Thrfs*9",
-    "p.Ile327Argfs*?",
-    "p.Trp24*",
-    "p.Trp26*",
-    "p.Trp41*",
-    "p.Tyr4*",
-    "p.[(Lys79*;Lys79Asn)]",
-    "p.[(Ser868Argfs*2,Ser868=)]",
+    //    and a cis allele whose **members are reordered** into coordinate order
+    //    (`p.[Lys79Asn;Lys79Ter]` for the spec's `p.[Lys79*;Lys79Asn]`) — the same
+    //    render choice as class 6 below, which no stop spelling can account for.
+    //    Its parenthesised sibling `p.[(Lys79*;Lys79Asn)]` *does* now pass, since
+    //    there the glyph was the only difference.
     "p.[Lys79*;Lys79Asn]",
     // 2. Trans (`];[`) alleles: ferro renders the accession outside the first
     //    bracket, the spec writes it inside.
@@ -418,11 +441,15 @@ fn ferro_produces_the_form_the_spec_states() {
         }
         let target = row.input_prefixed.as_deref().unwrap_or(&row.input);
         let (observed, _) = observe(&normalizer, target);
+        let equivalents = observe_equivalents(&normalizer, target);
         let known_divergent = KNOWN_DIVERGENT_INPUTS.contains(&row.input.as_str());
 
         let conformant = match row.spec_expected.as_deref() {
-            // The spec states a form: ferro must render it.
-            Some(expected) => observed == expected,
+            // The spec states a form: ferro must render it — in any spelling the
+            // spec presents as equal to it (#1079). Pinning this to ferro's
+            // default rendering alone reported a display-convention choice as
+            // non-conformance; see `HgvsVariant::spec_equivalent_renderings`.
+            Some(expected) => observed == expected || equivalents.iter().any(|r| r == expected),
             // The spec forbids the input: ferro must refuse it.
             None => observed.starts_with("parse error") || observed.starts_with("normalize error"),
         };

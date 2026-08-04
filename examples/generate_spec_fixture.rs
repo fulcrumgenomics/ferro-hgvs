@@ -161,6 +161,22 @@ mod runner {
     use ferro_hgvs::reference::mock::MockProvider;
     use ferro_hgvs::{parse_hgvs, Normalizer};
 
+    /// What ferro did with one harvested input.
+    ///
+    /// `current` is the canonical rendering — ferro's default `Display`, and the
+    /// string recorded on the row. `equivalent_renderings` holds the *other*
+    /// spellings the spec admits for that same normalized variant; conformance
+    /// means the spec's stated form matches any of them. The rule lives in
+    /// `HgvsVariant::spec_equivalent_renderings` so this generator and the
+    /// `ferro_produces_the_form_the_spec_states` oracle cannot drift apart.
+    struct FerroOutcome {
+        current: String,
+        equivalent_renderings: Vec<String>,
+        parse_ok: bool,
+        normalize_ok: bool,
+        expected_warnings: Vec<String>,
+    }
+
     #[derive(Debug, Serialize)]
     pub struct Row {
         pub input: String,
@@ -353,8 +369,13 @@ mod runner {
             // spec_expected default (the spec wrote the bare form as
             // shorthand for the prefixed form).
             let target = input_prefixed.as_deref().unwrap_or(&input);
-            let (current, parse_ok, normalize_ok, expected_warnings) =
-                run_ferro(&normalizer, target);
+            let FerroOutcome {
+                current,
+                equivalent_renderings,
+                parse_ok,
+                normalize_ok,
+                expected_warnings,
+            } = run_ferro(&normalizer, target);
 
             // Drop position references harvested from spec prose (e.g.
             // "position `c.5690`"): they are not describable variants, just
@@ -387,8 +408,13 @@ mod runner {
             // Status is derived from the taxonomy table in `classify::classify`.
             // Overrides may pin a non-default status (e.g. for rows the
             // auditor has hand-classified into a sub-bucket).
-            let auto_status =
-                classify::classify(parse_ok, normalize_ok, &current, spec_expected.as_deref());
+            let auto_status = classify::classify(
+                parse_ok,
+                normalize_ok,
+                &current,
+                &equivalent_renderings,
+                spec_expected.as_deref(),
+            );
             let status = ov
                 .and_then(|o| o.status.clone())
                 .unwrap_or_else(|| auto_status.to_string());
@@ -433,20 +459,30 @@ mod runner {
         Ok(rows)
     }
 
-    fn run_ferro(
-        normalizer: &Normalizer<MockProvider>,
-        input: &str,
-    ) -> (String, bool, bool, Vec<String>) {
+    fn run_ferro(normalizer: &Normalizer<MockProvider>, input: &str) -> FerroOutcome {
+        let failed = |current: String, parse_ok: bool| FerroOutcome {
+            current,
+            equivalent_renderings: Vec::new(),
+            parse_ok,
+            normalize_ok: false,
+            expected_warnings: Vec::new(),
+        };
         match parse_hgvs(input) {
-            Err(e) => (format!("parse error: {e}"), false, false, Vec::new()),
+            Err(e) => failed(format!("parse error: {e}"), false),
             Ok(v) => match normalizer.normalize_with_diagnostics(&v) {
-                Err(e) => (format!("normalize error: {e}"), true, false, Vec::new()),
+                Err(e) => failed(format!("normalize error: {e}"), true),
                 Ok(n) => {
                     let mut codes: Vec<String> =
                         n.warnings.iter().map(|w| w.code().to_string()).collect();
                     codes.sort();
                     codes.dedup();
-                    (format!("{}", n.result), true, true, codes)
+                    FerroOutcome {
+                        equivalent_renderings: n.result.spec_equivalent_renderings(),
+                        current: format!("{}", n.result),
+                        parse_ok: true,
+                        normalize_ok: true,
+                        expected_warnings: codes,
+                    }
                 }
             },
         }
