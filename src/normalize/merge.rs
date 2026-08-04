@@ -249,6 +249,22 @@ enum GEdit {
     /// sequence-first canonicalizer builds this; `collapse_overlapping_cis_edits`
     /// refuses inversion members.
     Inv { s: i64, e: i64 },
+    /// A tandem repeat member (`274A[3]`) that has **not been lowered yet**:
+    /// `unit` repeated `count` times, anchored on the inclusive span `[s, e]`.
+    ///
+    /// The only `GEdit` that does not yet denote a sequence. A repeat names its
+    /// reference tract implicitly — "the run of `unit` covering `[s, e]`" — and
+    /// the tract's extent is in the reference, not in the description, so this
+    /// cannot be resolved until the window is fetched. [`lower_repeat_edits`]
+    /// rewrites every one of these into the `Ins`/`Del` it denotes; nothing
+    /// downstream of that call can see one, and both the applier and
+    /// `collapse_overlapping_cis_edits` refuse it outright rather than guess.
+    Repeat {
+        s: i64,
+        e: i64,
+        unit: Vec<u8>,
+        count: u64,
+    },
 }
 
 /// Report whether `variants` contains two or more insertion-like cis members
@@ -351,14 +367,23 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     let template_accession = template_accession.clone();
 
     // Lowering is `collect_canonical_edits`': same `cis_axis_parts` call, same
-    // accession / body-region refusals, same per-`NaEdit` guards. It admits one
-    // shape this path does not — `NaEdit::Inversion`, which the sequence-first
-    // canonicalizer serves — so reject that explicitly and the two passes stay
-    // one implementation instead of two copies ten screens apart.
+    // accession / body-region refusals, same per-`NaEdit` guards. It admits two
+    // shapes this path does not — `NaEdit::Inversion` and `NaEdit::Repeat`,
+    // both of which the sequence-first canonicalizer serves — so reject those
+    // explicitly and the two passes stay one implementation instead of two
+    // copies ten screens apart.
+    //
+    // A `GEdit::Repeat` does not yet denote a sequence at all (its tract is in
+    // the reference, and only `lower_repeat_edits` reads it), so this pass —
+    // which reasons purely about spans — could not use one even if it wanted
+    // to.
     let Some(edits) = collect_canonical_edits(&variants, kind, body, &template_accession) else {
         return variants;
     };
-    if edits.iter().any(|e| matches!(e, GEdit::Inv { .. })) {
+    if edits
+        .iter()
+        .any(|e| matches!(e, GEdit::Inv { .. } | GEdit::Repeat { .. }))
+    {
         return variants;
     }
 
@@ -377,12 +402,15 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     let covered: Vec<(i64, i64)> = edits
         .iter()
         .filter_map(|e| match e {
-            // `Inv` is unreachable here — the rejection above drops any group
-            // carrying one — but it is a replacement over `[s, e]`, so classify
-            // it as one rather than leaving a misleading `None`.
-            GEdit::Del { s, e } | GEdit::Delins { s, e, .. } | GEdit::Inv { s, e } => {
-                Some((*s, *e))
-            }
+            // `Inv` and `Repeat` are unreachable here — the rejection above
+            // drops any group carrying either — but both hold reference bases
+            // over `[s, e]`, so classify them as replacements rather than leave
+            // a misleading `None` that would let the contiguity check pass over
+            // territory a member owns.
+            GEdit::Del { s, e }
+            | GEdit::Delins { s, e, .. }
+            | GEdit::Inv { s, e }
+            | GEdit::Repeat { s, e, .. } => Some((*s, *e)),
             GEdit::Sub { pos, .. } => Some((*pos, *pos)),
             GEdit::Ins { .. } | GEdit::Dup { .. } => None,
         })
@@ -486,6 +514,10 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
                 }
             }
             GEdit::Sub { pos, alt } => cell[idx(*pos)] = Some(alt.to_u8()),
+            // Unreachable — the group was rejected above — and unapplicable:
+            // a repeat's tract is resolved only by `lower_repeat_edits`, which
+            // this pass never runs. Decline rather than approximate.
+            GEdit::Repeat { .. } => return variants,
             GEdit::Delins { s, e, alt } => {
                 for p in *s..=*e {
                     cell[idx(p)] = None;
@@ -2022,7 +2054,22 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     let (template_accession, _, _, _, _) = cis_axis_parts(&variants[0], kind)?;
     let template_accession = template_accession.clone();
 
-    let edits = collect_canonical_edits(variants, kind, body, &template_accession)?;
+    let mut edits = collect_canonical_edits(variants, kind, body, &template_accession)?;
+
+    // A **lone** repeat is not what the lockout is about, and re-deriving one
+    // can only cost. Its whole change is a single contiguous tract, so there is
+    // no partition decision for this pass to make — the one thing it could do
+    // is hand back the `ins`/`del` that denotes the same bases, trading a
+    // spelling the spec explicitly leaves open (`open-issues.md:88`) for
+    // another. Sometimes the per-member renderer promotes that straight back
+    // (`274_275insAA` → `274A[3]`) and the alternation settles; sometimes it
+    // does not — a `B2` contraction re-derives as a plain deletion and
+    // `g.258CAG[2]` came back as `g.258_263del`. The value is in a *group*,
+    // where the tract's bases can merge with a sibling's, so that is where
+    // lowering is allowed to run.
+    if variants.len() < 2 && edits.iter().any(|e| matches!(e, GEdit::Repeat { .. })) {
+        return None;
+    }
 
     // Window: the union of every member's footprint, padded for the 3'-shift.
     let (c_lo, c_hi) = edit_span_union(&edits)?;
@@ -2051,6 +2098,12 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // sequence, the same assumption `apply_canonical_split` already relies on.
     // (`fetch_canonical_window` has already upper-cased, so this only folds.)
     let ref_bytes: Vec<u8> = ref_bytes.iter().map(|b| canonical_base_byte(*b)).collect();
+
+    // A repeat member names its tract implicitly, so it is only now — with the
+    // window in hand — that it denotes anything. Every `GEdit::Repeat` becomes
+    // the `ins`/`del` it means, and nothing past this line can see one (#1296).
+    lower_repeat_edits(&mut edits, &ref_bytes, w_lo)?;
+    let edits = edits;
 
     // A member that misstates its reference base is a reference mismatch, not a
     // canonicalization problem: strict mode must still reject it and lenient
@@ -2307,12 +2360,58 @@ fn cis_kind_of(variant: &HgvsVariant) -> Option<CisKind> {
 /// Lower every member to a [`GEdit`], or refuse the group.
 ///
 /// Refuses anything whose description carries information the resulting
-/// sequence does not: repeats (the spec says a repeat and a del/dup spelling of
-/// one change are *both* correct and declines to choose — `open-issues.md:88`),
-/// conversions, methylation, copy number, identity/`=`, and uncertain edits.
-/// Also refuses a mixed axis, a second accession, and any member outside the
-/// positive body region (a contiguous window would happily produce `c.-1_1`,
-/// which is not valid HGVS).
+/// sequence does not: conversions, methylation, copy number, identity/`=`,
+/// mixed repeats (`MultiRepeat`), and uncertain edits. Also refuses a mixed
+/// axis, a second accession, and any member outside the positive body region (a
+/// contiguous window would happily produce `c.-1_1`, which is not valid HGVS).
+///
+/// # Repeats are lowered, not refused (#1296)
+///
+/// A single-unit tandem repeat *does* denote a sequence, so it becomes a
+/// [`GEdit::Repeat`] here and [`lower_repeat_edits`] resolves it against the
+/// window into the `ins`/`del` it means. That is a change of what the
+/// derivation may **read**, not of what it emits: repeat *output* stays with
+/// the per-member pipeline's renderer, which promotes a derived `ins` straight
+/// back to `unit[N]`.
+///
+/// Refusing was a permanent lockout rather than a single declined case. The
+/// per-member pipeline *promotes* members into repeat notation, so
+/// `[272_273del;274_275insAA]` normalizes to `[272_273del;274A[3]]` — and on
+/// the next pass the derivation refused the group it had just produced, so it
+/// could never run on that variant again.
+///
+/// This takes no side in the repeat-vs-del/dup question — `open-issues.md:88`
+/// says both spellings are correct, and that is why the old refusal cited it.
+/// Reading a repeat does not choose a spelling for it.
+///
+/// `MultiRepeat` stays refused, and the reason is **not** that a mixed repeat
+/// has no single unit to lower. That describes the shape of [`lowered_repeat`],
+/// not an impossibility: a mixed repeat could be expanded unit by unit and the
+/// concatenation diffed against its tract.
+///
+/// The reason is that the lockout above **cannot arise for one**. Nothing in
+/// ferro ever *produces* a `MultiRepeat`:
+/// [`normalize_na_edit`](crate::normalize) gives it an explicit pass-through arm
+/// — deliberately not 3'-shifted, routed only for tract validation — and the
+/// only other construction site is a case-folding rebuild in
+/// [`rules`](crate::normalize::rules). A `MultiRepeat` appears in ferro's output
+/// only if the submitter wrote one, so the "refused the group it had just
+/// produced" failure has no mixed-repeat analogue. Refusing is not free, though:
+/// a **submitter-written** `MultiRepeat` beside a sibling still cannot be
+/// merged. That single case is the whole of what it costs.
+///
+/// Two further grounds, each covering only part of the space:
+///
+/// * a `MultiRepeat` carrying any non-`Exact` count has no determined resulting
+///   sequence at all — the same rule this function already applies to uncertain
+///   edits;
+/// * **for the all-`Exact` case only**,
+///   [`validate_multirepeat_tract`](crate::normalize::validate) requires the
+///   declared units to expand to exactly the reference bases over the stated
+///   span, so under ferro's semantic such a member denotes no change — an
+///   identity, which this pass refuses on principle because the resulting
+///   sequence cannot express it. This argument does not generalise past that
+///   branch, and is not what settles the question.
 fn collect_canonical_edits(
     variants: &[HgvsVariant],
     kind: CisKind,
@@ -2364,10 +2463,186 @@ fn collect_canonical_edits(
                 uncertain_extent: None,
                 ..
             } => edits.push(GEdit::Dup { s, e }),
+            // Deferred until the window exists — see [`GEdit::Repeat`]. The
+            // guards here are exactly the per-member pipeline's own admission
+            // test for a shufflable repeat (`normalize_na_edit`'s `Repeat`
+            // arm): a stated unit, one exact count, and no genotype or VEP
+            // trailing baggage. Anything else has no single resulting sequence
+            // to derive from.
+            NaEdit::Repeat {
+                sequence: Some(sequence),
+                count: RepeatCount::Exact(count),
+                additional_counts,
+                trailing: None,
+            } if additional_counts.is_empty() => {
+                let unit: Vec<u8> = sequence
+                    .bases()
+                    .iter()
+                    .map(|b| canonical_base_byte(b.to_u8()))
+                    .collect();
+                if unit.is_empty() {
+                    return None;
+                }
+                edits.push(GEdit::Repeat {
+                    s,
+                    e,
+                    unit,
+                    count: *count,
+                });
+            }
             _ => return None,
         }
     }
     Some(edits)
+}
+
+/// Resolve every [`GEdit::Repeat`] into the `ins`/`del` it denotes, or refuse
+/// the group.
+///
+/// A repeat says "the run of `unit` covering my anchor holds `count` copies".
+/// The run itself is in the reference, so this is the first point at which the
+/// member denotes anything: `ref_bytes`/`w_lo` are the window
+/// [`canonicalize_from_sequence`] has just fetched.
+///
+/// Tract-finding is [`count_tandem_repeats`]', the same one
+/// [`normalize_repeat`](crate::normalize::rules::normalize_repeat) uses, over
+/// the same [`smallest_repeat_unit`] canonicalization and the same flank
+/// absorption for an under-specified explicit range — **minus that function's
+/// off-phase rotation search**, which is the one place the two part company.
+///
+/// For a single-anchor member whose unit is two or more bases, `normalize_repeat`
+/// (#852) tries every rotation of the unit at every anchor offset and keeps the
+/// longest tract that spans the anchor; this takes the literal lookup only. So
+/// the two agree on which tract a member names whenever it is written in phase
+/// with its tract, and an off-phase single-anchor member is **refused** here
+/// rather than lowered onto some other tract — it fails the spanning check or
+/// the room check below. That is a capability gap, not a disagreement: the group
+/// falls back to the per-member pipeline, which does run the rotation search.
+///
+/// What is deliberately *not* shared is that function's choice between `dup`,
+/// `del`, `ins` and `unit[N]`: that is a rendering decision, and the derivation
+/// only needs the bases.
+///
+/// Where inside the tract the difference is placed does not matter. The tract
+/// is a whole number of copies of one unit, so adding or removing copies at
+/// either end yields the same sequence — which is why this can ignore the
+/// shuffle direction that `normalize_repeat` must honour. The 3' end is chosen
+/// so the footprint stays as small and as far from the group's other members as
+/// possible.
+///
+/// Refuses (leaving the group to the per-member pipeline) when:
+///
+/// * the anchor is outside the window, or the tract runs into either window
+///   edge — a truncated tract would under-count the copies and denote the wrong
+///   sequence. [`count_tandem_repeats`] stops scanning when it has less than a
+///   whole unit left in that direction, so "a whole unit of room on each side"
+///   is exactly the condition under which it stopped for a real reason;
+/// * the tract does not span the anchor, which `count_tandem_repeats` can
+///   return (it back-scans first, so a run lying entirely 5' of the anchor is
+///   reachable);
+/// * `count` equals the reference count, i.e. the member is an identity. The
+///   resulting sequence cannot express one, so a group carrying one would come
+///   back with that member silently dropped — the same reason `NaEdit::Identity`
+///   is refused above.
+fn lower_repeat_edits(edits: &mut [GEdit], ref_bytes: &[u8], w_lo: i64) -> Option<()> {
+    for edit in edits.iter_mut() {
+        let GEdit::Repeat { s, e, unit, count } = edit else {
+            continue;
+        };
+        *edit = lowered_repeat(*s, *e, unit, *count, ref_bytes, w_lo)?;
+    }
+    Some(())
+}
+
+/// The `ins`/`del` one repeat member denotes, or `None`. See
+/// [`lower_repeat_edits`] for the refusal conditions.
+fn lowered_repeat(
+    s: i64,
+    e: i64,
+    unit: &[u8],
+    count: u64,
+    ref_bytes: &[u8],
+    w_lo: i64,
+) -> Option<GEdit> {
+    // Canonicalize to the smallest period, exactly as `normalize_repeat` does,
+    // so a member spelling a non-minimal unit (`ATAT[1]` over an `AT[4]` tract)
+    // finds the same tract the per-member pipeline would.
+    let canonical = crate::normalize::rules::smallest_repeat_unit(unit);
+    let copies_per_stated_unit = (unit.len() / canonical.len()) as u64;
+    let mut count = count.checked_mul(copies_per_stated_unit)?;
+    let unit_len = canonical.len();
+
+    let anchor = usize::try_from(s.checked_sub(w_lo)?).ok()?;
+    if anchor >= ref_bytes.len() {
+        return None;
+    }
+    let (ref_count, tract_start, tract_end) =
+        crate::normalize::rules::count_tandem_repeats(ref_bytes, anchor, canonical)?;
+    if tract_start > anchor || anchor >= tract_end {
+        return None;
+    }
+    if tract_start < unit_len || tract_end + unit_len > ref_bytes.len() {
+        return None;
+    }
+
+    // Flank absorption, mirroring `normalize_repeat`: an explicit range states
+    // which reference copies the count applies to, and copies inside the tract
+    // but outside that range are untouched by the edit, so they survive into the
+    // result and belong in the count. A single-position anchor (`e == s`) names
+    // only the tract's start and means "the whole run becomes N", so it absorbs
+    // nothing.
+    if e > s {
+        let stated_end = usize::try_from(e.checked_sub(w_lo)?).ok()?;
+        let three_prime = tract_end.saturating_sub(stated_end + 1);
+        let five_prime = anchor.saturating_sub(tract_start);
+        // `checked_add`, not `+=`: `count` is the submitter's copy number times
+        // `copies_per_stated_unit`, so a description like `g.5_6A[18446744073709551615]`
+        // reaches here already near the top of the range and absorbing a flank
+        // would wrap. Every other arithmetic step in this function is checked;
+        // this was the one that was not.
+        count = count.checked_add(((three_prime + five_prime) / unit_len) as u64)?;
+    }
+
+    match count.cmp(&ref_count) {
+        // Identity: the member denotes no change at all.
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => {
+            let added = usize::try_from(count - ref_count).ok()?;
+            // A repeat count is the one place a *short* description names an
+            // arbitrarily *long* payload: `g.274A[4000000000]` is thirteen
+            // characters and would size a four-gigabyte `Vec`, which
+            // `with_capacity` answers by aborting the process — in release as
+            // well as debug, and reachable from `Normalizer::normalize`. Every
+            // other `alt` here is bounded by the length of the string the
+            // submitter actually wrote. Bound it by the window instead: an
+            // insertion wider than the whole window has no partition to
+            // contribute to, so refusing costs nothing.
+            let payload = added.checked_mul(unit_len)?;
+            if payload > MAX_CANONICAL_WINDOW as usize {
+                return None;
+            }
+            let mut alt = Vec::with_capacity(payload);
+            for _ in 0..added {
+                for byte in canonical {
+                    alt.push(Base::from_char(*byte as char)?);
+                }
+            }
+            Some(GEdit::Ins {
+                gap: w_lo + tract_end as i64 - 1,
+                alt,
+            })
+        }
+        std::cmp::Ordering::Less => {
+            let removed = usize::try_from(ref_count - count)
+                .ok()?
+                .checked_mul(unit_len)?;
+            let del_start = tract_end.checked_sub(removed)?;
+            Some(GEdit::Del {
+                s: w_lo + del_start as i64,
+                e: w_lo + tract_end as i64 - 1,
+            })
+        }
+    }
 }
 
 /// Whether every member's *stated* reference base agrees with the window.
@@ -2459,7 +2734,13 @@ fn edit_span_union(edits: &[GEdit]) -> Option<(i64, i64)> {
             GEdit::Del { s, e }
             | GEdit::Delins { s, e, .. }
             | GEdit::Inv { s, e }
-            | GEdit::Dup { s, e } => (*s, *e),
+            | GEdit::Dup { s, e }
+            // The *stated* anchor, which is all an unlowered repeat has. Its
+            // tract can reach past it in either direction, so this is the one
+            // shape whose real footprint is wider than its span — that is what
+            // `CANONICAL_PAD` gives it room for, and `lower_repeat_edits`
+            // refuses any tract that reaches a window edge anyway.
+            | GEdit::Repeat { s, e, .. } => (*s, *e),
             GEdit::Sub { pos, .. } => (*pos, *pos),
         };
         lo = lo.min(s);
@@ -2822,6 +3103,11 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
             | GEdit::Dup { s, e }
             | GEdit::Inv { s, e }
             | GEdit::Delins { s, e, .. } => e < s,
+            // A repeat does not denote a sequence until `lower_repeat_edits`
+            // has resolved its tract, so there is nothing here to apply. Both
+            // callers lower first; refusing rather than approximating keeps
+            // that a precondition instead of a silent wrong answer.
+            GEdit::Repeat { .. } => return None,
             GEdit::Ins { .. } | GEdit::Sub { .. } => false,
         };
         if descending {
@@ -2875,7 +3161,11 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
     for edit in edits {
         let (s, e) = match edit {
             GEdit::Del { s, e } | GEdit::Delins { s, e, .. } | GEdit::Inv { s, e } => (*s, *e),
-            GEdit::Ins { .. } | GEdit::Dup { .. } | GEdit::Sub { .. } => continue,
+            // Unreachable: the descending-span loop above returns `None` on
+            // any unlowered repeat before this one runs.
+            GEdit::Ins { .. } | GEdit::Dup { .. } | GEdit::Sub { .. } | GEdit::Repeat { .. } => {
+                continue
+            }
         };
         for p in s..e {
             if let Some(i) = idx(p) {
@@ -2888,9 +3178,12 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
             GEdit::Ins { gap, .. } => *gap,
             // A `Dup` writes its copy into the slot after its own last base.
             GEdit::Dup { e, .. } => *e,
-            GEdit::Del { .. } | GEdit::Delins { .. } | GEdit::Inv { .. } | GEdit::Sub { .. } => {
-                continue
-            }
+            GEdit::Del { .. }
+            | GEdit::Delins { .. }
+            | GEdit::Inv { .. }
+            | GEdit::Sub { .. }
+            // Unreachable for the same reason as the loop above.
+            | GEdit::Repeat { .. } => continue,
         };
         if idx(gap).is_some_and(|i| interior_gap[i]) {
             return None;
@@ -2962,6 +3255,10 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
                 }
                 after[slot].extend(copied);
             }
+            // Unreachable — refused by the descending-span loop at the top —
+            // and restated here so a future edit that removes that loop cannot
+            // silently start applying a repeat as if it denoted nothing.
+            GEdit::Repeat { .. } => return None,
             GEdit::Inv { s, e } => {
                 claim(&mut claimed, *s, *e)?;
                 let span: Vec<u8> = (*s..=*e)
@@ -3176,6 +3473,10 @@ fn changed_columns_of_edits(edits: &[GEdit]) -> usize {
             GEdit::Sub { .. } => 1,
             GEdit::Ins { alt, .. } => alt.len(),
             GEdit::Del { s, e } | GEdit::Dup { s, e } | GEdit::Inv { s, e } => span(*s, *e),
+            // Unreachable (this measure runs on lowered edit sets only); its
+            // stated anchor is the widest thing that can be said about an
+            // unresolved tract without reading the reference.
+            GEdit::Repeat { s, e, .. } => span(*s, *e),
             GEdit::Delins { s, e, alt } => span(*s, *e).max(alt.len()),
         })
         .sum()
@@ -7036,6 +7337,38 @@ mod tests {
     /// through `merge_consecutive_edits` requires the normalizer to have
     /// shifted the pair together first, so a merge-level test exercises the
     /// `Delins` branch instead and would not cover this.
+    /// A repeat count is the one description that names an unbounded payload
+    /// in a bounded number of characters, so the lowering has to bound it
+    /// itself. `A[4000000000]` sizes a four-gigabyte `Vec` through
+    /// `with_capacity`, which aborts the process rather than unwinding — in
+    /// release as well as debug — and `Normalizer::normalize` reaches here.
+    ///
+    /// Asserted on `lowered_repeat` directly. Driving it through
+    /// `canonicalize_from_sequence` would prove the same thing by *surviving*,
+    /// and a test whose evidence is "the process did not die" cannot tell a
+    /// working bound from a lowering that never ran.
+    ///
+    /// The just-over-the-window count is asserted alongside the absurd one on
+    /// purpose: it is the case that can be checked *against* an unbounded
+    /// build without allocating anything dangerous, so it is what makes this
+    /// test demonstrably sensitive to the bound rather than merely consistent
+    /// with it.
+    #[test]
+    fn an_absurd_repeat_count_is_refused_rather_than_allocated() {
+        let reference = b"CCCCAAAAAGGGG";
+        // Sanity: the same tract with a sane count does lower, so the refusals
+        // below are the bound and not a mis-specified fixture.
+        assert!(matches!(
+            lowered_repeat(5, 5, b"A", 7, reference, 1),
+            Some(GEdit::Ins { .. })
+        ));
+        // The tract's own five copies are kept, so this asks for 95 bases
+        // more than the widest window the derivation will ever fetch.
+        let just_past_the_window = MAX_CANONICAL_WINDOW as u64 + 100;
+        assert!(lowered_repeat(5, 5, b"A", just_past_the_window, reference, 1).is_none());
+        assert!(lowered_repeat(5, 5, b"A", 4_000_000_000, reference, 1).is_none());
+    }
+
     #[test]
     fn empty_insertion_anchor_builds_an_identity() {
         // Insertion-shaped anchor (`start == end + 1`) with an empty payload.
@@ -7451,6 +7784,30 @@ mod tests {
         assert_eq!(
             pieces[0].ref_start, 2,
             "the first piece must be the lone 5' substitution; got {pieces:?}"
+        );
+    }
+
+    /// Flank absorption must not wrap the submitter's copy number.
+    ///
+    /// `count` arrives as the stated count times `copies_per_stated_unit`, so a
+    /// description written at the top of the range reaches the absorption step
+    /// already saturated and `count += flank` wraps. Every other arithmetic step
+    /// in [`lowered_repeat`] is checked; this pins the one that was not.
+    ///
+    /// The anchor spans an explicit two-position range (`e > s`) inside a
+    /// five-`A` tract, which is what makes the 3' flank non-zero and the add
+    /// reachable at all.
+    #[test]
+    fn lowered_repeat_refuses_a_count_that_would_overflow_flank_absorption() {
+        assert!(
+            lowered_repeat(5, 6, b"A", u64::MAX, b"CCCCAAAAAGGGG", 1).is_none(),
+            "a count at the top of the range must be refused, not wrapped"
+        );
+        // Control: the same tract and anchor with a sane count still lowers, so
+        // the guard above is rejecting the overflow rather than the shape.
+        assert!(
+            lowered_repeat(5, 6, b"A", 7, b"CCCCAAAAAGGGG", 1).is_some(),
+            "the same shape with a small count must still lower"
         );
     }
 

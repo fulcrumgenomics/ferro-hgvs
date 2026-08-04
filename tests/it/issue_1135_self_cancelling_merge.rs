@@ -77,8 +77,14 @@ fn non_cancelling_del_ins_allele_still_merges() {
     let variant = parse_hgvs(input).unwrap();
     let rendered = normalizer.normalize(&variant).unwrap().to_string();
 
+    // Re-blessed from `g.[1008del;1009G[3]]` (#1296): the per-member pipeline
+    // still produces that pair, but the sequence-first pass no longer refuses
+    // to read the promoted repeat, and what the pair denotes is one reference
+    // base replaced by two — `A` at 1008 -> `GG`. The guard is unchanged in
+    // substance: this is a real edit, not the identity the #1135 fix could
+    // wrongly collapse it to.
     assert_eq!(
-        rendered, "NC_000001.11:g.[1008del;1009G[3]]",
+        rendered, "NC_000001.11:g.1008delinsGG",
         "{input} changes the sequence and must not collapse to an identity"
     );
     parse_hgvs(&rendered)

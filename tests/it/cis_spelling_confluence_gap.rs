@@ -15,7 +15,14 @@
 //! #1304 makes seven. It needed the input-separator veto gone as well (#1345,
 //! landed separately on `main`), because its split spelling is three members
 //! whose derived form merges across a base the input left between two of them.
-//! Only #1296 is left.
+//!
+//! #1296 was the eighth and last, and it needed something different from all of
+//! them: not a capability the derivation lacked, but permission to *read* its
+//! own output. The per-member pipeline promotes `274_275insAA` to `274A[3]`,
+//! and `collect_canonical_edits` refused any group carrying a repeat — so the
+//! derivation was locked out of that variant forever. With repeats lowered to
+//! the `ins`/`del` they denote, both spellings reach `g.273C>A`. [`DIVERGENT`]
+//! is now empty.
 //!
 //! The pairs were found by deriving each variant's minimal-alignment partition
 //! from the resulting sequence, rendering the derived single-block form, and
@@ -40,12 +47,16 @@ use crate::common::synthetic::padded;
 use ferro_hgvs::ShuffleDirection;
 
 /// `(issue, core, split spelling, merged spelling)`.
-const DIVERGENT: &[(&str, &str, &str, &str)] = &[(
-    "#1296",
-    "AAAAAAATAATCGCAACAGAAG",
-    "TEMPLATE:g.[272_273del;274_275insAA]",
-    "TEMPLATE:g.273delinsA",
-)];
+///
+/// Empty: every harvested pair has converged. Kept — rather than deleted along
+/// with its last row — because it is where the next divergence found by
+/// `cis_allele_confluence_proptest`'s indel model gets pinned, and because
+/// [`every_pinned_pair_denotes_one_variant`] and
+/// [`every_divergent_row_still_diverges`] are the contract a new row must
+/// satisfy — the latter is dormant while this table is empty and starts
+/// checking the moment a row is added, and
+/// [`the_divergent_table_is_empty`] pins the count that says so.
+const DIVERGENT: &[(&str, &str, &str, &str)] = &[];
 
 /// `(issue, core, split spelling, merged spelling, the string they agree on)`
 /// for pairs that converge today.
@@ -117,6 +128,18 @@ const CONVERGED: &[(&str, &str, &str, &str, &str)] = &[
         "TEMPLATE:g.262_263insGA",
         "TEMPLATE:g.261_262dup",
     ),
+    // #1296 is the eighth and last, and the only one that converged by letting
+    // the derivation *read* a form rather than by teaching it to build one. Its
+    // agreed string is neither input spelling: two members denoting one changed
+    // base come back as that substitution. Verified identical under
+    // `--direction 5prime`.
+    (
+        "#1296",
+        "AAAAAAATAATCGCAACAGAAG",
+        "TEMPLATE:g.[272_273del;274_275insAA]",
+        "TEMPLATE:g.273delinsA",
+        "TEMPLATE:g.273C>A",
+    ),
     // Converged before that change, and unmoved by it.
     (
         "#1286",
@@ -179,18 +202,43 @@ fn every_pinned_pair_denotes_one_variant() {
 }
 
 #[test]
-fn the_one_spelling_pair_still_diverges() {
-    // The count "one" is asserted in three places' prose — this test's name,
+fn the_divergent_table_is_empty() {
+    // Named for what actually executes. The predecessor was called
+    // `no_pinned_pair_still_diverges`, which promised a divergence check its
+    // body cannot perform while `DIVERGENT` is empty, so the name described
+    // coverage that was not there. Renamed rather than deleted: the emptiness
+    // claim is itself worth pinning. The divergence check it promised lives in
+    // [`every_divergent_row_still_diverges`], deliberately apart so this
+    // assertion cannot abort it.
+    //
+    // The count "none" is asserted in three places' prose — this test's name,
     // the module doc above, and `tests/it/rewrite_target_corpus.rs` — and in none
     // of them executably. Adding or removing a row would leave all three wrong
     // and silent. `splitter_reproducer_corpus.rs` guards its own table the same
     // way.
-    assert_eq!(
-        DIVERGENT.len(),
-        1,
+    assert!(
+        DIVERGENT.is_empty(),
         "row count changed; update this test's name, the module doc, and \
-         tests/it/rewrite_target_corpus.rs's reference to this pair"
+         tests/it/rewrite_target_corpus.rs's reference to this table"
     );
+}
+
+/// Every [`DIVERGENT`] row must still diverge, or it belongs in [`CONVERGED`].
+///
+/// **Dormant while the table is empty — zero iterations, by construction.**
+/// Kept, not deleted, because it is the contract the next row must satisfy: a
+/// pair added to `DIVERGENT` must actually diverge when it is added, and must
+/// redden here when it converges. Deleting it would drop that check exactly
+/// when nobody is looking for it; leaving it labelled costs nothing and stops
+/// it reading as live coverage.
+///
+/// It is a **separate test** from [`the_divergent_table_is_empty`] on purpose.
+/// Held together, the emptiness assertion runs first and aborts the whole test
+/// on the very change that makes this loop live: adding the first row fails the
+/// count pin, and the divergence check below never executes. Split, adding a
+/// row reddens the count pin *and* exercises the row.
+#[test]
+fn every_divergent_row_still_diverges() {
     for (issue, core, split, merged) in DIVERGENT {
         let seq = padded(core);
         let (a, b) = (normalize(&seq, split), normalize(&seq, merged));
@@ -269,19 +317,31 @@ fn converged_pairs_stay_converged() {
 /// (`src/bin/ferro.rs`) and the Python bindings. Every row above was blessed
 /// against the 3' direction only, so these gaps were never measured.
 ///
-/// **#1321 has left this set.** Its 5' divergence was the cancelled-member
-/// residue: `g.[262_263insA;263del]` merges to `g.263delinsA`, which restates
-/// the reference and so renders as `g.263=`, and the split spelling kept that
-/// `=` while the merged spelling never grew one. Dropping the residue where the
-/// merge creates it converges the pair on `g.261_262dup` — see
-/// `issue_1321_identity_inside_a_duplication.rs`.
+/// **Both original rows have since left this set, for unrelated reasons.**
 ///
-/// Both spellings still denote the input's bases and both are stable fixed
-/// points, so this is criterion 1 of #1235 — non-confluence — and nothing else.
-/// That is why neither oracle sees it: `FERRO_ASSERT_IDEMPOTENT` re-normalizes a
-/// single spelling and finds it stable, and `FERRO_ASSERT_REPARSE` finds it
-/// well-formed. Only comparing two spellings of one variant exposes it.
-const DIVERGENT_UNDER_FIVE_PRIME: &[&str] = &["#1323"];
+/// #1321's 5' divergence was the cancelled-member residue: `g.[262_263insA;263del]`
+/// merges to `g.263delinsA`, which restates the reference and so renders as
+/// `g.263=`, and the split spelling kept that `=` while the merged spelling never
+/// grew one. Dropping the residue where the merge creates it converges the pair on
+/// `g.261_262dup` — see `issue_1321_identity_inside_a_duplication.rs`.
+///
+/// #1323 closed here: lowering a repeat member to the `ins`/`del` it denotes let
+/// `collect_canonical_edits` read its 5' spelling, which is the gate that had been
+/// refusing it; both spellings now reach one string under 5' as they already did
+/// under 3'.
+///
+/// The set is kept rather than deleted with its last row — it is where the next
+/// direction-dependent gap gets pinned, and `the_five_prime_confluence_gap_is_unchanged`
+/// asserts every unlisted row converges, so an empty set is a stronger claim than a
+/// populated one, not a dormant check.
+///
+/// What a row here means, when there is one: both spellings still denote the
+/// input's bases and both are stable fixed points, so it is criterion 1 of #1235
+/// — non-confluence — and nothing else. That is why neither oracle sees such a
+/// row: `FERRO_ASSERT_IDEMPOTENT` re-normalizes a single spelling and finds it
+/// stable, and `FERRO_ASSERT_REPARSE` finds it well-formed. Only comparing two
+/// spellings of one variant exposes it.
+const DIVERGENT_UNDER_FIVE_PRIME: &[&str] = &[];
 
 #[test]
 fn the_five_prime_confluence_gap_is_unchanged() {
@@ -294,12 +354,14 @@ fn the_five_prime_confluence_gap_is_unchanged() {
     // measured and refuted: threading `ShuffleDirection` into
     // `canonicalize_from_sequence` changes 298 of 39,600 swept outputs and all of
     // them are sequence-preserving both before and after, so it is a lateral
-    // re-spelling with no correctness content. For these two rows the derivation
-    // instead *refuses*: `canonicalize_from_sequence` returns `None`, behind
-    // three stacked gates — the `collect_canonical_edits` catch-all (reached via
-    // a redundant `=` member the 5' pipeline emits), then the
-    // `changed_columns_of_pieces` weight bound, then `needs_unsupported_form`.
-    // Each masks the next, which is the pattern #1235 and #1345 both describe.
+    // re-spelling with no correctness content. For the one row still listed the
+    // derivation instead *refuses*: `canonicalize_from_sequence` returns `None`,
+    // behind two stacked gates — the `collect_canonical_edits` catch-all
+    // (reached via a redundant `=` member the 5' pipeline emits), then the
+    // `changed_columns_of_pieces` weight bound. Each masks the next, which is
+    // the pattern #1235 and #1345 both describe. A third gate stood behind those
+    // two when this was written — `needs_unsupported_form`, since removed — so
+    // the ladder is two deep today, not three.
     //
     // Every listed id must still name a `CONVERGED` row. The loop below reaches
     // an entry only through that table, so an id naming no row is inert: it

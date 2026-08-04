@@ -90,13 +90,44 @@ fn a_sibling_outside_the_tract_leaves_the_repeat_alone() {
 }
 
 #[test]
-fn a_short_tract_with_a_clear_sibling_keeps_its_repeat() {
-    // Negative control on a four-base tract (`T` at 4-7): `5_6del` becomes
-    // `4_7T[2]`, and the substitution at 8 is outside it.
+fn a_short_tract_with_a_sibling_against_its_edge_merges() {
+    // Was `a_short_tract_with_a_clear_sibling_keeps_its_repeat`, pinning
+    // `g.[4_7T[2];8A>G]`. The sibling is not in fact clear of the tract: the
+    // deletion 3'-shifts to 6_7 and the substitution at 8 abuts it, so the two
+    // are consecutive changes and `delins.md:16` makes them one `delins`.
+    //
+    // The repeat spelling used to survive only because the sequence-first pass
+    // refused any group containing one; with repeats lowered for derivation
+    // (#1296) it re-derives the merged form. `TTA` -> `G` over 6_8.
+    //
+    // The negative control this row was written to be lives on in
+    // `a_short_tract_with_a_genuinely_clear_sibling_keeps_its_repeat` below.
     assert_normalizes_preserving(
         "ACGTTTTACGTACGTACGTA",
         "TEMPLATE:g.[5_6del;8A>G]",
-        "TEMPLATE:g.[4_7T[2];8A>G]",
+        "TEMPLATE:g.6_8delinsG",
+    );
+}
+
+#[test]
+fn a_short_tract_with_a_genuinely_clear_sibling_keeps_its_repeat() {
+    // Negative control on the same four-base tract (`T` at 4-7): `5_6del`
+    // becomes `4_7T[2]`, and the substitution at 9 is separated from the
+    // shifted deletion by the unchanged base at 8 — so there is nothing for the
+    // derivation to merge, and the repeat survives.
+    //
+    // A control, not a discriminator, and measured as such: this row passes
+    // whether repeat lowering runs or not, because its input carries no repeat
+    // member and its expected output *keeps* one. It guards the opposite risk
+    // from the rows above — the derivation over-reaching onto a genuinely
+    // separated sibling — which is exactly what it is here to do. The rows that
+    // redden when lowering is removed are the five in `issue_1296_*`,
+    // `issue_1135_*`, `cis_spelling_confluence_gap` and
+    // `a_short_tract_with_a_sibling_against_its_edge_merges`.
+    assert_normalizes_preserving(
+        "ACGTTTTACGTACGTACGTA",
+        "TEMPLATE:g.[5_6del;9C>G]",
+        "TEMPLATE:g.[4_7T[2];9C>G]",
     );
 }
 
