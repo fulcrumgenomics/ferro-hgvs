@@ -50,6 +50,14 @@
 
 mod processor;
 
+// Gated to match its only consumers, both of which are `parallel`-only: the
+// `#[cfg(feature = "parallel")]` impl block in `processor.rs` and the streaming
+// functions in `crate::parallel`. `default = []`, so without this the module
+// compiles in a featureless build with nothing constructing `StreamingMap` —
+// dead code that `dead_code`'s warn-by-default level let through every existing
+// clippy job (they all pass `--features dev` or `--all-features`). The
+// release-profile lint added in this PR is what surfaced it.
+#[cfg(feature = "parallel")]
 pub(crate) mod streaming;
 
 pub use processor::{
