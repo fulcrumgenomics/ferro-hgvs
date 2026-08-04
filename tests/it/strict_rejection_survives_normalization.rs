@@ -44,7 +44,7 @@
 
 use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::normalize::NormalizeConfig;
-use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
+use ferro_hgvs::{parse_hgvs, FerroError, MockProvider, Normalizer};
 
 /// 24 bases ending in a unique `C`, so a member authored at position 24 stays
 /// there and 24 is genuinely the last base. Shared with
@@ -66,15 +66,36 @@ fn normalize_lenient(accession: &str, input: &str) -> String {
         .to_string()
 }
 
-/// `true` when strict mode rejects `description`.
+/// `true` when strict mode rejects `description` **specifically as
+/// `OverlapConflictingEdits / W5002`**.
+///
+/// Panics on any other error, rather than returning `true` for it. `is_err()`
+/// alone cannot tell the contract under test from an unrelated rejection — a
+/// past-end position or a reference mismatch would satisfy it just as well —
+/// and this file's whole claim is about *that* gate surviving normalization.
+///
+/// Both halves of the tag are required because the promotion site emits them
+/// together (`… (OverlapConflictingEdits / W5002)`); accepting either alone
+/// would keep passing after the other half regressed. Same shape as
+/// `strict_rejects_as_overlap` in `issue_1276_dup_junction_overlap.rs`.
 fn strict_rejects(accession: &str, description: &str) -> bool {
     let variant = parse_hgvs(description).expect("description must parse");
-    Normalizer::with_config(
+    match Normalizer::with_config(
         provider(accession),
         NormalizeConfig::default().with_error_mode(ErrorMode::Strict),
     )
     .normalize(&variant)
-    .is_err()
+    {
+        Ok(_) => false,
+        Err(FerroError::InvalidCoordinates { msg }) => {
+            assert!(
+                msg.contains("W5002") && msg.contains("OverlapConflictingEdits"),
+                "expected `OverlapConflictingEdits / W5002` for `{description}`; got: {msg}"
+            );
+            true
+        }
+        Err(other) => panic!("unexpected error variant for `{description}`: {other:?}"),
+    }
 }
 
 /// Inputs strict mode rejects as `OverlapConflictingEdits / W5002`, one per

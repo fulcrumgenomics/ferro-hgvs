@@ -69,6 +69,16 @@ pub(crate) enum Region {
 /// tandem duplication, which `duplication.md:18` states as a MUST — so the form
 /// travels with the anchor rather than being re-inferred downstream, where the
 /// duplicated source span is no longer in hand.
+///
+/// An **inversion** is deliberately *not* a form here, even though it is the
+/// other shape the two lengths cannot see. It does not need to be: a `dup` is
+/// unrecoverable downstream because its source span is gone by then, whereas an
+/// `inv` is a span plus its own bases, so [`crate::normalize::rules`]'s
+/// single-span typing re-derives it from the rendered member. A variant was
+/// tried and measured inert — 849,752 normalizations across the whole-span
+/// inversion and random-haplotype corpora were byte-identical with and without
+/// it — so it was dropped rather than kept as a second, silent authority for a
+/// typing another module already owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AnchorForm {
     /// The span is replaced by `alt`; typing follows from the two lengths.
@@ -2012,6 +2022,18 @@ type Column = (Option<usize>, Option<usize>);
 /// globally. Two encodings of one variant therefore converge, and members
 /// cannot overlap by construction.
 ///
+/// "Cannot overlap" is a statement about the *output*, and it is narrower than
+/// it sounds about the input. The geometry this path applies is **interbase**,
+/// via [`apply_edits_to_window`]: a zero-length junction and a span that merely
+/// touches it are flush rather than overlapping, so `g.[24dup;24C>G]` is
+/// admitted here even though both members name base 24.
+/// `overlap::detect_overlap_conflicts` asks the other question — coincident
+/// spans in **HGVS-coordinate** space — and reports that pair as
+/// `OverlapConflictingEdits` / W5002. The two are not redundant and the
+/// coincident-span check is not implied by this one, which is why the caller
+/// runs `detect_overlap_conflicts` *before* reaching here rather than relying on
+/// this function to refuse (#1307).
+///
 /// The spec is explicit that the description follows from the sequence and not
 /// from the input spelling: `delins.md:86-89` *deleted* its former carve-out
 /// permitting a two-member spelling for a variant "likely a combination of two
@@ -2242,6 +2264,45 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         return None;
     }
 
+    // Applied *after* the weight bound for the same reason the codon exception
+    // below is: it widens, and a widening judged against the *input's* weight is
+    // accepted for one spelling of a variant and refused for another. See
+    // `coalesce_whole_block_inversion`'s own doc for the worked case.
+    //
+    // It sits *before* `apply_coding_codon_exception`, and on a `c.`/`n.` axis
+    // the two do reach for the same pieces: a 5 nt whole-block inversion whose
+    // changed columns fall at offsets 0/2/4 inside one codon is exactly the
+    // `[Sub@p; Identity@p+1; Sub@p+2]` triplet the codon exception merges
+    // (`general.md:35`). Stub this call and that is what happens —
+    // `c.[1G>T;3T>A;5A>C]` comes out as `c.[1_3delinsTTA;5A>C]`.
+    //
+    // **The order between them is nevertheless not observable, and that is
+    // measured, not assumed.** Moving this call to *after* the codon exception
+    // leaves the whole suite green, the new `c.`-axis test included. The reason
+    // is that this rule reads only three things — the hull the pieces span, the
+    // sequence they denote, and whether every separation is a single base — and
+    // the codon exception preserves all three: it splices the unchanged middle
+    // base into the payload explicitly (denoted sequence unchanged), it grows
+    // the left piece by exactly what it takes from the right (hull unchanged),
+    // and it only ever *closes* a one-base gap, never opens one, so the gaps
+    // that remain are a subset of the gaps that were there
+    // (`every_separation_is_a_single_base`'s verdict unchanged). A codon-merged
+    // partition therefore reconstructs to the same span, and this rule reaches
+    // the same `inv` from either side.
+    //
+    // Two reasons to keep the order written down anyway. It stops being neutral
+    // the moment the codon exception can merge across more than one unchanged
+    // base, since that would break the third invariant above and let a widened
+    // partition fail the gate. And where both fire, the `inv` is the answer
+    // regardless of who reaches it — the codon exception's product is a
+    // `delins`, which `delins.md:5` defines as a replacement "which is not a
+    // substitution or inversion", so over a reverse-complement span it is not a
+    // description the spec admits.
+    //
+    // Pinned by `issue_1040_inv_overrecognition_probes::
+    // a_derived_whole_block_inversion_outranks_the_codon_exception`.
+    coalesce_whole_block_inversion(&mut pieces, &ref_bytes);
+
     // Applied *after* the weight bound, deliberately. The bound is a statement
     // about the re-derived partition — it may not describe more change than the
     // input did — and the codon exception (`general.md:35`) is a licensed
@@ -2249,9 +2310,19 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // bound judges. Running it first would let a legitimate codon merge inflate
     // the weight and trip a refusal.
     apply_coding_codon_exception(&mut pieces, frame.reading_frame, w_lo, &ref_bytes);
-    if needs_unsupported_form(&pieces, &ref_bytes) {
-        return None;
-    }
+    // A veto stood here that refused the whole group whenever any derived piece
+    // was an inversion. It was not an input-relative gate — it read only the
+    // pieces and the reference, so two spellings of one variant always got the
+    // same verdict. It was a capability gap: the derivation could shred a whole
+    // reverse complement into a run of substitutions (`ACGTGC -> GCACGT` splits
+    // into `[A>G, GT>AC, C>T]`), and declining was better than emitting that.
+    //
+    // `coalesce_whole_block_inversion` above closes the gap at its source, by
+    // putting such a block back into one piece before it is rendered. That piece
+    // is then a single span whose replacement is its own reverse complement,
+    // which `crate::normalize::rules`' single-span typing renders as `inv` —
+    // so there is nothing left for a veto to protect.
+
     // There was a veto here, and it was the last gate in this pass that read the
     // *input spelling* rather than the sequence: when the derivation produced
     // fewer pieces than there were members, and any piece covered a base the
@@ -2469,12 +2540,20 @@ fn collect_canonical_edits(
             // arm): a stated unit, one exact count, and no genotype or VEP
             // trailing baggage. Anything else has no single resulting sequence
             // to derive from.
+            // `e >= s` joins the admission test rather than being left to
+            // `lowered_repeat`. That function skips its stated-end branch when
+            // `e < s`, so a reversed anchor does not crash — it is silently
+            // re-read as the single-position `g.10AC[3]`, which is a different
+            // variant from the `g.10_5AC[3]` that was written. SVD-WG006's
+            // reversed-range provision covers circular deletions and
+            // duplications, not repeats, so there is nothing here to honour and
+            // declining is the answer.
             NaEdit::Repeat {
                 sequence: Some(sequence),
                 count: RepeatCount::Exact(count),
                 additional_counts,
                 trailing: None,
-            } if additional_counts.is_empty() => {
+            } if additional_counts.is_empty() && e >= s => {
                 let unit: Vec<u8> = sequence
                     .bases()
                     .iter()
@@ -3365,6 +3444,137 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
         return whole();
     }
     pieces
+}
+
+/// Merge a run of pieces that together span one inversion back into that single
+/// inversion.
+///
+/// An inversion is defined by `inversion.md:5` as a span replaced by its reverse
+/// complement, and that is a property of the *whole* span. Nothing forbids some
+/// of its columns coinciding: `ACGTGC -> GCACGT` is a textbook 6 nt inversion
+/// whose 2nd and 5th columns happen to match, so a position-wise partition finds
+/// `[A>G, GT>AC, C>T]` in it and the inversion disappears — which is what the
+/// since-removed `needs_unsupported_form` used to prevent, by refusing the
+/// derivation outright.
+///
+/// This is the same reading [`crate::normalize::rules`]'s single-span typing
+/// already applies (a shared-affix-trimmed span that is a whole reverse
+/// complement is an `inv`), so putting the block back together here is what
+/// makes the derivation agree with the per-member pipeline instead of shredding
+/// what that pipeline types correctly.
+///
+/// Gated on [`every_separation_is_a_single_base`], and that gate is load-bearing
+/// rather than defensive. `AAGCTA -> TAGCTT` is also a whole reverse complement,
+/// but only its first and last bases change and four unchanged bases lie between
+/// them. `general.md:34` describes two variants separated by one or more
+/// nucleotides individually; its letter names only `delins`, but its rationale
+/// (`delins.md:81-84` — the variants may have been reported, or may occur,
+/// individually) reaches any single spanning description, and at four unchanged
+/// bases these are two independent changes rather than interior columns of one
+/// reverse-complement relation. At exactly one unchanged base the match is far
+/// more likely to be the alignment's coincidence than structure — the same line
+/// [`every_separation_is_a_single_base`] draws inside [`partition_block`].
+///
+/// Expressed through [`is_inversion`] rather than re-deriving the test, so the
+/// block-level and piece-level answers cannot drift apart.
+///
+/// # Why this runs *after* the changed-columns weight bound
+///
+/// Load-bearing placement, not an accident of ordering. This rule **widens**:
+/// the merged piece claims every column between the first and the last, including
+/// the ones the partition found unchanged. The weight bound compares the derived
+/// weight against *the input's*, so a widening applied before it is judged
+/// against a quantity that differs between two spellings of one variant — the
+/// 5 nt inversion `GTTAA -> TTAAC` weighs 3 spelled as `g.[257G>T;259T>A;261A>C]`
+/// and 5 spelled as `g.257_261delinsTTAAC`, so a pre-bound widening to 5 columns
+/// is accepted for the second and refused for the first. That is exactly the
+/// non-confluence #1235 exists to remove, and it would be *introduced* here.
+/// (Offsets are the synthetic reference's, which puts the core at 257, so the
+/// case is quotable verbatim from
+/// `issue_1040_inv_overrecognition_probes::every_spelling_of_a_derived_whole_block_inversion_converges_on_inv`.)
+///
+/// Applied afterwards, the bound judges the un-widened partition — whose weight
+/// is what it was before this rule existed — and the widening is a licensed
+/// re-typing on top of an already-accepted partition. That is the same argument
+/// [`apply_coding_codon_exception`] is placed by.
+///
+/// Two citations carry the licence, and they answer different questions.
+///
+/// The **widening** — collapsing changed columns back into one spanning
+/// description when the only thing between them is a base that happens to match
+/// — is what `delins.md:46-47` recommends. Against
+/// `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` it notes that "parts of the
+/// inserted sequence 'align' with the reference sequence, giving an alternative
+/// description like `c.[850_869del;874_881del;887_897del;901_902insG]`", and
+/// answers: "**The 'delins' format is recommended**: it is simpler and prevents
+/// software tools making incorrect predictions for the consequences on protein
+/// level." That is this shape exactly — interior columns coinciding by alignment
+/// rather than by structure — and it endorses the spanning form over the split.
+/// [`every_separation_is_a_single_base`] cites the same passage for the regime
+/// it admits, so both ends of this rule rest on one line of the spec.
+///
+/// The **type** of that spanning description is then not a preference but a
+/// definition: `delins.md:5` defines a delins as a replacement "which is not a
+/// substitution or inversion", so the very form `delins.md:46-47` recommends may
+/// not be spelled `delins` over a reverse-complement span, and `inversion.md:5`
+/// admits the `inv` on sequence alone. Between them the widening is recommended
+/// and the resulting type is forced; reaching the `inv` describes the same change
+/// under the only spanning type the spec allows for it — not more change.
+///
+/// Deliberately **not** `general.md:56`. That list ranks single-variant type
+/// labels for one span; it never ranks a multi-member allele against a spanning
+/// description, it omits `delins` altogether, and it places substitution *above*
+/// inversion — so if it reached this comparison at all it would argue the other
+/// way.
+///
+/// The general rule, worth stating because it caught this once: **any partition
+/// rule that widens a piece must run after the weight bound, never inside
+/// [`partition_block`].**
+fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
+    if pieces.len() < 2 || !every_separation_is_a_single_base(pieces) {
+        return;
+    }
+    let start = pieces[0].ref_start;
+    let end = pieces[pieces.len() - 1].ref_end;
+    // Defence in depth, not a live case, and checked **before** anything is
+    // allocated or sliced. The pieces reaching here are disjoint and ascending:
+    // `coalesce_adjacent_pieces` asserts it, and the only step between that call
+    // and this one is `shrink_pieces_to_differences`, which can narrow a piece
+    // but never widen one. But that assertion is a `debug_assert!` and so is
+    // compiled out of release, and the gate above cannot substitute for it: it
+    // measures separations with `saturating_sub`, so a strict overlap
+    // (`ref_start < ref_end` of its predecessor) reads as `0 <= 1` and *passes*.
+    //
+    // Two things downstream would then panic inside a library rather than
+    // decline: `end - start` underflows if the pieces are out of order at all,
+    // and the reconstruction slice indexes with `start > end`. Both are why this
+    // runs first. Declining instead leaves the un-coalesced pieces, which the
+    // downstream round-trip guard (`reapplied == result`) is already able to
+    // refuse.
+    if end < start
+        || pieces
+            .windows(2)
+            .any(|pair| pair[1].ref_start < pair[0].ref_end)
+    {
+        return;
+    }
+    // Reconstruct what the span denotes: each piece's payload, with the
+    // unchanged reference bases separating them spliced back in.
+    let mut alt = Vec::with_capacity(end - start);
+    let mut cursor = start;
+    for piece in pieces.iter() {
+        alt.extend_from_slice(&ref_bytes[cursor..piece.ref_start]);
+        alt.extend_from_slice(&piece.alt);
+        cursor = piece.ref_end;
+    }
+    let whole = Piece {
+        ref_start: start,
+        ref_end: end,
+        alt,
+    };
+    if is_inversion(&whole, ref_bytes) {
+        *pieces = vec![whole];
+    }
 }
 
 /// Whether every gap between consecutive pieces is a single unchanged base —
@@ -4347,9 +4557,15 @@ fn rebuild_members(
 /// and is re-spelled as a single-position `delins` ([`boundary_delins_anchor`],
 /// #1205/#1217).
 ///
-/// Inversion and tandem duplication are *not* built here — [`needs_unsupported_form`]
-/// refuses the whole group when a piece would need either, leaving them to the
-/// per-member pipeline.
+/// One further shape cannot be read off the two lengths at all, because it
+/// leaves them unchanged, so it is recognised from the reference before that
+/// fallback: a tandem duplication ([`duplication_anchor`], `duplication.md:18`).
+///
+/// An inversion is the other such shape and is deliberately *not* typed here —
+/// see [`AnchorForm`]. Both were once refused wholesale, sending the group back
+/// to the per-member pipeline; the `dup` is now built, and the `inv` is left to
+/// [`crate::normalize::rules`]'s single-span typing, which can still see it in
+/// the rendered member.
 ///
 /// `previous_ref_end` is the window offset one past the last reference base the
 /// preceding piece claimed, which only [`duplication_anchor`] needs — see there.
@@ -4395,8 +4611,8 @@ fn anchor_for_piece(
 /// tried before every other typing a pure insertion can take.
 ///
 /// [`is_tandem_duplication`] already recognised the shape; until #1235's
-/// sequence-first ladder it was used **only** to refuse, via
-/// [`needs_unsupported_form`], and the `dup` had to come back from the
+/// sequence-first ladder it was used **only** to refuse, via the since-removed
+/// `needs_unsupported_form`, and the `dup` had to come back from the
 /// per-member pipeline — which types each member in isolation and so cannot
 /// produce one for a duplication the derivation assembled out of several
 /// members. It now builds as well as recognises.
@@ -4420,8 +4636,8 @@ fn anchor_for_piece(
 /// round-trip guard's `reapplied == result` holds by construction. The test
 /// helpers' disjointness checks go through `hgvs_to_spdi`, where a `dup` is a
 /// zero-width interbase insert, so they see no overlap either. Before the `dup`
-/// builder existed this whole class was refused wholesale by
-/// [`needs_unsupported_form`]; dropping that refusal is what makes it reachable.
+/// builder existed this whole class was refused wholesale by the since-removed
+/// `needs_unsupported_form`; dropping that refusal is what makes it reachable.
 ///
 /// No input reaching the partition has been shown to produce it — candidates
 /// collapse to a single piece under `trim_common_flanks` — but "unreachable, I
@@ -4515,27 +4731,6 @@ fn boundary_delins_anchor(
         alt: bases,
         form: AnchorForm::Replacement,
     })
-}
-
-/// Whether any piece would have to be rendered as an inversion.
-///
-/// [`build_naedit`] produces insertion / deletion / delins / identity from the
-/// two span lengths, and an inversion is not interchangeable with any of them —
-/// it is the reverse complement of its span (`inversion.md:5`), which the
-/// lengths cannot see. Rather than teach the builder that shape, refuse the
-/// group and let the per-member pipeline — which already gets it right — answer.
-///
-/// **Tandem duplication used to be refused here too, and is not any more.** The
-/// argument for refusing it was the same ("`duplication.md:18` says a
-/// duplication must be a `dup`, and the builder cannot make one"), and its cost
-/// was much higher than it looked: the derivation can assemble a duplication out
-/// of members that are *individually* not duplications, which is precisely the
-/// case the per-member pipeline cannot answer, so refusing sent the allele back
-/// to the one place guaranteed to get it wrong. [`duplication_anchor`] now
-/// builds the `dup`, so the MUST is honoured by construction rather than by
-/// deferral.
-fn needs_unsupported_form(pieces: &[Piece], ref_bytes: &[u8]) -> bool {
-    pieces.iter().any(|piece| is_inversion(piece, ref_bytes))
 }
 
 /// A piece is an inversion when its replacement is the reverse complement of
@@ -8155,7 +8350,15 @@ mod tests {
     /// function's doc comment), but the old `>=` condition's `max()`/`extend()`
     /// body would silently double-count the shared columns, changing the
     /// denoted sequence instead of merely mis-describing it.
+    ///
+    /// Gated on `debug_assertions` because what it asserts *is* a
+    /// `debug_assert!`, which compiles out of a release build — the function
+    /// then falls through to the `else` arm and leaves the pair un-coalesced
+    /// (safe, just silent), so `#[should_panic]` would fail there for the right
+    /// reason and the wrong outcome. The release behaviour is deliberately not
+    /// asserted here: it is the fail-safe, not the contract.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "strict overlap")]
     fn coalesce_rejects_a_strictly_overlapping_pair() {
         let mut pieces = vec![
