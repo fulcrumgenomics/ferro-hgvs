@@ -2341,14 +2341,29 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<NormalizeResult, FerroError> {
-        // Through `normalize_core_canonical`, not `normalize_core`: this exit
-        // must emit the same canonical variant `normalize()` does, and `infos`
-        // must describe the shift from the input to *that* variant.
-        let (result, warnings) = self.normalize_core_canonical(variant)?;
-        // This exit does not pass through `normalize_core_checked`, so the oracles
-        // have to be run here too — otherwise a public entry point hands back a
-        // normalized variant none of the three ever saw.
-        self.assert_seam_oracles(variant, &result);
+        // Through `normalize_core_checked`, not `normalize_core_canonical`: this
+        // is a *public* exit, so it owes the caller the same strict-mode contract
+        // `normalize()` does (#1382). It used to call the canonical core directly
+        // and so applied none of the `should_reject_*` ladder, which meant a
+        // strict-configured `Normalizer` rejected a variant through `normalize()`
+        // and accepted the very same one through here. The asymmetry was invisible
+        // in the default lenient config, where every rung is a no-op.
+        //
+        // `normalize_core_checked` routes through `normalize_core_canonical`
+        // itself, so the variant this returns is the same canonical one as before
+        // and `infos` still describes the shift from the input to *that* variant —
+        // which is why the ladder can be added without moving the output.
+        //
+        // The warnings it returns are the ones NOT promoted to hard errors, so a
+        // lenient caller still sees everything this entry point exists to report.
+        //
+        // This also subsumes #1366's separate `assert_seam_oracles` call here.
+        // That call existed precisely because this exit bypassed
+        // `normalize_core_checked`; now that it does not, the oracles run once at
+        // that method's own exit. Calling them here as well would re-run all three
+        // on every diagnostics normalization — including `assert_idempotent`'s full
+        // re-normalization, the most expensive of them.
+        let (result, warnings) = self.normalize_core_checked(variant)?;
         let infos = detect_shuffle_infos(variant, &result, self.config.shuffle_direction);
         Ok(NormalizeResult::with_diagnostics(result, warnings, infos))
     }
@@ -10702,17 +10717,20 @@ mod tests {
 
     /// `Normalizer` has exactly two public normalizing methods — `normalize` and
     /// `normalize_with_diagnostics` — and only the first went through
-    /// `normalize_core_checked`. So before `assert_seam_oracles` was factored out,
-    /// this one returned a normalized variant none of the three seam oracles had
-    /// inspected: `FERRO_ASSERT_IN_BOUNDS`, `FERRO_ASSERT_REPARSE` and
-    /// `FERRO_ASSERT_IDEMPOTENT` alike.
+    /// `normalize_core_checked`. So this one returned a normalized variant none of
+    /// the three seam oracles had inspected: `FERRO_ASSERT_IN_BOUNDS`,
+    /// `FERRO_ASSERT_REPARSE` and `FERRO_ASSERT_IDEMPOTENT` alike. #1366 covered it
+    /// by calling `assert_seam_oracles` from this exit directly; #1382 then routed
+    /// the exit through `normalize_core_checked`, so the coverage now comes from the
+    /// same single call site as every other public normalization — and the strict
+    /// ladder comes with it.
     ///
     /// The flags themselves are process-wide `OnceLock`s read from the
     /// environment, so a unit test cannot toggle one; asserting the *invariant*
     /// with the same predicate the oracle uses is the env-independent equivalent,
     /// and it fails if this path ever starts emitting an out-of-range coordinate
-    /// again. In CI, where all three flags are set, this path now also gets the
-    /// live assertions for free — which is the actual fix.
+    /// again. In CI, where all three flags are set, this path also gets the
+    /// live assertions.
     ///
     /// The inputs are the shapes the in-bounds class was found in (#1307's
     /// terminal-dup collision and #1274's two-base identity), each authored at the
