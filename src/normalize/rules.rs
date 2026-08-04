@@ -511,17 +511,60 @@ fn resolve_repeat_rotation(
     // with no CDS context (genomic / `n.`) and the unit tests below are
     // unaffected.
     //
-    // Frames line up: `ref_start` / `ref_end_excl` are 0-based indices into the
-    // transcript-frame `ref_seq`, and `cds_span` is 1-based inclusive in that
-    // same frame, so the 1-based inclusive tract is
-    // `(ref_start + 1) ..= ref_end_excl`. Per rotation since #1355, which is also
-    // more correct than it was: each rotation finds its own tract, so each gets
-    // its own residency answer instead of the winner's.
+    // Per rotation since #1355, which is also more correct than it was: each
+    // rotation finds its own tract, so each gets its own residency answer instead
+    // of the winner's.
+    //
+    // #1389: the window to ask about is the one the repeat is **emitted** over,
+    // which is not the tract `find_tandem_extent` discovered. `normalize_repeat`
+    // owns a direction-aware phase alignment and can return a shifted window, and
+    // the two disagree exactly at a CDS boundary: for `CTGTGTT` with
+    // `cds_span = (3, 6)`, the raw `TG` tract is 1-based `2..=5` and so reads as
+    // non-resident (`2 < 3`), switching the gate off — while the emitted window is
+    // `3..=6`, wholly CDS-resident, and got written as `GT[5]` with a two-base
+    // unit that `repeated.md`'s codon rule forbids. The 5' direction of the same
+    // fixture emits `TG` over `2..=5`, which genuinely is not resident, so before
+    // this the two directions disagreed about whether the repeat was admissible.
+    //
+    // So probe for the emitted window with the gate lifted, then delegate with the
+    // gate derived from it. Two calls rather than re-implementing the codon test
+    // here, which keeps `normalize_repeat` the single source of truth for the
+    // codon decision (#866) — the probe is only ever used to learn *which window*
+    // to ask about. This is sound because `is_coding` enters `normalize_repeat` at
+    // exactly one point, `codon_blocks_repeat`, which routes the result variant
+    // only: the window, unit and counts are all computed before it and do not
+    // depend on it. `insertion_to_repeat`'s `ref_count <= best.ref_count` skip
+    // means only score-improving rotations pay for the second call.
+    //
+    // Frames line up: `normalize_repeat` returns 1-based inclusive HGVS positions
+    // and `cds_span` is 1-based inclusive in the same transcript frame, so the
+    // comparison is direct. With no `cds_span` there is no window question to ask
+    // — the caller's precomputed verdict stands and no probe is issued, so callers
+    // with no CDS context (genomic / `n.`) and the unit tests below are
+    // unaffected.
+    let target = ref_count + added_copies;
+    let end_pos_incl = ref_end_excl - 1;
     let gate_is_coding = match cds_span {
         Some((cds_start, cds_end)) => {
-            let tract_start = ref_start as u64 + 1;
-            let tract_end = ref_end_excl as u64;
-            tract_start >= cds_start && tract_end <= cds_end
+            let probe = normalize_repeat(
+                ref_seq,
+                ref_start,
+                end_pos_incl,
+                &unit,
+                target,
+                // Gate lifted: this call answers "which window?", not "may it be
+                // repeat notation?". Passing the real flag would let a gated
+                // result hide the window the gate has to be asked about.
+                false,
+                direction,
+            );
+            match probe {
+                RepeatNormResult::Repeat { start, end, .. } => start >= cds_start && end <= cds_end,
+                // Unreachable for the same reason the delegation below asserts:
+                // `added_copies >= 2`. Fall back to the caller's verdict rather
+                // than panicking here, so the assertion stays in one place.
+                _ => is_coding,
+            }
         }
         None => is_coding,
     };
@@ -538,8 +581,9 @@ fn resolve_repeat_rotation(
     // in the same direction. `added_copies >= 2` ⇒ the target is
     // `>= ref_count + 2`, so only `Repeat` (or the codon-gated `Insertion` →
     // `None`) is reachable; `Deletion`/`Duplication`/`Unchanged` cannot occur.
-    let target = ref_count + added_copies;
-    let end_pos_incl = ref_end_excl - 1;
+    //
+    // `target` and `end_pos_incl` are bound above, where the #1389 probe needs
+    // them; this call is the authoritative one.
     let (start_idx, emitted_end_hgvs, rotated_unit, total_count) = match normalize_repeat(
         ref_seq,
         ref_start,
@@ -3435,6 +3479,53 @@ mod tests {
         assert_eq!(count, 5);
         assert_eq!((start, end), (3, 6));
         assert_eq!(unit, b"GT".to_vec());
+    }
+
+    /// #1389: the codon gate must be answered about the window the repeat is
+    /// **emitted** over, not the raw tract `find_tandem_extent` discovered.
+    ///
+    /// Same fixture as the test above, with the CDS pinned to exactly the emitted
+    /// window. The raw `TG` tract is 1-based `2..=5`, which is not CDS-resident
+    /// (`2 < 3`), so gating on it switches the codon rule off — but the emitted
+    /// window is `3..=6`, wholly inside the CDS, with a two-base unit that
+    /// `repeated.md`'s codon rule forbids. The literal `ins` must win.
+    #[test]
+    fn insertion_to_repeat_gates_on_the_emitted_window_not_the_raw_tract() {
+        let r = b"CTGTGTT";
+        assert_eq!(
+            insertion_to_repeat(
+                r,
+                4,
+                b"TGTGTG",
+                true,
+                Some((3, 6)),
+                ShuffleDirection::ThreePrime
+            ),
+            None,
+            "the emitted window 3..=6 is wholly CDS-resident with a 2-base unit, \
+             so the codon gate must block repeat notation"
+        );
+    }
+
+    /// The 5' direction of the same fixture, which must NOT change: it emits `TG`
+    /// over `2..=5`, genuinely outside the CDS, so gating the codon rule off there
+    /// is correct. Pinned so the #1389 fix cannot over-reach into a window whose
+    /// residency answer was already right.
+    #[test]
+    fn insertion_to_repeat_five_prime_window_outside_the_cds_still_repeats() {
+        let r = b"CTGTGTT";
+        let (_, count, start, end, unit) = insertion_to_repeat(
+            r,
+            4,
+            b"TGTGTG",
+            true,
+            Some((3, 6)),
+            ShuffleDirection::FivePrime,
+        )
+        .expect("the 5' window lies outside the CDS, so the codon gate stays off");
+        assert_eq!((start, end), (2, 5));
+        assert_eq!(unit, b"TG".to_vec());
+        assert_eq!(count, 5);
     }
 
     #[test]
