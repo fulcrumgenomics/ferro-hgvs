@@ -41,18 +41,18 @@ jobs:
         with:
           toolchain: stable
       - uses: taiki-e/install-action@3f7f2bd74f95d407a45d96b106f26d4f6c238fab  # cargo-llvm-cov
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # Cargo caching is delegated to `Swatinem/rust-cache` (#1218) — see the
+      # full rationale on the first such step in `ci.yml`. In short: the
+      # hand-rolled entries had grown to ~3 GiB each because they cached a whole
+      # `target/`, and `actions/cache` never re-saves on a primary-key hit, so
+      # they also froze.
+      #
+      # This one was among the three biggest measured (2.87 GB on 2026-08-04), and
+      # it must stay a separate entry: coverage instrumentation re-fingerprints
+      # every dependency, so a tree shared with any other job is useless to both.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-coverage
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
+          key: coverage
       - name: Run coverage
         run: |
           cargo llvm-cov --features dev --codecov --output-path codecov.json

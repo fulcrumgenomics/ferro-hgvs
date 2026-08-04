@@ -171,18 +171,41 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # Cargo caching is delegated to `Swatinem/rust-cache` rather than
+      # hand-rolled `actions/cache` keys (#1218). Two reasons, both measured.
+      #
+      # **Size.** Every hand-rolled entry cached the same five paths including a
+      # full `target/`, and they had grown to ~3 GiB each: on 2026-08-04 the
+      # `-wheel`, `-clippy-all-features` and `-coverage` entries were 3.04 GB,
+      # 3.00 GB and 2.87 GB, i.e. three entries from a single PR filling 9 GB of a
+      # 10 GiB repository budget (measured usage: 11.76 GiB, already evicting).
+      # `rust-cache` saves dependency artifacts only — it deletes the workspace
+      # crate's own outputs, `incremental/`, `.d` files and stale entries before
+      # saving. #1218 records that a hand-rolled trim was tried and "did not move
+      # the needle", because it kept the bulk under `target/*/deps`.
+      #
+      # **Staleness.** `actions/cache` SKIPS the save when the primary key already
+      # exists ("Cache hit occurred on the primary key …, not saving cache"), so a
+      # lockfile-only key froze `target/` at whatever the first run for that
+      # lockfile happened to write, forever. Rotating the key was the obvious fix
+      # and #1218 records why it could not be afforded. `rust-cache` largely
+      # dissolves the problem instead of paying for it: the only thing it stores is
+      # dependency artifacts, and its key already hashes the dependency set,
+      # rustc version and job — so a frozen entry cannot disagree with what the
+      # job needs the way a frozen whole-`target/` could.
+      #
+      # Deliberately NOT set:
+      # - `cache-on-failure` — it would save a tree per failed run, and budget is
+      #   the constraint this change exists to relieve.
+      # - `shared-key` — each job would then share one entry, which is the
+      #   cross-profile mismatch that had `generated-docs` (dev profile) and
+      #   `test-build` (`CARGO_PROFILE_TEST_DEBUG=0`) serving each other useless
+      #   trees. `rust-cache` keys per job by default; `key` below only adds a
+      #   legible name, so `gh api .../actions/caches` stays diagnosable — which
+      #   is how #1218 was diagnosed in the first place.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-clippy
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
+          key: clippy
       - run: cargo clippy --features dev --all-targets -- -D warnings
 
   clippy-all-features:
@@ -207,18 +230,9 @@ jobs:
         with:
           toolchain: stable
           components: clippy
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-clippy-all-features
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
+          key: clippy-all-features
       - run: cargo clippy --all-features --all-targets -- -D warnings
 
   # The two generated spec artifacts, split out of `test-build`.
@@ -253,26 +267,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           toolchain: stable
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          # Hashed on this workflow file as well as the lockfile, for the reason
-          # spelled out on `test-build`: `actions/cache` SKIPS the save on an
-          # exact key hit, so a lockfile-only key freezes `target/` at whatever
-          # the first run for that lockfile produced and no later change to
-          # this job's build flags can refresh it.
-          #
-          # Suffix BEFORE the hash, so `restore-keys` is a genuine prefix of
-          # `key` — see the note on `test-build` for why the other order cannot
-          # fire.
-          key: ${{ runner.os }}-cargo-specgen-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-specgen-
+          key: spec-fixtures
       - name: Generate HGVS v21.0 spec fixture
         run: cargo run --features dev --bin generate_spec_fixture
       - name: Generate HGVS spec test enumeration
@@ -349,55 +346,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           toolchain: stable
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # `CARGO_PROFILE_TEST_DEBUG=0` re-fingerprints every dependency, so this
+      # job's tree is not interchangeable with any other's — see the note on
+      # `shared-key` above.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          # Hashed on this workflow file as well as the lockfile, and given a
-          # suffix distinct from `generated-docs`. Two separate bugs met here.
-          #
-          # `actions/cache` skips the save on an exact key hit, so a
-          # lockfile-only key can never refresh once written. And this key was
-          # SHARED with `generated-docs`, which builds in the dev profile,
-          # while this job builds in the test profile where
-          # `CARGO_PROFILE_TEST_DEBUG=0` re-fingerprints every dependency. The
-          # frozen cache therefore satisfied that job and was useless to this
-          # one: measured on run 30684270515, `generated-docs` compiled 3
-          # crates and this job compiled 316 — the entire tree from
-          # `proc-macro2` up — on every single run.
-          #
-          # The job suffix comes BEFORE the hash on purpose. `restore-keys` is
-          # matched as a PREFIX of a saved key and nothing else, so the
-          # hash-in-the-middle form cannot work once the two keys hash
-          # different file sets: `hashFiles('**/Cargo.lock')` and
-          # `hashFiles('**/Cargo.lock', '.github/workflows/ci.yml')` are
-          # different digests, so `...-<lock-hash>-test-archive` is not a
-          # prefix of `...-<lock+workflow-hash>-test-archive` and never
-          # matches. Measured on run 30712837408: this job restored via the
-          # legacy `...-test-nodebug` restore-key — 520087453 B, byte-identical
-          # to what `generated-docs` restored from the same entry, which is the
-          # cross-job sharing the comment above says was fixed — then saved to
-          # `...-test-archive`, a key its own restore-key can never reach. Once
-          # the legacy entry ages out (nothing writes it now), every workflow
-          # edit would compile all 316 crates cold, forever.
-          #
-          # Suffix-first makes the restore-key a real prefix, so a workflow
-          # edit warm-starts from this job's own last good `target/` and
-          # rebuilds only what changed. Expect one cold build on the first run
-          # after this lands, then warm.
-          key: ${{ runner.os }}-cargo-test-archive-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-test-archive-
-      # AFTER the cache restore, deliberately. `~/.cargo/bin/` is one of the
-      # cached paths, so a restore running second would extract a
-      # previously-saved `cargo-nextest` over the one just installed and pin
+          key: test-archive
+      # `install-action` stays AFTER the cache step, deliberately. `rust-cache`
+      # leaves `cache-bin` at its default of `true`, so `${CARGO_HOME}/bin` is
+      # still cached and a restore running second would extract a
+      # previously-saved `cargo-nextest` over the one just installed, pinning
       # this job to whichever version first populated the key. The job that
-      # writes an archive and the jobs that read it have to agree on the
-      # nextest version, so let the install win.
+      # writes an archive and the jobs that read it have to agree on the nextest
+      # version, so let the install win.
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - name: Build test archive
         # Compiles every test binary and packs them with their run metadata.
@@ -446,34 +407,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           toolchain: stable
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          # Keyed on the workflow file as well as the lockfile. `actions/cache`
-          # SKIPS the save on an exact key hit ("Cache hit occurred on the
-          # primary key ..., not saving cache"), so a key derived from
-          # `Cargo.lock` alone freezes `target/` at whatever the first run for
-          # that lockfile produced. Measured directly: after this job dropped
-          # `--features dev`, the restored cache still held the dev-feature
-          # artifacts, so every run re-compiled reqwest, hyper, criterion and
-          # the rest at opt-level 3 — about 60s, repeated forever rather than
-          # paid once. The build flags live in this file, so hashing it makes
-          # the cache follow them.
-          #
-          # Suffix before the hash so `restore-keys` is a real prefix of `key`
-          # — see `test-build`.
-          key: ${{ runner.os }}-cargo-soak-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-soak-
-      # AFTER the cache restore — see the same note on `test-build`. The cache
-      # covers `~/.cargo/bin/`, so restoring second would overwrite the
-      # `cargo-nextest` installed here with a stale cached copy, and this job
-      # writes the archive that `soak` and `sweeps` read.
+          key: test-archive-soak
+      # AFTER the cache step — see the same note on `test-build`. `rust-cache`
+      # still caches `${CARGO_HOME}/bin`, and this job writes the archive that
+      # `soak` and `sweeps` read.
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - name: Build soak archive
         # No `--features dev`. That feature pulls in `web-service` (axum, tokio,
@@ -779,24 +718,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           toolchain: stable
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          # Its own key AND its own restore-key, neither shared with
-          # `test-build` — see there. This job builds examples in the dev
-          # profile; that one builds test binaries with different debug
-          # settings, and one cache cannot serve both. Splitting only the
-          # primary key was not enough: both jobs kept the legacy
-          # `...-test-nodebug` restore-key and so kept restoring the same
-          # shared entry (run 30712837408, 520087453 B in both).
-          key: ${{ runner.os }}-cargo-gendocs-${{ hashFiles('**/Cargo.lock', '.github/workflows/ci.yml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-gendocs-
+          key: generated-docs
       - name: Verify conformance summary docs are up to date
         run: cargo run --features dev --example generate_conformance_summary -- --check
       - name: Tool-support tables up to date
@@ -858,18 +782,9 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version: "3.12"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-wheel
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
+          key: python-wheel
       - name: Build release wheel
         run: |
           python -m pip install --upgrade pip
@@ -907,18 +822,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           toolchain: stable
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-release
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
+          key: build-release
       - run: cargo build --release
       - name: Check binary size
         run: |
