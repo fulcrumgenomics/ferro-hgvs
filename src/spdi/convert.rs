@@ -298,13 +298,19 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 /// This is the provider-aware companion to [`hgvs_to_spdi_simple`]. It
 /// handles `c.` (CDS) variants, `n.`/`r.` variants with UTR-style positions
 /// (`*N` downstream), and populates SPDI's mandatory `del` field for
-/// short-form deletions / delins (and the symmetric `ins` field for
-/// short-form duplications) by fetching the reference bases for the
+/// short-form deletions / delins / identities (and the symmetric `ins` field
+/// for short-form duplications) by fetching the reference bases for the
 /// variant's interval. Explicit-form input (`g.100_102delATG`,
-/// `g.100_102dupATG`, etc.) emits the user-supplied bases as-is and does
-/// not consult the provider. Intronic `n.`/`r.` positions remain
+/// `g.100_102dupATG`, `g.100A=`, etc.) emits the user-supplied bases as-is
+/// and does not consult the provider. Intronic `n.`/`r.` positions remain
 /// unsupported (SPDI has no offset notation) and return
 /// [`ConversionError::MissingReferenceData`].
+///
+/// An **unspelled identity** (`g.100=`, `g.100_102=`) therefore needs a
+/// provider: on [`hgvs_to_spdi_simple`] it returns
+/// [`ConversionError::MissingReferenceData`] rather than a zero-width triple
+/// that would claim no bases. A **whole-entity** identity (`g.=`) names no
+/// interval at all and returns [`ConversionError::UnsupportedEditType`].
 ///
 /// The resulting SPDI uses the **same accession** as the HGVS variant — for
 /// `NM_000088.3:c.1A>G` the SPDI sequence is `NM_000088.3`, not the
@@ -1248,10 +1254,15 @@ fn ensure_tx_in_bounds<P: std::fmt::Display + Copy>(
 /// # Provider behavior
 ///
 /// When `provider` is `Some` and the edit is a short-form deletion,
-/// duplication, or delins (i.e. lacks an explicit deleted sequence), the
-/// reference bases for `[start_one_based, end_one_based]` are fetched via
-/// the provider so SPDI's mandatory `del` field can be populated. When
-/// `provider` is `None`, those cases return [`ConversionError::MissingReferenceData`].
+/// duplication, delins, or identity (i.e. lacks an explicit deleted
+/// sequence), the reference bases for `[start_one_based, end_one_based]` are
+/// fetched via the provider so SPDI's mandatory `del` field can be populated.
+/// When `provider` is `None`, those cases return
+/// [`ConversionError::MissingReferenceData`].
+///
+/// A **whole-entity** identity (`g.=`) is the one exception: it names no
+/// interval, so it returns [`ConversionError::UnsupportedEditType`] rather
+/// than a triple at an arbitrary position.
 fn emit_spdi_for_edit<P>(
     sequence: String,
     start_one_based: u64,
@@ -1394,12 +1405,48 @@ where
             ))
         }
         NaEdit::Identity {
-            sequence: id_seq, ..
+            sequence: id_seq,
+            whole_entity,
         } => {
-            let ref_base = id_seq
-                .as_ref()
-                .map(|s| apply_alphabet(&sequence_to_string(s), alphabet))
-                .unwrap_or_default();
+            // An identity claims the bases it names, so its triple must span
+            // them: `g.263=` is `262:A:A`, not the zero-width `262::`. A
+            // zero-width triple is not merely less informative, it *aliases an
+            // insertion junction* — put `g.[261_262dup;263=]` through it and
+            // both members land on interbase 262, which is indistinguishable
+            // from two insertions competing for one interbase.
+            //
+            // When the input does not spell the base, fetch it, exactly as the
+            // Deletion / Delins / Inversion arms do for their own omitted
+            // sequences.
+            let ref_base = match id_seq {
+                Some(seq) => sequence_to_string(seq),
+                // `g.=` asserts the whole reference is unchanged and names no
+                // interval, so there is no position SPDI could honestly carry.
+                // Emitting `0::` looks harmless but round-trips through
+                // `spdi_to_hgvs` as `g.1=`, narrowing a statement about the
+                // whole sequence to one about base 1. Decline instead, as this
+                // module does for every other shape SPDI cannot encode.
+                None if *whole_entity => {
+                    return Err(ConversionError::UnsupportedEditType {
+                        description: "a whole-entity identity (`=`) asserts the entire \
+                                      reference is unchanged and names no interval; SPDI \
+                                      has no representation for it"
+                            .to_string(),
+                    });
+                }
+                None => match provider {
+                    Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
+                    None => {
+                        return Err(ConversionError::MissingReferenceData {
+                            description:
+                                "unchanged sequence not provided; reference data needed to \
+                                 determine the bases an identity claims"
+                                    .to_string(),
+                        });
+                    }
+                },
+            };
+            let ref_base = apply_alphabet(&ref_base, alphabet);
             Ok(SpdiVariant::new(
                 sequence,
                 spdi_pos,
@@ -1658,14 +1705,36 @@ pub fn spdi_to_hgvs(spdi: &SpdiVariant) -> Result<HgvsVariant, ConversionError> 
 
     // Determine the edit type based on deletion and insertion
     let (interval, edit) = if spdi.is_identity() {
-        // Identity
-        let seq = if spdi.deletion.is_empty() {
-            None
+        // A zero-width triple (`NC_000001.11:99::`) names no bases at all, so
+        // there is no interval it could be an identity over. Emitting one
+        // anyway rendered `g.100=`, an identity asserting a base the triple
+        // never claimed — the reverse-direction twin of the invent-a-base
+        // error #1362 fixed on the way out. `is_identity()` is `deletion ==
+        // insertion`, so a both-empty triple reaches this arm and not the
+        // deletion/insertion ones below; refusing here covers it.
+        if spdi.deletion.is_empty() {
+            return Err(ConversionError::UnsupportedEditType {
+                description: "a zero-width SPDI triple names no bases, so it cannot be \
+                              converted to an identity over an interval"
+                    .to_string(),
+            });
+        }
+        let seq = Some(string_to_sequence(&spdi.deletion)?);
+        // An identity claims every base in its triple, so a multi-base one
+        // needs a span interval — a point interval would render `g.27GT=`,
+        // whose location says one base while its sequence says two. Mirrors
+        // the `is_deletion()` arm below.
+        let del_len = spdi.deletion.len();
+        let interval = if del_len > 1 {
+            Interval::new(
+                GenomePos::new(hgvs_pos),
+                GenomePos::new(hgvs_pos + del_len as u64 - 1),
+            )
         } else {
-            Some(string_to_sequence(&spdi.deletion)?)
+            Interval::point(GenomePos::new(hgvs_pos))
         };
         (
-            Interval::point(GenomePos::new(hgvs_pos)),
+            interval,
             NaEdit::Identity {
                 sequence: seq,
                 whole_entity: false,
@@ -2077,6 +2146,142 @@ mod tests {
         assert_eq!(spdi.position, 99);
         assert_eq!(spdi.deletion, "A");
         assert_eq!(spdi.insertion, "A");
+    }
+
+    /// A 28-base `ACGT…` contig, so a 1-based position `p` holds
+    /// `"ACGT"[(p - 1) % 4]` — base 10 is `C`, and 10..12 is `CGT`.
+    fn identity_provider() -> MockProvider {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_000001.11", "ACGTACGTACGTACGTACGTACGTACGT".to_string());
+        provider
+    }
+
+    #[test]
+    fn an_unspelled_identity_takes_its_base_from_the_reference() {
+        // `g.10=` states that base 10 is unchanged without naming it. Every
+        // other arm that can omit its sequence (deletion, delins, inversion)
+        // fetches it from the provider; this one used to default to the empty
+        // string, yielding a zero-width `99::` that claims no base at all.
+        let hgvs = parse_hgvs("NC_000001.11:g.10=").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "C");
+        assert_eq!(spdi.insertion, "C");
+    }
+
+    #[test]
+    fn an_unspelled_identity_takes_its_whole_span_from_the_reference() {
+        let hgvs = parse_hgvs("NC_000001.11:g.10_12=").unwrap();
+        let spdi = hgvs_to_spdi(&hgvs, &identity_provider()).unwrap();
+        assert_eq!(spdi.position, 9);
+        assert_eq!(spdi.deletion, "CGT");
+        assert_eq!(spdi.insertion, "CGT");
+    }
+
+    #[test]
+    fn an_unspelled_identity_fetches_on_the_non_genomic_axes_too() {
+        // The arm is shared by g./m./n./r./c., and the r. path additionally
+        // runs the fetched bases through `apply_alphabet(_, Rna)`. Each axis is
+        // asserted against its own `del` sibling on the same position, since
+        // that sibling is the fetch behavior this arm was made to match.
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NR_TEST.1", "ACGTACGTACGTACGTACGTACGTACGT".to_string());
+        for (identity, deletion) in [
+            ("NR_TEST.1:n.10=", "NR_TEST.1:n.10del"),
+            ("NR_TEST.1:r.10=", "NR_TEST.1:r.10del"),
+        ] {
+            let id_spdi = hgvs_to_spdi(&parse_hgvs(identity).unwrap(), &provider).unwrap();
+            let del_spdi = hgvs_to_spdi(&parse_hgvs(deletion).unwrap(), &provider).unwrap();
+            assert_eq!(
+                (id_spdi.position, id_spdi.deletion.as_str()),
+                (del_spdi.position, del_spdi.deletion.as_str()),
+                "{identity} must claim the same span `{deletion}` deletes"
+            );
+            // An identity keeps what it claims; the deletion drops it.
+            assert_eq!(
+                id_spdi.insertion, id_spdi.deletion,
+                "{identity} is an identity"
+            );
+            assert_eq!(del_spdi.insertion, "", "{deletion} deletes");
+        }
+    }
+
+    #[test]
+    fn an_unspelled_identity_needs_reference_data() {
+        // The provider-less path cannot know which bases the span holds, so it
+        // reports that rather than emitting a triple whose span is wrong. This
+        // matches `g.10del` on the same path.
+        let hgvs = parse_hgvs("NC_000001.11:g.10=").unwrap();
+        let result = hgvs_to_spdi_simple(&hgvs);
+        assert!(
+            matches!(result, Err(ConversionError::MissingReferenceData { .. })),
+            "expected MissingReferenceData, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn an_out_of_range_unspelled_identity_reports_the_fetch_failure() {
+        // The error path of the fetch above. An identity past the end of the
+        // contig has no bases to claim, so the fetch fails and that failure is
+        // propagated — the same answer `g.9999del` already gives, rather than a
+        // panic or a triple invented from an empty span. Before this arm
+        // consulted the provider it returned `Ok(9998::)` here, so this also
+        // pins that an out-of-range identity is no longer silently accepted.
+        let hgvs = parse_hgvs("NC_000001.11:g.9999=").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &identity_provider());
+        assert!(
+            matches!(result, Err(ConversionError::MissingReferenceData { .. })),
+            "expected MissingReferenceData, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn a_whole_entity_identity_has_no_spdi() {
+        // `g.=` asserts the *entire* reference is unchanged and names no
+        // interval, so there is no position SPDI could honestly carry. It used
+        // to emit `0::`, which `spdi_to_hgvs` reads back as `g.1=` — turning a
+        // statement about the whole sequence into one about base 1. Declining
+        // is the same answer this module gives every other edit whose shape
+        // SPDI cannot encode.
+        let hgvs = parse_hgvs("NC_000001.11:g.=").unwrap();
+        let result = hgvs_to_spdi(&hgvs, &identity_provider());
+        assert!(
+            matches!(result, Err(ConversionError::UnsupportedEditType { .. })),
+            "expected UnsupportedEditType, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn an_identity_member_does_not_alias_a_sibling_insertion_junction() {
+        // The defect this fix exists for. `g.[261_262dup;263=]` is a real
+        // normalizer output (5' shuffle, #1321's split spelling). With the
+        // identity converting to a zero-width triple, both members landed at
+        // interbase 262 — the dup's junction and the identity's empty span —
+        // and an applier walking the members cannot tell that apart from two
+        // insertions competing for one interbase, so it has to decline the
+        // whole description. Giving the identity its real span separates them.
+        let provider = identity_provider();
+        let variant = parse_hgvs("NC_000001.11:g.[10_11dup;12=]").unwrap();
+        let members = match variant {
+            HgvsVariant::Allele(allele) => allele.variants,
+            other => panic!("expected an allele, got {other}"),
+        };
+        let triples: Vec<SpdiVariant> = members
+            .iter()
+            .map(|m| hgvs_to_spdi(m, &provider).expect("member converts"))
+            .collect();
+        // The dup copies bases 10-11 in at the junction after 11 (interbase 11).
+        assert_eq!(triples[0].position, 11);
+        assert_eq!(triples[0].deletion, "");
+        assert_eq!(triples[0].insertion, "CG");
+        // The identity claims base 12 itself: interbase 11..12, not 11..11.
+        assert_eq!(triples[1].position, 11);
+        assert_eq!(
+            triples[1].deletion, "T",
+            "the identity must claim its base; a zero-width deletion here is \
+             indistinguishable from a second insertion at interbase {}",
+            triples[0].position
+        );
     }
 
     #[test]
@@ -2855,6 +3060,44 @@ mod tests {
         let provider = provider_with_genomic(&"N".repeat(2000));
         let spdi = SpdiVariant::new("NC_000001.11", 99, "A", "A");
         let hgvs = spdi_to_hgvs_with_ref(&spdi, &provider).unwrap();
+        assert_eq!(hgvs.to_string(), "NC_000001.11:g.100A=");
+    }
+
+    /// A zero-width triple is an identity by the predicate (`deletion ==
+    /// insertion`) but names no bases, so the conversion arm must refuse it
+    /// rather than emit `g.100=` over a base the triple never claimed.
+    ///
+    /// Asserted on **both** public entry points: `spdi_to_hgvs_with_ref`
+    /// delegates to `spdi_to_hgvs` for its base conversion, so the refusal
+    /// reaches it too — and a future cut that stopped delegating would silently
+    /// lose the guard on the reference-aware path.
+    #[test]
+    fn zero_width_identity_is_refused_on_both_entry_points() {
+        let spdi = SpdiVariant::new("NC_000001.11", 99, "", "");
+        assert!(spdi.is_identity(), "both sides empty is an identity");
+        assert!(
+            matches!(
+                spdi_to_hgvs(&spdi),
+                Err(ConversionError::UnsupportedEditType { .. })
+            ),
+            "a triple naming zero bases must not convert to an identity"
+        );
+        let provider = provider_with_genomic(&"N".repeat(2000));
+        assert!(
+            matches!(
+                spdi_to_hgvs_with_ref(&spdi, &provider),
+                Err(ConversionError::UnsupportedEditType { .. })
+            ),
+            "the reference-aware path must inherit the refusal"
+        );
+    }
+
+    /// A one-base identity still converts — the guard must be scoped to the
+    /// zero-width case and not have cost the arm its ordinary behaviour.
+    #[test]
+    fn a_one_base_identity_still_converts() {
+        let spdi = SpdiVariant::new("NC_000001.11", 99, "A", "A");
+        let hgvs = spdi_to_hgvs(&spdi).expect("a one-base identity converts");
         assert_eq!(hgvs.to_string(), "NC_000001.11:g.100A=");
     }
 
