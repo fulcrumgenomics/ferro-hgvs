@@ -129,22 +129,58 @@ jobs:
         with:
           key: external-validation-api
 
+      # These three steps are the point of the workflow, so they gate it.
+      #
+      # They previously could not fail it, in two independent ways (#1404):
+      # `continue-on-error` kept the step's failure out of the job conclusion,
+      # and `cargo test … | tee` reports *tee's* status without `pipefail`, so
+      # the exit code was ~always 0 regardless. Both are gone; the report and
+      # its upload carry `if: always()` instead, so a red run still publishes
+      # what it found rather than being masked to keep the artifact.
+      #
+      # `run_validation` also fails when the filter selects **no** tests, which
+      # neither of the above would catch. Two silent-zero cases had already
+      # happened here: #725 collapsed the per-file test binaries into the single
+      # `it` target, so `--test api_comparison_tests` became
+      # `error: no test target named …` — masked, and seven consecutive weekly
+      # runs reported success while running nothing — and `spdi_tests` kept a
+      # `--ignored` flag after its last `#[ignore]` was removed, which selects
+      # an empty set and exits 0.
       - name: Run API comparison tests
+        shell: bash
         run: |
-          cargo test --test api_comparison_tests -- --ignored --nocapture 2>&1 | tee api_comparison_results.txt
-        continue-on-error: true
+          source .github/scripts/run_validation.sh
+          # All three api_comparison_tests are #[ignore]d: they are the
+          # network-fixture suite, run here and not in the standard job.
+          run_validation api_comparison_tests api_comparison_results.txt --ignored
 
+      # `!cancelled()` on the second and third suites, because dropping
+      # `continue-on-error` alone would trade one silent failure for another:
+      # by default a failed step skips every later step, so a red API-comparison
+      # run would leave SPDI and dbSNP unexecuted while the report said only
+      # "No results" for them. That is the same shape this PR exists to fix — a
+      # suite that validated nothing, reported as though it had. Each suite now
+      # runs and fails independently, and the job is red if any of them is.
+      #
+      # `!cancelled()` rather than `always()`: a cancelled run should stop, not
+      # push on through two more cargo builds.
       - name: Run SPDI tests
+        if: ${{ !cancelled() }}
+        shell: bash
         run: |
-          cargo test --test spdi_tests -- --ignored --nocapture 2>&1 | tee spdi_results.txt
-        continue-on-error: true
+          source .github/scripts/run_validation.sh
+          # No `--ignored`: spdi_tests carries no #[ignore] any more.
+          run_validation spdi_tests spdi_results.txt
 
       - name: Run dbSNP tests
+        if: ${{ !cancelled() }}
+        shell: bash
         run: |
-          cargo test --test dbsnp_tests -- --nocapture 2>&1 | tee dbsnp_results.txt
-        continue-on-error: true
+          source .github/scripts/run_validation.sh
+          run_validation dbsnp_tests dbsnp_results.txt
 
       - name: Generate validation report
+        if: always()
         run: |
           {
             echo "# External Validation Report"
@@ -171,6 +207,7 @@ jobs:
           } > validation_report.md
 
       - name: Upload validation report
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: validation-report
