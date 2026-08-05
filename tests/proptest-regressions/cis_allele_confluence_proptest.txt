@@ -9,18 +9,21 @@
 # whose remaining filter drops haplotypes whose events cancel to no net change.
 # (The adjacent-gap-insertion filter that used to reject the first seed as well
 # was removed in #1294, so it runs now.) #1297, #1308 and #1312 are fixed
-# too, and so are #1316, #1320, #1321 and #1323 — all of the above now replay
-# green. #1325 is not yet fixed and is the reason
+# too, and so are #1316, #1320, #1321, #1323 and #1325 — all of the above now
+# replay green. #1394 is not yet fixed and is the reason
 # `an_indel_haplotype_normalizes_to_its_own_sequence` is still `#[ignore]`d — it
 # is the one seed here that still fails, which is what should gate enabling the
 # test.
 #
 # On soak depth, and on not reading a trend into it: #1320 was found at 27,633
 # successes by a 1,000,000-case run that a 200,000-case run had just passed;
-# then #1321 at 114,694, #1323 at 143,034, #1325 at 132,216. The early 4x jump
-# did not continue and the last three sit in one band, so depth has plateaued
-# and cannot forecast an end. Note also that the soak's shell exit code is
-# `tail`'s, not the test's — an appended seed here is the reliable signal.
+# then #1321 at 114,694, #1323 at 143,034, #1325 at 132,216 and #1394 at
+# 231,801. The early 4x jump did not continue and the middle four sit in one
+# band, so depth has plateaued and cannot forecast an end. Note also that
+# #1394 was reached by an *unseeded* stream after all eight of `ci.yml`'s
+# seeded shards passed clean, so a green seeded soak is not evidence the chain
+# has ended. And the soak's shell exit code is `tail`'s, not the test's — an
+# appended seed here is the reliable signal.
 cc e8fb54e331549cd5d7b8d2f8100951aed7db8ab2ffc759df817bd69a7e4eff9a # #1286; shrinks to haplotype = IndelHaplotype { core: "AAAAAA", events: [Insert { index: 1, bases: ['A', 'A'], len: 1 }, Insert { index: 2, bases: ['A', 'A'], len: 1 }] }
 cc e11d211278b3d526443f114ec02b2ec4e1b35df7d4a6024ba0bcc543d52162b3 # shrinks to haplotype = IndelHaplotype { core: "AAAAAA", events: [Delete { index: 1 }, Insert { index: 2, bases: ['A', 'A'], len: 1 }] }
 cc a38727fa5784df80e613e4c9547baccb981621191ad1260871fb5943faf8dce6 # #1287; shrinks to haplotype = IndelHaplotype { core: "ATACAGAAAATCAGGGCATA", events: [Insert { index: 4, bases: ['G', 'A'], len: 2 }, Insert { index: 6, bases: ['A', 'A'], len: 2 }] }
@@ -35,3 +38,4 @@ cc 467e0a71b3d82df45d32757cbea6276e3853cc2bcfa505b23e946ac5513d57b2 # #1321; shr
 cc ff4eca544f5524a5164ea91fe2bd0ab9f777f8bc2c86180ecae1aa19ee46aaa1 # #1323; shrinks to haplotype = IndelHaplotype { core: "CAGGGATCAT", events: [Delete { index: 3 }, Insert { index: 4, bases: "GA" }, Insert { index: 5, bases: "GA" }] }
 cc 4c6fab93d960d151efaae1712887d2434ede4a2e975eaac181369bd61055889f # #1325; shrinks to haplotype = IndelHaplotype { core: "GATCATAAATTCAGC", events: [Insert { index: 5, bases: "AA" }, Insert { index: 6, bases: "AA" }, Insert { index: 7, bases: "C" }] }
 cc 68d4dbe8f1fb14817dccb5307f55791ca0680478f6906ea5c6cc5074d70f2329 # #1235 whole-span inversion vs. its substitution spelling; shrinks to haplotype = Haplotype { core: "CTGTTAA", changes: [(2, 'T'), (4, 'A'), (6, 'C')] }
+cc 6ec5686a0f5e290e507e200e264cfd28c157a1683b777803a951fb8dedf54f20 # #1394; shrinks to haplotype = IndelHaplotype { core: "CAGGCAAACAGTGAAG", events: [Delete { index: 5 }, Insert { index: 6, bases: "AA" }, Insert { index: 7, bases: "AA" }] }

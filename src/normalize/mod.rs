@@ -2979,6 +2979,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 &mut result,
                 allele.phase,
                 allele.uncertain,
+                &self.provider,
             );
             // Second: each member went to its standalone most-3' position, which
             // can carry it clear over a sibling's bases and make the pair denote

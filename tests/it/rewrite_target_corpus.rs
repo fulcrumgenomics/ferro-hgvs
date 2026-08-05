@@ -26,13 +26,14 @@
 //!   independent of the normalizer under test) and it keeps passing after the rewrite
 //!   lands; a malformed pin here would prove nothing about the normalizer, which is why the
 //!   guard exists at all.
-//! - *Denotation* (#1325): normalizing must not change what the description denotes. It
+//! - *Denotation* (#1394): normalizing must not change what the description denotes. It
 //!   does, today. `assert_denotation_currently_broken` asserts the normalized output
-//!   denotes no sequence at all, because #1325's members overlap and the independent
-//!   applier declines to splice them. **#1267 was the other half of this row and is
-//!   fixed** — the 5' half of `clamp_sibling_crossing_junctions` bounds the junction, so
-//!   the case left the PARTITION list rather than being re-pinned; see the note where its
-//!   test used to be.
+//!   denotes no sequence at all, because #1394's members overlap and the independent
+//!   applier declines to splice them. **#1267 and #1325 were the other halves of this row
+//!   and are fixed** — the 5' half of `clamp_sibling_crossing_junctions` bounds the
+//!   junction, and a repeat outgrowing its tract now demotes to the insertion that growth
+//!   stands for; both cases left the PARTITION list rather than being re-pinned, see the
+//!   notes where their tests used to be.
 //! - *Boundary-validity* (#1274): normalizing must not name a position past the contig's
 //!   end. **Fixed** — by #1327's terminal re-spelling, which lands the repair's junction
 //!   inside the sequence instead of one past it. Flipped from a pinned failure to a
@@ -77,12 +78,12 @@
 //!   property, `an_indel_haplotype_normalizes_to_its_own_sequence`, is `#[ignore]`d and its
 //!   own doc comment says plainly: "this currently fails, and the failure is real." It is
 //!   the property that found the entire #1286 -> #1287 -> #1290 -> #1292 -> #1296 -> #1301
-//!   -> #1304 -> #1297 -> #1308 -> #1312 -> #1316 -> #1320 -> #1321 -> #1323 -> #1325 chain
-//!   (sixteen defects). It does not run by default; enabling it is `cargo test --features
-//!   dev -- --ignored an_indel_haplotype`.
+//!   -> #1304 -> #1297 -> #1308 -> #1312 -> #1316 -> #1320 -> #1321 -> #1323 -> #1325 ->
+//!   #1394 chain (seventeen defects). It does not run by default; enabling it is
+//!   `cargo test --features dev -- --ignored an_indel_haplotype`.
 //!
 //! So criterion 2 (no overlapping/out-of-order members) for indel haplotypes is currently
-//! enforced by no test that runs in CI. #1325 below is the live failure that property last
+//! enforced by no test that runs in CI. #1394 below is the live failure that property last
 //! found; there is nothing further to assert for #1235 itself beyond that, but "already
 //! exercised" overstated what's actually wired in.
 //!
@@ -121,7 +122,7 @@
 //!   `no_two_member_allele_normalizes_to_a_different_sequence` and
 //!   `repeat_span_sibling_overlap.rs`'s
 //!   `no_two_member_allele_normalizes_to_overlapping_members`) are explicitly two-member.
-//!   Every recent defect in the #1286 chain, #1325 included, is three-member. This is a gap
+//!   Every recent defect in the #1286 chain, #1394 included, is three-member. This is a gap
 //!   in the corpus's own evidence, flagged prominently rather than quietly worked around:
 //!   nothing here asserts three-member coverage either, so the gap remains open after this
 //!   file lands.
@@ -308,20 +309,35 @@ fn assert_denotation_currently_broken(
 // `an_insertion_junction_does_not_cross_an_upstream_junction_sibling` and
 // `a_duplication_junction_does_not_cross_an_upstream_junction_sibling`).
 
-/// #1325: two insertions collapse into a repeat correctly, but adding a third pushes a
-/// junction inside the tract; the tract grew by more bases than it can express as a
-/// duplication, so the demotion pass declines and the repeat is left spanning (swallowing)
-/// the sibling's junction. The independent applier refuses to splice the resulting
-/// members at all, since they overlap — there is no single well-defined resulting sequence
-/// for them, which is itself the defect this pins (#1235's criterion 2).
+// #1325 was pinned here as a denotation target and is **fixed** — a repeat whose
+// growth exceeds its tract is now re-spelled as the insertion that growth stands
+// for, which restores a junction `clamp_sibling_crossing_junctions` can bound, so
+// `g.[262_263insAA;263_264insAA;264_265insC]` reaches
+// `g.[263_264insAAAA;264_265insC]` and denotes the input's bases. Per this file's
+// contract the case moves out of the PARTITION list rather than being re-pinned;
+// the positive assertions live with the rest of their shape in
+// `issue_1325_repeat_growth_swallows_junction.rs`.
+
+/// #1394: the same defect on the other branch of the same guard, and what #1325 was
+/// masking. Two insertions collapse into a tract-wide repeat correctly, but a sibling
+/// *deletion* 3'-shifts into that tract; the tract grew by more bases than it can express
+/// as a duplication, so the demotion pass declines and the repeat is left spanning
+/// (swallowing) the deletion's bases. The independent applier refuses to splice the
+/// resulting members at all, since they overlap — there is no single well-defined
+/// resulting sequence for them, which is itself the defect this pins (#1235's
+/// criterion 2).
+///
+/// #1325's repair does not extend here: an insertion claims no bases and so blocks no
+/// sibling's shift, and widening its route to the base-claiming branch costs
+/// `issue_1296_repeat_claims_its_bases`' two tests (measured, not assumed).
 #[test]
-fn a_repeat_growth_exceeding_its_tract_still_swallows_a_sibling_junction() {
-    let seq = padded("GATCATAAATTCAGC");
+fn a_repeat_growth_exceeding_its_tract_still_swallows_a_sibling_deletion() {
+    let seq = padded("CAGGCAAACAGTGAAG");
     assert_denotation_currently_broken(
         &seq,
-        "TEMPLATE:g.[262_263insAA;263_264insAA;264_265insC]",
+        "TEMPLATE:g.[262del;263_264insAA;264_265insAA]",
         ShuffleDirection::ThreePrime,
-        "#1325",
+        "#1394",
     );
 }
 
@@ -350,7 +366,7 @@ fn max_hgvs_position(output: &str) -> u64 {
 /// standing guard, and inverting keeps the reproducer that found the defect attached to it.
 ///
 /// Two things are asserted, because the position bound alone is weak. The independent
-/// applier never caught this one the way it catches #1325 — an `=` edit's SPDI triple does
+/// applier never caught this one the way it catches #1394 — an `=` edit's SPDI triple does
 /// not exercise the out-of-bounds check a deletion's does, so `apply()` happily returned the
 /// (correct) reference — which is exactly why "stays in range" needs pairing with "still
 /// denotes the reference", or a fix that clamped the span while corrupting the sequence

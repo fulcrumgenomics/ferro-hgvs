@@ -5389,11 +5389,18 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
 /// Runs before the clamp, so the clamp sees the deletion rather than the
 /// repeat. Members whose pre-normalization form was not a plain deletion are
 /// left alone: without a deleted-base count there is nothing to re-spell to.
-pub(crate) fn demote_repeats_spanning_siblings(
+///
+/// A repeat that grew its tract by more bases than the tract holds has no
+/// duplication form at all — the copy would have to start 5' of the tract — and
+/// for a swallowed *junction* it is re-spelled as the insertion its growth
+/// stands for instead (#1325). Running before the clamp is what makes that
+/// worth doing: the clamp bounds the restored junction against the sibling.
+pub(crate) fn demote_repeats_spanning_siblings<P: ReferenceProvider>(
     before: &[HgvsVariant],
     after: &mut [HgvsVariant],
     phase: AllelePhase,
     uncertain: bool,
+    provider: &P,
 ) {
     if phase != AllelePhase::Cis || uncertain || after.len() < 2 || before.len() != after.len() {
         return;
@@ -5432,10 +5439,7 @@ pub(crate) fn demote_repeats_spanning_siblings(
             continue;
         };
         let (source, length) = source;
-        // Either way the equivalent edit sits on the 3'-most `length` bases of
-        // the tract: removing them, or duplicating them.
-        let start = a.end - length + 1;
-        if length <= 0 || start < a.start || b.region != a.region {
+        if length <= 0 || b.region != a.region {
             continue;
         }
         // Does the tract actually swallow a sibling? Both snapshots, so a
@@ -5466,6 +5470,51 @@ pub(crate) fn demote_repeats_spanning_siblings(
             .any(|junction| junction >= a.start && junction < a.end);
         let spans_sibling = spans_sibling_bases || spans_sibling_junction;
         if !spans_sibling {
+            continue;
+        }
+        // Either way the equivalent edit sits on the 3'-most `length` bases of
+        // the tract: removing them, or duplicating them.
+        let start = a.end - length + 1;
+        if start < a.start {
+            // The member grew the tract by more bases than the tract holds, so
+            // neither target form fits — a duplication over the tract can add
+            // at most `tract` bases. Declining here is what left #1325's repeat
+            // spanning its sibling, and the loss is larger than one spelling:
+            // the first merge pass had already bounded this member correctly
+            // (the clamp held both duplications short of the sibling's
+            // junction, and the coalesce combined them), and the next pass
+            // re-spelled the result as a tract-wide copy count. A repeat
+            // carries no junction, so the clamp can no longer see it — this
+            // demotion is the only route back to it.
+            //
+            // The growth is expressible as an insertion at the tract's 3'
+            // junction, which is the payload `demote_coincident_tract_repeats`
+            // already builds. Emitting it restores the junction and
+            // `clamp_sibling_crossing_junctions`, immediately after, pulls it
+            // back to the last position before the sibling.
+            //
+            // Only the junction case takes this route. An insertion claims no
+            // bases and so blocks no sibling's shift, which is why demoting a
+            // repeat to one before the clamps released a sibling deletion that
+            // #1296 had deliberately clamped out of its tract. That shape
+            // reaches here through `spans_sibling_bases`, and it keeps the
+            // decline.
+            if !spans_sibling_junction || spans_sibling_bases {
+                continue;
+            }
+            let Some((payload, _)) = repeat_growth_as_insertion(&after[i], kind, a) else {
+                continue;
+            };
+            respell_at_gap(
+                &mut after[i],
+                a,
+                a.end,
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(Sequence::new(payload)),
+                },
+                provider,
+                TerminalOverrun::RespellAtBoundary,
+            );
             continue;
         }
         respell_as(&mut after[i], kind, a.region, start, a.end, source);
