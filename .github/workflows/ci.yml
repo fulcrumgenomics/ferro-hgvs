@@ -822,9 +822,42 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
         with:
           toolchain: stable
+          # For the release-profile lint below. The two `clippy` jobs request the
+          # component the same way; without it `cargo clippy` is not installed.
+          components: clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           key: build-release
+      # The release-profile lint (#1383). It lives in THIS job on purpose: the two
+      # `clippy` jobs both lint the debug profile, so nothing checked the release
+      # profile, and the normalization oracles are required by convention to
+      # compile out of release entirely (`#[cfg(debug_assertions)]` on
+      # `assert_in_bounds`, `assert_reparseable`, `assert_idempotent` and their
+      # `*_self_check_enabled` flags). An oracle helper left ungated becomes dead
+      # code in release, and `dead_code` is warn-by-default, so nothing went red:
+      # #1366's pre-review head failed this command with three such errors while
+      # all three CI clippy jobs were green on the same commit.
+      #
+      # Here rather than in a job of its own because the repository sits near the
+      # 10 GiB Actions cache cap and #1218 records two cache generations reaching
+      # 13.61 GiB, evicting by LRU and destroying the nightly's 3.25 GiB
+      # `ferro-manifest-v3` as collateral damage. This job already builds the
+      # release profile and already owns a `rust-cache` entry (`build-release`),
+      # so the lint adds no new cache KEY — only clippy's own fingerprints to an
+      # entry that already exists. (The +30 MB / +1.6% this was measured at
+      # originally was against the hand-rolled whole-`target/` entries that #1370
+      # retired; `rust-cache` stores dependency artifacts only, so the marginal
+      # cost is smaller still.) `Build` is also already a required check, so a
+      # failure blocks a merge rather than only turning a non-required job red.
+      #
+      # Deliberately NOT `--all-targets`: the dead code lands in the `lib` target,
+      # which the plain invocation covers. Measured by removing the four
+      # `#[cfg(any(debug_assertions, test))]` gates from
+      # `src/normalize/merge.rs` — this command then fails with all four items
+      # reported against `(lib)`, and passes with them restored. `--all-targets`
+      # would additionally compile every test and bench binary with optimisation
+      # for no gain here.
+      - run: cargo clippy --release -- -D warnings
       - run: cargo build --release
       - name: Check binary size
         run: |
