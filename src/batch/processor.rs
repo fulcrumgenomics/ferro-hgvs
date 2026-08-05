@@ -8,6 +8,38 @@ use crate::hgvs::variant::HgvsVariant;
 use crate::normalize::Normalizer;
 use crate::reference::ReferenceProvider;
 
+/// Items processed per chunk by the CLI's batch path.
+///
+/// The value `run_batch` has used since #687, exported so the CLI and the library
+/// share one definition rather than two that can drift. #975 asks for that
+/// chunk-and-preserve-order engine to be reused, and it is — see
+/// [`STREAM_CHUNK_ITEMS`] for why the streaming API chunks at a different size.
+pub const BATCH_CHUNK_ITEMS: usize = 8192;
+
+/// Items read, mapped and drained per chunk by the streaming batch API (#975).
+///
+/// Larger than [`BATCH_CHUNK_ITEMS`], and sized by measurement rather than
+/// inherited. #975 asks for two things at once — peak RSS bounded and flat in
+/// input size, *and* throughput within noise of the `Vec`-based path — and 8192
+/// delivers only the first. Measured on 1M genomic substitutions, three reps:
+///
+/// | chunk | peak RSS @ 4M inputs | wall clock vs `Vec` |
+/// |---|---|---|
+/// | 8 192 | 17.6 MiB | +8 % (0.179 s against 0.166 s) |
+/// | 65 536 | 82.9 MiB | parity (0.163 s against 0.164 s) |
+///
+/// At 8192 the per-chunk overhead — refill, a result `Vec` per chunk, and rayon
+/// fanning out over only 8192 items at a time — is a measurable fraction of the
+/// per-item work, which for a bare parse is very small. The CLI does not see this
+/// because its per-item work (normalize plus formatting plus a write) dwarfs the
+/// chunk overhead, which is exactly why the two constants differ instead of one
+/// being bent to serve both.
+///
+/// 65 536 keeps the property that matters: RSS measured 81.3 / 90.6 / 82.9 /
+/// 84.1 MiB at 250k / 1M / 4M / 8M inputs — flat across a 32x range, against the
+/// `Vec` path's 157 MiB / 610 MiB / 2419 MiB over the first three.
+pub const STREAM_CHUNK_ITEMS: usize = 64 * 1024;
+
 /// Configuration for batch processing.
 #[derive(Debug, Clone)]
 pub struct BatchConfig {
@@ -503,6 +535,85 @@ impl<P: ReferenceProvider + Sync> BatchProcessor<P> {
         BatchResult::new(results, start.elapsed())
     }
 
+    /// Parse a *stream* of HGVS strings, yielding results in input order (#975).
+    ///
+    /// The streaming counterpart to [`parse_parallel`](Self::parse_parallel), and
+    /// the reason it exists: that method takes `&[S]` and returns a `Vec`, so both
+    /// the whole input and the whole output are resident at once by contract. No
+    /// amount of internal chunking can bound peak memory behind such a signature
+    /// — #975 says so explicitly — which is why this takes an `IntoIterator` and
+    /// returns an `Iterator` instead.
+    ///
+    /// Memory is bounded by one chunk of inputs plus one chunk of results, not by
+    /// the length of the stream. Order is preserved exactly as the `Vec`-based
+    /// path preserves it, because each chunk is mapped with the same
+    /// order-preserving `collect` and drained before the next is read.
+    ///
+    /// The existing `Vec`-based methods are untouched.
+    pub fn parse_streaming<'a, I, S>(
+        &'a self,
+        variants: I,
+        num_threads: usize,
+    ) -> impl Iterator<Item = ItemResult<HgvsVariant>> + 'a
+    where
+        I: IntoIterator<Item = S> + 'a,
+        S: AsRef<str> + Send + Sync + 'a,
+    {
+        self.map_streaming(variants, num_threads, |input: &S| {
+            match parse_hgvs(input.as_ref()) {
+                Ok(variant) => ItemResult::Ok(variant),
+                Err(error) => ItemResult::Err {
+                    input: Some(input.as_ref().to_string()),
+                    error,
+                },
+            }
+        })
+    }
+
+    /// Parse and normalize a *stream* of HGVS strings, yielding results in input
+    /// order (#975). See [`parse_streaming`](Self::parse_streaming) for why the
+    /// signature is shaped this way.
+    pub fn parse_and_normalize_streaming<'a, I, S>(
+        &'a self,
+        variants: I,
+        num_threads: usize,
+    ) -> impl Iterator<Item = ItemResult<HgvsVariant>> + 'a
+    where
+        I: IntoIterator<Item = S> + 'a,
+        S: AsRef<str> + Send + Sync + 'a,
+    {
+        self.map_streaming(variants, num_threads, |input: &S| {
+            match parse_hgvs(input.as_ref()).and_then(|v| self.normalizer.normalize(&v)) {
+                Ok(normalized) => ItemResult::Ok(normalized),
+                Err(error) => ItemResult::Err {
+                    input: Some(input.as_ref().to_string()),
+                    error,
+                },
+            }
+        })
+    }
+
+    /// Shared engine behind the streaming methods: read a bounded chunk, map it
+    /// order-preservingly, drain it, repeat.
+    ///
+    /// The engine is [`crate::batch::streaming::StreamingMap`], shared with
+    /// [`crate::parallel`]'s streaming functions so there is one chunk-and-drain
+    /// loop rather than two. Its shape is the CLI's `run_batch`/`flush_chunk`
+    /// pair (#687), which #975 asks to reuse.
+    fn map_streaming<'a, I, S, F>(
+        &'a self,
+        variants: I,
+        num_threads: usize,
+        f: F,
+    ) -> impl Iterator<Item = ItemResult<HgvsVariant>> + 'a
+    where
+        I: IntoIterator<Item = S> + 'a,
+        S: AsRef<str> + Send + Sync + 'a,
+        F: Fn(&S) -> ItemResult<HgvsVariant> + Sync + Send + 'a,
+    {
+        crate::batch::streaming::StreamingMap::new(variants, num_threads, STREAM_CHUNK_ITEMS, f)
+    }
+
     /// Map `f` over `variants`, preserving order. Serial for `num_threads == 1`,
     /// the global rayon pool for `0`, or a dedicated `num_threads`-thread pool
     /// otherwise (falling back to the global pool if one can't be built).
@@ -722,5 +833,53 @@ mod tests {
         assert_eq!(result.total(), 0);
         assert!(result.all_ok());
         assert!((result.success_rate() - 100.0).abs() < 0.01);
+    }
+
+    /// The streaming batch methods must agree item-for-item with the `Vec`-based
+    /// ones (#975), across the thread settings that select different engines
+    /// (serial, global pool, dedicated pool).
+    #[test]
+    fn streaming_batch_matches_the_vec_api_exactly() {
+        let processor = processor();
+        let inputs: Vec<String> = (0..BATCH_CHUNK_ITEMS + 11)
+            .map(|i| {
+                match i % 4 {
+                    0 => "NM_000088.3:c.459A>G",
+                    1 => "NC_000001.11:g.12345A>G",
+                    2 => "definitely not hgvs",
+                    _ => "NP_000079.2:p.Val600Glu",
+                }
+                .to_string()
+            })
+            .collect();
+        let render = |r: &ItemResult<HgvsVariant>| match r {
+            ItemResult::Ok(v) => format!("ok:{v}"),
+            ItemResult::Err { input, error } => format!("err:{input:?}:{error}"),
+        };
+        for threads in [1usize, 0, 2] {
+            let expected: Vec<String> = processor
+                .parse_parallel(&inputs, threads)
+                .results
+                .iter()
+                .map(render)
+                .collect();
+            let streamed: Vec<String> = processor
+                .parse_streaming(inputs.iter(), threads)
+                .map(|r| render(&r))
+                .collect();
+            assert_eq!(streamed, expected, "parse, num_threads={threads}");
+
+            let expected: Vec<String> = processor
+                .parse_and_normalize_parallel(&inputs, threads)
+                .results
+                .iter()
+                .map(render)
+                .collect();
+            let streamed: Vec<String> = processor
+                .parse_and_normalize_streaming(inputs.iter(), threads)
+                .map(|r| render(&r))
+                .collect();
+            assert_eq!(streamed, expected, "parse+normalize, num_threads={threads}");
+        }
     }
 }

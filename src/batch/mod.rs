@@ -50,4 +50,9 @@
 
 mod processor;
 
-pub use processor::{BatchConfig, BatchProcessor, BatchProgress, BatchResult, ItemResult};
+pub(crate) mod streaming;
+
+pub use processor::{
+    BatchConfig, BatchProcessor, BatchProgress, BatchResult, ItemResult, BATCH_CHUNK_ITEMS,
+    STREAM_CHUNK_ITEMS,
+};

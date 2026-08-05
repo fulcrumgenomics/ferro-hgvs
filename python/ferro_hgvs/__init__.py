@@ -144,6 +144,8 @@ __all__ = [
     "BatchProgress",
     "BatchResult",
     "BatchProcessor",
+    "BatchStream",
+    "BatchItem",
     # Error handling classes
     "ErrorMode",
     "ErrorType",

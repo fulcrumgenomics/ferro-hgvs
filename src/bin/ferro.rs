@@ -1403,7 +1403,11 @@ fn write_tsv_header<W: Write>(writer: &mut W, tsv: bool) -> io::Result<()> {
 /// Number of input lines processed per batch before their results are written.
 /// Bounds memory (only one chunk is in flight) while giving rayon enough work
 /// per fan-out to amortize scheduling overhead.
-const BATCH_CHUNK_LINES: usize = 8192;
+///
+/// Re-exported from the library rather than defined twice: #975 built the
+/// streaming batch API on this same engine, and two copies of the number would
+/// have been two things to drift apart.
+const BATCH_CHUNK_LINES: usize = ferro_hgvs::batch::BATCH_CHUNK_ITEMS;
 
 /// Drive a batch of input lines through `item`, writing each line's output in
 /// input order. With `workers <= 1` the work runs serially; with `workers > 1`

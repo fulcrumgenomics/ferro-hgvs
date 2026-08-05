@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use crate::backtranslate::{Backtranslator, CodonChange, CodonTable};
-use crate::batch::{BatchProcessor, BatchProgress, BatchResult};
+use crate::batch::{BatchProcessor, BatchProgress, BatchResult, ItemResult, BATCH_CHUNK_ITEMS};
 use crate::convert::CoordinateMapper;
 use crate::coords::{OneBasedPos, ZeroBasedPos};
 use crate::effect::{Consequence, EffectPredictor, Impact, ProteinEffect};
@@ -3386,10 +3386,158 @@ impl PyBatchResult {
     }
 }
 
+/// One item from a [`PyBatchStream`], mirroring `ItemResult` (#975).
+///
+/// A streaming API cannot hand back a `BatchResult`, because that type's whole
+/// purpose is to hold every result at once. This is the per-item equivalent:
+/// exactly one of `variant` / `error` is set, and `input` carries the string that
+/// failed so a caller can report it without keeping its own copy of the input.
+#[pyclass(name = "BatchItem")]
+pub struct PyBatchItem {
+    /// The parsed (and, for the normalize stream, normalized) variant, or `None`.
+    #[pyo3(get)]
+    variant: Option<PyHgvsVariant>,
+    /// The input string, present only on failure — on success the caller has the
+    /// variant, and holding the input too would defeat the point.
+    #[pyo3(get)]
+    input: Option<String>,
+    /// The rendered error, or `None` on success.
+    #[pyo3(get)]
+    error: Option<String>,
+}
+
+#[pymethods]
+impl PyBatchItem {
+    /// Whether this item parsed (and normalized) successfully.
+    #[getter]
+    fn ok(&self) -> bool {
+        self.variant.is_some()
+    }
+
+    fn __repr__(&self) -> String {
+        match (&self.variant, &self.error) {
+            (Some(v), _) => format!("BatchItem(ok=True, variant={})", v.__repr__()),
+            (None, Some(e)) => format!("BatchItem(ok=False, error={e:?})"),
+            (None, None) => "BatchItem(ok=False)".to_string(),
+        }
+    }
+}
+
+/// Which operation a [`PyBatchStream`] applies to each item.
+#[derive(Clone, Copy)]
+enum StreamOp {
+    Parse,
+    ParseAndNormalize,
+}
+
+/// Lazy, order-preserving batch stream over a Python iterable (#975).
+///
+/// The reason this exists rather than another `list`-in/`list`-out method: the
+/// existing `parse`/`parse_and_normalize` take a fully materialized
+/// `Vec<String>` and return a fully materialized `BatchResult`, so both the input
+/// and the output are resident at once *by contract*. No amount of internal
+/// chunking can bound peak memory behind that signature — #975 says exactly this
+/// — so bounding it needs an entry point that consumes an iterator and yields.
+///
+/// Per `__next__`, at most one chunk of inputs and one chunk of results are
+/// alive. The GIL is held only to pull the chunk out of the Python iterable and
+/// to hand results back; the mapping itself runs under `py.detach`, so it still
+/// scales across cores and still does not block other Python threads.
+#[pyclass(name = "BatchStream")]
+pub struct PyBatchStream {
+    processor: std::sync::Arc<BatchProcessor<PyProvider>>,
+    /// The caller's iterable, pulled from lazily. Held as a Python object rather
+    /// than drained into a `Vec`, which is the entire point.
+    source: pyo3::Py<pyo3::PyAny>,
+    op: StreamOp,
+    workers: usize,
+    /// Results of the current chunk, yielded front-first to preserve input order.
+    pending: std::collections::VecDeque<PyBatchItem>,
+    /// Set once the source iterator is exhausted, so a caller that keeps calling
+    /// `__next__` after `StopIteration` does not re-poll a spent iterator.
+    exhausted: bool,
+}
+
+#[pymethods]
+impl PyBatchStream {
+    fn __iter__(slf: pyo3::PyRef<'_, Self>) -> pyo3::PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<PyBatchItem>> {
+        loop {
+            if let Some(item) = self.pending.pop_front() {
+                return Ok(Some(item));
+            }
+            if self.exhausted {
+                return Ok(None);
+            }
+            // Pull one bounded chunk with the GIL held. Anything the iterable
+            // yields that is not a string is a `TypeError` from `extract`, which
+            // propagates rather than being silently skipped.
+            //
+            // `BATCH_CHUNK_ITEMS` (8192), not the Rust streaming API's larger
+            // `STREAM_CHUNK_ITEMS` — measured, because the two paths have very
+            // different per-item costs. Here every item becomes a `BatchItem` plus
+            // a variant `PyObject`, so a chunk is far heavier than a chunk of Rust
+            // strings and the chunk *floor* is what dominates peak memory. At
+            // 65536 that floor was ~120 MiB, which made streaming WORSE than the
+            // list API below ~150k inputs; at 8192 peak RSS is flat at ~37 MiB and
+            // better at every size measured. The same object-creation cost also
+            // dwarfs the per-chunk overhead that forced the Rust path to chunk
+            // larger, so nothing is lost by chunking small here.
+            let mut chunk: Vec<String> = Vec::with_capacity(BATCH_CHUNK_ITEMS.min(1024));
+            let source = self.source.bind(py);
+            while chunk.len() < BATCH_CHUNK_ITEMS {
+                match source.call_method0("__next__") {
+                    Ok(value) => chunk.push(value.extract::<String>()?),
+                    Err(err) if err.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) => {
+                        self.exhausted = true;
+                        break;
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+            if chunk.is_empty() {
+                return Ok(None);
+            }
+            // Map with the GIL released, exactly as the list-based methods do.
+            let processor = std::sync::Arc::clone(&self.processor);
+            let op = self.op;
+            let workers = self.workers;
+            let results = py.detach(move || match op {
+                StreamOp::Parse => processor.parse_parallel(&chunk, workers).results,
+                StreamOp::ParseAndNormalize => {
+                    processor
+                        .parse_and_normalize_parallel(&chunk, workers)
+                        .results
+                }
+            });
+            self.pending = results
+                .into_iter()
+                .map(|result| match result {
+                    ItemResult::Ok(variant) => PyBatchItem {
+                        variant: Some(PyHgvsVariant { inner: variant }),
+                        input: None,
+                        error: None,
+                    },
+                    ItemResult::Err { input, error } => PyBatchItem {
+                        variant: None,
+                        input,
+                        error: Some(error.to_string()),
+                    },
+                })
+                .collect();
+        }
+    }
+}
+
 /// Batch processor for parsing and normalizing multiple variants
 #[pyclass(name = "BatchProcessor")]
 pub struct PyBatchProcessor {
-    processor: BatchProcessor<PyProvider>,
+    /// `Arc` so a `BatchStream` (#975) can share the processor: a `#[pyclass]`
+    /// cannot borrow, and the stream outlives the call that created it.
+    processor: std::sync::Arc<BatchProcessor<PyProvider>>,
     /// How the backing reference was built (#1012). Captured at construction
     /// because the provider is moved into `processor`.
     kind: ProviderKind,
@@ -3506,6 +3654,56 @@ impl PyBatchProcessor {
         PyBatchResult { inner }
     }
 
+    /// Parse an *iterable* of HGVS strings, yielding results lazily (#975).
+    ///
+    /// The streaming counterpart to `parse`. Use it when the input does not fit
+    /// comfortably in memory, or when you want to start consuming results before
+    /// the whole input has been read: peak memory is a function of the chunk size
+    /// rather than of the input's length. Measured on this path, 1M inputs took
+    /// ~1782 MiB through the list API against ~38 MiB streaming, at about 1.8x
+    /// the wall clock — the cost of one result object per item. (The Rust
+    /// streaming API's own numbers differ; it chunks larger and allocates no
+    /// Python objects. Quoting them here would misdescribe this method, so the
+    /// figures above match `python/ferro_hgvs/__init__.pyi`.)
+    ///
+    /// Accepts any iterable of `str` — a list, a generator, or an open file. The
+    /// GIL is released for the parsing itself, as with `parse`.
+    ///
+    /// Args:
+    ///     variants: Iterable of HGVS strings.
+    ///     workers: Number of worker threads. 0 (default) uses all available
+    ///         cores; 1 runs serially; N uses N threads.
+    ///
+    /// Returns:
+    ///     BatchStream yielding one BatchItem per input, in input order.
+    #[pyo3(signature = (variants, workers=0))]
+    fn parse_streaming(
+        &self,
+        variants: Bound<'_, pyo3::PyAny>,
+        workers: usize,
+    ) -> PyResult<PyBatchStream> {
+        self.streaming(variants, workers, StreamOp::Parse)
+    }
+
+    /// Parse and normalize an *iterable* of HGVS strings, yielding results lazily
+    /// (#975). See `parse_streaming` for the rationale and the memory numbers.
+    ///
+    /// Args:
+    ///     variants: Iterable of HGVS strings.
+    ///     workers: Number of worker threads. 0 (default) uses all available
+    ///         cores; 1 runs serially; N uses N threads.
+    ///
+    /// Returns:
+    ///     BatchStream yielding one BatchItem per input, in input order.
+    #[pyo3(signature = (variants, workers=0))]
+    fn parse_and_normalize_streaming(
+        &self,
+        variants: Bound<'_, pyo3::PyAny>,
+        workers: usize,
+    ) -> PyResult<PyBatchStream> {
+        self.streaming(variants, workers, StreamOp::ParseAndNormalize)
+    }
+
     /// Parse multiple HGVS strings with progress callback
     ///
     /// Args:
@@ -3529,6 +3727,31 @@ impl PyBatchProcessor {
 }
 
 impl PyBatchProcessor {
+    /// Shared construction for the two streaming entry points.
+    ///
+    /// `iter()` rather than assuming the argument is already an iterator, so a
+    /// list works as naturally as a generator — and so the `TypeError` for a
+    /// non-iterable argument is raised here, at the call, rather than on the
+    /// first `next()`.
+    fn streaming(
+        &self,
+        variants: Bound<'_, pyo3::PyAny>,
+        workers: usize,
+        op: StreamOp,
+    ) -> PyResult<PyBatchStream> {
+        let source = variants
+            .call_method0("__iter__")
+            .or_else(|_| pyo3::types::PyIterator::from_object(&variants).map(|it| it.into_any()))?;
+        Ok(PyBatchStream {
+            processor: std::sync::Arc::clone(&self.processor),
+            source: source.unbind(),
+            op,
+            workers,
+            pending: std::collections::VecDeque::new(),
+            exhausted: false,
+        })
+    }
+
     /// Build a processor from a provider, capturing capability before the
     /// provider is moved into the inner processor, and emit the one-time
     /// reduced-capability warning (#1012).
@@ -3536,7 +3759,7 @@ impl PyBatchProcessor {
         let has_genomic_data = provider.has_genomic_data();
         let has_protein_data = provider.has_protein_data();
         let processor = Self {
-            processor: BatchProcessor::new(provider),
+            processor: std::sync::Arc::new(BatchProcessor::new(provider)),
             kind,
             has_genomic_data,
             has_protein_data,
@@ -5812,6 +6035,8 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBatchProgress>()?;
     m.add_class::<PyBatchResult>()?;
     m.add_class::<PyBatchProcessor>()?;
+    m.add_class::<PyBatchStream>()?;
+    m.add_class::<PyBatchItem>()?;
 
     // Error handling classes
     m.add_class::<PyErrorMode>()?;
