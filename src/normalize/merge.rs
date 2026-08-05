@@ -2379,7 +2379,34 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         SequenceEnds::INTERIOR
     };
 
-    let rebuilt = rebuild_members(&pieces, &variants[0], body, w_lo, &ref_bytes, ends)?;
+    // The CDS end on the member axis, for `cds_end_delins_anchor`. `None`
+    // wherever there is no CDS to change axis at — every genomic kind, and a
+    // non-coding transcript — which makes that clamp inert there.
+    //
+    // `CisKind::Cds` only: `r.` reaches the same junction, but `normalize_cds`'s
+    // #387 clamp is gated on `AxisRegion::Cds`, so claiming the `r.` case here
+    // would make the derivation *disagree* with the per-member pipeline in the
+    // opposite direction — the very fault this fixes. Left for its own evidence.
+    let cds_end_axis = if matches!(kind, CisKind::Cds) {
+        provider
+            .get_transcript(&accession)
+            .ok()
+            .and_then(|tx| tx.cds_end)
+            .and_then(|end| i64::try_from(end).ok())
+            .map(|end| end - frame.delta)
+    } else {
+        None
+    };
+
+    let rebuilt = rebuild_members(
+        &pieces,
+        &variants[0],
+        body,
+        w_lo,
+        &ref_bytes,
+        ends,
+        cds_end_axis,
+    )?;
     if rebuilt == variants {
         return None;
     }
@@ -4567,6 +4594,7 @@ fn rebuild_members(
     w_lo: i64,
     ref_bytes: &[u8],
     ends: SequenceEnds,
+    cds_end_axis: Option<i64>,
 ) -> Option<Vec<HgvsVariant>> {
     let mut members = Vec::with_capacity(pieces.len());
     // Window offset one past the last reference base the *previous* piece
@@ -4582,7 +4610,15 @@ fn rebuild_members(
             piece.ref_start >= previous_ref_end,
             "pieces must be in ascending offset order for the dup disjointness check"
         );
-        let anchor = anchor_for_piece(piece, body, w_lo, ref_bytes, ends, previous_ref_end)?;
+        let anchor = anchor_for_piece(
+            piece,
+            body,
+            w_lo,
+            ref_bytes,
+            ends,
+            previous_ref_end,
+            cds_end_axis,
+        )?;
         previous_ref_end = piece.ref_end;
         members.push(build_merged(template, anchor));
     }
@@ -4619,6 +4655,7 @@ fn anchor_for_piece(
     ref_bytes: &[u8],
     ends: SequenceEnds,
     previous_ref_end: usize,
+    cds_end_axis: Option<i64>,
 ) -> Option<Anchor> {
     let alt: Vec<Base> = piece
         .alt
@@ -4633,6 +4670,11 @@ fn anchor_for_piece(
             return Some(anchor);
         }
         if let Some(anchor) = boundary_delins_anchor(piece, &alt, body, w_lo, ref_bytes, ends) {
+            return Some(anchor);
+        }
+        if let Some(anchor) =
+            cds_end_delins_anchor(piece, &alt, body, w_lo, ref_bytes, cds_end_axis)
+        {
             return Some(anchor);
         }
     }
@@ -4771,6 +4813,66 @@ fn boundary_delins_anchor(
         region: body,
         start: position,
         end: position,
+        alt: bases,
+        form: AnchorForm::Replacement,
+    })
+}
+
+/// The **axis-change** counterpart to [`boundary_delins_anchor`]: a derived pure
+/// insertion resting exactly on the CDS/3'UTR junction is re-spelled as
+/// `c.<cds_end>delins<ref[cds_end] ++ payload>` (#387, #1398).
+///
+/// [`boundary_delins_anchor`] deliberately covers only the *representability*
+/// bounds, on the grounds that `normalize_cds` keeps the axis-change policy. For
+/// a lone member that reasoning holds — the per-member pipeline re-clamps it. It
+/// does **not** hold for a derivation, which is authoritative for the group and
+/// whose output nothing re-clamps: `c.[11_12dup;16_17insC]` came back as
+/// `c.18_*1insCAT`, and normalizing *that* produced `c.18delinsTCAT`, so the
+/// first answer was not a fixed point and the two shuffle directions disagreed
+/// about the second (#1398). The clamp therefore has to exist on both paths.
+///
+/// The identity is the same one `normalize_cds` applies and is shared, not
+/// copied: inserting `A'` between `cds_end` and `cds_end + 1` is exactly
+/// "delete `ref[cds_end]`, insert `ref[cds_end] ++ A'`", true for any `A'`.
+///
+/// **Spanning duplications are not clamped.** Per the spec a `dup` is the
+/// priority form even when its span bridges the boundary (`c.9171_*1dup`), which
+/// #401 pins. That carve-out needs no gate here: [`anchor_for_piece`] tries
+/// [`duplication_anchor`] first, so a piece that a `dup` describes never reaches
+/// this function — the same positive-list-`Insertion` effect `normalize_cds`
+/// spells out explicitly, obtained from the call order instead.
+///
+/// `cds_end_axis` is the CDS end expressed on the member axis (`cds_end - delta`,
+/// the `AxisFrame` identity), and is `None` for every axis without a CDS, which
+/// makes this inert there. Positions run continuously past it — `c.<n>` beyond
+/// the CDS length denotes the base `c.*(n - cds_len)` does — so the junction is
+/// simply `cds_end_axis` and `cds_end_axis + 1`, with no discontinuity to correct
+/// for. That is only true at the **3'** end; the 5' end has one (`c.-1` is
+/// `cds_start - 1`, the reason `region_sequence_delta` exists), which is why this
+/// has no `cds_start` mirror here.
+fn cds_end_delins_anchor(
+    piece: &Piece,
+    alt: &[Base],
+    body: Region,
+    w_lo: i64,
+    ref_bytes: &[u8],
+    cds_end_axis: Option<i64>,
+) -> Option<Anchor> {
+    let cds_end_axis = cds_end_axis?;
+    // A pure insertion's anchor spans `(start - 1, start)`, so it rests on the
+    // junction exactly when its insertion point is the first 3'UTR base.
+    let insertion_point = w_lo + i64::try_from(piece.ref_start).ok()?;
+    if insertion_point != cds_end_axis + 1 {
+        return None;
+    }
+    // Same 1-based-into-the-slice convention `boundary_delins_anchor` uses; the
+    // anchor base is `ref[cds_end]`, one before the insertion point.
+    let anchor_1b = u64::try_from(piece.ref_start).ok()?;
+    let bases = boundary_delins_bases(ref_bytes, alt, anchor_1b, BoundarySide::ThreePrime)?;
+    Some(Anchor {
+        region: body,
+        start: cds_end_axis,
+        end: cds_end_axis,
         alt: bases,
         form: AnchorForm::Replacement,
     })
@@ -7703,6 +7805,7 @@ mod tests {
             ref_bytes,
             SequenceEnds::INTERIOR,
             4,
+            None,
         )
         .expect("the piece is still built");
         assert_eq!(anchor.form, AnchorForm::Replacement);
