@@ -18,6 +18,7 @@ mod five_prime_tandem_repeat_dup_rotation;
 mod issue_1282_position_zero;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
+mod residual_above_cap_confluence;
 
 mod allele_grammar_corners;
 mod allele_trans_phase;
