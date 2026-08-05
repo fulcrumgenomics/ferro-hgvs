@@ -56,16 +56,27 @@ jobs:
           export PATH="$HOME/.pixi/bin:$PATH"
           pixi install
 
-      - name: Cache cargo registry
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # Cargo caching via `rust-cache`; rationale recorded above the equivalent
+      # step in `ci.yml` (#1218).
+      #
+      # This job builds `--release --features "web-service hgvs-rs"`, a feature
+      # set no other job builds, so its dependency tree is its own. That is an
+      # argument for caching it and for keying it separately — which the key this
+      # replaces did get right (`-web-hgvs-rs-`, suffix before hash, scoped
+      # restore-key). What it could not fix is that `actions/cache` skips the save
+      # on a primary-key hit, so the tree froze at the first run per lockfile.
+      #
+      # `cache-bin: false` because this job runs on a PERSISTENT self-hosted
+      # runner (`runs-on: [self-hosted, …, ferro-deploy]`) with its own rustup
+      # install — the step below sources `$HOME/.cargo/env`. `rust-cache` caches
+      # `${CARGO_HOME}/bin` unless told not to, so on a hosted runner that is a
+      # throwaway directory, but here it would restore a snapshot of the
+      # operator's toolchain over the live one. Dependency artifacts are what is
+      # worth caching; the binaries on this box are not ours to replace.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-web-hgvs-rs-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-web-hgvs-rs-
+          key: deploy-local-web-hgvs-rs
+          cache-bin: "false"
 
       - name: Build release binary (with hgvs-rs)
         run: |

@@ -69,18 +69,19 @@ jobs:
         with:
           toolchain: stable
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # Cargo caching via `rust-cache`; rationale recorded above the equivalent
+      # step in `ci.yml` (#1218).
+      #
+      # This job gates on a startup-time budget, so what it restores matters more
+      # here than elsewhere. That argues *for* the change rather than against it:
+      # the hand-rolled key it replaces ended in a bare
+      # `${{ runner.os }}-cargo-` restore-key, which is a prefix of every cargo
+      # cache in the repository and could hand this job a `target/` built under a
+      # different profile — exactly the kind of variance a timing gate must not
+      # inherit. `rust-cache` keys per job and stores dependency artifacts only.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-nightly
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
+          key: nightly-perf
 
       # The prepared reference is NOT cached, for the reason recorded in
       # nightly-mutalyzer.yml and measured in #1218: a 3+ GiB entry cannot

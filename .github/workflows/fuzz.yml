@@ -42,16 +42,29 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz
 
-      - name: Cache cargo
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # Cargo caching via `rust-cache`; rationale recorded above the equivalent
+      # step in `ci.yml` (#1218).
+      #
+      # `workspaces` is required here and is not boilerplate: `fuzz/Cargo.toml`
+      # declares its own empty `[workspace]` to stay out of the root package, so
+      # the tree cargo-fuzz builds into is `fuzz/target/` and `rust-cache` would
+      # otherwise cache the root workspace's `target/`, which this job never
+      # populates. The old key cached `fuzz/target/` explicitly; this preserves
+      # that.
+      #
+      # `cache-bin: false` fixes a pre-existing hazard rather than introducing
+      # one. `cargo install cargo-fuzz` runs in the step ABOVE this one, and the
+      # old key cached `~/.cargo/bin/` — so the restore landed on top of the
+      # just-installed binary and could overwrite it with whatever version first
+      # populated the key. Not caching binaries removes the possibility. It also
+      # means `cargo install cargo-fuzz` compiles every run, which it already did
+      # (the install ran before the restore, so it never read the cache anyway);
+      # making that install cheap is a separate change and is not attempted here.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            fuzz/target/
-          key: ${{ runner.os }}-fuzz-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          key: fuzz-${{ matrix.target }}
+          workspaces: fuzz
+          cache-bin: "false"
 
       - name: Download corpus
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0

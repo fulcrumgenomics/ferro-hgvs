@@ -60,18 +60,21 @@ jobs:
 
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+      # Cargo caching is delegated to `Swatinem/rust-cache` rather than
+      # hand-rolled `actions/cache` keys. The full measurement is recorded once,
+      # above the equivalent step in `ci.yml`; in short, a hand-rolled entry
+      # cached a whole `target/` and grew to ~3 GiB, and `actions/cache` skips
+      # the save on a primary-key hit so a lockfile-only key froze that tree
+      # permanently (#1218).
+      #
+      # The bare `${{ runner.os }}-cargo-` last-resort restore-key that used to
+      # sit here was its own hazard: it is a prefix of every cargo cache in the
+      # repository, so this job could restore a tree built by any other job
+      # under a different profile. `rust-cache` keys per job, so there is no
+      # cross-job fallback to get wrong.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-nightly
-          restore-keys: |
-            ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
-            ${{ runner.os }}-cargo-
+          key: nightly-mutalyzer
 
       # The prepared reference is NOT cached. It used to be
       # (`Linux-ferro-manifest-v3-<hash>`, `path: benchmark-output/`), and that
