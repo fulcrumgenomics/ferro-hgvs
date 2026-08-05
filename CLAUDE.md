@@ -82,14 +82,20 @@ a second time with it set; the nightly reference-aware job sets it too, which is
 where the manifest-backed conformance corpora are actually covered.
 
 The check runs from `Normalizer::assert_seam_oracles`, which all three oracles
-share. It is called from two places, because ferro has two normalization exits and
-only one of them is the "shared" one: `normalize_core_checked`, covering
-`normalize()` and every `VariantProjector` path (the projection-driven
-genomic/coding/protein axes), and `normalize_with_diagnostics`, which reaches
-`normalize_core_canonical` directly and so was returning results no oracle had
-inspected — for all three checks, not just the newest. Its verification pass
-re-enters normalization, so a thread-local `IN_IDEMPOTENCY_CHECK` guard breaks the
-recursion — the inner call skips its own check.
+share, at the single exit of `normalize_core_checked`. That covers every public
+normalization: `normalize()`, `normalize_with_diagnostics()`, and every
+`VariantProjector` path (the projection-driven genomic/coding/protein axes).
+
+It is one call site again as of #1382. `normalize_with_diagnostics` used to reach
+`normalize_core_canonical` directly, which bypassed both the oracles and — the
+actual defect — the strict-mode rejection ladder, so #1366 had to call
+`assert_seam_oracles` from it separately. Routing it through
+`normalize_core_checked` fixes both at once, and the extra call would now just
+re-run all three oracles on that path.
+
+The idempotency oracle's verification pass re-enters normalization, so a
+thread-local `IN_IDEMPOTENCY_CHECK` guard breaks the recursion — the inner call
+skips its own check.
 
 #### Normalization re-parse oracle
 
