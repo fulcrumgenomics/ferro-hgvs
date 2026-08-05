@@ -17,6 +17,7 @@ mod five_prime_insertion_dup_boundary_anchor;
 mod five_prime_tandem_repeat_dup_rotation;
 mod issue_1282_position_zero;
 mod repeat_input_idempotency;
+mod repeat_lowering_sibling_junction;
 
 mod allele_grammar_corners;
 mod allele_trans_phase;

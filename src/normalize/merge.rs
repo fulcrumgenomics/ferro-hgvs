@@ -2602,12 +2602,28 @@ fn collect_canonical_edits(
 /// `del`, `ins` and `unit[N]`: that is a rendering decision, and the derivation
 /// only needs the bases.
 ///
-/// Where inside the tract the difference is placed does not matter. The tract
-/// is a whole number of copies of one unit, so adding or removing copies at
-/// either end yields the same sequence — which is why this can ignore the
-/// shuffle direction that `normalize_repeat` must honour. The 3' end is chosen
-/// so the footprint stays as small and as far from the group's other members as
-/// possible.
+/// Where inside the tract the difference is placed does not matter **as long as
+/// no sibling sits inside it**. The tract is a whole number of copies of one
+/// unit, so adding or removing copies at either end yields the same sequence —
+/// which is why this can otherwise ignore the shuffle direction that
+/// `normalize_repeat` must honour. The 3' end is chosen so the footprint stays
+/// as small and as far from the group's other members as possible.
+///
+/// That premise fails when another member's junction falls strictly inside the
+/// tract, and it fails silently. `g.[263_265A[7];264_265insC]` puts the
+/// insertion's `C` between the tract's own bases, so the four added `A`s are
+/// *before* it; lowering the repeat to an insertion at the tract's 3' junction
+/// puts them after, and the applied window comes back as `TAACAAAAAT` instead of
+/// `TAAAAAACAT`. Nothing downstream can notice, because by then the repeat is an
+/// ordinary `Ins` and the tract it came from is gone — the derivation simply
+/// canonicalizes the wrong sequence, and the caller gets a well-formed
+/// description of bases the input never denoted.
+///
+/// Such a pair overlaps and has no single resulting sequence to derive from, so
+/// this refuses rather than picks an order — the same answer
+/// `apply_edits_to_window` already gives an insertion interior to a `del`,
+/// `delins` or `inv` span (#486), applied to the one span-bearing member that
+/// reaches here still carrying its tract.
 ///
 /// Refuses (leaving the group to the per-member pipeline) when:
 ///
@@ -2619,11 +2635,38 @@ fn collect_canonical_edits(
 /// * the tract does not span the anchor, which `count_tandem_repeats` can
 ///   return (it back-scans first, so a run lying entirely 5' of the anchor is
 ///   reachable);
+/// * another member's junction falls strictly inside a repeat's stated span,
+///   per the paragraph above — the pair overlaps and denotes no single
+///   sequence, so there is nothing to derive from;
 /// * `count` equals the reference count, i.e. the member is an identity. The
 ///   resulting sequence cannot express one, so a group carrying one would come
 ///   back with that member silently dropped — the same reason `NaEdit::Identity`
 ///   is refused above.
 fn lower_repeat_edits(edits: &mut [GEdit], ref_bytes: &[u8], w_lo: i64) -> Option<()> {
+    // The junction each member adds sequence at, for the interior test below.
+    // An insertion's is its gap; a duplication's is the 3' end of what it
+    // copies. Every other kind claims bases rather than a junction and is
+    // already covered by the applier's own interior test.
+    let junction_of = |edit: &GEdit| match edit {
+        GEdit::Ins { gap, .. } => Some(*gap),
+        GEdit::Dup { e, .. } => Some(*e),
+        _ => None,
+    };
+    for i in 0..edits.len() {
+        let GEdit::Repeat { s, e, .. } = edits[i] else {
+            continue;
+        };
+        // Strictly inside, matching `demote_repeats_spanning_siblings`'
+        // `spans_sibling_junction`: a junction at the tract's 3' end is flush
+        // against it rather than within it, and that adjacency is legitimate.
+        if (0..edits.len())
+            .filter(|&j| j != i)
+            .filter_map(|j| junction_of(&edits[j]))
+            .any(|junction| junction >= s && junction < e)
+        {
+            return None;
+        }
+    }
     for edit in edits.iter_mut() {
         let GEdit::Repeat { s, e, unit, count } = edit else {
             continue;
