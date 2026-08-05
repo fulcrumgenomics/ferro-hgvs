@@ -398,6 +398,7 @@ mod strict_explicit_seq_size_modes;
 mod strict_rejection_survives_normalization;
 mod strict_whitespace_mode;
 mod supernumerary;
+mod sweep_filter_invariant;
 mod tool_support_matrix;
 mod trans_mosaic_mixed;
 mod uta_loader_tests;
