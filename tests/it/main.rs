@@ -199,6 +199,7 @@ mod issue_1362_identity_span;
 mod issue_1376_utr_ins_payload;
 mod issue_1382_diagnostics_strict_ladder;
 mod issue_1389_codon_gate_emitted_window;
+mod issue_1406_conflict_is_a_property_of_the_input;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;

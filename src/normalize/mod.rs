@@ -2700,6 +2700,85 @@ impl<P: ReferenceProvider> Normalizer<P> {
             allele.phase,
         ));
 
+        // Coincident *bounds* among the raw members, for exactly the reason the
+        // insertion detector above runs pre-merge — and the half that was
+        // missing (#1406).
+        //
+        // `detect_overlap_conflicts` also runs post-shift, on the normalized
+        // members, which meant W5002 reported whether the repair had *succeeded*
+        // rather than whether the input conflicted. Two inputs of the same shape
+        // got opposite verdicts:
+        //
+        // ```text
+        // reference  TTTTTTTTTAATATATTTTAATAC     24 bases
+        // g.[23dup;23A>G]  -> g.22_23insG          no warning, strict ACCEPTS
+        // g.[24dup;24C>G]  -> unchanged            W5002, strict REJECTS
+        // ```
+        //
+        // Both are a `dup` of one base beside a substitution of that same base.
+        // The only difference is that at 23 the repair collapses the pair into a
+        // single member, so by the time the post-shift detector looks there is
+        // nothing left to conflict; at 24 the terminal decline (#1307) leaves
+        // the pair intact and it is reported. Proximity to the end of the contig
+        // decided whether a conflicting description was rejected.
+        //
+        // The same mechanism let lenient mode launder a conflict outright:
+        // `g.[11_12inv;11_12insAA]` is strict-rejected, and its own lenient
+        // output `g.[11_12=;10_11A[4]]` is strict-*accepted*.
+        //
+        // So the verdict is taken from the input, where the conflict lives, and
+        // a conflicting allele is preserved as authored — the same answer
+        // `has_same_gap_insertions` gives just below, and ferro's standing one
+        // since #395/#486/#1004: report the conflict and leave the description
+        // alone rather than pick a winner among orderings the spec does not
+        // rank.
+        // Scoped to *coincident bounds*, and deliberately not widened to the
+        // insertion-interior-to-a-span conflicts `detect_insertion_overlaps`
+        // reports. Those alleles are still expected to have each member
+        // normalized on its own — `[4_10inv;5_6insAA]` settles as
+        // `[5_9inv;6_7insAA]`, the inversion 3'-shifted and the insertion
+        // respelled at its own junction — and preserving them verbatim would
+        // drop the per-member 3' rule that #1276 and #1235's transcript axes
+        // pin. What those alleles do not get is whole-allele re-derivation,
+        // which they already did not.
+        let raw_conflicts =
+            crate::normalize::overlap::detect_overlap_conflicts(&allele.variants, allele.phase);
+        if !raw_conflicts.is_empty() {
+            // Harvest the per-member diagnostics before preserving. Returning
+            // here skips the per-member loop below, which is where every
+            // *member-local* finding is raised — so without this a conflicting
+            // allele that ALSO misstates a reference base reports only the
+            // conflict. Measured on `g.[13G>A;13A>C]` (base 13 is `A`): the
+            // warning set went from `[RefSeqMismatch, OverlapConflict]` to
+            // `[OverlapConflict]`, and strict mode's error changed from
+            // "Reference mismatch at 13-13: expected G" to the coincidence
+            // message. A reference mismatch is a data-integrity signal about the
+            // caller's input, independent of whether the members also collide;
+            // losing it to a sibling's conflict is a strictly worse report.
+            //
+            // Each member is normalized in isolation purely to collect what it
+            // says — the results are discarded, because preserving the authored
+            // members is the whole point of this branch.
+            //
+            // Errors propagate rather than being swallowed. An earlier cut used
+            // `if let Ok(..)`, which quietly made this branch *more* permissive
+            // than the ordinary per-member path: a member that fails hard —
+            // `TranscriptVersionNotExact`, say — surfaces to the caller there
+            // and would have been discarded here, so an allele would go from
+            // erroring to returning a preserved value merely because a sibling
+            // conflicted with it. Whether the members collide is unrelated to
+            // whether one of them is resolvable at all.
+            for member in &allele.variants {
+                let (_, member_warnings) = self.normalize_core(member)?;
+                all_warnings.extend(member_warnings);
+            }
+            all_warnings.extend(raw_conflicts);
+            let mut preserved =
+                crate::hgvs::variant::AlleleVariant::new(allele.variants.clone(), allele.phase);
+            preserved.uncertain = allele.uncertain;
+            return Ok((HgvsVariant::Allele(preserved), all_warnings));
+        }
+
         // Two separate insertions at the *same* junction (`g.[4_5insT;4_5insA]`)
         // are an order-ambiguous overlap conflict, not a normalizable form:
         // there is no canonical order for the two inserted sequences, so the

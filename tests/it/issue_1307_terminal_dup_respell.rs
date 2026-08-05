@@ -70,31 +70,53 @@
 //! `issue_1327_mt_respell_past_contig_end`. The circular axis therefore gets the
 //! same answer as the linear one.
 //!
-//! **And not the single member the trace above ends on**, tempting as it looks:
-//! `g.23_24insG` is in range, is one member, and denotes the same sequence. It is
-//! unreachable *by policy*. `normalize_allele` disables its pre-merge reorder
-//! when the input carries an overlap conflict, and both shapes here are such an
-//! input — a `dup` and a substitution on one base is exactly what strict mode
-//! rejects as `OverlapConflictingEdits / W5002`. Dropping that guard does reach
-//! `g.23_24insG` (measured), and it breaks four committed guards that exist to
-//! forbid precisely this: `issue_395_overlap_conflict_strict_rejection::
+//! ## The single member the trace ends on — reached, as of #1406
+//!
+//! This section previously argued that `g.23_24insG` — in range, one member,
+//! denoting the same sequence — was **unreachable by policy**, because
+//! `normalize_allele` disables its pre-merge reorder when the input carries an
+//! overlap conflict, and "a `dup` and a substitution on one base is exactly what
+//! strict mode rejects as `OverlapConflictingEdits / W5002`."
+//!
+//! **That premise was wrong, and #1406 corrected it.** A `dup` is not an
+//! in-place edit: `duplication.md:5` places the copy "directly 3' of the
+//! original copy", so `g.24dup` *reads* base 24 and *writes* at the junction
+//! 24|25, while `g.24C>G` writes base 24. The two write footprints are disjoint,
+//! there is no ordering to choose, and the composition is unique. Coincident
+//! *read* spans were being reported as a conflict that never existed —
+//! `detect_overlap_conflicts` keyed on the span a member names rather than on
+//! the bases it claims.
+//!
+//! The spec asks for the merge, not the refusal. `delins.md:86-89` marks
+//! `NM_007294.3:c.[2077G>A;2077_2078insTA]` invalid and gives `c.2077delinsATA`
+//! as *the correct description*; `general.md:56` prioritisation then requires
+//! that form be spelled as a `dup` where it is one. And the old reading made the
+//! verdict depend on the spelling: the same variant written
+//! `g.[24C>G;24_25insC]` was accepted while `g.[24dup;24C>G]` was rejected.
+//!
+//! **So the issue's own bug is fixed more cleanly than by declining.** The
+//! reported defect is a coordinate one base past the contig — `g.24_25insC`.
+//! Reaching `g.23_24insG` never constructs an out-of-range coordinate at all,
+//! rather than constructing one and then refusing to repair around it.
+//! `assert_within_contig` below still guards every output, and now passes on a
+//! merged form instead of on an un-repaired pair.
+//!
+//! The four guards this section used to cite as blocking still **pass**,
+//! measured: `issue_395_overlap_conflict_strict_rejection::
 //! lenient_mode_preserves_authored_order_of_conflicting_members`,
 //! `issue_1276_dup_junction_overlap::
 //! lenient_output_of_a_conflict_is_still_rejected_by_strict`,
 //! `issue_1235_transcript_axes::overlap_conflicting_allele_is_not_canonicalized`
 //! and `idempotency_tests::
-//! test_overlap_conflicting_allele_is_idempotent_across_respellings`.
+//! test_overlap_conflicting_allele_is_idempotent_across_respellings`. They are
+//! unaffected because nothing was dropped wholesale — the change is to *which
+//! shapes are conflicts*, and every allele those four use is one still.
 //!
-//! A conflicting allele must stay recognisable as one so strict mode can reject
-//! it, rather than being canonicalised into something that looks valid. Which
-//! makes the pre-fix behaviour worse than the issue reports: it did not merely
-//! name a position past the end, it laundered a conflict into an output strict
-//! mode **accepts** (`g.[24C>G;24_25insC]` normalizes strictly to
-//! `g.23_24insG`). Declining restores both properties at once — in range, and
-//! still a conflict.
+//! A genuinely conflicting allele must still stay recognisable as one so strict
+//! mode can reject it rather than being canonicalised into something that looks
+//! valid. That property is intact; this shape simply was never a member of it.
 
-use ferro_hgvs::error_handling::ErrorMode;
-use ferro_hgvs::normalize::NormalizeConfig;
+use crate::common::cis_apply_oracle::apply_with;
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
 
 /// The issue's reference: 24 bases ending in a unique `C`, so a duplication
@@ -156,14 +178,14 @@ fn assert_within_contig(input: &str, output: &str) {
 fn a_substitution_sibling_leaves_the_terminal_duplication_alone() {
     assert_eq!(SEQUENCE.len(), LENGTH, "fixture must be 24 bases");
     for (input, expected) in [
-        ("NC_TEST.1:g.[24dup;24C>G]", "NC_TEST.1:g.[24dup;24C>G]"),
-        ("NC_TEST.1:g.[24C>G;24dup]", "NC_TEST.1:g.[24C>G;24dup]"),
+        ("NC_TEST.1:g.[24dup;24C>G]", "NC_TEST.1:g.23_24insG"),
+        ("NC_TEST.1:g.[24C>G;24dup]", "NC_TEST.1:g.23_24insG"),
     ] {
         let output = normalize("NC_TEST.1", SEQUENCE, input);
         assert_within_contig(input, &output);
         assert_eq!(
             output, expected,
-            "`{input}` must keep both members in range"
+            "`{input}` must reach the merged form, in range"
         );
     }
 }
@@ -179,7 +201,10 @@ fn a_delins_sibling_leaves_the_terminal_duplication_alone() {
     let input = "NC_TEST.1:g.[24dup;24delinsGG]";
     let output = normalize("NC_TEST.1", SEQUENCE, input);
     assert_within_contig(input, &output);
-    assert_eq!(output, "NC_TEST.1:g.[24dup;24delinsGG]");
+    // Two members still, unlike the substitution case — the pair does not
+    // collapse to one edit. What changed is that they are now ordered rather
+    // than refused, and the out-of-range junction is never constructed.
+    assert_eq!(output, "NC_TEST.1:g.[24delinsGG;24dup]");
 }
 
 /// The same overrun on the circular axis. Not a special case: `m.` has a last
@@ -187,15 +212,20 @@ fn a_delins_sibling_leaves_the_terminal_duplication_alone() {
 /// it one is not valid HGVS (see the module docs).
 #[test]
 fn the_circular_axis_gets_the_same_answer() {
-    for input in [
-        "NC_012920.1:m.[24dup;24C>G]",
-        "NC_012920.1:m.[24dup;24delinsGG]",
+    // The genomic answers, verbatim, on `m.` — that identity is the whole
+    // claim, so they are written out rather than derived from the input.
+    for (input, expected) in [
+        ("NC_012920.1:m.[24dup;24C>G]", "NC_012920.1:m.23_24insG"),
+        (
+            "NC_012920.1:m.[24dup;24delinsGG]",
+            "NC_012920.1:m.[24delinsGG;24dup]",
+        ),
     ] {
         let output = normalize("NC_012920.1", SEQUENCE, input);
         assert_within_contig(input, &output);
         assert_eq!(
-            output, input,
-            "`{input}` must keep both members in range on the circular axis"
+            output, expected,
+            "`{input}` must get the same answer as the linear axis, in range"
         );
     }
 }
@@ -328,36 +358,46 @@ fn the_declined_output_is_idempotent() {
     }
 }
 
-/// The conflict must survive into strict mode.
+/// The merged form must denote the bases the input denotes.
 ///
-/// The point of declining rather than repairing: an overlap-conflicting input
-/// stays recognisable as one, so strict mode still rejects it. The out-of-range
-/// spelling failed this — `g.[24C>G;24_25insC]` is strict-*acceptable*, so the
-/// old behaviour laundered a conflict into a valid-looking description while also
-/// naming a position the contig does not have.
+/// This replaces `the_declined_output_is_still_rejected_by_strict`, whose
+/// premise #1406 removed: these shapes are not overlap conflicts, so there is no
+/// conflict left for strict mode to reject and asserting one would pin the
+/// misclassification rather than the behaviour.
 ///
-/// The sibling of `issue_1276_dup_junction_overlap::
-/// lenient_output_of_a_conflict_is_still_rejected_by_strict`, at the terminus.
+/// What matters now is stronger and specific to having *started* merging a shape
+/// that was previously refused. A refusal is safe by construction — the output
+/// is the input. A merge is not: it asserts that two members compose into one
+/// edit, and if the composition is wrong the result is a well-formed description
+/// of the wrong bases, which no oracle in this suite would notice. So the check
+/// is a sequence identity, made with an applier that is **not** the normalizer:
+/// convert each member to its SPDI triple and splice the reference.
+///
+/// `g.[24dup;24delinsGG]` is included even though it does not collapse to one
+/// member, because reordering must be sequence-preserving too.
 #[test]
-fn the_declined_output_is_still_rejected_by_strict() {
-    for input in [
-        "NC_TEST.1:g.[24dup;24C>G]",
-        "NC_TEST.1:g.[24C>G;24dup]",
-        "NC_TEST.1:g.[24dup;24delinsGG]",
+fn the_merged_output_denotes_the_inputs_bases() {
+    // The circular inputs are here too, not only on the linear axis. `m.` is
+    // where the wrapped spelling would have been tempting, so it is the axis
+    // where a wrong composition is most plausible — checking only `g.` would
+    // leave the riskier half to a string comparison.
+    for (accession, input) in [
+        ("NC_TEST.1", "NC_TEST.1:g.[24dup;24C>G]"),
+        ("NC_TEST.1", "NC_TEST.1:g.[24C>G;24dup]"),
+        ("NC_TEST.1", "NC_TEST.1:g.[24dup;24delinsGG]"),
+        ("NC_012920.1", "NC_012920.1:m.[24dup;24C>G]"),
+        ("NC_012920.1", "NC_012920.1:m.[24dup;24delinsGG]"),
     ] {
-        let lenient = normalize("NC_TEST.1", SEQUENCE, input);
-        let variant = parse_hgvs(&lenient).expect("lenient output must parse");
         let mut provider = MockProvider::new();
-        provider.add_genomic_sequence("NC_TEST.1", SEQUENCE.to_string());
-        let strict = Normalizer::with_config(
-            provider,
-            NormalizeConfig::default().with_error_mode(ErrorMode::Strict),
-        )
-        .normalize(&variant);
-        assert!(
-            strict.is_err(),
-            "`{input}` -> `{lenient}`, which strict mode accepts — the conflict \
-             was canonicalized away instead of being left for strict to reject"
+        provider.add_genomic_sequence(accession, SEQUENCE.to_string());
+        let want = apply_with(&provider, SEQUENCE, input)
+            .unwrap_or_else(|| panic!("`{input}` must denote a sequence"));
+        let output = normalize("NC_TEST.1", SEQUENCE, input);
+        let got = apply_with(&provider, SEQUENCE, &output)
+            .unwrap_or_else(|| panic!("`{input}` -> `{output}`, which denotes no sequence at all"));
+        assert_eq!(
+            got, want,
+            "`{input}` -> `{output}` no longer denotes the input's bases"
         );
     }
 }
