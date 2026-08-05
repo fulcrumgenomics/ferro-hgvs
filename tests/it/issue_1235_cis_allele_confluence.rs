@@ -200,7 +200,7 @@ fn soft_masked_reference_yields_the_same_canonical_form() {
 }
 
 /// #1233 — `[ins;del]` reduces to substitutions. Highest-frequency shape in the
-/// reporter's saturation-mutagenesis counting run.
+/// reporter's variant-counting run.
 #[test]
 fn issue_1233_ins_del_reduces_to_substitutions() {
     converges_to(
