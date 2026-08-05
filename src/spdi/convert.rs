@@ -1318,11 +1318,11 @@ where
                 None => match provider {
                     Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
                     None => {
-                        return Err(ConversionError::MissingReferenceData {
-                            description:
-                                "duplication sequence not provided; reference data needed to determine duplicated bases"
-                                    .to_string(),
-                        });
+                        return Err(unspelled_bases_error(
+                            UnspelledBases::Duplicated,
+                            start_one_based,
+                            end_one_based,
+                        ));
                     }
                 },
             };
@@ -1346,11 +1346,11 @@ where
                 None => match provider {
                     Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
                     None => {
-                        return Err(ConversionError::MissingReferenceData {
-                            description:
-                                "deleted sequence not provided; reference data needed to determine deleted bases"
-                                    .to_string(),
-                        });
+                        return Err(unspelled_bases_error(
+                            UnspelledBases::Deleted,
+                            start_one_based,
+                            end_one_based,
+                        ));
                     }
                 },
             };
@@ -1385,15 +1385,11 @@ where
                 None => match provider {
                     Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
                     None => {
-                        let del_len = end_one_based
-                            .saturating_sub(start_one_based)
-                            .saturating_add(1) as usize;
-                        return Err(ConversionError::MissingReferenceData {
-                            description: format!(
-                                "Cannot convert delins to SPDI: deleted sequence of length {} is unknown (no reference data)",
-                                del_len
-                            ),
-                        });
+                        return Err(unspelled_bases_error(
+                            UnspelledBases::DeletedInDelins,
+                            start_one_based,
+                            end_one_based,
+                        ));
                     }
                 },
             };
@@ -1437,12 +1433,11 @@ where
                 None => match provider {
                     Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
                     None => {
-                        return Err(ConversionError::MissingReferenceData {
-                            description:
-                                "unchanged sequence not provided; reference data needed to \
-                                 determine the bases an identity claims"
-                                    .to_string(),
-                        });
+                        return Err(unspelled_bases_error(
+                            UnspelledBases::Unchanged,
+                            start_one_based,
+                            end_one_based,
+                        ));
                     }
                 },
             };
@@ -1464,11 +1459,11 @@ where
                 None => match provider {
                     Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
                     None => {
-                        return Err(ConversionError::MissingReferenceData {
-                            description:
-                                "inversion sequence not provided; reference data needed to determine inverted bases"
-                                    .to_string(),
-                        });
+                        return Err(unspelled_bases_error(
+                            UnspelledBases::Inverted,
+                            start_one_based,
+                            end_one_based,
+                        ));
                     }
                 },
             };
@@ -1541,11 +1536,11 @@ where
             let del_raw = match provider {
                 Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
                 None => {
-                    return Err(ConversionError::MissingReferenceData {
-                        description:
-                            "repeat reference span not provided; reference data needed to determine pre-expansion bases"
-                                .to_string(),
-                    });
+                    return Err(unspelled_bases_error(
+                        UnspelledBases::RepeatTract,
+                        start_one_based,
+                        end_one_based,
+                    ));
                 }
             };
             let del_str = apply_alphabet(&del_raw, alphabet);
@@ -1588,6 +1583,94 @@ where
         _ => Err(ConversionError::UnsupportedEditType {
             description: format!("unsupported edit type: {:?}", edit),
         }),
+    }
+}
+
+/// The edit shapes whose SPDI form needs reference bases the description did
+/// not spell out. Each names what is unknown and how the caller could spell it.
+///
+/// Exists so the five arms of [`hgvs_to_spdi`] that hit this wall decline in one
+/// voice. They previously carried five hand-written strings, none of which named
+/// the interval that could not be resolved or either way out, and one of which
+/// (`Delins`) had drifted into a different sentence shape than its siblings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnspelledBases {
+    Duplicated,
+    Deleted,
+    DeletedInDelins,
+    Unchanged,
+    Inverted,
+    /// A repeat's pre-expansion tract. The odd one out: see
+    /// [`Self::spelled_example`].
+    RepeatTract,
+}
+
+impl UnspelledBases {
+    /// How to describe the missing bases: `"the {} bases at 10..=12"`.
+    fn adjective(self) -> &'static str {
+        match self {
+            Self::Duplicated => "duplicated",
+            Self::Deleted | Self::DeletedInDelins => "deleted",
+            Self::Unchanged => "unchanged",
+            Self::Inverted => "inverted",
+            Self::RepeatTract => "pre-expansion repeat-tract",
+        }
+    }
+
+    /// A spelled-out form of this shape, offered as the example in the message —
+    /// or `None` where the description has no way to carry the bases.
+    ///
+    /// `RepeatTract` is that case, and it is why this returns an `Option`. The
+    /// other five arms all read an optional sequence off the edit first and only
+    /// consult the provider when it is absent, so "spell it" is genuinely a way
+    /// out. The repeat arm has no such field to fill: the notation states the
+    /// *unit* (`g.10AC[3]`), never the span the tract currently occupies, so the
+    /// provider is the only route and suggesting otherwise would send the caller
+    /// after a description they cannot write.
+    ///
+    /// Every `Some` here **must parse** — an error message that suggests a
+    /// description ferro would itself reject is worse than one that suggests
+    /// nothing. `spelled_examples_are_parseable` holds them to that.
+    fn spelled_example(self) -> Option<&'static str> {
+        match self {
+            Self::Duplicated => Some("g.10_12dupACG"),
+            Self::Deleted => Some("g.10_12delACG"),
+            Self::DeletedInDelins => Some("g.10_12delACGinsT"),
+            Self::Unchanged => Some("g.10A="),
+            Self::Inverted => Some("g.10_12invACG"),
+            Self::RepeatTract => None,
+        }
+    }
+}
+
+/// Decline a conversion that needs bases the description left implicit.
+///
+/// Names the interval and every remedy that actually exists, because a caller who
+/// hits this has one or two ways forward — spell the bases in the description
+/// where the notation allows it, or pass a provider that can look them up — and
+/// neither is guessable from "reference data needed".
+fn unspelled_bases_error(
+    what: UnspelledBases,
+    start_one_based: u64,
+    end_one_based: u64,
+) -> ConversionError {
+    let remedy = match what.spelled_example() {
+        Some(example) => format!(
+            "Spell them in the description (e.g. `{example}`) or convert with a reference provider."
+        ),
+        None => "Convert with a reference provider: the repeat notation states the unit, \
+                 not the span its tract currently occupies, so the bases cannot be spelled \
+                 in the description."
+            .to_string(),
+    };
+    ConversionError::MissingReferenceData {
+        description: format!(
+            "cannot convert to SPDI: the {} bases at {}..={} are unknown (no reference data). \
+             {remedy}",
+            what.adjective(),
+            start_one_based,
+            end_one_based,
+        ),
     }
 }
 
@@ -2064,6 +2147,165 @@ fn char_to_base(c: char) -> Result<crate::hgvs::edit::Base, ConversionError> {
 mod tests {
     use super::*;
     use crate::hgvs::parser::parse_hgvs;
+
+    // ------------------------------------------------------------------
+    // Unspelled-bases declines (#1388)
+    //
+    // These pin the message *text*, not just that an error occurs. The arms
+    // were already covered for behaviour, which is exactly why a wrapping
+    // defect could sit in a branch through a full green suite: nothing read
+    // what they said.
+    // ------------------------------------------------------------------
+
+    /// Every example offered in a decline must be a description ferro accepts.
+    /// Suggesting a form the parser rejects would send the caller somewhere
+    /// worse than saying nothing, and the suggestion is a literal that no other
+    /// test exercises.
+    #[test]
+    fn spelled_examples_are_parseable() {
+        for what in [
+            UnspelledBases::Duplicated,
+            UnspelledBases::Deleted,
+            UnspelledBases::DeletedInDelins,
+            UnspelledBases::Unchanged,
+            UnspelledBases::Inverted,
+            UnspelledBases::RepeatTract,
+        ] {
+            let Some(example) = what.spelled_example() else {
+                // `RepeatTract` offers no example on purpose — the notation
+                // cannot carry the bases. Assert that rather than skipping it,
+                // so adding an example here without a parseable form fails.
+                assert_eq!(
+                    what,
+                    UnspelledBases::RepeatTract,
+                    "only the repeat tract may decline without offering an example"
+                );
+                continue;
+            };
+            let prefixed = format!("NC_000001.11:{example}");
+            assert!(
+                parse_hgvs(&prefixed).is_ok(),
+                "{what:?} suggests `{example}`, which ferro cannot parse as `{prefixed}`"
+            );
+        }
+    }
+
+    /// The repeat arm names the provider as the only route, and does not tell the
+    /// caller to spell bases the notation cannot express.
+    #[test]
+    fn the_repeat_tract_offers_only_the_provider() {
+        let message = unspelled_bases_error(UnspelledBases::RepeatTract, 10, 12).to_string();
+        assert!(message.contains("10..=12"), "no span named: {message}");
+        assert!(
+            message.contains("reference provider"),
+            "the provider route must be named: {message}"
+        );
+        assert!(
+            !message.contains("Spell them"),
+            "a repeat's tract cannot be spelled in the description, so the message \
+             must not suggest it: {message}"
+        );
+    }
+
+    /// The rendered message must carry no accidental whitespace runs. A wrapped
+    /// literal without `\` continuations silently embeds the source indentation,
+    /// which is invisible in review and obvious to a user.
+    #[test]
+    fn the_decline_message_has_no_embedded_whitespace_runs() {
+        // Every shape, not a representative one: the defect is per-literal, and
+        // each shape's message is assembled from a different pair of literals.
+        for what in [
+            UnspelledBases::Duplicated,
+            UnspelledBases::Deleted,
+            UnspelledBases::DeletedInDelins,
+            UnspelledBases::Unchanged,
+            UnspelledBases::Inverted,
+            UnspelledBases::RepeatTract,
+        ] {
+            let message = unspelled_bases_error(what, 10, 12).to_string();
+            assert!(
+                !message.contains("  "),
+                "{what:?} carries a run of consecutive spaces: {message:?}"
+            );
+            assert!(
+                !message.contains('\n') && !message.contains('\t'),
+                "{what:?} carries a newline or tab: {message:?}"
+            );
+        }
+    }
+
+    /// The whole point of the message: it names the interval that could not be
+    /// resolved, and both ways out.
+    #[test]
+    fn the_decline_message_names_the_span_and_both_remedies() {
+        let message = unspelled_bases_error(UnspelledBases::Unchanged, 10, 12).to_string();
+        assert!(message.contains("10..=12"), "no span named: {message}");
+        assert!(message.contains("unchanged"), "no shape named: {message}");
+        assert!(message.contains("g.10A="), "no example offered: {message}");
+        assert!(
+            message.contains("Spell them") && message.contains("reference provider"),
+            "both remedies must be offered: {message}"
+        );
+    }
+
+    /// The five shapes must be distinguishable from their messages alone — a
+    /// caller reading a log has nothing else to go on.
+    #[test]
+    fn each_shape_declines_distinguishably() {
+        let messages: Vec<String> = [
+            UnspelledBases::Duplicated,
+            UnspelledBases::Deleted,
+            UnspelledBases::DeletedInDelins,
+            UnspelledBases::Unchanged,
+            UnspelledBases::Inverted,
+            UnspelledBases::RepeatTract,
+        ]
+        .iter()
+        .map(|w| unspelled_bases_error(*w, 10, 12).to_string())
+        .collect();
+
+        // `Deleted` and `DeletedInDelins` share an adjective by design — both
+        // are the deleted span — but differ in the example they offer.
+        let unique: std::collections::BTreeSet<&String> = messages.iter().collect();
+        assert_eq!(
+            unique.len(),
+            messages.len(),
+            "two shapes decline identically: {messages:#?}"
+        );
+    }
+
+    /// End-to-end: the message a real provider-less conversion produces, for
+    /// each shape that can hit the wall. Pins that the helper is actually wired
+    /// in — a unit test on the helper alone would pass with the arms unchanged.
+    ///
+    /// All **six** shapes, including the repeat tract. It is the one arm whose
+    /// remedy differs, so leaving it to the helper-level tests would have left
+    /// the only differing branch unproven end-to-end — and it is reachable
+    /// without a provider exactly like its siblings.
+    #[test]
+    fn a_provider_less_conversion_declines_with_the_span() {
+        for (descriptor, adjective, span) in [
+            ("NC_000001.11:g.10_12dup", "duplicated", "10..=12"),
+            ("NC_000001.11:g.10_12del", "deleted", "10..=12"),
+            ("NC_000001.11:g.10_12delinsT", "deleted", "10..=12"),
+            ("NC_000001.11:g.10_12=", "unchanged", "10..=12"),
+            ("NC_000001.11:g.10_12inv", "inverted", "10..=12"),
+            (
+                "NC_000001.11:g.10_15AC[3]",
+                "pre-expansion repeat-tract",
+                "10..=15",
+            ),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            let message = hgvs_to_spdi_simple(&variant)
+                .expect_err(&format!("`{descriptor}` must decline without a provider"))
+                .to_string();
+            assert!(
+                message.contains(adjective) && message.contains(span),
+                "`{descriptor}` declined without naming the {adjective} bases at {span}: {message}"
+            );
+        }
+    }
 
     // HGVS to SPDI tests
 
