@@ -135,11 +135,20 @@ reviews:
         (`boundary.rs`), repeat shuffling, edit merging (`merge.rs`), overlap
         resolution (`overlap.rs`), and rule application (`rules.rs`). The core
         invariant is IDEMPOTENCY — normalize(normalize(x)) == normalize(x) —
-        enforced in debug builds by `FERRO_ASSERT_IDEMPOTENT=1` at the shared
-        exit of `normalize_core_checked`, which covers both `normalize()` and
-        every `VariantProjector` path. Confirm changes are covered by
-        `tests/it/idempotency_tests.rs`, `tests/it/normalize_property_tests.rs`,
-        and `tests/it/normalize_idempotency_proptest.rs`. Flag: off-by-one in
+        enforced in debug builds by `FERRO_ASSERT_IDEMPOTENT=1`, which runs from
+        `Normalizer::assert_seam_oracles` and covers every public normalization:
+        `normalize()`, `normalize_with_diagnostics()` and every
+        `VariantProjector` path.
+        `Normalizer` has exactly TWO public normalizing methods — `normalize()`
+        and `normalize_with_diagnostics()` — and a change can affect one without
+        the other, so establish which of them the change reaches before judging
+        its coverage. `tests/it/idempotency_tests.rs`,
+        `tests/it/normalize_property_tests.rs` and
+        `tests/it/normalize_idempotency_proptest.rs` are the idempotency-corpus
+        entry points and go through `normalize()` ONLY — none of the three calls
+        `normalize_with_diagnostics`, so they are a starting point rather than
+        sufficient coverage, and for a change on that exit they are no coverage at
+        all (roughly three dozen other `tests/it/` files do call it). Flag: off-by-one in
         shuffle or boundary windows; wrong shift direction or strand handling;
         mishandled circular/mitochondrial wraparound; overlap merges that
         silently drop or reorder edits; any path that can make a second
