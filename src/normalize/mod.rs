@@ -4269,9 +4269,40 @@ impl<P: ReferenceProvider> Normalizer<P> {
         //     stops the shuffle at the exon edge (the #670 machinery then
         //     governs any genomic-space continuation).
         // `tx_to_cds_pos` re-expresses any resulting `tx > cds_end` as `c.*<M>`.
+        //     The `end_axis` test asks whether the variant's *reference span*
+        //     straddles the boundary. An insertion has no reference span: its
+        //     two endpoints are the flanks of a gap, so an insertion resting on
+        //     the CDS/3'UTR junction necessarily reads `end_axis == ThreeUtr`
+        //     while covering no 3'UTR base at all. Requiring both flanks
+        //     therefore excluded every junction insertion from the relaxation
+        //     above — including the ones this relaxation was extended to
+        //     `Insertion` for — and reproduced #1209's own alternation one shape
+        //     over (#1426):
+        //
+        //         c.18_*1insACT -> c.18delinsTACT -> c.*1_*2insCTA
+        //
+        //     The first pass is barred here, stops on the boundary and is
+        //     rewritten by the #387 clamp; the resulting `Delins` has both
+        //     flanks on `c.18`, so the second pass is admitted and shifts. Two
+        //     passes, two branches — the exact defect #1209 records.
+        //
+        //     So for an insertion the question is asked of the 5' flank alone.
+        //     A del/dup/delins still needs both, because for those the span is
+        //     real and #350's bail is what keeps a genuinely straddling variant
+        //     from being reinterpreted.
+        //
+        //     `is_zero_width_insertion`, not `matches!(edit, Insertion { .. })`.
+        //     The argument above rests on an insertion covering no reference
+        //     base, and that is what `tx_end == tx_start + 1` establishes. A
+        //     malformed insertion with non-adjacent flanks (`c.10_20insA`) does
+        //     name a span, and it is exactly the straddling shape #350's bail
+        //     exists to refuse — so it must not be waved through on the strength
+        //     of its edit kind. This is the same predicate the 5' mirror below
+        //     uses, and the two arms should not disagree about what counts as an
+        //     insertion for this purpose.
         if self.config.shuffle_direction == ShuffleDirection::ThreePrime
             && matches!(start_axis, boundary::AxisRegion::Cds)
-            && matches!(end_axis, boundary::AxisRegion::Cds)
+            && (matches!(end_axis, boundary::AxisRegion::Cds) || is_zero_width_insertion)
             && matches!(
                 edit,
                 NaEdit::Deletion { .. }
