@@ -4314,6 +4314,48 @@ impl<P: ReferenceProvider> Normalizer<P> {
             boundaries = Boundaries::new(boundaries.left, exon_only.right);
         }
 
+        // The 5' mirror, for zero-width insertions only (#1426).
+        //
+        // The relaxation above is 3'-direction-only, deliberately: the 3' rule
+        // is what HGVS mandates. But the *bound* it relaxes is not a rule, it is
+        // an axis clamp derived from the region the variant currently sits in —
+        // and for a zero-width insertion that region flips as the insertion
+        // moves, so the bound that stops it is one the next pass no longer
+        // applies:
+        //
+        //     c.*1_*2insCTA  tx=(19,20) start_axis=ThreeUtr clamped.left=18
+        //         -> stops at c.18_*1
+        //     c.18_*1insACT  tx=(18,19) start_axis=Cds      clamped.left=0
+        //         -> continues to c.17_18insTAC
+        //
+        // Two passes, two bounds, because the first pass's answer changed which
+        // clamp the second pass reads. That is the same defect the 3' half of
+        // #1426 was, arriving from the other side, and it is not a question of
+        // whether the 5' shuffle *should* cross `cds_end` — it already does,
+        // just one base per pass.
+        //
+        // Scoped to a zero-width insertion for the same reason the 3' arm asks
+        // only its 5' flank: an insertion covers no reference base, so the axis
+        // clamp's purpose — never reinterpret a variant whose span straddles the
+        // boundary — has nothing to bite on. A `del`/`dup`/`delins` keeps both
+        // bounds; for those the span is real.
+        //
+        // This reuses `is_zero_width_insertion` rather than re-deriving the same
+        // predicate locally. The 3' arm's note above asks that the two arms not
+        // disagree about what counts as an insertion here, and two bindings that
+        // are equal today are exactly how that promise is broken later — a
+        // narrowing applied to one would leave the other admitting a malformed
+        // `c.10_20insA` on the strength of its edit kind alone.
+        if self.config.shuffle_direction == ShuffleDirection::FivePrime
+            && is_zero_width_insertion
+            && matches!(
+                start_axis,
+                boundary::AxisRegion::Cds | boundary::AxisRegion::ThreeUtr
+            )
+        {
+            boundaries = Boundaries::new(exon_only.left, boundaries.right);
+        }
+
         // #918: a whole-CDS-spanning del/dup (5'UTR→3'UTR, carved out of the
         // #350 bail above) shuffles over the full contiguous spliced transcript
         // — its deleted block already crosses every internal CDS exon/intron
