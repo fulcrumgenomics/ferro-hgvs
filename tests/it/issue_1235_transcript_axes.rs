@@ -322,27 +322,39 @@ fn overlap_conflicting_allele_is_not_canonicalized() {
     // collision repair rewrites it, in whichever member order it was authored.
     // Convergence is the point — one variant, one canonical string — and it is
     // reached in a single pass, so idempotency is preserved either way.
-    for (dup_spelling, converges_to) in [
-        (
-            "NM_TEST.1:c.[5_9inv;5_6dup]",
-            "NM_TEST.1:c.[5_9inv;6_7insAA]",
-        ),
-        (
-            "NM_TEST.1:c.[5_6dup;5_9inv]",
-            "NM_TEST.1:c.[6_7insAA;5_9inv]",
-        ),
-    ] {
+    //
+    // **Both authored orders now reach the same string (#1414).** They used to
+    // reach two, differing only in member order, because the genomic-order sort
+    // was skipped for any allele that reported an overlap conflict. That skip
+    // exists to honour #395's "preserve the input verbatim" contract, and the
+    // contract does not apply here: the collision repair rewrote the `dup` into
+    // an `ins`, so there is no authored form left to preserve. The sort is now
+    // skipped only when the allele really was handed back untouched, which is
+    // why this loop pins one target rather than two.
+    const CONVERGES_TO: &str = "NM_TEST.1:c.[5_9inv;6_7insAA]";
+    for dup_spelling in ["NM_TEST.1:c.[5_9inv;5_6dup]", "NM_TEST.1:c.[5_6dup;5_9inv]"] {
         assert_eq!(
             normalize_to_string(provider(), dup_spelling),
-            converges_to,
-            "a `dup` interior to an `inv` must settle on the `ins` spelling of the same conflict"
-        );
-        assert_eq!(
-            normalize_to_string(provider(), converges_to),
-            converges_to,
-            "and that settled spelling must be a fixed point"
+            CONVERGES_TO,
+            "a `dup` interior to an `inv` must settle on the `ins` spelling of the same \
+             conflict, in genomic order whichever order it was authored in"
         );
     }
+    assert_eq!(
+        normalize_to_string(provider(), CONVERGES_TO),
+        CONVERGES_TO,
+        "and that settled spelling must be a fixed point"
+    );
+    // The reversed-order `ins` spelling remains a fixed point of its own: it is
+    // authored exactly as its members settle, so it *is* returned verbatim and
+    // #395's contract genuinely applies. Whether a conflicting allele should be
+    // preserved that faithfully is #1406's question, not this one — recorded
+    // here so the residual is visible rather than mistaken for convergence.
+    assert_eq!(
+        normalize_to_string(provider(), "NM_TEST.1:c.[6_7insAA;5_9inv]"),
+        "NM_TEST.1:c.[6_7insAA;5_9inv]",
+        "an allele authored exactly as it settles is still returned verbatim"
+    );
 
     // Both spellings are recognised as the same conflict by strict mode, and
     // the authored member order survives in each.

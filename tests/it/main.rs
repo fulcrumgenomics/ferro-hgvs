@@ -205,6 +205,7 @@ mod issue_1394_repeat_growth_swallows_deletion;
 mod issue_1398_cds_utr3_insertion_idempotency;
 mod issue_1406_conflict_is_a_property_of_the_input;
 mod issue_1406_lenient_output_keeps_the_conflict;
+mod issue_1414_conflicting_allele_member_order;
 mod issue_1416_cancelled_identity_beside_repeat;
 mod issue_1426_five_prime_junction_insertion;
 mod issue_1426_junction_insertion_settles_in_one_pass;
