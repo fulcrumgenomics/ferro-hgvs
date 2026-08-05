@@ -53,6 +53,15 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           key: coverage
+          # This job needs it too, and needs it more than `ci.yml`'s two do
+          # (#1396). `install-action` puts `cargo-llvm-cov` into
+          # `${CARGO_HOME}/bin` at the step ABOVE this one, so with `cache-bin`
+          # left at its default the restore runs *after* the install and can
+          # extract a previously-saved `cargo-llvm-cov` over it — pinning this
+          # job to whichever version first populated the key. In `test-build` the
+          # cache step at least runs first; here the hazardous order is the one
+          # already written.
+          cache-bin: "false"
       - name: Run coverage
         run: |
           cargo llvm-cov --features dev --codecov --output-path codecov.json
