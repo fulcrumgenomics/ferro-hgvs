@@ -196,14 +196,14 @@ pub(crate) fn merge_consecutive_edits<P: ReferenceProvider>(
         // Chain ends here. If we'd been growing one, rebuild the head once
         // from the final merged anchor before moving on.
         if head_merged {
-            reconcile_head(&mut output, head_anchor.take().unwrap());
+            reconcile_head(&mut output, head_anchor.take().unwrap(), provider);
             head_merged = false;
         }
         head_anchor = anchor_for_variant(&next);
         output.push(next);
     }
     if head_merged {
-        reconcile_head(&mut output, head_anchor.take().unwrap());
+        reconcile_head(&mut output, head_anchor.take().unwrap(), provider);
     }
     output
 }
@@ -630,10 +630,124 @@ fn cis_axis_parts(
     Some((accession, region, s, e, edit.inner()?))
 }
 
-/// Replace `output.last()` with a freshly-built variant from `anchor`.
+/// Whether a merged anchor restates the reference bases under its own span —
+/// that is, whether the members it merged cancelled each other out.
+///
+/// `g.[262_263insA;263del]` over a reference whose base 263 is `A` inserts an
+/// `A` and deletes the `A` beside it. The merge is faithful: it yields
+/// `g.263delinsA`, which denotes exactly the reference. Per-member
+/// normalization then renders that as `g.263=`, and inside a cis allele with
+/// real members beside it, that `=` is a residue of the merge rather than
+/// anything the caller said (#1321).
+///
+/// Only the axes whose positions index the fetched sequence directly are
+/// answered; anything else returns `false` so the member is built as before.
+fn merged_anchor_restates_reference<P: ReferenceProvider>(
+    head: &HgvsVariant,
+    anchor: &Anchor,
+    provider: &P,
+) -> bool {
+    // An insertion anchor with nothing left to insert is the empty-payload
+    // cancellation `build_naedit` renders as an identity; it has no span to
+    // compare against, and `start > end` is its shape.
+    if anchor.start > anchor.end {
+        return anchor.alt.is_empty();
+    }
+    let Some(kind) = cis_kind_of(head) else {
+        return false;
+    };
+    let Some((accession, region, _start, _end, _edit)) = cis_axis_parts(head, kind) else {
+        return false;
+    };
+    // `region_sequence_delta`, not `axis_frame(..).delta`: the anchor's positions
+    // are on the member's own region axis, and on `c.` that axis is not one
+    // affine shift. A `c.-n` 5'UTR or `c.*n` 3'UTR position needs the
+    // region-aware conversion — the same one `first_out_of_bounds_coordinate`
+    // runs before any comparison — or the bases fetched below are simply the
+    // wrong ones, and a member that merely *looks* like a cancellation against
+    // them would be dropped.
+    let provider_key = accession.transcript_accession();
+    let Some(delta) = region_sequence_delta(region, &provider_key, provider) else {
+        return false;
+    };
+    // Checked for the same reason the conversion below is: `anchor.start`/
+    // `anchor.end` come off a parsed description, so an adversarial span can
+    // overflow the subtraction or the inclusive `+ 1` and panic in a debug build
+    // where declining is the answer every other unrepresentable coordinate gets.
+    let Some(span) = anchor
+        .end
+        .checked_sub(anchor.start)
+        .and_then(|d| d.checked_add(1))
+        .and_then(|d| usize::try_from(d).ok())
+    else {
+        return false;
+    };
+    // A cancellation replaces each base it claims with that same base, so a
+    // payload of a different length cannot be one.
+    if anchor.alt.len() != span {
+        return false;
+    }
+    // Checked, matching the sibling conversions in this file: `anchor.start`/
+    // `anchor.end` come off a parsed description and `delta` off the record's CDS
+    // bounds, so neither is bounded by anything here — an unchecked `i64` add
+    // panics in a debug build where declining is the answer every other
+    // unrepresentable coordinate gets.
+    let Some(start0) = anchor
+        .start
+        .checked_add(delta)
+        .and_then(|s| s.checked_sub(1))
+    else {
+        return false;
+    };
+    let Some(end0) = anchor.end.checked_add(delta) else {
+        return false;
+    };
+    if start0 < 0 || end0 < start0 {
+        return false;
+    }
+    let Ok(ref_seq) = provider.get_sequence(&provider_key, start0 as u64, end0 as u64) else {
+        return false;
+    };
+    let ref_bytes = ref_seq.as_bytes();
+    if ref_bytes.len() != span {
+        return false;
+    }
+    anchor
+        .alt
+        .iter()
+        .zip(ref_bytes)
+        .all(|(base, byte)| (base.to_char() as u8).eq_ignore_ascii_case(byte))
+}
+
+/// Replace `output.last()` with a freshly-built variant from `anchor`, or drop
+/// it when the members it merged cancelled each other out.
+///
 /// Caller has established that the head is merge-eligible (so kind dispatch
 /// in `build_merged` is safe).
-fn reconcile_head(output: &mut [HgvsVariant], anchor: Anchor) {
+///
+/// A chain that cancels leaves nothing to describe, so keeping it costs
+/// confluence: the same variant spelled without the cancelling members
+/// normalizes without the `=` they collapse to, and the two spellings then
+/// disagree (#1321). Dropping it here — where the merge is what produced it — is
+/// what separates it from a **user-authored** identity. `g.[258=;260del]` and
+/// `g.[259=;259_260insG]` never pass through a merge and keep their `=`, which is
+/// the guard #1297 installed; `drop_identity_members_covered_by_siblings`
+/// approximates the same distinction afterwards by asking whether a sibling
+/// covers the member, and a sibling that shifted away from it (as the
+/// duplication does under the 5' rule) leaves the residue unrecognised.
+///
+/// The last member is never dropped: an allele that cancels away entirely still
+/// has to render as something, and that something is the identity.
+fn reconcile_head<P: ReferenceProvider>(
+    output: &mut Vec<HgvsVariant>,
+    anchor: Anchor,
+    provider: &P,
+) {
+    let head = output.last().expect("head must exist when head_merged");
+    if output.len() > 1 && merged_anchor_restates_reference(head, &anchor, provider) {
+        output.pop();
+        return;
+    }
     let last = output.last_mut().expect("head must exist when head_merged");
     *last = build_merged(last, anchor);
 }
