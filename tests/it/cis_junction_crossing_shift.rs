@@ -874,30 +874,47 @@ fn no_tandem_tract_allele_normalizes_to_a_different_sequence() {
 /// boundary behaviour has its own dedicated tests and would only add noise to a
 /// smoke slice.
 ///
-/// # `#[ignore]`d pending #1398, which this sweep found
+/// # No longer `#[ignore]`d — it took five fixes to get here
 ///
-/// It passes at the default 4-seed prefix and **fails at the full corpus**, on a
-/// real defect rather than on anything about the sweep: `c.[11_12dup;16_17insC]`
-/// over `TAAATAATAAATATATATTA` normalizes to `c.18_*1insCAT`, an insertion across
-/// the CDS/3'UTR boundary, and re-normalizing that does not return it
-/// (`c.18delinsTCAT` under 3', `c.16_17insATC` under 5'). That trips
-/// `FERRO_ASSERT_IDEMPOTENT` as a panic, so the sweep cannot merely count it the
-/// way `FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES` counts its class.
+/// It was committed `#[ignore]`d rather than narrowed, deliberately: trimming the
+/// position range until the boundary shape was unreachable would have been the
+/// exact move #1283 exists to complain about — a generator that reads wider than
+/// it is — and the gap it closes was worth the wait. What it found, in the order
+/// each was unmasked by the one before it:
 ///
-/// Committed `#[ignore]`d rather than narrowed, deliberately. Trimming the
-/// position range until the boundary shape is unreachable would be the exact
-/// move #1283 exists to complain about — a generator that reads wider than it is
-/// — and the gap it closes is worth more than the few days it spends ignored.
-/// Un-ignore it when #1398 lands; it is already green on everything else.
+/// 1. **#1398** (#1417) — the original fire. `c.[11_12dup;16_17insC]` over
+///    `TAAATAATAAATATATATTA` normalized to `c.18_*1insCAT`, an insertion across
+///    the CDS/3'UTR boundary, and re-normalizing that did not return it
+///    (`c.18delinsTCAT` under 3', `c.16_17insATC` under 5').
+/// 2. **#1418** (#1425) — a sibling-crossing shift unbounded across a region
+///    boundary.
+/// 3. **#1426, 3' half** (#1427) — a junction insertion needing two passes to
+///    finish its shift.
+/// 4. **#1426, 5' half** (#1428) — the same defect arriving from the other side,
+///    via the axis clamp rather than the #918 relaxation.
+/// 5. **#1429** (this PR) — the sequence-first derivation shifting 3' whatever
+///    direction was asked for.
 ///
-/// Run it with:
+/// Each was a genuine defect, and each was invisible until its predecessor was
+/// fixed. That is the argument for committing a sweep `#[ignore]`d instead of
+/// narrowing it: a narrowed generator would have found none of the five.
+///
+/// It runs in the `sweeps` job only — `cis_junction_crossing_shift` is inside
+/// `SWEEP_FILTER`, which `test` and `test-oracle` negate — so it is exercised at
+/// the full corpus with the oracles set, which is the configuration that found
+/// all five. Measured at 280s for 829,440 cases.
+///
+/// Run it locally in the configuration `sweeps` uses — the oracles are not
+/// optional here, since four of the five defects above were *reported* by
+/// `FERRO_ASSERT_IDEMPOTENT` rather than by this sweep's own sequence comparison:
 ///
 /// ```text
-/// FERRO_SWEEP_SEEDS=full cargo nextest run --features dev \
-///   -E 'test(no_two_member_transcript_axis_allele)' --run-ignored all
+/// FERRO_SWEEP_SEEDS=full \
+///   FERRO_ASSERT_IDEMPOTENT=1 FERRO_ASSERT_REPARSE=1 FERRO_ASSERT_IN_BOUNDS=1 \
+///   cargo nextest run --features dev \
+///   -E 'test(no_two_member_transcript_axis_allele)'
 /// ```
 #[test]
-#[ignore = "finds #1398 at the full corpus; un-ignore when that lands"]
 fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
     use crate::common::cis_apply_oracle::apply_with;
     use crate::common::synthetic::SyntheticBuilder;

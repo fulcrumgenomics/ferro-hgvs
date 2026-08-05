@@ -2052,6 +2052,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     variants: &[HgvsVariant],
     phase: AllelePhase,
     provider: &P,
+    direction: ShuffleDirection,
 ) -> Option<Vec<HgvsVariant>> {
     if variants.is_empty() || (variants.len() > 1 && phase != AllelePhase::Cis) {
         return None;
@@ -2223,7 +2224,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         piece.ref_start += lo;
         piece.ref_end += lo;
     }
-    shift_pieces_three_prime(&mut pieces, &ref_bytes);
+    shift_pieces(&mut pieces, &ref_bytes, direction);
     coalesce_adjacent_pieces(&mut pieces);
     // Partitioning decides where the members are; this decides how wide each
     // one is spelled, and the two are not the same question — see
@@ -4278,7 +4279,8 @@ fn pieces_from_columns(columns: &[Column], reference: &[u8], result: &[u8]) -> V
     pieces
 }
 
-/// 3'-shift each length-changing piece, clamped so it cannot reach a sibling.
+/// Shift each length-changing piece in `direction`, clamped so it cannot reach
+/// a sibling.
 ///
 /// The clamp is the #1234 fix. The 3' rule (`general.md:41`) is stated per
 /// description with no allele-awareness, and the only text that ever addressed
@@ -4286,7 +4288,21 @@ fn pieces_from_columns(columns: &[Column], reference: &[u8], result: &[u8]) -> V
 /// deletion shifts over a downstream substitution and the two members overlap —
 /// malformed, and denoting a different sequence. Substitutions are anchored and
 /// never shift.
-fn shift_pieces_three_prime(pieces: &mut [Piece], ref_bytes: &[u8]) {
+///
+/// **`direction` is a parameter, not a constant (#1429).** This was hardcoded to
+/// `ThreePrime`, and `canonicalize_from_sequence` never received the caller's
+/// direction at all — so under a 5' shuffle the derivation handed back a
+/// *3'-shifted* allele, which the per-member pipeline then moved on the next
+/// pass:
+///
+/// ```text
+/// c.[16dup;18_19insC]  ->  c.*1_*2insCT  ->  c.18_*1insTC
+/// ```
+///
+/// Two passes, two directions. The 5' answer was also simply wrong on the first
+/// pass, independently of the idempotency: a caller asking for a 5' shuffle got
+/// a 3'-shifted merged allele.
+fn shift_pieces(pieces: &mut [Piece], ref_bytes: &[u8], direction: ShuffleDirection) {
     for i in 0..pieces.len() {
         if !pieces[i].is_pure_indel() {
             continue;
@@ -4302,7 +4318,7 @@ fn shift_pieces_three_prime(pieces: &mut [Piece], ref_bytes: &[u8]) {
             pieces[i].ref_start as u64,
             pieces[i].ref_end as u64,
             &bounds,
-            ShuffleDirection::ThreePrime,
+            direction,
         );
         let old_start = pieces[i].ref_start;
         let new_start = shuffled.start as usize;
@@ -4326,19 +4342,32 @@ fn shift_pieces_three_prime(pieces: &mut [Piece], ref_bytes: &[u8]) {
         // This is the hazard the per-member pipeline documents inside
         // `Normalizer::normalize_na_edit` (the #1157 follow-up).
         if !pieces[i].alt.is_empty() {
-            // A 3'-shuffle only ever advances: it initialises its cursor to
-            // `start` and mutates it solely via `new_start += 1`. Unlike the
-            // `mod.rs` precedent, which serves both directions and once
-            // regressed 5' insertions by clamping leftward moves with
-            // `saturating_sub`, this call site is `ThreePrime`-only, so a
-            // leftward move would be a bug in `shuffle`, not a case to handle.
-            debug_assert!(
-                new_start >= old_start,
-                "a 3'-shuffle cannot move a piece 5' (old={old_start}, new={new_start})",
-            );
-            let rotation = new_start.saturating_sub(old_start) % pieces[i].alt.len();
+            // Each direction moves the point only its own way — `shuffle`
+            // initialises its cursor to `start` and mutates it solely via
+            // `+= 1` or `-= 1` — so the two are asserted separately rather
+            // than with one `abs`, which would mask a `shuffle` that moved a
+            // piece the wrong way.
+            match direction {
+                ShuffleDirection::ThreePrime => debug_assert!(
+                    new_start >= old_start,
+                    "a 3'-shuffle cannot move a piece 5' (old={old_start}, new={new_start})",
+                ),
+                ShuffleDirection::FivePrime => debug_assert!(
+                    new_start <= old_start,
+                    "a 5'-shuffle cannot move a piece 3' (old={old_start}, new={new_start})",
+                ),
+            }
+            let distance = new_start.abs_diff(old_start);
+            let rotation = distance % pieces[i].alt.len();
             if rotation > 0 {
-                pieces[i].alt.rotate_left(rotation);
+                // Mirror images. Moving the point 3' by `k` rotates the payload
+                // left by `k`; moving it 5' by `k` rotates it right by the same
+                // `k`, because the payload's phase against the reference is what
+                // the rotation tracks and the point moved the other way.
+                match direction {
+                    ShuffleDirection::ThreePrime => pieces[i].alt.rotate_left(rotation),
+                    ShuffleDirection::FivePrime => pieces[i].alt.rotate_right(rotation),
+                }
             }
         }
     }
@@ -4600,7 +4629,7 @@ fn rebuild_members(
     // Window offset one past the last reference base the *previous* piece
     // claimed, for `duplication_anchor`'s disjointness check. `0` before the
     // first piece. Correct because `pieces` is in ascending offset order —
-    // `partition_block` builds it that way and neither `shift_pieces_three_prime`
+    // `partition_block` builds it that way and neither `shift_pieces`
     // nor `coalesce_adjacent_pieces` reorders — which the assertion below pins
     // rather than assumes, since a silent reordering would turn the check into a
     // no-op instead of a failure.
@@ -9222,13 +9251,13 @@ mod tests {
                     };
 
                     let mut shift_first = pieces.clone();
-                    shift_pieces_three_prime(&mut shift_first, block);
+                    shift_pieces(&mut shift_first, block, ShuffleDirection::ThreePrime);
                     coalesce_adjacent_pieces(&mut shift_first);
                     shrink_pieces_to_differences(&mut shift_first, block);
 
                     let mut shrink_first = pieces.clone();
                     shrink_pieces_to_differences(&mut shrink_first, block);
-                    shift_pieces_three_prime(&mut shrink_first, block);
+                    shift_pieces(&mut shrink_first, block, ShuffleDirection::ThreePrime);
                     coalesce_adjacent_pieces(&mut shrink_first);
 
                     assert_eq!(
