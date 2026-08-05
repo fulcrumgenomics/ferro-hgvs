@@ -2034,7 +2034,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `phase` is `Cis` on both arms — the allele arm refuses anything else
         // above — and `uncertain` is likewise always false, which is exactly what
         // `AlleleVariant::new` builds.
-        let rebuilt = merge::canonicalize_from_sequence(members, AllelePhase::Cis, &self.provider)?;
+        let rebuilt = merge::canonicalize_from_sequence(
+            members,
+            AllelePhase::Cis,
+            &self.provider,
+            self.config.shuffle_direction,
+        )?;
         match rebuilt.len() {
             0 => None,
             1 => rebuilt.into_iter().next(),

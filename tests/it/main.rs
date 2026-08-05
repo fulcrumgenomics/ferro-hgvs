@@ -204,6 +204,7 @@ mod issue_1406_conflict_is_a_property_of_the_input;
 mod issue_1416_cancelled_identity_beside_repeat;
 mod issue_1426_five_prime_junction_insertion;
 mod issue_1426_junction_insertion_settles_in_one_pass;
+mod issue_1429_derivation_honours_shuffle_direction;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;
