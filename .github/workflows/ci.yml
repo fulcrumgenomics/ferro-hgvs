@@ -352,13 +352,23 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           key: test-archive
-      # `install-action` stays AFTER the cache step, deliberately. `rust-cache`
-      # leaves `cache-bin` at its default of `true`, so `${CARGO_HOME}/bin` is
-      # still cached and a restore running second would extract a
-      # previously-saved `cargo-nextest` over the one just installed, pinning
-      # this job to whichever version first populated the key. The job that
-      # writes an archive and the jobs that read it have to agree on the nextest
-      # version, so let the install win.
+          # `rust-cache` caches `${CARGO_HOME}/bin` unless told not to, so a
+          # restore could extract a previously-saved `cargo-nextest` over the one
+          # `install-action` puts there and pin this job to whichever version
+          # first populated the key. This job writes an archive that other jobs
+          # read, and producer and consumer must agree on the nextest version.
+          #
+          # This used to be handled by ORDERING — the install step below sat
+          # after the cache step, with a comment saying that was deliberate. Not
+          # caching the binaries removes the hazard at the source instead (#1396),
+          # which matters because reordering two `uses:` steps looks harmless and
+          # would silently reintroduce it. `nightly-soak.yml` and `fuzz.yml`
+          # already do it this way.
+          #
+          # The cost is nil: `install-action` downloads a prebuilt binary rather
+          # than compiling one. Measured on this PR's own runs rather than
+          # assumed — see the PR body.
+          cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - name: Build test archive
         # Compiles every test binary and packs them with their run metadata.
@@ -410,9 +420,11 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
           key: test-archive-soak
-      # AFTER the cache step — see the same note on `test-build`. `rust-cache`
-      # still caches `${CARGO_HOME}/bin`, and this job writes the archive that
-      # `soak` and `sweeps` read.
+          # Same reason as `test-build` above, and it applies at least as
+          # strongly here: this job writes the archive that `soak` and `sweeps`
+          # read, so a stale cached `cargo-nextest` would desynchronise three
+          # jobs rather than one (#1396).
+          cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - name: Build soak archive
         # No `--features dev`. That feature pulls in `web-service` (axum, tokio,
