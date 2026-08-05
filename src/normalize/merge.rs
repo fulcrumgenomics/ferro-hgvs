@@ -6579,9 +6579,27 @@ fn translate_junction_member<P: ReferenceProvider>(
 ///   the repeat alone denotes the input; the `265=` residue overlaps it
 /// ```
 ///
-/// Only the identity member is dropped, and only when a sibling's span *covers*
+/// Only the identity member is dropped, and only when a sibling's span *overlaps*
 /// it under [`blocks_sibling_shift`] — a sibling that merely adds sequence at a
 /// junction inside it contradicts nothing.
+///
+/// **Overlap, not containment** (#1416). The rule this enforces is "two members
+/// must not claim one base", and a partial overlap breaks it exactly as a
+/// containment does — the applier declines both alike:
+///
+/// ```text
+/// g.[11_12inv;11_12insAA]  ->  g.[11_12=;10_11A[4]]  over `CGCGCGCGCAATCGCGCG`
+///   the inversion of `AT` cancels to `=`; the repeat grows the `A` tract at
+///   10_11 to four copies and so claims base 11, which the identity also names.
+///   The repeat's span (10_11) does not *contain* the identity's (11_12), so a
+///   containment test left the pair overlapping and the allele denoted nothing.
+/// ```
+///
+/// Dropping is sequence-preserving even where the identity reaches past the
+/// sibling: an identity asserts only that its bases are unchanged, so removing
+/// it can never change what the allele denotes — the bases outside the sibling
+/// are unchanged whether or not anything says so. What is lost is an assertion,
+/// and keeping it costs a description no consumer can splice.
 ///
 /// `blocks_sibling_shift` rather than `claims_reference_bases`, because a
 /// duplication covers the positions it copies without consuming them (#1321):
@@ -6630,8 +6648,22 @@ pub(crate) fn drop_identity_members_covered_by_siblings(
                     s.blocks_shift
                         && s.region == span.region
                         && s.accession == span.accession
-                        && s.start <= span.start
-                        && s.end >= span.end
+                        // Both spans forward. A reversed `<high>_<low>` range is
+                        // SVD-WG006's circular deletion/duplication form, and
+                        // `cis_axis_parts` hands the endpoints over raw, so one
+                        // can reach here with `start > end`. This pass has no
+                        // wraparound semantics: the interval test below reads
+                        // such a span as an ordinary one, and widening
+                        // containment to overlap made that newly *matter* — a
+                        // reversed sibling against a forward identity now
+                        // satisfies the test where containment refused it.
+                        // Declining is the honest answer, and it is also the
+                        // conservative one: the identity is kept, which is the
+                        // behaviour that predates this rule.
+                        && s.start <= s.end
+                        && span.start <= span.end
+                        && s.start <= span.end
+                        && s.end >= span.start
                 })
             })
         })
