@@ -2496,6 +2496,41 @@ impl HgvsVariant {
         format!("{}", Styled(self, style))
     }
 
+    /// Renderings of this variant, **other than** its canonical [`Display`](Self)
+    /// form, that the HGVS spec admits as equally correct.
+    ///
+    /// Only the stop-codon glyph qualifies. The spec's checklist
+    /// (`docs/recommendations/checklist.md`) states *"`Ter` or `*` should be used
+    /// to indicate a translation stop codon; the `X` should not be used"* — so
+    /// `Ter` and `*` are co-equal spellings and `X` alone is deprecated. The spec
+    /// then uses both across its own examples. ferro renders `Ter` by policy
+    /// (#1114 made the `*` form parse; #1050 added [`TerStyle`] to render it), so a
+    /// description spelling the stop `*` names the same variant in a spelling the
+    /// spec sanctions.
+    ///
+    /// The one-letter amino-acid code is deliberately **excluded**, even though
+    /// [`ProteinRenderStyle`] can emit it: it is a separate axis, and a caller
+    /// asking "does this string name my variant?" should not be told yes for a
+    /// three-letter/one-letter difference it never asked to ignore.
+    ///
+    /// Empty for every non-protein variant, whose rendering the stop style cannot
+    /// affect.
+    ///
+    /// [`TerStyle`]: crate::hgvs::location::TerStyle
+    /// [`ProteinRenderStyle`]: crate::hgvs::location::ProteinRenderStyle
+    pub fn spec_equivalent_renderings(&self) -> Vec<String> {
+        use crate::hgvs::location::{ProteinRenderStyle, TerStyle};
+        let starred = self.to_styled_string(ProteinRenderStyle {
+            stop: TerStyle::Star,
+            ..Default::default()
+        });
+        if starred == self.to_string() {
+            Vec::new()
+        } else {
+            vec![starred]
+        }
+    }
+
     /// Format just the position+edit portion (without accession and coordinate prefix).
     ///
     /// For `NM_000088.3:c.459A>G`, this writes `459A>G`. Used by `AlleleVariant::Display`
@@ -5007,6 +5042,65 @@ mod tests {
         };
         let v = parse_hgvs("NM_000088.3:c.459A>G").expect("parse");
         assert_eq!(v.to_styled_string(one), v.to_string());
+    }
+
+    /// `spec_equivalent_renderings` offers the `*` spelling for exactly those
+    /// descriptions whose rendering contains a stop token, and nothing else.
+    #[test]
+    fn spec_equivalent_renderings_offers_the_star_stop_spelling() {
+        use crate::parse_hgvs;
+        for (input, want) in [
+            // A stop token anywhere in the rendering — plain, frameshift and
+            // extension shapes, plus a stop inside a cis allele.
+            ("NP_000079.2:p.Trp24Ter", Some("NP_000079.2:p.Trp24*")),
+            (
+                "NP_000079.2:p.Gln151ThrfsTer9",
+                Some("NP_000079.2:p.Gln151Thrfs*9"),
+            ),
+            (
+                "NP_000079.2:p.Ter110GlnextTer17",
+                Some("NP_000079.2:p.*110Glnext*17"),
+            ),
+            (
+                "NP_000079.2:p.[Lys79Ter;Lys79Asn]",
+                Some("NP_000079.2:p.[Lys79*;Lys79Asn]"),
+            ),
+            // Protein, but no stop token: nothing to respell.
+            ("NP_000079.2:p.(Ser4Thr)", None),
+            // Off the protein axis the stop style has no meaning at all.
+            ("NM_000088.3:c.459A>G", None),
+            ("NC_000023.11:g.32867861_32867862del", None),
+        ] {
+            let v = parse_hgvs(input).expect("parse");
+            let got = v.spec_equivalent_renderings();
+            match want {
+                Some(starred) => assert_eq!(got, vec![starred.to_string()], "for {input}"),
+                None => assert!(
+                    got.is_empty(),
+                    "expected no alternate rendering for {input}, got {got:?}"
+                ),
+            }
+        }
+    }
+
+    /// The alternates are *additional* spellings, never a replacement: the
+    /// canonical `Display` form must not appear among them, or a caller checking
+    /// "does this name my variant?" would count the same spelling twice.
+    #[test]
+    fn spec_equivalent_renderings_excludes_the_canonical_form() {
+        use crate::parse_hgvs;
+        for input in [
+            "NP_000079.2:p.Trp24Ter",
+            "NP_000079.2:p.(Ser4Thr)",
+            "NM_000088.3:c.459A>G",
+        ] {
+            let v = parse_hgvs(input).expect("parse");
+            let canonical = v.to_string();
+            assert!(
+                !v.spec_equivalent_renderings().contains(&canonical),
+                "{input}: alternates must exclude the canonical rendering"
+            );
+        }
     }
 
     #[test]

@@ -663,23 +663,36 @@ pub mod prefix {
 
 pub mod classify {
     /// Status taxonomy is a function of (parse_ok, normalize_ok, spec_expected,
-    /// current == spec_expected). `spec_expected: None` is the spec-rejects-this
-    /// sentinel (set by override or by `<code class="invalid">` extraction).
+    /// whether ferro renders the spec's form). `spec_expected: None` is the
+    /// spec-rejects-this sentinel (set by override or by `<code class="invalid">`
+    /// extraction).
     ///
-    /// | spec_expected | parse | normalize | current == spec_expected | status              |
-    /// |---------------|-------|-----------|--------------------------|---------------------|
-    /// | `None`        | err   | —         | —                        | `correctly-rejected`|
-    /// | `None`        | ok    | —         | —                        | `false-acceptance`  |
-    /// | `Some`        | err   | —         | —                        | `parse-error`       |
-    /// | `Some`        | ok    | err       | —                        | `needs-reference`   |
-    /// | `Some`        | ok    | ok        | true                     | `preserved`         |
-    /// | `Some`        | ok    | ok        | false                    | `diverges`          |
+    /// | spec_expected | parse | normalize | renders spec's form | status              |
+    /// |---------------|-------|-----------|---------------------|---------------------|
+    /// | `None`        | err   | —         | —                   | `correctly-rejected`|
+    /// | `None`        | ok    | —         | —                   | `false-acceptance`  |
+    /// | `Some`        | err   | —         | —                   | `parse-error`       |
+    /// | `Some`        | ok    | err       | —                   | `needs-reference`   |
+    /// | `Some`        | ok    | ok        | yes                 | `preserved`         |
+    /// | `Some`        | ok    | ok        | no                  | `diverges`          |
+    ///
+    /// "Renders the spec's form" is a match against `current` **or** any of
+    /// `equivalent_renderings`. Where the spec presents two spellings as equals,
+    /// a description that uses either one conforms, so pinning the comparison to
+    /// ferro's default rendering alone would manufacture divergences out of a
+    /// display-convention choice. The caller decides which alternates are
+    /// spec-legal; this function only takes them as given. `current` remains the
+    /// canonical rendering and is what the row records.
     pub fn classify(
         parse_ok: bool,
         normalize_ok: bool,
         current: &str,
+        equivalent_renderings: &[String],
         spec_expected: Option<&str>,
     ) -> &'static str {
+        let renders_spec_form = |expected: &str| {
+            current == expected || equivalent_renderings.iter().any(|r| r == expected)
+        };
         match (parse_ok, normalize_ok, spec_expected) {
             (false, _, None) => "correctly-rejected",
             (false, _, Some(_)) => "parse-error",
@@ -687,8 +700,70 @@ pub mod classify {
             // regardless of whether ferro's normalize() then errored.
             (true, _, None) => "false-acceptance",
             (true, false, Some(_)) => "needs-reference",
-            (true, true, Some(expected)) if current == expected => "preserved",
+            (true, true, Some(expected)) if renders_spec_form(expected) => "preserved",
             (true, true, Some(_)) => "diverges",
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::classify;
+
+        /// The taxonomy's shape must not depend on the alternates list: with none
+        /// supplied, every arm is exactly what it was before alternates existed.
+        #[test]
+        fn taxonomy_without_alternates_is_unchanged() {
+            assert_eq!(classify(false, false, "x", &[], None), "correctly-rejected");
+            assert_eq!(classify(true, false, "x", &[], None), "false-acceptance");
+            assert_eq!(classify(true, true, "x", &[], None), "false-acceptance");
+            assert_eq!(classify(false, false, "x", &[], Some("y")), "parse-error");
+            assert_eq!(
+                classify(true, false, "x", &[], Some("y")),
+                "needs-reference"
+            );
+            assert_eq!(classify(true, true, "y", &[], Some("y")), "preserved");
+            assert_eq!(classify(true, true, "x", &[], Some("y")), "diverges");
+        }
+
+        #[test]
+        fn an_alternate_rendering_of_the_spec_form_is_preserved() {
+            let alts = vec!["p.Trp24*".to_string()];
+            assert_eq!(
+                classify(true, true, "p.Trp24Ter", &alts, Some("p.Trp24*")),
+                "preserved",
+                "the spec spells this stop `*`; ferro renders `Ter`. Both are \
+                 spec-legal (checklist.md:63), so this conforms."
+            );
+        }
+
+        /// The canonical rendering must still be accepted when *it* is the form
+        /// the spec states — the alternates widen the match, they don't replace it.
+        #[test]
+        fn the_canonical_rendering_still_matches() {
+            let alts = vec!["p.Trp24*".to_string()];
+            assert_eq!(
+                classify(true, true, "p.Trp24Ter", &alts, Some("p.Trp24Ter")),
+                "preserved"
+            );
+        }
+
+        /// Alternates must not launder a genuine divergence: a row differing by
+        /// more than the stop glyph stays divergent even though an alternate exists.
+        #[test]
+        fn an_alternate_does_not_excuse_an_unrelated_difference() {
+            let alts = vec!["p.[Lys79*;Lys79Asn]".to_string()];
+            assert_eq!(
+                classify(
+                    true,
+                    true,
+                    "p.[Lys79Ter;Lys79Asn]",
+                    &alts,
+                    // Spec states a *parenthesised* predicted form — a bracket
+                    // difference no stop spelling can account for.
+                    Some("p.[(Lys79*;Lys79Asn)]")
+                ),
+                "diverges"
+            );
         }
     }
 }
