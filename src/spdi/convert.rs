@@ -93,6 +93,21 @@ use crate::sequence::reverse_complement;
 /// we'd plausibly emit as a single SPDI.
 const MAX_REPEAT_EXPANSION_BASES: usize = 100_000;
 
+/// Widest reference window [`resolve_repeat_tract_span`] will read while looking
+/// for the physical extent of a start-only repeat anchor.
+///
+/// Named separately from [`MAX_REPEAT_EXPANSION_BASES`] because it bounds a
+/// different thing: that one caps the `ins` string a repeat *count* can
+/// generate, this one caps how much reference is *read* to find the tract the
+/// anchor names. Reusing the expansion bound for both read as if one number
+/// governed both, and the growth loop compared it against a half-width, so the
+/// window it declined at was twice the figure its own error message quoted.
+///
+/// 200 KB is far above any biological tandem repeat — the largest known
+/// pathogenic expansions run to a few tens of kilobases — so a tract still
+/// growing at this width is a degenerate reference, not a variant.
+const MAX_REPEAT_SEARCH_BASES: u64 = 200_000;
+
 /// Error type for conversion failures.
 ///
 /// Marked `#[non_exhaustive]` so a new conversion-failure case is additive
@@ -1533,8 +1548,42 @@ where
                     ),
                 });
             }
+            // A single-position anchor names the tract's *start*, not a
+            // one-base span, so widen it to the physical run before fetching
+            // (#1431).
+            //
+            // The spec presents the two spellings as two formats of one
+            // variant — "a Community Consultation proposal is being prepared
+            // which will suggest to allow only the format where the **entire
+            // range** of the repeated sequence is indicated; so
+            // `g.123_191CAG[23]`, **not** `g.123CAG[23]`"
+            // (`DNA/repeated.md`) — and `123_191` is 69 bases, the whole
+            // 23-copy tract. Reading the anchor as a one-base span instead
+            // made the two disagree: on a 3-base `A` tract at 263,
+            // `g.263A[7]` came out as `262:A:AAAAAAA`, which denotes **nine**
+            // `A`s once the two untouched tract bases are counted, while
+            // `g.263_265A[7]` correctly denotes seven.
+            //
+            // The one-base reading also does not survive a multi-base unit at
+            // all: `g.263CAG[5]` fetched a single base and died on the
+            // divisibility check below ("length 1 is not a multiple of unit
+            // length 3"), so the spec's own start-only format was unusable for
+            // every unit the spec actually illustrates it with.
+            //
+            // This is the reading `merge::lowered_repeat` already documents —
+            // "a single-position anchor (`e == s`) names only the tract's
+            // start and means 'the whole run becomes N', so it absorbs
+            // nothing" — so widening here makes the two sites agree rather
+            // than introducing a third answer.
+            let (del_start, del_end) = match provider {
+                Some(p) if start_one_based == end_one_based => {
+                    resolve_repeat_tract_span(p, &sequence, start_one_based, unit_str.as_bytes())?
+                }
+                _ => (start_one_based, end_one_based),
+            };
+            let spdi_pos = del_start - 1;
             let del_raw = match provider {
-                Some(p) => fetch_reference_bases(p, &sequence, start_one_based, end_one_based)?,
+                Some(p) => fetch_reference_bases(p, &sequence, del_start, del_end)?,
                 None => {
                     return Err(unspelled_bases_error(
                         UnspelledBases::RepeatTract,
@@ -1552,8 +1601,8 @@ where
                     description: format!(
                         "repeat span {}:{}-{} length {} is not a multiple of unit length {}",
                         sequence,
-                        start_one_based,
-                        end_one_based,
+                        del_start,
+                        del_end,
                         del_str.len(),
                         unit_str.len()
                     ),
@@ -1567,7 +1616,7 @@ where
                 return Err(ConversionError::InvalidPosition {
                     description: format!(
                         "repeat span {}:{}-{} does not match repeat unit {}",
-                        sequence, start_one_based, end_one_based, unit_str
+                        sequence, del_start, del_end, unit_str
                     ),
                 });
             }
@@ -1686,6 +1735,128 @@ fn unspelled_bases_error(
 /// Returns [`ConversionError::MissingReferenceData`] when neither call
 /// returns data, or when the returned string length does not match the
 /// requested interval length (insufficient ref data near a boundary).
+/// The physical repeat run a single-position repeat anchor names, as a 1-based
+/// inclusive span (#1431).
+///
+/// A start-only repeat (`g.263A[7]`, `g.123CAG[23]`) addresses the whole tandem
+/// run it points into, not the one base or one unit at the anchor — see the
+/// call site for the spec text and the two ways the one-base reading went
+/// wrong. This finds that run with the same routine the normalizer uses
+/// ([`crate::normalize::rules::count_tandem_repeats`]) so the two cannot drift
+/// apart.
+///
+/// **Window growth, and why the cap is not a silent truncation.** The tract's
+/// extent is not known before it is read, so the reference is fetched in a
+/// window around the anchor and the window is doubled while the run still
+/// reaches either edge. A tract that is still growing at
+/// [`MAX_REPEAT_SEARCH_BASES`] is *declined* rather than reported at the
+/// window's width: returning the clamped span would silently under-count the
+/// run and emit a triple denoting the wrong bases, which is the exact defect
+/// this function exists to remove.
+///
+/// Falls back to the unit-wide span at the anchor when no run is found — the
+/// unit does not match the reference there — so the caller's existing
+/// "does not match repeat unit" diagnostic is what reports it, rather than a
+/// second error for one condition.
+fn resolve_repeat_tract_span<P>(
+    provider: &P,
+    accession: &str,
+    anchor_one_based: u64,
+    unit: &[u8],
+) -> Result<(u64, u64), ConversionError>
+where
+    P: ReferenceProvider + ?Sized,
+{
+    /// Half-width of the first window. Comfortably covers the tract lengths the
+    /// spec illustrates (its `CAG[23]` example is 69 bases) so the common case
+    /// costs one fetch.
+    const INITIAL_HALF_WIDTH: u64 = 128;
+
+    if unit.is_empty() {
+        return Ok((anchor_one_based, anchor_one_based));
+    }
+    let unit_len = unit.len() as u64;
+    let fallback = (
+        anchor_one_based,
+        anchor_one_based.saturating_add(unit_len - 1),
+    );
+
+    // A failed length lookup must not fail the conversion. `get_sequence_length`
+    // carries a trait default that always errors (`provider.rs:424`), so a
+    // provider that serves bases perfectly well but does not implement it would
+    // otherwise go from converting `g.263A[7]` to refusing it outright — a
+    // regression for every out-of-tree `ReferenceProvider`, and one no in-repo
+    // test can see because all of ferro's own providers override it.
+    //
+    // Without a length the window cannot be clamped or its edges judged, so the
+    // tract search is not attempted; the unit-wide span is what this returns
+    // instead. That leaves such a provider with the pre-#1431 answer rather than
+    // the corrected one, which is a known and stated limit, not a silent wrong
+    // span — the caller's divisibility and unit-match checks still judge it.
+    let Ok(sequence_length) = provider.get_sequence_length(accession) else {
+        return Ok(fallback);
+    };
+    if sequence_length == 0 || anchor_one_based > sequence_length {
+        return Ok(fallback);
+    }
+    // Now that the length is known, keep the fallback inside the contig: a
+    // multi-base unit anchored within `unit_len` of the 3' end would otherwise
+    // hand `fetch_reference_bases` a range past the end, replacing the
+    // documented "does not match repeat unit" diagnostic with a fetch failure.
+    let fallback = (fallback.0, fallback.1.min(sequence_length));
+
+    let mut half_width = INITIAL_HALF_WIDTH;
+    loop {
+        let window_start = anchor_one_based.saturating_sub(half_width).max(1);
+        let window_end = anchor_one_based
+            .saturating_add(half_width)
+            .min(sequence_length);
+        let window = fetch_reference_bases(provider, accession, window_start, window_end)?;
+        let bytes = window.as_bytes();
+        let anchor_offset = (anchor_one_based - window_start) as usize;
+
+        let Some((_, tract_start, tract_end)) =
+            crate::normalize::rules::count_tandem_repeats(bytes, anchor_offset, unit)
+        else {
+            return Ok(fallback);
+        };
+
+        // Only grow while the run is still touching an edge the contig has not
+        // itself ended at — otherwise the window is not what is bounding it.
+        //
+        // Both tests are stated in units, not bytes, because
+        // `count_tandem_repeats` steps by `unit_len`: a run clipped by the
+        // window stops up to `unit_len - 1` bytes short of the edge rather than
+        // on it. Testing `tract_end == bytes.len()` therefore only fires when
+        // the remaining byte count happens to be a multiple of the unit — true
+        // for a 1- or 3-base unit at the initial half-width, false for a 4- or
+        // 5-base one — and the clipped span was returned as if it were the whole
+        // run. Same on the 5' side: the backward scan stops at
+        // `anchor_offset % unit_len`, which need not be 0.
+        let open_at_start = tract_start < unit.len() && window_start > 1;
+        let open_at_end = tract_end + unit.len() > bytes.len() && window_end < sequence_length;
+        if !open_at_start && !open_at_end {
+            return Ok((
+                window_start + tract_start as u64,
+                window_start + tract_end as u64 - 1,
+            ));
+        }
+        // Judged on the whole window, not the half-width, so the figure the
+        // message quotes is the window that was actually read.
+        if half_width.saturating_mul(2).saturating_add(1) >= MAX_REPEAT_SEARCH_BASES {
+            return Err(ConversionError::UnsupportedEditType {
+                description: format!(
+                    "repeat tract at {accession}:{anchor_one_based} still extends past a \
+                     {MAX_REPEAT_SEARCH_BASES}-base search window; spell the whole range \
+                     explicitly (`g.<start>_<end>{}[n]`) rather than the start alone",
+                    String::from_utf8_lossy(unit)
+                ),
+            });
+        }
+        half_width = half_width.saturating_mul(2);
+    }
+}
+
 fn fetch_reference_bases<P>(
     provider: &P,
     accession: &str,
