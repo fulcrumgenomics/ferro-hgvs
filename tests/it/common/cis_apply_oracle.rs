@@ -30,6 +30,103 @@ use ferro_hgvs::{
     parse_hgvs, HgvsVariant, MockProvider, NormalizeConfig, Normalizer, ShuffleDirection,
 };
 
+/// Seeds a sweep should draw, given the count it wants when run in full (#1295).
+///
+/// The exhaustive sweeps are 92% of a local `cargo nextest run`: measured on this
+/// commit's parent, `cis_junction_crossing_shift` alone is 79.6s of an 86.6s
+/// suite, and `repeat_span_sibling_overlap` adds 33.1s. That is a poor edit-test
+/// loop for work that touches none of it, and it is the only cost — CI shards the
+/// `Test` job, so it does not gate CI wall-clock.
+///
+/// So the default is a small prefix of the corpus and CI asks for all of it:
+///
+/// | `FERRO_SWEEP_SEEDS` | seeds drawn |
+/// |---|---|
+/// | unset | [`DEFAULT_SWEEP_SEEDS`], or `full` if that is smaller |
+/// | `full` | `full` |
+/// | a number | that number |
+///
+/// **Why a prefix, and why this does not weaken the pinned counts.**
+/// [`sweep_sequences`] is prefix-stable — `sweep_sequences(8)` is exactly the
+/// first sixteen entries of `sweep_sequences(16)`, asserted by
+/// `sweep_sequences_is_prefix_stable` below. So a reduced run enumerates a strict
+/// *subset* of the full run's cases, which is what makes the assertions survive
+/// unchanged rather than becoming profile-dependent:
+///
+/// - `overlapping.is_empty()` / `changed.is_empty()` — a property that holds over
+///   a set holds over any subset, so a reduced run cannot pass one the full run
+///   would fail. It can only find *fewer* failures, never different ones.
+/// - `FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES` — pinned at **zero**, and zero is
+///   subset-stable for the same reason. Had it been a non-zero count, this knob
+///   would have had to make it profile-dependent, which #1295 flags as its own
+///   hazard; it is only safe because the residual was driven to zero first.
+///
+/// Two assertions are **not** covered by that subset argument, and it is worth
+/// being exact about which:
+///
+/// - each sweep's case-count floor is genuinely seed-dependent, which is why
+///   those are expressed per-seed rather than as absolutes;
+/// - the `skipped * 10 < checked` share is an **aggregate ratio**, and a ratio
+///   is not subset-stable. Adding seeds changes which cases are skipped, so a
+///   prefix run clearing the bound does not prove the full run will: later seeds
+///   could be skip-heavier and push the aggregate over. It is not profile-*noisy*
+///   — both runs assert the same bound — but a green local prefix is not a
+///   guarantee here the way it is for the three above. CI's `full` run is what
+///   actually settles it.
+///
+/// The escape hatch is the numeric form: `FERRO_SWEEP_SEEDS=12` when bisecting a
+/// failure that a reduced run reproduces but a full one takes too long to iterate
+/// on.
+pub fn sweep_seeds(full: u32) -> u32 {
+    let setting = match std::env::var("FERRO_SWEEP_SEEDS") {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        // Set, but not valid UTF-8. Folding this into "unset" would silently run
+        // the 4-seed prefix for someone who asked for the full corpus and typoed
+        // it — the same "ran less than you think" failure the panic below exists
+        // to prevent, so it gets the same treatment rather than a quiet default.
+        Err(std::env::VarError::NotUnicode(raw)) => panic!(
+            "FERRO_SWEEP_SEEDS is set to a non-UTF-8 value ({raw:?}); it must be \
+             `full` or a seed count. Unset it for the default \
+             {DEFAULT_SWEEP_SEEDS}-seed prefix."
+        ),
+    };
+    sweep_seeds_from(setting.as_deref(), full)
+}
+
+/// The selection rule of [`sweep_seeds`], as a pure function of the setting.
+///
+/// Split out so the rule can be tested **without touching the environment**.
+/// The tests used to `set_var`/`remove_var` around their assertions, guarded by
+/// a SAFETY note arguing that nextest gives each test its own process. That
+/// argument is sound under nextest and *false* under `cargo test`, which
+/// `CLAUDE.md` lists as a supported alternative and which runs tests as threads
+/// in one process: there, setting `FERRO_SWEEP_SEEDS=12` mid-run races every
+/// concurrently-executing sweep reading the same variable, silently shrinking
+/// its corpus. A test that can quietly hollow out the sweeps it shares a process
+/// with is not worth the coverage, and none is lost by parsing a string instead.
+fn sweep_seeds_from(setting: Option<&str>, full: u32) -> u32 {
+    match setting {
+        Some(value) if value.eq_ignore_ascii_case("full") => full,
+        Some(value) => value.trim().parse().unwrap_or_else(|_| {
+            panic!(
+                "FERRO_SWEEP_SEEDS must be `full` or a seed count, got {value:?}. \
+                 Unset it for the default {DEFAULT_SWEEP_SEEDS}-seed prefix."
+            )
+        }),
+        None => DEFAULT_SWEEP_SEEDS.min(full),
+    }
+}
+
+/// Seeds drawn when `FERRO_SWEEP_SEEDS` is unset.
+///
+/// Four keeps every *shape* the sweeps enumerate — the loop bounds over member
+/// spellings, positions and directions are untouched — and reduces only sequence
+/// diversity. That is the right axis to cut: each sweep's own notes record that
+/// every blocking defect found so far lived in a shape the generator could not
+/// emit rather than in a sequence it did not draw.
+pub const DEFAULT_SWEEP_SEEDS: u32 = 4;
+
 /// The deterministic 20-mers every cis-allele sweep enumerates over.
 ///
 /// `2 * seeds` sequences: for each seed, one over `{A,T}` — the alphabet that
@@ -278,8 +375,59 @@ mod tests {
     #[test]
     fn sweep_sequences_is_deterministic() {
         assert_eq!(sweep_sequences(8), sweep_sequences(8));
-        // A larger seed count extends the corpus rather than re-rolling it,
-        // which is what lets one sweep use 48 seeds and another 64.
+    }
+
+    /// A larger seed count **extends** the corpus rather than re-rolling it.
+    ///
+    /// This is what lets one sweep use 48 seeds and another 64, and since #1295
+    /// it is load-bearing for [`sweep_seeds`]: a reduced run must enumerate a
+    /// strict subset of the full run's cases, or the sweeps' `is_empty()` and
+    /// pinned-zero assertions could pass at the default seed count while failing
+    /// at the full one. Split out of the determinism test and named, because a
+    /// property the seed knob's soundness rests on should fail under its own name.
+    #[test]
+    fn sweep_sequences_is_prefix_stable() {
         assert_eq!(sweep_sequences(8)[..], sweep_sequences(16)[..16]);
+        // The default prefix specifically, since that is the one every local run
+        // takes.
+        let full = sweep_sequences(64);
+        let default = sweep_sequences(DEFAULT_SWEEP_SEEDS);
+        assert_eq!(default[..], full[..default.len()]);
+    }
+
+    /// The selection rule, exercised through [`sweep_seeds_from`] so nothing
+    /// here mutates a process-wide variable the sweeps are concurrently reading.
+    #[test]
+    fn sweep_seeds_defaults_to_the_prefix_and_honours_full() {
+        assert_eq!(sweep_seeds_from(None, 64), DEFAULT_SWEEP_SEEDS);
+        // A sweep asking for fewer than the default gets its own count, never more.
+        assert_eq!(sweep_seeds_from(None, 2), 2);
+
+        assert_eq!(sweep_seeds_from(Some("full"), 64), 64);
+        assert_eq!(
+            sweep_seeds_from(Some("FULL"), 48),
+            48,
+            "the sentinel is case-insensitive"
+        );
+
+        assert_eq!(
+            sweep_seeds_from(Some("12"), 64),
+            12,
+            "an explicit count overrides both"
+        );
+        assert_eq!(
+            sweep_seeds_from(Some("  12  "), 64),
+            12,
+            "surrounding whitespace is tolerated, as a shell can easily add it"
+        );
+    }
+
+    /// A value that is neither `full` nor a count must be loud, not defaulted —
+    /// silently running 4 seeds for someone who asked for 48 is the failure this
+    /// whole knob has to avoid.
+    #[test]
+    #[should_panic(expected = "FERRO_SWEEP_SEEDS must be `full` or a seed count")]
+    fn an_unparseable_sweep_seed_setting_panics() {
+        let _ = sweep_seeds_from(Some("most"), 64);
     }
 }

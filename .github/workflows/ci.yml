@@ -691,6 +691,17 @@ jobs:
           name: nextest-archive-soak
       - name: Run the exhaustive sweeps with the normalization self-checks
         env:
+          # The full corpus, not the prefix a local run takes (#1295). The
+          # sweeps were 92% of a local `cargo nextest run` — 79.6s of an 86.6s
+          # suite for `cis_junction_crossing_shift` alone — so `sweep_seeds`
+          # defaults to a 4-seed prefix and this job is what asks for all of it.
+          #
+          # This job is the ONLY place that sets it, which is why the exhaustive
+          # coverage still runs on every PR: `test` and `test-oracle` negate
+          # `SWEEP_FILTER` and so never reach these modules at all. If a sweep is
+          # ever moved out of `SWEEP_FILTER`, it silently drops to the prefix
+          # here — check both when editing that filter.
+          FERRO_SWEEP_SEEDS: full
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
           # The sweeps are where this one earns its keep: they enumerate members

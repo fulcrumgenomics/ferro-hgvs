@@ -25,7 +25,7 @@
 //! normalizes both sides, so it passed on the broken behavior.
 
 use crate::common::cis_apply_oracle::{
-    apply, assert_normalizes_preserving, assert_normalizes_preserving_in, normalize,
+    apply, assert_normalizes_preserving, assert_normalizes_preserving_in, normalize, sweep_seeds,
     sweep_sequences,
 };
 use ferro_hgvs::ShuffleDirection;
@@ -138,7 +138,10 @@ fn shifts_never_change_the_sequence_across_an_exhaustive_two_member_sweep() {
     let mut overlapping: Vec<String> = Vec::new();
     let mut mismatched: Vec<String> = Vec::new();
 
-    for seq in sweep_sequences(64) {
+    // #1295: full 64 when CI asks (`FERRO_SWEEP_SEEDS=full`), a 4-seed prefix
+    // otherwise.
+    let seeds = sweep_seeds(64);
+    for seq in sweep_sequences(seeds) {
         for first_start in 1..=14usize {
             for first_len in 1..=2usize {
                 let first_end = first_start + first_len - 1;
@@ -189,9 +192,13 @@ fn shifts_never_change_the_sequence_across_an_exhaustive_two_member_sweep() {
     // convertible fraction. The skip count is asserted separately: it is the
     // number this sweep cannot speak for, and letting it grow silently would
     // hollow the property out without moving `enumerated` at all.
+    // Per seed since #1295, for the reason recorded on the equivalent floor in
+    // `cis_junction_crossing_shift.rs`.
+    const CASES_PER_SEED_FLOOR: usize = 1_000;
+    let floor = CASES_PER_SEED_FLOOR * seeds as usize;
     assert!(
-        enumerated > 70_000,
-        "sweep covered too little: {enumerated} enumerated"
+        enumerated > floor,
+        "sweep covered too little: {enumerated} enumerated over {seeds} seeds (floor {floor})"
     );
     assert!(
         skipped * 10 < enumerated,
