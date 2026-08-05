@@ -77,10 +77,16 @@ const PINNED: &[(&str, ShuffleDirection, &str)] = &[
         ShuffleDirection::ThreePrime,
         "NM_TEST.1:c.18delinsTCAT",
     ),
+    // Re-blessed by #1418. This was `c.[16_17insC;*1_*2dup]` — the `dup` had
+    // shifted across the CDS/3'UTR boundary and past its own sibling, which is
+    // the defect #1418 fixes by bounding a sibling-crossing shift on the
+    // sequence axis. With that bound in place the sibling case converges on the
+    // same answer as `CORE`, and both members stay in the CDS. A deliberate
+    // representation change, declared in that PR.
     (
         CORE_SIBLING,
         ShuffleDirection::ThreePrime,
-        "NM_TEST.1:c.[16_17insC;*1_*2dup]",
+        "NM_TEST.1:c.18delinsTCAT",
     ),
     (CORE, ShuffleDirection::FivePrime, "NM_TEST.1:c.16_17insATC"),
     (
