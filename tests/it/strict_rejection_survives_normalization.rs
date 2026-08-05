@@ -101,17 +101,34 @@ fn strict_rejects(accession: &str, description: &str) -> bool {
 /// Inputs strict mode rejects as `OverlapConflictingEdits / W5002`, one per
 /// distinguishable route into the gate.
 ///
-/// `(accession, input)`. The first three are the #1307 terminal `dup` collision
-/// in both member orders and with a `delins` sibling; the fourth is its circular
-/// twin, which reaches the same gate because `m.` has a last base like any other
-/// sequence; the fifth is a different conflict class entirely — an insertion
-/// interior to an inversion (#1276's shape) — so the property is not pinned on
-/// one edit-type pair.
+/// `(accession, input)`, one per distinguishable route into the gate: two
+/// substitutions of one base, a coincident deletion and inversion, and an
+/// insertion interior to an inversion (#1276's shape). Three edit-type pairings,
+/// so the property is not pinned on one.
+///
+/// **This list used to be four `dup` rows plus the inversion**, and #1406
+/// removed all four — a `dup` writes at the junction 3' of the span it names
+/// (`duplication.md:5`), so it never claims the base a coincident sibling
+/// claims. The assertion below anticipated exactly this ("either it stopped
+/// being a conflict — a result worth its own measurement — or the row is
+/// stale"); it was the first, and the measurement is #1406's. Their merged
+/// outputs are pinned in `issue_1307_terminal_dup_respell` and
+/// `issue_1406_conflict_is_a_property_of_the_input` instead.
+///
+/// What replaced them are conflicts by write footprint rather than by read span,
+/// in the two shapes the gate actually distinguishes. The first two rows are
+/// coincident *bases*: both members write the same span, so the result depends
+/// on which one wins. The third is the other route entirely — an insertion
+/// junction lying inside an inversion span (#1276), which
+/// `detect_insertion_overlaps` reports rather than `detect_overlap_conflicts`.
+/// Keeping both means the property is not pinned on one detector.
 const CONFLICTING_INPUTS: &[(&str, &str)] = &[
-    ("NC_TEST.1", "NC_TEST.1:g.[24dup;24C>G]"),
-    ("NC_TEST.1", "NC_TEST.1:g.[24C>G;24dup]"),
-    ("NC_TEST.1", "NC_TEST.1:g.[24dup;24delinsGG]"),
-    ("NC_012920.1", "NC_012920.1:m.[24dup;24C>G]"),
+    // Two substitutions of base 23 — the least arguable conflict there is.
+    ("NC_TEST.1", "NC_TEST.1:g.[23A>G;23A>T]"),
+    // Coincident `del` and `inv` over one span. One of the rows #1406 measured
+    // as silently laundered: it normalized to a single accepted `g.15_16del`,
+    // dropping the inversion outright.
+    ("NC_TEST.1", "NC_TEST.1:g.[15_16del;15_16inv]"),
     ("NC_TEST.1", "NC_TEST.1:g.[9_12inv;10_11insAA]"),
 ];
 

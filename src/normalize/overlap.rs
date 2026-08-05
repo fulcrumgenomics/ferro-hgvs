@@ -366,7 +366,51 @@ fn na_range<L>(
     if !is_overlap_edit(edit) {
         return None;
     }
+    if writes_only_at_a_junction(edit) {
+        return None;
+    }
     range_fn(&loc_edit.location)
+}
+
+/// Whether this edit's *write* lands at a junction rather than over the span it
+/// names — in which case coincident bounds are not a conflict.
+///
+/// Coincident-bounds detection asks whether two members claim the same bases.
+/// That is a question about what they **write**, and for most edit kinds the
+/// two coincide: a substitution, deletion, delins or inversion replaces the span
+/// it names. A `dup` does not. `duplication.md:5` places the copy "directly 3'
+/// of the original copy", so `g.23dup` *reads* base 23 and *writes* at the
+/// junction 23|24. Against `g.23A>G`, which writes base 23, the two write
+/// footprints are disjoint and the composition is unique — `g.22_23insG` — with
+/// no ordering to choose. Grouping them by the read span reported a conflict
+/// that is not one, and made the verdict depend on the spelling: the same
+/// variant written `g.[23A>G;23_24insA]` was accepted.
+///
+/// The spec says merge rather than reject for this shape. `delins.md:86-89`
+/// marks `NM_007294.3:c.[2077G>A;2077_2078insTA]` invalid and gives
+/// `c.2077delinsATA` as the correct description, and `general.md:56`
+/// prioritisation then requires that form be spelled as a `dup` where it is one.
+///
+/// **`Repeat` is deliberately not here**, though it also writes at a junction
+/// when it grows. Whether it *only* does so depends on whether its unit tiles
+/// the reference tract — `A[8]`, `G[6]` and `TA[3]` are indistinguishable at
+/// this layer, and `g.[4_9G[6];4_9inv]` rewrites all six bases while satisfying
+/// any purely syntactic "does not shorten" test. This function has no reference
+/// provider and cannot tell them apart, so a repeat keeps its span. That is the
+/// principled line: a `dup`'s write footprint is reference-*independent*, a
+/// repeat's is not, which is also why a repeat is registered in *both* detectors
+/// and a `dup` in only one.
+///
+/// An uncertain-extent `dup` keeps its span too — its footprint is not known to
+/// be that junction. Same condition `merge::has_same_gap_insertions` uses.
+fn writes_only_at_a_junction(edit: &NaEdit) -> bool {
+    matches!(
+        edit,
+        NaEdit::Duplication {
+            uncertain_extent: None,
+            ..
+        }
+    )
 }
 
 /// The certain inner [`NaEdit`] of an NaEdit-bearing variant, or `None` for

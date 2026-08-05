@@ -2758,14 +2758,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
             //
             // Each member is normalized in isolation purely to collect what it
             // says — the results are discarded, because preserving the authored
-            // members is the whole point of this branch. A member that fails to
-            // normalize contributes nothing rather than aborting: the allele is
-            // being refused anyway, and the conflict below is the finding that
-            // matters.
+            // members is the whole point of this branch.
+            //
+            // Errors propagate rather than being swallowed. An earlier cut used
+            // `if let Ok(..)`, which quietly made this branch *more* permissive
+            // than the ordinary per-member path: a member that fails hard —
+            // `TranscriptVersionNotExact`, say — surfaces to the caller there
+            // and would have been discarded here, so an allele would go from
+            // erroring to returning a preserved value merely because a sibling
+            // conflicted with it. Whether the members collide is unrelated to
+            // whether one of them is resolvable at all.
             for member in &allele.variants {
-                if let Ok((_, member_warnings)) = self.normalize_core(member) {
-                    all_warnings.extend(member_warnings);
-                }
+                let (_, member_warnings) = self.normalize_core(member)?;
+                all_warnings.extend(member_warnings);
             }
             all_warnings.extend(raw_conflicts);
             let mut preserved =

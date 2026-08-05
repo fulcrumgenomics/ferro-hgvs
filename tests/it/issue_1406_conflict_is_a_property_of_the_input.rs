@@ -69,17 +69,35 @@ fn strict_rejects(input: &str) -> bool {
 
 #[test]
 fn the_same_shape_gets_the_same_verdict_wherever_it_sits() {
-    // The heart of #1406. Neither position may be privileged: both are a `dup`
-    // of one base beside a substitution of that base.
-    for input in ["TEMPLATE:g.[23dup;23A>G]", "TEMPLATE:g.[24dup;24C>G]"] {
+    // The heart of #1406, and the verdict is ACCEPT at both positions.
+    //
+    // Neither position may be privileged: both are a `dup` of one base beside a
+    // substitution of that base. The defect was that 23 merged and 24 was
+    // rejected, decided only by proximity to the contig end.
+    //
+    // Which way the parity resolves is the other half, and it is the spec's
+    // call rather than a preference. A `dup` writes at the junction 3' of the
+    // span it names (`duplication.md:5`), not over it, so a `dup` and a
+    // substitution of the same base have disjoint write footprints, compose
+    // uniquely, and were never a conflict. `delins.md:86-89` asks for the merged
+    // form outright. So the pair converges by merging, not by being refused.
+    //
+    // The merged forms are pinned literally, not just compared to each other:
+    // two spellings settling on one *wrong* string would satisfy a parity check
+    // silently. One base apart, the outputs are the same shape one base apart.
+    for (input, expected) in [
+        ("TEMPLATE:g.[23dup;23A>G]", "TEMPLATE:g.22_23insG"),
+        ("TEMPLATE:g.[24dup;24C>G]", "TEMPLATE:g.23_24insG"),
+    ] {
         assert!(
-            strict_rejects(input),
-            "`{input}` is an overlap conflict and strict mode must reject it"
+            !strict_rejects(input),
+            "`{input}` is not an overlap conflict — its members write to \
+             different places — so strict mode must accept it"
         );
         assert_eq!(
             lenient(input),
-            input,
-            "a conflicting allele is preserved as authored, not canonicalized"
+            expected,
+            "`{input}` must reach the merged form the spec asks for"
         );
     }
 }
@@ -88,7 +106,21 @@ fn the_same_shape_gets_the_same_verdict_wherever_it_sits() {
 fn the_conflicting_allele_is_a_fixed_point() {
     // Preserving is only an answer if it is stable: re-normalizing the output
     // must not start the repair the first pass declined.
-    let input = "TEMPLATE:g.[23dup;23A>G]";
+    //
+    // The allele is two substitutions of ONE base. That is a genuine conflict —
+    // both members write base 23 and the result depends on which wins — unlike
+    // the `dup` pair above, whose members write to different places. This test
+    // used that pair until #1406 established it was never a conflict; keeping it
+    // here would have pinned the misclassification rather than the preserve.
+    let input = "TEMPLATE:g.[23A>G;23A>T]";
+    // Assert the premise first. Preservation is only the *right* answer for an
+    // allele that genuinely conflicts, so a row that quietly stopped being one
+    // would otherwise satisfy everything below while pinning nothing — the same
+    // trap #1406 found in the `dup` rows this test used to use.
+    assert!(
+        strict_rejects(input),
+        "`{input}` must still be a conflict strict mode rejects"
+    );
     let once = lenient(input);
     // The form that must be stable is the *preserved* one. Asserting only
     // `lenient(once) == once` would pass on the repaired output too, which is
@@ -110,10 +142,13 @@ fn a_disjoint_dup_and_substitution_still_normalize() {
         !strict_rejects(input),
         "`{input}` shares no base and must not be reported as a conflict"
     );
-    assert_ne!(
+    // The exact form, not merely "something other than the input". `assert_ne!`
+    // passes on any change at all, including a wrong one, which is no guard for
+    // a test whose whole point is that this allele takes the normal path.
+    assert_eq!(
         lenient(input),
-        input,
-        "a non-conflicting allele must still be canonicalized"
+        "TEMPLATE:g.24delinsAG",
+        "a non-conflicting allele must reach its canonical merged form"
     );
 }
 
