@@ -1589,8 +1589,8 @@ where
 /// The edit shapes whose SPDI form needs reference bases the description did
 /// not spell out. Each names what is unknown and how the caller could spell it.
 ///
-/// Exists so the five arms of [`hgvs_to_spdi`] that hit this wall decline in one
-/// voice. They previously carried five hand-written strings, none of which named
+/// Exists so the six arms of [`hgvs_to_spdi`] that hit this wall decline in one
+/// voice. They previously carried six hand-written strings, none of which named
 /// the interval that could not be resolved or either way out, and one of which
 /// (`Delins`) had drifted into a different sentence shape than its siblings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2248,7 +2248,7 @@ mod tests {
         );
     }
 
-    /// The five shapes must be distinguishable from their messages alone — a
+    /// The six shapes must be distinguishable from their messages alone — a
     /// caller reading a log has nothing else to go on.
     #[test]
     fn each_shape_declines_distinguishably() {
