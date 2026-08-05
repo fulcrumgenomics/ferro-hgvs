@@ -725,7 +725,7 @@ impl SequenceEnds {
 ///
 /// `o.` stays out: `normalize_core` returns circular `o.` variants unchanged, so
 /// no shuffle runs and nothing can saturate. A genuine circular normalizer is
-/// #951.
+/// #466's circular candidate.
 ///
 /// The genomic caller passes a **window** rather than the whole contig, so it
 /// must say which of its ends are real — see [`SequenceEnds`].
@@ -2527,8 +2527,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // 3'-shift runs and no warning is emitted. A genuine circular
             // normalizer would 3'-shift with origin-wraparound semantics (cf.
             // the mitochondrial wraparound handling in `normalize_mt`), which is
-            // not yet implemented. Tracked by #951. (The earlier "normalize like
-            // genomic variants" note overstated this pass-through clone.)
+            // not yet implemented.
+            //
+            // Tracked by #466's circular candidate, which asks SVD-WG to state
+            // the origin-wraparound shift semantics first — "the most 3'
+            // position possible" is ill-defined on a ring, so there is nothing
+            // to implement against yet.
+            //
+            // NOT #951, and not #129 before it: both are closed. This pointer
+            // has now gone stale twice (#129 -> #951 -> here), and #951's own
+            // body was filed *because* the comment then cited the closed #129.
+            // If #466's candidate is ever closed too, repoint this rather than
+            // leaving the third generation of the same dangling reference.
+            // (The earlier "normalize like genomic variants" note overstated
+            // this pass-through clone.)
             HV::Circular(v) => (
                 HV::Circular(crate::hgvs::variant::CircularVariant {
                     accession: v.accession.clone(),
@@ -9798,10 +9810,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
 ///
 /// `Circular` (o.) is included even though its current normalizer is a
 /// pass-through clone (positions cannot change); the surface is
-/// forward-safe for when circular shuffling is implemented (tracked by
-/// #951 — the prior reference to the now-closed #129 was to its MT-scoped
-/// deferral) and costs nothing today (the post-hoc equality check trivially
-/// returns no info).
+/// forward-safe for when circular shuffling is implemented (tracked by #466's
+/// circular candidate; the earlier pointers at #951 and, before it, the
+/// MT-scoped #129 are both closed) and costs nothing today (the post-hoc
+/// equality check trivially returns no info).
 fn position_text_if_shuffleable(variant: &HgvsVariant) -> Option<String> {
     match variant {
         HV::Genome(v) => Some(format!("{}", v.loc_edit.location)),

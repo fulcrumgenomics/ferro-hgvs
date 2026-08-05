@@ -193,7 +193,8 @@ fn a_substitution_off_the_first_base_is_out_of_scope() {
 /// single-position `delins`, which needs no reversed range at all.
 ///
 /// So the clamp firing on `m.` is the established behaviour, not an oversight —
-/// this pins it so a future circular normalizer (#951) has to decide
+/// this pins it so a future circular normalizer (#466's circular candidate,
+/// which supersedes the closed #951) has to decide
 /// deliberately rather than change it by accident.
 #[test]
 fn the_mitochondrial_axis_takes_the_same_boundary_delins() {

@@ -1,8 +1,17 @@
 //! Issue #951 — `o.` (circular, SVD-WG006) normalization is a deliberate
 //! pass-through: the variant is returned unchanged, with no 3'-shift and no
 //! warning. A genuine circular normalizer would 3'-shift with origin-wraparound
-//! semantics, which is not yet implemented (tracked by the open #951; the prior
-//! in-code reference to the now-closed, MT-scoped #129 was misleading).
+//! semantics, which is not yet implemented.
+//!
+//! **The live tracker is #466's circular candidate, not #951.** #951 was closed
+//! `NOT_PLANNED` on 2026-07-08, superseded by that candidate, which asks SVD-WG
+//! to define the origin-wraparound shift semantics before anything is built
+//! against them. The file keeps its name as the historical anchor for the
+//! behaviour it pins.
+//!
+//! Note the shape of the mistake this corrects, since it has now happened
+//! twice: #951 was itself filed because the code then pointed at the closed,
+//! MT-scoped #129.
 //!
 //! These tests pin the current documented behavior so a future implementer of
 //! circular shuffling knows exactly what contract they are changing.
@@ -22,7 +31,8 @@ fn circular_deletion_is_returned_unchanged_without_warnings() {
     assert_eq!(
         format!("{}", outcome.result),
         input,
-        "circular o. normalization must be a pass-through (no 3'-shift) — #951",
+        "circular o. normalization must be a pass-through (no 3'-shift) — see \
+         #466's circular candidate",
     );
     assert!(
         outcome.warnings.is_empty(),
