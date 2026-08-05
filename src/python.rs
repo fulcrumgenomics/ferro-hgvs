@@ -2012,7 +2012,7 @@ impl PyVariantProjector {
     /// Equivalent to `[self.project_all(s) for s in hgvs_strings]`, but takes a
     /// single Python→Rust call, releases the GIL for the entire batch, and
     /// reuses the projector's internal transcript / ref-protein caches across
-    /// all inputs. Fast path for SatMut-style fan-out workloads.
+    /// all inputs. Fast path for high-throughput fan-out workloads.
     ///
     /// Args:
     ///     hgvs_strings: List of g. HGVS variant strings.

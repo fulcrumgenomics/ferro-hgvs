@@ -4,7 +4,7 @@
 
 A synthetic/local reference (own GFF3 + FASTA) can be built and normalized
 entirely in-process via the PyPI wheel — no shelling out to the `ferro` CLI.
-This exercises the exact Python surface a saturation-mutagenesis pipeline uses.
+This exercises the exact Python surface a high-throughput variant pipeline uses.
 """
 
 import json
