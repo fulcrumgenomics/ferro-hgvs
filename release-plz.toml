@@ -4,3 +4,104 @@
 # pre-1.0 feature additions as minor bumps, so increment the minor version on
 # features even while the major version is 0.
 features_always_increment_minor = true
+
+# Prepend a representation-stability block to the release PR body (#1424).
+#
+# Representation stability is a shipped guarantee: the downstream consumer keys
+# read counts on the normalized HGVS string, so a canonical form that churns
+# between releases silently re-buckets every stored design. `CLAUDE.md` asks for
+# such changes to be batched into one release, which makes the release PR the
+# place to see them together — and today its body carries only the
+# `cargo-semver-checks` dump, from which no reader can tell that (say) #1392
+# moved cis-allele output.
+#
+# Setting `pr_body` replaces the default body wholesale, so the `semver_check`
+# and `breaking_changes` renders below are not decoration — dropping either
+# would silently delete the API-compatibility report this PR body exists to
+# *add* to, on a pre-1.0 crate where that report is the only automated warning
+# that a release breaks callers.
+#
+# The block is emitted **whether or not** anything was declared. An empty section
+# that is stated beats an absent one: it turns an undeclared change from silence
+# into a visible false statement, which is the only version a reviewer can act
+# on.
+#
+# `release.changelog` is release-plz's rendered changelog for the release, so the
+# group configured under `[changelog]` below shows up here automatically rather
+# than in a second place that has to be kept in step.
+pr_body = """
+## Representation stability
+
+Any PR that moves a normalized output should carry a `Representation-Change:`
+trailer (see CONTRIBUTING.md). Those are collected into the **Representation
+changes** section of the changelog below.
+
+Reviewer checklist:
+
+- [ ] Either that section lists every output-moving change in this cycle, or
+      there were none and it is absent.
+- [ ] Each entry says whether the affected inputs were previously **rejected**
+      (no stored string, so free) or previously **accepted** (a real migration
+      for the consumer).
+
+A commit under `src/normalize/`, `src/hgvs/`, `src/spdi/` or `src/project/` that
+moved output without declaring it means the trailer is missing. Fix that before
+releasing, not after.
+
+---
+
+{% for release in releases %}
+{% if release.title %}### {{ release.title }}{% endif %}
+{% if release.changelog %}{{ release.changelog }}{% endif %}
+{% if release.breaking_changes %}
+#### API breaking changes
+
+{{ release.breaking_changes }}
+{% endif %}
+{% if release.semver_check %}
+#### cargo-semver-checks
+
+{{ release.semver_check }}
+{% endif %}
+{% endfor %}
+"""
+
+# Group commits carrying a `Representation-Change:` trailer into their own
+# changelog section, ordered above the ordinary ones (#1424).
+#
+# git-cliff matches on the commit's **footer**, which is where a trailer on the
+# squash commit lands — the documented example for this field is
+# `{ footer = "^changelog: ?ignore", skip = true }`.
+#
+# Footer matching depends on `git.conventional_commits` staying enabled (it is
+# release-plz's default). Verified against git-cliff 2.13.1 both ways: with it
+# on, a trailered `fix:` is promoted into the group below; with it off, the
+# footer rule never matches and the same commit lands in `Fixed` with no error
+# and no warning. So turning that setting off would disable this grouping
+# silently rather than break the build.
+#
+# The `<!-- N -->` prefixes are how git-cliff orders groups; they are stripped
+# from the rendered heading. The six below `Representation changes` reproduce
+# release-plz's own defaults, because defining `commit_parsers` at all replaces
+# them wholesale — omitting them would collapse Added/Fixed into one bucket.
+# `Removed` is in that default set and is easy to drop by eye, since this
+# project's changelog has never had an entry under it; leaving it out would
+# route a `removed:` commit into `Other` instead.
+#
+# For the changelog file itself: release-plz regenerates the *pending* section
+# of an open release PR on every run, so a hand-written entry there is lost when
+# the PR next updates. Already-released sections are not rewritten — a release
+# only prepends (v0.12.0's commit touched `CHANGELOG.md` as a single +63/-0
+# insertion at the top) — so a released section can be amended after the fact.
+# The trailer is what gets a note in automatically, at release time.
+[changelog]
+commit_parsers = [
+  { footer = "^Representation-Change:", group = "<!-- 0 -->Representation changes" },
+  { message = "^feat", group = "<!-- 1 -->Added" },
+  { message = "^changed", group = "<!-- 2 -->Changed" },
+  { message = "^deprecated", group = "<!-- 3 -->Deprecated" },
+  { message = "^removed", group = "<!-- 4 -->Removed" },
+  { message = "^fix", group = "<!-- 5 -->Fixed" },
+  { message = "^security", group = "<!-- 6 -->Security" },
+  { message = "^.*", group = "<!-- 7 -->Other" },
+]
