@@ -151,12 +151,20 @@ jobs:
         # proptest writes the shrunk case to its persistence file. Surfacing it
         # here means the reproducer is in the run log even if the artifact is
         # missed — and that file is exactly what gets committed alongside the
-        # eventual fix, per the convention in
-        # tests/proptest-regressions/normalize_idempotency_proptest.txt.
+        # eventual fix, per the convention in tests/proptest-regressions/.
+        #
+        # Both modules' files are printed, because this job selects
+        # `test(proptest)` and either can be the one that grew a seed.
         if: failure()
         run: |
           echo "::group::proptest regression seeds"
           find tests/proptest-regressions -name '*.txt' -print -exec cat {} \;
+          echo "::endgroup::"
+          # Which file proptest appended to is the reliable signal for *which*
+          # property failed — the run log above prints all of them, and a
+          # 14-seed file looks much like a 3-seed one at a glance.
+          echo "::group::seed files this run modified"
+          git status --porcelain tests/proptest-regressions/ || true
           echo "::endgroup::"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         if: failure()
@@ -185,24 +193,70 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          TITLE="nightly soak: idempotency property failed"
-          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
-            --json number --jq '.[0].number // empty')
+          TITLE="nightly soak: a proptest property failed"
+          LEGACY_TITLE="nightly soak: idempotency property failed"
+
+          # `in:title` alone is a *word* match, not an exact one: the search
+          # tokenizes, so any issue whose title merely contains these words
+          # ranks, and `.[0]` then takes whichever GitHub happened to sort
+          # first. That is how a rolling tracker ends up commenting on an
+          # unrelated issue. Quote the phrase to narrow the search, then filter
+          # on `.title == $t` so only an exact match can be adopted.
+          find_issue_by_exact_title() {
+            gh issue list --state open --search "\"$1\" in:title" \
+              --json number,title \
+              | jq -r --arg t "$1" '[.[] | select(.title == $t)][0].number // empty'
+          }
+
+          EXISTING=$(find_issue_by_exact_title "$TITLE")
+          # Also match the pre-#1235 title, so an issue already rolling under
+          # the old wording keeps being updated instead of being duplicated.
+          if [ -z "$EXISTING" ]; then
+            EXISTING=$(find_issue_by_exact_title "$LEGACY_TITLE")
+          fi
+          # The job selects `test(proptest)`, which is TWO modules, so the body
+          # must not name one of them. It said "idempotency" while
+          # `cis_allele_confluence_proptest` was also in the selection, and that
+          # module contributes four live properties to this soak
+          # (`all_encodings_of_one_haplotype_converge`,
+          # `the_converged_form_is_a_fixed_point`,
+          # `members_are_disjoint_and_ascending` and
+          # `an_indel_haplotype_is_authored_order_independent`) — so a
+          # confluence failure would have been reported under the wrong name,
+          # pointing at the wrong seed file and the wrong reproduce command.
+          #
+          # Its fifth, `an_indel_haplotype_normalizes_to_its_own_sequence`, is
+          # deliberately NOT among them: it is `#[ignore]`d for #1325 and this
+          # job passes no `--run-ignored`, so it never fires here. Say so
+          # explicitly — the count is what makes "two modules, either can fail"
+          # true rather than a guess.
           BODY=$(printf '%s\n' \
-            "The unseeded 1M-case idempotency soak failed." \
+            "The unseeded 1M-case proptest soak failed." \
             "" \
             "Run: $RUN_URL" \
             "" \
-            "The shrunk case is in the run log (\"proptest regression seeds\" group) and in the \`proptest-regressions-shard-*\` artifact." \
+            "**Which property failed** is the failing test name in the nextest summary in the run log — that is always present. The \"seed files this run modified\" group narrows it to a seed file, but only when proptest appended a *new* case: proptest replays the persisted seeds before drawing random ones, so a failure on an already-pinned seed modifies nothing and leaves that group empty. The shrunk case itself is in the \"proptest regression seeds\" group and in the \`proptest-regressions-shard-*\` artifact." \
             "" \
-            "To reproduce locally, add the seed line to \`tests/proptest-regressions/normalize_idempotency_proptest.txt\` and run:" \
+            "This job runs both proptest modules. To reproduce locally, add the seed line to the file it was appended to and run the matching command:" \
             "" \
             '```' \
+            "# tests/proptest-regressions/normalize_idempotency_proptest.txt" \
             "cargo nextest run --features dev -E 'test(normalize_idempotency_proptest)'" \
+            "" \
+            "# tests/proptest-regressions/cis_allele_confluence_proptest.txt" \
+            "cargo nextest run --features dev -E 'test(cis_allele_confluence_proptest)'" \
             '```' \
             "" \
-            "Commit that seed line alongside the fix — it becomes the regression guard.")
+            "Commit that seed line alongside the fix — it becomes the regression guard." \
+            "" \
+            "Note that a seed is replayed *through* its strategy, so editing how a strategy consumes randomness makes every seed recorded against it regenerate a different case. Check the strategy is untouched before concluding a pinned seed no longer reproduces.")
           if [ -n "$EXISTING" ]; then
+            # Re-title on the way past. Without this, an issue matched by the
+            # old-wording fallback keeps being commented on under a title that
+            # names one of the two modules — the exact confusion this change
+            # exists to remove. `gh issue edit` is idempotent, so it costs one
+            # no-op call when the title already matches.
+            gh issue edit "$EXISTING" --title "$TITLE"
             gh issue comment "$EXISTING" --body "$BODY"
           else
             gh issue create --title "$TITLE" --body "$BODY"
