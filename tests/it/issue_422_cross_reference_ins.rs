@@ -439,28 +439,35 @@ fn cross_reference_inv_suffix_expands_inside_a_complex_bracket() {
         "the spanning delins must be a normalization fixed point",
     );
 
-    // KNOWN LIMITATION, pinned deliberately so it is visible rather than merely
-    // absent: the hand-written two-member spelling of this same variant does
-    // *not* converge on the spanning delins. Two stable strings, one variant.
+    // This was a pinned KNOWN LIMITATION — the hand-written two-member spelling
+    // of this same variant did not converge on the spanning delins, so one
+    // variant had two stable strings. **It now converges**, and the condition
+    // the old pin set for changing it is met.
     //
-    // It cannot be closed from here. The two-member input trips the
-    // `input_separator_positions` veto (`general.md:34` — do not merge across a
-    // base the input left unchanged), which returns it verbatim. Letting a
-    // coincidence-driven collapse override that veto does close this case, but it
-    // also merges `g.[306dup;308C>A]` into `g.307_308delinsCGA`, breaking #999 —
-    // and the collapse cannot tell the two apart, because both are two-member
-    // inputs whose derived pieces collapse to one. The veto is what protects
-    // #999, so it stays and this case stays split.
+    // That pin said the case "cannot be closed from here", because closing it
+    // seemed to require letting a coincidence-driven collapse override the
+    // `general.md:34` veto — which would also merge `g.[306dup;308C>A]` into
+    // `g.307_308delinsCGA` and break #999, "and the collapse cannot tell the two
+    // apart, because both are two-member inputs whose derived pieces collapse to
+    // one."
     //
-    // Change this assertion only alongside a fix that keeps #999 green.
+    // It can tell them apart, once it is asked to record *why* it collapsed.
+    // `partition_block` now reports a `BlockCollapse`, and the weight bound is
+    // waived only for `ByPolicy` — a block where the aligner found a multi-piece
+    // partition and `split_buys_no_higher_priority_type` deliberately merged it
+    // because the split bought nothing but more `delins` members across one
+    // unchanged base. #999's split buys a `dup`, which is a higher-priority type,
+    // so that predicate is false, no policy collapse is recorded, the bound still
+    // applies, and `g.[306dup;308C>A]` stays split. All four #999 tests are green
+    // — verified directly, not inferred from the suite.
     assert_eq!(
         normalize(
             "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
             inv_payload_provider()
         )
         .expect("normalize"),
-        "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
-        "the two-member spelling is left alone by the separator veto (known non-confluence)",
+        "NC_000022.10:g.10_15delinsAAACCCC",
+        "the two-member spelling now converges on the spanning delins",
     );
 }
 

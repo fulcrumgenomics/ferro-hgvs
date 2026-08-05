@@ -2146,7 +2146,8 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         return None; // no net change; leave it to the existing pipeline.
     }
 
-    let mut pieces = partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
+    let (mut pieces, collapse) =
+        partition_block_detailed(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
     // about the *split* and not about a downstream pass. Never affects `pieces`.
@@ -2261,7 +2262,21 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // Strict on purpose: #1229, #1231, #1233 and #1234 all sit exactly at
     // equality, and equality is where prioritisation (`general.md:56`) may
     // legitimately prefer the re-derived shape.
-    if changed_columns_of_pieces(&pieces) > changed_columns_of_edits(&edits) {
+    //
+    // One exemption, and only one: a block `partition_block` collapsed *by
+    // policy* (`BlockCollapse::ByPolicy`). There the aligner did find a
+    // multi-piece partition and `split_buys_no_higher_priority_type` merged it
+    // deliberately, because the split bought nothing but more `delins` members
+    // across a single unchanged base. That collapse is necessarily heavier than
+    // the split it replaced — merging across an unchanged base always is — so
+    // the bound refused ferro's own preferred spelling whenever the input
+    // happened to arrive already split, and `g.[257_258delinsGGG;260_261delinsGG]`
+    // and `g.257_261delinsGGGTGG` were both stable: one variant, two normal
+    // forms. The bound is a guard against derivations that are *accidentally*
+    // worse, and a policy that widens on purpose is not that.
+    if collapse != BlockCollapse::ByPolicy
+        && changed_columns_of_pieces(&pieces) > changed_columns_of_edits(&edits)
+    {
         return None;
     }
 
@@ -3464,6 +3479,26 @@ fn trim_common_flanks(reference: &[u8], result: &[u8]) -> (usize, usize, usize) 
     (lo, hi_ref, hi_alt)
 }
 
+/// Why [`partition_block_detailed`] returned a single whole-block piece.
+///
+/// The distinction matters to the weight bound in `canonicalize_from_sequence`,
+/// which refuses a derivation heavier than the input. That refusal is right for
+/// [`BlockCollapse::Fallback`] — no usable partition was found, so the lone piece
+/// is a worse description that the per-member pipeline should answer instead. It
+/// is wrong for [`BlockCollapse::ByPolicy`], where the aligner *did* find a
+/// multi-piece partition and a deliberate rule merged it: refusing there makes
+/// ferro's own preferred spelling unreachable from an input that is already
+/// split, which is how one variant ended up with two stable normal forms.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum BlockCollapse {
+    /// Not collapsed — the pieces are the alignment's own partition.
+    No,
+    /// Collapsed deliberately by [`split_buys_no_higher_priority_type`].
+    ByPolicy,
+    /// Collapsed because no usable partition was available.
+    Fallback,
+}
+
 /// Partition a changed block into maximal runs of change separated by at least
 /// one unchanged base.
 ///
@@ -3475,7 +3510,21 @@ fn trim_common_flanks(reference: &[u8], result: &[u8]) -> (usize, usize, usize) 
 /// pieces — and break ties by placing the indel 5'-most. The tie-break is an
 /// implementer's choice; the spec does not reach it. Each piece is 3'-shifted
 /// afterwards, so the 3' rule is still honoured per member.
+///
+/// Test-only since the weight bound began reading the collapse origin: every
+/// production caller needs [`partition_block_detailed`]'s second element, and
+/// the tests here care only about the pieces.
+#[cfg(test)]
 fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
+    partition_block_detailed(reference, result).0
+}
+
+/// Why a block came back as one whole-block piece — see [`BlockCollapse`].
+///
+/// Split out from [`partition_block`] because the caller cannot otherwise tell a
+/// *deliberate* collapse from a fallback, and the weight bound needs to
+/// (`BlockCollapse::ByPolicy`).
+fn partition_block_detailed(reference: &[u8], result: &[u8]) -> (Vec<Piece>, BlockCollapse) {
     let whole = || {
         vec![Piece {
             ref_start: 0,
@@ -3486,14 +3535,14 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     // One bound for every regime now that every length-changing regime has a
     // real guard — see `separations_are_meaningful` (#1271).
     if reference.len() > MAX_SPLIT_BLOCK || result.len() > MAX_SPLIT_BLOCK {
-        return whole();
+        return (whole(), BlockCollapse::Fallback);
     }
     let Some(columns) = best_alignment(reference, result) else {
-        return whole();
+        return (whole(), BlockCollapse::Fallback);
     };
     let pieces = pieces_from_columns(&columns, reference, result);
     if pieces.is_empty() {
-        return whole();
+        return (whole(), BlockCollapse::Fallback);
     }
     // Every length-changing block, not just net insertions (#1271). Equal-length
     // blocks are exempt because `best_alignment` compares position-wise there —
@@ -3501,7 +3550,7 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     if reference.len() != result.len()
         && !separations_are_meaningful(&pieces, result.len().abs_diff(reference.len()))
     {
-        return whole();
+        return (whole(), BlockCollapse::Fallback);
     }
     // Scoped to length-changing blocks: an equal-length block has no gap to
     // place, so every matched base is a genuine coordinate-wise identity rather
@@ -3512,9 +3561,9 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
         && every_separation_is_a_single_base(&pieces)
         && split_buys_no_higher_priority_type(&pieces, reference)
     {
-        return whole();
+        return (whole(), BlockCollapse::ByPolicy);
     }
-    pieces
+    (pieces, BlockCollapse::No)
 }
 
 /// Merge a run of pieces that together span one inversion back into that single
