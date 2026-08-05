@@ -848,3 +848,202 @@ fn no_tandem_tract_allele_normalizes_to_a_different_sequence() {
         "sequence-changing normalizations in {checked} tract cases: {changed:#?}"
     );
 }
+
+/// A smoke slice of the same class on the **transcript axes** (#1283 gap 4).
+///
+/// Every sweep above runs on `g.` only, so the file's claim — that no two-member
+/// cis allele normalizes to a different sequence — was never tested where the
+/// axis itself changes the answer. It does change it: the CDS/UTR and
+/// transcript-end insertion clamps, the exon-junction exception to the 3' rule,
+/// the coding one-amino-acid exception to the separation rule and the `c.` codon
+/// gate on repeat notation all fire here and nowhere above. #1284, which had to
+/// land first because a transcript-axis member could abort the run outright under
+/// `FERRO_ASSERT_REPARSE`, is closed.
+///
+/// Deliberately a **smoke slice**, not a second exhaustive sweep. It reuses the
+/// same corpus, member shapes and oracle, so what it adds is the axis rather than
+/// new shapes — and the genomic sweeps above already carry the shape coverage.
+/// Sizing it that way is also what keeps it affordable: it multiplies the case
+/// count by the number of axes, and the seed knob (#1295) is what makes that a
+/// prefix locally and the full corpus in CI.
+///
+/// `cds_start = 1` so `c.N` is transcript position `N` and the coordinate
+/// arithmetic matches the genomic sweeps exactly. The CDS is 18 of the 20 bases —
+/// six whole codons, so the codon gate is not tripped by a ragged reading frame —
+/// leaving `c.*1_*2` as a 3'UTR the members deliberately stay out of, since UTR
+/// boundary behaviour has its own dedicated tests and would only add noise to a
+/// smoke slice.
+///
+/// # `#[ignore]`d pending #1398, which this sweep found
+///
+/// It passes at the default 4-seed prefix and **fails at the full corpus**, on a
+/// real defect rather than on anything about the sweep: `c.[11_12dup;16_17insC]`
+/// over `TAAATAATAAATATATATTA` normalizes to `c.18_*1insCAT`, an insertion across
+/// the CDS/3'UTR boundary, and re-normalizing that does not return it
+/// (`c.18delinsTCAT` under 3', `c.16_17insATC` under 5'). That trips
+/// `FERRO_ASSERT_IDEMPOTENT` as a panic, so the sweep cannot merely count it the
+/// way `FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES` counts its class.
+///
+/// Committed `#[ignore]`d rather than narrowed, deliberately. Trimming the
+/// position range until the boundary shape is unreachable would be the exact
+/// move #1283 exists to complain about — a generator that reads wider than it is
+/// — and the gap it closes is worth more than the few days it spends ignored.
+/// Un-ignore it when #1398 lands; it is already green on everything else.
+///
+/// Run it with:
+///
+/// ```text
+/// FERRO_SWEEP_SEEDS=full cargo nextest run --features dev \
+///   -E 'test(no_two_member_transcript_axis_allele)' --run-ignored all
+/// ```
+#[test]
+#[ignore = "finds #1398 at the full corpus; un-ignore when that lands"]
+fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
+    use crate::common::cis_apply_oracle::apply_with;
+    use crate::common::synthetic::SyntheticBuilder;
+    use ferro_hgvs::reference::transcript::Strand;
+    use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};
+
+    /// 1-based inclusive CDS end within the 20-base transcript: six codons.
+    const CDS_END: u64 = 18;
+
+    let mut checked = 0usize;
+    let mut skipped = 0usize;
+    let mut overlapping: Vec<String> = Vec::new();
+    let mut changed: Vec<String> = Vec::new();
+
+    let seeds = sweep_seeds(48);
+    for seq in sweep_sequences(seeds) {
+        // `c.` and `n.` share the generator; `r.` is excluded because its
+        // `U`/`T` alphabet makes the payload construction below a different
+        // problem, and `issue_1235_transcript_axes.rs` pins that axis by hand.
+        for (accession, axis) in [("NM_TEST.1", "c"), ("NR_TEST.1", "n")] {
+            // Built once per (sequence, axis) and cloned per case. `SyntheticBuilder`
+            // pads, maps to a genomic contig and reverse-complements on demand, so
+            // constructing one inside the innermost loop dominated the test:
+            // measured at 39.8s for the 4-seed prefix before hoisting, against
+            // 18.3s for the far larger genomic sweep beside it.
+            let axis_provider = if axis == "c" {
+                SyntheticBuilder::cds(&seq, 1, CDS_END, Strand::Plus).build()
+            } else {
+                SyntheticBuilder::noncoding(&seq, Strand::Plus).build()
+            };
+            for first_start in 2..=11usize {
+                for first_len in 1..=2usize {
+                    let first_end = first_start + first_len - 1;
+                    let span = if first_len == 1 {
+                        format!("{first_start}")
+                    } else {
+                        format!("{first_start}_{first_end}")
+                    };
+                    // Same payload rule as the genomic sweeps: excluding both
+                    // flanking reference bases keeps the `ins` entry from
+                    // denoting the `dup` beside it.
+                    let first_base = seq.as_bytes()[first_start - 1] as char;
+                    let first_next = seq.as_bytes()[first_start] as char;
+                    let first_payload = ['A', 'C', 'G', 'T']
+                        .into_iter()
+                        .find(|b| *b != first_base && *b != first_next)
+                        .expect("four bases, at most two excluded");
+                    let inserted: String = std::iter::repeat_n(first_payload, first_len).collect();
+                    let firsts = [
+                        format!("{span}del"),
+                        format!("{span}dup"),
+                        format!("{first_start}_{}ins{inserted}", first_start + 1),
+                    ];
+                    for first in firsts {
+                        for second_start in first_end + 2..=(CDS_END as usize - 1) {
+                            let base = seq.as_bytes()[second_start - 1] as char;
+                            let alt = if base == 'A' { 'G' } else { 'A' };
+                            let next_base = seq.as_bytes()[second_start] as char;
+                            let second_payload = ['A', 'C', 'G', 'T']
+                                .into_iter()
+                                .find(|b| *b != base && *b != next_base)
+                                .expect("four bases, at most two excluded");
+                            for second in [
+                                format!("{second_start}del"),
+                                format!("{second_start}{base}>{alt}"),
+                                format!("{second_start}dup"),
+                                format!("{second_start}_{}ins{second_payload}", second_start + 1),
+                            ] {
+                                for direction in
+                                    [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime]
+                                {
+                                    let input = format!("{accession}:{axis}.[{first};{second}]");
+                                    let variant =
+                                        parse_hgvs(&input).expect("generated input parses");
+                                    let normalizer = Normalizer::with_config(
+                                        axis_provider.clone(),
+                                        NormalizeConfig::default()
+                                            .with_direction(direction)
+                                            .allow_crossing_boundaries(),
+                                    );
+                                    let Ok(normalized) = normalizer.normalize(&variant) else {
+                                        // A refusal is a legitimate answer here —
+                                        // the transcript axes decline shapes the
+                                        // genomic axis accepts — and says nothing
+                                        // about sequence preservation.
+                                        skipped += 1;
+                                        continue;
+                                    };
+                                    let output = format!("{normalized}");
+                                    checked += 1;
+
+                                    let Some(want) = apply_with(&axis_provider, &seq, &input)
+                                    else {
+                                        // An *input* that does not apply is a case
+                                        // this sweep cannot speak for. Counted
+                                        // separately from an unconvertible output,
+                                        // which is a failure.
+                                        skipped += 1;
+                                        checked -= 1;
+                                        continue;
+                                    };
+                                    // Both collections are capped at ten, matching
+                                    // the two sweeps above. The assertions below
+                                    // fire on `is_empty()`, so every failure past
+                                    // the tenth changes nothing about the verdict
+                                    // and only makes the panic output harder to
+                                    // read — and a broad regression on the full
+                                    // corpus would otherwise accumulate a string
+                                    // per case.
+                                    match apply_with(&axis_provider, &seq, &output) {
+                                        None if overlapping.len() < 10 => overlapping
+                                            .push(format!("{input} [{direction:?}] -> {output}")),
+                                        None => {}
+                                        Some(got) if got != want && changed.len() < 10 => changed
+                                            .push(format!(
+                                                "{input} [{direction:?}] -> {output} \
+                                             (want {want}, got {got})"
+                                            )),
+                                        Some(_) => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Per seed, for the reason recorded on the floor in the first sweep above.
+    const CASES_PER_SEED_FLOOR: usize = 1_000;
+    let floor = CASES_PER_SEED_FLOOR * seeds as usize;
+    assert!(
+        checked > floor,
+        "transcript-axis sweep covered too little: {checked} over {seeds} seeds (floor {floor})"
+    );
+    assert!(
+        skipped * 2 < checked,
+        "too many transcript-axis cases skipped: {skipped} of {checked}"
+    );
+    assert!(
+        overlapping.is_empty(),
+        "overlapping or unconvertible output in {checked} transcript-axis cases: {overlapping:#?}"
+    );
+    assert!(
+        changed.is_empty(),
+        "sequence-changing normalizations in {checked} transcript-axis cases: {changed:#?}"
+    );
+}
