@@ -84,15 +84,18 @@
 //!
 //! ## PARTITION issues not asserted
 //!
-//! - **#1271** — the issue's own worked example (the HGVS spec's `LRG_199` delins) is
-//!   **not a live defect** on this branch: the regression that used to split it four ways
-//!   was already fixed (a regime-aware `MAX_UNGUARDED_SPLIT_BLOCK`, per the issue's own
-//!   account). What #1271 tracks is a *principled* follow-up (extending
-//!   `separations_are_meaningful` to net deletions) with no constructed failing case yet.
-//!   Its illustrative example is also stated as a coding-axis (`c.`) description, and the
-//!   split spelling's coordinates are relative/illustrative rather than full genomic
-//!   positions — there is no sequence content to build a synthetic genomic reproducer from
-//!   without inventing it. Excluded rather than forced into a frame it doesn't fit.
+//! - **#1271** — closed. The issue's own worked example (the HGVS spec's `LRG_199` delins)
+//!   was never a live defect here: the regression that used to split it four ways was
+//!   already held by a regime-aware bound (`MAX_UNGUARDED_SPLIT_BLOCK`, per the issue's own
+//!   account). What #1271 tracked was the *principled* follow-up — extending
+//!   `separations_are_meaningful` to net deletions and retiring that bound — and that has
+//!   since landed, so the block is now refused on its merits rather than by length. It is
+//!   pinned at the unit level by `partition_block_refuses_a_coincidental_net_deletion_split`
+//!   and end-to-end by `long_delins_splits_at_unchanged_bases`, and the spec enumeration
+//!   records the move (`projection-splits-single-member` 10 -> 9). Still nothing to add to
+//!   *this* corpus: the illustrative example is stated as a coding-axis (`c.`) description
+//!   whose split coordinates are relative rather than full genomic positions, so there is no
+//!   sequence content to build a synthetic genomic reproducer from without inventing it.
 //! - **#1284** — three cis repair passes (`respell_colliding_duplications`,
 //!   `coalesce_members_at_one_junction`, and the junction arm of
 //!   `demote_repeats_spanning_siblings`) are gated `CisKind::Genome | Mt`, so a `c.`/`n.`/

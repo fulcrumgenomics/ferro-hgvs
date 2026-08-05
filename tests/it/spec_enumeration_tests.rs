@@ -292,7 +292,14 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // `DNA/delins.md:42` calls "not correct". See
     // `Status::ProjectionSplitsSingleMember`; added by #1272, which is also what
     // makes the LRG_199 delins regression visible.
-    (Status::ProjectionSplitsSingleMember, 10),
+    //
+    // 10 -> 9 in #1271: that LRG_199 row is the one this status was created to
+    // surface, and extending `separations_are_meaningful` to net deletions is
+    // what stops it splitting. The row it vacates reappears in
+    // `PASSING_CENSUS`'s `ProjectionPinned` (1167 -> 1168), so the 2184-row total
+    // is unchanged — nothing left the enumeration, one row moved from a
+    // divergence to a pass.
+    (Status::ProjectionSplitsSingleMember, 9),
 ];
 
 /// Census of the **conformant** statuses — the counting half of
@@ -358,7 +365,10 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // The four `project-r/…r.spl` rows are deliberately unmoved: the `rna` axis
     // is documented as the predicted form and already rendered `r.(spl)`, so the
     // replacement path preserves that wrapper rather than quietly changing it.
-    (Status::ProjectionPinned, 1167),
+    // 1167 -> 1168 in #1271: the LRG_199 `delins.md:44` row that used to land in
+    // `ProjectionSplitsSingleMember` now projects as the single member the spec
+    // states. See that status's note in `DIVERGENCE_BUDGET`.
+    (Status::ProjectionPinned, 1168),
     (Status::ProjectionUnavailablePinned, 487),
     (Status::ProjectionErrorPinned, 210),
     (Status::ModeDivergencePinned, 132),

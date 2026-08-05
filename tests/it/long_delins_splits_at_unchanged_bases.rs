@@ -8,11 +8,16 @@
 //! length qualifier at all.
 //!
 //! The coincidence concern is handled by `separations_are_meaningful`, which
-//! covers net insertions. It does not reach net *deletions*, so those keep the
-//! original 32 nt bound (`MAX_UNGUARDED_SPLIT_BLOCK`) as their only guard, and
-//! the raise applies to the two regimes that are safe: equal-length blocks,
-//! which have no alignment choice to get wrong, and net insertions, which the
-//! rule covers. Both halves of that split are pinned below.
+//! since #1271 covers **every** length-changing regime — net deletions as well
+//! as net insertions. Equal-length blocks need no cover at all, having no
+//! alignment choice to get wrong. So one bound (`MAX_SPLIT_BLOCK`) now applies
+//! everywhere, and the coincidence question is answered by a rule about the
+//! derived pieces rather than by length.
+//!
+//! It was not always so: net deletions were once the unguarded regime and were
+//! held instead by a second, smaller bound of 32 nt
+//! (`MAX_UNGUARDED_SPLIT_BLOCK`) that guarded by accident. #1271 retired it.
+//! The cases below pin the outcomes, which are unchanged by that move.
 
 use crate::common::synthetic::{hgvs, SyntheticBuilder};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
@@ -107,9 +112,14 @@ fn a_long_net_deletion_stays_one_spanning_delins() {
     // `1_51`, `2_52`, or a payload with something spliced onto it would all
     // pass while the guard under test had stopped working.
     //
-    // The expected answer is fully determined. The block is a net deletion, so
-    // `partition_block` caps it at `MAX_UNGUARDED_SPLIT_BLOCK` (32) and returns
-    // the whole block as one piece; and neither endpoint trims, because the
+    // The expected answer is fully determined. The block reaches the aligner,
+    // whose proposed split `separations_are_meaningful` then refuses — every gap
+    // between consecutive pieces is one base wide, against the
+    // `RAISED_PIECE_SEPARATION` this block's net change requires — so
+    // `partition_block` returns the whole block as one piece. (Before #1271 the
+    // same single piece came from a 32 nt bound instead; the outcome pinned here
+    // is the same either way, which is why this assertion did not move.) Neither
+    // endpoint trims, because the
     // core begins `A`/ends `T` while the payload begins `T`/ends `G`. So the
     // span is the full core and the payload is untouched.
     let expected = format!("NC_TEST.1:g.1_{}delins{replacement}", core.len());
