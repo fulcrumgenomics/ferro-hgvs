@@ -194,6 +194,47 @@ Wheel Test, abi3 floor — and neither `Test oracle` nor `Exhaustive sweeps` is
 among them. So an oracle fire shows up as a failed job that a human must not
 merge past, not as a ruleset-enforced merge block.
 
+#### Exhaustive cis sweeps: `FERRO_SWEEP_SEEDS`
+
+The three exhaustive cis sweeps — `cis_junction_crossing_shift`,
+`repeat_span_sibling_overlap` and `issue_1254_sibling_crossing_shift` — draw a
+deterministic corpus of 20-mers from `sweep_sequences`. They dominated a local
+run: measured at 79.6s of an 86.6s suite for `cis_junction_crossing_shift`
+alone, so any `cargo nextest run` cost ~90s regardless of what changed (#1295).
+
+They now take a **4-seed prefix of that corpus by default**, and CI's
+`Exhaustive sweeps` job asks for all of it:
+
+```bash
+cargo nextest run --features dev                        # 4-seed prefix (fast)
+FERRO_SWEEP_SEEDS=full cargo nextest run --features dev # the full corpus, as CI runs it
+FERRO_SWEEP_SEEDS=12   cargo nextest run --features dev # an explicit count, for bisecting
+```
+
+Local suite: **86.6s → 27.5s**, with no test left over nextest's 60s SLOW
+threshold.
+
+**Only the sequence diversity is reduced — never the shapes.** The loop bounds
+over member spellings, positions and directions are untouched, which is the
+axis worth keeping: each sweep's notes record that every blocking defect found
+so far lived in a shape the generator could not emit, not in a sequence it did
+not draw.
+
+**Why the pinned counts did not become profile-dependent**, which is the hazard
+#1295 flags against exactly this change. `sweep_sequences` is prefix-stable
+(`sweep_sequences_is_prefix_stable`), so a reduced run enumerates a strict
+*subset* of the full run's cases. An `is_empty()` assertion therefore cannot
+pass at the prefix while failing at the full corpus, and
+`FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES` is pinned at **zero**, which is
+subset-stable for the same reason — had that residual still been 74, this knob
+would have had to make it profile-dependent. The one genuinely seed-dependent
+assertion in each sweep is its case-count floor, which is why those are written
+per-seed rather than as absolutes.
+
+The one thing to watch: `sweeps` is the only job that sets the variable, and it
+selects on `SWEEP_FILTER`. Moving a sweep out of that filter silently drops it
+to the prefix in CI, so edit the two together.
+
 ### Generated spec fixture (not committed)
 
 `tests/fixtures/grammar/hgvs_spec_normalization.json` is a **generated build artifact** — it is `.gitignore`d, not committed. It is produced by the `generate_spec_fixture` binary from the HGVS spec submodule, the parser's behavior, and the curated `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`. (Committing it made every parser PR a merge-conflict magnet, since each PR regenerated the whole file.)

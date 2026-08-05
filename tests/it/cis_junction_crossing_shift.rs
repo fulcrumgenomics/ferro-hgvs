@@ -38,7 +38,7 @@
 
 use crate::common::cis_apply_oracle::{
     apply, assert_normalizes_preserving, assert_normalizes_preserving_in, normalize, normalize_in,
-    sweep_sequences,
+    sweep_seeds, sweep_sequences,
 };
 use ferro_hgvs::ShuffleDirection;
 
@@ -302,8 +302,7 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
     // covering twice the shapes, which is the trade the issue asks for: its
     // five gaps are all shape gaps, not sequence-diversity gaps, and every
     // blocking defect found so far lived in a shape the generator could not
-    // emit rather than in a sequence it did not draw. The `checked > 100_000`
-    // floor below still holds with room to spare.
+    // emit rather than in a sequence it did not draw.
     //
     // One cost to keep on the record: `FIVE_PRIME_DUP_DEL_SEQUENCE_CHANGES`
     // below is an exact count over *this* corpus, so halving the seeds halves
@@ -311,7 +310,15 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
     // a defect would have to live only in a dropped sequence *and* in the
     // dup+del+5' shape to escape — but the guard is weaker than it was, and
     // #1295's seed knob is what restores it without paying the runtime.
-    for seq in sweep_sequences(24) {
+    //
+    // #1295 delivered that knob, so the full count goes back to 48 and the
+    // diversity behind the pinned zero is restored. `sweep_seeds` returns the
+    // full 48 when CI asks (`FERRO_SWEEP_SEEDS=full`) and a 4-seed prefix
+    // otherwise, so a local run no longer pays for it: this test was 79.6s of an
+    // 86.6s local suite at 24 seeds, and the prefix is a strict subset of the
+    // corpus, not a different one.
+    let seeds = sweep_seeds(48);
+    for seq in sweep_sequences(seeds) {
         for first_start in 2..=13usize {
             for first_len in 1..=2usize {
                 let first_end = first_start + first_len - 1;
@@ -434,7 +441,18 @@ fn no_two_member_allele_normalizes_to_a_different_sequence() {
         }
     }
 
-    assert!(checked > 100_000, "sweep covered too little: {checked}");
+    // Per seed, not absolute (#1295): the seed count is now a knob, so a fixed
+    // floor would either fail at the default prefix or be vacuous at the full
+    // corpus. Measured at 11,520 cases per seed — the loop bounds below are what
+    // fix that, and they do not depend on the sequences drawn — so this floor
+    // sits deliberately loose, at roughly a third, and guards against the sweep
+    // being hollowed out by a lost loop rather than against exact drift.
+    const CASES_PER_SEED_FLOOR: usize = 4_000;
+    let floor = CASES_PER_SEED_FLOOR * seeds as usize;
+    assert!(
+        checked > floor,
+        "sweep covered too little: {checked} cases over {seeds} seeds (floor {floor})"
+    );
     // `checked` counts enumerated cases, but a case whose *input* will not
     // apply contributes nothing to either property below. Bound that share, so
     // the sweep cannot go quietly hollow while still clearing the floor.

@@ -25,7 +25,7 @@
 //! pre-existing on `main` and independent of both.
 
 use crate::common::cis_apply_oracle::{
-    apply, assert_normalizes_preserving, normalize_in, sweep_sequences,
+    apply, assert_normalizes_preserving, normalize_in, sweep_seeds, sweep_sequences,
 };
 use ferro_hgvs::ShuffleDirection;
 
@@ -167,7 +167,10 @@ fn no_two_member_allele_normalizes_to_overlapping_members() {
     let mut overlapping: Vec<String> = Vec::new();
     let mut changed: Vec<String> = Vec::new();
 
-    for seq in sweep_sequences(64) {
+    // #1295: full 64 when CI asks (`FERRO_SWEEP_SEEDS=full`), a 4-seed prefix
+    // otherwise. This sweep was 33.1s of an 86.6s local suite.
+    let seeds = sweep_seeds(64);
+    for seq in sweep_sequences(seeds) {
         for first_start in 1..=14usize {
             for first_len in 1..=2usize {
                 let first_end = first_start + first_len - 1;
@@ -213,7 +216,16 @@ fn no_two_member_allele_normalizes_to_overlapping_members() {
         }
     }
 
-    assert!(checked > 100_000, "sweep covered too little: {checked}");
+    // Per seed since #1295, for the reason recorded on the equivalent floor in
+    // `cis_junction_crossing_shift.rs`: the seed count is a knob, so an absolute
+    // floor would either fail at the default prefix or go vacuous at the full
+    // corpus.
+    const CASES_PER_SEED_FLOOR: usize = 1_500;
+    let floor = CASES_PER_SEED_FLOOR * seeds as usize;
+    assert!(
+        checked > floor,
+        "sweep covered too little: {checked} cases over {seeds} seeds (floor {floor})"
+    );
     // `checked` counts enumerated cases, but a case whose *input* will not
     // apply contributes nothing to either property below. Bound that share, so
     // the sweep cannot go quietly hollow while still clearing the floor.
