@@ -1047,3 +1047,212 @@ fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
         "sequence-changing normalizations in {checked} transcript-axis cases: {changed:#?}"
     );
 }
+
+/// Three-member cis alleles, with the failure causes separated (#1268).
+///
+/// Both committed sweeps above generate exactly **two** members, so the ask
+/// CodeRabbit made on #1257 — "extend the randomized overlap/convergence coverage
+/// to alleles with three or more members" — was reported as addressed while the
+/// artifact never covered it. Three members is not a marginal widening: the
+/// measurement #1268 records found 0 overlapping outputs at two members and tens
+/// of thousands at three.
+///
+/// # The causes are counted apart, which is the point
+///
+/// That measurement's other half was a 61,765-case "unapplicable" bucket that
+/// conflated genuine overlap, `hgvs_to_spdi` conversion failure and parse
+/// rejection — three quite different severities. #1268 asks that no three-member
+/// number be quoted until they are separated, so this sweep reports
+/// [`ApplyFailure`] per cause rather than a single count, and asserts on the two
+/// that are defects in a normalizer's *output*:
+///
+/// * `Overlapping` / `CoincidentInsertions` — the output denotes no single
+///   sequence. Both are failures here.
+/// * `Unconvertible` / `Unparseable` / `OutOfBounds` / `StatedBasesMismatch` on
+///   an **input** — a case this sweep cannot speak for, counted and bounded as a
+///   share rather than asserted at zero.
+///
+/// `FERRO_ASSERT_REPARSE` (#1259) already covers parse rejection of normalizer
+/// output suite-wide, so this does not re-derive it.
+///
+/// # Sizing
+///
+/// Three nested member loops over the same positions would be roughly the
+/// two-member sweep cubed. The first and third members therefore **stride** their
+/// position range by two rather than walking it: striding keeps both ends of the
+/// range reachable, where truncating the range would silently drop the cases
+/// nearest the sequence ends — which is where the shifts this file is about
+/// actually terminate. Measured, at the 4-seed default: 131,328 cases and 60.8s
+/// walking, 38,016 and 17.2s striding, against 18.3s for the two-member sweep
+/// beside it. The seed knob (#1295) does the rest.
+///
+/// # What it measures today
+///
+/// All four buckets are **empty** over this corpus — 0 overlapping, 0
+/// coincident-insertion, 0 sequence-changing outputs, and 0 inputs declined for
+/// any cause. That is the re-measurement #1268 asks for before any three-member
+/// number is quoted again, and it is a long way from what that issue recorded
+/// from the throwaway probe: 10,881 sequence-changing and a 61,765-case
+/// undifferentiated "unapplicable" bucket. The confluence work between then and
+/// now is what closed it; this sweep is what keeps it closed.
+///
+/// Because every bucket is zero, there is nothing to pin as a known residual —
+/// the `assert!(…is_empty())` form reports the offending descriptions directly,
+/// which is strictly better than a count, and #1268's request for named
+/// exclusions cross-referenced to issues has no subject.
+#[test]
+fn no_three_member_allele_normalizes_to_a_different_sequence() {
+    use crate::common::cis_apply_oracle::{
+        apply_reason, provider as genomic_provider, ApplyFailure,
+    };
+    use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};
+
+    let mut checked = 0usize;
+    let mut input_declined = 0usize;
+    let mut overlapping: Vec<String> = Vec::new();
+    let mut changed: Vec<String> = Vec::new();
+    // Per-cause tallies for the *input* declines, so the share below is
+    // decomposable rather than another single opaque number.
+    let mut by_cause: std::collections::BTreeMap<&'static str, usize> =
+        std::collections::BTreeMap::new();
+
+    // 16 rather than the 48 its neighbours use. Each seed here carries roughly
+    // three times their cases, so 16 seeds is comparable *total* coverage — and
+    // at 48 this one test was 411s in CI's sweeps job, against 183s for all three
+    // existing sweeps together. It is a deliberate starting point for a sweep
+    // whose buckets are all currently zero, not a ceiling: raise it if a
+    // three-member defect ever turns up in a sequence beyond the sixteenth.
+    let seeds = sweep_seeds(16);
+    for seq in sweep_sequences(seeds) {
+        // Even positions only, and the bound says 8 rather than 9 because
+        // `step_by(2)` from 2 can never reach an odd endpoint — writing `..=9`
+        // named a position this loop does not visit. Sampling every other
+        // position is deliberate (the third member's loop below multiplies this
+        // one), but the range should not claim coverage it does not provide.
+        for first_start in (2..=8usize).step_by(2) {
+            let first_base = seq.as_bytes()[first_start - 1] as char;
+            let first_next = seq.as_bytes()[first_start] as char;
+            let first_payload = ['A', 'C', 'G', 'T']
+                .into_iter()
+                .find(|b| *b != first_base && *b != first_next)
+                .expect("four bases, at most two excluded");
+            let firsts = [
+                format!("{first_start}del"),
+                format!("{first_start}dup"),
+                format!("{first_start}_{}ins{first_payload}", first_start + 1),
+            ];
+            for first in &firsts {
+                // Second and third members walk the remaining positions, each
+                // separated from its predecessor by at least one unchanged base
+                // so every case starts as three genuinely separate members.
+                for second_start in first_start + 2..=14usize {
+                    let second_base = seq.as_bytes()[second_start - 1] as char;
+                    let second_alt = if second_base == 'A' { 'G' } else { 'A' };
+                    for second in [
+                        format!("{second_start}del"),
+                        format!("{second_start}{second_base}>{second_alt}"),
+                        format!("{second_start}dup"),
+                    ] {
+                        // `..=19` is right here, unlike the `first_start` loop
+                        // above: `second_start` walks every integer, so when it
+                        // is odd this range is odd-valued and 19 IS visited.
+                        for third_start in (second_start + 2..=19usize).step_by(2) {
+                            let third_base = seq.as_bytes()[third_start - 1] as char;
+                            let third_alt = if third_base == 'A' { 'G' } else { 'A' };
+                            for third in [
+                                format!("{third_start}del"),
+                                format!("{third_start}{third_base}>{third_alt}"),
+                            ] {
+                                for direction in
+                                    [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime]
+                                {
+                                    let input = format!("TEMPLATE:g.[{first};{second};{third}]");
+                                    let want =
+                                        match apply_reason(&genomic_provider(&seq), &seq, &input) {
+                                            Ok(want) => want,
+                                            Err(cause) => {
+                                                // An input this sweep cannot speak
+                                                // for. Tallied by cause so the share
+                                                // asserted below can be read.
+                                                *by_cause
+                                                    .entry(match cause {
+                                                        ApplyFailure::Unparseable => "unparseable",
+                                                        ApplyFailure::Unconvertible => {
+                                                            "unconvertible"
+                                                        }
+                                                        ApplyFailure::OutOfBounds => {
+                                                            "out-of-bounds"
+                                                        }
+                                                        ApplyFailure::Overlapping => "overlapping",
+                                                        ApplyFailure::CoincidentInsertions => {
+                                                            "coincident-insertions"
+                                                        }
+                                                        ApplyFailure::StatedBasesMismatch => {
+                                                            "stated-bases-mismatch"
+                                                        }
+                                                    })
+                                                    .or_default() += 1;
+                                                input_declined += 1;
+                                                continue;
+                                            }
+                                        };
+                                    let variant =
+                                        parse_hgvs(&input).expect("generated input parses");
+                                    let normalizer = Normalizer::with_config(
+                                        genomic_provider(&seq),
+                                        NormalizeConfig::default()
+                                            .with_direction(direction)
+                                            .allow_crossing_boundaries(),
+                                    );
+                                    let Ok(normalized) = normalizer.normalize(&variant) else {
+                                        input_declined += 1;
+                                        *by_cause.entry("normalize-declined").or_default() += 1;
+                                        continue;
+                                    };
+                                    let output = format!("{normalized}");
+                                    checked += 1;
+
+                                    match apply_reason(&genomic_provider(&seq), &seq, &output) {
+                                        Ok(got) if got == want => {}
+                                        Ok(got) => changed.push(format!(
+                                            "{input} [{direction:?}] -> {output} \
+                                             (want {want}, got {got})"
+                                        )),
+                                        Err(cause) => overlapping.push(format!(
+                                            "{input} [{direction:?}] -> {output} ({cause:?})"
+                                        )),
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    const CASES_PER_SEED_FLOOR: usize = 2_000;
+    let floor = CASES_PER_SEED_FLOOR * seeds as usize;
+    assert!(
+        checked > floor,
+        "three-member sweep covered too little: {checked} over {seeds} seeds (floor {floor})"
+    );
+    // The share this sweep cannot speak for, bounded so it cannot go hollow
+    // while still clearing the floor. Decomposed in the message, per #1268 —
+    // a single "unapplicable" number is what that issue exists to reject.
+    assert!(
+        input_declined < checked,
+        "more three-member inputs declined than checked: {input_declined} of \
+         {} enumerated, by cause: {by_cause:#?}",
+        input_declined + checked
+    );
+    assert!(
+        overlapping.is_empty(),
+        "output denotes no single sequence in {checked} three-member cases \
+         (inputs declined: {input_declined}, by cause {by_cause:#?}): {overlapping:#?}"
+    );
+    assert!(
+        changed.is_empty(),
+        "sequence-changing normalizations in {checked} three-member cases: {changed:#?}"
+    );
+}

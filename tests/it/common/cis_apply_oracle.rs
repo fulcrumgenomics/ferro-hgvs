@@ -211,13 +211,59 @@ pub fn apply_with<P: ReferenceProvider + ?Sized>(
     reference: &str,
     descriptor: &str,
 ) -> Option<String> {
-    let members: Vec<HgvsVariant> = match parse_hgvs(descriptor).ok()? {
-        HgvsVariant::Allele(allele) => allele.variants.clone(),
-        single => vec![single],
+    apply_reason(provider, reference, descriptor).ok()
+}
+
+/// Why [`apply_with`] declined a descriptor.
+///
+/// `apply_with` collapses all of these to `None`, which is the right shape for a
+/// sweep asking "does this denote a sequence at all". It is the wrong shape for
+/// reporting: #1268 records a three-member measurement whose 61,765 "unapplicable"
+/// cases conflated genuine overlap with conversion failure and with parse
+/// rejection, and notes that no number should be quoted until the causes are
+/// separated. These are those causes.
+///
+/// Ordered by severity as a sweep should read them: [`Self::Overlapping`] and
+/// [`Self::CoincidentInsertions`] mean the description denotes no single
+/// sequence, which for a *normalizer output* is a defect. The rest are limits of
+/// the harness or of the input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyFailure {
+    /// `parse_hgvs` rejected it. Suite-wide, `FERRO_ASSERT_REPARSE` already
+    /// covers this for normalizer output (#1259), so a sweep seeing it here is
+    /// usually looking at a generated *input*.
+    Unparseable,
+    /// A member has no SPDI triple — `hgvs_to_spdi` declined it.
+    Unconvertible,
+    /// A member's span runs past the end of the reference.
+    OutOfBounds,
+    /// A member claims a base another member already claimed.
+    Overlapping,
+    /// Two pure insertions at one interbase, whose relative order — and so the
+    /// sequence they jointly denote — is undefined.
+    CoincidentInsertions,
+    /// A member's stated deleted bases disagree with the reference.
+    StatedBasesMismatch,
+}
+
+/// [`apply_with`], but reporting *why* it declined.
+///
+/// The two share this one walk rather than the walk being duplicated, for the
+/// reason `apply_with`'s own note gives about `claimed_from`: a second copy is a
+/// second thing to drift.
+pub fn apply_reason<P: ReferenceProvider + ?Sized>(
+    provider: &P,
+    reference: &str,
+    descriptor: &str,
+) -> Result<String, ApplyFailure> {
+    let members: Vec<HgvsVariant> = match parse_hgvs(descriptor) {
+        Ok(HgvsVariant::Allele(allele)) => allele.variants.clone(),
+        Ok(single) => vec![single],
+        Err(_) => return Err(ApplyFailure::Unparseable),
     };
     let mut triples = Vec::with_capacity(members.len());
     for member in &members {
-        triples.push(hgvs_to_spdi(member, provider).ok()?);
+        triples.push(hgvs_to_spdi(member, provider).map_err(|_| ApplyFailure::Unconvertible)?);
     }
     // 3'→5' so an applied splice never shifts a later one's coordinates.
     //
@@ -238,10 +284,20 @@ pub fn apply_with<P: ReferenceProvider + ?Sized>(
     let mut claimed_from = reference.len();
     let mut insertion_at: Option<usize> = None;
     for triple in &triples {
-        let start = usize::try_from(triple.position).ok()?;
-        let end = start.checked_add(triple.deletion.len())?;
-        if end > reference.len() || end > claimed_from {
-            return None; // out of bounds, or overlapping the member 3' of it
+        let start = usize::try_from(triple.position).map_err(|_| ApplyFailure::OutOfBounds)?;
+        let end = start
+            .checked_add(triple.deletion.len())
+            .ok_or(ApplyFailure::OutOfBounds)?;
+        // Split, where `apply_with` used to test both in one condition and
+        // report them alike. They are different severities: running off the
+        // reference is a coordinate that does not exist, while claiming a base
+        // the member 3' of it already claimed is the overlap #1268 asks to have
+        // counted on its own.
+        if end > reference.len() {
+            return Err(ApplyFailure::OutOfBounds);
+        }
+        if end > claimed_from {
+            return Err(ApplyFailure::Overlapping);
         }
         // Two pure insertions at one interbase have no defined order between
         // them, so the sequence they jointly denote is ambiguous — decline it
@@ -249,10 +305,10 @@ pub fn apply_with<P: ReferenceProvider + ?Sized>(
         // `claimed_from` walk above cannot see this: a zero-length member never
         // advances the claim, so both would pass it.
         if triple.deletion.is_empty() && insertion_at == Some(start) {
-            return None;
+            return Err(ApplyFailure::CoincidentInsertions);
         }
         if !reference[start..end].eq_ignore_ascii_case(triple.deletion.as_bytes()) {
-            return None;
+            return Err(ApplyFailure::StatedBasesMismatch);
         }
         edited.splice(start..end, triple.insertion.bytes());
         if triple.deletion.is_empty() {
@@ -260,7 +316,7 @@ pub fn apply_with<P: ReferenceProvider + ?Sized>(
         }
         claimed_from = start;
     }
-    String::from_utf8(edited).ok()
+    String::from_utf8(edited).map_err(|_| ApplyFailure::Unconvertible)
 }
 
 /// The half-open interbase spans of `descriptor`'s members, in the order they
