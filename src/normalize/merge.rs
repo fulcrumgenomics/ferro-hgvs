@@ -13,6 +13,7 @@ use crate::hgvs::variant::{
 use crate::normalize::boundary::Boundaries;
 use crate::normalize::config::ShuffleDirection;
 use crate::normalize::shuffle::shuffle;
+use crate::normalize::{boundary_delins_bases, BoundarySide, SequenceEnds};
 use crate::reference::ReferenceProvider;
 use crate::sequence::complement_base;
 
@@ -58,6 +59,35 @@ pub(crate) enum Region {
     TxDownstream,
 }
 
+/// How an [`Anchor`]'s span and `alt` relate — i.e. which HGVS form
+/// [`build_naedit`] must emit for it.
+///
+/// Everything the *merge* pass produces is a [`AnchorForm::Replacement`]: it
+/// coalesces members into one span-plus-replacement and lets the two lengths
+/// pick substitution / deletion / insertion / delins. The sequence-first
+/// derivation additionally recognises a shape those lengths cannot express — a
+/// tandem duplication, which `duplication.md:18` states as a MUST — so the form
+/// travels with the anchor rather than being re-inferred downstream, where the
+/// duplicated source span is no longer in hand.
+///
+/// An **inversion** is deliberately *not* a form here, even though it is the
+/// other shape the two lengths cannot see. It does not need to be: a `dup` is
+/// unrecoverable downstream because its source span is gone by then, whereas an
+/// `inv` is a span plus its own bases, so [`crate::normalize::rules`]'s
+/// single-span typing re-derives it from the rendered member. A variant was
+/// tried and measured inert — 849,752 normalizations across the whole-span
+/// inversion and random-haplotype corpora were byte-identical with and without
+/// it — so it was dropped rather than kept as a second, silent authority for a
+/// typing another module already owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnchorForm {
+    /// The span is replaced by `alt`; typing follows from the two lengths.
+    Replacement,
+    /// The span is duplicated in tandem. `alt` is empty and unused: a `dup`
+    /// names only the source bases, which the span already gives.
+    Duplication,
+}
+
 /// Anchor for a single sub-variant.
 ///
 /// `start` and `end` are 1-based inclusive position bounds on the
@@ -71,6 +101,7 @@ struct Anchor {
     start: i64,
     end: i64,
     alt: Vec<Base>,
+    form: AnchorForm,
 }
 
 /// Merge consecutive sub-variants in an allele.
@@ -228,6 +259,22 @@ enum GEdit {
     /// sequence-first canonicalizer builds this; `collapse_overlapping_cis_edits`
     /// refuses inversion members.
     Inv { s: i64, e: i64 },
+    /// A tandem repeat member (`274A[3]`) that has **not been lowered yet**:
+    /// `unit` repeated `count` times, anchored on the inclusive span `[s, e]`.
+    ///
+    /// The only `GEdit` that does not yet denote a sequence. A repeat names its
+    /// reference tract implicitly — "the run of `unit` covering `[s, e]`" — and
+    /// the tract's extent is in the reference, not in the description, so this
+    /// cannot be resolved until the window is fetched. [`lower_repeat_edits`]
+    /// rewrites every one of these into the `Ins`/`Del` it denotes; nothing
+    /// downstream of that call can see one, and both the applier and
+    /// `collapse_overlapping_cis_edits` refuse it outright rather than guess.
+    Repeat {
+        s: i64,
+        e: i64,
+        unit: Vec<u8>,
+        count: u64,
+    },
 }
 
 /// Report whether `variants` contains two or more insertion-like cis members
@@ -330,14 +377,23 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     let template_accession = template_accession.clone();
 
     // Lowering is `collect_canonical_edits`': same `cis_axis_parts` call, same
-    // accession / body-region refusals, same per-`NaEdit` guards. It admits one
-    // shape this path does not — `NaEdit::Inversion`, which the sequence-first
-    // canonicalizer serves — so reject that explicitly and the two passes stay
-    // one implementation instead of two copies ten screens apart.
+    // accession / body-region refusals, same per-`NaEdit` guards. It admits two
+    // shapes this path does not — `NaEdit::Inversion` and `NaEdit::Repeat`,
+    // both of which the sequence-first canonicalizer serves — so reject those
+    // explicitly and the two passes stay one implementation instead of two
+    // copies ten screens apart.
+    //
+    // A `GEdit::Repeat` does not yet denote a sequence at all (its tract is in
+    // the reference, and only `lower_repeat_edits` reads it), so this pass —
+    // which reasons purely about spans — could not use one even if it wanted
+    // to.
     let Some(edits) = collect_canonical_edits(&variants, kind, body, &template_accession) else {
         return variants;
     };
-    if edits.iter().any(|e| matches!(e, GEdit::Inv { .. })) {
+    if edits
+        .iter()
+        .any(|e| matches!(e, GEdit::Inv { .. } | GEdit::Repeat { .. }))
+    {
         return variants;
     }
 
@@ -356,12 +412,15 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     let covered: Vec<(i64, i64)> = edits
         .iter()
         .filter_map(|e| match e {
-            // `Inv` is unreachable here — the rejection above drops any group
-            // carrying one — but it is a replacement over `[s, e]`, so classify
-            // it as one rather than leaving a misleading `None`.
-            GEdit::Del { s, e } | GEdit::Delins { s, e, .. } | GEdit::Inv { s, e } => {
-                Some((*s, *e))
-            }
+            // `Inv` and `Repeat` are unreachable here — the rejection above
+            // drops any group carrying either — but both hold reference bases
+            // over `[s, e]`, so classify them as replacements rather than leave
+            // a misleading `None` that would let the contiguity check pass over
+            // territory a member owns.
+            GEdit::Del { s, e }
+            | GEdit::Delins { s, e, .. }
+            | GEdit::Inv { s, e }
+            | GEdit::Repeat { s, e, .. } => Some((*s, *e)),
             GEdit::Sub { pos, .. } => Some((*pos, *pos)),
             GEdit::Ins { .. } | GEdit::Dup { .. } => None,
         })
@@ -465,6 +524,10 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
                 }
             }
             GEdit::Sub { pos, alt } => cell[idx(*pos)] = Some(alt.to_u8()),
+            // Unreachable — the group was rejected above — and unapplicable:
+            // a repeat's tract is resolved only by `lower_repeat_edits`, which
+            // this pass never runs. Decline rather than approximate.
+            GEdit::Repeat { .. } => return variants,
             GEdit::Delins { s, e, alt } => {
                 for p in *s..=*e {
                     cell[idx(p)] = None;
@@ -542,6 +605,7 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
         start: a_start,
         end: a_end,
         alt: alt_bases,
+        form: AnchorForm::Replacement,
     };
     // Rebuild the variant kind the group came in as. `g.`/`m.` use the
     // single-axis `Region::Genome` anchor; `c.`/`n.`/`r.` use the positive
@@ -949,6 +1013,7 @@ fn anchor_from_loc_edit<L>(
                 start,
                 end,
                 alt: vec![*alternative],
+                form: AnchorForm::Replacement,
             })
         }
         NaEdit::Deletion { .. } => Some(Anchor {
@@ -956,6 +1021,7 @@ fn anchor_from_loc_edit<L>(
             start,
             end,
             alt: Vec::new(),
+            form: AnchorForm::Replacement,
         }),
         NaEdit::Delins { sequence, .. } => {
             let bases = sequence.bases()?.to_vec();
@@ -964,6 +1030,7 @@ fn anchor_from_loc_edit<L>(
                 start,
                 end,
                 alt: bases,
+                form: AnchorForm::Replacement,
             })
         }
         NaEdit::Insertion { sequence } => {
@@ -976,6 +1043,7 @@ fn anchor_from_loc_edit<L>(
                 start: end,
                 end: start,
                 alt: bases,
+                form: AnchorForm::Replacement,
             })
         }
         _ => None,
@@ -1246,7 +1314,19 @@ fn build_naedit<P>(
     merged: Anchor,
     mut to_pos: impl FnMut(Region, i64) -> P,
 ) -> (Interval<P>, NaEdit) {
-    let edit = if merged.start > merged.end {
+    // A duplication is decided by the *builder*, from the reference, not by the
+    // two span lengths below — `dup` and the `ins` of the same bases have the
+    // same lengths and `duplication.md:18` says only one of them is allowed.
+    let edit = if merged.form == AnchorForm::Duplication {
+        NaEdit::Duplication {
+            // Canonical form states neither the bases nor the length: the span
+            // already names them, and every other builder here likewise leaves
+            // the optional reference-bases channel empty.
+            sequence: None,
+            length: None,
+            uncertain_extent: None,
+        }
+    } else if merged.start > merged.end {
         debug_assert_eq!(
             merged.start,
             merged.end + 1,
@@ -1867,6 +1947,19 @@ impl Piece {
         let ref_len = self.ref_end - self.ref_start;
         (self.alt.is_empty() && ref_len > 0) || (ref_len == 0 && !self.alt.is_empty())
     }
+
+    /// Whether this piece is a pure insertion sitting immediately outside one
+    /// end of the fetched window.
+    ///
+    /// A cheap necessary condition for the terminal-insertion clamp: only such
+    /// a piece can be resting on a *sequence* bound, so only for such a piece is
+    /// it worth asking the provider whether the window edge is the sequence's
+    /// edge (see [`window_sequence_ends`]).
+    fn rests_on_a_window_edge(&self, ref_bytes: &[u8]) -> bool {
+        self.ref_start == self.ref_end
+            && !self.alt.is_empty()
+            && (self.ref_start == 0 || self.ref_start == ref_bytes.len())
+    }
 }
 
 /// Whether to run both block splitters and report their disagreements.
@@ -1929,6 +2022,18 @@ type Column = (Option<usize>, Option<usize>);
 /// globally. Two encodings of one variant therefore converge, and members
 /// cannot overlap by construction.
 ///
+/// "Cannot overlap" is a statement about the *output*, and it is narrower than
+/// it sounds about the input. The geometry this path applies is **interbase**,
+/// via [`apply_edits_to_window`]: a zero-length junction and a span that merely
+/// touches it are flush rather than overlapping, so `g.[24dup;24C>G]` is
+/// admitted here even though both members name base 24.
+/// `overlap::detect_overlap_conflicts` asks the other question — coincident
+/// spans in **HGVS-coordinate** space — and reports that pair as
+/// `OverlapConflictingEdits` / W5002. The two are not redundant and the
+/// coincident-span check is not implied by this one, which is why the caller
+/// runs `detect_overlap_conflicts` *before* reaching here rather than relying on
+/// this function to refuse (#1307).
+///
 /// The spec is explicit that the description follows from the sequence and not
 /// from the input spelling: `delins.md:86-89` *deleted* its former carve-out
 /// permitting a two-member spelling for a variant "likely a combination of two
@@ -1962,15 +2067,31 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     //   one alphabet before any comparison;
     // * the CDS/UTR and transcript-end insertion clamps (#1202, #1205, #1207,
     //   #1209, #383, #387) and the exon-junction exception to the 3' rule
-    //   (`general.md:44`) — covered by the pass's existing refusals: the body
-    //   region check in `collect_canonical_edits` keeps every member inside the
-    //   positive body, and the lone-pure-insertion bail hands terminal
-    //   insertions back to the per-member pipeline that owns those clamps.
+    //   (`general.md:44`) — the body region check in `collect_canonical_edits`
+    //   keeps every member inside the positive body, and the terminal-insertion
+    //   clamp is applied here, by `boundary_delins_anchor`. (It used to be
+    //   *deferred* here, by refusing every derivation that collapsed to one pure
+    //   insertion; that refusal is gone — see where it stood, below.)
     let body = body_region(kind);
     let (template_accession, _, _, _, _) = cis_axis_parts(&variants[0], kind)?;
     let template_accession = template_accession.clone();
 
-    let edits = collect_canonical_edits(variants, kind, body, &template_accession)?;
+    let mut edits = collect_canonical_edits(variants, kind, body, &template_accession)?;
+
+    // A **lone** repeat is not what the lockout is about, and re-deriving one
+    // can only cost. Its whole change is a single contiguous tract, so there is
+    // no partition decision for this pass to make — the one thing it could do
+    // is hand back the `ins`/`del` that denotes the same bases, trading a
+    // spelling the spec explicitly leaves open (`open-issues.md:88`) for
+    // another. Sometimes the per-member renderer promotes that straight back
+    // (`274_275insAA` → `274A[3]`) and the alternation settles; sometimes it
+    // does not — a `B2` contraction re-derives as a plain deletion and
+    // `g.258CAG[2]` came back as `g.258_263del`. The value is in a *group*,
+    // where the tract's bases can merge with a sibling's, so that is where
+    // lowering is allowed to run.
+    if variants.len() < 2 && edits.iter().any(|e| matches!(e, GEdit::Repeat { .. })) {
+        return None;
+    }
 
     // Window: the union of every member's footprint, padded for the 3'-shift.
     let (c_lo, c_hi) = edit_span_union(&edits)?;
@@ -1999,6 +2120,12 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // sequence, the same assumption `apply_canonical_split` already relies on.
     // (`fetch_canonical_window` has already upper-cased, so this only folds.)
     let ref_bytes: Vec<u8> = ref_bytes.iter().map(|b| canonical_base_byte(*b)).collect();
+
+    // A repeat member names its tract implicitly, so it is only now — with the
+    // window in hand — that it denotes anything. Every `GEdit::Repeat` becomes
+    // the `ins`/`del` it means, and nothing past this line can see one (#1296).
+    lower_repeat_edits(&mut edits, &ref_bytes, w_lo)?;
+    let edits = edits;
 
     // A member that misstates its reference base is a reference mismatch, not a
     // canonicalization problem: strict mode must still reject it and lenient
@@ -2137,6 +2264,45 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         return None;
     }
 
+    // Applied *after* the weight bound for the same reason the codon exception
+    // below is: it widens, and a widening judged against the *input's* weight is
+    // accepted for one spelling of a variant and refused for another. See
+    // `coalesce_whole_block_inversion`'s own doc for the worked case.
+    //
+    // It sits *before* `apply_coding_codon_exception`, and on a `c.`/`n.` axis
+    // the two do reach for the same pieces: a 5 nt whole-block inversion whose
+    // changed columns fall at offsets 0/2/4 inside one codon is exactly the
+    // `[Sub@p; Identity@p+1; Sub@p+2]` triplet the codon exception merges
+    // (`general.md:35`). Stub this call and that is what happens —
+    // `c.[1G>T;3T>A;5A>C]` comes out as `c.[1_3delinsTTA;5A>C]`.
+    //
+    // **The order between them is nevertheless not observable, and that is
+    // measured, not assumed.** Moving this call to *after* the codon exception
+    // leaves the whole suite green, the new `c.`-axis test included. The reason
+    // is that this rule reads only three things — the hull the pieces span, the
+    // sequence they denote, and whether every separation is a single base — and
+    // the codon exception preserves all three: it splices the unchanged middle
+    // base into the payload explicitly (denoted sequence unchanged), it grows
+    // the left piece by exactly what it takes from the right (hull unchanged),
+    // and it only ever *closes* a one-base gap, never opens one, so the gaps
+    // that remain are a subset of the gaps that were there
+    // (`every_separation_is_a_single_base`'s verdict unchanged). A codon-merged
+    // partition therefore reconstructs to the same span, and this rule reaches
+    // the same `inv` from either side.
+    //
+    // Two reasons to keep the order written down anyway. It stops being neutral
+    // the moment the codon exception can merge across more than one unchanged
+    // base, since that would break the third invariant above and let a widened
+    // partition fail the gate. And where both fire, the `inv` is the answer
+    // regardless of who reaches it — the codon exception's product is a
+    // `delins`, which `delins.md:5` defines as a replacement "which is not a
+    // substitution or inversion", so over a reverse-complement span it is not a
+    // description the spec admits.
+    //
+    // Pinned by `issue_1040_inv_overrecognition_probes::
+    // a_derived_whole_block_inversion_outranks_the_codon_exception`.
+    coalesce_whole_block_inversion(&mut pieces, &ref_bytes);
+
     // Applied *after* the weight bound, deliberately. The bound is a statement
     // about the re-derived partition — it may not describe more change than the
     // input did — and the codon exception (`general.md:35`) is a licensed
@@ -2144,9 +2310,19 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // bound judges. Running it first would let a legitimate codon merge inflate
     // the weight and trip a refusal.
     apply_coding_codon_exception(&mut pieces, frame.reading_frame, w_lo, &ref_bytes);
-    if needs_unsupported_form(&pieces, &ref_bytes) {
-        return None;
-    }
+    // A veto stood here that refused the whole group whenever any derived piece
+    // was an inversion. It was not an input-relative gate — it read only the
+    // pieces and the reference, so two spellings of one variant always got the
+    // same verdict. It was a capability gap: the derivation could shred a whole
+    // reverse complement into a run of substitutions (`ACGTGC -> GCACGT` splits
+    // into `[A>G, GT>AC, C>T]`), and declining was better than emitting that.
+    //
+    // `coalesce_whole_block_inversion` above closes the gap at its source, by
+    // putting such a block back into one piece before it is rendered. That piece
+    // is then a single span whose replacement is its own reverse complement,
+    // which `crate::normalize::rules`' single-span typing renders as `inv` —
+    // so there is nothing left for a veto to protect.
+
     // There was a veto here, and it was the last gate in this pass that read the
     // *input spelling* rather than the sequence: when the derivation produced
     // fewer pieces than there were members, and any piece covered a base the
@@ -2175,15 +2351,35 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // it holds no live line and could not have been the net this argument leans
     // on. The two are twins by design (see its own doc comment); the live one is
     // the one worth naming here.
-    // A derivation that collapses to a single pure insertion belongs to the
-    // per-member pipeline, which owns the terminal-insertion clamps (#1205,
-    // #1217) and duplication recovery. Re-deriving one here would undo a clamp
-    // the pipeline had already applied.
-    if pieces.len() == 1 && pieces[0].is_pure_indel() && !pieces[0].alt.is_empty() {
-        return None;
-    }
 
-    let rebuilt = rebuild_members(&pieces, &variants[0], body, w_lo)?;
+    // A derivation collapsing to a single pure insertion used to be refused
+    // here, on the grounds that the per-member pipeline owned two capabilities
+    // this one lacked: the terminal-insertion clamps (#1205, #1217, and #129's
+    // ban on a bare `ins` at the mito origin) and duplication recovery. Both now
+    // live in the piece builder — `boundary_delins_anchor` and
+    // `duplication_anchor` — so the refusal has nothing left to protect, and it
+    // was the single largest source of #1235's non-confluence: every allele
+    // whose members denote one insertion was handed back to a pipeline that
+    // normalizes members in isolation and therefore cannot merge them.
+    //
+    // Do not restore it. If a terminal or tandem case regresses, the fix belongs
+    // in the builder; refusing here also refuses every merge the derivation gets
+    // right.
+
+    // Only a pure insertion resting on a window edge can be clamped, and only
+    // then is it worth asking the provider how long the whole sequence is — the
+    // one question `ref_bytes` alone cannot answer, since a window that stops
+    // short of the end and one that is flush with it look identical from here.
+    let ends = if pieces
+        .iter()
+        .any(|piece| piece.rests_on_a_window_edge(&ref_bytes))
+    {
+        window_sequence_ends(provider, &accession, start0, ref_bytes.len())
+    } else {
+        SequenceEnds::INTERIOR
+    };
+
+    let rebuilt = rebuild_members(&pieces, &variants[0], body, w_lo, &ref_bytes, ends)?;
     if rebuilt == variants {
         return None;
     }
@@ -2235,12 +2431,58 @@ fn cis_kind_of(variant: &HgvsVariant) -> Option<CisKind> {
 /// Lower every member to a [`GEdit`], or refuse the group.
 ///
 /// Refuses anything whose description carries information the resulting
-/// sequence does not: repeats (the spec says a repeat and a del/dup spelling of
-/// one change are *both* correct and declines to choose — `open-issues.md:88`),
-/// conversions, methylation, copy number, identity/`=`, and uncertain edits.
-/// Also refuses a mixed axis, a second accession, and any member outside the
-/// positive body region (a contiguous window would happily produce `c.-1_1`,
-/// which is not valid HGVS).
+/// sequence does not: conversions, methylation, copy number, identity/`=`,
+/// mixed repeats (`MultiRepeat`), and uncertain edits. Also refuses a mixed
+/// axis, a second accession, and any member outside the positive body region (a
+/// contiguous window would happily produce `c.-1_1`, which is not valid HGVS).
+///
+/// # Repeats are lowered, not refused (#1296)
+///
+/// A single-unit tandem repeat *does* denote a sequence, so it becomes a
+/// [`GEdit::Repeat`] here and [`lower_repeat_edits`] resolves it against the
+/// window into the `ins`/`del` it means. That is a change of what the
+/// derivation may **read**, not of what it emits: repeat *output* stays with
+/// the per-member pipeline's renderer, which promotes a derived `ins` straight
+/// back to `unit[N]`.
+///
+/// Refusing was a permanent lockout rather than a single declined case. The
+/// per-member pipeline *promotes* members into repeat notation, so
+/// `[272_273del;274_275insAA]` normalizes to `[272_273del;274A[3]]` — and on
+/// the next pass the derivation refused the group it had just produced, so it
+/// could never run on that variant again.
+///
+/// This takes no side in the repeat-vs-del/dup question — `open-issues.md:88`
+/// says both spellings are correct, and that is why the old refusal cited it.
+/// Reading a repeat does not choose a spelling for it.
+///
+/// `MultiRepeat` stays refused, and the reason is **not** that a mixed repeat
+/// has no single unit to lower. That describes the shape of [`lowered_repeat`],
+/// not an impossibility: a mixed repeat could be expanded unit by unit and the
+/// concatenation diffed against its tract.
+///
+/// The reason is that the lockout above **cannot arise for one**. Nothing in
+/// ferro ever *produces* a `MultiRepeat`:
+/// [`normalize_na_edit`](crate::normalize) gives it an explicit pass-through arm
+/// — deliberately not 3'-shifted, routed only for tract validation — and the
+/// only other construction site is a case-folding rebuild in
+/// [`rules`](crate::normalize::rules). A `MultiRepeat` appears in ferro's output
+/// only if the submitter wrote one, so the "refused the group it had just
+/// produced" failure has no mixed-repeat analogue. Refusing is not free, though:
+/// a **submitter-written** `MultiRepeat` beside a sibling still cannot be
+/// merged. That single case is the whole of what it costs.
+///
+/// Two further grounds, each covering only part of the space:
+///
+/// * a `MultiRepeat` carrying any non-`Exact` count has no determined resulting
+///   sequence at all — the same rule this function already applies to uncertain
+///   edits;
+/// * **for the all-`Exact` case only**,
+///   [`validate_multirepeat_tract`](crate::normalize::validate) requires the
+///   declared units to expand to exactly the reference bases over the stated
+///   span, so under ferro's semantic such a member denotes no change — an
+///   identity, which this pass refuses on principle because the resulting
+///   sequence cannot express it. This argument does not generalise past that
+///   branch, and is not what settles the question.
 fn collect_canonical_edits(
     variants: &[HgvsVariant],
     kind: CisKind,
@@ -2292,10 +2534,194 @@ fn collect_canonical_edits(
                 uncertain_extent: None,
                 ..
             } => edits.push(GEdit::Dup { s, e }),
+            // Deferred until the window exists — see [`GEdit::Repeat`]. The
+            // guards here are exactly the per-member pipeline's own admission
+            // test for a shufflable repeat (`normalize_na_edit`'s `Repeat`
+            // arm): a stated unit, one exact count, and no genotype or VEP
+            // trailing baggage. Anything else has no single resulting sequence
+            // to derive from.
+            // `e >= s` joins the admission test rather than being left to
+            // `lowered_repeat`. That function skips its stated-end branch when
+            // `e < s`, so a reversed anchor does not crash — it is silently
+            // re-read as the single-position `g.10AC[3]`, which is a different
+            // variant from the `g.10_5AC[3]` that was written. SVD-WG006's
+            // reversed-range provision covers circular deletions and
+            // duplications, not repeats, so there is nothing here to honour and
+            // declining is the answer.
+            NaEdit::Repeat {
+                sequence: Some(sequence),
+                count: RepeatCount::Exact(count),
+                additional_counts,
+                trailing: None,
+            } if additional_counts.is_empty() && e >= s => {
+                let unit: Vec<u8> = sequence
+                    .bases()
+                    .iter()
+                    .map(|b| canonical_base_byte(b.to_u8()))
+                    .collect();
+                if unit.is_empty() {
+                    return None;
+                }
+                edits.push(GEdit::Repeat {
+                    s,
+                    e,
+                    unit,
+                    count: *count,
+                });
+            }
             _ => return None,
         }
     }
     Some(edits)
+}
+
+/// Resolve every [`GEdit::Repeat`] into the `ins`/`del` it denotes, or refuse
+/// the group.
+///
+/// A repeat says "the run of `unit` covering my anchor holds `count` copies".
+/// The run itself is in the reference, so this is the first point at which the
+/// member denotes anything: `ref_bytes`/`w_lo` are the window
+/// [`canonicalize_from_sequence`] has just fetched.
+///
+/// Tract-finding is [`count_tandem_repeats`]', the same one
+/// [`normalize_repeat`](crate::normalize::rules::normalize_repeat) uses, over
+/// the same [`smallest_repeat_unit`] canonicalization and the same flank
+/// absorption for an under-specified explicit range — **minus that function's
+/// off-phase rotation search**, which is the one place the two part company.
+///
+/// For a single-anchor member whose unit is two or more bases, `normalize_repeat`
+/// (#852) tries every rotation of the unit at every anchor offset and keeps the
+/// longest tract that spans the anchor; this takes the literal lookup only. So
+/// the two agree on which tract a member names whenever it is written in phase
+/// with its tract, and an off-phase single-anchor member is **refused** here
+/// rather than lowered onto some other tract — it fails the spanning check or
+/// the room check below. That is a capability gap, not a disagreement: the group
+/// falls back to the per-member pipeline, which does run the rotation search.
+///
+/// What is deliberately *not* shared is that function's choice between `dup`,
+/// `del`, `ins` and `unit[N]`: that is a rendering decision, and the derivation
+/// only needs the bases.
+///
+/// Where inside the tract the difference is placed does not matter. The tract
+/// is a whole number of copies of one unit, so adding or removing copies at
+/// either end yields the same sequence — which is why this can ignore the
+/// shuffle direction that `normalize_repeat` must honour. The 3' end is chosen
+/// so the footprint stays as small and as far from the group's other members as
+/// possible.
+///
+/// Refuses (leaving the group to the per-member pipeline) when:
+///
+/// * the anchor is outside the window, or the tract runs into either window
+///   edge — a truncated tract would under-count the copies and denote the wrong
+///   sequence. [`count_tandem_repeats`] stops scanning when it has less than a
+///   whole unit left in that direction, so "a whole unit of room on each side"
+///   is exactly the condition under which it stopped for a real reason;
+/// * the tract does not span the anchor, which `count_tandem_repeats` can
+///   return (it back-scans first, so a run lying entirely 5' of the anchor is
+///   reachable);
+/// * `count` equals the reference count, i.e. the member is an identity. The
+///   resulting sequence cannot express one, so a group carrying one would come
+///   back with that member silently dropped — the same reason `NaEdit::Identity`
+///   is refused above.
+fn lower_repeat_edits(edits: &mut [GEdit], ref_bytes: &[u8], w_lo: i64) -> Option<()> {
+    for edit in edits.iter_mut() {
+        let GEdit::Repeat { s, e, unit, count } = edit else {
+            continue;
+        };
+        *edit = lowered_repeat(*s, *e, unit, *count, ref_bytes, w_lo)?;
+    }
+    Some(())
+}
+
+/// The `ins`/`del` one repeat member denotes, or `None`. See
+/// [`lower_repeat_edits`] for the refusal conditions.
+fn lowered_repeat(
+    s: i64,
+    e: i64,
+    unit: &[u8],
+    count: u64,
+    ref_bytes: &[u8],
+    w_lo: i64,
+) -> Option<GEdit> {
+    // Canonicalize to the smallest period, exactly as `normalize_repeat` does,
+    // so a member spelling a non-minimal unit (`ATAT[1]` over an `AT[4]` tract)
+    // finds the same tract the per-member pipeline would.
+    let canonical = crate::normalize::rules::smallest_repeat_unit(unit);
+    let copies_per_stated_unit = (unit.len() / canonical.len()) as u64;
+    let mut count = count.checked_mul(copies_per_stated_unit)?;
+    let unit_len = canonical.len();
+
+    let anchor = usize::try_from(s.checked_sub(w_lo)?).ok()?;
+    if anchor >= ref_bytes.len() {
+        return None;
+    }
+    let (ref_count, tract_start, tract_end) =
+        crate::normalize::rules::count_tandem_repeats(ref_bytes, anchor, canonical)?;
+    if tract_start > anchor || anchor >= tract_end {
+        return None;
+    }
+    if tract_start < unit_len || tract_end + unit_len > ref_bytes.len() {
+        return None;
+    }
+
+    // Flank absorption, mirroring `normalize_repeat`: an explicit range states
+    // which reference copies the count applies to, and copies inside the tract
+    // but outside that range are untouched by the edit, so they survive into the
+    // result and belong in the count. A single-position anchor (`e == s`) names
+    // only the tract's start and means "the whole run becomes N", so it absorbs
+    // nothing.
+    if e > s {
+        let stated_end = usize::try_from(e.checked_sub(w_lo)?).ok()?;
+        let three_prime = tract_end.saturating_sub(stated_end + 1);
+        let five_prime = anchor.saturating_sub(tract_start);
+        // `checked_add`, not `+=`: `count` is the submitter's copy number times
+        // `copies_per_stated_unit`, so a description like `g.5_6A[18446744073709551615]`
+        // reaches here already near the top of the range and absorbing a flank
+        // would wrap. Every other arithmetic step in this function is checked;
+        // this was the one that was not.
+        count = count.checked_add(((three_prime + five_prime) / unit_len) as u64)?;
+    }
+
+    match count.cmp(&ref_count) {
+        // Identity: the member denotes no change at all.
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => {
+            let added = usize::try_from(count - ref_count).ok()?;
+            // A repeat count is the one place a *short* description names an
+            // arbitrarily *long* payload: `g.274A[4000000000]` is thirteen
+            // characters and would size a four-gigabyte `Vec`, which
+            // `with_capacity` answers by aborting the process — in release as
+            // well as debug, and reachable from `Normalizer::normalize`. Every
+            // other `alt` here is bounded by the length of the string the
+            // submitter actually wrote. Bound it by the window instead: an
+            // insertion wider than the whole window has no partition to
+            // contribute to, so refusing costs nothing.
+            let payload = added.checked_mul(unit_len)?;
+            if payload > MAX_CANONICAL_WINDOW as usize {
+                return None;
+            }
+            let mut alt = Vec::with_capacity(payload);
+            for _ in 0..added {
+                for byte in canonical {
+                    alt.push(Base::from_char(*byte as char)?);
+                }
+            }
+            Some(GEdit::Ins {
+                gap: w_lo + tract_end as i64 - 1,
+                alt,
+            })
+        }
+        std::cmp::Ordering::Less => {
+            let removed = usize::try_from(ref_count - count)
+                .ok()?
+                .checked_mul(unit_len)?;
+            let del_start = tract_end.checked_sub(removed)?;
+            Some(GEdit::Del {
+                s: w_lo + del_start as i64,
+                e: w_lo + tract_end as i64 - 1,
+            })
+        }
+    }
 }
 
 /// Whether every member's *stated* reference base agrees with the window.
@@ -2387,7 +2813,13 @@ fn edit_span_union(edits: &[GEdit]) -> Option<(i64, i64)> {
             GEdit::Del { s, e }
             | GEdit::Delins { s, e, .. }
             | GEdit::Inv { s, e }
-            | GEdit::Dup { s, e } => (*s, *e),
+            | GEdit::Dup { s, e }
+            // The *stated* anchor, which is all an unlowered repeat has. Its
+            // tract can reach past it in either direction, so this is the one
+            // shape whose real footprint is wider than its span — that is what
+            // `CANONICAL_PAD` gives it room for, and `lower_repeat_edits`
+            // refuses any tract that reaches a window edge anyway.
+            | GEdit::Repeat { s, e, .. } => (*s, *e),
             GEdit::Sub { pos, .. } => (*pos, *pos),
         };
         lo = lo.min(s);
@@ -2685,6 +3117,35 @@ fn fetch_canonical_window<P: ReferenceProvider>(
     Some(bytes)
 }
 
+/// Which edges of the fetched window are edges of the sequence itself.
+///
+/// [`fetch_canonical_window`] serves 0-based `[start0, start0 + len)` of
+/// `accession`, and a window is padded on both sides, so an edge is the
+/// sequence's own only when the padding was clipped there. The 5' side is
+/// decidable from `start0` alone; the 3' side needs the sequence's length, which
+/// is the single provider round-trip this costs — and the caller only pays it
+/// when a derived piece is actually resting on an edge.
+///
+/// A length the provider cannot answer yields [`SequenceEnds::INTERIOR`]: not
+/// knowing where the sequence ends is a reason to leave a derived insertion
+/// alone, never a reason to rewrite one.
+fn window_sequence_ends<P: ReferenceProvider>(
+    provider: &P,
+    accession: &str,
+    start0: i64,
+    window_len: usize,
+) -> SequenceEnds {
+    let three_prime = provider
+        .get_sequence_length(accession)
+        .ok()
+        .and_then(|len| i64::try_from(len).ok())
+        .is_some_and(|len| start0 + window_len as i64 == len);
+    SequenceEnds {
+        five_prime: start0 == 0,
+        three_prime,
+    }
+}
+
 /// Apply every edit to the window, returning the resulting bytes.
 ///
 /// Returns `None` if an edit falls outside the window, a stated reference base
@@ -2721,6 +3182,11 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
             | GEdit::Dup { s, e }
             | GEdit::Inv { s, e }
             | GEdit::Delins { s, e, .. } => e < s,
+            // A repeat does not denote a sequence until `lower_repeat_edits`
+            // has resolved its tract, so there is nothing here to apply. Both
+            // callers lower first; refusing rather than approximating keeps
+            // that a precondition instead of a silent wrong answer.
+            GEdit::Repeat { .. } => return None,
             GEdit::Ins { .. } | GEdit::Sub { .. } => false,
         };
         if descending {
@@ -2774,7 +3240,11 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
     for edit in edits {
         let (s, e) = match edit {
             GEdit::Del { s, e } | GEdit::Delins { s, e, .. } | GEdit::Inv { s, e } => (*s, *e),
-            GEdit::Ins { .. } | GEdit::Dup { .. } | GEdit::Sub { .. } => continue,
+            // Unreachable: the descending-span loop above returns `None` on
+            // any unlowered repeat before this one runs.
+            GEdit::Ins { .. } | GEdit::Dup { .. } | GEdit::Sub { .. } | GEdit::Repeat { .. } => {
+                continue
+            }
         };
         for p in s..e {
             if let Some(i) = idx(p) {
@@ -2787,9 +3257,12 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
             GEdit::Ins { gap, .. } => *gap,
             // A `Dup` writes its copy into the slot after its own last base.
             GEdit::Dup { e, .. } => *e,
-            GEdit::Del { .. } | GEdit::Delins { .. } | GEdit::Inv { .. } | GEdit::Sub { .. } => {
-                continue
-            }
+            GEdit::Del { .. }
+            | GEdit::Delins { .. }
+            | GEdit::Inv { .. }
+            | GEdit::Sub { .. }
+            // Unreachable for the same reason as the loop above.
+            | GEdit::Repeat { .. } => continue,
         };
         if idx(gap).is_some_and(|i| interior_gap[i]) {
             return None;
@@ -2861,6 +3334,10 @@ fn apply_edits_to_window(edits: &[GEdit], ref_bytes: &[u8], w_lo: i64) -> Option
                 }
                 after[slot].extend(copied);
             }
+            // Unreachable — refused by the descending-span loop at the top —
+            // and restated here so a future edit that removes that loop cannot
+            // silently start applying a repeat as if it denoted nothing.
+            GEdit::Repeat { .. } => return None,
             GEdit::Inv { s, e } => {
                 claim(&mut claimed, *s, *e)?;
                 let span: Vec<u8> = (*s..=*e)
@@ -2969,6 +3446,137 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     pieces
 }
 
+/// Merge a run of pieces that together span one inversion back into that single
+/// inversion.
+///
+/// An inversion is defined by `inversion.md:5` as a span replaced by its reverse
+/// complement, and that is a property of the *whole* span. Nothing forbids some
+/// of its columns coinciding: `ACGTGC -> GCACGT` is a textbook 6 nt inversion
+/// whose 2nd and 5th columns happen to match, so a position-wise partition finds
+/// `[A>G, GT>AC, C>T]` in it and the inversion disappears — which is what the
+/// since-removed `needs_unsupported_form` used to prevent, by refusing the
+/// derivation outright.
+///
+/// This is the same reading [`crate::normalize::rules`]'s single-span typing
+/// already applies (a shared-affix-trimmed span that is a whole reverse
+/// complement is an `inv`), so putting the block back together here is what
+/// makes the derivation agree with the per-member pipeline instead of shredding
+/// what that pipeline types correctly.
+///
+/// Gated on [`every_separation_is_a_single_base`], and that gate is load-bearing
+/// rather than defensive. `AAGCTA -> TAGCTT` is also a whole reverse complement,
+/// but only its first and last bases change and four unchanged bases lie between
+/// them. `general.md:34` describes two variants separated by one or more
+/// nucleotides individually; its letter names only `delins`, but its rationale
+/// (`delins.md:81-84` — the variants may have been reported, or may occur,
+/// individually) reaches any single spanning description, and at four unchanged
+/// bases these are two independent changes rather than interior columns of one
+/// reverse-complement relation. At exactly one unchanged base the match is far
+/// more likely to be the alignment's coincidence than structure — the same line
+/// [`every_separation_is_a_single_base`] draws inside [`partition_block`].
+///
+/// Expressed through [`is_inversion`] rather than re-deriving the test, so the
+/// block-level and piece-level answers cannot drift apart.
+///
+/// # Why this runs *after* the changed-columns weight bound
+///
+/// Load-bearing placement, not an accident of ordering. This rule **widens**:
+/// the merged piece claims every column between the first and the last, including
+/// the ones the partition found unchanged. The weight bound compares the derived
+/// weight against *the input's*, so a widening applied before it is judged
+/// against a quantity that differs between two spellings of one variant — the
+/// 5 nt inversion `GTTAA -> TTAAC` weighs 3 spelled as `g.[257G>T;259T>A;261A>C]`
+/// and 5 spelled as `g.257_261delinsTTAAC`, so a pre-bound widening to 5 columns
+/// is accepted for the second and refused for the first. That is exactly the
+/// non-confluence #1235 exists to remove, and it would be *introduced* here.
+/// (Offsets are the synthetic reference's, which puts the core at 257, so the
+/// case is quotable verbatim from
+/// `issue_1040_inv_overrecognition_probes::every_spelling_of_a_derived_whole_block_inversion_converges_on_inv`.)
+///
+/// Applied afterwards, the bound judges the un-widened partition — whose weight
+/// is what it was before this rule existed — and the widening is a licensed
+/// re-typing on top of an already-accepted partition. That is the same argument
+/// [`apply_coding_codon_exception`] is placed by.
+///
+/// Two citations carry the licence, and they answer different questions.
+///
+/// The **widening** — collapsing changed columns back into one spanning
+/// description when the only thing between them is a base that happens to match
+/// — is what `delins.md:46-47` recommends. Against
+/// `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` it notes that "parts of the
+/// inserted sequence 'align' with the reference sequence, giving an alternative
+/// description like `c.[850_869del;874_881del;887_897del;901_902insG]`", and
+/// answers: "**The 'delins' format is recommended**: it is simpler and prevents
+/// software tools making incorrect predictions for the consequences on protein
+/// level." That is this shape exactly — interior columns coinciding by alignment
+/// rather than by structure — and it endorses the spanning form over the split.
+/// [`every_separation_is_a_single_base`] cites the same passage for the regime
+/// it admits, so both ends of this rule rest on one line of the spec.
+///
+/// The **type** of that spanning description is then not a preference but a
+/// definition: `delins.md:5` defines a delins as a replacement "which is not a
+/// substitution or inversion", so the very form `delins.md:46-47` recommends may
+/// not be spelled `delins` over a reverse-complement span, and `inversion.md:5`
+/// admits the `inv` on sequence alone. Between them the widening is recommended
+/// and the resulting type is forced; reaching the `inv` describes the same change
+/// under the only spanning type the spec allows for it — not more change.
+///
+/// Deliberately **not** `general.md:56`. That list ranks single-variant type
+/// labels for one span; it never ranks a multi-member allele against a spanning
+/// description, it omits `delins` altogether, and it places substitution *above*
+/// inversion — so if it reached this comparison at all it would argue the other
+/// way.
+///
+/// The general rule, worth stating because it caught this once: **any partition
+/// rule that widens a piece must run after the weight bound, never inside
+/// [`partition_block`].**
+fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
+    if pieces.len() < 2 || !every_separation_is_a_single_base(pieces) {
+        return;
+    }
+    let start = pieces[0].ref_start;
+    let end = pieces[pieces.len() - 1].ref_end;
+    // Defence in depth, not a live case, and checked **before** anything is
+    // allocated or sliced. The pieces reaching here are disjoint and ascending:
+    // `coalesce_adjacent_pieces` asserts it, and the only step between that call
+    // and this one is `shrink_pieces_to_differences`, which can narrow a piece
+    // but never widen one. But that assertion is a `debug_assert!` and so is
+    // compiled out of release, and the gate above cannot substitute for it: it
+    // measures separations with `saturating_sub`, so a strict overlap
+    // (`ref_start < ref_end` of its predecessor) reads as `0 <= 1` and *passes*.
+    //
+    // Two things downstream would then panic inside a library rather than
+    // decline: `end - start` underflows if the pieces are out of order at all,
+    // and the reconstruction slice indexes with `start > end`. Both are why this
+    // runs first. Declining instead leaves the un-coalesced pieces, which the
+    // downstream round-trip guard (`reapplied == result`) is already able to
+    // refuse.
+    if end < start
+        || pieces
+            .windows(2)
+            .any(|pair| pair[1].ref_start < pair[0].ref_end)
+    {
+        return;
+    }
+    // Reconstruct what the span denotes: each piece's payload, with the
+    // unchanged reference bases separating them spliced back in.
+    let mut alt = Vec::with_capacity(end - start);
+    let mut cursor = start;
+    for piece in pieces.iter() {
+        alt.extend_from_slice(&ref_bytes[cursor..piece.ref_start]);
+        alt.extend_from_slice(&piece.alt);
+        cursor = piece.ref_end;
+    }
+    let whole = Piece {
+        ref_start: start,
+        ref_end: end,
+        alt,
+    };
+    if is_inversion(&whole, ref_bytes) {
+        *pieces = vec![whole];
+    }
+}
+
 /// Whether every gap between consecutive pieces is a single unchanged base —
 /// the regime where a match is most likely to be coincidence rather than
 /// structure.
@@ -3075,6 +3683,10 @@ fn changed_columns_of_edits(edits: &[GEdit]) -> usize {
             GEdit::Sub { .. } => 1,
             GEdit::Ins { alt, .. } => alt.len(),
             GEdit::Del { s, e } | GEdit::Dup { s, e } | GEdit::Inv { s, e } => span(*s, *e),
+            // Unreachable (this measure runs on lowered edit sets only); its
+            // stated anchor is the widest thing that can be said about an
+            // unresolved tract without reading the reference.
+            GEdit::Repeat { s, e, .. } => span(*s, *e),
             GEdit::Delins { s, e, alt } => span(*s, *e).max(alt.len()),
         })
         .sum()
@@ -3848,10 +4460,14 @@ fn split_codon_incompatible_triplets(
 fn coalesce_adjacent_pieces(pieces: &mut Vec<Piece>) {
     let mut i = 1;
     while i < pieces.len() {
-        if pieces[i - 1].ref_end >= pieces[i].ref_start {
+        debug_assert!(
+            pieces[i - 1].ref_end <= pieces[i].ref_start,
+            "strict overlap between adjacent pieces: the 3'-shuffle cannot produce this",
+        );
+        if pieces[i - 1].ref_end == pieces[i].ref_start {
             let next = pieces.remove(i);
             let prev = &mut pieces[i - 1];
-            prev.ref_end = prev.ref_end.max(next.ref_end);
+            prev.ref_end = next.ref_end;
             prev.alt.extend(next.alt);
         } else {
             i += 1;
@@ -3906,10 +4522,26 @@ fn rebuild_members(
     template: &HgvsVariant,
     body: Region,
     w_lo: i64,
+    ref_bytes: &[u8],
+    ends: SequenceEnds,
 ) -> Option<Vec<HgvsVariant>> {
     let mut members = Vec::with_capacity(pieces.len());
+    // Window offset one past the last reference base the *previous* piece
+    // claimed, for `duplication_anchor`'s disjointness check. `0` before the
+    // first piece. Correct because `pieces` is in ascending offset order —
+    // `partition_block` builds it that way and neither `shift_pieces_three_prime`
+    // nor `coalesce_adjacent_pieces` reorders — which the assertion below pins
+    // rather than assumes, since a silent reordering would turn the check into a
+    // no-op instead of a failure.
+    let mut previous_ref_end = 0usize;
     for piece in pieces {
-        members.push(build_merged(template, anchor_for_piece(piece, body, w_lo)?));
+        debug_assert!(
+            piece.ref_start >= previous_ref_end,
+            "pieces must be in ascending offset order for the dup disjointness check"
+        );
+        let anchor = anchor_for_piece(piece, body, w_lo, ref_bytes, ends, previous_ref_end)?;
+        previous_ref_end = piece.ref_end;
+        members.push(build_merged(template, anchor));
     }
     Some(members)
 }
@@ -3919,10 +4551,32 @@ fn rebuild_members(
 /// [`build_naedit`] already picks insertion / deletion / delins from the span
 /// and replacement, which covers the mandates that 1 nt → 1 nt is a
 /// substitution (`delins.md:15`) and that consecutive changes are one delins
-/// (`delins.md:16`). Inversion and tandem duplication are *not* built here —
-/// [`needs_unsupported_form`] refuses the whole group when a piece would need
-/// either, leaving them to the per-member pipeline.
-fn anchor_for_piece(piece: &Piece, body: Region, w_lo: i64) -> Option<Anchor> {
+/// (`delins.md:16`). A pure insertion needs one rule that span alone cannot
+/// express, applied here before falling back to that typing: a payload resting
+/// outside the sequence's own first or last base has no second anchor to name,
+/// and is re-spelled as a single-position `delins` ([`boundary_delins_anchor`],
+/// #1205/#1217).
+///
+/// One further shape cannot be read off the two lengths at all, because it
+/// leaves them unchanged, so it is recognised from the reference before that
+/// fallback: a tandem duplication ([`duplication_anchor`], `duplication.md:18`).
+///
+/// An inversion is the other such shape and is deliberately *not* typed here —
+/// see [`AnchorForm`]. Both were once refused wholesale, sending the group back
+/// to the per-member pipeline; the `dup` is now built, and the `inv` is left to
+/// [`crate::normalize::rules`]'s single-span typing, which can still see it in
+/// the rendered member.
+///
+/// `previous_ref_end` is the window offset one past the last reference base the
+/// preceding piece claimed, which only [`duplication_anchor`] needs — see there.
+fn anchor_for_piece(
+    piece: &Piece,
+    body: Region,
+    w_lo: i64,
+    ref_bytes: &[u8],
+    ends: SequenceEnds,
+    previous_ref_end: usize,
+) -> Option<Anchor> {
     let alt: Vec<Base> = piece
         .alt
         .iter()
@@ -3931,6 +4585,14 @@ fn anchor_for_piece(piece: &Piece, body: Region, w_lo: i64) -> Option<Anchor> {
     if alt.len() != piece.alt.len() {
         return None; // non-IUPAC byte; refuse rather than mangle.
     }
+    if piece.ref_start == piece.ref_end && !alt.is_empty() {
+        if let Some(anchor) = duplication_anchor(piece, body, w_lo, ref_bytes, previous_ref_end) {
+            return Some(anchor);
+        }
+        if let Some(anchor) = boundary_delins_anchor(piece, &alt, body, w_lo, ref_bytes, ends) {
+            return Some(anchor);
+        }
+    }
     let start = w_lo + piece.ref_start as i64;
     let end = w_lo + piece.ref_end as i64 - 1;
     Some(Anchor {
@@ -3938,24 +4600,137 @@ fn anchor_for_piece(piece: &Piece, body: Region, w_lo: i64) -> Option<Anchor> {
         start,
         end,
         alt,
+        form: AnchorForm::Replacement,
     })
 }
 
-/// Whether any piece would have to be rendered as an inversion or a tandem
-/// duplication.
+/// The `dup` anchor for a piece that is a tandem duplication, or `None`.
 ///
-/// [`build_naedit`] only produces insertion / deletion / delins / identity, and
-/// the spec is emphatic that these two forms are not interchangeable with those:
-/// an inversion is the reverse complement of its span (`inversion.md:5`), and a
-/// tandem duplication **must** be described as a `dup`, never an insertion
-/// (`duplication.md:18`). Rather than teach the builder two more shapes, refuse
-/// the group and let the existing per-member pipeline — which already gets both
-/// right — handle it. Refusing costs nothing here: these are exactly the cases
-/// where a single member is already canonical.
-fn needs_unsupported_form(pieces: &[Piece], ref_bytes: &[u8]) -> bool {
-    pieces
-        .iter()
-        .any(|piece| is_inversion(piece, ref_bytes) || is_tandem_duplication(piece, ref_bytes))
+/// `duplication.md:18` — "when a variant can be described as a duplication, it
+/// must be described as a duplication" — is a MUST, not a preference, so this is
+/// tried before every other typing a pure insertion can take.
+///
+/// [`is_tandem_duplication`] already recognised the shape; until #1235's
+/// sequence-first ladder it was used **only** to refuse, via the since-removed
+/// `needs_unsupported_form`, and the `dup` had to come back from the
+/// per-member pipeline — which types each member in isolation and so cannot
+/// produce one for a duplication the derivation assembled out of several
+/// members. It now builds as well as recognises.
+///
+/// The duplicated span is the reference run the payload repeats: the
+/// `alt.len()` bases immediately 5' of the insertion point, which is exactly
+/// what [`is_tandem_duplication`] compared the payload against.
+///
+/// # Why the span has to be checked against the preceding piece
+///
+/// Unlike every other form this module builds, a `dup` **names reference bases
+/// its own piece does not claim** — its span reaches `alt.len()` bases back from
+/// an insertion point that consumes nothing. In a multi-piece group that reach
+/// can extend into the piece before it, and the result would be an allele whose
+/// members contradict each other: `g.[10_12delinsX;9_12dup]` duplicates three
+/// bases the sibling has just replaced.
+///
+/// Nothing downstream catches that. `GEdit::Dup` neither claims its span nor
+/// reads the window through the applied cells — it copies from the untouched
+/// `ref_bytes`, which is where the piece's own `alt` bytes came from — so the
+/// round-trip guard's `reapplied == result` holds by construction. The test
+/// helpers' disjointness checks go through `hgvs_to_spdi`, where a `dup` is a
+/// zero-width interbase insert, so they see no overlap either. Before the `dup`
+/// builder existed this whole class was refused wholesale by the since-removed
+/// `needs_unsupported_form`; dropping that refusal is what makes it reachable.
+///
+/// No input reaching the partition has been shown to produce it — candidates
+/// collapse to a single piece under `trim_common_flanks` — but "unreachable, I
+/// think" is not a guard, and the fallback costs nothing: the piece is spelled as
+/// the plain insertion it already is, which denotes the same bases.
+fn duplication_anchor(
+    piece: &Piece,
+    body: Region,
+    w_lo: i64,
+    ref_bytes: &[u8],
+    previous_ref_end: usize,
+) -> Option<Anchor> {
+    if !is_tandem_duplication(piece, ref_bytes) {
+        return None;
+    }
+    let source_start = piece.ref_start.checked_sub(piece.alt.len())?;
+    if source_start < previous_ref_end {
+        return None;
+    }
+    Some(Anchor {
+        region: body,
+        start: w_lo + source_start as i64,
+        end: w_lo + piece.ref_start as i64 - 1,
+        // A `dup` names its source bases by span; there is nothing to insert.
+        alt: Vec::new(),
+        form: AnchorForm::Duplication,
+    })
+}
+
+/// The single-position `delins` anchor for a derived insertion that has come to
+/// rest outside the sequence's own bounds, or `None` when it has not.
+///
+/// The per-member pipeline owns this rewrite through
+/// [`clamp_insertion_at_sequence_bounds`](crate::normalize); it is the reason
+/// the sequence-first pass used to refuse every derivation that collapsed to one
+/// pure insertion. An insertion resting immediately 5' of base 1, or immediately
+/// 3' of the last base, has only one flanking anchor — `g.1ins…` is the form the
+/// spec itself rejects (`DNA/insertion.md:95-101`) and `g.<len>_<len+1>ins…`
+/// names a position past the end. On `m.` the tempting wraparound spelling is not
+/// available either (#129/#1217).
+///
+/// **Which boundary this is, and which it is not.** `ends` is derived from
+/// [`window_sequence_ends`], i.e. from the *entity's* own length, so this covers
+/// exactly the **sequence** bounds — the contig ends on `g.`/`m.` (#1205, #1217)
+/// and the transcript ends on `c.`/`n.`/`r.` (the transcript-bound half of
+/// #1202). It does **not** cover the CDS/UTR *axis-change* boundaries at
+/// `cds_start` / `cds_end` (#1170, #387, #1209): those have a representable far
+/// side (`c.-1`, `c.*1`), so clamping there is a policy with carve-outs rather
+/// than a representability rule, and `normalize_cds` keeps it — see
+/// [`clamp_insertion_at_sequence_bounds`](crate::normalize)'s table.
+///
+/// On `c.`/`r.` the transcript's last base may sit in the **3'UTR**, and the
+/// anchor this returns is still placed on `body` at `w_lo + offset`. That is
+/// sound: the `AxisFrame` identity `sequence = axis + delta` is discontinuous
+/// only at the *5'* end of the CDS (`c.-1` is `cds_start - 1`, since the axis has
+/// no zero — the reason [`region_sequence_delta`] exists), and running *past*
+/// `cds_end` is continuous, `c.<n>` denoting exactly the base `c.*(n - cds_len)`
+/// does. The formatter then renders the canonical `*` form. Pinned by
+/// `issue_1235_transcript_axes::cds_axis_clamps_a_derived_insertion_at_the_transcript_end`,
+/// on a transcript with a real UTR at both ends.
+///
+/// `ends` says which of the fetched window's edges are the *entity's* edges; a
+/// window that merely stopped where the fetch stopped must not be clamped at, or
+/// a perfectly valid interior insertion is rewritten at the wrong place.
+///
+/// The rewrite itself is
+/// [`boundary_delins_bases`](crate::normalize::boundary_delins_bases) — the same
+/// coordinate identity the per-member clamp applies, shared rather than copied.
+fn boundary_delins_anchor(
+    piece: &Piece,
+    alt: &[Base],
+    body: Region,
+    w_lo: i64,
+    ref_bytes: &[u8],
+    ends: SequenceEnds,
+) -> Option<Anchor> {
+    let (offset, side) = if ends.five_prime && piece.ref_start == 0 {
+        (0usize, BoundarySide::FivePrime)
+    } else if ends.three_prime && piece.ref_start == ref_bytes.len() {
+        (ref_bytes.len().checked_sub(1)?, BoundarySide::ThreePrime)
+    } else {
+        return None;
+    };
+    // `boundary_delins_bases` numbers its anchor 1-based into the slice.
+    let bases = boundary_delins_bases(ref_bytes, alt, offset as u64 + 1, side)?;
+    let position = w_lo + offset as i64;
+    Some(Anchor {
+        region: body,
+        start: position,
+        end: position,
+        alt: bases,
+        form: AnchorForm::Replacement,
+    })
 }
 
 /// A piece is an inversion when its replacement is the reverse complement of
@@ -6757,6 +7532,38 @@ mod tests {
     /// through `merge_consecutive_edits` requires the normalizer to have
     /// shifted the pair together first, so a merge-level test exercises the
     /// `Delins` branch instead and would not cover this.
+    /// A repeat count is the one description that names an unbounded payload
+    /// in a bounded number of characters, so the lowering has to bound it
+    /// itself. `A[4000000000]` sizes a four-gigabyte `Vec` through
+    /// `with_capacity`, which aborts the process rather than unwinding — in
+    /// release as well as debug — and `Normalizer::normalize` reaches here.
+    ///
+    /// Asserted on `lowered_repeat` directly. Driving it through
+    /// `canonicalize_from_sequence` would prove the same thing by *surviving*,
+    /// and a test whose evidence is "the process did not die" cannot tell a
+    /// working bound from a lowering that never ran.
+    ///
+    /// The just-over-the-window count is asserted alongside the absurd one on
+    /// purpose: it is the case that can be checked *against* an unbounded
+    /// build without allocating anything dangerous, so it is what makes this
+    /// test demonstrably sensitive to the bound rather than merely consistent
+    /// with it.
+    #[test]
+    fn an_absurd_repeat_count_is_refused_rather_than_allocated() {
+        let reference = b"CCCCAAAAAGGGG";
+        // Sanity: the same tract with a sane count does lower, so the refusals
+        // below are the bound and not a mis-specified fixture.
+        assert!(matches!(
+            lowered_repeat(5, 5, b"A", 7, reference, 1),
+            Some(GEdit::Ins { .. })
+        ));
+        // The tract's own five copies are kept, so this asks for 95 bases
+        // more than the widest window the derivation will ever fetch.
+        let just_past_the_window = MAX_CANONICAL_WINDOW as u64 + 100;
+        assert!(lowered_repeat(5, 5, b"A", just_past_the_window, reference, 1).is_none());
+        assert!(lowered_repeat(5, 5, b"A", 4_000_000_000, reference, 1).is_none());
+    }
+
     #[test]
     fn empty_insertion_anchor_builds_an_identity() {
         // Insertion-shaped anchor (`start == end + 1`) with an empty payload.
@@ -6765,6 +7572,7 @@ mod tests {
             start: 1010,
             end: 1009,
             alt: Vec::new(),
+            form: AnchorForm::Replacement,
         };
         let (interval, edit) = build_naedit(anchor, |_, p| GenomePos::new(p as u64));
 
@@ -6784,12 +7592,80 @@ mod tests {
             start: 1010,
             end: 1009,
             alt: vec![Base::A],
+            form: AnchorForm::Replacement,
         };
         let (_, edit) = build_naedit(anchor, |_, p| GenomePos::new(p as u64));
         match edit {
             NaEdit::Insertion { .. } => {}
             other => panic!("expected NaEdit::Insertion, got {other:?}"),
         }
+    }
+
+    /// A `dup`'s span reaches back from an insertion point that consumes
+    /// nothing, so it is the one form here that can name reference bases a
+    /// *preceding* piece already claims. It must decline rather than emit
+    /// `[10_12delinsX;9_12dup]`.
+    ///
+    /// Pinned on `duplication_anchor` directly. No input has been shown to reach
+    /// this through `partition_block` — candidates collapse to a single piece
+    /// under `trim_common_flanks` — and every rail that would otherwise catch it
+    /// is blind to it: `GEdit::Dup` copies from the untouched window, so the
+    /// round-trip guard passes by construction, and `hgvs_to_spdi` renders a
+    /// `dup` as a zero-width insert, so the disjointness helpers in `tests/it`
+    /// see no overlap. An end-to-end test is therefore not available to write;
+    /// this is what stands in for one.
+    #[test]
+    fn a_duplication_reaching_into_a_preceding_piece_declines() {
+        // Window `AAACAG`. The piece is a pure insertion of `CAG` at offset 6,
+        // whose source span is [3, 6) — a genuine tandem duplication.
+        let ref_bytes = b"AAACAG";
+        let piece = Piece {
+            ref_start: 6,
+            ref_end: 6,
+            alt: b"CAG".to_vec(),
+        };
+        assert!(
+            is_tandem_duplication(&piece, ref_bytes),
+            "fixture must be a tandem duplication, or the test proves nothing"
+        );
+
+        // Preceding piece ends at 3: source span [3, 6) is clear of it.
+        let clear = duplication_anchor(&piece, Region::Genome, 1, ref_bytes, 3)
+            .expect("a disjoint source span still builds a dup");
+        assert_eq!(clear.form, AnchorForm::Duplication);
+        assert_eq!((clear.start, clear.end), (4, 6));
+
+        // Preceding piece ends at 4: source span [3, 6) reaches one base into it.
+        assert!(
+            duplication_anchor(&piece, Region::Genome, 1, ref_bytes, 4).is_none(),
+            "a dup whose source span overlaps the preceding piece must decline",
+        );
+    }
+
+    /// The fallback the decline above lands on is not a refusal of the whole
+    /// group — `anchor_for_piece` still returns the piece, spelled as the plain
+    /// insertion it already is, which denotes the same bases.
+    #[test]
+    fn a_declined_duplication_falls_back_to_the_insertion_spelling() {
+        let ref_bytes = b"AAACAG";
+        let piece = Piece {
+            ref_start: 6,
+            ref_end: 6,
+            alt: b"CAG".to_vec(),
+        };
+        let anchor = anchor_for_piece(
+            &piece,
+            Region::Genome,
+            1,
+            ref_bytes,
+            SequenceEnds::INTERIOR,
+            4,
+        )
+        .expect("the piece is still built");
+        assert_eq!(anchor.form, AnchorForm::Replacement);
+        // Insertion shape: `start == end + 1`, payload intact.
+        assert_eq!((anchor.start, anchor.end), (7, 6));
+        assert_eq!(anchor.alt, vec![Base::C, Base::A, Base::G]);
     }
 
     /// The terminal base of a CDS-relative record is named by the record's own
@@ -7103,6 +7979,30 @@ mod tests {
         assert_eq!(
             pieces[0].ref_start, 2,
             "the first piece must be the lone 5' substitution; got {pieces:?}"
+        );
+    }
+
+    /// Flank absorption must not wrap the submitter's copy number.
+    ///
+    /// `count` arrives as the stated count times `copies_per_stated_unit`, so a
+    /// description written at the top of the range reaches the absorption step
+    /// already saturated and `count += flank` wraps. Every other arithmetic step
+    /// in [`lowered_repeat`] is checked; this pins the one that was not.
+    ///
+    /// The anchor spans an explicit two-position range (`e > s`) inside a
+    /// five-`A` tract, which is what makes the 3' flank non-zero and the add
+    /// reachable at all.
+    #[test]
+    fn lowered_repeat_refuses_a_count_that_would_overflow_flank_absorption() {
+        assert!(
+            lowered_repeat(5, 6, b"A", u64::MAX, b"CCCCAAAAAGGGG", 1).is_none(),
+            "a count at the top of the range must be refused, not wrapped"
+        );
+        // Control: the same tract and anchor with a sane count still lowers, so
+        // the guard above is rejecting the overflow rather than the shape.
+        assert!(
+            lowered_repeat(5, 6, b"A", 7, b"CCCCAAAAAGGGG", 1).is_some(),
+            "the same shape with a small count must still lower"
         );
     }
 
@@ -7441,6 +8341,39 @@ mod tests {
                 "pieces overlap or are out of order: {pieces:?}"
             );
         }
+    }
+
+    /// `coalesce_adjacent_pieces` must reject a strictly overlapping pair
+    /// rather than merge it.
+    ///
+    /// Unreachable in production (the 3'-shuffle cannot produce it — see the
+    /// function's doc comment), but the old `>=` condition's `max()`/`extend()`
+    /// body would silently double-count the shared columns, changing the
+    /// denoted sequence instead of merely mis-describing it.
+    ///
+    /// Gated on `debug_assertions` because what it asserts *is* a
+    /// `debug_assert!`, which compiles out of a release build — the function
+    /// then falls through to the `else` arm and leaves the pair un-coalesced
+    /// (safe, just silent), so `#[should_panic]` would fail there for the right
+    /// reason and the wrong outcome. The release behaviour is deliberately not
+    /// asserted here: it is the fail-safe, not the contract.
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "strict overlap")]
+    fn coalesce_rejects_a_strictly_overlapping_pair() {
+        let mut pieces = vec![
+            Piece {
+                ref_start: 0,
+                ref_end: 4,
+                alt: b"AAAA".to_vec(),
+            },
+            Piece {
+                ref_start: 2,
+                ref_end: 6,
+                alt: b"CCCC".to_vec(),
+            },
+        ];
+        coalesce_adjacent_pieces(&mut pieces);
     }
 
     /// The enumerated classes of disagreement between the two block splitters.

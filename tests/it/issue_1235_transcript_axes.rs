@@ -367,3 +367,80 @@ fn overlap_conflicting_allele_is_not_canonicalized() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// The derived terminal-insertion clamp, on each transcript axis
+// ---------------------------------------------------------------------------
+//
+// #1205 and #1217 pin this on `g.` and `m.`. It is not axis-specific — the
+// derivation asks the provider for the sequence's own length — so it is live on
+// `c.`, `n.` and `r.` too, and was unpinned there.
+//
+// The probe tail is #1205's contig, `C`x4 `A`x7 `G`x4: `insGGA` shifts twice
+// through the `G` tract and then mismatches, which is what leaves it an
+// insertion resting on the bound rather than a repeat or a `dup`. Each allele
+// carries a second member because the transcript axes are only reachable here as
+// a cis allele — `is_splittable_single_member` still gates *lone* members to
+// `g.`/`m.`.
+
+/// `n.` — the transcript body is the whole transcript, so its last base is the
+/// sequence's last base and the clamp lands on `n.<len>`.
+///
+/// This is the one of the three the derivation actually owns: with the clamp
+/// removed from the piece builder this comes back as `n.15_16insAGG`, naming a
+/// position past the end of a 15-base transcript. `normalize_tx`'s own clamp
+/// cannot repair that, for the same reason `normalize_genome`'s cannot on `g.` —
+/// it keys on where a *shuffle* comes to rest, and the payload has nowhere left
+/// to shift.
+#[test]
+fn noncoding_axis_clamps_a_derived_terminal_insertion() {
+    let provider = || SyntheticBuilder::noncoding("CCCCAAAAAAAGGGG", Strand::Plus).build();
+    assert_eq!(
+        normalize_to_string(provider(), "NR_TEST.1:n.[3C>T;13_14insGGA]"),
+        "NR_TEST.1:n.[3C>T;15delinsGAGG]",
+    );
+}
+
+/// `r.` — same shape, lower-case RNA alphabet, and the clamp must not leak a
+/// `T` into an axis that spells `u`.
+#[test]
+fn rna_axis_clamps_a_derived_terminal_insertion() {
+    let provider = || SyntheticBuilder::rna("ccccaaaaaaagggg", Strand::Plus).build();
+    let out = normalize_to_string(provider(), "NR_TEST.1:r.[3c>u;13_14insgga]");
+    assert_eq!(out, "NR_TEST.1:r.[3c>u;15delinsgagg]");
+    assert!(
+        !edit_of(&out).contains('t') && !edit_of(&out).contains('T'),
+        "the r. axis must not render a thymine: {out}",
+    );
+}
+
+/// `c.` — and the answer to "what happens when the transcript's last base is in
+/// the 3'UTR", which is where a naive `w_lo + offset` would be suspect.
+///
+/// The transcript here has a real 5'UTR *and* a real 3'UTR (`cds_start = 3`,
+/// `cds_end = 17`, length 19), so `delta` is non-zero and the derived insertion
+/// comes to rest on `c.*2` — two bases past the CDS.
+///
+/// **It renders correctly, and the reason is worth recording.** The piece
+/// builder places every piece on the body region at `w_lo + offset`, which is
+/// the `AxisFrame` identity `sequence = axis + delta`. That identity has a
+/// discontinuity at the **5'** end of the CDS — `c.-1` is `cds_start - 1`, not
+/// `cds_start - 2`, because the `c.` axis has no zero — which is why
+/// `region_sequence_delta` exists. Going *up* from the CDS there is no
+/// discontinuity: `c.<n>` for `n` past the CDS length denotes exactly the base
+/// `c.*(n - cds_len)` does, so the overflow is arithmetically sound and the
+/// formatter renders the canonical `*` form. Nothing here needs a per-region
+/// offset.
+///
+/// Unlike the `n.` case above, the derived clamp is not load-bearing for this
+/// one — `normalize_cds` re-clamps it, because a `c.` position outside the CDS
+/// is representable and its shuffle can still be recomputed. It is pinned
+/// anyway: it is the only place the 3'UTR rendering is asserted at all.
+#[test]
+fn cds_axis_clamps_a_derived_insertion_at_the_transcript_end() {
+    let provider = || SyntheticBuilder::cds("CTCCCCAAAAAAAGGGGGG", 3, 17, Strand::Plus).build();
+    assert_eq!(
+        normalize_to_string(provider(), "NM_TEST.1:c.[2C>T;14_15insGGGA]"),
+        "NM_TEST.1:c.[2C>T;*2delinsGAGGG]",
+    );
+}

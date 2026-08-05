@@ -1,8 +1,28 @@
 //! Two spellings of one variant that normalize to two different strings.
 //!
 //! #1235's criterion 1 requires every encoding of a variant to reach one
-//! normalized string. These eight pairs do not, and each pair's *split*
-//! spelling is an expectation this repository blessed and shipped.
+//! normalized string. This pair does not, and its *split* spelling is an
+//! expectation this repository blessed and shipped.
+//!
+//! Six of the original eight converged when the sequence-first pass stopped
+//! refusing a derivation that collapses to a single pure insertion — #1287,
+//! #1290, #1301, #1308, #1312 and #1320 have moved to [`CONVERGED`] below. The
+//! refusal existed to protect two capabilities the derivation lacked (the
+//! terminal-insertion clamp and `dup` typing); both now live in the piece
+//! builder, so every one of those six merged forms is derived from the sequence
+//! rather than assembled per member.
+//!
+//! #1304 makes seven. It needed the input-separator veto gone as well (#1345,
+//! landed separately on `main`), because its split spelling is three members
+//! whose derived form merges across a base the input left between two of them.
+//!
+//! #1296 was the eighth and last, and it needed something different from all of
+//! them: not a capability the derivation lacked, but permission to *read* its
+//! own output. The per-member pipeline promotes `274_275insAA` to `274A[3]`,
+//! and `collect_canonical_edits` refused any group carrying a repeat — so the
+//! derivation was locked out of that variant forever. With repeats lowered to
+//! the `ins`/`del` they denote, both spellings reach `g.273C>A`. [`DIVERGENT`]
+//! is now empty.
 //!
 //! The pairs were found by deriving each variant's minimal-alignment partition
 //! from the resulting sequence, rendering the derived single-block form, and
@@ -27,11 +47,34 @@ use crate::common::synthetic::padded;
 use ferro_hgvs::ShuffleDirection;
 
 /// `(issue, core, split spelling, merged spelling)`.
-const DIVERGENT: &[(&str, &str, &str, &str)] = &[
+///
+/// Empty: every harvested pair has converged. Kept — rather than deleted along
+/// with its last row — because it is where the next divergence found by
+/// `cis_allele_confluence_proptest`'s indel model gets pinned, and because
+/// [`every_pinned_pair_denotes_one_variant`] and
+/// [`every_divergent_row_still_diverges`] are the contract a new row must
+/// satisfy — the latter is dormant while this table is empty and starts
+/// checking the moment a row is added, and
+/// [`the_divergent_table_is_empty`] pins the count that says so.
+const DIVERGENT: &[(&str, &str, &str, &str)] = &[];
+
+/// `(issue, core, split spelling, merged spelling, the string they agree on)`
+/// for pairs that converge today.
+///
+/// The fifth column exists because agreement alone is not a value pin: both
+/// spellings regressing together onto the same *wrong* string would satisfy an
+/// agreement check silently. Pinning what they agree on is what makes a row
+/// evidence rather than a tautology. Note it is often neither of the two input
+/// spellings — several settle on repeat notation.
+const CONVERGED: &[(&str, &str, &str, &str, &str)] = &[
+    // The first six converged when the lone-pure-insertion refusal was removed:
+    // each merged form is now derived from the sequence rather than assembled
+    // per member, so the split spelling reaches it too.
     (
         "#1287",
         "ATACAGAAAATCAGGGCATA",
         "TEMPLATE:g.[261_262insGA;263_264insAA]",
+        "TEMPLATE:g.263_264insGAAA",
         "TEMPLATE:g.263_264insGAAA",
     ),
     (
@@ -39,29 +82,20 @@ const DIVERGENT: &[(&str, &str, &str, &str)] = &[
         "ATACAGAAAATCAGGGCATA",
         "TEMPLATE:g.[263_264insA;265_266insC]",
         "TEMPLATE:g.266_267insCA",
-    ),
-    (
-        "#1296",
-        "AAAAAAATAATCGCAACAGAAG",
-        "TEMPLATE:g.[272_273del;274_275insAA]",
-        "TEMPLATE:g.273delinsA",
+        "TEMPLATE:g.266_267insCA",
     ),
     (
         "#1301",
         "GCATGAAAAT",
         "TEMPLATE:g.[263_264insAC;264_265insAA]",
         "TEMPLATE:g.264_265insCAAA",
-    ),
-    (
-        "#1304",
-        "GCATGAAAAT",
-        "TEMPLATE:g.[260_261insGA;261_262insA;264del]",
-        "TEMPLATE:g.262_263insGA",
+        "TEMPLATE:g.264_265insCAAA",
     ),
     (
         "#1308",
         "CAGAAGATGAATAA",
         "TEMPLATE:g.[263_264insTG;264_265insTG]",
+        "TEMPLATE:g.265_266insTTGG",
         "TEMPLATE:g.265_266insTTGG",
     ),
     (
@@ -69,45 +103,77 @@ const DIVERGENT: &[(&str, &str, &str, &str)] = &[
         "TAAAACCA",
         "TEMPLATE:g.[260_261insAC;261_262insAC]",
         "TEMPLATE:g.262_263insAACC",
+        "TEMPLATE:g.262_263insAACC",
     ),
     (
         "#1320",
         "AACAGTAAAATAT",
         "TEMPLATE:g.[263_264insAC;265_266insAA;266_267insAA]",
         "TEMPLATE:g.264_265insCAAAAA",
+        "TEMPLATE:g.264_265insCAAAAA",
     ),
-];
-
-/// `(issue, core, split spelling, merged spelling)` for pairs that agree today.
-const CONVERGED: &[(&str, &str, &str, &str)] = &[
+    // #1304 converged on top of those six, and needed one more thing they did
+    // not: `origin/main`'s removal of the input-separator veto (#1345). Its
+    // split spelling is three members whose derived form is a single piece
+    // covering a base the input left between two of them, so the veto refused it
+    // even with the lone-insertion refusal gone. With both removed the pair
+    // reaches the `dup` the sequence states, and the sequence-first pass — not
+    // the junction barrier — is what now decides this allele's output. See
+    // `issue_1304_junction_barrier_snapshot.rs`, where the barrier keeps its own
+    // coverage on a shape the derivation declines to merge.
+    (
+        "#1304",
+        "GCATGAAAAT",
+        "TEMPLATE:g.[260_261insGA;261_262insA;264del]",
+        "TEMPLATE:g.262_263insGA",
+        "TEMPLATE:g.261_262dup",
+    ),
+    // #1296 is the eighth and last, and the only one that converged by letting
+    // the derivation *read* a form rather than by teaching it to build one. Its
+    // agreed string is neither input spelling: two members denoting one changed
+    // base come back as that substitution. Verified identical under
+    // `--direction 5prime`.
+    (
+        "#1296",
+        "AAAAAAATAATCGCAACAGAAG",
+        "TEMPLATE:g.[272_273del;274_275insAA]",
+        "TEMPLATE:g.273delinsA",
+        "TEMPLATE:g.273C>A",
+    ),
+    // Converged before that change, and unmoved by it.
     (
         "#1286",
         "AAAAAA",
         "TEMPLATE:g.[258_259insA;259_260insA]",
         "TEMPLATE:g.263_264insAA",
+        "TEMPLATE:g.257_263A[9]",
     ),
     (
         "#1297",
         "GCATGAAAAT",
         "TEMPLATE:g.[261_262insAA;263del;264_265insA]",
         "TEMPLATE:g.265_266insAA",
+        "TEMPLATE:g.262_265A[6]",
     ),
     (
         "#1316",
         "CAGCCAGTCAGCGCATCAG",
         "TEMPLATE:g.[261_262insAA;262_263insAA]",
         "TEMPLATE:g.262_263insAAAA",
+        "TEMPLATE:g.262A[5]",
     ),
     (
         "#1321",
         "TCCCAGAAAAT",
         "TEMPLATE:g.[261_262insGA;262_263insA;263del]",
         "TEMPLATE:g.263_264insGA",
+        "TEMPLATE:g.262_263dup",
     ),
     (
         "#1323",
         "CAGGGATCAT",
         "TEMPLATE:g.[260del;261_262insGA;262_263insGA]",
+        "TEMPLATE:g.262_263insAGA",
         "TEMPLATE:g.262_263insAGA",
     ),
 ];
@@ -116,7 +182,7 @@ const CONVERGED: &[(&str, &str, &str, &str)] = &[
 /// broken pin rather than evidence about the normalizer.
 #[test]
 fn every_pinned_pair_denotes_one_variant() {
-    for (issue, core, split, merged) in DIVERGENT.iter().chain(CONVERGED) {
+    let check = |issue: &str, core: &str, split: &str, merged: &str| {
         let seq = padded(core);
         let a = apply(&seq, split)
             .unwrap_or_else(|| panic!("{issue}: split spelling `{split}` does not apply"));
@@ -126,22 +192,53 @@ fn every_pinned_pair_denotes_one_variant() {
             a, b,
             "{issue}: `{split}` and `{merged}` are not the same variant"
         );
+    };
+    for (issue, core, split, merged) in DIVERGENT {
+        check(issue, core, split, merged);
+    }
+    for (issue, core, split, merged, _) in CONVERGED {
+        check(issue, core, split, merged);
     }
 }
 
 #[test]
-fn the_eight_spelling_pairs_still_diverge() {
-    // The count "eight" is asserted in three places' prose — this test's name,
+fn the_divergent_table_is_empty() {
+    // Named for what actually executes. The predecessor was called
+    // `no_pinned_pair_still_diverges`, which promised a divergence check its
+    // body cannot perform while `DIVERGENT` is empty, so the name described
+    // coverage that was not there. Renamed rather than deleted: the emptiness
+    // claim is itself worth pinning. The divergence check it promised lives in
+    // [`every_divergent_row_still_diverges`], deliberately apart so this
+    // assertion cannot abort it.
+    //
+    // The count "none" is asserted in three places' prose — this test's name,
     // the module doc above, and `tests/it/rewrite_target_corpus.rs` — and in none
     // of them executably. Adding or removing a row would leave all three wrong
     // and silent. `splitter_reproducer_corpus.rs` guards its own table the same
     // way.
-    assert_eq!(
-        DIVERGENT.len(),
-        8,
+    assert!(
+        DIVERGENT.is_empty(),
         "row count changed; update this test's name, the module doc, and \
-         tests/it/rewrite_target_corpus.rs's reference to these eight pairs"
+         tests/it/rewrite_target_corpus.rs's reference to this table"
     );
+}
+
+/// Every [`DIVERGENT`] row must still diverge, or it belongs in [`CONVERGED`].
+///
+/// **Dormant while the table is empty — zero iterations, by construction.**
+/// Kept, not deleted, because it is the contract the next row must satisfy: a
+/// pair added to `DIVERGENT` must actually diverge when it is added, and must
+/// redden here when it converges. Deleting it would drop that check exactly
+/// when nobody is looking for it; leaving it labelled costs nothing and stops
+/// it reading as live coverage.
+///
+/// It is a **separate test** from [`the_divergent_table_is_empty`] on purpose.
+/// Held together, the emptiness assertion runs first and aborts the whole test
+/// on the very change that makes this loop live: adding the first row fails the
+/// count pin, and the divergence check below never executes. Split, adding a
+/// row reddens the count pin *and* exercises the row.
+#[test]
+fn every_divergent_row_still_diverges() {
     for (issue, core, split, merged) in DIVERGENT {
         let seq = padded(core);
         let (a, b) = (normalize(&seq, split), normalize(&seq, merged));
@@ -154,15 +251,61 @@ fn the_eight_spelling_pairs_still_diverge() {
     }
 }
 
+/// #1235's criterion 1 stated directly rather than as a table row: a **lone**
+/// spelling of a variant and its multi-member spelling must reach one string.
+///
+/// This is `#1287`'s pair. It gets its own named test rather than only a row in
+/// [`CONVERGED`] because it is the acceptance criterion itself and should not
+/// have to be read out of a table: the two spellings must denote one variant
+/// (proved below with an applier that is not the normalizer), reach one string,
+/// and that string must be a fixed point.
+///
+/// **Which half moved.** The multi-member spelling is the one that moved onto
+/// the lone one, by entering the sequence-first pass as a cis allele. The lone
+/// `g.263_264insGAAA` is a fixed point either way, so this pair does *not*
+/// exercise `is_splittable_single_member`'s widening from `delins`/`inv` to any
+/// edit type — that gate is exercised by
+/// `issue_1205_genome_contig_bounds_clamp::a_lone_insertion_written_past_the_contig_end_is_clamped`
+/// and its `m.` twin, which are the shapes where a lone member's derived answer
+/// differs from its per-member one at all.
+#[test]
+fn a_lone_insertion_and_its_multi_member_spelling_converge() {
+    let seq = padded("ATACAGAAAATCAGGGCATA");
+    let lone = "TEMPLATE:g.263_264insGAAA";
+    let split = "TEMPLATE:g.[261_262insGA;263_264insAA]";
+
+    // Not assumed: proved with an applier that is not the normalizer, so a
+    // convergence onto a *wrong* shared string cannot pass this test.
+    assert_eq!(
+        apply(&seq, lone).expect("lone spelling applies"),
+        apply(&seq, split).expect("split spelling applies"),
+        "`{lone}` and `{split}` must denote one variant"
+    );
+
+    let from_lone = normalize(&seq, lone);
+    let from_split = normalize(&seq, split);
+    assert_eq!(
+        from_lone, from_split,
+        "one variant, two spellings, two normalized strings"
+    );
+    assert_eq!(from_lone, lone, "the shared answer must be a fixed point");
+}
+
 #[test]
 fn converged_pairs_stay_converged() {
-    for (issue, core, split, merged) in CONVERGED {
+    for (issue, core, split, merged, expected) in CONVERGED {
         let seq = padded(core);
         let (a, b) = (normalize(&seq, split), normalize(&seq, merged));
         assert_eq!(
             a, b,
             "{issue} regressed — `{split}` -> `{a}` but `{merged}` -> `{b}`; these \
              two spellings of one variant must agree."
+        );
+        // Agreement alone is also satisfied by both spellings moving together
+        // onto a wrong string, so the value they agree on is pinned too.
+        assert_eq!(
+            &a, expected,
+            "{issue} moved — `{split}` and `{merged}` now agree on `{a}`, not `{expected}`"
         );
     }
 }
@@ -174,19 +317,31 @@ fn converged_pairs_stay_converged() {
 /// (`src/bin/ferro.rs`) and the Python bindings. Every row above was blessed
 /// against the 3' direction only, so these gaps were never measured.
 ///
-/// **#1321 has left this set.** Its 5' divergence was the cancelled-member
-/// residue: `g.[262_263insA;263del]` merges to `g.263delinsA`, which restates
-/// the reference and so renders as `g.263=`, and the split spelling kept that
-/// `=` while the merged spelling never grew one. Dropping the residue where the
-/// merge creates it converges the pair on `g.261_262dup` — see
-/// `issue_1321_identity_inside_a_duplication.rs`.
+/// **Both original rows have since left this set, for unrelated reasons.**
 ///
-/// Both spellings still denote the input's bases and both are stable fixed
-/// points, so this is criterion 1 of #1235 — non-confluence — and nothing else.
-/// That is why neither oracle sees it: `FERRO_ASSERT_IDEMPOTENT` re-normalizes a
-/// single spelling and finds it stable, and `FERRO_ASSERT_REPARSE` finds it
-/// well-formed. Only comparing two spellings of one variant exposes it.
-const DIVERGENT_UNDER_FIVE_PRIME: &[&str] = &["#1323"];
+/// #1321's 5' divergence was the cancelled-member residue: `g.[262_263insA;263del]`
+/// merges to `g.263delinsA`, which restates the reference and so renders as
+/// `g.263=`, and the split spelling kept that `=` while the merged spelling never
+/// grew one. Dropping the residue where the merge creates it converges the pair on
+/// `g.261_262dup` — see `issue_1321_identity_inside_a_duplication.rs`.
+///
+/// #1323 closed here: lowering a repeat member to the `ins`/`del` it denotes let
+/// `collect_canonical_edits` read its 5' spelling, which is the gate that had been
+/// refusing it; both spellings now reach one string under 5' as they already did
+/// under 3'.
+///
+/// The set is kept rather than deleted with its last row — it is where the next
+/// direction-dependent gap gets pinned, and `the_five_prime_confluence_gap_is_unchanged`
+/// asserts every unlisted row converges, so an empty set is a stronger claim than a
+/// populated one, not a dormant check.
+///
+/// What a row here means, when there is one: both spellings still denote the
+/// input's bases and both are stable fixed points, so it is criterion 1 of #1235
+/// — non-confluence — and nothing else. That is why neither oracle sees such a
+/// row: `FERRO_ASSERT_IDEMPOTENT` re-normalizes a single spelling and finds it
+/// stable, and `FERRO_ASSERT_REPARSE` finds it well-formed. Only comparing two
+/// spellings of one variant exposes it.
+const DIVERGENT_UNDER_FIVE_PRIME: &[&str] = &[];
 
 #[test]
 fn the_five_prime_confluence_gap_is_unchanged() {
@@ -199,12 +354,14 @@ fn the_five_prime_confluence_gap_is_unchanged() {
     // measured and refuted: threading `ShuffleDirection` into
     // `canonicalize_from_sequence` changes 298 of 39,600 swept outputs and all of
     // them are sequence-preserving both before and after, so it is a lateral
-    // re-spelling with no correctness content. For these two rows the derivation
-    // instead *refuses*: `canonicalize_from_sequence` returns `None`, behind
-    // three stacked gates — the `collect_canonical_edits` catch-all (reached via
-    // a redundant `=` member the 5' pipeline emits), then the
-    // `changed_columns_of_pieces` weight bound, then `needs_unsupported_form`.
-    // Each masks the next, which is the pattern #1235 and #1345 both describe.
+    // re-spelling with no correctness content. For the one row still listed the
+    // derivation instead *refuses*: `canonicalize_from_sequence` returns `None`,
+    // behind two stacked gates — the `collect_canonical_edits` catch-all
+    // (reached via a redundant `=` member the 5' pipeline emits), then the
+    // `changed_columns_of_pieces` weight bound. Each masks the next, which is
+    // the pattern #1235 and #1345 both describe. A third gate stood behind those
+    // two when this was written — `needs_unsupported_form`, since removed — so
+    // the ladder is two deep today, not three.
     //
     // Every listed id must still name a `CONVERGED` row. The loop below reaches
     // an entry only through that table, so an id naming no row is inert: it
@@ -220,7 +377,7 @@ fn the_five_prime_confluence_gap_is_unchanged() {
              row, so it pins nothing. Delete the entry, or restore the row it names."
         );
     }
-    for (issue, core, split, merged) in CONVERGED {
+    for (issue, core, split, merged, _three_prime_expected) in CONVERGED {
         let seq = padded(core);
         let (a, b) = (
             normalize_in(&seq, split, ShuffleDirection::FivePrime),
@@ -288,7 +445,7 @@ fn the_five_prime_divergences_are_non_confluence_and_nothing_worse() {
     // The identity-stripping rewrite and the tolerated-skip count this loop used
     // to carry are both gone, and an inexpressible output is now a failure rather
     // than a known exception.
-    for (issue, core, split, merged) in CONVERGED {
+    for (issue, core, split, merged, _three_prime_expected) in CONVERGED {
         if !DIVERGENT_UNDER_FIVE_PRIME.contains(issue) {
             continue;
         }

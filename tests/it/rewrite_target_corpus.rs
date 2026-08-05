@@ -47,13 +47,17 @@
 //!
 //! ## The other half of the acceptance evidence
 //!
-//! `tests/it/cis_spelling_confluence_gap.rs` pins eight *other* currently-diverging spelling
-//! pairs (#1287, #1290, #1296, #1301, #1304, #1308, #1312, #1320) on the same
-//! `cis_apply_oracle` + `padded()` machinery and the same assert-then-flip-red contract as
-//! this file, plus five pairs that have already converged. Those eight are also things the
-//! sequence-first rewrite must converge, and will also go red when it lands. Read the two
-//! files together — this one is not the sole record of confluence targets, only of the
-//! ones harvested separately from #1235's descendant chain.
+//! `tests/it/cis_spelling_confluence_gap.rs` holds the *other* harvested spelling pairs, on
+//! the same `cis_apply_oracle` + `padded()` machinery and the same assert-then-flip-red
+//! contract as this file. Read the two files together — this one is not the sole record of
+//! confluence targets, only of the ones harvested separately from #1235's descendant chain.
+//!
+//! It started at eight diverging pairs and now has **none**: #1287, #1290, #1301, #1308,
+//! #1312 and #1320 converged once the sequence-first pass stopped refusing a derivation
+//! that collapses to a single pure insertion; #1304 followed once `main`'s removal of the
+//! input-separator veto (#1345) let its three-member spelling merge as well; and #1296 —
+//! the last — converged once the derivation was allowed to read a repeat member instead of
+//! refusing the group that carried it.
 //!
 //! ## #1235 itself: what's actually running
 //!

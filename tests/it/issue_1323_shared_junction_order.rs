@@ -58,11 +58,20 @@ fn a_commuting_pair_still_merges_as_before() {
 }
 
 #[test]
-fn a_non_commuting_pair_that_can_be_kept_apart_still_is() {
+fn a_non_commuting_pair_kept_apart_by_the_clamp_still_merges() {
     // #1312's case, which the clamp resolves by keeping the two members on
     // distinct junctions. That must keep happening: merging is the repair for a
     // pair that *cannot* be separated, not a licence to fold together members
     // the clamp already ordered.
+    //
+    // The clamp still keeps the two members on distinct junctions — that is
+    // what this test is about and it is unchanged. What moved is the allele's
+    // *output*: since #1235 it is derived from the sequence the pair denotes
+    // rather than assembled from the clamped members, and that sequence is one
+    // four-base insertion (the `#1312` row of `cis_spelling_confluence_gap.rs`,
+    // now converged). Merging by derivation is not the "licence to fold
+    // together" this comment warns about: the clamp's job is to decide where a
+    // member may shift, and it still refuses.
     let output = assert_padded_preserving("TAAAACCA", "NC_TEST.1:g.[260_261insAC;261_262insAC]");
-    assert_eq!(output, "NC_TEST.1:g.[260_261insAC;261_262insAC]");
+    assert_eq!(output, "NC_TEST.1:g.262_263insAACC");
 }

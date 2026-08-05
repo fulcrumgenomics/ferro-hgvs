@@ -121,6 +121,52 @@ fn the_clamped_delins_describes_the_same_sequence() {
 }
 
 // ---------------------------------------------------------------------------
+// Reached through the sequence-first derivation too (#1235)
+// ---------------------------------------------------------------------------
+
+/// A lone insertion *authored* past the contig end is clamped too.
+///
+/// `g.15_16insAGG` is the exact string
+/// `three_prime_saturated_insertion_clamps_at_contig_end` emitted before #1205,
+/// so an older build's stored output can be handed straight back.
+/// `normalize_genome`'s own clamp does not repair it: that clamp keys on where a
+/// *shuffle* comes to rest, and this payload cannot shuffle — it is already as
+/// 3' as it goes — so the resting place it inspects is the one the input named,
+/// outside the contig.
+///
+/// The sequence-first pass closes it, and needs both halves of #1235's ladder:
+/// `is_splittable_single_member` must admit a lone `ins` (it used to admit only
+/// `delins`/`inv`), and the piece builder must apply the terminal clamp.
+#[test]
+fn a_lone_insertion_written_past_the_contig_end_is_clamped() {
+    assert_canonical(
+        "NC_PROBE.1:g.15_16insAGG",
+        ShuffleDirection::ThreePrime,
+        "NC_PROBE.1:g.15delinsGAGG",
+    );
+}
+
+/// The clamp belongs to the *description*, not to one pipeline.
+///
+/// #1235 re-derives a cis allele from the sequence it produces and re-types
+/// every piece globally, so a derived piece can be a terminal insertion that no
+/// per-member clamp ever saw. Without the clamp in the piece builder the allele
+/// comes back carrying `g.15_16ins…` — the same 3' defect this file fixes,
+/// re-introduced one layer up.
+///
+/// The substitution is here to give the derivation a second piece: a derivation
+/// collapsing to a lone insertion is a separate case, covered by
+/// `three_prime_saturated_insertion_clamps_at_contig_end` above.
+#[test]
+fn a_derived_terminal_insertion_is_clamped_too() {
+    assert_canonical(
+        "NC_PROBE.1:g.[3C>T;13_14insGGA]",
+        ShuffleDirection::ThreePrime,
+        "NC_PROBE.1:g.[3C>T;15delinsGAGG]",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Controls: the clamp must not fire away from the bounds
 // ---------------------------------------------------------------------------
 

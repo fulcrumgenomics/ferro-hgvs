@@ -209,6 +209,32 @@ fn issue_1233_ins_del_reduces_to_substitutions() {
     );
 }
 
+/// A derived piece that is a tandem duplication must be **typed** as one.
+///
+/// `duplication.md:18` — "when a variant can be described as a duplication, it
+/// must be described as a duplication" — is one of the spec's genuine MUSTs, and
+/// the sequence-first derivation used to be unable to honour it: it recognised
+/// the shape (`is_tandem_duplication`) only in order to **refuse** the whole
+/// group, handing the allele back to the per-member pipeline, which types each
+/// member in isolation and so never merges the two insertions below.
+///
+/// `g.[74_75insC;75_76insG]` and `g.73_74dup` denote one variant: reference
+/// `…C(73) G(74) G(75) C(76)…` becomes `…C G C G G C…` either way, because the
+/// interleaved `C`/`G` of the split spelling and the contiguous `CG` of the dup
+/// commute across the `G` at 75. The substitution at 90 is not decoration — it
+/// is what keeps the derivation at two pieces, so this exercises the `dup`
+/// typing rather than the lone-insertion path.
+#[test]
+fn a_derived_tandem_insertion_renders_as_a_duplication() {
+    converges_to(
+        "TEMPLATE:g.[73_74dup;90A>T]",
+        &[
+            "TEMPLATE:g.[74_75insC;75_76insG;90A>T]",
+            "TEMPLATE:g.[73_74dup;90A>T]",
+        ],
+    );
+}
+
 // #1234's clamp-dependent assertions are **not** here.
 //
 // `[4_6del;8A>T]` -> `[6_8del;8A>T]` — a deletion shifting over its sibling and

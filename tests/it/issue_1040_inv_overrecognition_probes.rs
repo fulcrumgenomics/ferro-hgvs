@@ -58,7 +58,7 @@
 //! is the correct answer for #1040 (the fallback cannot *carve* an `inv`); the
 //! result is a single `delins` on both v0.8.1 and the #1042 branch.
 
-use crate::common::synthetic::{normalize_to_string, SyntheticBuilder};
+use crate::common::synthetic::{assert_padded_preserving, normalize_to_string, SyntheticBuilder};
 use ferro_hgvs::reference::transcript::Strand;
 use ferro_hgvs::{parse_hgvs, JsonProvider, Normalizer};
 use std::io::Write;
@@ -143,6 +143,153 @@ fn whole_run_reverse_complement_emits_inv() {
         g("ACGTGC", &format!("{G}:g.257_262delinsGCACGT")),
         format!("{G}:g.257_262inv"),
     );
+}
+
+// ---------------------------------------------------------------------------
+// The sequence-first derivation reaches the same `inv`, from every spelling.
+//
+// `whole_run_reverse_complement_emits_inv` above pins the *per-member* answer:
+// one `delins` member, typed by `rules::canonicalize_delins`. The three tests
+// below pin what `merge::canonicalize_from_sequence` derives from `(reference,
+// denoted sequence)` — the path a multi-member cis allele takes, and the one
+// that used to refuse an inversion outright (the since-removed
+// `needs_unsupported_form`).
+//
+// They use `assert_padded_preserving` rather than this file's `g` helper: it
+// projects input and output through `hgvs_to_spdi` and compares the bases each
+// denotes, so a re-typing that quietly changed the sequence fails here rather
+// than merely disagreeing with a pinned string.
+//
+// Spec basis, and it is not prioritisation. `inversion.md:5` defines an
+// inversion by the content of the whole span and says nothing about interior
+// columns coinciding, so a 5 nt span whose replacement is its reverse
+// complement qualifies. `delins.md:5` defines a delins as a replacement "which
+// is not a substitution or inversion", so the *spanning* alternative is not
+// merely lower-priority, it is excluded. `general.md:56`'s prioritised list is
+// deliberately not cited: it ranks single-variant type labels for one span, it
+// omits `delins`, and it puts substitution above inversion.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_derived_whole_block_inversion_renders_as_inv() {
+    // GTTAA -> TTAAC is a 5 nt whole-span reverse complement whose 2nd and 4th
+    // columns coincide, so a position-wise partition finds three substitutions
+    // in it and the inversion disappears. Spelled as those three substitutions
+    // the input is a genuine multi-member allele, so it is the derivation — not
+    // the per-member typer — that has to put the inversion back together.
+    assert_eq!(
+        assert_padded_preserving("GTTAA", &format!("{G}:g.[257G>T;259T>A;261A>C]")),
+        format!("{G}:g.257_261inv"),
+    );
+}
+
+#[test]
+fn every_spelling_of_a_derived_whole_block_inversion_converges_on_inv() {
+    // The same 5 nt inversion written every way its changed columns allow: the
+    // spanning description, the three substitutions, and each grouping of those
+    // columns into `delins` runs. Two spellings of one allele must normalize to
+    // one string (#1235).
+    //
+    // The three-substitution spelling is what pins the mechanism. It weighs 3
+    // changed columns against the derivation's 5, so the changed-columns bound
+    // in `canonicalize_from_sequence` refuses it whenever the widening to the
+    // whole span happens *before* that bound — while the spanning spelling
+    // weighs 5 and is accepted. One variant, two answers. That is why
+    // `coalesce_whole_block_inversion` runs after the bound rather than inside
+    // `partition_block`.
+    //
+    // `g.257_261delinsTTAAC` is included even though `delins.md:5` makes it an
+    // incorrect spelling: ferro accepts it as input and must land on the same
+    // normal form as the spellings that are correct.
+    for input in [
+        format!("{G}:g.257_261inv"),
+        format!("{G}:g.257_261delinsTTAAC"),
+        format!("{G}:g.[257G>T;259T>A;261A>C]"),
+        format!("{G}:g.[257_259delinsTTA;261A>C]"),
+        format!("{G}:g.[257G>T;259_261delinsAAC]"),
+    ] {
+        assert_eq!(
+            assert_padded_preserving("GTTAA", &input),
+            format!("{G}:g.257_261inv"),
+            "spelling `{input}` did not converge on the inv",
+        );
+    }
+    // ACGTGC -> GCACGT, the 6 nt case `whole_run_reverse_complement_emits_inv`
+    // already pins from the `delins` side, now from its substitution spelling.
+    assert_eq!(
+        assert_padded_preserving("ACGTGC", &format!("{G}:g.[257A>G;259G>A;260T>C;262C>T]")),
+        format!("{G}:g.257_262inv"),
+    );
+}
+
+#[test]
+fn a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation() {
+    // The control for the two tests above, and the reason they pin `inv` rather
+    // than merely "one member". AAGCTA -> TAGCTT is *also* a whole-span reverse
+    // complement, but only its first and last bases change and four unchanged
+    // bases lie between them.
+    //
+    // `general.md:34` describes two variants separated by one or more
+    // nucleotides individually; its letter names only `delins`, but its
+    // rationale (`delins.md:81-84` — the variants may have been reported, or may
+    // occur, individually) reaches any single spanning description. At four
+    // unchanged bases these are two independent changes rather than interior
+    // columns of one reverse-complement relation, so
+    // `coalesce_whole_block_inversion`'s `every_separation_is_a_single_base`
+    // gate must refuse them.
+    //
+    // Without this case the two tests above would pass just as well against a
+    // rule that merged *any* whole-span reverse complement — the shape, not the
+    // thing they name.
+    let expected = format!("{G}:g.[257A>T;262A>T]");
+    assert_eq!(
+        assert_padded_preserving("AAGCTA", &format!("{G}:g.[257A>T;262A>T]")),
+        expected,
+    );
+    assert_eq!(
+        assert_padded_preserving("AAGCTA", &format!("{G}:g.257_262delinsTAGCTT")),
+        expected,
+    );
+}
+
+#[test]
+fn a_derived_whole_block_inversion_outranks_the_codon_exception() {
+    // The `c.`-axis half of the two tests above. It matters because every other
+    // case in this section is genomic, where `general.md:35`'s codon exception
+    // cannot fire at all — so this is the only coverage of what the derivation
+    // does when the codon rule is also reaching for the same pieces.
+    //
+    // `GTTAA -> TTAAC` changes c.1, c.3 and c.5. c.1 and c.3 are two variants
+    // separated by one nucleotide inside codon 1: precisely the
+    // `[Sub@p; Identity@p+1; Sub@p+2]` triplet the codon exception merges into a
+    // `delins`. Stub `coalesce_whole_block_inversion` and it does, and this test
+    // reports `c.[1_3delinsTTA;5A>C]` — so the overlap is real, not notional.
+    //
+    // The `inv` is the coalesce's answer and not the codon rule's: stubbing
+    // `apply_coding_codon_exception` instead leaves this test green (while
+    // reddening `issue_165_delins_sub_only_decompose`'s codon tests, so the stub
+    // is doing something).
+    //
+    // The *order* of the two is a separate question, and it turns out not to be
+    // observable — see the call sites in `merge::canonicalize_from_sequence`,
+    // which record why. Whichever runs first, the answer here is `c.1_5inv`,
+    // which is also the only one the spec admits: `delins.md:5` defines a delins
+    // as a replacement "which is not a substitution or inversion".
+    //
+    // `revcomp_runs_in_distinct_codons_are_individual_on_cds_axis` above pins the
+    // other side of the same axis — the case where neither rule may fire.
+    for input in [
+        format!("{C}:c.1_5inv"),
+        format!("{C}:c.1_5delinsTTAAC"),
+        format!("{C}:c.[1G>T;3T>A;5A>C]"),
+        format!("{C}:c.[1_3delinsTTA;5A>C]"),
+    ] {
+        assert_eq!(
+            c("GTTAA", &input),
+            format!("{C}:c.1_5inv"),
+            "spelling `{input}` did not converge on the inv",
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

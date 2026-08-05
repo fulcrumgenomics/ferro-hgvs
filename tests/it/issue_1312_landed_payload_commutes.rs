@@ -26,11 +26,19 @@
 use crate::common::synthetic::assert_padded_preserving;
 
 #[test]
-fn a_rotation_that_breaks_commuting_keeps_the_pair_apart() {
+fn a_rotation_that_breaks_commuting_still_merges_to_one_member() {
     // #1312. `AC` at 260 becomes `CA` at 261, which does not commute with the
     // `AC` already there, so the member may not land on that junction.
+    //
+    // The clamp still refuses that landing — this file's property is unchanged —
+    // but since #1235 the allele's output is derived from the sequence the pair
+    // denotes rather than assembled from the clamped members, and that sequence
+    // is one four-base insertion. It is the `#1312` row of
+    // `cis_spelling_confluence_gap.rs`, now converged. The `ACCA` corruption the
+    // module doc describes is still excluded: `assert_padded_preserving` applies
+    // both spellings with an applier that is not the normalizer.
     let output = assert_padded_preserving("TAAAACCA", "NC_TEST.1:g.[260_261insAC;261_262insAC]");
-    assert_eq!(output, "NC_TEST.1:g.[260_261insAC;261_262insAC]");
+    assert_eq!(output, "NC_TEST.1:g.262_263insAACC");
 }
 
 #[test]

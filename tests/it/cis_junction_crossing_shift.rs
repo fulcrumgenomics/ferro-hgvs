@@ -192,27 +192,82 @@ fn the_five_prime_junction_barrier_does_not_over_clamp() {
     );
 }
 
-/// The barrier bounds a member by its **span start**, which is the right edge
-/// to bound only for a member that claims bases. A `dup` carries its own
-/// junction at its *end*, so bounding its start holds it back by `len - 1`
-/// more than the invariant requires.
+/// The tract `[4_5insC;5_6dup]` shuffles through: an `AT`-alternating run at
+/// 3-11, long enough for a two-base duplication to travel and short enough that
+/// a third member placed past 11 sits clear of it.
+const DUP_RUN: &str = "TTAATATATAATAATATTAT";
+
+/// The pair alone. Both members land inside one run of change, so #1235's
+/// sequence-first derivation answers the whole allele from the bases it denotes
+/// and emits a single insertion.
 ///
-/// `3_4dup` really is illegal here — it would share interbase 4 with the
-/// insertion — so `4_5dup` is the 5'-most legal spelling, and the member must
-/// still reach it. Bounding the start would strand it at `5_6dup`, its input
-/// position: sequence-preserving, so the exhaustive sweep cannot see it, and
-/// silently non-canonical.
+/// **Re-blessed from `TEMPLATE:g.[4_5insC;4_5dup]`.** The merged form is derived
+/// from the sequence rather than assembled per member; `[4_5insC;4_5dup]` was
+/// only ever the per-member repair's spelling of the same bases. Verified
+/// sequence-preserving: `assert_normalizes_preserving_in` asserts the string
+/// *before* it applies both descriptions, so the failing string assertion left
+/// the preservation check unrun — with the string re-blessed it executes, and
+/// `apply(DUP_RUN, …)` gives `TTAACTATATATAATAATATTAT` for input and output
+/// alike.
 ///
-/// The sweep is blind to this class twice over: its only oracle is `apply`, and
-/// its second member is always a single-base `dup` — exactly the length at
-/// which `len - 1` is zero and the over-clamp disappears.
+/// **This row no longer bounds anything.** It was #1357's negative control for
+/// the over-clamp guard on the 5' junction barrier, and it passes now whether
+/// that guard runs or not — the output contains no duplication at all, so the
+/// property in its old name (`…_still_reaches_its_five_prime_most_position`) is
+/// not exercised here. That coverage moved to
+/// [`a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position`],
+/// which is the row that still goes red when the guard is removed.
 #[test]
-fn a_multi_base_duplication_still_reaches_its_five_prime_most_position() {
-    const DUP_RUN: &str = "TTAATATATAATAATATTAT";
+fn a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence() {
     assert_normalizes_preserving_in(
         DUP_RUN,
         "TEMPLATE:g.[4_5insC;5_6dup]",
-        "TEMPLATE:g.[4_5insC;4_5dup]",
+        "TEMPLATE:g.3_4insACT",
+        ShuffleDirection::FivePrime,
+    );
+}
+
+/// #1357's discriminator, restored on the nucleotide axis.
+///
+/// The barrier bounds a member by its **span start**, which is the right edge to
+/// bound only for a member that claims bases. A `dup` carries its own junction at
+/// its *end*, so bounding its start would hold it back by `len - 1` more than the
+/// invariant requires — which is why the 5' barrier carries
+/// `.filter(|_| a.junction.is_none())`.
+///
+/// `3_4dup` really is illegal here — it would share interbase 4 with the
+/// insertion — so `4_5dup` is the 5'-most legal spelling, and the member must
+/// still reach it. Without the guard it is stranded at `5_6dup`, its input
+/// position: sequence-preserving, so neither exhaustive sweep can see it, and
+/// silently non-canonical. The sweeps are blind to this class twice over — their
+/// only oracle is `apply`, and their second member is always a single-base `dup`,
+/// exactly the length at which `len - 1` is zero and the over-clamp disappears.
+///
+/// The third member is what keeps the property visible. `15del` stops the
+/// *merge* without touching the shift: the block is no longer one run of change,
+/// so the derivation declines to collapse the allele and the per-member pipeline
+/// decides the output again, which is where the barrier lives. The `dup` then
+/// reaches `4_5dup` and the spelling is observable.
+///
+/// **Distance measured, not assumed.** Sweeping every third-member position on
+/// `DUP_RUN`: at `10del` and `11del` the member joins the block and the allele
+/// merges again (to `g.[4_5insC;10_11insT]`) — a test written there would be
+/// vacuous in a new way, pinning a merged form while claiming to pin a barrier.
+/// `12del` and `13del` are clear but only 1-2 nt past the tract; at `14del` and
+/// `18del` the third member itself 5'-shifts, which muddies the row. `15del` is
+/// 4 nt clear, stays exactly where it is written, and reaches the tie.
+///
+/// **Fails both ways.** Deleting `.filter(|_| a.junction.is_none())` from the 5'
+/// branch of `clamp_sibling_crossing_shifts` turns this output into
+/// `g.[4_5insC;5_6dup;15del]`; restoring it turns it back. (Removing the whole
+/// 5' `across_junctions` barrier instead leaves this row green — that half is
+/// guarded by `an_insertion_merging_with_a_deletion_keeps_its_base_in_place`.)
+#[test]
+fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position() {
+    assert_normalizes_preserving_in(
+        DUP_RUN,
+        "TEMPLATE:g.[4_5insC;5_6dup;15del]",
+        "TEMPLATE:g.[4_5insC;4_5dup;15del]",
         ShuffleDirection::FivePrime,
     );
 }
@@ -439,10 +494,17 @@ fn a_five_prime_duplication_does_not_cross_an_upstream_sibling() {
     // *downstream*, so under 5' shuffle the member travels away from it. These
     // were found by hand and stand in for the sweep until its generator is
     // widened to upstream siblings (#1283).
+    //
+    // The expectations are the *merged* forms since #1235: the pair is now
+    // derived from the sequence it denotes rather than assembled per member, and
+    // a substitution abutting an A-run duplication is one inserted `G`. The
+    // property under test is unchanged — the sequence assertion below is what
+    // catches a crossing — and `g.[4A>G;5dup]` was only ever the per-member
+    // repair's spelling of the same bases.
     let seq = "ACAAAAAAAACGTACGTACG";
     for (input, expected) in [
-        ("TEMPLATE:g.[4A>G;9dup]", "TEMPLATE:g.[4A>G;5dup]"),
-        ("TEMPLATE:g.[5A>G;10dup]", "TEMPLATE:g.[5A>G;6dup]"),
+        ("TEMPLATE:g.[4A>G;9dup]", "TEMPLATE:g.3_4insG"),
+        ("TEMPLATE:g.[5A>G;10dup]", "TEMPLATE:g.4_5insG"),
     ] {
         assert_normalizes_preserving_in(seq, input, expected, ShuffleDirection::FivePrime);
     }

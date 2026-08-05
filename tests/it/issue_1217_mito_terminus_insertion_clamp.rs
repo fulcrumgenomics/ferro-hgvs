@@ -182,6 +182,51 @@ fn the_clamp_does_not_emit_a_wraparound_insertion() {
 }
 
 // ---------------------------------------------------------------------------
+// Reached through the sequence-first derivation too (#1235)
+// ---------------------------------------------------------------------------
+
+/// A lone insertion *authored* past the terminus is clamped too — and nothing
+/// but the derivation can do it.
+///
+/// `m.15_16insAGG` is the exact string
+/// `three_prime_saturated_insertion_clamps_at_mito_end` was emitting before
+/// #1217, so someone who normalized under an older build and stored the result
+/// can hand it straight back. `normalize_mt`'s own clamp does **not** repair it:
+/// that clamp keys on where a *shuffle* comes to rest, and this payload cannot
+/// shuffle — it is already as 3' as it goes — so the resting place it inspects
+/// is the one the input already named, outside the contig.
+///
+/// The sequence-first pass is what closes it, and it needs both halves of
+/// #1235's ladder: `is_splittable_single_member` must admit a lone `ins` (it
+/// used to admit only `delins`/`inv`, so this member never entered), and the
+/// piece builder must apply the terminal clamp. Narrow either and this comes
+/// back as `m.15_16insAGG`, naming a position past the end of a 15-base contig.
+#[test]
+fn a_lone_insertion_written_past_the_terminus_is_clamped() {
+    assert_canonical(
+        &format!("{MT}:m.15_16insAGG"),
+        ShuffleDirection::ThreePrime,
+        &format!("{MT}:m.15delinsGAGG"),
+    );
+}
+
+/// The `m.` mirror of #1205's `a_derived_terminal_insertion_is_clamped_too`.
+///
+/// #1235's sequence-first pass re-derives a cis allele from the sequence it
+/// produces, so a derived piece can be a terminal insertion no per-member clamp
+/// ever saw. On `m.` there is no wraparound alternative to fall back on (#129),
+/// so the piece builder must apply the same single-position `delins` this file
+/// pins for the per-member path.
+#[test]
+fn a_derived_terminal_insertion_is_clamped_too() {
+    assert_canonical(
+        &format!("{MT}:m.[3C>T;13_14insGGA]"),
+        ShuffleDirection::ThreePrime,
+        &format!("{MT}:m.[3C>T;15delinsGAGG]"),
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Controls: the clamp must not fire away from the termini
 // ---------------------------------------------------------------------------
 

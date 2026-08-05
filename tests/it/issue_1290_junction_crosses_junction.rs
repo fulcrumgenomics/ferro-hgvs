@@ -35,11 +35,18 @@ use crate::common::synthetic::assert_padded_preserving;
 fn a_junction_does_not_cross_a_non_commuting_junction() {
     // #1290. The `A` stops one short of the `C`'s junction, keeping the two in
     // their authored order.
+    //
+    // Since #1235 the pair does not stay apart at all: the merged form is derived
+    // from the sequence rather than assembled per member, and these two denote
+    // one two-base insertion — the `#1290` row of
+    // `cis_spelling_confluence_gap.rs`, now converged. The crossing this test
+    // guards against would change the sequence, which
+    // `assert_padded_preserving` still checks against an independent applier.
     let output = assert_padded_preserving(
         "ATACAGAAAATCAGGGCATA",
         "NC_TEST.1:g.[263_264insA;265_266insC]",
     );
-    assert_eq!(output, "NC_TEST.1:g.[264dup;265_266insC]");
+    assert_eq!(output, "NC_TEST.1:g.266_267insCA");
 }
 
 #[test]

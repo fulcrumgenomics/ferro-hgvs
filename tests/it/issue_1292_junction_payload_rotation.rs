@@ -71,13 +71,21 @@ fn the_pulled_back_payload_does_not_pick_up_a_flanking_base() {
 }
 
 #[test]
-fn a_tandem_repeat_keeps_the_duplication_spelling() {
+fn a_tandem_repeat_insertion_beside_a_deletion_merges_to_one_insertion() {
     // #1280's counterexample, and the reason the payload is *rotated* rather
     // than carried literally. A duplication is phase-correct by construction
     // where it already sits, so a member that does not have to move keeps it.
+    //
+    // Since #1235 the pair does not survive to be spelled per member: the merged
+    // form is derived from the sequence, and a `-1` deletion with a `+6`
+    // insertion six bases away has a five-column single-gap explanation against
+    // the input's seven, so the derivation takes it. The payload lands 5' of the
+    // `CAG` tract with a `C` to its 3', so it cannot rotate onto the tract and is
+    // not a tandem duplication of what precedes it — the `dup` mandate is not in
+    // play on the merged form.
     let output = assert_padded_preserving(
         "CTTTTCAGCAGCAGCAGCAGCAGTTTTG",
         "NC_TEST.1:g.[268_269insAGCAGC;262del]",
     );
-    assert_eq!(output, "NC_TEST.1:g.[262del;274_279dup]");
+    assert_eq!(output, "NC_TEST.1:g.261_262insAGCAG");
 }

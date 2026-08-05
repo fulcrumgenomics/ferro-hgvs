@@ -598,9 +598,36 @@ pub(crate) fn insertion_to_boundary_delins(
     anchor: u64,
     side: BoundarySide,
 ) -> Option<NaEdit> {
+    let bases = boundary_delins_bases(seq, a_prime.bases(), anchor, side)?;
+    Some(NaEdit::Delins {
+        sequence: InsertedSequence::Literal(Sequence::new(bases)),
+        deleted: None,
+        deleted_length: None,
+        substitution_reference: None,
+    })
+}
+
+/// The replacement bases the boundary identity produces: `payload` concatenated
+/// with `ref[anchor]`, on whichever side the payload rests.
+///
+/// The whole of [`insertion_to_boundary_delins`]'s arithmetic, split out because
+/// the sequence-first derivation in [`merge`] needs the same rewrite in a
+/// different currency: it types its derived pieces straight into `Vec<Base>` and
+/// only later hands them to a builder that decides the `NaEdit`, so routing
+/// through the `NaEdit`-returning form above would mean constructing a `Delins`
+/// solely to take it apart again. Both callers therefore share one
+/// implementation of the identity rather than two copies that can drift.
+///
+/// Returns `None` when `anchor` lies outside `seq` or the reference byte there
+/// is not a base we can spell — the same two refusals the caller above documents.
+pub(crate) fn boundary_delins_bases(
+    seq: &[u8],
+    payload: &[Base],
+    anchor: u64,
+    side: BoundarySide,
+) -> Option<Vec<Base>> {
     let anchor_0b = (anchor as usize).saturating_sub(1);
     let ref_base = Base::from_char(*seq.get(anchor_0b)? as char)?;
-    let payload = a_prime.bases();
     let mut bases = Vec::with_capacity(payload.len() + 1);
     match side {
         BoundarySide::FivePrime => {
@@ -612,12 +639,7 @@ pub(crate) fn insertion_to_boundary_delins(
             bases.extend_from_slice(payload);
         }
     }
-    Some(NaEdit::Delins {
-        sequence: InsertedSequence::Literal(Sequence::new(bases)),
-        deleted: None,
-        deleted_length: None,
-        substitution_reference: None,
-    })
+    Some(bases)
 }
 
 /// Which ends of the `seq` slice handed to [`clamp_insertion_at_sequence_bounds`]
@@ -629,12 +651,15 @@ pub(crate) fn insertion_to_boundary_delins(
 /// contig there. Clamping at a window edge that is merely where the fetch stopped
 /// would assert a boundary that does not exist and rewrite a perfectly valid
 /// interior insertion into a `delins` at the wrong place.
+/// The sequence-first canonicalization in [`merge`] fetches a window too, and
+/// applies the same clamp to the pieces it derives, so this is `pub(crate)`
+/// rather than private to this module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct SequenceEnds {
+pub(crate) struct SequenceEnds {
     /// `seq[0]` is the entity's first base.
-    five_prime: bool,
+    pub(crate) five_prime: bool,
     /// `seq[len-1]` is the entity's last base.
-    three_prime: bool,
+    pub(crate) three_prime: bool,
 }
 
 impl SequenceEnds {
@@ -642,6 +667,14 @@ impl SequenceEnds {
     const WHOLE: Self = Self {
         five_prime: true,
         three_prime: true,
+    };
+
+    /// Neither end of the slice is known to be a real boundary, so no clamp may
+    /// fire. The conservative answer whenever the entity's length is unknown or
+    /// the window plainly sits inside it.
+    pub(crate) const INTERIOR: Self = Self {
+        five_prime: false,
+        three_prime: false,
     };
 }
 
@@ -1780,21 +1813,30 @@ impl<P: ReferenceProvider> Normalizer<P> {
     }
 
     /// Whether a lone (non-allele) member is a shape the sequence-first pass
-    /// can improve: a `delins` or an `inv`, the two forms that may be hiding an
-    /// unchanged interior base and so need re-partitioning (#1230, #1232).
+    /// can improve.
     ///
-    /// Genomic axes only — and, since this PR lifts `merge`'s axis gate, that is
-    /// now a deliberate restriction rather than a free one.
+    /// Any edit type may enter: the derivation is a function of (reference,
+    /// denoted sequence), so restricting by the input's *spelling* — as this
+    /// used to do, admitting only `delins`/`inv` — is exactly the
+    /// input-relativity #1235 is about. A lone `g.263_264insGAAA` and the
+    /// two-member `g.[261_262insGA;263_264insAA]` denote the same variant, and
+    /// until this widened, only one of them was allowed to be re-derived.
     ///
-    /// #1237 narrowed this to `g.`/`m.` on the grounds that
+    /// The **axis** restriction below is a separate, still-live gate — kept
+    /// exactly as narrow as before (`g.`/`m.` only) — and unaffected by the
+    /// above. Widening the edit-type half was measured to move nothing; the
+    /// costs recorded below are what widening the *axis* half would move, and
+    /// they are **not** paid by this change:
+    ///
+    /// #1237 narrowed the axis to `g.`/`m.` on the grounds that
     /// `merge::canonicalize_from_sequence` refused the transcript axes anyway.
-    /// This PR removes that refusal for **alleles**, so lone `c.`/`n.`/`r.`
-    /// `delins` and `inv` members are the one shape still held back, and the
+    /// A prior PR removed that refusal for **alleles**, so lone `c.`/`n.`/`r.`
+    /// members are the one shape still held back on axis grounds, and the
     /// asymmetry is real: a lone spelling that the allele spelling of the same
     /// variant would re-partition can stay unsplit.
     ///
-    /// Widening it was tried and is **not** a drive-by change. It moves four
-    /// tests, and one of them is not ours to move unilaterally:
+    /// Widening the axis was tried and is **not** a drive-by change. It moves
+    /// four tests, and one of them is not ours to move unilaterally:
     ///
     /// * `normalize_tests::test_normalize_inversion_unchanged` and
     ///   `rna_coding_consistency::parity_safe_regime::inversion_parity` — a lone
@@ -1809,17 +1851,15 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///   from an independent oracle, which is a conformance decision needing its
     ///   own measurement pass, not a side effect of this one.
     ///
-    /// So the lone-member case stays gated until that pass happens.
+    /// So the axis stays gated until that pass happens; only the edit-type
+    /// half opened here.
     fn is_splittable_single_member(variant: &HgvsVariant) -> bool {
         let edit = match variant {
             HV::Genome(g) => &g.loc_edit.edit,
             HV::Mt(m) => &m.loc_edit.edit,
             _ => return false,
         };
-        matches!(
-            edit.inner(),
-            Some(NaEdit::Delins { .. }) | Some(NaEdit::Inversion { .. })
-        )
+        edit.inner().is_some()
     }
 
     /// Re-derive the variant from the sequence it produces (#1229-#1235).
@@ -1950,6 +1990,47 @@ impl<P: ReferenceProvider> Normalizer<P> {
             single if Self::is_splittable_single_member(single) => std::slice::from_ref(variant),
             _ => return None,
         };
+        // When strict mode declares an input has no canonical form, the
+        // derivation must not manufacture one.
+        //
+        // This is a deliberate narrowing of "the derivation is authoritative":
+        // it is authoritative over *how* to spell a variant, not over *whether*
+        // an ill-formed input has a spelling at all. An allele carrying an
+        // overlap conflict is rejected by strict mode as `OverlapConflictingEdits
+        // / W5002` precisely because the spec defines no canonical form for it;
+        // re-deriving it from the sequence hands lenient mode a single tidy
+        // member that strict mode then *accepts*, which launders the conflict out
+        // of existence instead of leaving it visible to be rejected.
+        //
+        // The check has to be here, on `detect_overlap_conflicts`, because the
+        // two refusals in play answer different questions in different coordinate
+        // spaces and disagree for exactly this shape:
+        //
+        // * `merge::apply_edits_to_window` refuses on **interbase** geometry, so
+        //   `24dup` (the zero-length junction `[24, 24]`) and `24C>G` (the span
+        //   `[23, 24]`) are flush, not overlapping, and it admits the pair.
+        // * `detect_overlap_conflicts` works in **HGVS-coordinate** space, where
+        //   both members name base 24, and reports the conflict — and it is this
+        //   one that strict mode and the #395 / #1276 / #1235 guards use.
+        //
+        // #1307 is the instance that showed the gap: `g.[24dup;24C>G]` on a
+        // 24-base contig derived to `g.23_24insG`, which is in range and denotes
+        // the same bases, yet turned a strict-rejected input into a
+        // strict-accepted output. The lone-pure-insertion bail in
+        // `canonicalize_from_sequence` had been masking it; removing that bail
+        // made it reachable rather than creating it.
+        //
+        // Recomputed from the member list on every pass rather than read off a
+        // carried `OverlapConflict` warning. That distinction is what keeps the
+        // gate idempotent: the warning does not survive re-normalization, so
+        // gating on it would refuse the first pass and admit the second.
+        if members.len() > 1
+            && crate::normalize::overlap::detect_overlap_conflicts(members, AllelePhase::Cis)
+                .iter()
+                .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }))
+        {
+            return None;
+        }
         // `phase` is `Cis` on both arms — the allele arm refuses anything else
         // above — and `uncertain` is likewise always false, which is exactly what
         // `AlleleVariant::new` builds.
@@ -1980,9 +2061,18 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// disjoint, but it does not cover a conflict that was in the input all
     /// along — an insertion interior to another member's span is reported
     /// (`OverlapConflict`) rather than resolved, and so survives into here.
-    /// `merge::apply_edits_to_window` refuses those on the edit geometry, which
-    /// is where the check has to live: the warning itself does not survive
-    /// re-normalization, so gating on it here would cost idempotency.
+    ///
+    /// **This used to say `merge::apply_edits_to_window` refuses those on the
+    /// edit geometry, "which is where the check has to live". It does not, and
+    /// it is not.** That refusal is interbase-geometric, so it admits a pair that
+    /// is flush in interbase space while coincident in HGVS-coordinate space —
+    /// a `dup` and a substitution on one base, which is #1307. The gate that
+    /// actually holds this line is in [`Self::sequence_first_pass`], on
+    /// `detect_overlap_conflicts`; see the reasoning there, including why
+    /// recomputing it per pass (rather than gating on the carried warning, the
+    /// idempotency cost this note was warning about) keeps the pass a fixed
+    /// point. Do not restore the older claim — leaving it in place is how the
+    /// hole gets re-opened.
     fn normalize_core_canonical(
         &self,
         variant: &HgvsVariant,
