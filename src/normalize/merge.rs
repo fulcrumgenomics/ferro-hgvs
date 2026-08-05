@@ -5493,13 +5493,36 @@ pub(crate) fn demote_repeats_spanning_siblings<P: ReferenceProvider>(
             // `clamp_sibling_crossing_junctions`, immediately after, pulls it
             // back to the last position before the sibling.
             //
-            // Only the junction case takes this route. An insertion claims no
-            // bases and so blocks no sibling's shift, which is why demoting a
-            // repeat to one before the clamps released a sibling deletion that
-            // #1296 had deliberately clamped out of its tract. That shape
-            // reaches here through `spans_sibling_bases`, and it keeps the
-            // decline.
-            if !spans_sibling_junction || spans_sibling_bases {
+            // An insertion claims no bases and so blocks no sibling's shift, so
+            // this route may only fire where that barrier has nothing left to
+            // do. For a base-claiming sibling that means the tract holds it in
+            // *both* snapshots: where it started and where this pass's
+            // per-member normalization has put it.
+            //
+            // That is what separates #1394 from #1296. In #1296 the deletion
+            // reaches the tract only after its own 3' shift (272_273 ->
+            // 273_274), and `clamp_sibling_crossing_shifts` — which runs
+            // immediately after this pass — pulls it back out to 272_273. The
+            // overlap is the ordinary pre-clamp state the clamp exists to
+            // repair, so demoting on it destroys the barrier one step before it
+            // does its job, which is the defect #1296 fixed. In #1394 the
+            // deletion is inside the tract at both 263 and 264: there is no
+            // position outside it for the clamp to reach, so the barrier buys
+            // nothing and the tract is simply swallowing a sibling.
+            //
+            // A swallowed junction needs no such care and keeps the plain test:
+            // a junction member claims no bases, so there is nothing to release.
+            let traps_sibling_bases = (0..pre.len()).filter(|&j| j != i).any(|j| {
+                let overlaps = |s: &MemberSpan| {
+                    s.claims_bases
+                        && s.region == a.region
+                        && s.accession == a.accession
+                        && s.start <= a.end
+                        && s.end >= a.start
+                };
+                pre[j].as_ref().is_some_and(overlaps) && post[j].as_ref().is_some_and(overlaps)
+            });
+            if !spans_sibling_junction && !traps_sibling_bases {
                 continue;
             }
             let Some((payload, _)) = repeat_growth_as_insertion(&after[i], kind, a) else {

@@ -200,6 +200,7 @@ mod issue_1362_identity_span;
 mod issue_1376_utr_ins_payload;
 mod issue_1382_diagnostics_strict_ladder;
 mod issue_1389_codon_gate_emitted_window;
+mod issue_1394_repeat_growth_swallows_deletion;
 mod issue_1398_cds_utr3_insertion_idempotency;
 mod issue_1406_conflict_is_a_property_of_the_input;
 mod issue_1416_cancelled_identity_beside_repeat;

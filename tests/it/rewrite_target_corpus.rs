@@ -26,14 +26,13 @@
 //!   independent of the normalizer under test) and it keeps passing after the rewrite
 //!   lands; a malformed pin here would prove nothing about the normalizer, which is why the
 //!   guard exists at all.
-//! - *Denotation* (#1394): normalizing must not change what the description denotes. It
-//!   does, today. `assert_denotation_currently_broken` asserts the normalized output
-//!   denotes no sequence at all, because #1394's members overlap and the independent
-//!   applier declines to splice them. **#1267 and #1325 were the other halves of this row
-//!   and are fixed** — the 5' half of `clamp_sibling_crossing_junctions` bounds the
-//!   junction, and a repeat outgrowing its tract now demotes to the insertion that growth
-//!   stands for; both cases left the PARTITION list rather than being re-pinned, see the
-//!   notes where their tests used to be.
+//! - *Denotation* (#1267, #1325, #1394): normalizing must not change what the description
+//!   denotes. **All three are now fixed**, so this row has no live target and asserts
+//!   nothing here — the 5' half of `clamp_sibling_crossing_junctions` bounds the junction
+//!   (#1267), and a repeat outgrowing its tract demotes to the insertion that growth
+//!   stands for, on both the junction branch (#1325) and the trapped-deletion branch
+//!   (#1394). Each left the PARTITION list rather than being re-pinned; see the notes
+//!   where their tests used to be.
 //! - *Boundary-validity* (#1274): normalizing must not name a position past the contig's
 //!   end. **Fixed** — by #1327's terminal re-spelling, which lands the repair's junction
 //!   inside the sequence instead of one past it. Flipped from a pinned failure to a
@@ -41,10 +40,11 @@
 //!   file's own contract: when the assertion goes red, the case moves out of the target
 //!   list rather than being silenced.
 //!
-//! Apart from the guard noted above, every test here is a **pinned failure**, not a
-//! `#[ignore]`d one: it currently passes *because* it asserts the defect reproduces. The
-//! moment the rewrite fixes a case, the assertion flips and the test goes red — that's the
-//! signal to delete it (or move it to a "fixed" note), never something to silence.
+//! Tests here are **pinned failures**, not `#[ignore]`d ones: one passes *because* it
+//! asserts the defect reproduces. The moment the rewrite fixes a case, the assertion flips
+//! and the test goes red — that's the signal to delete it (or move it to a "fixed" note),
+//! never something to silence. As of the #1394 fix every pinned failure has flipped, so
+//! what remains is the confluence guard plus three positive pins.
 //!
 //! ## The other half of the acceptance evidence
 //!
@@ -79,13 +79,15 @@
 //!   own doc comment says plainly: "this currently fails, and the failure is real." It is
 //!   the property that found the entire #1286 -> #1287 -> #1290 -> #1292 -> #1296 -> #1301
 //!   -> #1304 -> #1297 -> #1308 -> #1312 -> #1316 -> #1320 -> #1321 -> #1323 -> #1325 ->
-//!   #1394 chain (seventeen defects). It does not run by default; enabling it is
-//!   `cargo test --features dev -- --ignored an_indel_haplotype`.
+//!   #1394 chain (seventeen defects). With #1394 fixed it passes and **no longer carries
+//!   `#[ignore]`**, so it now runs on every invocation and criterion 2 is enforced in CI
+//!   for indel haplotypes — see its doc comment for what the enabling soak does and does
+//!   not establish.
 //!
-//! So criterion 2 (no overlapping/out-of-order members) for indel haplotypes is currently
-//! enforced by no test that runs in CI. #1394 below is the live failure that property last
-//! found; there is nothing further to assert for #1235 itself beyond that, but "already
-//! exercised" overstated what's actually wired in.
+//! So criterion 2 (no overlapping/out-of-order members) for indel haplotypes was, for the
+//! whole life of this file, enforced by no test that ran in CI. That is no longer true: the
+//! indel property is enabled as of the #1394 fix. The "already exercised" claim the earlier
+//! draft made is now roughly accurate — it just was not when it was written.
 //!
 //! ## PARTITION issues not asserted
 //!
@@ -212,9 +214,8 @@
 //! All three now pass, the insertion form included, so nothing from #1267 is asserted
 //! here any more.
 
-use crate::common::cis_apply_oracle::{apply, normalize, normalize_in};
+use crate::common::cis_apply_oracle::{apply, normalize};
 use crate::common::synthetic::padded;
-use ferro_hgvs::ShuffleDirection;
 
 /// `(issue, core, split spelling, spanning/merged spelling)` — the two spellings that
 /// currently reach two different fixed points instead of one.
@@ -275,71 +276,22 @@ fn the_confluence_targets_converge() {
     }
 }
 
-/// Assert that normalizing `input` in `direction` currently changes what it denotes: the
-/// output either splices to a different sequence than the input, or (when its members now
-/// overlap) does not splice to a well-defined sequence at all. Flips to a failing
-/// assertion, on purpose, the moment the rewrite fixes the case — that is the point of
-/// this corpus.
-fn assert_denotation_currently_broken(
-    seq: &str,
-    input: &str,
-    direction: ShuffleDirection,
-    issue: &str,
-) {
-    let actual = normalize_in(seq, input, direction);
-    let from_input = apply(seq, input)
-        .unwrap_or_else(|| panic!("{issue}: `{input}` has no well-defined resulting sequence"));
-    let from_output = apply(seq, &actual);
-    assert_ne!(
-        from_output,
-        Some(from_input),
-        "{issue} appears fixed — `{input}` now normalizes to `{actual}` (under {direction:?} \
-         shuffle), which denotes the same sequence as the input. Move this case out of the \
-         PARTITION target list and delete this test."
-    );
-}
-
-// #1267 was pinned here as a denotation target and is **fixed** — the 5' half of
-// `clamp_sibling_crossing_junctions` bounds the junction, so `g.[4A>G;9_10insA]`
-// now reaches `g.3_4insG`, which denotes the input's bases. Per this file's
-// contract the case moves out of the PARTITION list rather than being re-pinned;
-// the positive assertions live with the rest of their shape in
-// `cis_junction_crossing_shift.rs`
-// (`an_insertion_junction_does_not_cross_an_upstream_sibling`,
-// `an_insertion_junction_does_not_cross_an_upstream_junction_sibling` and
-// `a_duplication_junction_does_not_cross_an_upstream_junction_sibling`).
-
-// #1325 was pinned here as a denotation target and is **fixed** — a repeat whose
-// growth exceeds its tract is now re-spelled as the insertion that growth stands
-// for, which restores a junction `clamp_sibling_crossing_junctions` can bound, so
-// `g.[262_263insAA;263_264insAA;264_265insC]` reaches
-// `g.[263_264insAAAA;264_265insC]` and denotes the input's bases. Per this file's
-// contract the case moves out of the PARTITION list rather than being re-pinned;
-// the positive assertions live with the rest of their shape in
-// `issue_1325_repeat_growth_swallows_junction.rs`.
-
-/// #1394: the same defect on the other branch of the same guard, and what #1325 was
-/// masking. Two insertions collapse into a tract-wide repeat correctly, but a sibling
-/// *deletion* 3'-shifts into that tract; the tract grew by more bases than it can express
-/// as a duplication, so the demotion pass declines and the repeat is left spanning
-/// (swallowing) the deletion's bases. The independent applier refuses to splice the
-/// resulting members at all, since they overlap — there is no single well-defined
-/// resulting sequence for them, which is itself the defect this pins (#1235's
-/// criterion 2).
-///
-/// #1325's repair does not extend here: an insertion claims no bases and so blocks no
-/// sibling's shift, and widening its route to the base-claiming branch costs
-/// `issue_1296_repeat_claims_its_bases`' two tests (measured, not assumed).
-#[test]
-fn a_repeat_growth_exceeding_its_tract_still_swallows_a_sibling_deletion() {
-    let seq = padded("CAGGCAAACAGTGAAG");
-    assert_denotation_currently_broken(
-        &seq,
-        "TEMPLATE:g.[262del;263_264insAA;264_265insAA]",
-        ShuffleDirection::ThreePrime,
-        "#1394",
-    );
-}
+// The *denotation* row is now empty. Both of its targets are fixed, and per this file's
+// contract they moved out of the PARTITION list rather than being re-pinned:
+//
+// - **#1325** — a repeat whose growth exceeds its tract is re-spelled as the insertion that
+//   growth stands for, which restores a junction `clamp_sibling_crossing_junctions` can
+//   bound, so `g.[262_263insAA;263_264insAA;264_265insC]` reaches
+//   `g.[263_264insAAAA;264_265insC]`.
+// - **#1394** — the base-claiming branch of that same guard, where the swallowed sibling is
+//   a deletion the tract holds in both snapshots, so the clamp has nowhere to pull it back
+//   to; `g.[262del;263_264insAA;264_265insAA]` reaches `g.262_264A[6]`.
+//
+// The positive assertions live with the rest of their shape, in
+// `issue_1325_repeat_growth_swallows_junction.rs` and
+// `issue_1394_repeat_growth_swallows_deletion.rs`. `assert_denotation_currently_broken`
+// went with them: it had no remaining caller, and a helper kept alive for a row with no
+// members is exactly the corpus rot this file's self-checks exist to catch.
 
 /// The highest 1-based HGVS position named anywhere in `output`'s coordinate part (the
 /// substring after the accession's `:`). Used only to check a position against a contig

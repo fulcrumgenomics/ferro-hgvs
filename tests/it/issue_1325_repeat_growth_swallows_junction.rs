@@ -48,12 +48,24 @@ const CORE: &str = "GATCATAAATTCAGC";
 
 #[test]
 fn a_repeat_growing_past_its_tract_releases_a_swallowed_junction() {
-    // #1325, the proptest's own case. The four added `A`s sit 5' of the `C`,
-    // so the insertion carrying them stays at `263_264` rather than reaching
-    // the tract's 3' end.
+    // #1325, the proptest's own case.
+    //
+    // The settled form is a *single* insertion since #1392 made the
+    // sequence-first derivation authoritative: the whole variant is five bases
+    // added at one junction, and `g.265_266insAAACA` is its 3'-most spelling.
+    // Before #1392 it was the two-member `g.[263_264insAAAA;264_265insC]`,
+    // which denotes the same bases — the pin moved because the derivation now
+    // reaches the weight-minimal form, not because the answer changed.
+    //
+    // What this test guards is not the string. Without the demotion below the
+    // tract keeps a span that swallows the sibling's junction, and on
+    // post-#1392 main that member set is then lowered into a reordered payload
+    // denoting `...TAACAAAAAT...` instead of `...TAAAAAACAT...` (#1415).
+    // `assert_padded_preserving` checks the bases before it checks the string,
+    // so a regression fails on the sequence first.
     let output =
         assert_padded_preserving(CORE, "NC_TEST.1:g.[262_263insAA;263_264insAA;264_265insC]");
-    assert_eq!(output, "NC_TEST.1:g.[263_264insAAAA;264_265insC]");
+    assert_eq!(output, "NC_TEST.1:g.265_266insAAACA");
 }
 
 #[test]

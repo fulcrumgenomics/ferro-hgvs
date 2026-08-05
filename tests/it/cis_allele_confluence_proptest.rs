@@ -60,25 +60,26 @@
 //!
 //!   So the restriction has outlived its reason. Restoring it is deliberately
 //!   **not** done here: the test that holds it back,
-//!   `an_indel_haplotype_normalizes_to_its_own_sequence`, is `#[ignore]`d because
-//!   it already fails on #1394, so a comparison added to it could not be
-//!   validated — a pass would be unobservable and a failure unattributable
-//!   between #1394 and the new assertion. It waits on #1394, and is tracked
-//!   rather than left to inattention. The substitution model already compares the
-//!   delins encoding (`encodings()` includes `as_spanning_delins`), so the gap is
-//!   specific to the indel model.
+//!   `an_indel_haplotype_normalizes_to_its_own_sequence`, failed on a live defect
+//!   at the time, so a comparison added to it could not be validated — a pass
+//!   would be unobservable and a failure unattributable between that defect and
+//!   the new assertion. That property now passes and is no longer `#[ignore]`d,
+//!   so the restriction can be revisited; it is left in place here rather than
+//!   changed in the same commit that enabled the property. The substitution model
+//!   already compares the delins encoding (`encodings()` includes
+//!   `as_spanning_delins`), so the gap is specific to the indel model.
 //!
 //!   This is the **only** restriction those two issues justify. The generator
 //!   used to carry a second one citing them — a filter excluding two insertions
 //!   at adjacent gaps — which #1294 removed after re-measuring: neither #1260
 //!   nor #1262 is about overlapping members, so the citation did not describe
 //!   the shape it was excluding. What that shape hit was #1301, now fixed.
-//! - `an_indel_haplotype_normalizes_to_its_own_sequence` is `#[ignore]`d
-//!   because it finds #1394, a repeat whose growth exceeds its tract swallowing
-//!   a sibling *deletion* that shifted into it. It found #1286, #1287, #1290,
-//!   #1292, #1296, #1301, #1304, #1297, #1308, #1312, #1316, #1320, #1321,
-//!   #1323 and #1325 first, all now fixed, each masked behind the one before
-//!   it; see its doc comment for the history and the live reproduction.
+//! - `an_indel_haplotype_normalizes_to_its_own_sequence` **is no longer
+//!   `#[ignore]`d**. It found #1286, #1287, #1290, #1292, #1296, #1301, #1304,
+//!   #1297, #1308, #1312, #1316, #1320, #1321, #1323, #1325 and #1394 — all now
+//!   fixed, each masked behind the one before it — and then 6,000,000 further
+//!   cases without a seventeenth. Its doc comment records that history and is
+//!   explicit about what a clean soak does and does not establish.
 //!
 //! Neither restriction is silent: both are named, pinned, and fail loudly when
 //! the underlying issue is fixed (#1268/#1283's complaint about coverage that
@@ -424,9 +425,10 @@ fn core_strategy() -> impl Strategy<Value = String> {
 /// reproduces the recorded #1312 case (`core: "TAAAACCA"`) exactly and appends
 /// nothing. Point the indel model at [`core_strategy`] instead and that same run
 /// **passes**: #1312 is still open, but no seed reaches it any more, so the
-/// property reads as fixed. Nothing goes red, because the property is
-/// `#[ignore]`d and `the_ignored_indel_property_still_finds_its_defect` pins the
-/// defect by hardcoded input rather than through the strategy.
+/// property reads as fixed. That silent-loss risk is now *larger*, not smaller:
+/// the property no longer carries an `#[ignore]` whose companion pin held the
+/// defect by hardcoded input, so these seeds are the only thing standing between
+/// a strategy edit and seventeen guards that quietly stop guarding.
 ///
 /// The substitution model has no such pinned cases, so it is free to move.
 /// Collapsing these two is safe once every pinned case is either fixed and
@@ -864,8 +866,8 @@ proptest! {
     /// A length-changing haplotype normalizes to something that denotes it, is
     /// a fixed point, and renders disjoint members in ascending order.
     ///
-    /// **`#[ignore]`d: this currently fails, and the failure is real.** Run it
-    /// with `cargo test --features dev -- --ignored an_indel_haplotype`.
+    /// **No longer `#[ignore]`d.** It failed for seventeen consecutive defects
+    /// and now passes; see the history below for what that is and is not worth.
     ///
     /// It is committed rather than withheld because it keeps earning its place.
     /// Its first two runs found #1286 and #1287, both since fixed:
@@ -904,57 +906,42 @@ proptest! {
     /// deletion and placed the repeats at 259; #1313 and #1317 moved both before
     /// #1316 itself was fixed.)
     ///
-    /// The live failure is the seventeenth, **#1394**:
+    /// **Nothing live remains.** #1394 was the seventeenth and last, and with it
+    /// fixed the property is no longer `#[ignore]`d — which is what its own
+    /// history said should gate taking the ignore off.
     ///
-    /// ```text
-    /// core "CAGGCAAACAGTGAAG", delete 5, insert "AA" after 6, "AA" after 7
-    ///   g.[262del;263_264insAA;264_265insAA] -> g.[262_264A[7];264del]
-    ///     the deletion claims 264, inside the tract 262-264
-    /// ```
-    ///
-    /// #1325 was the sixteenth and is **fixed**, pinned by
-    /// `issue_1325_repeat_growth_swallows_junction`: a repeat that grew its
-    /// tract by more bases than the tract holds has no duplication form, so
+    /// The final two were one guard's two branches. A repeat that grew its tract
+    /// by more bases than the tract holds has no duplication form, so
     /// `demote_repeats_spanning_siblings` declined at its `start < a.start`
-    /// guard and the tract kept a sibling's *junction*. It is now re-spelled as
-    /// the insertion its growth stands for, which the clamp can bound.
+    /// guard and left the tract spanning a sibling: #1325 where the sibling was
+    /// a *junction*, #1394 where it was a base-claiming *deletion*. Both are now
+    /// re-spelled as the insertion that growth stands for, and both are pinned
+    /// positively, by `issue_1325_repeat_growth_swallows_junction` and
+    /// `issue_1394_repeat_growth_swallows_deletion`.
     ///
-    /// #1394 is the **base-claiming branch of that same guard**, and it was
-    /// masked behind #1325: here the sibling is a deletion that 3'-shifted into
-    /// the tract, so the decline stays. #1325's route is deliberately scoped
-    /// away from it — an insertion blocks no sibling's shift, and widening the
-    /// route costs `issue_1296_repeat_claims_its_bases`' two tests (measured).
-    /// Verified pre-existing: `origin/main` at `dfea7d3` emits the identical
-    /// output.
-    ///
-    /// Each of the seventeen was masked behind the one before it, which is the
-    /// point of keeping this committed rather than deleting it until it passes.
+    /// Each of the seventeen was masked behind the one before it, which is why
+    /// this was kept committed rather than deleted until it passed. The
+    /// fifteen seeds that between them pin all seventeen — plus the whole-span
+    /// inversion pair #1392 recorded — are committed below and replay green.
     ///
     /// Enabling this test was #1292's acceptance criterion, then #1316's, then
-    /// #1325's; all three are fixed and pinned, by
-    /// `issue_1292_junction_payload_rotation`,
-    /// `issue_1316_coincident_tract_repeats` and
-    /// `issue_1325_repeat_growth_swallows_junction`, and by the `99d5d382`,
-    /// `23c33174` and `4c6fab93` seeds below. None could carry the criterion,
-    /// because the property's next failure was always behind it. Enabling now
-    /// belongs to **#1394**, whose seed `6ec5686a` is committed below — so
-    /// taking the ignore off replays it immediately and turns CI red, which is
-    /// exactly what should gate taking it off.
+    /// #1325's; none could carry it, because the property's next failure was
+    /// always behind the one being fixed.
     ///
-    /// A caution about soak depth, and about reading a trend into it. With
-    /// #1316 fixed this passed 200,000 cases and then failed a 1,000,000-case
-    /// run at 27,633 successes (#1320); then at 114,694 (#1321), 143,034
-    /// (#1323), 132,216 (#1325) and 231,801 (#1394). The early 4x jump did not
-    /// continue — the middle four sit in one band — so depth has plateaued
-    /// rather than trending toward an end, and it cannot be used to forecast
-    /// one. A clean soak at one depth says nothing about the next, and a clean
-    /// *seeded* soak says less than it looks: #1394 was found by an unseeded
-    /// stream after all eight of `ci.yml`'s seeded shards passed clean at
-    /// 1,000,000 cases with #1325 fixed.
+    /// **What "clean" is worth here, stated precisely.** Enabling followed a
+    /// 6,000,000-case soak with #1394 fixed: 1,000,000 across the eight seeded
+    /// shards `ci.yml` runs, plus 5,000,000 in ten unseeded 500k streams, no
+    /// seed appended. That is the evidence, and it is not proof the chain has
+    /// ended. Depth never trended toward one — #1320 was found at 27,633
+    /// successes, then #1321 at 114,694, #1323 at 143,034, #1325 at 132,216 and
+    /// #1394 at 231,801, the middle four in one band. And a clean *seeded* soak
+    /// says less than it looks: #1394 was reached by an unseeded stream after
+    /// all eight seeded shards passed clean at 1,000,000 cases. If an
+    /// eighteenth exists, the unseeded nightly is what will find it, and the
+    /// honest response is to pin its seed and fix it — not to re-ignore this.
     ///
     /// Do not weaken it to make it pass.
     #[test]
-    #[ignore = "finds #1394, a real unfixed defect; see doc comment"]
     fn an_indel_haplotype_normalizes_to_its_own_sequence(
         haplotype in indel_haplotype_strategy()
     ) {
@@ -1023,7 +1010,7 @@ proptest! {
 /// message naming the restoration of the delins encoding to
 /// `an_indel_haplotype_normalizes_to_its_own_sequence`'s comparison set as the
 /// follow-through. That restoration is still outstanding — see the module doc for
-/// why it waits on #1394 rather than being done here.
+/// why it was deferred rather than done here.
 ///
 /// The two rows are not two edge cases. They are the general behaviour of
 /// "length-changing members versus the spanning delins": the derivation reaches
@@ -1091,99 +1078,6 @@ fn adjacent_gap_insertions_and_the_delins_spelling_converge() {
     assert_eq!(
         split, "NC_TEST.1:g.258_259delinsC",
         "and they converge on the form the block itself derives"
-    );
-}
-
-/// The three clauses of `an_indel_haplotype_normalizes_to_its_own_sequence`,
-/// evaluated on one hand-written case instead of over the strategy: the output
-/// denotes the input's sequence, normalization is a fixed point, and the members
-/// render disjoint and ascending.
-///
-/// `Ok(())` means the property holds for `input` against `core`; `Err` names the
-/// clause that fails. [`the_ignored_indel_property_still_finds_its_defect`]
-/// asserts `Err`, so fixing the pinned defect turns it red.
-///
-/// Stated over the property's own clauses rather than over a defect's *shape*
-/// because the shapes differ: #1286 and #1287 rendered overlapping members,
-/// while later defects change the sequence or break the fixed point instead. A
-/// shape-specific assertion would have to be rewritten for each one, and — worse
-/// — would report a defect as fixed while the property still failed on it some
-/// other way.
-fn indel_property_holds(core: &str, input: &str) -> Result<(), String> {
-    let provider = SyntheticBuilder::genomic(core).build();
-    let normalizer = Normalizer::new(provider.clone());
-    let reference = padded(core);
-
-    // The pinned inputs are well-formed by construction, so an input that does
-    // not itself denote a sequence is a broken pin rather than a property
-    // failure — panic rather than report it as the defect still standing.
-    let parsed = parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for `{input}`: {e}"));
-    let intended = resulting_sequence(&parsed, &provider, &reference)
-        .unwrap_or_else(|e| panic!("pinned input `{input}` has no resulting sequence: {e}"));
-
-    let normalized = normalize(&normalizer, input);
-
-    let applied = resulting_sequence(&normalized, &provider, &reference)
-        .map_err(|e| format!("`{input}` -> `{normalized}` has no resulting sequence: {e}"))?;
-    if applied != intended {
-        return Err(format!(
-            "`{input}` -> `{normalized}` does not denote the input's sequence"
-        ));
-    }
-
-    let once = normalized.to_string();
-    let twice = normalize(&normalizer, &once).to_string();
-    if twice != once {
-        return Err(format!(
-            "`{once}` is not a fixed point: it normalizes to `{twice}`"
-        ));
-    }
-
-    let spans = interbase_spans(&normalized, &provider)
-        .map_err(|e| format!("`{input}` -> `{normalized}` has no interbase spans: {e}"))?;
-    for pair in spans.windows(2) {
-        let ((_, previous_end), (start, _)) = (pair[0], pair[1]);
-        if start < previous_end {
-            return Err(format!(
-                "`{input}` -> `{normalized}`: member at interbase {start} overlaps or does not \
-                 follow the previous member ending at {previous_end}"
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// Pins the defect that currently keeps `an_indel_haplotype_normalizes_to_its_own_sequence`
-/// `#[ignore]`d, so fixing it fails here and names the ignore to revisit.
-///
-/// The property's doc comment records the reproduction, but a doc comment does
-/// not run: the live defect could be fixed and the property would simply stay
-/// ignored, which is the coverage-that-reads-wider-than-it-is complaint in
-/// #1268/#1283. This is the same guard
-/// `adjacent_gap_insertions_and_the_delins_spelling_converge`
-/// gives the two shapes the model holds back.
-///
-/// One row, not a list: the property stops at its first failure, so only the
-/// *live* blocker is observable here. Each fix moves this pin to whatever the
-/// property surfaces next, and the ignore comes off when there is nothing left
-/// to pin.
-#[test]
-fn the_ignored_indel_property_still_finds_its_defect() {
-    // #1394: the same `start < a.start` decline as #1325, on its base-claiming
-    // branch — a sibling deletion 3'-shifts into the tract and the repeat is
-    // left spanning it. Moved here from #1325, which this change fixes; #1325's
-    // own junction case is pinned positively by
-    // `issue_1325_repeat_growth_swallows_junction`.
-    let (core, input, issue) = (
-        "CAGGCAAACAGTGAAG",
-        "NC_TEST.1:g.[262del;263_264insAA;264_265insAA]",
-        "#1394",
-    );
-    assert!(
-        indel_property_holds(core, input).is_err(),
-        "{issue} appears fixed — the property now holds for `{input}`. Re-run \
-         `an_indel_haplotype_normalizes_to_its_own_sequence` with `--ignored`, pin whatever \
-         it finds next here, and drop its `#[ignore]` once it finds nothing."
     );
 }
 
