@@ -5081,6 +5081,22 @@ fn blocks_sibling_shift(edit: &NaEdit) -> bool {
 /// live list keeps the pass independent of member order.
 ///
 /// [`ShuffleDirection::FivePrime`]: crate::normalize::ShuffleDirection
+/// One sibling's bounds, on the **sequence** axis rather than its own region's.
+///
+/// [`clamp_sibling_crossing_shifts`] compares a moving member against every
+/// sibling, and the two need not share a region — a member shifting out of the
+/// CDS is bounded by siblings still inside it (#1418). Region axes are not
+/// comparable position-by-position (`c.12` and `c.*1` are adjacent bases with
+/// unrelated numbers), so each span is converted once, here, via
+/// [`region_sequence_delta`], and the pass then does ordinary arithmetic.
+struct SiblingBound {
+    claims_bases: bool,
+    blocks_shift: bool,
+    start: i64,
+    end: i64,
+    junction: Option<i64>,
+}
+
 pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
     before: &[HgvsVariant],
     after: &mut [HgvsVariant],
@@ -5104,11 +5120,34 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
         let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
             continue;
         };
-        if !b.blocks_shift || !a.blocks_shift || b.region != a.region {
+        if !b.blocks_shift || !a.blocks_shift {
             continue;
         }
+        // A shift that changes region is still a shift, and still has to respect
+        // siblings (#1418). It used to be skipped here, which let a member cross
+        // the CDS/3'UTR boundary — and every sibling on the way — unchecked:
+        // `c.[11_12del;14del]` emitted `c.[14del;*1_*2del]`, straight past the
+        // `14del`, denoting different bases.
+        //
+        // Regions cannot be compared position-by-position: `c.12` and `c.*1` are
+        // adjacent bases with unrelated numbers. So the whole pass runs on the
+        // **sequence** axis, via the same `region_sequence_delta` conversion the
+        // in-bounds oracle and the payload reads use. Within one region that is a
+        // constant offset and changes nothing, which is why the arithmetic below
+        // is untouched; across regions it is what makes the comparison mean
+        // anything at all.
+        //
+        // A region with no conversion — an `n.` position outside the transcript —
+        // is skipped, the same conservative answer its sibling reads give.
+        let seq = |s: &MemberSpan| -> Option<(i64, i64)> {
+            let delta = region_sequence_delta(s.region, &s.provider_key, provider)?;
+            Some((s.start.checked_add(delta)?, s.end.checked_add(delta)?))
+        };
+        let (Some((b_start, b_end)), Some((a_start, a_end))) = (seq(b), seq(a)) else {
+            continue;
+        };
         // A member that did not move cannot have crossed anything.
-        let delta = a.start - b.start;
+        let delta = a_start - b_start;
         if delta == 0 {
             continue;
         }
@@ -5128,8 +5167,8 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
         // a duplication moves its span and its junction together, so bounding
         // the span mis-places the copy — measured on the 5' sweep, that turns
         // correct outputs into silently wrong ones (#1266, #1279).
-        let translated = a.end - b.end == delta;
-        let shrank = a.end - a.start < b.end - b.start;
+        let translated = a_end - b_end == delta;
+        let shrank = a_end - a_start < b_end - b_start;
         if !translated && !shrank {
             continue;
         }
@@ -5140,11 +5179,28 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
         // sliding a deletion past the point where a sibling adds sequence
         // reorders the two edits and changes what the allele denotes (`g.
         // [258del;259_260insC]` emitted `g.[259_260insC;263del]`).
-        let siblings: Vec<&MemberSpan> = (0..pre.len())
+        //
+        // Matched on accession alone, not on region: a sibling in the 3'UTR is
+        // on this member's coordinate line just as much as one in the CDS, and
+        // filtering by region was the other half of #1418 — it hid exactly the
+        // siblings a boundary-crossing member sweeps over. `seq` puts both on
+        // the sequence axis, which is what makes them comparable; a sibling
+        // whose region has no conversion is dropped rather than mis-placed.
+        let siblings: Vec<SiblingBound> = (0..pre.len())
             .filter(|&j| j != i)
             .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
             .flatten()
-            .filter(|s| s.region == a.region && s.accession == a.accession)
+            .filter(|s| s.accession == a.accession)
+            .filter_map(|s| {
+                let delta = region_sequence_delta(s.region, &s.provider_key, provider)?;
+                Some(SiblingBound {
+                    claims_bases: s.claims_bases,
+                    blocks_shift: s.blocks_shift,
+                    start: s.start.checked_add(delta)?,
+                    end: s.end.checked_add(delta)?,
+                    junction: s.junction.and_then(|j| j.checked_add(delta)),
+                })
+            })
             .collect();
 
         let pull = if delta > 0 {
@@ -5164,7 +5220,7 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
                 .iter()
                 .filter(|s| s.claims_bases)
                 .map(|s| s.start)
-                .filter(|&start| start > b.end && start <= a.end)
+                .filter(|&start| start > b_end && start <= a_end)
                 .map(|start| start - 1);
             // A junction between `j` and `j+1` is crossed once this member's
             // end reaches `j + 1`; stopping at `j` leaves it flush against the
@@ -5172,18 +5228,18 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
             let across_junctions = siblings
                 .iter()
                 .filter_map(|s| s.junction)
-                .filter(|&j| j >= b.end && j < a.end);
+                .filter(|&j| j >= b_end && j < a_end);
             onto_bases
                 .chain(across_junctions)
                 .min()
-                .map(|limit| a.end - limit)
+                .map(|limit| a_end - limit)
         } else {
             // 5'-shift: mirror image, window `[a.start, b.end]`.
             let onto_bases = siblings
                 .iter()
                 .filter(|s| s.blocks_shift)
                 .map(|s| s.end)
-                .filter(|&end| end < b.start && end >= a.start)
+                .filter(|&end| end < b_start && end >= a_start)
                 .map(|end| end + 1);
             // Mirror of the 3' junction barrier. A junction between `j` and
             // `j + 1` is crossed once this member's start reaches `j`; stopping
@@ -5209,12 +5265,12 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
                 .iter()
                 .filter(|_| a.junction.is_none())
                 .filter_map(|s| s.junction)
-                .filter(|&j| j < b.start && j >= a.start)
+                .filter(|&j| j < b_start && j >= a_start)
                 .map(|j| j + 1);
             onto_bases
                 .chain(across_junctions)
                 .max()
-                .map(|limit| a.start - limit)
+                .map(|limit| a_start - limit)
         };
         // Never move past where the member started: those positions were not
         // reachable by this shift and are not equivalent to it.
@@ -5228,12 +5284,36 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
             continue;
         };
         if pull != 0 {
-            // A duplication blocks a sibling's shift without claiming bases, so
-            // it reaches this pass too — and its payload is read from under its
-            // own span, so it cannot simply be slid (#1280, #1292).
-            match a.junction {
-                Some(_) => translate_junction_member(&mut after[i], -pull, kind, a, provider),
-                None => translate_member(&mut after[i], -pull, kind, a),
+            if a.region == b.region {
+                // A duplication blocks a sibling's shift without claiming bases,
+                // so it reaches this pass too — and its payload is read from
+                // under its own span, so it cannot simply be slid (#1280, #1292).
+                match a.junction {
+                    Some(_) => translate_junction_member(&mut after[i], -pull, kind, a, provider),
+                    None => translate_member(&mut after[i], -pull, kind, a),
+                }
+            } else {
+                // The member crossed a region boundary, and the pull would carry
+                // it back across (#1418). Neither translate can express that:
+                // both add `-pull` to the axis number and then verify the result
+                // landed in `from.region`, so a `c.*1` pulled seven bases 5'
+                // would be written as `c.*-6` and reverted — silently leaving the
+                // uncorrected output in place.
+                //
+                // Restore the pre-shift member instead. That is a *stronger* pull
+                // than the bound requires, so it is always inside the swept
+                // window and cannot cross anything itself; and the input spelling
+                // is sequence-correct by construction, since it is what the
+                // allele denoted before this pass moved it. The cost is
+                // canonicalisation, not correctness: the member may sit 5' of the
+                // most-3' position a boundary-aware translate would reach.
+                //
+                // Re-spelling it properly means a translate that converts between
+                // region axes rather than adding to one. That is worth doing, and
+                // is deliberately not done here — it is a change to shared
+                // machinery every clamp uses, and this pass's job is to stop the
+                // allele denoting the wrong bases.
+                after[i] = before[i].clone();
             }
         }
     }
