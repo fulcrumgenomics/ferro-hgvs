@@ -348,7 +348,11 @@ Never commit machine-specific absolute paths (e.g. `/Volumes/...`, `/Users/...`,
 - `python` - PyO3 Python bindings (build with maturin)
 - `benchmark` - ferro-benchmark binary and tool comparison
 - `validation` - Hash-based validation with ahash
-- `parallel` - Rayon-based parallelism
+- `parallel` - **no-op alias, retained for compatibility.** Rayon-based parallelism
+  (`ferro_hgvs::parallel`, and `BatchProcessor`'s `*_parallel`/`*_streaming` methods)
+  is unconditional — rayon is a non-optional dependency, so there is nothing to enable.
+  It formerly gated that API's visibility, which read as a capability gate and was
+  misread as one (#1504, #1507).
 - `web-service` - HTTP API server
 
 ## Key Patterns
