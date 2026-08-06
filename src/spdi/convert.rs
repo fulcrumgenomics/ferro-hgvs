@@ -1576,14 +1576,20 @@ where
             // nothing" — so widening here makes the two sites agree rather
             // than introducing a third answer.
             let (del_start, del_end) = match provider {
-                Some(p) if start_one_based == end_one_based => {
-                    resolve_repeat_tract_span(p, &sequence, start_one_based, unit_str.as_bytes())?
-                }
+                Some(p) if start_one_based == end_one_based => resolve_repeat_tract_span(
+                    p,
+                    &sequence,
+                    start_one_based,
+                    unit_str.as_bytes(),
+                    alphabet,
+                )?,
                 _ => (start_one_based, end_one_based),
             };
             let spdi_pos = del_start - 1;
-            let del_raw = match provider {
-                Some(p) => fetch_reference_bases(p, &sequence, del_start, del_end)?,
+            let del_str = match provider {
+                Some(p) => {
+                    fetch_normalized_reference_bases(p, &sequence, del_start, del_end, alphabet)?
+                }
                 None => {
                     return Err(unspelled_bases_error(
                         UnspelledBases::RepeatTract,
@@ -1592,7 +1598,6 @@ where
                     ));
                 }
             };
-            let del_str = apply_alphabet(&del_raw, alphabet);
             // The HGVS recommendations require the interval to span an
             // integer number of repeat units. Reject non-divisible spans
             // with a clear message rather than silently emitting nonsense.
@@ -1758,11 +1763,29 @@ fn unspelled_bases_error(
 /// unit does not match the reference there — so the caller's existing
 /// "does not match repeat unit" diagnostic is what reports it, rather than a
 /// second error for one condition.
+///
+/// **The window is normalised before it is searched** (#1452). `unit` arrives
+/// having already been through [`apply_alphabet`], so searching the raw window
+/// would compare a soft-masked (lowercase) reference against an uppercase unit
+/// and find no run at all. That did not surface as an error: the no-run
+/// fallback above returns the *unit-wide* span, whose bases the caller then
+/// uppercases, so the unit-match check passed and a truncated triple was
+/// emitted. On a 3-copy lowercase `cag` tract, `g.259CAG[5]` came out as
+/// `258:CAG:CAGCAGCAGCAGCAG` — seven copies once the two untouched tract
+/// units are counted — while the range spelling `g.259_267CAG[5]` correctly
+/// gave `258:CAGCAGCAG:CAGCAGCAGCAGCAG`. Both spellings converted; they just
+/// denoted different sequences.
+///
+/// Normalising with [`apply_alphabet`] rather than a bare `to_ascii_uppercase`
+/// is what keeps the two comparisons provably identical: on the `r.` axis the
+/// unit has had `U` rewritten to `T`, so an uppercase-only window would still
+/// miss a `U`-spelled tract and truncate it by the same route.
 fn resolve_repeat_tract_span<P>(
     provider: &P,
     accession: &str,
     anchor_one_based: u64,
     unit: &[u8],
+    alphabet: AlphabetMode,
 ) -> Result<(u64, u64), ConversionError>
 where
     P: ReferenceProvider + ?Sized,
@@ -1811,7 +1834,13 @@ where
         let window_end = anchor_one_based
             .saturating_add(half_width)
             .min(sequence_length);
-        let window = fetch_reference_bases(provider, accession, window_start, window_end)?;
+        let window = fetch_normalized_reference_bases(
+            provider,
+            accession,
+            window_start,
+            window_end,
+            alphabet,
+        )?;
         let bytes = window.as_bytes();
         let anchor_offset = (anchor_one_based - window_start) as usize;
 
@@ -1855,6 +1884,56 @@ where
         }
         half_width = half_width.saturating_mul(2);
     }
+}
+
+/// [`fetch_reference_bases`] with [`apply_alphabet`] already applied, so the
+/// caller never holds a window in the reference's own case convention (#1452).
+///
+/// Reference FASTAs are routinely soft-masked, and the repeat arm compares the
+/// fetched bases against a unit that has been through `apply_alphabet` — twice,
+/// at two sites. Normalising at the fetch is what stops those two sites from
+/// disagreeing: the tract search and the unit-match check now see the same
+/// bytes by construction rather than by each remembering to fold. This mirrors
+/// how `normalize::merge::canonical_base_byte` centralises the `r.` uracil /
+/// thymine equivalence instead of spreading it over its comparison sites.
+///
+/// The byte offsets a caller computes against the returned string stay valid:
+/// `apply_alphabet` rewrites ASCII bytes one-for-one and leaves everything else
+/// alone, so the length is preserved. `normalizing_a_window_preserves_its_length`
+/// pins that, since a length change would silently mis-map the anchor offset in
+/// [`resolve_repeat_tract_span`] rather than fail.
+///
+/// **Only the repeat arm uses this, and the other arms are not an oversight.**
+/// The Duplication / Deletion / Delins / Identity / Inversion arms each fetch
+/// through the plain [`fetch_reference_bases`] and fold *after* the `match`,
+/// because the bases they fold may instead have come from the description
+/// itself (`Some(seq) => sequence_to_string(seq)`, which is a bare
+/// `to_string()` and does not fold). Their trailing `apply_alphabet` covers
+/// **both** branches. Swapping those fetches to this function would therefore
+/// not let the trailing fold be removed — it would only normalize the fetched
+/// branch twice, and removing the fold along with it would silently stop
+/// normalizing author-spelled bases. This arm is different precisely because it
+/// has no author-spelled branch: an unspelled repeat tract is the only way in,
+/// so the fetch is the single source and folding there is what makes the tract
+/// search and the unit-match check agree by construction.
+fn fetch_normalized_reference_bases<P>(
+    provider: &P,
+    accession: &str,
+    start_one_based: u64,
+    end_one_based: u64,
+    alphabet: AlphabetMode,
+) -> Result<String, ConversionError>
+where
+    P: ReferenceProvider + ?Sized,
+{
+    let raw = fetch_reference_bases(provider, accession, start_one_based, end_one_based)?;
+    let normalized = apply_alphabet(&raw, alphabet);
+    debug_assert_eq!(
+        normalized.len(),
+        raw.len(),
+        "alphabet normalization must preserve byte length"
+    );
+    Ok(normalized)
 }
 
 fn fetch_reference_bases<P>(
@@ -2559,6 +2638,64 @@ mod tests {
         assert_eq!(spdi.position, 99);
         assert_eq!(spdi.deletion, "A");
         assert_eq!(spdi.insertion, "A");
+    }
+
+    // ------------------------------------------------------------------
+    // Reference-window normalization (#1452)
+    //
+    // The soft-masking behaviour these underwrite is graded end-to-end in
+    // `tests/it/issue_1452_soft_masked_repeat_span.rs`. What lives here are
+    // the two properties that cannot be isolated from there: the length
+    // invariant the anchor offset depends on, and the `r.` axis, which the
+    // integration suite reaches only through a full transcript projection.
+    // ------------------------------------------------------------------
+
+    /// `resolve_repeat_tract_span` computes `anchor_offset` as a byte index
+    /// into the normalized window, so a normalization that changed the byte
+    /// length would silently point the tract search at the wrong base rather
+    /// than fail. Both `apply_alphabet` arms rewrite ASCII one-for-one and
+    /// leave every other byte alone, and this is what holds them to it.
+    #[test]
+    fn normalizing_a_window_preserves_its_length() {
+        for window in ["acgtACGT", "uuuUUU", "acgunACGUN", "", "nnnn"] {
+            for alphabet in [AlphabetMode::Dna, AlphabetMode::Rna] {
+                assert_eq!(
+                    apply_alphabet(window, alphabet).len(),
+                    window.len(),
+                    "`{window}` changed length under {alphabet:?}"
+                );
+            }
+        }
+    }
+
+    /// The window is normalized with `apply_alphabet`, not `to_ascii_uppercase`,
+    /// and on the `r.` axis that is the difference between finding a tract and
+    /// truncating it.
+    ///
+    /// A repeat unit reaches `resolve_repeat_tract_span` having already had `U`
+    /// rewritten to `T` for SPDI's DNA alphabet, so a `u`-spelled reference must
+    /// get the same rewrite or the search compares `T` against `U` and finds no
+    /// run — the identical silent-truncation route #1452 fixed for case. The
+    /// `Dna` row is the control: there `U` is not `T`, so no tract exists and
+    /// the unit-wide fallback is the right answer.
+    #[test]
+    fn a_uracil_spelled_tract_is_found_on_the_rna_axis() {
+        let mut provider = MockProvider::new();
+        // A 4-copy `u` tract at 3..=6, lower-case as well, so this covers both
+        // normalizations at once.
+        provider.add_genomic_sequence("NR_TEST.1", "GGuuuuGG".to_string());
+
+        assert_eq!(
+            resolve_repeat_tract_span(&provider, "NR_TEST.1", 3, b"T", AlphabetMode::Rna).unwrap(),
+            (3, 6),
+            "the `r.` axis must see the tract its unit was rewritten to match"
+        );
+        assert_eq!(
+            resolve_repeat_tract_span(&provider, "NR_TEST.1", 3, b"T", AlphabetMode::Dna).unwrap(),
+            (3, 3),
+            "on the DNA axis `U` is not `T`, so no tract exists and the \
+             unit-wide fallback stands"
+        );
     }
 
     /// A 28-base `ACGT…` contig, so a 1-based position `p` holds
