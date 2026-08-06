@@ -63,6 +63,14 @@
 //!    `compare` now says so in the zero case rather than leaving it to be inferred.
 //!    If your change is scoped to a shape no family builds, add the family; do not
 //!    quote the zero.
+//! 4. **…and only at the scale it builds them** (#1460). The families are drawn
+//!    against 20-mers, so a change gated on *length* rather than on shape sees the
+//!    same path on both sides no matter how many families exist. #1403 caps a
+//!    partition at `MAX_SPLIT_BLOCK` (1024) and measured a guaranteed zero here
+//!    even after the conflict families landed. `long_corpus_sequences` is the
+//!    answer, and it is deliberately narrow: two cores, one family, 16 rows. Adding
+//!    scale is expensive in a way adding a family is not — check the dump cost
+//!    before crossing a kilobase core with anything.
 //!
 //! ## The corpus is deliberately independent of `tests/it/common/`
 //!
@@ -244,23 +252,148 @@ const FAMILIES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The family drawn against the **long** cores, and the one shape in this file
+/// whose point is its size rather than its geometry (#1460).
+///
+/// Kept out of `FAMILIES` on purpose. The nine families there are crossed with
+/// every short core, and crossing a kilobase core with all of them would multiply
+/// the dump cost while adding no coverage: `MAX_SPLIT_BLOCK` gates on the *length*
+/// of the block being partitioned, not on how its members are arranged.
+const LONG_FAMILY: (&str, &str) = (
+    "long_block_inversion",
+    "#1403 — a near-palindromic block straddling the MAX_SPLIT_BLOCK cap",
+);
+
+/// The long cores, as `(label, sequence)`. Two lengths that straddle the cap the
+/// normalizer applies at 1024 bases (`merge::MAX_SPLIT_BLOCK`): one block that
+/// fits under it and one that does not, which is the pair a change to the cap moves
+/// between. The exact boundary is the one `partition_block`'s own comment records —
+/// 1024 confluent, 1026 not.
+///
+/// The **label** is what lands in the dump's `reference` column, not the sequence:
+/// a kilobase core would otherwise be repeated verbatim on every row of the dump.
+/// Labels are as good a row identity as the sequence — they only have to be unique
+/// and stable — and the short-core rows are untouched, so no existing key moves.
+fn long_corpus_sequences() -> Vec<(String, String)> {
+    [1024usize, 1100]
+        .into_iter()
+        .map(|len| (format!("nearpalindrome_{len}"), near_palindromic_core(len)))
+        .collect()
+}
+
+/// A near-palindromic core: an exact reverse-complement palindrome with two
+/// positions perturbed, so inverting the whole core changes exactly **four** bases
+/// — the perturbed pair and their two partners.
+///
+/// The perturbation is what makes the shape usable. An exact palindrome inverts to
+/// itself, so the inversion denotes nothing and normalizes to `=`; a random core
+/// inverts to something differing at ~75% of its positions, so the equivalent
+/// spelled-out allele would carry hundreds of members. Four differences is what
+/// gives a block of this size a second spelling short enough to write down, which
+/// is what makes it a confluence question at all.
+fn near_palindromic_core(len: usize) -> String {
+    // An odd length would silently produce a `len - 1` core while the caller's
+    // label (`nearpalindrome_{len}`) still claimed `len` — and the label is the
+    // dump's `reference` column, so the corpus would misreport the one property
+    // this family exists to vary.
+    assert!(
+        len.is_multiple_of(2),
+        "near-palindromic core length must be even, got {len}"
+    );
+    let half = len / 2;
+    let mut state = (len as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    let mut seq: Vec<u8> = (0..half)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            b"ACGT"[(state % 4) as usize]
+        })
+        .collect();
+    // Mirror it into an exact palindrome, then break it at two positions that are
+    // not each other's partners — each perturbation costs two differences under
+    // reverse complement, so two of them give the four the shape is named for.
+    let mirror: Vec<u8> = (0..half).rev().map(|i| complement(seq[i])).collect();
+    seq.extend(mirror);
+    for offset in [10, half + 7] {
+        seq[offset] = complement(seq[offset]);
+    }
+    String::from_utf8(seq).expect("ACGT is valid UTF-8")
+}
+
+fn complement(base: u8) -> u8 {
+    match base {
+        b'A' => b'T',
+        b'T' => b'A',
+        b'C' => b'G',
+        b'G' => b'C',
+        // Not a catch-all: a silent fallback would map an unexpected byte to `C`
+        // and hand `the_long_cores_are_near_palindromes` a core that looks
+        // near-palindromic because the complement lied, not because the sequence
+        // is. The cores are built from `ACGT` here, so this is unreachable —
+        // which is the reason to say so rather than to absorb it.
+        other => panic!("complement of non-ACGT byte {other:#04x}"),
+    }
+}
+
+/// The two spellings of one whole-core inversion: the `inv` itself, and the same
+/// change written as the individual substitutions it makes. On a near-palindromic
+/// core those are the same variant, so a normalizer that is confluent has to bring
+/// them to one form — and whether it can depends on whether the block was capped.
+fn long_inputs_for(axis: &str, core: &str) -> Vec<String> {
+    let bytes = core.as_bytes();
+    let acc = if axis == "g" {
+        GENOMIC_CONTIG
+    } else {
+        TX_ACCESSION
+    };
+    let prefix = format!("{acc}:{axis}.");
+    let inverted: Vec<u8> = bytes.iter().rev().map(|b| complement(*b)).collect();
+    let members: Vec<String> = (0..bytes.len())
+        .filter(|&i| bytes[i] != inverted[i])
+        .map(|i| {
+            format!(
+                "{}{}>{}",
+                hgvs_pos(axis, i),
+                bytes[i] as char,
+                inverted[i] as char
+            )
+        })
+        .collect();
+    let whole = format!(
+        "{prefix}{}_{}inv",
+        hgvs_pos(axis, 0),
+        hgvs_pos(axis, bytes.len() - 1)
+    );
+    // A core whose inversion changes nothing would emit an empty allele, which is
+    // not a description. `the_long_cores_are_near_palindromes` pins that the
+    // construction above never gets there.
+    if members.is_empty() {
+        return vec![whole];
+    }
+    vec![whole, format!("{prefix}[{}]", members.join(";"))]
+}
+
 fn dump(seeds: u32) -> Vec<Row> {
     let mut rows = Vec::new();
+    for (label, core) in long_corpus_sequences() {
+        for (axis, direction, dir_label) in axes_and_directions() {
+            for input in long_inputs_for(axis, &core) {
+                let output = normalize_one(axis, &core, &input, direction);
+                rows.push(Row {
+                    reference: label.clone(),
+                    axis,
+                    direction: dir_label,
+                    family: LONG_FAMILY.0,
+                    was_fixed_point: output == input,
+                    input,
+                    output,
+                });
+            }
+        }
+    }
     for core in corpus_sequences(seeds) {
-        for (axis, direction) in [
-            ("g", ShuffleDirection::ThreePrime),
-            ("g", ShuffleDirection::FivePrime),
-            ("c", ShuffleDirection::ThreePrime),
-            ("c", ShuffleDirection::FivePrime),
-        ] {
-            let dir_label = match direction {
-                ShuffleDirection::ThreePrime => "3prime",
-                ShuffleDirection::FivePrime => "5prime",
-                // `#[non_exhaustive]`: a new direction must be added to the loop
-                // above deliberately, not silently mislabelled in a dump that a
-                // later revision will be diffed against.
-                other => unreachable!("unhandled shuffle direction {other:?}"),
-            };
+        for (axis, direction, dir_label) in axes_and_directions() {
             for (family, _) in FAMILIES {
                 for input in inputs_for(family, axis, &core) {
                     let output = normalize_one(axis, &core, &input, direction);
@@ -278,6 +411,32 @@ fn dump(seeds: u32) -> Vec<Row> {
         }
     }
     rows
+}
+
+/// The axis/direction matrix every core is drawn against, with each direction's
+/// dump label. Shared by both loops in [`dump`] so the two cannot disagree about a
+/// label — a dump that spelled one direction differently in one loop would compare
+/// as an entirely separate set of rows.
+fn axes_and_directions() -> Vec<(&'static str, ShuffleDirection, &'static str)> {
+    [
+        ("g", ShuffleDirection::ThreePrime),
+        ("g", ShuffleDirection::FivePrime),
+        ("c", ShuffleDirection::ThreePrime),
+        ("c", ShuffleDirection::FivePrime),
+    ]
+    .into_iter()
+    .map(|(axis, direction)| {
+        let label = match direction {
+            ShuffleDirection::ThreePrime => "3prime",
+            ShuffleDirection::FivePrime => "5prime",
+            // `#[non_exhaustive]`: a new direction must be added to the matrix
+            // above deliberately, not silently mislabelled in a dump that a later
+            // revision will be diffed against.
+            other => unreachable!("unhandled shuffle direction {other:?}"),
+        };
+        (axis, direction, label)
+    })
+    .collect()
 }
 
 /// Deterministic 20-mers, two per seed. Same xorshift as `sweep_sequences` so the
@@ -826,6 +985,109 @@ mod tests {
             nested > 0,
             "no allele has nested spans (`[10_14del;10_16del]`)"
         );
+    }
+
+    /// The longest reference span any member of `input` names, in bases. A
+    /// junction insertion spans nothing; every other edit spans what it names.
+    fn longest_span(input: &str) -> u64 {
+        use ferro_hgvs::hgvs::edit::NaEdit;
+        use ferro_hgvs::HgvsVariant;
+        fn of(variant: &HgvsVariant) -> u64 {
+            match variant {
+                HgvsVariant::Allele(a) => a.variants.iter().map(of).max().unwrap_or(0),
+                HgvsVariant::Genome(g) => {
+                    if matches!(g.loc_edit.edit.inner(), Some(NaEdit::Insertion { .. })) {
+                        return 0;
+                    }
+                    match (
+                        g.loc_edit.location.start.inner(),
+                        g.loc_edit.location.end.inner(),
+                    ) {
+                        (Some(s), Some(e)) => e.base.saturating_sub(s.base) + 1,
+                        _ => 0,
+                    }
+                }
+                _ => 0,
+            }
+        }
+        parse_hgvs(input).map(|v| of(&v)).unwrap_or(0)
+    }
+
+    /// The corpus must build a block past the normalizer's split cap (#1460).
+    ///
+    /// The cap is a *length* gate — `merge.rs` returns the un-partitioned whole
+    /// block once either side exceeds `MAX_SPLIT_BLOCK` — so a corpus of 20-mers
+    /// takes the same path on both sides of any change to it, by construction.
+    /// That is why #1403 measured `0 of 18,432` here and why the zero was
+    /// guaranteed rather than informative. Fixing #1456 added the shapes that were
+    /// missing; this adds the scale.
+    #[test]
+    fn the_corpus_emits_a_block_past_the_split_cap() {
+        // `MAX_SPLIT_BLOCK` is crate-private (`src/normalize/merge.rs`), so
+        // the bound is restated rather than imported. If it ever moves, this test
+        // is measuring the wrong threshold and should be updated with it.
+        const SPLIT_CAP: u64 = 1024;
+        let rows = dump(1);
+        let genomic: Vec<&Row> = rows.iter().filter(|row| row.axis == "g").collect();
+        let longest = genomic
+            .iter()
+            .map(|row| longest_span(&row.input))
+            .max()
+            .unwrap_or(0);
+        assert!(
+            longest > SPLIT_CAP,
+            "the longest block the corpus builds is {longest} bases, under the {SPLIT_CAP}-base \
+             split cap — so every row takes the same path on both sides of a change to it"
+        );
+
+        // Building the row is not measuring it. Every sentinel below is recorded
+        // in the `output` column like any other string, so a corpus whose long
+        // rows all panicked would satisfy the span assertion above and still
+        // measure nothing at this scale — the same "a zero is not a result"
+        // confusion (#1456) that the shape families were added to end, one level
+        // down. At least one past-cap row has to have actually normalized.
+        const SENTINELS: [&str; 3] = ["<parse-error>", "<declined>", "<panic>"];
+        let past_cap: Vec<&&Row> = genomic
+            .iter()
+            .filter(|row| longest_span(&row.input) > SPLIT_CAP)
+            .collect();
+        let measured = past_cap
+            .iter()
+            .filter(|row| !SENTINELS.contains(&row.output.as_str()))
+            .count();
+        assert!(
+            measured > 0,
+            "all {} rows past the {SPLIT_CAP}-base cap normalized to a sentinel, so the corpus \
+             builds the scale but measures nothing at it: {:?}",
+            past_cap.len(),
+            past_cap.iter().map(|r| &r.output).collect::<Vec<_>>()
+        );
+    }
+
+    /// The long cores are *near* palindromes: inverting one changes exactly four
+    /// bases (#1460).
+    ///
+    /// Both halves of that matter and both are one edit away. An **exact**
+    /// palindrome inverts to itself, so the inversion denotes nothing, normalizes
+    /// to `=`, and the family measures a pair of descriptions that were never a
+    /// confluence question. A core that is not a palindrome at all inverts to
+    /// something differing at most of its positions, so the equivalent allele
+    /// carries hundreds of members and the pair stops being a spelling anyone
+    /// would write. Four is the number that keeps it a real question.
+    #[test]
+    fn the_long_cores_are_near_palindromes() {
+        for (label, core) in long_corpus_sequences() {
+            let bytes = core.as_bytes();
+            let inverted: Vec<u8> = bytes.iter().rev().map(|b| complement(*b)).collect();
+            let differing = (0..bytes.len())
+                .filter(|&i| bytes[i] != inverted[i])
+                .count();
+            assert_eq!(
+                differing, 4,
+                "{label} inverts with {differing} base changes, not 4 — the two spellings \
+                 this family compares are only a confluence question at a handful"
+            );
+        }
     }
 
     /// A reduced seed count must be a strict prefix of a larger one, so a quick
