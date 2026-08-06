@@ -1815,41 +1815,43 @@ impl MultiFastaProvider {
         if start == end {
             return Ok(String::new());
         }
-        // The `[start, end)` window is 0-based into the parent *sequence*, so
-        // offset 0 is the parent's first base — parent coordinate
-        // `parent_start`. The mapping below assumes `parent_start == 1` (it maps
-        // the 0-based offset `start` to 1-based parent coordinate `start + 1`).
-        // Reachable callers are parents that have a placement but no record of
-        // their own: the FASTA-less #728 derived `NG_`, which is constructed
-        // with `parent_start == 1` (`derived_placement.rs`), and a record-less
-        // LRG, which carries whatever its XML states (`LRG_998`, in the test
-        // below, is exactly that shape). So `parent_start == 1` is an
-        // assumption about the placement data, not an invariant this function
-        // can enforce.
-        //
-        // Until #1462 the set was far wider: every bare `LRG_<N>` was routed
-        // here, because the callers gated on `prepared.contains(id)`, which is
-        // `false` for `LRG_<N>` (the record is named `LRG_<N>g`). One real LRG
-        // placement carries `parent_start == 1049` and tripped this very
-        // assertion; a further 164 passed it and quietly served chromosome
-        // bases in place of the frozen LRG record. The callers now gate on
-        // `own_record`, so an LRG *with* a record never reaches here.
-        //
-        // Guard the assumption in debug builds. Note this does not make the
-        // release build safe: `parent_to_nc` declines only a position *below*
-        // `parent_start`, so a window low enough fails loud while a deeper one
-        // silently maps to the wrong bases. Hardening it to fail closed in
-        // release is #1494; this PR narrows who can reach it rather than
-        // changing what it does.
-        debug_assert_eq!(
-            placement.parent_start, 1,
-            "synthesize_parent_sequence assumes parent_start == 1; offset the window \
-             by parent_start before mapping to support placement-only parents"
-        );
         // 0-based half-open [start, end) → 1-based inclusive parent positions
-        // [start+1, end]. Map both endpoints onto the chromosome; on a minus-
-        // strand placement the parent runs antiparallel, so the low parent
-        // position maps to the *higher* `NC_` coordinate.
+        // [start+1, end]. An offset indexes the parent's **own coordinate
+        // frame**, so offset 0 is parent coordinate 1 — never `parent_start`.
+        //
+        // That distinction is what #1494 got backwards, and it is worth being
+        // explicit about because the opposite reading has an obvious-looking
+        // fix that silently serves the wrong bases. `parent_start` is a
+        // coordinate in the parent's numbering, not the origin of the window:
+        // a placement with `parent_start > 1` simply does not cover the
+        // parent's first `parent_start - 1` bases, and `parent_to_nc` declines
+        // them. Ground truth is `LRG_1075`, the one real placement in the
+        // prepared reference with `parent_start > 1` — span
+        // `lrg_start=1049 lrg_end=15267` onto `NC_000004.12:190173122-190187909`,
+        // record `LRG_1075g` exactly 15267 bases (i.e. `lrg_end`), and record
+        // coordinate 1049 matching `NC_000004.12:190173122` base for base.
+        // It also has to hold for this method to be coherent: `get_sequence`'s
+        // FASTA branch reads record coordinates `start + 1 ..= end`, and one
+        // method's two branches cannot index differently.
+        //
+        // A `debug_assert_eq!(placement.parent_start, 1)` used to sit here.
+        // It was over-strict — it fired on a legitimate record-less LRG whose
+        // XML places it past coordinate 1 — and it guarded a mapping that was
+        // already correct. Removed rather than relaxed; the two tests named
+        // `a_record_less_parent_*` pin the semantics instead.
+        //
+        // Reachable callers are parents with a placement and no record of their
+        // own: the FASTA-less #728 derived `NG_` (always `parent_start == 1`,
+        // per `derived_placement.rs`) and a record-less LRG, which carries
+        // whatever its XML states. Until #1462 the set was far wider — every
+        // bare `LRG_<N>` came through here, because the callers gated on
+        // `prepared.contains(id)`, which is `false` for `LRG_<N>` (the record is
+        // named `LRG_<N>g`); 164 of them were quietly served chromosome bases in
+        // place of their frozen record. The callers now gate on `own_record`.
+        //
+        // Map both endpoints onto the chromosome; on a minus-strand placement
+        // the parent runs antiparallel, so the low parent position maps to the
+        // *higher* `NC_` coordinate.
         let (nc_a, nc_b) = match (
             placement.parent_to_nc(start + 1),
             placement.parent_to_nc(end),
@@ -3417,12 +3419,48 @@ impl ReferenceProvider for MultiFastaProvider {
 
     fn get_sequence_length(&self, id: &str) -> Result<u64, FerroError> {
         // Mirror `get_sequence`: a placement-only parent (#728 derived `NG_`)
-        // has no FASTA record, so its length is the placed span on the
-        // chromosome. Checked before the version-fuzzy `sequence_length`.
+        // has no FASTA record, so its length comes from the placement. Checked
+        // before the version-fuzzy `sequence_length`.
+        //
+        // The length is the parent's **highest placed coordinate**, not the
+        // width of the placed span (#1494). Since a coordinate is counted from
+        // the parent's own base 1 — see `synthesize_parent_sequence` — a
+        // placement starting at `parent_start` runs to
+        // `parent_start + (nc_end - nc_start)`, and the span width silently
+        // drops the `parent_start - 1` unplaced bases beneath it. With
+        // `parent_start == 1` (every #728 derived `NG_`) the two agree, so this
+        // changes nothing for them.
+        //
+        // It is a lower bound, not necessarily the record's true length: the
+        // parent may extend past the placed span. That is the best a placement
+        // can say, and it is the bound every caller needs — reporting the span
+        // width instead made bounds checks reject legitimate placed
+        // coordinates as past-the-end.
+        //
+        // **`nc_end - nc_start` is a chromosome-frame width standing in for a
+        // parent-frame one, and the two differ exactly when the alignment
+        // carries indels.** `GenomicPlacement` is a pure affine with no
+        // `parent_end`: the LRG parser reads `lrg_end` and discards it (see
+        // `genomic_placement_on_build`), and `parent_to_nc` reconstructs the
+        // parent's end the same way. `LRG_1075` shows the gap — its GRCh38 span
+        // is `lrg_start=1049 lrg_end=15267` onto
+        // `NC_000004.12:190173122-190187909`, so the LRG side is 14 219 wide
+        // and the chromosome side 14 788. This expression yields 15 836 where
+        // the `LRG_1075g` record is 15 267 bases (i.e. exactly `lrg_end`).
+        //
+        // Latent rather than live: an accession reaches this branch only when
+        // `own_record` finds nothing, and `LRG_1075` *has* a record, so it is
+        // served from that instead. Every #728 derived `NG_` has
+        // `parent_start == 1` and an exact affine. So nothing in the reachable
+        // population is affected today — but a record-less, indel-bearing
+        // parent would be over-long here, and the fix is to carry `parent_end`
+        // on the placement rather than to re-derive it from the other frame.
+        // That touches `parent_to_nc` and therefore projection, so it wants its
+        // own measurement rather than riding along with this change.
         if self.own_record(id).is_none() {
             if let Ok(("", acc)) = crate::hgvs::parser::accession::parse_accession(id) {
                 if let Some(placement) = self.genomic_placement(&acc) {
-                    return Ok(placement.nc_end - placement.nc_start + 1);
+                    return Ok(placement.parent_start + (placement.nc_end - placement.nc_start));
                 }
             }
         }
@@ -3826,6 +3864,108 @@ mod tests {
             "an LRG with no FASTA record of its own is still synthesized from the placement"
         );
         assert_eq!(provider.get_sequence_length("LRG_998").unwrap(), 10);
+    }
+
+    // ------------------------------------------------------------------
+    // A record-less parent placed at `parent_start > 1` (#1494)
+    // ------------------------------------------------------------------
+
+    /// Provider with a chromosome but **no** record for `LRG_997`, whose
+    /// placement starts at parent coordinate 5 rather than 1.
+    ///
+    /// Genome `NC_000017.11` is `AAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCC`
+    /// (1-based: 1-4 `A`, 5-8 `C`, 9-12 `G`, 13-16 `T`, 17-20 `A`, …). The
+    /// placement maps parent `5..=14` onto `nc 11..=20`.
+    fn provider_with_offset_placed_lrg() -> (MultiFastaProvider, tempfile::TempDir) {
+        let dir = tempdir().unwrap();
+        {
+            let mut f = File::create(dir.path().join("ref.fna")).unwrap();
+            writeln!(f, ">NC_000017.11").unwrap();
+            writeln!(f, "AAAACCCCGGGGTTTTAAAACCCCGGGGTTTTAAAACCCC").unwrap();
+        }
+        {
+            // ">NC_000017.11\n" is 14 bytes, so the sequence starts at 14.
+            let mut f = File::create(dir.path().join("ref.fna.fai")).unwrap();
+            writeln!(f, "NC_000017.11\t40\t14\t40\t41").unwrap();
+        }
+        let mut provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+        let xml_dir = dir.path().join("lrg");
+        std::fs::create_dir_all(&xml_dir).unwrap();
+        std::fs::write(
+            xml_dir.join("LRG_997.xml"),
+            r#"
+              <mapping coord_system="GRCh38" other_id="NC_000017.11" type="main_assembly">
+                <mapping_span lrg_start="5" lrg_end="14" other_start="11" other_end="20" strand="1" />
+              </mapping>
+            "#,
+        )
+        .unwrap();
+        provider.lrg_xml_dir = Some(xml_dir);
+        (provider, dir)
+    }
+
+    /// Characterization test: a `get_sequence` offset is an offset into the
+    /// parent's **own coordinate frame**, so offset `k` is parent coordinate
+    /// `k + 1` — *not* `parent_start + k`.
+    ///
+    /// This is the half of #1494 that does not hold, and it is pinned here because
+    /// the natural-looking "fix" (offset the window by `parent_start`) silently
+    /// serves the wrong bases. Ground truth is `LRG_1075`, the one real
+    /// placement in the prepared reference with `parent_start > 1`: its
+    /// `main_assembly` span is `lrg_start=1049 lrg_end=15267` onto
+    /// `NC_000004.12:190173122-190187909`, its record `LRG_1075g` is **15267**
+    /// bases long — exactly `lrg_end` — and its record coordinate 1049 matches
+    /// `NC_000004.12:190173122` base for base over a 30-base window. So
+    /// `lrg_start` is a coordinate in the parent's own numbering, and a
+    /// placement with `parent_start > 1` simply does not cover the parent's
+    /// first `parent_start - 1` bases.
+    ///
+    /// That also has to hold for `get_sequence` to be coherent at all: the
+    /// FASTA branch reads record coordinates `start + 1 ..= end`, and the two
+    /// branches of one method cannot index differently.
+    #[test]
+    fn a_record_less_parent_window_is_offset_from_coordinate_one_not_parent_start() {
+        let (provider, _dir) = provider_with_offset_placed_lrg();
+        let lrg = crate::hgvs::variant::Accession::new("LRG", "997", None);
+        assert!(provider.genomic_placement(&lrg).is_some());
+
+        // Offsets 4..8 are parent coordinates 5..=8 → nc 11..=14 → `GGTT`.
+        // Offsetting by `parent_start` instead would ask for coordinates
+        // 9..=12 → nc 15..=18 → `TTAA`, which is why this pins an exact string.
+        assert_eq!(
+            provider.get_sequence("LRG_997", 4, 8).unwrap(),
+            "GGTT",
+            "offset k must be parent coordinate k+1, not parent_start+k"
+        );
+
+        // The parent's first four bases are *below* the placed span, so they
+        // cannot be synthesized. Failing loud is correct — there is nothing to
+        // read them from.
+        assert!(
+            provider.get_sequence("LRG_997", 0, 4).is_err(),
+            "coordinates below parent_start are unplaced and must not be fabricated"
+        );
+    }
+
+    /// #1494: the length of a record-less placed parent is its highest placed
+    /// coordinate, not the width of the placed span.
+    ///
+    /// `nc_end - nc_start + 1` silently drops the `parent_start - 1` bases the
+    /// placement does not cover, so a parent placed at `parent_start == 5` over
+    /// ten chromosome bases reported length 10 when its coordinates run to 14.
+    /// Every bounds check keyed on that length — including the
+    /// `FERRO_ASSERT_IN_BOUNDS` oracle — then rejects legitimate placed
+    /// coordinates as past-the-end.
+    #[test]
+    fn a_record_less_parent_length_counts_from_coordinate_one() {
+        let (provider, _dir) = provider_with_offset_placed_lrg();
+        assert_eq!(
+            provider.get_sequence_length("LRG_997").unwrap(),
+            14,
+            "parent runs to coordinate 14 (parent_start 5 + 10 placed bases - 1)"
+        );
+        // The last placed base must be readable at that length.
+        assert_eq!(provider.get_sequence("LRG_997", 13, 14).unwrap(), "A");
     }
 
     // ----------------------------------------------------------------------
