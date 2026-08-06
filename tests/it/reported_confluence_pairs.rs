@@ -43,7 +43,7 @@ use ferro_hgvs::ShuffleDirection;
 ///
 /// Reproduced verbatim from the reports so these rows run against the same bases
 /// they were observed on. Synthetic: it names no real sequence.
-const TEMPLATE: &str = concat!(
+pub(crate) const TEMPLATE: &str = concat!(
     "ATGCACCAGTCACCAGTCTGATGCGGATCACGTGCAATTGCACGTGCAATTGGATCCGATCG",
     "TACGTACGATCGGCATGCATGCTAGCTAGCATCGATCGTAGCTAGCTAGCATCGATCGATCGA"
 );
@@ -54,7 +54,7 @@ const TEMPLATE: &str = concat!(
 /// the same variant. The two are kept distinguishable rather than collapsed into
 /// an unordered pair because *which one a consumer has stored* decides what a
 /// convergence fix costs them.
-const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
+pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
     // #1419 — two deletions versus the spanning delins.
     (
         "1419-r1",
