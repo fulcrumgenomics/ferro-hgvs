@@ -17,6 +17,32 @@
 //! `tests` slice is empty — that is itself the finding for a `high`-labeled
 //! issue, per [`no_high_priority_issue_is_unguarded_without_being_named`].
 //!
+//! ## Python guards count, and used not to
+//!
+//! The catalog is a report about what is *unguarded*, so a guard it cannot see
+//! is a false negative in the one direction that matters. Until now it scanned
+//! only Rust — `tests/` and `src/` — and the bindings' guards live in
+//! `tests/python/`. Four issues were listed as unguarded while a dedicated
+//! pytest module guarded each: **#1050, #1159, #1245, #1246**.
+//!
+//! Python attribution works differently and the rule above is adjusted for it
+//! rather than bent. A Rust suite puts many unrelated tests in one file, so the
+//! reference has to be per-function. The bindings' guards are instead written one
+//! module per issue, and the issue number is named in the **module docstring** —
+//! so for a Python entry the reference may be in that docstring rather than
+//! beside each function, and [`source_defines_fn`] accepts `def` as well as `fn`.
+//!
+//! Three of the four carry the number in the filename too
+//! (`test_issue_<N>_*.py`); #1159's module is named for its behaviour
+//! (`test_reference_aware_spdi.py`) and names the issue in its first docstring
+//! line. The docstring, not the filename, is what the attribution rests on — a
+//! filename convention that three of four follow is not one to state as the rule.
+//!
+//! Only issues whose slice was **empty** were audited this way, because only
+//! those produced a false "unguarded" claim. An issue that already lists a Rust
+//! guard may still have an unlisted Python one; that understates coverage
+//! without misreporting the issue as unguarded.
+//!
 //! ## What this module does NOT claim
 //!
 //! It does not re-run the shadow/live comparison, so it makes no claim about
@@ -132,7 +158,7 @@ static MSTO_ISSUES: &[MstoIssue] = &[
     MstoIssue { number: 1035, high: false, state: State::Closed, tests: &[("tests/it/build_transcript_library_parity.rs", "library_matches_cli_minus_strand_custom_id_gene"), ("tests/it/build_transcript_library_parity.rs", "library_matches_cli_plus_strand"), ("tests/it/build_transcript_library_parity.rs", "library_matches_cli_with_emit_genomic_sequences"), ("tests/it/convert_gff_library_parity.rs", "library_matches_cli_transcript_only"), ("tests/it/convert_gff_library_parity.rs", "library_matches_cli_with_emit_genomic_sequences"), ("tests/it/convert_gff_library_parity.rs", "library_matches_cli_with_gene_filter")], note: None },
     MstoIssue { number: 1040, high: true, state: State::Closed, tests: &[("tests/it/issue_1040_inv_overrecognition_probes.rs", "issue_1034_minimal_contiguous_run_stays_delins"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "issue_1040_compound_allele_near_3prime_end_stays_delins"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "issue_1040_contiguous_run_near_3prime_end_stays_delins"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "issue_1040_literal_ten_nt_contiguous_run_stays_delins"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "issue_1040_same_run_as_delins_input_stays_delins"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "length_changing_revcomp_delins_stays_delins"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "revcomp_runs_in_distinct_codons_are_individual_on_cds_axis"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "revcomp_runs_separated_by_identity_are_individual_on_genomic_axis"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "shared_affix_trimming_reveals_inner_inv"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "two_nt_reverse_complement_emits_inv"), ("tests/it/issue_1040_inv_overrecognition_probes.rs", "whole_run_reverse_complement_emits_inv")], note: Some("Cluster A: the new splitter allows compensating gaps and shreds a contiguous replacement into pieces.") },
     MstoIssue { number: 1041, high: true, state: State::Closed, tests: &[("tests/it/issue_1041_repro.rs", "issue_1041_compound_subs_near_3prime_end_merge_to_inv"), ("tests/it/issue_1041_repro.rs", "issue_1041_root_cause_also_restores_3prime_shift"), ("tests/it/issue_1041_repro.rs", "issue_1041_span_past_contig_end_passes_through_unchanged"), ("tests/it/issue_1041_repro.rs", "issue_1041_whole_run_revcomp_is_inv_regardless_of_3prime_proximity")], note: Some("Cluster A: the new splitter allows compensating gaps and shreds a contiguous replacement into pieces.") },
-    MstoIssue { number: 1050, high: false, state: State::Closed, tests: &[], note: None },
+    MstoIssue { number: 1050, high: false, state: State::Closed, tests: &[("tests/python/test_issue_1050_protein_render_style.py", "test_default_is_three_letter_ter"), ("tests/python/test_issue_1050_protein_render_style.py", "test_constructor_protein_stop_star_switches_stop_token"), ("tests/python/test_issue_1050_protein_render_style.py", "test_per_call_option_b_overrides_default")], note: None },
     MstoIssue { number: 1051, high: false, state: State::Closed, tests: &[("tests/it/gene_selector_display_preserve.rs", "display_drops_redundant_gene_selector_with_compound_ref"), ("tests/it/gene_selector_roundtrip.rs", "display_drops_gene_selector_in_compact_cis_allele"), ("tests/it/gene_selector_roundtrip.rs", "display_drops_gene_selector_refseq_nm"), ("tests/it/gene_selector_roundtrip.rs", "display_drops_redundant_gene_selector_with_compound_ref"), ("tests/it/gene_selector_roundtrip.rs", "parse_captures_gene_symbol_refseq_nm"), ("tests/it/gene_selector_roundtrip.rs", "reparse_preserves_gene_symbol_on_nontranscript_reference")], note: None },
     MstoIssue { number: 1052, high: true, state: State::Closed, tests: &[("tests/it/issue_1052_substitution_refseq.rs", "correct_ref_cds_sub_no_warning"), ("tests/it/issue_1052_substitution_refseq.rs", "correct_ref_exonic_sub_at_transcript_boundary_no_capability_warning"), ("tests/it/issue_1052_substitution_refseq.rs", "correct_ref_exonic_sub_at_transcript_boundary_passes_strict"), ("tests/it/issue_1052_substitution_refseq.rs", "correct_ref_genomic_sub_no_warning"), ("tests/it/issue_1052_substitution_refseq.rs", "correct_ref_mito_sub_no_warning"), ("tests/it/issue_1052_substitution_refseq.rs", "genomic_sub_without_reference_passes_through"), ("tests/it/issue_1052_substitution_refseq.rs", "intronic_sub_bare_nm_stays_on_pre_existing_eintronic_warning_only"), ("tests/it/issue_1052_substitution_refseq.rs", "intronic_sub_without_genomic_sequence_is_silent_passthrough"), ("tests/it/issue_1052_substitution_refseq.rs", "uncertain_correct_ref_genomic_sub_preserves_wrapper"), ("tests/it/issue_1052_substitution_refseq.rs", "uncertain_wrong_ref_cds_sub_stays_silent_in_lenient"), ("tests/it/issue_1052_substitution_refseq.rs", "uncertain_wrong_ref_cds_sub_stays_silent_in_strict"), ("tests/it/issue_1052_substitution_refseq.rs", "uncertain_wrong_ref_genomic_sub_stays_silent_in_lenient_and_strict"), ("tests/it/issue_1052_substitution_refseq.rs", "uncertain_wrong_ref_mito_sub_stays_silent"), ("tests/it/issue_1052_substitution_refseq.rs", "wrong_ref_cds_sub_warns"), ("tests/it/issue_1052_substitution_refseq.rs", "wrong_ref_genomic_sub_rejects_in_strict"), ("tests/it/issue_1052_substitution_refseq.rs", "wrong_ref_genomic_sub_warns_in_lenient"), ("tests/it/issue_1052_substitution_refseq.rs", "wrong_ref_mito_sub_rejects_in_strict"), ("tests/it/issue_1052_substitution_refseq.rs", "wrong_ref_mito_sub_warns_in_lenient")], note: None },
     MstoIssue { number: 1059, high: true, state: State::Closed, tests: &[("src/hgvs/variant.rs", "test_coordinate_axis_allele_shares_member_axis"), ("src/hgvs/variant.rs", "test_coordinate_axis_enum_groupings"), ("src/hgvs/variant.rs", "test_coordinate_axis_genome_ring_is_genomic"), ("src/hgvs/variant.rs", "test_coordinate_axis_leaf_kinds"), ("src/hgvs/variant.rs", "test_coordinate_axis_markers_contribute_no_axis"), ("src/hgvs/variant.rs", "test_coordinate_axis_mixed_allele_is_none"), ("src/hgvs/variant.rs", "test_coordinate_axis_nested_allele")], note: None },
@@ -145,17 +171,27 @@ static MSTO_ISSUES: &[MstoIssue] = &[
     MstoIssue { number: 1139, high: false, state: State::Closed, tests: &[("tests/it/gene_selector_roundtrip.rs", "assembly_ref_keeps_its_gene_selector"), ("tests/it/issue_1139_gene_symbol_specification.rs", "a_reference_without_a_gene_symbol_is_unchanged"), ("tests/it/issue_1139_gene_symbol_specification.rs", "gene_symbol_is_not_stacked_as_a_second_specification_on_the_coding_axis"), ("tests/it/issue_1139_gene_symbol_specification.rs", "gene_symbol_is_not_stacked_as_a_second_specification_on_the_noncoding_axis"), ("tests/it/issue_1139_gene_symbol_specification.rs", "projected_coding_name_round_trips_through_the_parser"), ("tests/it/issue_1139_gene_symbol_specification.rs", "projected_noncoding_name_round_trips_through_the_parser"), ("tests/it/issue_1139_gene_symbol_specification.rs", "the_protein_axis_stays_gene_symbol_free")], note: None },
     MstoIssue { number: 1157, high: true, state: State::Closed, tests: &[("tests/it/issue_1157_delins_reduction_shift.rs", "decomposed_cis_allele_is_idempotent"), ("tests/it/issue_1157_delins_reduction_shift.rs", "decomposed_cis_allele_is_not_collapsed_into_a_spanning_delins"), ("tests/it/issue_1157_delins_reduction_shift.rs", "delins_reducing_to_deletion_is_idempotent"), ("tests/it/issue_1157_delins_reduction_shift.rs", "delins_reducing_to_deletion_is_three_prime_shifted"), ("tests/it/issue_1157_delins_reduction_shift.rs", "delins_reducing_to_deletion_matches_direct_deletion"), ("tests/it/issue_1157_delins_reduction_shift.rs", "delins_reducing_to_duplication_is_idempotent"), ("tests/it/issue_1157_delins_reduction_shift.rs", "delins_reducing_to_duplication_is_three_prime_shifted"), ("tests/it/issue_1157_delins_reduction_shift.rs", "delins_reducing_to_duplication_matches_direct_duplication"), ("tests/it/issue_1157_delins_reduction_shift.rs", "sequence_identical_delins_and_allele_normalize_equal"), ("tests/it/issue_1157_delins_reduction_shift.rs", "single_delins_is_decomposed_at_its_unchanged_bases"), ("tests/it/issue_1157_five_prime_insertion_rotation.rs", "five_prime_multibase_insertion_rotates_and_is_idempotent"), ("tests/it/issue_1157_five_prime_insertion_rotation.rs", "five_prime_rotated_insertion_is_a_fixed_point"), ("tests/it/issue_1158_equivalence_resulting_sequence.rs", "delins_reducing_to_deletion_matches_direct_deletion")], note: Some("Cluster B: a non-unique minimal alignment leaves no dominator, so the block stays one spanning member.") },
     MstoIssue { number: 1158, high: true, state: State::Closed, tests: &[("tests/it/issue_1158_equivalence_resulting_sequence.rs", "decomposed_allele_with_different_sequence_stays_not_equivalent"), ("tests/it/issue_1158_equivalence_resulting_sequence.rs", "delins_and_decomposed_allele_with_same_sequence_are_equivalent"), ("tests/it/issue_1158_equivalence_resulting_sequence.rs", "delins_reducing_to_deletion_matches_direct_deletion"), ("tests/it/issue_1158_equivalence_resulting_sequence.rs", "delins_with_different_resulting_sequence_stays_not_equivalent"), ("tests/it/issue_1158_equivalence_resulting_sequence.rs", "identical_variants_still_identical"), ("tests/it/issue_1158_equivalence_resulting_sequence.rs", "sequence_match_is_equivalent"), ("tests/it/issue_1158_equivalence_resulting_sequence.rs", "substitution_written_two_ways_still_normalized_match")], note: Some("Cluster B: confluence diverges rather than relocates (NormalizedMatch degrades to SequenceMatch).") },
-    MstoIssue { number: 1159, high: false, state: State::Open, tests: &[], note: None },
+    MstoIssue { number: 1159, high: false, state: State::Closed, tests: &[("tests/python/test_reference_aware_spdi.py", "test_the_module_level_conversion_still_declines"), ("tests/python/test_reference_aware_spdi.py", "test_canonical_spdi_is_the_same_for_two_encodings")], note: None },
     MstoIssue { number: 1229, high: true, state: State::Closed, tests: &[("tests/it/cis_allele_confluence_proptest.rs", "members_are_disjoint_and_ascending"), ("tests/it/issue_1235_cis_allele_confluence.rs", "both_public_exits_emit_the_same_canonical_variant"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1229_adjacent_inv_member_coalesces"), ("tests/it/issue_1249_inv_one_base_residue.rs", "every_spelling_of_the_variant_normalizes_alike")], note: None },
     MstoIssue { number: 1230, high: true, state: State::Closed, tests: &[("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1230_inv_with_unchanged_interior_becomes_substitutions")], note: None },
     MstoIssue { number: 1231, high: true, state: State::Closed, tests: &[("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1231_dup_del_reduces_to_substitutions")], note: Some("Cluster B: a non-unique minimal alignment leaves no dominator, so the block stays one spanning member.") },
     MstoIssue { number: 1232, high: true, state: State::Closed, tests: &[("src/normalize/merge.rs", "shadow_merges_across_one_unchanged_base_where_live_splits"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1232_spanning_delins_splits_at_unchanged_base"), ("tests/it/issue_1235_cis_allele_confluence.rs", "soft_masked_reference_yields_the_same_canonical_form")], note: Some("Cluster B: a non-unique minimal alignment leaves no dominator, so the block stays one spanning member.") },
     MstoIssue { number: 1233, high: true, state: State::Closed, tests: &[("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1233_ins_del_reduces_to_substitutions")], note: Some("Cluster B: a non-unique minimal alignment leaves no dominator, so the block stays one spanning member.") },
     MstoIssue { number: 1234, high: true, state: State::Closed, tests: &[("tests/it/cis_allele_confluence_proptest.rs", "members_are_disjoint_and_ascending"), ("tests/it/issue_1234_sibling_clamped_shift.rs", "a_distant_sibling_does_not_clamp_the_shift"), ("tests/it/issue_1234_sibling_clamped_shift.rs", "a_lone_deletion_still_shifts_to_its_three_prime_most_position"), ("tests/it/issue_1234_sibling_clamped_shift.rs", "an_uncertain_allele_keeps_its_predicted_marker"), ("tests/it/issue_1234_sibling_clamped_shift.rs", "deletion_shift_stops_before_a_sibling_substitution"), ("tests/it/issue_1234_sibling_clamped_shift.rs", "normalization_preserves_the_resulting_sequence"), ("tests/it/issue_1234_sibling_clamped_shift.rs", "normalized_cis_members_never_overlap"), ("tests/it/issue_1234_sibling_clamped_shift.rs", "the_certain_spelling_of_that_allele_still_clamps"), ("tests/it/issue_1234_sibling_clamped_shift.rs", "the_clamped_spelling_reaches_the_same_string"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1234_lone_deletion_still_shifts_fully"), ("tests/it/issue_1235_cis_allele_confluence.rs", "normalization_preserves_the_resulting_sequence")], note: Some("Cluster C: the fix lives in a repair pass (clamp_sibling_crossing_shifts) the rewrite's splitter never reaches.") },
-    MstoIssue { number: 1235, high: true, state: State::Open, tests: &[("src/normalize/merge.rs", "shadow_merges_across_one_unchanged_base_where_live_splits"), ("tests/it/cis_allele_confluence_proptest.rs", "members_are_disjoint_and_ascending"), ("tests/it/idempotency_tests.rs", "test_overlap_conflicting_allele_is_idempotent_across_respellings"), ("tests/it/issue_1235_cis_allele_confluence.rs", "both_public_exits_emit_the_same_canonical_variant"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1229_adjacent_inv_member_coalesces"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1230_inv_with_unchanged_interior_becomes_substitutions"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1231_dup_del_reduces_to_substitutions"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1232_spanning_delins_splits_at_unchanged_base"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1233_ins_del_reduces_to_substitutions"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1234_lone_deletion_still_shifts_fully"), ("tests/it/issue_1235_cis_allele_confluence.rs", "normalization_is_idempotent"), ("tests/it/issue_1235_cis_allele_confluence.rs", "normalization_preserves_the_resulting_sequence"), ("tests/it/issue_1235_cis_allele_confluence.rs", "normalized_cis_members_are_disjoint_and_ordered"), ("tests/it/issue_1235_cis_allele_confluence.rs", "shifted_insertion_piece_rotates_its_payload"), ("tests/it/issue_1235_cis_allele_confluence.rs", "soft_masked_reference_yields_the_same_canonical_form"), ("tests/it/issue_1235_transcript_axes.rs", "cds_axis_converges_on_separated_changes"), ("tests/it/issue_1235_transcript_axes.rs", "cds_axis_reduces_a_mixed_type_allele_to_substitutions"), ("tests/it/issue_1235_transcript_axes.rs", "cds_axis_splits_across_a_codon_boundary"), ("tests/it/issue_1235_transcript_axes.rs", "coding_rna_axis_keeps_its_reading_frame"), ("tests/it/issue_1235_transcript_axes.rs", "noncoding_axis_converges_on_separated_changes"), ("tests/it/issue_1235_transcript_axes.rs", "noncoding_rna_axis_converges_without_a_reading_frame"), ("tests/it/issue_1235_transcript_axes.rs", "overlap_conflicting_allele_is_not_canonicalized"), ("tests/it/issue_1235_transcript_axes.rs", "rna_axis_converges_and_keeps_the_u_alphabet"), ("tests/it/issue_1235_transcript_axes.rs", "rna_axis_reduces_a_mixed_type_allele_and_keeps_the_u_alphabet"), ("tests/it/issue_1249_inv_one_base_residue.rs", "every_spelling_of_the_variant_normalizes_alike"), ("tests/it/issue_1325_repeat_growth_swallows_junction.rs", "a_repeat_growing_past_its_tract_releases_a_swallowed_junction"), ("tests/it/issue_1394_repeat_growth_swallows_deletion.rs", "a_repeat_growing_past_its_tract_releases_a_swallowed_deletion")], note: Some("Cluster B (c./r. axes): a non-unique minimal alignment leaves no dominator, so the block stays spanning.") },
+    MstoIssue { number: 1235, high: true, state: State::Closed, tests: &[("src/normalize/merge.rs", "shadow_merges_across_one_unchanged_base_where_live_splits"), ("tests/it/cis_allele_confluence_proptest.rs", "members_are_disjoint_and_ascending"), ("tests/it/idempotency_tests.rs", "test_overlap_conflicting_allele_is_idempotent_across_respellings"), ("tests/it/issue_1235_cis_allele_confluence.rs", "both_public_exits_emit_the_same_canonical_variant"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1229_adjacent_inv_member_coalesces"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1230_inv_with_unchanged_interior_becomes_substitutions"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1231_dup_del_reduces_to_substitutions"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1232_spanning_delins_splits_at_unchanged_base"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1233_ins_del_reduces_to_substitutions"), ("tests/it/issue_1235_cis_allele_confluence.rs", "issue_1234_lone_deletion_still_shifts_fully"), ("tests/it/issue_1235_cis_allele_confluence.rs", "normalization_is_idempotent"), ("tests/it/issue_1235_cis_allele_confluence.rs", "normalization_preserves_the_resulting_sequence"), ("tests/it/issue_1235_cis_allele_confluence.rs", "normalized_cis_members_are_disjoint_and_ordered"), ("tests/it/issue_1235_cis_allele_confluence.rs", "shifted_insertion_piece_rotates_its_payload"), ("tests/it/issue_1235_cis_allele_confluence.rs", "soft_masked_reference_yields_the_same_canonical_form"), ("tests/it/issue_1235_transcript_axes.rs", "cds_axis_converges_on_separated_changes"), ("tests/it/issue_1235_transcript_axes.rs", "cds_axis_reduces_a_mixed_type_allele_to_substitutions"), ("tests/it/issue_1235_transcript_axes.rs", "cds_axis_splits_across_a_codon_boundary"), ("tests/it/issue_1235_transcript_axes.rs", "coding_rna_axis_keeps_its_reading_frame"), ("tests/it/issue_1235_transcript_axes.rs", "noncoding_axis_converges_on_separated_changes"), ("tests/it/issue_1235_transcript_axes.rs", "noncoding_rna_axis_converges_without_a_reading_frame"), ("tests/it/issue_1235_transcript_axes.rs", "overlap_conflicting_allele_is_not_canonicalized"), ("tests/it/issue_1235_transcript_axes.rs", "rna_axis_converges_and_keeps_the_u_alphabet"), ("tests/it/issue_1235_transcript_axes.rs", "rna_axis_reduces_a_mixed_type_allele_and_keeps_the_u_alphabet"), ("tests/it/issue_1249_inv_one_base_residue.rs", "every_spelling_of_the_variant_normalizes_alike"), ("tests/it/issue_1325_repeat_growth_swallows_junction.rs", "a_repeat_growing_past_its_tract_releases_a_swallowed_junction"), ("tests/it/issue_1394_repeat_growth_swallows_deletion.rs", "a_repeat_growing_past_its_tract_releases_a_swallowed_deletion")], note: Some("Cluster B (c./r. axes): a non-unique minimal alignment leaves no dominator, so the block stays spanning.") },
     MstoIssue { number: 1244, high: true, state: State::Closed, tests: &[("tests/it/issue_1244_equivalence_overlap_panic.rs", "a_disjoint_cis_allele_is_not_declined"), ("tests/it/issue_1244_equivalence_overlap_panic.rs", "an_overlapping_allele_compared_with_itself_is_still_decided"), ("tests/it/issue_1244_equivalence_overlap_panic.rs", "an_overlapping_cis_allele_returns_a_verdict_instead_of_panicking"), ("tests/it/issue_1244_equivalence_overlap_panic.rs", "members_that_merely_abut_are_not_treated_as_overlapping"), ("tests/it/issue_1244_equivalence_overlap_panic.rs", "normalizing_the_same_overlapping_allele_does_not_panic"), ("tests/it/issue_1244_equivalence_overlap_panic.rs", "pure_insertions_at_one_position_are_not_treated_as_overlapping"), ("tests/it/issue_1244_equivalence_overlap_panic.rs", "the_crash_is_symmetric_in_argument_order"), ("tests/it/issue_1244_equivalence_overlap_panic.rs", "three_insertions_at_one_position_are_still_not_overlapping")], note: None },
-    MstoIssue { number: 1245, high: false, state: State::Closed, tests: &[], note: None },
-    MstoIssue { number: 1246, high: false, state: State::Closed, tests: &[], note: None },
+    MstoIssue { number: 1245, high: false, state: State::Closed, tests: &[("tests/python/test_issue_1245_enum_contract.py", "test_members_are_hashable"), ("tests/python/test_issue_1245_enum_contract.py", "test_members_work_as_set_and_dict_keys"), ("tests/python/test_issue_1245_enum_contract.py", "test_members_are_orderable")], note: None },
+    MstoIssue { number: 1246, high: false, state: State::Closed, tests: &[("tests/python/test_issue_1246_changed_positions_list.py", "test_changed_positions_is_a_list"), ("tests/python/test_issue_1246_changed_positions_list.py", "test_changed_positions_holds_ints"), ("tests/python/test_issue_1246_changed_positions_list.py", "test_changed_positions_is_json_serializable")], note: None },
+    // Filed 2026-08-05. #1419–#1421 are the surviving non-confluence follow-ups
+    // to the #1229–#1234 family; #1430 proposes coercing a description to its
+    // denoted sequence before normalizing, which is the same seam the
+    // sequence-first splitter sits on. None is referenced by number from any
+    // test yet, which is why all four appear in
+    // `no_high_priority_issue_is_unguarded_without_being_named`.
+    MstoIssue { number: 1419, high: true, state: State::Open, tests: &[], note: None },
+    MstoIssue { number: 1420, high: true, state: State::Open, tests: &[], note: None },
+    MstoIssue { number: 1421, high: true, state: State::Open, tests: &[], note: None },
+    MstoIssue { number: 1430, high: true, state: State::Open, tests: &[], note: None },
 ];
 
 /// The eleven issues the sequence-first migration review flagged as at risk,
@@ -170,19 +206,21 @@ const PINNED_AT_RISK_ISSUES: &[u32] = &[
 /// constant only after confirming the new count is intentional (a `gh issue
 /// list` re-enumeration, a newly-tagged test, or a rename/deletion this table
 /// should reflect), not to silence a failing assertion.
-const PINNED_ISSUE_COUNT: usize = 69;
-const PINNED_HIGH_ISSUE_COUNT: usize = 23;
-const PINNED_UNIQUE_TEST_COUNT: usize = 254;
+const PINNED_ISSUE_COUNT: usize = 73;
+const PINNED_HIGH_ISSUE_COUNT: usize = 27;
+const PINNED_UNIQUE_TEST_COUNT: usize = 265;
 
 /// Reads `relative_path` (relative to the crate root) and returns whether it
 /// contains a function definition named `fn_name` — i.e. a line containing
-/// `fn <fn_name>` immediately followed by `(` or `<` (accounting for
-/// generics), possibly preceded by `pub`/`async`/whitespace.
+/// `fn <fn_name>` or `def <fn_name>` immediately followed by `(` or `<`
+/// (accounting for generics), possibly preceded by `pub`/`async`/whitespace.
 fn source_defines_fn(relative_path: &str, fn_name: &str) -> bool {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
     let content = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("could not read {relative_path}: {e}"));
-    let pattern = format!(r"fn\s+{}\s*[(<]", regex::escape(fn_name));
+    // `def` as well as `fn`: the bindings' guards are pytest modules, and a
+    // catalog that cannot see them reports guarded issues as unguarded.
+    let pattern = format!(r"(?:fn|def)\s+{}\s*[(<]", regex::escape(fn_name));
     Regex::new(&pattern)
         .expect("pattern built from an escaped literal is always valid")
         .is_match(&content)
@@ -301,8 +339,15 @@ fn pinned_at_risk_issues_carry_a_mechanism_note() {
     );
 }
 
-/// Exactly the two issues known to be open (#1159, the SPDI feature request,
-/// and #1235, the rewrite's own tracking issue) are marked as such.
+/// Exactly the four issues known to be open are marked as such:
+/// #1419/#1420/#1421 (the non-confluence follow-ups to the #1229–#1234 family)
+/// and #1430 (the sequence-coercion proposal).
+///
+/// Two issues left the open set in this re-enumeration. #1235, the rewrite's own
+/// tracking issue, closed as completed. #1159, the SPDI feature request, closed
+/// 2026-08-06 — after the first pass of this catalog was written, which is why
+/// the accompanying re-enumeration was re-run against GitHub before merge rather
+/// than trusted from the earlier `gh issue list`.
 ///
 /// The "is the state one of the two legal values" half of this check is gone,
 /// because `State` makes an illegal value unrepresentable — the compiler owns it
@@ -316,7 +361,7 @@ fn issue_state_matches_the_known_open_set() {
         .collect();
     assert_eq!(
         open,
-        HashSet::from([1159, 1235]),
+        HashSet::from([1419, 1420, 1421, 1430]),
         "the set of open msto issues changed \u{2014} re-check against GitHub and update \
          MSTO_ISSUES"
     );
@@ -335,7 +380,7 @@ fn no_high_priority_issue_is_unguarded_without_being_named() {
         .collect();
     assert_eq!(
         unguarded,
-        vec![200],
+        vec![200, 1419, 1420, 1421, 1430],
         "the set of unguarded high-priority msto issues changed; if this is a newly-found gap, \
          leave it here as a finding rather than silently dropping it"
     );
