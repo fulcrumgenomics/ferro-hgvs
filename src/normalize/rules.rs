@@ -1919,6 +1919,39 @@ pub fn duplication_to_repeat(
 /// boundary-anchor behavior, so delegating here would silently drop valid
 /// tracts. The genuinely shared piece across the ins→repeat / repeat paths is
 /// the 3'-phase step `three_prime_align_tract` (#852), not the tract finder.
+///
+/// # Case
+///
+/// Both scans compare with [`slice::eq_ignore_ascii_case`], because `ref_seq`
+/// comes from the reference and `repeat_unit` comes from the description. A
+/// reference FASTA is routinely soft-masked and a description is conventionally
+/// written in upper case, so a raw byte comparison finds no run at all on a
+/// masked tract — and, since this returns coordinates rather than a verdict,
+/// that surfaces as a *different canonical form* rather than as an error
+/// (#1491). Four of fifteen repeat inputs measured changed answer with case
+/// alone: `g.259_267CAG[2]` lowered to `g.265_267del` on an upper-case
+/// reference and stayed an unlowered repeat on the soft-masked twin, and three
+/// single-position anchors widened to their tract on one and not the other.
+///
+/// This is the convention the rest of this module already follows — the dup,
+/// delins-trimming and inversion-typing comparisons all fold — and folding
+/// costs nothing on an unmasked reference, where `eq_ignore_ascii_case` and
+/// `==` agree by definition. Note also that only *coordinates* leave this
+/// function, so folding here cannot put a lower-case base into an emitted
+/// sequence.
+///
+/// **Case is all this folds — it is not alphabet normalization.**
+/// `eq_ignore_ascii_case` maps `u` to `U`, never `U` to `T`, so an `r.` tract
+/// whose reference is spelled with uracil is still invisible here. The SPDI
+/// call site handles that separately by running the fetched window through
+/// `apply_alphabet` before it ever calls this function (#1452,
+/// `spdi::convert::fetch_normalized_reference_bases`), which folds case *and*
+/// rewrites `U` to `T`. The two are complementary rather than redundant, and
+/// the overlap is easy to misread as duplication: with this fold in place,
+/// reverting the SPDI-side normalization leaves every soft-masking test green
+/// and fails exactly one — `a_uracil_spelled_tract_is_found_on_the_rna_axis`.
+/// That single test is what pins the difference, so do not "simplify" either
+/// site away on the grounds that the other covers it.
 pub fn count_tandem_repeats(
     ref_seq: &[u8],
     pos: usize,
@@ -1940,7 +1973,7 @@ pub fn count_tandem_repeats(
     let mut start = pos;
     while start >= unit_len {
         let candidate = &ref_seq[start - unit_len..start];
-        if candidate == repeat_unit {
+        if candidate.eq_ignore_ascii_case(repeat_unit) {
             start -= unit_len;
         } else {
             break;
@@ -1951,7 +1984,7 @@ pub fn count_tandem_repeats(
     let mut end = start;
     let mut count = 0u64;
     while end + unit_len <= ref_seq.len() {
-        if &ref_seq[end..end + unit_len] == repeat_unit {
+        if ref_seq[end..end + unit_len].eq_ignore_ascii_case(repeat_unit) {
             count += 1;
             end += unit_len;
         } else {
