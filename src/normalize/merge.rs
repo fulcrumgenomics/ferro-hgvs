@@ -102,6 +102,15 @@ struct Anchor {
     end: i64,
     alt: Vec<Base>,
     form: AnchorForm,
+    /// The single reference base the span covers, when the span is exactly one
+    /// base and that base is known.
+    ///
+    /// Carried so `build_naedit` can render a one-for-one replacement as the
+    /// SUBSTITUTION `DNA/delins.md:12` requires rather than a one-base `delins`.
+    /// `None` wherever the reference is not to hand, which keeps every such
+    /// caller on the previous `delins` rendering rather than emitting a
+    /// reference-less substitution.
+    ref_base: Option<Base>,
 }
 
 /// Merge consecutive sub-variants in an allele.
@@ -624,6 +633,7 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
         end: a_end,
         alt: alt_bases,
         form: AnchorForm::Replacement,
+        ref_base: None,
     };
     // Rebuild the variant kind the group came in as. `g.`/`m.` use the
     // single-axis `Region::Genome` anchor; `c.`/`n.`/`r.` use the positive
@@ -1025,21 +1035,32 @@ fn anchor_from_loc_edit<L>(
         return None;
     }
     match edit {
-        NaEdit::Substitution { alternative, .. } | NaEdit::SubstitutionNoRef { alternative } => {
-            Some(Anchor {
-                region,
-                start,
-                end,
-                alt: vec![*alternative],
-                form: AnchorForm::Replacement,
-            })
-        }
+        NaEdit::Substitution {
+            reference,
+            alternative,
+        } => Some(Anchor {
+            region,
+            start,
+            end,
+            alt: vec![*alternative],
+            form: AnchorForm::Replacement,
+            ref_base: Some(*reference),
+        }),
+        NaEdit::SubstitutionNoRef { alternative } => Some(Anchor {
+            region,
+            start,
+            end,
+            alt: vec![*alternative],
+            form: AnchorForm::Replacement,
+            ref_base: None,
+        }),
         NaEdit::Deletion { .. } => Some(Anchor {
             region,
             start,
             end,
             alt: Vec::new(),
             form: AnchorForm::Replacement,
+            ref_base: None,
         }),
         NaEdit::Delins { sequence, .. } => {
             let bases = sequence.bases()?.to_vec();
@@ -1049,6 +1070,7 @@ fn anchor_from_loc_edit<L>(
                 end,
                 alt: bases,
                 form: AnchorForm::Replacement,
+                ref_base: None,
             })
         }
         NaEdit::Insertion { sequence } => {
@@ -1062,6 +1084,7 @@ fn anchor_from_loc_edit<L>(
                 end: start,
                 alt: bases,
                 form: AnchorForm::Replacement,
+                ref_base: None,
             })
         }
         _ => None,
@@ -1376,6 +1399,25 @@ fn build_naedit<P>(
         NaEdit::Deletion {
             sequence: None,
             length: None,
+        }
+    } else if let (true, 1, Some(reference)) = (
+        merged.end == merged.start,
+        merged.alt.len(),
+        merged.ref_base,
+    ) {
+        // One nucleotide replaced by one other nucleotide is a SUBSTITUTION,
+        // not a one-base delins: `DNA/delins.md:12` says so outright and
+        // `DNA/substitution.md` defines the form. Without this the derivation
+        // renders `c.5G>A` as `c.5delinsA`.
+        //
+        // Requires the reference base, hence `Anchor::ref_base`: emitting
+        // `SubstitutionNoRef` instead renders without the reference and moves
+        // strings across the whole suite (measured: 53 failures). Where the
+        // reference is unknown this falls through to `delins`, which is the
+        // previous rendering, so no caller regresses.
+        NaEdit::Substitution {
+            reference,
+            alternative: merged.alt[0],
         }
     } else {
         NaEdit::Delins {
@@ -5417,12 +5459,22 @@ fn anchor_for_piece(
     }
     let start = w_lo + piece.ref_start as i64;
     let end = w_lo + piece.ref_end as i64 - 1;
+    // A piece covering exactly one reference base can render as a substitution
+    // rather than a one-base `delins` (`DNA/delins.md:12`), but only if the base
+    // it replaces is stated. The window has it, so read it off here — this is
+    // the only place in the derivation where the reference and the piece are
+    // both in hand.
+    let ref_base = (piece.ref_end == piece.ref_start + 1)
+        .then(|| ref_bytes.get(piece.ref_start).copied())
+        .flatten()
+        .and_then(|byte| Base::from_char(byte as char));
     Some(Anchor {
         region: body,
         start,
         end,
         alt,
         form: AnchorForm::Replacement,
+        ref_base,
     })
 }
 
@@ -5486,6 +5538,7 @@ fn duplication_anchor(
         // A `dup` names its source bases by span; there is nothing to insert.
         alt: Vec::new(),
         form: AnchorForm::Duplication,
+        ref_base: None,
     })
 }
 
@@ -5552,6 +5605,7 @@ fn boundary_delins_anchor(
         end: position,
         alt: bases,
         form: AnchorForm::Replacement,
+        ref_base: None,
     })
 }
 
@@ -5612,6 +5666,7 @@ fn cds_end_delins_anchor(
         end: cds_end_axis,
         alt: bases,
         form: AnchorForm::Replacement,
+        ref_base: None,
     })
 }
 
@@ -8895,6 +8950,7 @@ mod tests {
             end: 1009,
             alt: Vec::new(),
             form: AnchorForm::Replacement,
+            ref_base: None,
         };
         let (interval, edit) = build_naedit(anchor, |_, p| GenomePos::new(p as u64));
 
@@ -8915,6 +8971,7 @@ mod tests {
             end: 1009,
             alt: vec![Base::A],
             form: AnchorForm::Replacement,
+            ref_base: None,
         };
         let (_, edit) = build_naedit(anchor, |_, p| GenomePos::new(p as u64));
         match edit {
