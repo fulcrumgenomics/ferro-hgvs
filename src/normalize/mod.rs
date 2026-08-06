@@ -2006,6 +2006,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         let edit = match variant {
             HV::Genome(g) => &g.loc_edit.edit,
             HV::Mt(m) => &m.loc_edit.edit,
+            HV::Cds(c) => &c.loc_edit.edit,
+            HV::Tx(t) => &t.loc_edit.edit,
+            HV::Rna(r) => &r.loc_edit.edit,
             _ => return false,
         };
         edit.inner().is_some()
