@@ -2261,8 +2261,8 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
 
     // Window: the union of every member's footprint, padded for the 3'-shift.
     let (c_lo, c_hi) = edit_span_union(&edits)?;
-    let w_lo = (c_lo - CANONICAL_PAD).max(1);
-    let w_hi = c_hi + CANONICAL_PAD;
+    let mut w_lo = (c_lo - CANONICAL_PAD).max(1);
+    let mut w_hi = c_hi + CANONICAL_PAD;
     if w_hi - w_lo + 1 > MAX_CANONICAL_WINDOW {
         return None;
     }
@@ -2293,6 +2293,22 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // left open.
     if crosses_exon_junction(kind, &accession, provider, &frame, c_lo, c_hi) {
         return None;
+    }
+    // `general.md:44` exempts a deletion or duplication at an exon/exon junction
+    // from the 3' rule, so the derivation may not place a change outside the exon
+    // its member was described in. Clamping the WINDOW is the only place that can
+    // enforce it, because the piece is *born* outside the exon: the partitioner's
+    // 3'-most tie-break puts a deletion at the far end of a homopolymer run
+    // before any shift runs, so `shift_pieces` has nothing left to move.
+    //
+    // Measured, on `NM_001234.1` (exons 1-15/16-30/31-44, `cds_start = 5`, G-run
+    // spanning c.9-c.33): a lone `c.11del` derives to `c.33del`, and an
+    // exon-aware clamp inside `shift_pieces` — with barriers verified correct at
+    // `[11, 26]` — changes nothing. Narrowing the window is what holds it.
+    if let Some((exon_lo, exon_hi)) = enclosing_exon(kind, &accession, provider, &frame, c_lo, c_hi)
+    {
+        w_lo = w_lo.max(exon_lo);
+        w_hi = w_hi.min(exon_hi);
     }
     let start0 = w_lo + frame.delta - 1;
     let end0 = w_hi + frame.delta;
@@ -3319,6 +3335,31 @@ struct AxisFrame {
     reading_frame: bool,
 }
 
+/// The axis-coordinate bounds of the exon enclosing `[lo, hi]`, when one does.
+///
+/// `None` on the genomic axes, for an unservable transcript, or when the span is
+/// not wholly inside a single exon — in the last case `crosses_exon_junction`
+/// has already refused the derivation, so there is nothing left to clamp.
+fn enclosing_exon<P: ReferenceProvider>(
+    kind: CisKind,
+    accession: &str,
+    provider: &P,
+    frame: &AxisFrame,
+    lo: i64,
+    hi: i64,
+) -> Option<(i64, i64)> {
+    if matches!(kind, CisKind::Genome | CisKind::Mt) {
+        return None;
+    }
+    let transcript = provider.get_transcript(accession).ok()?;
+    let (tx_lo, tx_hi) = (lo + frame.delta, hi + frame.delta);
+    transcript.exons.iter().find_map(|exon| {
+        let (start, end) = (exon.start as i64 + 1, exon.end as i64);
+        (start <= tx_lo && tx_hi <= end).then(|| (start - frame.delta, end - frame.delta))
+    })
+}
+
+/// Resolve the group's [`AxisFrame`], or refuse the group.
 /// Whether `[lo, hi]` — a member-span union in axis coordinates — crosses an
 /// exon/exon junction of its own transcript (#1450).
 ///
