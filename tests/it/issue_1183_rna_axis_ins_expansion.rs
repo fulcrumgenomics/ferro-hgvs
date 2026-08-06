@@ -79,16 +79,22 @@ fn rna_axis_expansion_agrees_with_the_c_axis() {
             .unwrap_or_else(|e| panic!("r. with [{payload}] must normalize, got {e:?}"));
         let cds = normalize(&format!("NM_000088.3:c.4_6delins[{payload}]"))
             .unwrap_or_else(|e| panic!("c. with [{payload}] must normalize, got {e:?}"));
-        // Re-render the c. answer as RNA: lowercase, and u for T.
+        // Re-render the c. answer as RNA: lowercase every base, and u for T.
+        //
+        // The whole description after the `r.` axis marker is re-rendered, not
+        // just the tail from the first `delins`. Splitting at `delins` was
+        // correct only while the answer was a single delins; once it is a
+        // multi-member allele (`r.[3_4insA;5_6delinsGT]`) the first `delins`
+        // sits in the *second* member and the leading `insA` escapes
+        // lowercasing, so the re-rendering asserted against an RNA description
+        // carrying an upper-case base. Positions and separators are unaffected
+        // by `to_lowercase`, and `t` appears only in bases.
         let expected = cds.replace("c.", "r.");
-        let split = expected.split_at(expected.find("delins").unwrap_or_else(|| {
-            panic!(
-                "the c. answer for [{payload}] is expected to stay a delins; got {cds} — \
-                 if canonicalization legitimately changed shape, update this re-rendering"
-            )
-        }));
-        let (prefix, edit) = split;
-        let as_rna = format!("{prefix}{}", edit.to_lowercase().replace('t', "u"));
+        let axis = expected.find("r.").unwrap_or_else(|| {
+            panic!("the c. answer for [{payload}] must carry an axis marker; got {cds}")
+        }) + 2;
+        let (prefix, body) = expected.split_at(axis);
+        let as_rna = format!("{prefix}{}", body.to_lowercase().replace('t', "u"));
         assert_eq!(
             rna, as_rna,
             "r. must match the c. answer re-rendered as RNA (payload [{payload}])",
