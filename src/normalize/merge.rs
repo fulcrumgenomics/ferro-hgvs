@@ -3148,8 +3148,16 @@ fn enclosing_exon<P: ReferenceProvider>(
     }
     let transcript = provider.get_transcript(accession).ok()?;
     let (tx_lo, tx_hi) = (lo + frame.delta, hi + frame.delta);
+    // `Exon` stores 1-based INCLUSIVE bounds — `[(1, 15), (16, 30), (31, 44)]` on
+    // `MockProvider`'s `NM_001234.1` — so `start` is already the exon's first
+    // base. Adding one treats them as 0-based half-open and makes the enclosure
+    // test miss any member sitting on an exon's first base: `c.12del` on that
+    // transcript has `tx_lo = 16`, which `17 <= 16` rejects, so the clamp
+    // silently returns `None` and the derivation shuffles across the junction
+    // into exon 1 (`c.9del`). `crosses_exon_junction` above reads `exon.end`
+    // directly and is unaffected.
     transcript.exons.iter().find_map(|exon| {
-        let (start, end) = (exon.start as i64 + 1, exon.end as i64);
+        let (start, end) = (exon.start as i64, exon.end as i64);
         (start <= tx_lo && tx_hi <= end).then(|| (start - frame.delta, end - frame.delta))
     })
 }
