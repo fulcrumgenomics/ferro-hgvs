@@ -3851,7 +3851,9 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
 /// rule that widens a piece must run after the weight bound, never inside
 /// [`partition_block`].**
 fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
-    if pieces.len() < 2 || !every_separation_is_a_single_base(pieces) {
+    if pieces.len() < 2
+        || !(every_separation_is_a_single_base(pieces) || changed_columns_dominate_the_span(pieces))
+    {
         return;
     }
     let start = pieces[0].ref_start;
@@ -3895,6 +3897,48 @@ fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
     if is_inversion(&whole, ref_bytes) {
         *pieces = vec![whole];
     }
+}
+
+/// Whether more of the span is changed than is left unchanged.
+///
+/// The second admission route into [`coalesce_whole_block_inversion`], and the
+/// one that recognises a long inversion (#1461). It is deliberately **not** a
+/// wider separation threshold, because separation cannot decide this case:
+///
+/// | | span | changed | widest gap |
+/// |---|---|---|---|
+/// | `NC_000013.10:g.100809575_100810031inv` (#1461) | 457 nt | 307 (67.2%) | **5** |
+/// | `AAGCTA -> TAGCTT` (the #1040 control) | 6 nt | 2 (33.3%) | **4** |
+///
+/// The inversion that must be recognised has *wider* gaps than the pair that
+/// must stay individual, so every threshold on separation either refuses #1461
+/// or admits the #1040 control. That is why widening
+/// [`every_separation_is_a_single_base`] breaks
+/// `a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation`.
+///
+/// Density does separate them, and for a reason rather than by fitting. Reverse
+/// complementing a random block leaves roughly a quarter of its positions
+/// coincidentally unchanged, which is what #1461's 32.8% looks like. The #1040
+/// control leaves 66.7% unchanged — far above chance, because that span is very
+/// nearly its own reverse complement and the two edits are independent changes
+/// sitting inside it, exactly as that test's comment argues. Requiring the
+/// changed columns to be the majority says the reverse-complement relation is
+/// doing work across the whole span instead of describing a near-palindrome.
+///
+/// Additive by construction: this is an `||` alternative to the single-base gate,
+/// so every block that coalesces today still coalesces. Only a block that is
+/// currently *refused* can change, which is what confines the blast radius to
+/// the class #1461 reports.
+fn changed_columns_dominate_the_span(pieces: &[Piece]) -> bool {
+    let (start, end) = (pieces[0].ref_start, pieces[pieces.len() - 1].ref_end);
+    let Some(span) = end.checked_sub(start).filter(|span| *span > 0) else {
+        return false;
+    };
+    let changed: usize = pieces
+        .iter()
+        .map(|piece| piece.ref_end.saturating_sub(piece.ref_start))
+        .sum();
+    changed * 2 > span
 }
 
 /// Whether every gap between consecutive pieces is a single unchanged base —
@@ -8304,6 +8348,84 @@ mod tests {
     use crate::hgvs::parser::parse_hgvs;
     use crate::hgvs::variant::Accession;
     use crate::reference::MockProvider;
+
+    /// The two geometries #1461 turns on, pinned as numbers so the reasoning
+    /// survives without a 457-base literal in the test.
+    ///
+    /// Real, measured from the shipped output of
+    /// `NC_000013.10:g.100809575_100810031inv` and from the `AAGCTA -> TAGCTT`
+    /// control in `issue_1040_inv_overrecognition_probes`.
+    ///
+    /// The reported geometry is rebuilt from its measured gap histogram rather
+    /// than approximated, because the margin is what the test is for: #1461 is
+    /// 67.2% changed, so a fixture that is denser than the real case would keep
+    /// passing under a threshold that refuses the case the fix exists for.
+    #[test]
+    fn density_separates_the_inversion_from_the_over_recognition_control() {
+        // #1461: 109 members over 457 nt, 307 columns changed. The measured gap
+        // histogram is {1: 78, 2: 24, 3: 2, 4: 2, 5: 2} — 108 gaps holding 150
+        // unchanged columns, so the span is 307 + 150 = 457 exactly as reported.
+        // Only the two totals reach the rule, so the 307 changed columns are
+        // spread as evenly over the members as the total allows.
+        let gaps: Vec<usize> = [(1, 78), (2, 24), (3, 2), (4, 2), (5, 2)]
+            .into_iter()
+            .flat_map(|(width, count)| std::iter::repeat_n(width, count))
+            .collect();
+        let member_count = gaps.len() + 1;
+        let mut cursor = 0usize;
+        let mut inversion: Vec<Piece> = Vec::with_capacity(member_count);
+        for member in 0..member_count {
+            let len = 307 / member_count + usize::from(member < 307 % member_count);
+            inversion.push(Piece {
+                ref_start: cursor,
+                ref_end: cursor + len,
+                alt: vec![b'N'; len],
+            });
+            cursor += len + gaps.get(member).copied().unwrap_or(0);
+        }
+
+        let span = inversion[member_count - 1].ref_end - inversion[0].ref_start;
+        let changed: usize = inversion.iter().map(|p| p.ref_end - p.ref_start).sum();
+        assert_eq!(inversion.len(), 109, "the reported member count");
+        assert_eq!(span, 457, "the reported span");
+        assert_eq!(changed, 307, "the reported changed-column total");
+        assert_eq!(
+            gaps.iter().copied().max(),
+            Some(5),
+            "the reported widest separation"
+        );
+        assert!(
+            changed_columns_dominate_the_span(&inversion),
+            "a dense inversion must be admitted even though its widest gap is 5"
+        );
+        assert!(
+            !every_separation_is_a_single_base(&inversion),
+            "and it is admitted by density alone -- the single-base gate refuses it"
+        );
+
+        // The #1040 control, `AAGCTA -> TAGCTT`: 6 nt, 2 changed, one gap of 4.
+        let control = vec![
+            Piece {
+                ref_start: 0,
+                ref_end: 1,
+                alt: vec![b'T'],
+            },
+            Piece {
+                ref_start: 5,
+                ref_end: 6,
+                alt: vec![b'T'],
+            },
+        ];
+        assert!(
+            !changed_columns_dominate_the_span(&control),
+            "two isolated edits inside a near-palindrome must stay individual"
+        );
+
+        // The ordering that makes a separation threshold impossible is asserted
+        // structurally above: the case to admit fails `every_separation_is_a_
+        // single_base` (its widest real gap is 5) while the case to refuse has a
+        // gap of 4, so no threshold on separation admits one without the other.
+    }
 
     // ------------------------------------------------------------------
     // Exon-junction guard on the derivation input (#1450)
