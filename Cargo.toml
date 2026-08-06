@@ -239,6 +239,16 @@ anyhow = "1"
 sha2 = "0.10"
 
 [[example]]
+name = "harvest_multi_member_cis"
+required-features = ["dev"]
+test = true
+
+[[example]]
+name = "generate_cis_confluence_corpus"
+required-features = ["dev"]
+test = true
+
+[[example]]
 name = "build_conformance_snapshot"
 required-features = ["dev"]
 

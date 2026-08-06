@@ -1,0 +1,1334 @@
+//! Generate a corpus of **confluence classes** for designed multi-member cis
+//! alleles (#1443, part 2).
+//!
+//! # Why this exists
+//!
+//! `canonicalize_from_sequence` is gated on `members.len() > 1`
+//! (`src/normalize/mod.rs`), so only a multi-member cis allele reaches the
+//! partitioner. Part 1 of this issue harvested every such input out of the bulk
+//! corpora: **650 rows out of 9 949 738**. Real corpora are observed variants,
+//! where two changes rarely land close enough to share a block, so no amount of
+//! real data will cover the partitioner. Consumers who submit *designed*
+//! alleles — a systematic indel design walking a window — have the opposite
+//! distribution, and that is the shape this generates.
+//!
+//! # What a confluence class is, and how it differs from a dump
+//!
+//! `examples/dump_normalized_corpus.rs` (#1441/#1442) records `input → output`
+//! so two revisions can be diffed: it measures **stability**, the property that
+//! a given variant's normalized string does not move between releases. This
+//! measures the other half — **confluence**, the property that two spellings of
+//! one variant reach one string *within* a single revision. Nothing in the repo
+//! asserts that at scale today.
+//!
+//! A class is therefore: one synthetic reference, one denoted sequence, and
+//! N ≥ 2 distinct HGVS spellings that all denote it. `tests/it/cis_confluence_axis.rs`
+//! normalizes every spelling in a class and censuses how many distinct outputs
+//! come back; the target is one.
+//!
+//! # Ground truth is the denoted sequence, never the intent
+//!
+//! Every candidate spelling is applied to the reference through
+//! `hgvs_to_spdi` — independently of the normalizer, or the whole axis would be
+//! circular — and kept only if its applied sequence is byte-identical to the
+//! class's. A spelling that does not match is dropped and counted; a class left
+//! with fewer than two spellings is dropped and counted. Both counts are
+//! reported, because a generator that silently produced singletons would make
+//! the axis vacuous while still looking busy.
+//!
+//! The applier is a compact restatement of `tests/it/common/cis_apply_oracle.rs`
+//! (`apply_reason`), including its 3'→5' walk, its longer-deletion-first
+//! tie-break and its coincident-insertion rejection. An example cannot reach
+//! `tests/`, which is the same constraint `dump_normalized_corpus` documents;
+//! keeping the two in step matters less than keeping this corpus stable over
+//! time, since the corpus is what the pinned census numbers are measured over.
+//!
+//! # Conventions shared with `dump_normalized_corpus`
+//!
+//! The [`PAD_OFFSET`] padded-synthetic-contig scheme, the two accessions, the
+//! coding-provider construction, and the deterministic xorshift sequence
+//! generator are all taken from it (which in turn shares the xorshift with
+//! `tests/it/common/cis_apply_oracle.rs`'s `sweep_sequences`). [`corpus_cores`]
+//! adds a length parameter; because the xorshift draws one base at a time from a
+//! per-seed stream, a longer draw is a strict extension of a shorter one, so a
+//! 64-mer core's first twenty bases are exactly the corresponding
+//! `sweep_sequences` 20-mer.
+//!
+//! Changing the generator, the seed count or the core length re-rolls the corpus
+//! and moves every pinned number that is measured over it.
+//!
+//! # Usage
+//!
+//! ```text
+//! # the corpus the axis test reads (regenerated on demand when absent)
+//! cargo run --features dev --example generate_cis_confluence_corpus
+//! cargo run --features dev --example generate_cis_confluence_corpus -- --output <path>
+//!
+//! # the (reference_block, alt_block) pairs the algebra side and the
+//! # partitioner bake-off consume: one pair per line, tab-separated,
+//! # deduplicated and sorted
+//! cargo run --features dev --example generate_cis_confluence_corpus -- --blocks <path>
+//!
+//! # census only, no files written
+//! cargo run --features dev --example generate_cis_confluence_corpus -- --stats
+//! ```
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::Parser;
+use serde::Serialize;
+
+use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+use ferro_hgvs::reference::MockProvider;
+use ferro_hgvs::spdi::hgvs_to_spdi;
+use ferro_hgvs::{parse_hgvs, HgvsVariant};
+
+// ---------------------------------------------------------------------------
+// The synthetic references
+// ---------------------------------------------------------------------------
+
+/// 256 bases of period-4 `ACGT` on either side of a core, so the base
+/// immediately 5' of the core is `T` and the one immediately 3' of it is `A`.
+/// Shared with `dump_normalized_corpus` and `tests/it/common/synthetic.rs`.
+const PAD_OFFSET: usize = 256;
+
+/// The genomic contig a `g.` class is drawn against.
+const GENOMIC_CONTIG: &str = "NC_TEST.1";
+/// The transcript a `c.` class is drawn against.
+const TX_ACCESSION: &str = "NM_TEST.1";
+/// The contig the synthetic transcript is placed on.
+const TX_CONTIG: &str = "chr_synth";
+
+/// Core length. Long enough for four members separated by eight unchanged bases
+/// with eight-base payloads, which is the widest design enumerated below.
+const CORE_LEN: usize = 64;
+
+/// CDS of the synthetic transcript, 1-based inclusive. The transcript sequence
+/// *is* the core, and `CDS_START == 1` makes `c.p` the core's 1-based position
+/// `p`, so a `g.` and a `c.` class over one design address the same bases. A
+/// one-base 3'UTR is left over so the CDS is not the whole transcript.
+const CDS_START: u64 = 1;
+const CDS_END: u64 = 63;
+
+/// The 0-based core offset every design starts at. Leaving eight bases of core
+/// 5' of the first member gives a 5'-shifting member somewhere to travel that is
+/// still inside the core, so a shifted respelling is not forced into the pad.
+const DESIGN_START: usize = 8;
+
+/// Highest 0-based core index a design may reference. Bounded by the `c.` axis:
+/// index 63 is `c.*1`, and keeping every design inside the CDS means the two
+/// axes enumerate exactly the same design set.
+const MAX_INDEX: usize = CDS_END as usize - 1;
+
+/// How far either way [`equivalent_placements`] looks for an equivalent
+/// placement of a single member. A shift longer than this would have to travel
+/// most of the core.
+const SHIFT_SEARCH: isize = 20;
+
+/// Member counts enumerated. Two is the smallest allele that reaches the
+/// partitioner at all; four is where the bulk corpora run out of evidence
+/// entirely (part 1 found seven three-member and three four-member rows).
+const MEMBER_COUNTS: &[usize] = &[2, 3, 4];
+
+/// Unchanged bases between consecutive members. Zero is adjacency — members
+/// that share a block with nothing between them — and eight is far enough that
+/// no partitioner should merge them.
+const SEPARATIONS: &[usize] = &[0, 1, 2, 3, 5, 8];
+
+/// Payload sizes: the deleted / inserted / duplicated length of a member.
+const PAYLOADS: &[usize] = &[1, 2, 4, 8];
+
+// ---------------------------------------------------------------------------
+// CLI
+// ---------------------------------------------------------------------------
+
+/// Where the corpus is written when `--output` is not given.
+const DEFAULT_OUTPUT: &str = "tests/fixtures/cis/cis_confluence_corpus.json";
+
+#[derive(Parser, Debug)]
+#[command(about = "Generate confluence classes for designed multi-member cis alleles (#1443)")]
+struct Cli {
+    /// Write the corpus JSON here.
+    #[arg(long, default_value = DEFAULT_OUTPUT)]
+    output: PathBuf,
+    /// Also write the raw `(reference_block, alt_block)` pairs here: one pair
+    /// per line, tab-separated, deduplicated and sorted.
+    #[arg(long)]
+    blocks: Option<PathBuf>,
+    /// Census only — write nothing.
+    #[arg(long)]
+    stats: bool,
+    /// Seed count for the reference corpus. Two cores per seed (an `AT` and an
+    /// `ACGT` alphabet). Prefix-stable: a smaller count is a strict prefix.
+    #[arg(long, default_value_t = 4)]
+    seeds: u32,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    let corpus = build_corpus(cli.seeds);
+
+    print!("{}", render_census(&corpus));
+
+    if cli.stats {
+        return ExitCode::SUCCESS;
+    }
+
+    if let Some(path) = &cli.blocks {
+        let pairs = block_pairs(&corpus);
+        let mut out = String::new();
+        for (reference, alt) in &pairs {
+            let _ = writeln!(out, "{reference}\t{alt}");
+        }
+        if let Err(e) = write_to(path, &out) {
+            eprintln!("error: {e}");
+            return ExitCode::FAILURE;
+        }
+        println!(
+            "wrote {} distinct (reference_block, alt_block) pairs to {}",
+            pairs.len(),
+            path.display()
+        );
+    }
+
+    let mut rendered = match serde_json::to_string_pretty(&corpus) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!("error: serializing the corpus: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    rendered.push('\n');
+    if let Err(e) = write_to(&cli.output, &rendered) {
+        eprintln!("error: {e}");
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "wrote {} confluence classes to {}",
+        corpus.classes.len(),
+        cli.output.display()
+    );
+    ExitCode::SUCCESS
+}
+
+fn write_to(path: &PathBuf, contents: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("creating {}: {e}", parent.display()))?;
+    }
+    std::fs::write(path, contents).map_err(|e| format!("writing {}: {e}", path.display()))
+}
+
+// ---------------------------------------------------------------------------
+// The corpus
+// ---------------------------------------------------------------------------
+
+/// One confluence class: a reference, the sequence it denotes, and the
+/// spellings that denote it.
+#[derive(Serialize)]
+struct Class {
+    /// Stable identifier, derived from the design parameters. Unique within a
+    /// corpus and independent of iteration order.
+    id: String,
+    /// `"g"` or `"c"`.
+    axis: String,
+    /// The accession the spellings are written against.
+    accession: String,
+    /// The synthetic core. A `g.` class is drawn against `PAD + core + PAD`; a
+    /// `c.` class is drawn against the core itself, which is the transcript.
+    core: String,
+    /// The core after the design is applied — the class's ground truth, stated
+    /// core-relative so a `g.` class does not carry 512 bases of padding.
+    denoted: String,
+    /// Members in the design.
+    members: usize,
+    /// Unchanged bases the design left between consecutive members.
+    separation: usize,
+    /// Payload size the design was parameterised with.
+    payload: usize,
+    /// The per-member edit-kind pattern, e.g. `rot2` or `all-del`.
+    pattern: String,
+    /// 0-based core offset the union span starts at, so a consumer holding only
+    /// the block pair can put it back where it came from.
+    block_start: usize,
+    /// The union span's reference bases, 0-based half-open over the core. Empty
+    /// for a design whose members are all pure insertions at one interbase.
+    reference_block: String,
+    /// What the union span becomes. Paired with `reference_block`, this is what
+    /// `--blocks` emits.
+    alt_block: String,
+    /// Every spelling that denotes [`Self::denoted`]. At least two.
+    spellings: Vec<String>,
+}
+
+/// A class plus the candidate spellings the ground-truth filter threw away
+/// building it. The count is reported in the run census rather than stored per
+/// class, since it says something about the *generator* and nothing about the
+/// class that survived.
+struct Built {
+    class: Class,
+    mismatched: usize,
+}
+
+/// Counts a run reports and the corpus carries, so a consumer can see how much
+/// was thrown away without re-running the generator.
+#[derive(Serialize, Default)]
+struct Drops {
+    /// Designs whose authored spelling had no well-defined resulting sequence —
+    /// two pure insertions at one interbase, or a member the applier declined.
+    /// Not a defect: `separation = 0` deliberately generates such designs, and
+    /// counting them is how that stays visible.
+    designs_without_a_denoted_sequence: usize,
+    /// Designs whose members cancel out, leaving the reference unchanged — a
+    /// `del` of one base immediately followed by an `ins` of the same base is
+    /// the shape. Every spelling of such a design denotes the reference, so it
+    /// is a confluence class about nothing.
+    designs_that_denote_the_reference: usize,
+    /// Candidate spellings whose applied sequence differed from the class's.
+    spellings_not_denoting_the_class: usize,
+    /// Classes left with fewer than two surviving spellings.
+    classes_that_became_singletons: usize,
+}
+
+#[derive(Serialize)]
+struct Corpus {
+    description: String,
+    generator: String,
+    seeds: u32,
+    core_length: usize,
+    /// Designs the parameter sweep proposed, before any filtering.
+    designs_considered: usize,
+    drops: Drops,
+    classes: Vec<Class>,
+}
+
+fn build_corpus(seeds: u32) -> Corpus {
+    let mut classes = Vec::new();
+    let mut drops = Drops::default();
+    let mut considered = 0usize;
+
+    for (core_index, core) in corpus_cores(seeds, CORE_LEN).into_iter().enumerate() {
+        let axes: [(&str, &str, MockProvider, String); 2] = [
+            ("g", GENOMIC_CONTIG, genomic_provider(&core), padded(&core)),
+            ("c", TX_ACCESSION, coding_provider(&core), core.clone()),
+        ];
+        for &member_count in MEMBER_COUNTS {
+            for &separation in SEPARATIONS {
+                for &payload in PAYLOADS {
+                    for pattern in patterns() {
+                        let Some(members) =
+                            layout(&core, member_count, separation, payload, pattern)
+                        else {
+                            continue;
+                        };
+                        for (axis, accession, provider, reference) in &axes {
+                            considered += 1;
+                            let id = format!(
+                                "s{core_index:02}-{axis}-m{member_count}-sep{separation}\
+                                 -p{payload}-{}",
+                                pattern.label()
+                            );
+                            let design = Design {
+                                id: &id,
+                                axis,
+                                accession,
+                                core: &core,
+                                reference,
+                                provider,
+                                members: &members,
+                                separation,
+                                payload,
+                                pattern,
+                            };
+                            match build_class(&design) {
+                                Ok(built) => {
+                                    drops.spellings_not_denoting_the_class += built.mismatched;
+                                    classes.push(built.class);
+                                }
+                                Err(Rejected::NoDenotedSequence) => {
+                                    drops.designs_without_a_denoted_sequence += 1;
+                                }
+                                Err(Rejected::DenotesTheReference) => {
+                                    drops.designs_that_denote_the_reference += 1;
+                                }
+                                Err(Rejected::Singleton { mismatched }) => {
+                                    drops.spellings_not_denoting_the_class += mismatched;
+                                    drops.classes_that_became_singletons += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    classes.sort_by(|a, b| a.id.cmp(&b.id));
+
+    Corpus {
+        description: "Confluence classes for designed multi-member cis alleles. Each class is one \
+                      synthetic reference, one denoted sequence, and the distinct HGVS spellings \
+                      that denote it; every spelling was verified by applying it to the reference \
+                      independently of the normalizer."
+            .to_string(),
+        generator: "cargo run --features dev --example generate_cis_confluence_corpus".to_string(),
+        seeds,
+        core_length: CORE_LEN,
+        designs_considered: considered,
+        drops,
+        classes,
+    }
+}
+
+/// Why a design produced no class.
+enum Rejected {
+    /// The authored spelling denotes no single sequence — two pure insertions
+    /// at one interbase, or a member the applier declined.
+    NoDenotedSequence,
+    /// The design's members cancel out and it denotes the reference.
+    DenotesTheReference,
+    /// Fewer than two spellings survived the ground-truth filter.
+    Singleton { mismatched: usize },
+}
+
+/// One design, resolved against one axis. A struct rather than ten positional
+/// arguments, most of which are `&str`.
+struct Design<'a> {
+    id: &'a str,
+    axis: &'a str,
+    accession: &'a str,
+    core: &'a str,
+    /// The full sequence the axis addresses: the padded contig for `g.`, the
+    /// transcript (which is the core) for `c.`.
+    reference: &'a str,
+    provider: &'a MockProvider,
+    members: &'a [Member],
+    separation: usize,
+    payload: usize,
+    pattern: Pattern,
+}
+
+fn build_class(design: &Design<'_>) -> Result<Built, Rejected> {
+    let Design {
+        axis,
+        accession,
+        core,
+        reference,
+        provider,
+        members,
+        ..
+    } = *design;
+    let authored = render_allele(axis, accession, core, members);
+
+    // Ground truth: what the design denotes, established through the applier
+    // rather than through the generator's own arithmetic, so a rendering bug
+    // cannot smuggle the generator's intent in as the answer.
+    let triples = triples_of(provider, &authored).ok_or(Rejected::NoDenotedSequence)?;
+    let denoted_full = apply_triples(reference, &triples).ok_or(Rejected::NoDenotedSequence)?;
+    let denoted = core_relative(axis, &denoted_full).ok_or(Rejected::NoDenotedSequence)?;
+    // A `del` of one base flush against an `ins` of that same base cancels out.
+    // Every spelling of such a design denotes the reference, so it would be a
+    // confluence class about no variant at all.
+    if denoted == core {
+        return Err(Rejected::DenotesTheReference);
+    }
+
+    // The union span, in core coordinates, and what it becomes.
+    let offset = axis_offset(axis);
+    let lo = triples
+        .iter()
+        .map(|t| t.0.saturating_sub(offset))
+        .min()
+        .ok_or(Rejected::NoDenotedSequence)?;
+    let hi = triples
+        .iter()
+        .map(|t| t.0.saturating_sub(offset) + t.1.len())
+        .max()
+        .ok_or(Rejected::NoDenotedSequence)?;
+    if hi > core.len() || lo > hi {
+        return Err(Rejected::NoDenotedSequence);
+    }
+    // Everything the design edits lies inside `[lo, hi)`, so the applied core is
+    // `core[..lo] + alt_block + core[hi..]`.
+    let suffix = core.len() - hi;
+    if denoted.len() < lo + suffix
+        || !denoted.starts_with(&core[..lo])
+        || !denoted.ends_with(&core[hi..])
+    {
+        return Err(Rejected::NoDenotedSequence);
+    }
+    let alt_block = denoted[lo..denoted.len() - suffix].to_string();
+    let reference_block = core[lo..hi].to_string();
+
+    let mut spellings = Vec::new();
+    let mut mismatched = 0usize;
+    let mut seen = BTreeSet::new();
+    let candidates = candidate_spellings(design, &triples, &alt_block, lo, hi);
+    for candidate in candidates {
+        if !seen.insert(candidate.clone()) {
+            continue;
+        }
+        let denotes = triples_of(provider, &candidate)
+            .and_then(|t| apply_triples(reference, &t))
+            .is_some_and(|applied| applied == denoted_full);
+        if denotes {
+            spellings.push(candidate);
+        } else {
+            mismatched += 1;
+        }
+    }
+
+    if spellings.len() < 2 {
+        return Err(Rejected::Singleton { mismatched });
+    }
+
+    Ok(Built {
+        class: Class {
+            id: design.id.to_string(),
+            axis: axis.to_string(),
+            accession: accession.to_string(),
+            core: core.to_string(),
+            denoted,
+            members: members.len(),
+            separation: design.separation,
+            payload: design.payload,
+            pattern: design.pattern.label(),
+            block_start: lo,
+            reference_block,
+            alt_block,
+            spellings,
+        },
+        mismatched,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Designs
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Kind {
+    Del,
+    Ins,
+    Delins,
+    Sub,
+    Dup,
+}
+
+const KINDS: [Kind; 5] = [Kind::Del, Kind::Ins, Kind::Delins, Kind::Sub, Kind::Dup];
+
+impl Kind {
+    fn label(self) -> &'static str {
+        match self {
+            Kind::Del => "del",
+            Kind::Ins => "ins",
+            Kind::Delins => "delins",
+            Kind::Sub => "sub",
+            Kind::Dup => "dup",
+        }
+    }
+}
+
+/// How a design assigns edit kinds to its members.
+#[derive(Clone, Copy, Debug)]
+enum Pattern {
+    /// Member `j` gets `KINDS[(r + j) % 5]` — every design mixes kinds, and over
+    /// `r` every ordered adjacent pair of kinds is covered.
+    Rotate(usize),
+    /// Every member gets the same kind, which is what a systematic design
+    /// walking one window actually looks like.
+    Uniform(Kind),
+}
+
+impl Pattern {
+    fn kind(self, member: usize) -> Kind {
+        match self {
+            Pattern::Rotate(r) => KINDS[(r + member) % KINDS.len()],
+            Pattern::Uniform(kind) => kind,
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Pattern::Rotate(r) => format!("rot{r}"),
+            Pattern::Uniform(kind) => format!("all-{}", kind.label()),
+        }
+    }
+}
+
+fn patterns() -> Vec<Pattern> {
+    let mut out: Vec<Pattern> = (0..KINDS.len()).map(Pattern::Rotate).collect();
+    out.extend(KINDS.iter().copied().map(Pattern::Uniform));
+    out
+}
+
+/// One member of a design, in 0-based core coordinates.
+#[derive(Clone, Debug)]
+struct Member {
+    kind: Kind,
+    /// Start of the reference footprint. For [`Kind::Ins`] this is the
+    /// interbase the payload goes into, and the footprint is empty.
+    start: usize,
+    /// Reference bases the member occupies. Zero for [`Kind::Ins`].
+    span: usize,
+    /// Inserted bases, for the kinds that state them.
+    payload: String,
+}
+
+/// Lay out `count` members starting at [`DESIGN_START`], each separated from
+/// the next by `separation` unchanged reference bases.
+///
+/// Returns `None` when the design would run past [`MAX_INDEX`].
+fn layout(
+    core: &str,
+    count: usize,
+    separation: usize,
+    payload: usize,
+    pattern: Pattern,
+) -> Option<Vec<Member>> {
+    let mut members = Vec::with_capacity(count);
+    let mut cursor = DESIGN_START;
+    for index in 0..count {
+        let kind = pattern.kind(index);
+        let span = match kind {
+            Kind::Del | Kind::Delins | Kind::Dup => payload,
+            Kind::Sub => 1,
+            Kind::Ins => 0,
+        };
+        let bases = match kind {
+            Kind::Del | Kind::Dup => String::new(),
+            Kind::Ins | Kind::Delins => payload_bases(core, cursor, payload),
+            Kind::Sub => payload_bases(core, cursor, 1),
+        };
+        // The highest core index the member names: the last base of its
+        // footprint, or — for an insertion — the base 3' of its interbase.
+        let highest = if span == 0 { cursor } else { cursor + span - 1 };
+        if highest > MAX_INDEX || cursor == 0 {
+            return None;
+        }
+        members.push(Member {
+            kind,
+            start: cursor,
+            span,
+            payload: bases,
+        });
+        cursor = cursor + span + separation;
+    }
+    Some(members)
+}
+
+/// Deterministic inserted bases that differ from the reference base-for-base,
+/// so an insertion is never a no-op and a substitution's alt is never its ref.
+fn payload_bases(core: &str, at: usize, size: usize) -> String {
+    let bytes = core.as_bytes();
+    (0..size)
+        .map(|k| match bytes.get(at + k).copied().unwrap_or(b'A') {
+            b'A' => 'C',
+            b'C' => 'G',
+            b'G' => 'T',
+            _ => 'A',
+        })
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Rendering
+// ---------------------------------------------------------------------------
+
+/// 0-based core index to 1-based axis position. A `g.` class sits in a padded
+/// contig; a `c.` class addresses the transcript, which *is* the core.
+fn pos(axis: &str, index: usize) -> usize {
+    match axis {
+        "g" => PAD_OFFSET + index + 1,
+        _ => index + 1,
+    }
+}
+
+/// The 0-based interbase offset of the core within the axis's reference, which
+/// is what an SPDI position has to have subtracted to become core-relative.
+fn axis_offset(axis: &str) -> usize {
+    match axis {
+        "g" => PAD_OFFSET,
+        _ => 0,
+    }
+}
+
+fn render_member(axis: &str, core: &str, member: &Member) -> String {
+    let p = |index: usize| pos(axis, index);
+    let last = member.start + member.span.saturating_sub(1);
+    match member.kind {
+        Kind::Del if member.span == 1 => format!("{}del", p(member.start)),
+        Kind::Del => format!("{}_{}del", p(member.start), p(last)),
+        Kind::Dup if member.span == 1 => format!("{}dup", p(member.start)),
+        Kind::Dup => format!("{}_{}dup", p(member.start), p(last)),
+        Kind::Sub => format!(
+            "{}{}>{}",
+            p(member.start),
+            &core[member.start..member.start + 1],
+            member.payload
+        ),
+        Kind::Delins if member.span == 1 => {
+            format!("{}delins{}", p(member.start), member.payload)
+        }
+        Kind::Delins => format!("{}_{}delins{}", p(member.start), p(last), member.payload),
+        // An insertion at interbase `start` sits between the bases at
+        // `start - 1` and `start`.
+        Kind::Ins => format!(
+            "{}_{}ins{}",
+            p(member.start - 1),
+            p(member.start),
+            member.payload
+        ),
+    }
+}
+
+fn render_allele(axis: &str, accession: &str, core: &str, members: &[Member]) -> String {
+    let rendered: Vec<String> = members
+        .iter()
+        .map(|m| render_member(axis, core, m))
+        .collect();
+    format!("{accession}:{axis}.[{}]", rendered.join(";"))
+}
+
+/// Render an arbitrary `(position, deletion, insertion)` triple in core
+/// coordinates, choosing the plainest spelling its shape admits. Used for a
+/// member that has been shifted off the placement its authored kind described,
+/// where the original kind may no longer apply.
+fn render_triple(axis: &str, position: usize, deletion: &str, insertion: &str) -> Option<String> {
+    let p = |index: usize| pos(axis, index);
+    match (deletion.is_empty(), insertion.is_empty()) {
+        (true, true) => None,
+        (true, false) => {
+            if position == 0 {
+                return None;
+            }
+            Some(format!("{}_{}ins{insertion}", p(position - 1), p(position)))
+        }
+        (false, true) if deletion.len() == 1 => Some(format!("{}del", p(position))),
+        (false, true) => Some(format!(
+            "{}_{}del",
+            p(position),
+            p(position + deletion.len() - 1)
+        )),
+        (false, false) if deletion.len() == 1 => Some(format!("{}delins{insertion}", p(position))),
+        (false, false) => Some(format!(
+            "{}_{}delins{insertion}",
+            p(position),
+            p(position + deletion.len() - 1)
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Equivalent spellings
+// ---------------------------------------------------------------------------
+
+/// Every spelling that might denote the class, before the ground-truth filter.
+///
+/// Four families, per #1443:
+///
+/// 1. the design as authored;
+/// 2. the spanning `delins` over the union span, which always exists;
+/// 3. each member independently moved to the other end of its own ambiguous
+///    run, where one exists;
+/// 4. the design with its members authored in the opposite order.
+fn candidate_spellings(
+    design: &Design<'_>,
+    triples: &[(usize, String, String)],
+    alt_block: &str,
+    lo: usize,
+    hi: usize,
+) -> Vec<String> {
+    let Design {
+        axis,
+        accession,
+        core,
+        members,
+        ..
+    } = *design;
+    let mut out = vec![render_allele(axis, accession, core, members)];
+
+    // 2. The spanning form. A union span with no reference bases is a pure
+    // insertion, which cannot be spelled `delins`.
+    if let Some(spanning) = render_triple(axis, lo, &core[lo..hi], alt_block) {
+        out.push(format!("{accession}:{axis}.{spanning}"));
+    }
+
+    // 3. Each member at the other end of its own run.
+    let offset = axis_offset(axis);
+    let rendered: Vec<String> = members
+        .iter()
+        .map(|m| render_member(axis, core, m))
+        .collect();
+    for (index, triple) in triples.iter().enumerate() {
+        let position = triple.0 - offset;
+        for shifted in equivalent_placements(core, position, &triple.1, &triple.2) {
+            let Some(text) = render_triple(axis, shifted.0, &shifted.1, &shifted.2) else {
+                continue;
+            };
+            let mut variant = rendered.clone();
+            variant[index] = text;
+            out.push(format!("{accession}:{axis}.[{}]", variant.join(";")));
+        }
+    }
+
+    // 4. The same members, authored in the opposite order.
+    if members.len() > 1 {
+        let mut reversed = rendered.clone();
+        reversed.reverse();
+        out.push(format!("{accession}:{axis}.[{}]", reversed.join(";")));
+    }
+
+    out
+}
+
+/// The extreme equivalent placements of one member's edit, 5' and 3' of where
+/// it is written.
+///
+/// A placement is equivalent when applying it *alone* to `core` yields the same
+/// sequence the original does alone. The search is brute force over offsets
+/// within [`SHIFT_SEARCH`] rather than a rolling rotation, because the question
+/// asked here is exactly "does this denote the same thing", and answering it by
+/// re-deriving the shift rules would make the corpus agree with the normalizer
+/// by construction.
+///
+/// Returns at most two placements: the furthest 5' and the furthest 3'. An
+/// unambiguous member returns none.
+fn equivalent_placements(
+    core: &str,
+    position: usize,
+    deletion: &str,
+    insertion: &str,
+) -> Vec<(usize, String, String)> {
+    let Some(target) = splice(core, position, deletion.len(), insertion) else {
+        return Vec::new();
+    };
+    let mut lowest: Option<(usize, String, String)> = None;
+    let mut highest: Option<(usize, String, String)> = None;
+    for delta in -SHIFT_SEARCH..=SHIFT_SEARCH {
+        if delta == 0 {
+            continue;
+        }
+        let Ok(candidate) = usize::try_from(position as isize + delta) else {
+            continue;
+        };
+        let end = candidate + deletion.len();
+        if end > core.len() {
+            continue;
+        }
+        // The equivalent placement keeps the reference bases it now spans and
+        // takes whatever `target` has between the unchanged flanks.
+        if !target.starts_with(&core[..candidate]) || !target.ends_with(&core[end..]) {
+            continue;
+        }
+        let tail = core.len() - end;
+        if target.len() < candidate + tail {
+            continue;
+        }
+        let new_deletion = core[candidate..end].to_string();
+        let new_insertion = target[candidate..target.len() - tail].to_string();
+        if splice(core, candidate, new_deletion.len(), &new_insertion).as_deref() != Some(&target) {
+            continue;
+        }
+        let placement = (candidate, new_deletion, new_insertion);
+        if delta < 0 {
+            if lowest.is_none() {
+                lowest = Some(placement);
+            }
+        } else {
+            highest = Some(placement);
+        }
+    }
+    // `lowest` was filled by the first (most negative) delta that worked, which
+    // is the furthest 5'; `highest` by the last, which is the furthest 3'.
+    lowest.into_iter().chain(highest).collect()
+}
+
+/// `sequence[..at] + insertion + sequence[at + deleted..]`, or `None` when the
+/// span runs off the end.
+fn splice(sequence: &str, at: usize, deleted: usize, insertion: &str) -> Option<String> {
+    let end = at.checked_add(deleted)?;
+    if end > sequence.len() {
+        return None;
+    }
+    Some(format!(
+        "{}{insertion}{}",
+        &sequence[..at],
+        &sequence[end..]
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// The applier — ground truth, independent of the normalizer
+// ---------------------------------------------------------------------------
+
+/// Each member's `(position, deletion, insertion)` in the provider's frame, in
+/// the order the description renders them. `None` when the description does not
+/// parse or a member has no SPDI triple.
+fn triples_of(provider: &MockProvider, descriptor: &str) -> Option<Vec<(usize, String, String)>> {
+    let members: Vec<HgvsVariant> = match parse_hgvs(descriptor).ok()? {
+        HgvsVariant::Allele(allele) => allele.variants.clone(),
+        single => vec![single],
+    };
+    let mut triples = Vec::with_capacity(members.len());
+    for member in &members {
+        let triple = hgvs_to_spdi(member, provider).ok()?;
+        triples.push((
+            usize::try_from(triple.position).ok()?,
+            triple.deletion.clone(),
+            triple.insertion.clone(),
+        ));
+    }
+    Some(triples)
+}
+
+/// Apply `triples` to `reference`, or decline.
+///
+/// A compact restatement of `tests/it/common/cis_apply_oracle.rs::apply_reason`,
+/// which an example cannot reach. The three things that make it an oracle rather
+/// than a formatter, all carried over: the 3'→5' walk with a `claimed` cursor so
+/// an overlapping description is declined rather than double-spliced; the
+/// longer-deletion-first tie-break, without which a zero-width member flush
+/// against a deletion reads as an overlap; and the rejection of two pure
+/// insertions at one interbase, whose joint denotation is undefined.
+fn apply_triples(reference: &str, triples: &[(usize, String, String)]) -> Option<String> {
+    let mut ordered: Vec<&(usize, String, String)> = triples.iter().collect();
+    ordered.sort_by_key(|t| (std::cmp::Reverse(t.0), std::cmp::Reverse(t.1.len())));
+    let bytes = reference.as_bytes();
+    let mut edited = bytes.to_vec();
+    let mut claimed = reference.len();
+    let mut insertion_at: Option<usize> = None;
+    for (position, deletion, insertion) in ordered {
+        let end = position.checked_add(deletion.len())?;
+        if end > reference.len() || end > claimed {
+            return None;
+        }
+        if deletion.is_empty() && insertion_at == Some(*position) {
+            return None;
+        }
+        if !bytes[*position..end].eq_ignore_ascii_case(deletion.as_bytes()) {
+            return None;
+        }
+        edited.splice(*position..end, insertion.bytes());
+        if deletion.is_empty() {
+            insertion_at = Some(*position);
+        }
+        claimed = *position;
+    }
+    String::from_utf8(edited).ok()
+}
+
+/// Strip a `g.` class's padding back off, verifying it is untouched. A design
+/// lives entirely inside the core, so a changed pad means the applier or the
+/// layout went out of bounds and the class must not be trusted.
+fn core_relative(axis: &str, applied: &str) -> Option<String> {
+    if axis != "g" {
+        return Some(applied.to_string());
+    }
+    let pad = "ACGT".repeat(PAD_OFFSET / 4);
+    let rest = applied.strip_prefix(&pad)?;
+    Some(rest.strip_suffix(&pad)?.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Providers
+// ---------------------------------------------------------------------------
+
+fn padded(core: &str) -> String {
+    let pad = "ACGT".repeat(PAD_OFFSET / 4);
+    format!("{pad}{core}{pad}")
+}
+
+fn genomic_provider(core: &str) -> MockProvider {
+    let mut provider = MockProvider::new();
+    provider.add_genomic_sequence(GENOMIC_CONTIG, padded(core));
+    provider
+}
+
+fn coding_provider(core: &str) -> MockProvider {
+    let mut provider = MockProvider::new();
+    let tx_len = core.len() as u64;
+    let g_start = PAD_OFFSET as u64 + 1;
+    let g_end = PAD_OFFSET as u64 + tx_len;
+    let exon = Exon::with_genomic(1, 1, tx_len, g_start, g_end);
+    let transcript = Transcript::new(
+        TX_ACCESSION.to_string(),
+        Some("SYNTH".to_string()),
+        Strand::Plus,
+        core.to_string(),
+        Some(CDS_START),
+        Some(CDS_END),
+        vec![exon],
+        Some(TX_CONTIG.to_string()),
+        Some(g_start),
+        Some(g_end),
+        GenomeBuild::GRCh38,
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_genomic_sequence(TX_CONTIG, padded(core));
+    provider.add_transcript(transcript);
+    provider
+}
+
+// ---------------------------------------------------------------------------
+// Sequences
+// ---------------------------------------------------------------------------
+
+/// Deterministic cores, two per seed. The same xorshift64 as
+/// `tests/it/common/cis_apply_oracle.rs::sweep_sequences` and
+/// `examples/dump_normalized_corpus.rs::corpus_sequences`, with the draw length
+/// lifted into a parameter.
+///
+/// Prefix-stable on both axes: a smaller `seeds` is a strict prefix of a larger
+/// one, and a shorter `length` is a strict prefix of each core, because the
+/// stream is re-seeded per `(seed, alphabet)` and consumed one base at a time.
+fn corpus_cores(seeds: u32, length: usize) -> Vec<String> {
+    let mut sequences = Vec::with_capacity(2 * seeds as usize);
+    for seed in 0..seeds {
+        for alphabet in [b"AT".as_slice(), b"ACGT".as_slice()] {
+            let mut state = u64::from(seed).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            sequences.push(
+                (0..length)
+                    .map(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        alphabet[(state % alphabet.len() as u64) as usize] as char
+                    })
+                    .collect(),
+            );
+        }
+    }
+    sequences
+}
+
+// ---------------------------------------------------------------------------
+// Census and blocks
+// ---------------------------------------------------------------------------
+
+fn block_pairs(corpus: &Corpus) -> Vec<(String, String)> {
+    corpus
+        .classes
+        .iter()
+        .map(|c| (c.reference_block.clone(), c.alt_block.clone()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn render_census(corpus: &Corpus) -> String {
+    let mut out = String::new();
+    let _ = writeln!(
+        out,
+        "designs considered: {}  ->  confluence classes: {}",
+        corpus.designs_considered,
+        corpus.classes.len()
+    );
+    let _ = writeln!(
+        out,
+        "dropped: {} designs with no denoted sequence, {} designs that denote the reference, \
+         {} spellings that did not denote their class, {} classes left as singletons",
+        corpus.drops.designs_without_a_denoted_sequence,
+        corpus.drops.designs_that_denote_the_reference,
+        corpus.drops.spellings_not_denoting_the_class,
+        corpus.drops.classes_that_became_singletons
+    );
+    let _ = writeln!(
+        out,
+        "distinct (reference_block, alt_block) pairs: {}",
+        block_pairs(corpus).len()
+    );
+
+    let mut by_axis: BTreeMap<&str, usize> = BTreeMap::new();
+    let mut by_members: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut by_separation: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut by_spellings: BTreeMap<usize, usize> = BTreeMap::new();
+    let mut by_pattern: BTreeMap<&str, usize> = BTreeMap::new();
+    for class in &corpus.classes {
+        *by_axis.entry(class.axis.as_str()).or_default() += 1;
+        *by_members.entry(class.members).or_default() += 1;
+        *by_separation.entry(class.separation).or_default() += 1;
+        *by_spellings.entry(class.spellings.len()).or_default() += 1;
+        *by_pattern.entry(class.pattern.as_str()).or_default() += 1;
+    }
+    let census = |title: &str, rows: Vec<(String, usize)>, out: &mut String| {
+        let _ = writeln!(out, "  {title}:");
+        for (key, count) in rows {
+            let _ = writeln!(out, "    {key}: {count}");
+        }
+    };
+    census(
+        "by axis",
+        by_axis
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect(),
+        &mut out,
+    );
+    census(
+        "by member count",
+        by_members
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect(),
+        &mut out,
+    );
+    census(
+        "by separation",
+        by_separation
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect(),
+        &mut out,
+    );
+    census(
+        "by spellings per class",
+        by_spellings
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect(),
+        &mut out,
+    );
+    census(
+        "by kind pattern",
+        by_pattern
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), *v))
+            .collect(),
+        &mut out,
+    );
+    let total: usize = corpus.classes.iter().map(|c| c.spellings.len()).sum();
+    let _ = writeln!(out, "  total spellings: {total}");
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The corpus must be reproducible from its parameters alone, and a smaller
+    /// run must be a strict prefix of a larger one on **both** axes — seed count
+    /// and draw length. The length half is what lets this corpus use 64-mers
+    /// while `sweep_sequences` uses 20-mers and still share a generator.
+    #[test]
+    fn the_cores_are_deterministic_and_prefix_stable() {
+        assert_eq!(corpus_cores(4, CORE_LEN), corpus_cores(4, CORE_LEN));
+        let few = corpus_cores(2, CORE_LEN);
+        let many = corpus_cores(6, CORE_LEN);
+        assert_eq!(few[..], many[..few.len()]);
+        for (short, long) in corpus_cores(4, 20).iter().zip(corpus_cores(4, 64)) {
+            assert_eq!(short.as_str(), &long[..20]);
+        }
+        // The 20-mer draw is exactly `sweep_sequences`' first pair, which is
+        // what "shares the generator" has to mean to be worth claiming.
+        assert_eq!(corpus_cores(1, 20)[0], "TTTTTTTTTAATATATTTTA");
+        assert_eq!(corpus_cores(1, 20)[1], "CCCCCCCCTGACGTATCCTA");
+    }
+
+    /// A payload that happened to equal the reference would make a `delins` an
+    /// identity and a substitution unparseable, and both would be silently
+    /// dropped by the ground-truth filter rather than reported.
+    #[test]
+    fn a_payload_never_repeats_the_reference_it_replaces() {
+        for core in corpus_cores(4, CORE_LEN) {
+            for at in 0..core.len() {
+                let size = (core.len() - at).min(8);
+                let payload = payload_bases(&core, at, size);
+                assert_eq!(payload.len(), size);
+                assert!(
+                    payload
+                        .bytes()
+                        .zip(core.as_bytes()[at..at + size].iter())
+                        .all(|(p, r)| p != *r),
+                    "payload {payload} repeats the reference at {at} of {core}"
+                );
+            }
+        }
+    }
+
+    /// The applier is the whole ground truth, so its two non-obvious rules get
+    /// their own test: a zero-width member flush against a deletion is not an
+    /// overlap, and two pure insertions at one interbase are declined.
+    #[test]
+    fn the_applier_declines_only_what_denotes_no_sequence() {
+        let reference = "AAAACCCCGGGG";
+        // A deletion of [4, 8) and an insertion at interbase 4: flush, not
+        // overlapping. Longer-deletion-first is what makes this apply.
+        assert_eq!(
+            apply_triples(
+                reference,
+                &[
+                    (4, "CCCC".to_string(), String::new()),
+                    (4, String::new(), "TT".to_string()),
+                ],
+            )
+            .as_deref(),
+            Some("AAAATTGGGG")
+        );
+        // Genuinely overlapping.
+        assert_eq!(
+            apply_triples(
+                reference,
+                &[
+                    (4, "CCCC".to_string(), String::new()),
+                    (6, "CC".to_string(), String::new()),
+                ],
+            ),
+            None
+        );
+        // Two pure insertions at one interbase have no defined order.
+        assert_eq!(
+            apply_triples(
+                reference,
+                &[
+                    (4, String::new(), "TT".to_string()),
+                    (4, String::new(), "GG".to_string()),
+                ],
+            ),
+            None
+        );
+        // Stated bases that disagree with the reference.
+        assert_eq!(
+            apply_triples(reference, &[(4, "GGGG".to_string(), String::new())]),
+            None
+        );
+    }
+
+    /// A deletion inside a homopolymer run has an ambiguous placement and both
+    /// ends must be found; one outside a run has none.
+    #[test]
+    fn equivalent_placements_find_both_ends_of_a_run() {
+        //          0123456789
+        let core = "GTAAAAATCG";
+        let placements = equivalent_placements(core, 4, "A", "");
+        let offsets: Vec<usize> = placements.iter().map(|p| p.0).collect();
+        assert_eq!(offsets, vec![2, 6], "the run spans core[2..7]");
+        for (position, deletion, insertion) in &placements {
+            assert_eq!(
+                splice(core, *position, deletion.len(), insertion),
+                splice(core, 4, 1, "")
+            );
+        }
+        // `G` at offset 0 is unique in its neighbourhood, so there is nowhere
+        // else to put its deletion.
+        assert!(equivalent_placements(core, 0, "G", "").is_empty());
+    }
+
+    /// Every class the generator emits satisfies the contract the axis test
+    /// relies on: at least two spellings, each of which really does denote the
+    /// class's sequence when applied independently of the normalizer.
+    #[test]
+    fn every_emitted_class_is_a_real_confluence_class() {
+        let corpus = build_corpus(1);
+        assert!(
+            corpus.classes.len() > 100,
+            "one seed should still yield a substantial corpus, got {}",
+            corpus.classes.len()
+        );
+        for class in &corpus.classes {
+            assert!(
+                class.spellings.len() >= 2,
+                "{} is a singleton: {:?}",
+                class.id,
+                class.spellings
+            );
+            let (provider, reference) = if class.axis == "g" {
+                (genomic_provider(&class.core), padded(&class.core))
+            } else {
+                (coding_provider(&class.core), class.core.clone())
+            };
+            let expected = if class.axis == "g" {
+                padded(&class.denoted)
+            } else {
+                class.denoted.clone()
+            };
+            for spelling in &class.spellings {
+                let applied = triples_of(&provider, spelling)
+                    .and_then(|t| apply_triples(&reference, &t))
+                    .unwrap_or_else(|| panic!("{} does not apply", spelling));
+                assert_eq!(applied, expected, "{spelling} denotes a different sequence");
+            }
+            // The block pair is the same statement restricted to the union
+            // span, so substituting the alt block back for the reference block
+            // must rebuild `denoted` exactly. That is what makes `--blocks`
+            // consumable on its own, without the spellings that produced it.
+            assert_eq!(class.core.len(), CORE_LEN);
+            let after = class.block_start + class.reference_block.len();
+            assert_eq!(
+                format!(
+                    "{}{}{}",
+                    &class.core[..class.block_start],
+                    class.alt_block,
+                    &class.core[after..]
+                ),
+                class.denoted,
+                "{}: the block pair does not rebuild the denoted sequence",
+                class.id
+            );
+        }
+    }
+
+    /// Both axes and every member count, separation and payload the sweep
+    /// enumerates must actually reach the corpus. A parameter that silently
+    /// contributed nothing would make its "no divergence" look like evidence.
+    #[test]
+    fn every_parameter_reaches_the_corpus() {
+        let corpus = build_corpus(1);
+        for axis in ["g", "c"] {
+            assert!(
+                corpus.classes.iter().any(|c| c.axis == axis),
+                "no {axis}. classes"
+            );
+        }
+        for &members in MEMBER_COUNTS {
+            assert!(
+                corpus.classes.iter().any(|c| c.members == members),
+                "no {members}-member classes"
+            );
+        }
+        for &separation in SEPARATIONS {
+            assert!(
+                corpus.classes.iter().any(|c| c.separation == separation),
+                "no classes at separation {separation}"
+            );
+        }
+        for &payload in PAYLOADS {
+            assert!(
+                corpus.classes.iter().any(|c| c.payload == payload),
+                "no classes at payload {payload}"
+            );
+        }
+        for pattern in patterns() {
+            assert!(
+                corpus.classes.iter().any(|c| c.pattern == pattern.label()),
+                "no classes for pattern {}",
+                pattern.label()
+            );
+        }
+    }
+
+    /// The block dump is what the algebra side and the partitioner bake-off
+    /// consume, so it must be deduplicated, sorted, and free of the tab and
+    /// newline its own format uses as separators.
+    #[test]
+    fn the_block_dump_is_sorted_deduplicated_and_tab_safe() {
+        let corpus = build_corpus(1);
+        let pairs = block_pairs(&corpus);
+        assert!(!pairs.is_empty());
+        assert!(
+            pairs.windows(2).all(|w| w[0] < w[1]),
+            "not sorted or unique"
+        );
+        assert!(
+            pairs
+                .iter()
+                .all(|(r, a)| !r.contains(['\t', '\n']) && !a.contains(['\t', '\n'])),
+            "a block contains a separator"
+        );
+    }
+}
