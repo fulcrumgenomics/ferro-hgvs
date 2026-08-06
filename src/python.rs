@@ -310,15 +310,33 @@ fn parse_render_style_or_raise(
 
 /// Reference provider used by the Python wrappers.
 ///
-/// `MultiFasta` is wrapped in `Arc` because `MultiFastaProvider` is large and
-/// is cloned on every Python call to construct a fresh `Normalizer<P>`.
+/// **Both variants are `Arc`, and that is load-bearing, not stylistic.** Every
+/// reference-backed binding clones this to construct a fresh `Normalizer<P>`, so
+/// whatever the variant holds is copied once per Python call.
 ///
-/// `Mock` is boxed because `JsonProvider` is itself large (it owns the test
-/// reference maps); without the box this variant dwarfs the 8-byte `Arc`
-/// `MultiFasta` variant and trips `clippy::large_enum_variant`.
+/// `Mock` used to be a `Box`, chosen only to keep the enum small enough for
+/// `clippy::large_enum_variant`. That satisfied the size constraint and missed
+/// the cost one: `JsonProvider` derives `Clone`, and its `genomic_sequences` and
+/// `proteins` maps own their `String`s, so the per-call clone deep-copied the
+/// whole reference. Measured on a variant whose work is fixed — a 6-base
+/// deletion on a 600-base transcript — while only the *unread* remainder of the
+/// contig grew:
+///
+/// | contig bases | `normalize_variant` | `to_spdi` |
+/// |-------------:|--------------------:|----------:|
+/// |       10 000 |              1.2 µs |    1.0 µs |
+/// |      100 000 |              6.8 µs |    6.1 µs |
+/// |    1 000 000 |             21.8 µs |   17.5 µs |
+/// |    4 000 000 |            443.2 µs |   74.0 µs |
+///
+/// ~9 GB/s, i.e. memcpy speed, for bases no call ever reads. A single human
+/// chromosome in `genomic_sequences` would have cost tens of milliseconds and a
+/// full re-allocation of itself on *every* call. `Arc` makes the clone two
+/// refcount bumps, and it is still 8 bytes, so the original size constraint
+/// holds.
 #[derive(Clone)]
 enum PyProvider {
-    Mock(Box<JsonProvider>),
+    Mock(Arc<JsonProvider>),
     MultiFasta(Arc<MultiFastaProvider>),
 }
 
@@ -508,7 +526,7 @@ impl PyProvider {
     /// Load from a JSON file (delegates to JsonProvider::from_json).
     fn from_json(path: &Path) -> PyResult<Self> {
         JsonProvider::from_json(path)
-            .map(|p| PyProvider::Mock(Box::new(p)))
+            .map(|p| PyProvider::Mock(Arc::new(p)))
             .map_err(|e| {
                 ferro_typed(
                     "ReferenceDataError",
@@ -533,7 +551,7 @@ impl PyProvider {
 
     /// Default: built-in test data.
     fn test_data() -> Self {
-        PyProvider::Mock(Box::new(JsonProvider::with_test_data()))
+        PyProvider::Mock(Arc::new(JsonProvider::with_test_data()))
     }
 
     /// Build / extract a CdotMapper for this provider.
