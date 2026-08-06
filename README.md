@@ -430,8 +430,18 @@ See [docs/BENCHMARK_GUIDE.md](docs/BENCHMARK_GUIDE.md) for detailed usage.
 
 ```bash
 cargo build
-cargo test
+cargo test                        # default features
 cargo clippy -- -D warnings
+```
+
+The commands above use the default feature set, and CI keeps them compiling (see
+the `build` job). They do not cover the whole suite — the feature-gated tests and
+the integration tree need `dev`, which is what CI runs and what you want before
+opening a PR:
+
+```bash
+cargo nextest run --features dev
+cargo clippy --features dev --all-targets -- -D warnings
 ```
 
 ## License

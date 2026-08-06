@@ -881,6 +881,30 @@ jobs:
       # would additionally compile every test and bench binary with optimisation
       # for no gain here.
       - run: cargo clippy --release -- -D warnings
+      # The featureless guard (#1505). Every other Rust job in this workflow
+      # either passes `--features dev` / `--all-features`, or is scoped to the
+      # integration binary (`test-build-soak`'s `--test it`). So the DEFAULT
+      # feature set's unit tests — the `#[cfg(test)]` modules under `src/` — are
+      # compiled NOWHERE in CI, and a call from one of them into feature-gated
+      # code cannot turn any job red.
+      #
+      # Not hypothetical: #1372 put exactly such a call on `main` and it survived
+      # until an external contributor ran the `cargo test` this repository's own
+      # README documents (`README.md:433`). Four `E0599`s, invisible to all 34
+      # checks, reported from outside the project.
+      #
+      # `--no-run` on purpose: the claim being defended is that the default
+      # feature set BUILDS, not that these tests run a second time. `--lib
+      # --bins` covers every `#[cfg(test)]` module under `src/`; the integration
+      # tree is already compiled featureless by `test-build-soak`.
+      #
+      # In THIS job rather than one of its own, for the reason the release-profile
+      # lint above gives at length: the repository sits near the 10 GiB Actions
+      # cache cap and #1218 records eviction cascades caused by adding cache keys.
+      # `build` already owns `build-release` and is already a required check, so
+      # the guard blocks a merge instead of only reddening an optional job.
+      - name: Unit tests compile with default features
+        run: cargo test --no-run --lib --bins
       - run: cargo build --release
       - name: Check binary size
         run: |
