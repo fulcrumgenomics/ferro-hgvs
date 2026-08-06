@@ -253,6 +253,43 @@ fn a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation(
 }
 
 #[test]
+fn a_dense_inversion_is_recognised_across_multi_base_separations() {
+    // The counterpart of the control above, and the #1461 regression.
+    //
+    // `AACAACCGCGTG -> CACGCGGTTGTT` is a whole-span reverse complement whose
+    // changed columns fall in three runs separated by **two** unchanged bases
+    // each, so `every_separation_is_a_single_base` refuses it. Before #1461 that
+    // was the end of it and the span came back as separate members.
+    //
+    // Separation cannot decide between this and the control above, and that is
+    // the whole point of the pair. Measured on the real case #1461 reports —
+    // `NC_000013.10:g.100809575_100810031inv`, 457 nt — the shipped rule emitted
+    // **109** members whose widest gap is **5**, while the control's single gap
+    // is **4**. The inversion that must be recognised has the *wider* gaps, so
+    // every threshold on separation either refuses #1461 or admits the control.
+    //
+    // Density does separate them. Reverse complementing a random block leaves
+    // roughly a quarter of its positions coincidentally unchanged, which is what
+    // #1461's 32.8% looks like; the control leaves 66.7% unchanged because that
+    // span is very nearly its own reverse complement. Hence
+    // `changed_columns_dominate_the_span`, and hence this test: 8 of 12 columns
+    // change here, against 2 of 6 in the control.
+    let core = "AACAACCGCGTG";
+    let expected = format!("{G}:g.257_268inv");
+    for input in [
+        format!("{G}:g.257_268inv"),
+        format!("{G}:g.257_268delinsCACGCGGTTGTT"),
+        format!("{G}:g.[257_257delinsC;260_265delinsGCGGTT;268G>T]"),
+    ] {
+        assert_eq!(
+            assert_padded_preserving(core, &input),
+            expected,
+            "spelling `{input}` did not converge on the inv",
+        );
+    }
+}
+
+#[test]
 fn a_derived_whole_block_inversion_outranks_the_codon_exception() {
     // The `c.`-axis half of the two tests above. It matters because every other
     // case in this section is genomic, where `general.md:35`'s codon exception
