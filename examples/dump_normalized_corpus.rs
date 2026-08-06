@@ -1,0 +1,792 @@
+//! Dump normalized output over a deterministic synthetic corpus, and diff two
+//! dumps — the measurement a representation-moving PR has to carry (#1441).
+//!
+//! Representation stability is a shipped guarantee: the downstream consumer keys
+//! read counts on the normalized HGVS string, so a PR that moves an output has to
+//! say which forms moved, in which direction, over how many rows, and whether the
+//! affected inputs were previously **rejected** (no stored string, so free) or
+//! previously **accepted** (a migration). Five PRs made that measurement by hand
+//! and each rebuilt the harness; this is that harness, committed.
+//!
+//! ## Usage
+//!
+//! ```text
+//! # at the base revision
+//! cargo run --features dev --example dump_normalized_corpus -- --out /tmp/before.tsv
+//! # at the candidate revision
+//! cargo run --features dev --example dump_normalized_corpus -- --out /tmp/after.tsv
+//! # the table for the PR body
+//! cargo run --features dev --example dump_normalized_corpus -- \
+//!     --compare /tmp/before.tsv --against /tmp/after.tsv
+//! ```
+//!
+//! ## What this is NOT for
+//!
+//! Prepared references. `ferro normalize --input <file> --reference <dir> --format
+//! tsv` already dumps a real corpus against real reference data, and duplicating it
+//! here would mean two things to keep in step. What that path *cannot* do is drive a
+//! **synthetic** reference — `--reference` requires a `manifest.json` and the
+//! JSON-reference constructor is Python-only — and synthetic references are what
+//! densely cover the cis-allele shape families where representation churn actually
+//! happens. That is the gap this fills.
+//!
+//! ## Two traps, both hit while measuring #1401
+//!
+//! 1. **A row's identity is `(reference, axis, direction, input)` — never the input
+//!    alone.** Every synthetic reference reuses one accession, so keying on the
+//!    input string silently merges rows drawn against different sequences: 2,160
+//!    rows collapsed to 135 and the reported movement came out at 6 instead of 498.
+//!    Nothing failed. `the_corpus_key_is_unique` pins this.
+//! 2. **A within-shape-family rate is not a library-wide rate.** This corpus is
+//!    deliberately enriched for the shapes that churn, so its percentages are far
+//!    higher than a real corpus would give — #1401 measures 23% here. Quote it as
+//!    "of the affected shape family", never as a repo-wide figure.
+//!
+//! ## The corpus is deliberately independent of `tests/it/common/`
+//!
+//! An example cannot reach test helpers, so the reference construction below is its
+//! own. That is a feature rather than a compromise: this corpus has to stay
+//! **stable across revisions** so that two dumps are comparable, and it must not
+//! move because someone refactored `SyntheticBuilder`. It does not need to agree
+//! with the test helpers — only with itself, over time. Changing the generator or
+//! the seed count re-rolls the corpus and makes old dumps incomparable; treat it
+//! the way `sweep_sequences` is treated.
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::fs;
+use std::path::PathBuf;
+use std::process::ExitCode;
+
+use clap::Parser;
+
+use ferro_hgvs::normalize::{NormalizeConfig, ShuffleDirection};
+use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+use ferro_hgvs::reference::MockProvider;
+use ferro_hgvs::{parse_hgvs, Normalizer};
+
+/// 256 bases of period-4 `ACGT`, so the base immediately 5' of a core is `T` and
+/// the one immediately 3' of it is `A`. A core starting with something other than
+/// `A` and ending with something other than `T` therefore cannot extend the pad's
+/// own rotation, which bounds a repeat tract to the core.
+const PAD_OFFSET: usize = 256;
+
+/// The genomic contig a `g.` row is drawn against.
+const GENOMIC_CONTIG: &str = "NC_TEST.1";
+/// The transcript a `c.` row is drawn against.
+const TX_ACCESSION: &str = "NM_TEST.1";
+/// The contig the synthetic transcript is placed on.
+const TX_CONTIG: &str = "chr_synth";
+
+/// The CDS of a synthetic coding reference: 1-based inclusive.
+///
+/// A multiple of three, so the CDS is codon-complete, and deliberately short of the
+/// 20-base core so that **five** 3'UTR bases (`c.*1`..`c.*5`) remain. Several shapes
+/// then straddle `CDS_END`, which is the region #1398, #1418 and both halves of
+/// #1426 lived in — a corpus that stops at the junction reports a confident zero for
+/// every one of them.
+const CDS_START: u64 = 1;
+const CDS_END: u64 = 15;
+
+/// The dump header, written on emit and required verbatim on read.
+const HEADER: &str = "reference\taxis\tdirection\tfamily\tinput\toutput\twas_fixed_point\n";
+
+/// Column count of a dump row, checked when reading a dump back.
+const COLUMNS: usize = 7;
+
+#[derive(Parser, Debug)]
+#[command(about = "Dump normalized output over a synthetic corpus, or diff two dumps (#1441)")]
+struct Cli {
+    /// Write the dump here (default: stdout). Dump mode only.
+    #[arg(long, conflicts_with_all = ["compare", "against"])]
+    out: Option<PathBuf>,
+    /// Seed count for the reference corpus. Two sequences per seed (an `AT` and an
+    /// `ACGT` alphabet). Prefix-stable: a smaller count is a strict prefix.
+    /// Dump mode only — in diff mode the corpus comes from the dumps being compared,
+    /// so accepting it here would silently ignore it and invite the belief that a
+    /// comparison had been re-scoped.
+    #[arg(long, default_value_t = 24, conflicts_with_all = ["compare", "against"])]
+    seeds: u32,
+    /// Diff mode: the baseline dump.
+    #[arg(long, requires = "against")]
+    compare: Option<PathBuf>,
+    /// Diff mode: the candidate dump.
+    #[arg(long, requires = "compare")]
+    against: Option<PathBuf>,
+}
+
+fn main() -> ExitCode {
+    let cli = Cli::parse();
+    if let (Some(before), Some(after)) = (&cli.compare, &cli.against) {
+        return match compare(before, after) {
+            Ok(report) => {
+                print!("{report}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+
+    let rows = dump(cli.seeds);
+    let mut out = String::new();
+    out.push_str(HEADER);
+    for row in &rows {
+        let _ = writeln!(
+            out,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            row.reference,
+            row.axis,
+            row.direction,
+            row.family,
+            row.input,
+            row.output,
+            row.was_fixed_point
+        );
+    }
+    match &cli.out {
+        Some(path) => {
+            if let Err(e) = fs::write(path, &out) {
+                eprintln!("error: writing {}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+            eprintln!("wrote {} rows to {}", rows.len(), path.display());
+        }
+        None => print!("{out}"),
+    }
+    ExitCode::SUCCESS
+}
+
+/// One measured row. `was_fixed_point` records whether the *input* was already its
+/// own normalized form on the revision that produced this dump — which is what
+/// makes the cheap/expensive split derivable from the baseline dump alone, without
+/// re-running the old code.
+struct Row {
+    reference: String,
+    axis: &'static str,
+    direction: &'static str,
+    family: &'static str,
+    input: String,
+    output: String,
+    was_fixed_point: bool,
+}
+
+/// The shape families, each drawn from a defect this repository has actually had.
+/// Adding one is fine; renaming or reordering re-rolls nothing, but changing what a
+/// family *emits* makes old dumps incomparable for that family.
+const FAMILIES: &[(&str, &str)] = &[
+    (
+        "split_vs_spanning_delins",
+        "#1232 / #1401 — two delins separated by one unchanged base",
+    ),
+    (
+        "dup_plus_sub",
+        "#999 — the split buys a higher-priority type, so it must stay split",
+    ),
+    (
+        "adjacent_junction_ins",
+        "#1235 — two insertions at neighbouring junctions",
+    ),
+    (
+        "dup_plus_ins",
+        "#1320 / #1323 — a dup and an insertion sharing a junction",
+    ),
+    (
+        "del_plus_sub",
+        "#1232's own example — a deletion and a separated substitution",
+    ),
+];
+
+fn dump(seeds: u32) -> Vec<Row> {
+    let mut rows = Vec::new();
+    for core in corpus_sequences(seeds) {
+        for (axis, direction) in [
+            ("g", ShuffleDirection::ThreePrime),
+            ("g", ShuffleDirection::FivePrime),
+            ("c", ShuffleDirection::ThreePrime),
+            ("c", ShuffleDirection::FivePrime),
+        ] {
+            let dir_label = match direction {
+                ShuffleDirection::ThreePrime => "3prime",
+                ShuffleDirection::FivePrime => "5prime",
+                // `#[non_exhaustive]`: a new direction must be added to the loop
+                // above deliberately, not silently mislabelled in a dump that a
+                // later revision will be diffed against.
+                other => unreachable!("unhandled shuffle direction {other:?}"),
+            };
+            for (family, _) in FAMILIES {
+                for input in inputs_for(family, axis, &core) {
+                    let output = normalize_one(axis, &core, &input, direction);
+                    rows.push(Row {
+                        reference: core.clone(),
+                        axis,
+                        direction: dir_label,
+                        family,
+                        was_fixed_point: output == input,
+                        input,
+                        output,
+                    });
+                }
+            }
+        }
+    }
+    rows
+}
+
+/// Deterministic 20-mers, two per seed. Same xorshift as `sweep_sequences` so the
+/// two corpora explore comparable sequence space; kept here rather than shared
+/// because an example cannot reach `tests/`.
+fn corpus_sequences(seeds: u32) -> Vec<String> {
+    let mut sequences = Vec::with_capacity(2 * seeds as usize);
+    for seed in 0..seeds {
+        for alphabet in [b"AT".as_slice(), b"ACGT".as_slice()] {
+            let mut state = u64::from(seed).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            sequences.push(
+                (0..20)
+                    .map(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        alphabet[(state % alphabet.len() as u64) as usize] as char
+                    })
+                    .collect(),
+            );
+        }
+    }
+    sequences
+}
+
+/// 1-based position of core offset `i` on the axis in question. A `g.` row sits in
+/// a padded contig; a `c.` row addresses the transcript directly, so the core *is*
+/// the transcript and offset 0 is position 1.
+fn pos(axis: &str, i: usize) -> usize {
+    match axis {
+        "g" => PAD_OFFSET + 1 + i,
+        _ => 1 + i,
+    }
+}
+
+/// Render core offset `i` as an HGVS position on `axis`.
+///
+/// A `c.` position past `CDS_END` is in the 3'UTR and is spelled `*N`, not `N`.
+/// Getting this wrong is not cosmetic: the corpus would either emit descriptions
+/// that mean the wrong base or, as it did before this was fixed, stop short of the
+/// junction entirely and report a confident zero for changes that only affect
+/// junction-crossing shapes — which is where #1398, #1418 and both halves of #1426
+/// lived.
+fn hgvs_pos(axis: &str, i: usize) -> String {
+    if axis == "g" {
+        return pos(axis, i).to_string();
+    }
+    let p = pos(axis, i) as u64;
+    if p <= CDS_END {
+        p.to_string()
+    } else {
+        format!("*{}", p - CDS_END)
+    }
+}
+
+fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
+    let bytes = core.as_bytes();
+    let acc = if axis == "g" {
+        GENOMIC_CONTIG
+    } else {
+        TX_ACCESSION
+    };
+    let prefix = format!("{acc}:{axis}.");
+    let mut out = Vec::new();
+    // The widest shape reads five consecutive offsets (`s`..`s+4`), so `s` runs to
+    // `len - 5`. It deliberately runs that far rather than stopping short: on the
+    // coding axis the last shapes straddle `CDS_END` and are spelled with `c.*N`,
+    // which is the junction region four of this campaign's five defects lived in.
+    let last = bytes.len().saturating_sub(4);
+    for s in 0..last {
+        let p = |i: usize| hgvs_pos(axis, i);
+        let base = |i: usize| bytes[i] as char;
+        let other = |i: usize| if base(i) == 'A' { 'C' } else { 'A' };
+        match family {
+            // Two delins separated by exactly one unchanged base, plus the
+            // spanning spelling of the same variant. The pair is the confluence
+            // question; the spanning form should be a fixed point either way.
+            "split_vs_spanning_delins" => {
+                let gap = base(s + 2);
+                out.push(format!(
+                    "{prefix}[{}_{}delinsGGG;{}_{}delinsGG]",
+                    p(s),
+                    p(s + 1),
+                    p(s + 3),
+                    p(s + 4)
+                ));
+                out.push(format!("{prefix}{}_{}delinsGGG{gap}GG", p(s), p(s + 4)));
+            }
+            "dup_plus_sub" => out.push(format!(
+                "{prefix}[{}_{}dup;{}{}>{}]",
+                p(s),
+                p(s + 1),
+                p(s + 3),
+                base(s + 3),
+                other(s + 3)
+            )),
+            "adjacent_junction_ins" => out.push(format!(
+                "{prefix}[{}_{}insAA;{}_{}insTT]",
+                p(s),
+                p(s + 1),
+                p(s + 1),
+                p(s + 2)
+            )),
+            "dup_plus_ins" => out.push(format!(
+                "{prefix}[{}_{}dup;{}_{}insCC]",
+                p(s),
+                p(s + 2),
+                p(s + 3),
+                p(s + 4)
+            )),
+            "del_plus_sub" => out.push(format!(
+                "{prefix}[{}_{}del;{}{}>{}]",
+                p(s),
+                p(s + 1),
+                p(s + 3),
+                base(s + 3),
+                other(s + 3)
+            )),
+            _ => unreachable!("unknown family {family}"),
+        }
+    }
+    out
+}
+
+/// Normalize, reporting a decline or a panic as data rather than aborting the dump.
+/// A row that errors on one revision and succeeds on the other is exactly the
+/// cheap-vs-expensive distinction the diff needs to see, so it must not be dropped.
+fn normalize_one(axis: &str, core: &str, input: &str, direction: ShuffleDirection) -> String {
+    let Ok(variant) = parse_hgvs(input) else {
+        return "<parse-error>".to_string();
+    };
+    let provider = match axis {
+        "g" => genomic_provider(core),
+        _ => coding_provider(core),
+    };
+    let normalizer = Normalizer::with_config(
+        provider,
+        NormalizeConfig::default().with_direction(direction),
+    );
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        normalizer.normalize(&variant)
+    })) {
+        Ok(Ok(v)) => v.to_string(),
+        Ok(Err(_)) => "<declined>".to_string(),
+        Err(_) => "<panic>".to_string(),
+    }
+}
+
+fn padded(core: &str) -> String {
+    let pad = "ACGT".repeat(PAD_OFFSET / 4);
+    format!("{pad}{core}{pad}")
+}
+
+fn genomic_provider(core: &str) -> MockProvider {
+    let mut provider = MockProvider::new();
+    provider.add_genomic_sequence(GENOMIC_CONTIG, padded(core));
+    provider
+}
+
+fn coding_provider(core: &str) -> MockProvider {
+    let mut provider = MockProvider::new();
+    let tx_len = core.len() as u64;
+    let g_start = PAD_OFFSET as u64 + 1;
+    let g_end = PAD_OFFSET as u64 + tx_len;
+    let exon = Exon::with_genomic(1, 1, tx_len, g_start, g_end);
+    let transcript = Transcript::new(
+        TX_ACCESSION.to_string(),
+        Some("SYNTH".to_string()),
+        Strand::Plus,
+        core.to_string(),
+        Some(CDS_START),
+        Some(CDS_END),
+        vec![exon],
+        Some(TX_CONTIG.to_string()),
+        Some(g_start),
+        Some(g_end),
+        GenomeBuild::GRCh38,
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_genomic_sequence(TX_CONTIG, padded(core));
+    provider.add_transcript(transcript);
+    provider
+}
+
+/// A row's identity. Deliberately a tuple: see trap 1 in the module docs.
+type Key = (String, String, String, String);
+
+fn read_dump(path: &PathBuf) -> Result<BTreeMap<Key, (String, bool, String)>, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let mut rows = BTreeMap::new();
+    for (n, line) in text.lines().enumerate() {
+        if n == 0 {
+            // Exact match, not a prefix. A dump whose columns were reordered or
+            // renamed would otherwise be read positionally under the old meanings —
+            // silently swapping, say, `output` and `was_fixed_point` and inverting
+            // every migration verdict in the report.
+            if line != HEADER.trim_end() {
+                return Err(format!(
+                    "{}:1: unexpected header\n  found:    {line}\n  expected: {}",
+                    path.display(),
+                    HEADER.trim_end()
+                ));
+            }
+            continue;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        let f: Vec<&str> = line.split('\t').collect();
+        if f.len() != COLUMNS {
+            return Err(format!(
+                "{}:{}: expected {COLUMNS} columns, found {}",
+                path.display(),
+                n + 1,
+                f.len()
+            ));
+        }
+        // Strict, because this column decides the expensive/cheap split — the single
+        // most consequential number in the report. Treating anything that is not
+        // "true" as false would turn a corrupted dump into an understated migration,
+        // which is the direction that gets a change waved through.
+        let was_fixed_point = match f[6] {
+            "true" => true,
+            "false" => false,
+            other => {
+                return Err(format!(
+                    "{}:{}: was_fixed_point must be `true` or `false`, found `{other}`",
+                    path.display(),
+                    n + 1
+                ))
+            }
+        };
+        let key = (
+            f[0].to_string(),
+            f[1].to_string(),
+            f[2].to_string(),
+            f[4].to_string(),
+        );
+        if rows
+            .insert(
+                key.clone(),
+                (f[5].to_string(), was_fixed_point, f[3].to_string()),
+            )
+            .is_some()
+        {
+            return Err(format!(
+                "{}:{}: duplicate key {key:?} — the dump is not uniquely keyed",
+                path.display(),
+                n + 1
+            ));
+        }
+    }
+    Ok(rows)
+}
+
+fn compare(before: &PathBuf, after: &PathBuf) -> Result<String, String> {
+    let a = read_dump(before)?;
+    let b = read_dump(after)?;
+
+    let only_before = a.keys().filter(|k| !b.contains_key(*k)).count();
+    let only_after = b.keys().filter(|k| !a.contains_key(*k)).count();
+    if only_before + only_after > 0 {
+        return Err(format!(
+            "the two dumps do not cover the same corpus ({only_before} rows only in the \
+             baseline, {only_after} only in the candidate). Re-dump both with the same \
+             --seeds; a changed generator or seed count makes them incomparable."
+        ));
+    }
+
+    let mut moved: Vec<(&Key, &str, &str, &str)> = Vec::new();
+    for (key, (old, _, family)) in &a {
+        let (new, _, new_family) = &b[key];
+        // The family is part of what the row *means*, not just a label: the
+        // per-family table below is read as "this change touched only X". If the two
+        // dumps disagree about which family a key belongs to, the family definitions
+        // moved between revisions and that table would attribute movement to the
+        // wrong shape. Refuse rather than silently report the baseline's view.
+        if family != new_family {
+            return Err(format!(
+                "the two dumps disagree on the shape family for {key:?} \
+                 (baseline `{family}`, candidate `{new_family}`). The family \
+                 definitions changed between revisions, so a per-family breakdown \
+                 would be misattributed; re-dump both at the same definitions."
+            ));
+        }
+        if old != new {
+            moved.push((key, old, new, family));
+        }
+    }
+
+    let mut by_family: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+    for (_, _, family) in a.values() {
+        by_family.entry(family.as_str()).or_default().0 += 1;
+    }
+    for (_, _, _, family) in &moved {
+        by_family.entry(family).or_default().1 += 1;
+    }
+
+    // Expensive == the input was its own normalized form on the BASELINE, so a
+    // consumer has that string stored. Cheap == it was not, so nothing stored it.
+    let expensive = moved.iter().filter(|(key, _, _, _)| a[*key].1).count();
+
+    let mut r = String::new();
+    let _ = writeln!(r, "## Representation stability\n");
+    let _ = writeln!(r, "| | rows |");
+    let _ = writeln!(r, "|---|---|");
+    let _ = writeln!(r, "| total | {} |", a.len());
+    let pct = if a.is_empty() {
+        0.0
+    } else {
+        100.0 * moved.len() as f64 / a.len() as f64
+    };
+    let _ = writeln!(r, "| **moved** | **{} ({pct:.1}%)** |", moved.len());
+    let _ = writeln!(
+        r,
+        "| of which previously **accepted** (a migration) | {expensive} |"
+    );
+    let _ = writeln!(
+        r,
+        "| of which previously **not** a fixed point (free) | {} |",
+        moved.len() - expensive
+    );
+    let _ = writeln!(r, "\n### By shape family\n");
+    let _ = writeln!(r, "| family | rows | moved |");
+    let _ = writeln!(r, "|---|---|---|");
+    for (family, (total, m)) in &by_family {
+        let _ = writeln!(r, "| `{family}` | {total} | {m} |");
+    }
+    if !moved.is_empty() {
+        let _ = writeln!(r, "\n### Sample moved rows\n\n```text");
+        for (key, old, new, _) in moved.iter().take(10) {
+            let _ = writeln!(
+                r,
+                "[{} {}] {}\n   before: {old}\n   after : {new}",
+                key.1, key.2, key.3
+            );
+        }
+        let _ = writeln!(r, "```");
+    }
+    let _ = writeln!(
+        r,
+        "\nThis corpus is enriched for the shapes that churn, so the percentage above is a \
+         rate **within these shape families**, not a library-wide rate."
+    );
+    Ok(r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Trap 1 from the module docs, pinned. Keying a row on the input string alone
+    /// merges rows drawn against different reference sequences — which is how a
+    /// measurement of 498 moved rows was reported as 6.
+    #[test]
+    fn the_corpus_key_is_unique() {
+        let rows = dump(3);
+        assert!(!rows.is_empty(), "the corpus must not be empty");
+        let mut seen = std::collections::HashSet::new();
+        for row in &rows {
+            let key = (
+                row.reference.clone(),
+                row.axis,
+                row.direction,
+                row.input.clone(),
+            );
+            assert!(
+                seen.insert(key.clone()),
+                "duplicate corpus key {key:?} — two rows would overwrite each other in a diff"
+            );
+        }
+        // And the input alone is NOT unique, which is precisely why the key is a
+        // tuple. If this ever stops holding the trap is gone, but so is the reason
+        // to trust that a future refactor kept the tuple for a reason.
+        let distinct_inputs = rows
+            .iter()
+            .map(|r| r.input.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .len();
+        assert!(
+            distinct_inputs < rows.len(),
+            "inputs repeat across references, so keying on the input alone would merge rows"
+        );
+    }
+
+    /// A reduced seed count must be a strict prefix of a larger one, so a quick
+    /// local run and a full one are comparable rather than merely similar.
+    #[test]
+    fn the_sequence_corpus_is_prefix_stable() {
+        let few = corpus_sequences(3);
+        let many = corpus_sequences(9);
+        assert_eq!(few, many[..few.len()]);
+        assert_eq!(few.len(), 6, "two sequences per seed");
+    }
+
+    /// Every family emits something on every axis, so a family cannot silently
+    /// contribute zero rows and make its "0 moved" look like evidence.
+    #[test]
+    fn every_family_emits_rows_on_both_axes() {
+        let core = &corpus_sequences(1)[0];
+        for (family, _) in FAMILIES {
+            for axis in ["g", "c"] {
+                assert!(
+                    !inputs_for(family, axis, core).is_empty(),
+                    "family {family} emitted no {axis}. rows"
+                );
+            }
+        }
+    }
+
+    /// The coding corpus must reach past `CDS_END` and spell those positions `c.*N`.
+    ///
+    /// Pinned because the first version of this file stopped exactly at `CDS_END`, so
+    /// it emitted no junction-crossing row at all — and would have reported a
+    /// confident "0 moved" for #1417, #1425, #1427 and #1428, every one of which is a
+    /// CDS/3'UTR junction defect.
+    #[test]
+    fn the_coding_corpus_crosses_into_the_three_prime_utr() {
+        let core = &corpus_sequences(1)[0];
+        let mut utr_rows = 0;
+        let mut straddling_rows = 0;
+        for (family, _) in FAMILIES {
+            for input in inputs_for(family, "c", core) {
+                if input.contains(":c.*") || input.contains(";*") || input.contains("_*") {
+                    utr_rows += 1;
+                    // A shape that names both a CDS position and a `*` position is
+                    // the junction-crossing case specifically.
+                    if input.contains("_*") || input.contains(";*") {
+                        straddling_rows += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            utr_rows > 0,
+            "the coding corpus emitted no 3'UTR (`c.*N`) row; CDS_END={CDS_END} against a \
+             {}-base core leaves no room, so junction defects would measure as zero",
+            core.len()
+        );
+        assert!(
+            straddling_rows > 0,
+            "the coding corpus emitted 3'UTR rows but none straddling CDS_END, which is \
+             the shape four of this campaign's five defects lived in"
+        );
+    }
+
+    /// A `c.` position past `CDS_END` is `*N`, and one inside it is plain.
+    #[test]
+    fn coding_positions_past_the_cds_are_spelled_with_a_star() {
+        // Offset i maps to 1-based position i+1.
+        assert_eq!(hgvs_pos("c", 0), "1");
+        assert_eq!(hgvs_pos("c", (CDS_END - 1) as usize), CDS_END.to_string());
+        assert_eq!(hgvs_pos("c", CDS_END as usize), "*1");
+        assert_eq!(hgvs_pos("c", CDS_END as usize + 1), "*2");
+        // The genomic axis has no such notion and is offset by the pad.
+        assert_eq!(hgvs_pos("g", 0), (PAD_OFFSET + 1).to_string());
+    }
+
+    /// The header is matched exactly, so reordered or renamed columns cannot be read
+    /// positionally under their old meanings.
+    #[test]
+    fn the_reader_rejects_a_wrong_header() {
+        let path = fixture("bad-header.tsv", "reference\taxis\tdirection\tfamily\tinput\twas_fixed_point\toutput\nAC\tg\t3prime\tf\tX\tfalse\tY\n");
+        let err = read_dump(&path).expect_err("a reordered header must be rejected");
+        assert!(err.contains("unexpected header"), "unexpected error: {err}");
+    }
+
+    /// `was_fixed_point` is parsed strictly. Anything else would understate the
+    /// migration, which is the direction that gets a change waved through.
+    #[test]
+    fn the_reader_rejects_a_malformed_boolean() {
+        let path = fixture(
+            "bad-bool.tsv",
+            &format!("{HEADER}AC\tg\t3prime\tf\tX\tY\tyes\n"),
+        );
+        let err = read_dump(&path).expect_err("a non-boolean must be rejected");
+        assert!(
+            err.contains("must be `true` or `false`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    /// Two dumps that disagree about a key's shape family are refused, rather than
+    /// producing a per-family table that attributes movement to the wrong shape.
+    #[test]
+    fn comparing_dumps_that_disagree_on_a_family_is_refused() {
+        let before = fixture(
+            "fam-before.tsv",
+            &format!("{HEADER}AC\tg\t3prime\tfamily_one\tX\tY\ttrue\n"),
+        );
+        let after = fixture(
+            "fam-after.tsv",
+            &format!("{HEADER}AC\tg\t3prime\tfamily_two\tX\tY\ttrue\n"),
+        );
+        let err = compare(&before, &after).expect_err("a family mismatch must be refused");
+        assert!(
+            err.contains("disagree on the shape family"),
+            "unexpected error: {err}"
+        );
+    }
+
+    fn fixture(name: &str, contents: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("ferro-dump-corpus-test");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join(name);
+        fs::write(&path, contents).expect("write fixture");
+        path
+    }
+
+    /// A dump round-trips through the reader, and the reader rejects a duplicate
+    /// key rather than silently keeping one of the two rows.
+    #[test]
+    fn the_reader_rejects_a_duplicate_key() {
+        let dir = std::env::temp_dir().join("ferro-dump-corpus-test");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("dup.tsv");
+        fs::write(
+            &path,
+            format!("{HEADER}AC\tg\t3prime\tf\tX\tY\tfalse\nAC\tg\t3prime\tf\tX\tZ\tfalse\n"),
+        )
+        .expect("write fixture");
+        let err = read_dump(&path).expect_err("a duplicate key must be rejected");
+        assert!(err.contains("duplicate key"), "unexpected error: {err}");
+    }
+
+    /// Comparing a dump with itself reports no movement — the degenerate case that
+    /// would otherwise make every table look alarming.
+    #[test]
+    fn comparing_a_dump_with_itself_reports_no_movement() {
+        let dir = std::env::temp_dir().join("ferro-dump-corpus-test");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("self.tsv");
+        let rows = dump(2);
+        let mut out = String::from(HEADER);
+        for row in &rows {
+            let _ = writeln!(
+                out,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                row.reference,
+                row.axis,
+                row.direction,
+                row.family,
+                row.input,
+                row.output,
+                row.was_fixed_point
+            );
+        }
+        fs::write(&path, &out).expect("write dump");
+        let report = compare(&path, &path).expect("self-comparison must succeed");
+        assert!(
+            report.contains("**moved** | **0 (0.0%)**"),
+            "a dump compared with itself must report zero movement:\n{report}"
+        );
+    }
+}
