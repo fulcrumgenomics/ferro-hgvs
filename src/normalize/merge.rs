@@ -6458,6 +6458,16 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
             return Some(columns);
         }
     }
+    // The mirror, on a net-deletion block: a single gap cannot express
+    // *deletion, retained reference, deletion* either, and the same argument
+    // licenses it — see [`two_gap_deletion_alignment`]. The trigger is the
+    // mirror too: the retained side of a net deletion is the result, so what
+    // signals a single gap's failure here is an unmatched *result* base.
+    if !shorter_is_ref && best.is_some_and(|(matches, _, _)| matches < result.len()) {
+        if let Some(columns) = two_gap_deletion_alignment(reference, result) {
+            return Some(columns);
+        }
+    }
 
     // Only the winner is materialized.
     best.map(|(_, _, k)| {
@@ -6536,9 +6546,16 @@ fn best_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
 /// introduced and no match is manufactured: every matched column is a reference
 /// base surviving verbatim. That argument never depended on `a` being 0 — all
 /// three chunks are verbatim reference either way. Cluster A is structurally out
-/// of reach — #1040 and the `inv` cases are equal-length, #1157A is a net
-/// deletion, and an equal-length or net-deletion block never reaches this
-/// function.
+/// of reach: #1040 and the `inv` cases are equal-length, and an equal-length
+/// block never reaches this function.
+///
+/// A **net-deletion** block reaches it only through
+/// [`two_gap_deletion_alignment`], which calls this with the two blocks swapped.
+/// The containment argument transposes with them and is unchanged in substance,
+/// but note the consequence for reading this function's preconditions: on that
+/// path `reference` is the observed sequence and `result` the reference. #1157A
+/// is a net deletion and is still out of reach — it has no decomposition of this
+/// shape in either orientation.
 ///
 /// Comparison is byte-exact, matching [`best_alignment`]'s own `==` throughout.
 /// Making only this path case-insensitive would let the two-gap form win on a
@@ -6606,6 +6623,60 @@ fn two_gap_insertion_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Co
         }
     }
     None
+}
+
+/// The alignment that keeps the **whole** result intact across two deletions,
+/// or `None` when the pair does not have that shape — the mirror of
+/// [`two_gap_insertion_alignment`].
+///
+/// # Why it is a transpose and not a second implementation
+///
+/// The two shapes are the same statement read from opposite sides. This
+/// function looks for
+///
+/// ```text
+/// reference = result[..a] + D1 + result[a..b] + D2 + result[b..]
+/// ```
+///
+/// and that is *literally* [`two_gap_insertion_alignment`]'s equation with the
+/// two blocks exchanged. Calling it with `(result, reference)` and swapping each
+/// column's two indices therefore yields exactly the alignment wanted here — so
+/// every bound, precondition and tie-break of that function applies unchanged,
+/// and there is no duplicated index arithmetic to drift.
+///
+/// # Why it does not reopen the corpus the single-gap rule protects
+///
+/// The same argument, transposed. The single-gap restriction exists to stop
+/// *compensating* gaps — a deletion **and** an insertion in one block — from
+/// manufacturing matches out of coincidence (#1034/#1040/#182). Both gaps here
+/// are deletions in a net-deletion block, so no insertion is introduced and no
+/// match is manufactured: every matched column is a result base that survives
+/// verbatim in the reference.
+///
+/// # What it is for
+///
+/// A block like `ATGC -> T` has no single-gap explanation that stays within its
+/// own edit distance: the lone gap parks at one end and the offset reads as
+/// substitutions, giving the 4-column `delins` where the block needs 3. The
+/// two-gap form is the description the block actually admits — delete `A`,
+/// retain `T`, delete `GC` — and it is the one `general.md:34` asks for, since
+/// the two deletions are separated by an unchanged nucleotide.
+///
+/// Without it, `canonicalize_from_sequence`'s weight bound correctly refuses the
+/// over-claiming `delins` and the pass falls back to the per-member pipeline,
+/// whose answer *is* spelling-dependent — so two spellings of one variant
+/// diverge. That is the confluence regression this closes. The bound is named
+/// generically here on purpose: the ceiling it compares against is derived from
+/// the input's spelling today and is being moved onto the block by a separate
+/// change, and this alignment is what it is either way.
+fn two_gap_deletion_alignment(reference: &[u8], result: &[u8]) -> Option<Vec<Column>> {
+    let transposed = two_gap_insertion_alignment(result, reference)?;
+    Some(
+        transposed
+            .into_iter()
+            .map(|(alt_index, ref_index)| (ref_index, alt_index))
+            .collect(),
+    )
 }
 
 /// Columns for an alignment with a single gap of `gap_len` after `k` aligned
@@ -14042,11 +14113,14 @@ mod tests {
         }
 
         /// Run both splitters on one block and check the two invariants that hold
-        /// for every disagreement found: both sides denote the alternate block,
-        /// and the sequence-first side never declines.
+        /// for every harvested block: both sides denote the alternate block, and
+        /// the sequence-first side never declines.
+        ///
+        /// Says nothing about whether the two agree — [`both`] and [`converged`]
+        /// are the two callers that do.
         ///
         /// Returns `(live, shadow)` for the caller to pin exactly.
-        fn both(reference: &[u8], result: &[u8]) -> (Vec<Piece>, Vec<Piece>) {
+        fn both_raw(reference: &[u8], result: &[u8]) -> (Vec<Piece>, Vec<Piece>) {
             let live = partition_block(reference, result);
             let shadow = partition_block_sequence_first(
                 reference,
@@ -14064,23 +14138,56 @@ mod tests {
                 Some(result),
                 "shadow pieces must denote the alternate block: {shadow:?}"
             );
+            (live, shadow)
+        }
+
+        /// [`both_raw`], for a class that still disagrees.
+        fn both(reference: &[u8], result: &[u8]) -> (Vec<Piece>, Vec<Piece>) {
+            let (live, shadow) = both_raw(reference, result);
             assert_ne!(shape(&live), shape(&shadow), "this block must disagree");
             (live, shadow)
         }
 
-        /// `A1` (7 035 blocks). `partition_block` has no single-gap explanation
-        /// for two separate deletions, so it emits the whole block as one
-        /// `delins`; the sequence-first split finds both deletions.
-        #[test]
-        fn shadow_splits_a_block_live_kept_whole() {
-            let (live, shadow) = both(b"ACAC", b"CA");
-            assert_eq!(shape(&live), [(0, 4, b"CA".as_slice())]);
+        /// [`both_raw`], for a class the live splitter has since **caught up
+        /// with**: the two now agree, and the agreed shape is returned once.
+        ///
+        /// Kept as a pin rather than deleted. The block counts these classes
+        /// carry are the measured size of a defect, and a closed defect that
+        /// leaves no test behind is one nothing stops from reopening — a
+        /// regression in `partition_block` would silently restore the
+        /// disagreement and no other test in this module would notice.
+        fn converged(reference: &[u8], result: &[u8]) -> Vec<Piece> {
+            let (live, shadow) = both_raw(reference, result);
             assert_eq!(
+                shape(&live),
                 shape(&shadow),
+                "this class is closed; the two splitters must agree"
+            );
+            live
+        }
+
+        /// `A1` (7 035 blocks) — **closed by [`two_gap_deletion_alignment`]**,
+        /// and the largest class this module recorded.
+        ///
+        /// The recorded defect was precisely the one that function exists to
+        /// remove: `partition_block` had no single-gap explanation for two
+        /// separate deletions, so it emitted the whole block as one `delins`
+        /// claiming 4 changed columns where the block needs 2, while the
+        /// sequence-first split found both deletions. Live now finds them too.
+        #[test]
+        fn two_separate_deletions_are_found_by_both_splitters() {
+            let pieces = converged(b"ACAC", b"CA");
+            assert_eq!(
+                shape(&pieces),
                 [(0, 1, b"".as_slice()), (3, 4, b"".as_slice())]
             );
-            assert_eq!(changed_columns_of_pieces(&live), 4);
-            assert_eq!(changed_columns_of_pieces(&shadow), 2);
+            // Two columns, against the four the spanning `delins` this replaced
+            // claimed. The count is pinned by value here rather than against the
+            // block's own Levenshtein distance: `minimal_changed_columns` is the
+            // helper that would state minimality directly, and it arrives with
+            // the separate change that derives the weight bound's ceiling from
+            // the block instead of the input.
+            assert_eq!(changed_columns_of_pieces(&pieces), 2);
         }
 
         /// `A2` (6 915 blocks). The block is a 5' insertion plus a 3' deletion.
@@ -14107,39 +14214,36 @@ mod tests {
             assert_eq!(changed_columns_of_pieces(&shadow), 2);
         }
 
-        /// `A3` (4 567 blocks). Same piece count; the live first piece spans one
-        /// base more than it needs to, and pays for it with a substitution the
-        /// sequence-first split renders as a deletion.
+        /// `A3` (4 567 blocks) — **closed by [`two_gap_deletion_alignment`]**.
+        ///
+        /// The recorded defect: same piece count on both sides, but the live
+        /// first piece spanned one base more than it needed to and paid for it
+        /// with a substitution the sequence-first split rendered as a deletion.
+        /// Both now narrow it.
         #[test]
-        fn shadow_narrows_a_piece_live_over_widened() {
-            let (live, shadow) = both(b"ACCA", b"CC");
+        fn neither_splitter_over_widens_the_first_of_two_deletions() {
+            let pieces = converged(b"ACCA", b"CC");
             assert_eq!(
-                shape(&live),
-                [(0, 2, b"".as_slice()), (3, 4, b"C".as_slice())]
-            );
-            assert_eq!(
-                shape(&shadow),
+                shape(&pieces),
                 [(0, 1, b"".as_slice()), (3, 4, b"".as_slice())]
             );
-            assert_eq!(changed_columns_of_pieces(&live), 3);
-            assert_eq!(changed_columns_of_pieces(&shadow), 2);
+            assert_eq!(changed_columns_of_pieces(&pieces), 2);
         }
 
-        /// `A4` (379 blocks). The rarest of the four: the sequence-first first
-        /// piece is *wider* than live's, and the total is still lower.
+        /// `A4` (379 blocks) — **closed by [`two_gap_deletion_alignment`]**, and
+        /// the rarest of the four.
+        ///
+        /// The recorded defect: the sequence-first first piece was *wider* than
+        /// live's and the total was still lower — live spent a substitution plus
+        /// a 3-base deletion where two deletions suffice.
         #[test]
-        fn shadow_widens_one_piece_and_still_lowers_the_total() {
-            let (live, shadow) = both(b"AACAC", b"CA");
+        fn a_wider_first_deletion_still_lowers_the_total_on_both_sides() {
+            let pieces = converged(b"AACAC", b"CA");
             assert_eq!(
-                shape(&live),
-                [(0, 1, b"C".as_slice()), (2, 5, b"".as_slice())]
-            );
-            assert_eq!(
-                shape(&shadow),
+                shape(&pieces),
                 [(0, 2, b"".as_slice()), (4, 5, b"".as_slice())]
             );
-            assert_eq!(changed_columns_of_pieces(&live), 4);
-            assert_eq!(changed_columns_of_pieces(&shadow), 3);
+            assert_eq!(changed_columns_of_pieces(&pieces), 3);
         }
 
         /// `B1` (8 044 blocks) — **the sequence-first answer is less minimal.**
@@ -14282,9 +14386,11 @@ mod tests {
                 (b"ACAGCG", b"CGCTGT"),
                 (b"AGAGT", b"GAAGAG"),
             ] {
-                // `both` asserts the denotation on each side and that the block
-                // does in fact disagree.
-                both(reference, result);
+                // `both_raw`, not `both`: the denotation invariant is what this
+                // test is about, and it must keep holding for the three classes
+                // the live splitter has since caught up with. Whether a given
+                // block still disagrees is each class's own test to say.
+                both_raw(reference, result);
             }
         }
     }

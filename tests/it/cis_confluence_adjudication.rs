@@ -543,3 +543,74 @@ fn a_spanning_delins_and_its_aligned_split_are_two_fixed_points() {
          scope reaches a spelling that arrives already split is not settled"
     );
 }
+
+/// The net-deletion two-gap split, pinned through the **public diagnostics
+/// entry point** and asserted to be a fixed point there.
+///
+/// Everything else this change added tests the splitter directly, on `&[u8]`
+/// reference/result pairs. That is the right level for the algorithm and the
+/// wrong level for the only question a consumer asks, which is what
+/// `Normalizer` prints — and `normalize_with_diagnostics` is specifically the
+/// exit where that has gone wrong before: it used to call
+/// `normalize_core_canonical` directly, skipping the strict-mode rejection
+/// ladder *and* all four seam oracles, so a variant could take a different route
+/// through it than through `normalize()` (#1382). A pass that changes which
+/// partition is reachable therefore owes this seam a test rather than assuming
+/// the two exits agree.
+///
+/// Three things are asserted, and the second is the one with teeth:
+///
+/// 1. the exact displayed string, from all three spellings of the case
+///    `the_separation_two_members_present_is_not_a_property_of_the_variant`
+///    settles — the spanning `delins` and both member spellings;
+/// 2. that re-normalizing that output through the same entry point returns it
+///    **byte-identically**. `two_gap_deletion_alignment` makes a partition
+///    reachable that was not before, and a newly reachable partition is exactly
+///    the shape that can fail to be its own fixed point — the output would then
+///    be a second canonical form rather than the canonical one;
+/// 3. that the diagnostics exit and the plain `normalize()` exit agree, which is
+///    the #1382 asymmetry stated as an assertion instead of as a comment.
+#[test]
+fn the_two_gap_deletion_split_is_a_fixed_point_through_the_diagnostics_exit() {
+    let provider = provider();
+    let normalizer = Normalizer::with_config(
+        provider.clone(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+    );
+    let with_diagnostics = |description: &str| -> String {
+        let variant = parse_hgvs(description).unwrap_or_else(|e| panic!("{description}: {e}"));
+        normalizer
+            .normalize_with_diagnostics(&variant)
+            .unwrap_or_else(|e| panic!("{description}: {e}"))
+            .result
+            .to_string()
+    };
+
+    // The spanning `delins` is the shape the pass exists for: a net deletion
+    // whose payload aligns against its span with TWO gaps, which the splitter
+    // could not express before and so had to flatten.
+    for spelling in [
+        "NM_TEST.1:c.9_13delinsAT",
+        "NM_TEST.1:c.[9del;10del;13del]",
+        "NM_TEST.1:c.[9del;11del;13del]",
+    ] {
+        let output = with_diagnostics(spelling);
+        assert_eq!(
+            output, "NM_TEST.1:c.[9_10del;13del]",
+            "{spelling}: the diagnostics exit must print the re-derived two-gap partition"
+        );
+        assert_eq!(
+            with_diagnostics(&output),
+            output,
+            "{spelling}: `{output}` is not a fixed point of the diagnostics exit — a newly \
+             reachable partition that re-normalizes elsewhere is a SECOND canonical form, not \
+             the canonical one"
+        );
+        assert_eq!(
+            normalized(&provider, spelling),
+            output,
+            "{spelling}: `normalize()` and `normalize_with_diagnostics()` disagree — the #1382 \
+             asymmetry, on a partition this change made reachable"
+        );
+    }
+}
