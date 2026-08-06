@@ -11,9 +11,9 @@
 //! Two detectors run at different points in the allele pipeline:
 //!
 //! - [`detect_overlap_conflicts`] — *post-shift* coincident bounds: span edits
-//!   (`sub`/`del`/`delins`/`dup`/`inv`/`repeat`) whose `(region, start, end)`
-//!   keys are identical. Insertions are excluded here (they anchor at a
-//!   boundary, not a single-base span).
+//!   (`sub`/`del`/`delins`/`dup`/`inv`/`repeat`) whose ranked start/end keys are
+//!   identical. Insertions are excluded here (they anchor at a boundary, not a
+//!   single-base span).
 //! - [`detect_insertion_overlaps`] — *pre-merge* junction overlaps: two
 //!   junction-anchored edits at one junction, or one interior to a span edit
 //!   (mutalyzer `EOVERLAP`, #486). Must run before the normalizer's merge step
@@ -32,10 +32,100 @@ use crate::hgvs::variant::{AllelePhase, HgvsVariant, LocEdit};
 use crate::normalize::merge::Region;
 use crate::normalize::NormalizationWarning;
 
+/// One position on a transcript-relative axis, ordered the way the axis reads.
+///
+/// # Why a rank rather than a bare `(Region, i64)`
+///
+/// The `c.`/`r.`/`n.` axes are piecewise: three regions numbered by three
+/// independent integer sequences, so a bare coordinate does not order against
+/// one in another region — `c.*1` is the base immediately 3' of the last CDS
+/// base, and `1 < 15`. Both detectors in this module previously handled that by
+/// refusing to read a range whose two endpoints were in different regions
+/// (`if rs != re { return None }` in `cds_range` / `tx_range` / `rna_range`) and
+/// by comparing only members that shared a region.
+///
+/// That was not a decline. `None` reaches `let Some(..) = .. else { continue }`,
+/// so the member was dropped from the analysis rather than treated
+/// conservatively, and **strict mode silently accepted overlaps it rejects when
+/// the same pair sits inside one region** (#1508). Measured on a 20-base
+/// transcript with CDS `1..=15`:
+///
+/// ```text
+/// c.[11_12dup;12_13inv]      REJECTED  W5002
+/// c.[14_15dup;15_*1inv]      ACCEPTED            <-- same shape, across the boundary
+/// c.[11_12del;11_12inv]      REJECTED  W5002
+/// c.[15_*1del;15_*1inv]      ACCEPTED
+/// c.[11_12insAA;11_12insCC]  REJECTED  W5002
+/// c.[15_*1insAA;15_*1insCC]  ACCEPTED  -> c.[15delinsCAA;15_*1insCC]
+/// ```
+///
+/// Ranking the regions gives the whole axis one order, so the boundary stops
+/// being a place where members become invisible to each other.
+///
+/// # Why this is sound here and was rejected for `merge.rs`
+///
+/// #1482 considered exactly this key for `merge::MemberSpan` and rejected it:
+/// 42 sites there do *arithmetic* on a span, many computing `end - start + 1`
+/// as a length, and for `c.15_*1` that is `1 - 15`. A rank-ordered key would
+/// have made all 42 compile while silently producing wrong lengths, so that
+/// module converts onto the sequence axis with a provider instead.
+///
+/// This module has no provider and needs none, because it never takes a length
+/// or an offset — every use is a **comparison**: do two spans coincide, do they
+/// intersect, does a junction fall interior to a span. The one place that looked
+/// like arithmetic, `gap + 1 <= end`, is already written `gap < end`.
+///
+/// The ordering itself is the one [`crate::hgvs::variant`]'s `CanonicalPos`
+/// already gives the parser's E3006 self-cancelling check — which is why that
+/// check gets a cross-region `c.[14_15dup;15_*1del]` right while these
+/// detectors do not. This adopts the precedent rather than inventing an order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct AxisPos {
+    /// `0` = 5' of the body, `1` = the body, `2` = 3' of it. First in
+    /// declaration order so the derived `Ord` is lexicographic.
+    rank: u8,
+    /// The written coordinate, whose numeric order is already correct *within*
+    /// a region — including the 5' regions, where `-3 < -2 < -1` runs toward
+    /// the body exactly as the axis does.
+    coord: i64,
+}
+
+impl AxisPos {
+    fn new(region: Region, coord: i64) -> Self {
+        let rank = match region {
+            Region::FivePrimeUtr | Region::TxUpstream => 0,
+            Region::Genome | Region::Cds | Region::Rna | Region::Tx => 1,
+            Region::ThreePrimeUtr | Region::TxDownstream => 2,
+        };
+        Self { rank, coord }
+    }
+
+    /// Whether `next` is the position immediately 3' of `self`.
+    ///
+    /// Needed because an insertion's anchor is recognised by its two endpoints
+    /// being adjacent, and at a region boundary they are adjacent without being
+    /// consecutive integers: `c.15_*1insCC` anchors at the junction between the
+    /// last CDS base and the first 3'UTR base.
+    ///
+    /// Crossing *into* the body is fully checkable — the 5' regions end at `-1`.
+    /// Crossing *out* of it is not: whether `c.15` is the last CDS base depends
+    /// on the record, and this module holds no provider. HGVS insertion syntax
+    /// requires the two flanking positions to be adjacent, so the author's
+    /// spelling is taken at its word there — the same latitude the parser
+    /// already extends, since it accepts `c.15_*1insCC` without consulting a
+    /// reference either.
+    fn is_immediately_followed_by(self, next: Self) -> bool {
+        if self.rank == next.rank {
+            return next.coord == self.coord + 1;
+        }
+        next.rank == self.rank + 1 && next.coord == 1 && (self.rank != 0 || self.coord == -1)
+    }
+}
+
 /// Detect coincident-bounds groups in a cis allele.
 ///
 /// Returns one warning per group of `>= 2` same-accession sub-variants whose
-/// `(coordinate-system region, signed start, signed end)` keys are identical.
+/// ranked start/end positions ([`AxisPos`]) are identical.
 /// Insertions are excluded — they anchor at boundaries (`[end, start]`) and
 /// have no single-base location to coincide on. Trans / mosaic / chimeric /
 /// unknown phases short-circuit (the warning only applies to a same-haplotype
@@ -54,9 +144,11 @@ pub(crate) fn detect_overlap_conflicts(
         return Vec::new();
     }
 
-    // Group sub-variants by (accession, coord_system, region, start, end). The
-    // `Vec<usize>` collects 0-based indices into `variants` in input order so
-    // each group's `edit_kinds` reflect the source ordering of the conflict.
+    // Group sub-variants by (accession, coord_system, start, end), the endpoints
+    // ranked so a member spanning a region boundary groups with the rest rather
+    // than vanishing (#1508). The `Vec<usize>` collects 0-based indices into
+    // `variants` in input order so each group's `edit_kinds` reflect the source
+    // ordering of the conflict.
     let mut groups: BTreeMap<GroupKey, Vec<usize>> = BTreeMap::new();
     for (idx, variant) in variants.iter().enumerate() {
         let Some(key) = group_key(variant) else {
@@ -91,8 +183,8 @@ pub(crate) fn detect_overlap_conflicts(
 
     // Spans that *intersect* without coinciding (#1448).
     //
-    // The grouping above keys on exact `(accession, coord_system, region, start,
-    // end)` equality, so two members that overlap only partially — or that nest —
+    // The grouping above keys on exact `(accession, coord_system, start, end)`
+    // equality, so two members that overlap only partially — or that nest —
     // land in different groups and were reported by nothing. Strict mode
     // therefore accepted them, and they denote no sequence at all: the
     // independent applier declines them in either member order.
@@ -115,26 +207,25 @@ pub(crate) fn detect_overlap_conflicts(
     // an exactly-coincident pair is reported once — by the loop above, which
     // names every member of its group — rather than twice.
     for (i, first) in variants.iter().enumerate() {
-        let Some((coord_system, region, first_start, first_end)) = span_writer_footprint(first)
-        else {
+        let Some((coord_system, first_start, first_end)) = span_writer_footprint(first) else {
             continue;
         };
         let Some(first_accession) = first.accession().map(|a| a.to_string()) else {
             continue;
         };
         for (j, second) in variants.iter().enumerate().skip(i + 1) {
-            let Some((second_system, second_region, second_start, second_end)) =
-                span_writer_footprint(second)
+            let Some((second_system, second_start, second_end)) = span_writer_footprint(second)
             else {
                 continue;
             };
             let Some(second_accession) = second.accession().map(|a| a.to_string()) else {
                 continue;
             };
-            if first_accession != second_accession
-                || coord_system != second_system
-                || region != second_region
-            {
+            // No region-equality gate (#1508). It was never a molecule test —
+            // `coord_system` is that — and gating on it hid every pair one of
+            // whose members crosses a region boundary. Ranked positions compare
+            // across the boundary, so the geometry test below decides.
+            if first_accession != second_accession || coord_system != second_system {
                 continue;
             }
             // Coincident pairs belong to the grouped loop above.
@@ -186,7 +277,7 @@ pub(crate) fn detect_overlap_conflicts(
 ///   measured census.
 ///
 /// Both of those geometries belong to [`detect_insertion_overlaps`].
-fn span_writer_footprint(variant: &HgvsVariant) -> Option<(&'static str, Region, i64, i64)> {
+fn span_writer_footprint(variant: &HgvsVariant) -> Option<(&'static str, AxisPos, AxisPos)> {
     let edit = inner_edit(variant)?;
     if !matches!(
         edit,
@@ -287,17 +378,15 @@ fn junction_overlaps(
         idx: usize,
         accession: String,
         coord_system: &'static str,
-        region: Region,
-        gap: i64,
+        gap: AxisPos,
         kind: &'static str,
     }
     struct Span {
         idx: usize,
         accession: String,
         coord_system: &'static str,
-        region: Region,
-        start: i64,
-        end: i64,
+        start: AxisPos,
+        end: AxisPos,
         /// Whether the edit **removes** every base it spans, leaving nothing
         /// for an interior junction to be positioned against. See branch (b).
         removes_its_bases: bool,
@@ -306,7 +395,7 @@ fn junction_overlaps(
     let mut insertions: Vec<Insertion> = Vec::new();
     let mut spans: Vec<Span> = Vec::new();
     for (idx, variant) in variants.iter().enumerate() {
-        let Some((coord_system, region, start, end)) = simple_span(variant) else {
+        let Some((coord_system, start, end)) = simple_span(variant) else {
             continue;
         };
         let Some(accession) = variant.accession().map(|a| a.to_string()) else {
@@ -318,12 +407,18 @@ fn junction_overlaps(
         if matches!(edit, NaEdit::Insertion { .. }) {
             // A canonical insertion anchors at two adjacent positions; anything
             // else (e.g. a malformed single-position insertion) has no junction.
-            if end == start + 1 {
+            //
+            // Adjacency, not `end == start + 1` (#1508): at a region boundary
+            // the two flanking positions are adjacent without being consecutive
+            // integers, so the integer test silently declined to register
+            // `c.15_*1insCC` as occupying a junction at all — and two of those
+            // at one junction were accepted where the in-region pair is
+            // rejected.
+            if start.is_immediately_followed_by(end) {
                 insertions.push(Insertion {
                     idx,
                     accession,
                     coord_system,
-                    region,
                     gap: start,
                     kind: "ins",
                 });
@@ -342,7 +437,6 @@ fn junction_overlaps(
                     idx,
                     accession: accession.clone(),
                     coord_system,
-                    region,
                     gap: end,
                     kind,
                 });
@@ -385,7 +479,6 @@ fn junction_overlaps(
                 idx,
                 accession,
                 coord_system,
-                region,
                 start,
                 end,
                 removes_its_bases: matches!(edit, NaEdit::Deletion { .. }),
@@ -405,20 +498,20 @@ fn junction_overlaps(
     // writers). The same holds for the `repeat` spelling.
     // Each group carries `(index, kind)` so the warning can name every member by
     // its own spelling rather than labelling the whole group `ins`.
-    /// `(accession, coordinate system, region, gap)` — one zero-width junction
-    /// on one molecule.
-    type JunctionKey = (String, &'static str, Region, i64);
+    /// `(accession, coordinate system, gap)` — one zero-width junction on one
+    /// molecule. The ranked gap carries its own region (#1508).
+    type JunctionKey = (String, &'static str, AxisPos);
     /// The members writing at a junction, as `(index into `variants`, kind)`.
     type Occupants = Vec<(usize, &'static str)>;
 
     let mut by_junction: BTreeMap<JunctionKey, Occupants> = BTreeMap::new();
     for ins in &insertions {
         by_junction
-            .entry((ins.accession.clone(), ins.coord_system, ins.region, ins.gap))
+            .entry((ins.accession.clone(), ins.coord_system, ins.gap))
             .or_default()
             .push((ins.idx, ins.kind));
     }
-    for ((accession, coord_system, _region, _gap), occupants) in &by_junction {
+    for ((accession, coord_system, _gap), occupants) in &by_junction {
         if !include_same_junction || occupants.len() < 2 {
             continue;
         }
@@ -471,7 +564,6 @@ fn junction_overlaps(
             ins.idx != span.idx
                 && ins.accession == span.accession
                 && ins.coord_system == span.coord_system
-                && ins.region == span.region
                 && span.start <= ins.gap
                 // `gap + 1 <= end` (junction interior); `gap < end` for ints.
                 && ins.gap < span.end
@@ -507,9 +599,11 @@ fn junction_overlaps(
 struct GroupKey {
     accession: String,
     coord_system: &'static str,
-    region: Region,
-    start: i64,
-    end: i64,
+    /// Ranked endpoints, which subsume the old separate `region` field: two
+    /// members coincide only if both ends agree, and a ranked position already
+    /// carries which region it is in (#1508).
+    start: AxisPos,
+    end: AxisPos,
 }
 
 /// Build the group key for a sub-variant, or `None` if it can't participate
@@ -525,42 +619,39 @@ struct GroupKey {
 /// - positions with intronic offsets, `?` sentinels, or special anchors
 ///   (`pter`/`qter`/`cen`)
 fn group_key(variant: &HgvsVariant) -> Option<GroupKey> {
-    let (coord_system, region, start, end) = simple_range(variant)?;
+    let (coord_system, start, end) = simple_range(variant)?;
     edit_kind(variant)?;
     let accession = variant.accession()?.to_string();
     Some(GroupKey {
         accession,
         coord_system,
-        region,
         start,
         end,
     })
 }
 
-/// Extract `(coord_system, region, start, end)` for an overlap-eligible
+/// Extract `(coord_system, ranked start, ranked end)` for an overlap-eligible
 /// sub-variant. Mirrors [`super::merge::simple_range_for_variant`] but is
 /// more permissive on edit kind: `Duplication`, `Inversion`, and
 /// (single-base or range) `Repeat` all have a definite reference span and
 /// can collide with other edits, so they're included here. `Insertion` is
 /// excluded — its anchor is `[end, start]` (zero-width at a boundary) and
 /// the spec excludes insertions from this rule.
-fn simple_range(variant: &HgvsVariant) -> Option<(&'static str, Region, i64, i64)> {
+fn simple_range(variant: &HgvsVariant) -> Option<(&'static str, AxisPos, AxisPos)> {
     match variant {
-        HgvsVariant::Genome(g) => {
-            na_range(&g.loc_edit, genome_range).map(|(r, s, e)| ("g", r, s, e))
-        }
-        HgvsVariant::Cds(c) => na_range(&c.loc_edit, cds_range).map(|(r, s, e)| ("c", r, s, e)),
-        HgvsVariant::Tx(t) => na_range(&t.loc_edit, tx_range).map(|(r, s, e)| ("n", r, s, e)),
-        HgvsVariant::Rna(r) => na_range(&r.loc_edit, rna_range).map(|(rg, s, e)| ("r", rg, s, e)),
-        HgvsVariant::Mt(m) => na_range(&m.loc_edit, genome_range).map(|(r, s, e)| ("m", r, s, e)),
+        HgvsVariant::Genome(g) => na_range(&g.loc_edit, genome_range).map(|(s, e)| ("g", s, e)),
+        HgvsVariant::Cds(c) => na_range(&c.loc_edit, cds_range).map(|(s, e)| ("c", s, e)),
+        HgvsVariant::Tx(t) => na_range(&t.loc_edit, tx_range).map(|(s, e)| ("n", s, e)),
+        HgvsVariant::Rna(r) => na_range(&r.loc_edit, rna_range).map(|(s, e)| ("r", s, e)),
+        HgvsVariant::Mt(m) => na_range(&m.loc_edit, genome_range).map(|(s, e)| ("m", s, e)),
         _ => None,
     }
 }
 
 fn na_range<L>(
     loc_edit: &LocEdit<Interval<L>, NaEdit>,
-    range_fn: impl Fn(&Interval<L>) -> Option<(Region, i64, i64)>,
-) -> Option<(Region, i64, i64)> {
+    range_fn: impl Fn(&Interval<L>) -> Option<(AxisPos, AxisPos)>,
+) -> Option<(AxisPos, AxisPos)> {
     if !loc_edit.edit.is_certain() {
         return None;
     }
@@ -628,7 +719,7 @@ fn inner_edit(variant: &HgvsVariant) -> Option<&NaEdit> {
     }
 }
 
-/// Extract `(coord_system, region, start, end)` for a certain NaEdit-bearing
+/// Extract `(coord_system, ranked start, ranked end)` for a certain NaEdit-bearing
 /// variant *regardless of edit kind*.
 ///
 /// This is [`simple_range`] without the `is_overlap_edit` gate: insertion-
@@ -636,24 +727,22 @@ fn inner_edit(variant: &HgvsVariant) -> Option<&NaEdit> {
 /// which `simple_range` deliberately drops. Position-validity gates (special
 /// anchors, intronic offsets, `?` sentinels, region splits) still apply via
 /// the per-coordinate-system range helpers.
-fn simple_span(variant: &HgvsVariant) -> Option<(&'static str, Region, i64, i64)> {
+fn simple_span(variant: &HgvsVariant) -> Option<(&'static str, AxisPos, AxisPos)> {
     fn na_span<L>(
         loc_edit: &LocEdit<Interval<L>, NaEdit>,
-        range_fn: impl Fn(&Interval<L>) -> Option<(Region, i64, i64)>,
-    ) -> Option<(Region, i64, i64)> {
+        range_fn: impl Fn(&Interval<L>) -> Option<(AxisPos, AxisPos)>,
+    ) -> Option<(AxisPos, AxisPos)> {
         if !loc_edit.edit.is_certain() {
             return None;
         }
         range_fn(&loc_edit.location)
     }
     match variant {
-        HgvsVariant::Genome(g) => {
-            na_span(&g.loc_edit, genome_range).map(|(r, s, e)| ("g", r, s, e))
-        }
-        HgvsVariant::Cds(c) => na_span(&c.loc_edit, cds_range).map(|(r, s, e)| ("c", r, s, e)),
-        HgvsVariant::Tx(t) => na_span(&t.loc_edit, tx_range).map(|(r, s, e)| ("n", r, s, e)),
-        HgvsVariant::Rna(r) => na_span(&r.loc_edit, rna_range).map(|(rg, s, e)| ("r", rg, s, e)),
-        HgvsVariant::Mt(m) => na_span(&m.loc_edit, genome_range).map(|(r, s, e)| ("m", r, s, e)),
+        HgvsVariant::Genome(g) => na_span(&g.loc_edit, genome_range).map(|(s, e)| ("g", s, e)),
+        HgvsVariant::Cds(c) => na_span(&c.loc_edit, cds_range).map(|(s, e)| ("c", s, e)),
+        HgvsVariant::Tx(t) => na_span(&t.loc_edit, tx_range).map(|(s, e)| ("n", s, e)),
+        HgvsVariant::Rna(r) => na_span(&r.loc_edit, rna_range).map(|(s, e)| ("r", s, e)),
+        HgvsVariant::Mt(m) => na_span(&m.loc_edit, genome_range).map(|(s, e)| ("m", s, e)),
         _ => None,
     }
 }
@@ -780,10 +869,13 @@ fn render_boundary<P: std::fmt::Display>(boundary: &UncertainBoundary<P>) -> Str
 // six-line helpers would widen merge.rs's surface area for no real
 // benefit. The shared piece is `Region`, which is `pub(crate)`.
 
-fn genome_range(interval: &Interval<GenomePos>) -> Option<(Region, i64, i64)> {
+fn genome_range(interval: &Interval<GenomePos>) -> Option<(AxisPos, AxisPos)> {
     let s = simple_genome(interval.start.as_single()?)?;
     let e = simple_genome(interval.end.as_single()?)?;
-    Some((Region::Genome, s, e))
+    Some((
+        AxisPos::new(Region::Genome, s),
+        AxisPos::new(Region::Genome, e),
+    ))
 }
 
 fn simple_genome(mu: &Mu<GenomePos>) -> Option<i64> {
@@ -797,13 +889,13 @@ fn simple_genome(mu: &Mu<GenomePos>) -> Option<i64> {
     i64::try_from(pos.base).ok()
 }
 
-fn cds_range(interval: &Interval<CdsPos>) -> Option<(Region, i64, i64)> {
+fn cds_range(interval: &Interval<CdsPos>) -> Option<(AxisPos, AxisPos)> {
+    // No cross-region refusal (#1508): each endpoint keeps its own region and
+    // is ranked, so a span running from the body into a UTR is readable and
+    // therefore visible to the detectors above.
     let (rs, s) = simple_cds(interval.start.as_single()?)?;
     let (re, e) = simple_cds(interval.end.as_single()?)?;
-    if rs != re {
-        return None;
-    }
-    Some((rs, s, e))
+    Some((AxisPos::new(rs, s), AxisPos::new(re, e)))
 }
 
 fn simple_cds(mu: &Mu<CdsPos>) -> Option<(Region, i64)> {
@@ -826,13 +918,13 @@ fn simple_cds(mu: &Mu<CdsPos>) -> Option<(Region, i64)> {
     None
 }
 
-fn tx_range(interval: &Interval<TxPos>) -> Option<(Region, i64, i64)> {
+fn tx_range(interval: &Interval<TxPos>) -> Option<(AxisPos, AxisPos)> {
+    // No cross-region refusal (#1508): each endpoint keeps its own region and
+    // is ranked, so a span running from the body into a UTR is readable and
+    // therefore visible to the detectors above.
     let (rs, s) = simple_tx(interval.start.as_single()?)?;
     let (re, e) = simple_tx(interval.end.as_single()?)?;
-    if rs != re {
-        return None;
-    }
-    Some((rs, s, e))
+    Some((AxisPos::new(rs, s), AxisPos::new(re, e)))
 }
 
 fn simple_tx(mu: &Mu<TxPos>) -> Option<(Region, i64)> {
@@ -855,13 +947,13 @@ fn simple_tx(mu: &Mu<TxPos>) -> Option<(Region, i64)> {
     None
 }
 
-fn rna_range(interval: &Interval<RnaPos>) -> Option<(Region, i64, i64)> {
+fn rna_range(interval: &Interval<RnaPos>) -> Option<(AxisPos, AxisPos)> {
+    // No cross-region refusal (#1508): each endpoint keeps its own region and
+    // is ranked, so a span running from the body into a UTR is readable and
+    // therefore visible to the detectors above.
     let (rs, s) = simple_rna(interval.start.as_single()?)?;
     let (re, e) = simple_rna(interval.end.as_single()?)?;
-    if rs != re {
-        return None;
-    }
-    Some((rs, s, e))
+    Some((AxisPos::new(rs, s), AxisPos::new(re, e)))
 }
 
 fn simple_rna(mu: &Mu<RnaPos>) -> Option<(Region, i64)> {
