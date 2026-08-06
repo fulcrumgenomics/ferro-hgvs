@@ -20,6 +20,21 @@
 //!     --compare /tmp/before.tsv --against /tmp/after.tsv
 //! ```
 //!
+//! ## Comparing across a revision that changed the corpus
+//!
+//! `compare` refuses two dumps that do not cover the same rows, so a revision that
+//! adds a shape family cannot be diffed against a dump taken with the older
+//! generator. Copy **this file** into the base checkout and dump from there: it
+//! depends only on the public API, so it builds against either revision and both
+//! dumps then describe the same corpus.
+//!
+//! ```text
+//! git worktree add --detach ../base <base-sha>
+//! cp examples/dump_normalized_corpus.rs ../base/examples/
+//! (cd ../base && cargo run --features dev --example dump_normalized_corpus -- --out /tmp/before.tsv)
+//! cargo run --features dev --example dump_normalized_corpus -- --out /tmp/after.tsv
+//! ```
+//!
 //! ## What this is NOT for
 //!
 //! Prepared references. `ferro normalize --input <file> --reference <dir> --format
@@ -30,7 +45,7 @@
 //! densely cover the cis-allele shape families where representation churn actually
 //! happens. That is the gap this fills.
 //!
-//! ## Two traps, both hit while measuring #1401
+//! ## Three traps, the first two hit while measuring #1401
 //!
 //! 1. **A row's identity is `(reference, axis, direction, input)` — never the input
 //!    alone.** Every synthetic reference reuses one accession, so keying on the
@@ -41,6 +56,13 @@
 //!    deliberately enriched for the shapes that churn, so its percentages are far
 //!    higher than a real corpus would give — #1401 measures 23% here. Quote it as
 //!    "of the affected shape family", never as a repo-wide figure.
+//! 3. **A zero measures only the families the corpus builds** (#1456). Before the
+//!    conflict families below were added, this harness reported `0 of 18,432` for
+//!    #1403, #1445 and #1451 in a row — none of which the corpus could express, and
+//!    two of which move behaviour for thousands of inputs by their own enumerations.
+//!    `compare` now says so in the zero case rather than leaving it to be inferred.
+//!    If your change is scoped to a shape no family builds, add the family; do not
+//!    quote the zero.
 //!
 //! ## The corpus is deliberately independent of `tests/it/common/`
 //!
@@ -197,6 +219,29 @@ const FAMILIES: &[(&str, &str)] = &[
         "del_plus_sub",
         "#1232's own example — a deletion and a separated substitution",
     ),
+    // The four below are the *conflicting* shapes (#1456). Every family above
+    // pairs members that occupy disjoint territory, which is why this corpus
+    // reported `0 of 18,432` for #1403, #1445 and #1451 in a row — three changes
+    // that move behaviour for thousands of inputs by their own enumerations. The
+    // two detectors in `normalize::overlap` between them define the shapes: one
+    // keys on coincident (and, since #1451, merely intersecting) spans, the other
+    // on a junction anchored at or inside a span.
+    (
+        "coincident_bounds",
+        "#1307 — a dup and a substitution on one and the same base",
+    ),
+    (
+        "junction_interior_to_span",
+        "#486 — an insertion at a junction interior to a span edit",
+    ),
+    (
+        "partial_overlap_spans",
+        "#1451 — two spans that intersect without either containing the other",
+    ),
+    (
+        "nested_spans",
+        "#1451 — two spans sharing a bound, one containing the other",
+    ),
 ];
 
 fn dump(seeds: u32) -> Vec<Row> {
@@ -350,6 +395,55 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
                 p(s + 3),
                 base(s + 3),
                 other(s + 3)
+            )),
+            // A one-base dup and a substitution on that same base: the shape
+            // `detect_overlap_conflicts` keys on, and the one #1307 produced out
+            // of bounds (`g.[24dup;24C>G]` -> `g.[24C>G;24_25insC]`).
+            "coincident_bounds" => out.push(format!(
+                "{prefix}[{}dup;{}{}>{}]",
+                p(s),
+                p(s),
+                base(s),
+                other(s)
+            )),
+            // An insertion anchored at the junction *inside* another member's
+            // span — mutalyzer `EOVERLAP`, #486. Both spellings the second
+            // detector has to see: the span deleted, and the span inverted.
+            "junction_interior_to_span" => {
+                out.push(format!(
+                    "{prefix}[{}_{}del;{}_{}insCC]",
+                    p(s),
+                    p(s + 1),
+                    p(s),
+                    p(s + 1)
+                ));
+                out.push(format!(
+                    "{prefix}[{}_{}inv;{}_{}insCC]",
+                    p(s),
+                    p(s + 1),
+                    p(s),
+                    p(s + 1)
+                ));
+            }
+            // Two spans that intersect without coinciding — accepted by strict
+            // mode until #1451, which reported 10,499 of 25,848 such pairs as
+            // denoting nothing while this corpus measured zero movement.
+            "partial_overlap_spans" => out.push(format!(
+                "{prefix}[{}_{}del;{}_{}del]",
+                p(s),
+                p(s + 2),
+                p(s + 1),
+                p(s + 3)
+            )),
+            // Nested spans sharing their 5' bound. Kept apart from the partial
+            // overlap above because containment and mere intersection are
+            // different questions to a detector that keys on bounds.
+            "nested_spans" => out.push(format!(
+                "{prefix}[{}_{}del;{}_{}del]",
+                p(s),
+                p(s + 1),
+                p(s),
+                p(s + 3)
             )),
             _ => unreachable!("unknown family {family}"),
         }
@@ -563,7 +657,29 @@ fn compare(before: &PathBuf, after: &PathBuf) -> Result<String, String> {
     for (family, (total, m)) in &by_family {
         let _ = writeln!(r, "| `{family}` | {total} | {m} |");
     }
-    if !moved.is_empty() {
+    if moved.is_empty() {
+        // A zero is the answer most likely to be quoted, and the one most likely
+        // to be wrong: it is a statement about the families above and nothing
+        // else. Three PRs in a row (#1403, #1445, #1451) reported `0 of 18,432`
+        // from a corpus that built no allele of the shape they changed, and each
+        // had to hand-write this caveat into its own PR body (#1456). Say it here
+        // instead, and name what was actually covered.
+        let covered: Vec<&str> = by_family.keys().copied().collect();
+        let _ = writeln!(
+            r,
+            "\n**No row moved.** That is a measured zero for the {} shape famil{} above and says \
+             nothing about a shape this corpus does not build: {}. If the change under test is \
+             scoped to a shape absent from that list, this harness has not measured it — add the \
+             family rather than quoting the zero.",
+            covered.len(),
+            if covered.len() == 1 { "y" } else { "ies" },
+            covered
+                .iter()
+                .map(|f| format!("`{f}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    } else {
         let _ = writeln!(r, "\n### Sample moved rows\n\n```text");
         for (key, old, new, _) in moved.iter().take(10) {
             let _ = writeln!(
@@ -617,6 +733,98 @@ mod tests {
         assert!(
             distinct_inputs < rows.len(),
             "inputs repeat across references, so keying on the input alone would merge rows"
+        );
+    }
+
+    /// The geometric relationship two members of a cis allele can stand in. An
+    /// insertion occupies no reference base, so it is a **junction** between two
+    /// bases and never a span; every other edit covers the bases it names.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Footprint {
+        Span(u64, u64),
+        Junction(u64, u64),
+    }
+
+    /// Read each member's footprint off a genomic allele by parsing what the
+    /// generator emitted. Deliberately derived from the description rather than
+    /// from the family table: the census below has to judge what the corpus
+    /// actually builds, so that renaming or adding a family cannot satisfy it
+    /// vacuously. `None` for anything that is not a two-member `g.` allele.
+    fn member_footprints(input: &str) -> Option<Vec<Footprint>> {
+        use ferro_hgvs::hgvs::edit::NaEdit;
+        use ferro_hgvs::HgvsVariant;
+        let HgvsVariant::Allele(allele) = parse_hgvs(input).ok()? else {
+            return None;
+        };
+        let mut out = Vec::new();
+        for member in &allele.variants {
+            let HgvsVariant::Genome(g) = member else {
+                return None;
+            };
+            let start = g.loc_edit.location.start.inner()?.base;
+            let end = g.loc_edit.location.end.inner()?.base;
+            out.push(match g.loc_edit.edit.inner() {
+                Some(NaEdit::Insertion { .. }) => Footprint::Junction(start, end),
+                _ => Footprint::Span(start, end),
+            });
+        }
+        Some(out)
+    }
+
+    /// The corpus must build alleles whose members **conflict** (#1456).
+    ///
+    /// Before this test the five shape families were all disjoint-member pairs, so
+    /// the harness reported `0 of 18,432` for three consecutive PRs — #1403, #1445
+    /// and #1451 — each of which moves behaviour for thousands of inputs by its own
+    /// enumeration. A zero was indistinguishable from blindness, and the stability
+    /// disclosure the repository requires was satisfied on paper while telling the
+    /// reader nothing.
+    #[test]
+    fn the_corpus_emits_alleles_whose_members_conflict() {
+        let (mut coincident, mut nested, mut partial, mut interior) = (0, 0, 0, 0);
+        for core in corpus_sequences(2) {
+            for (family, _) in FAMILIES {
+                for input in inputs_for(family, "g", &core) {
+                    let Some(footprints) = member_footprints(&input) else {
+                        continue;
+                    };
+                    let &[a, b] = &footprints[..] else { continue };
+                    match (a, b) {
+                        (Footprint::Span(s1, e1), Footprint::Span(s2, e2)) => {
+                            if (s1, e1) == (s2, e2) {
+                                coincident += 1;
+                            } else if (s1 <= s2 && e2 <= e1) || (s2 <= s1 && e1 <= e2) {
+                                nested += 1;
+                            } else if s1 <= e2 && s2 <= e1 {
+                                partial += 1;
+                            }
+                        }
+                        (Footprint::Junction(j0, j1), Footprint::Span(s, e))
+                        | (Footprint::Span(s, e), Footprint::Junction(j0, j1))
+                            if s <= j0 && j1 <= e =>
+                        {
+                            interior += 1;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        assert!(
+            coincident > 0,
+            "no allele has two members on coincident bounds (`[Ndup;NX>Y]`)"
+        );
+        assert!(
+            interior > 0,
+            "no allele puts a junction interior to a span (`[a_bdel;a_binsN]`)"
+        );
+        assert!(
+            partial > 0,
+            "no allele has partially-overlapping spans (`[10_14del;12_16del]`)"
+        );
+        assert!(
+            nested > 0,
+            "no allele has nested spans (`[10_14del;10_16del]`)"
         );
     }
 
@@ -733,6 +941,58 @@ mod tests {
         assert!(
             err.contains("disagree on the shape family"),
             "unexpected error: {err}"
+        );
+    }
+
+    /// A zero has to say what it covered (#1456).
+    ///
+    /// `0 moved` reads as "this change is safe", but it is only ever a statement
+    /// about the families the corpus builds — three PRs in a row quoted a zero from
+    /// a corpus that could not express the shape they changed. Naming the covered
+    /// families in the zero case is what lets a reader tell the two apart.
+    #[test]
+    fn a_report_with_no_movement_names_the_families_it_covered() {
+        let dump = fixture(
+            "zero-scope.tsv",
+            &format!(
+                "{HEADER}AC\tg\t3prime\tfamily_one\tX\tY\ttrue\n\
+                 AC\tg\t3prime\tfamily_two\tP\tQ\ttrue\n"
+            ),
+        );
+        let report = compare(&dump, &dump).expect("a self-comparison must succeed");
+        assert!(
+            report.contains("No row moved"),
+            "a zero must be stated, not left to be read off the table:\n{report}"
+        );
+        assert!(
+            report.contains("does not build"),
+            "a zero must say it covers only the families in the corpus:\n{report}"
+        );
+        for family in ["family_one", "family_two"] {
+            assert!(
+                report.contains(&format!("`{family}`")),
+                "the zero caveat must name {family}:\n{report}"
+            );
+        }
+    }
+
+    /// …and a report that *did* find movement must not carry that claim. The
+    /// discriminating half: printing the caveat unconditionally would satisfy the
+    /// test above while telling a reader of a moving diff that nothing moved.
+    #[test]
+    fn a_report_with_movement_does_not_claim_a_zero() {
+        let before = fixture(
+            "moved-before.tsv",
+            &format!("{HEADER}AC\tg\t3prime\tfamily_one\tX\tY\ttrue\n"),
+        );
+        let after = fixture(
+            "moved-after.tsv",
+            &format!("{HEADER}AC\tg\t3prime\tfamily_one\tX\tZ\ttrue\n"),
+        );
+        let report = compare(&before, &after).expect("comparison must succeed");
+        assert!(
+            !report.contains("No row moved"),
+            "a report with a moved row must not claim a zero:\n{report}"
         );
     }
 
