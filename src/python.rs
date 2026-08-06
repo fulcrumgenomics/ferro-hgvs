@@ -4094,6 +4094,14 @@ pub enum PyErrorType {
     // insertion with no inserted sequence); rejected in every mode, since the
     // missing bases are not recoverable from the description (#1162).
     InsertionWithoutInsertedSequence = 45,
+    // 46 is W5005 MembersCoalescedFromReportedForm — normalization returned
+    // fewer cis members than the input described. Purely informational: the
+    // normalized string is identical whether or not it is emitted. It carries
+    // the provenance `DNA/delins.md:79-84` asks about ("the two variants may
+    // have been reported ... individually"), which the canonical string
+    // deliberately does not, since making the output depend on the input's
+    // spelling is the non-confluence #1235 removes.
+    MembersCoalescedFromReportedForm = 46,
 }
 
 native_enum_pymethods! {
@@ -4144,6 +4152,7 @@ native_enum_pymethods! {
         43 => IntronicOnBareTranscript,
         44 => IncompleteCdsStartReference,
         45 => InsertionWithoutInsertedSequence,
+        46 => MembersCoalescedFromReportedForm,
     },
 }
 
@@ -4196,6 +4205,9 @@ impl From<ErrorType> for PyErrorType {
             ErrorType::TranscriptFlankNotDescribable => PyErrorType::TranscriptFlankNotDescribable,
             ErrorType::IntronicOnBareTranscript => PyErrorType::IntronicOnBareTranscript,
             ErrorType::IncompleteCdsStartReference => PyErrorType::IncompleteCdsStartReference,
+            ErrorType::MembersCoalescedFromReportedForm => {
+                PyErrorType::MembersCoalescedFromReportedForm
+            }
             ErrorType::InsertionWithoutInsertedSequence => {
                 PyErrorType::InsertionWithoutInsertedSequence
             }
@@ -4252,6 +4264,9 @@ impl From<PyErrorType> for ErrorType {
             PyErrorType::TranscriptFlankNotDescribable => ErrorType::TranscriptFlankNotDescribable,
             PyErrorType::IntronicOnBareTranscript => ErrorType::IntronicOnBareTranscript,
             PyErrorType::IncompleteCdsStartReference => ErrorType::IncompleteCdsStartReference,
+            PyErrorType::MembersCoalescedFromReportedForm => {
+                ErrorType::MembersCoalescedFromReportedForm
+            }
             PyErrorType::InsertionWithoutInsertedSequence => {
                 ErrorType::InsertionWithoutInsertedSequence
             }
@@ -6320,6 +6335,15 @@ mod tests {
                     edit_kinds: vec!["sub".to_string(), "sub".to_string()],
                 },
                 "OVERLAP_CONFLICTING_EDITS",
+            ),
+            (
+                crate::normalize::NormalizationWarning::MembersCoalesced {
+                    accession: "NC_000001.11".to_string(),
+                    coordinate_system: "g".to_string(),
+                    reported_members: 2,
+                    normalized_members: 1,
+                },
+                "MEMBERS_COALESCED_FROM_REPORTED_FORM",
             ),
             (
                 crate::normalize::NormalizationWarning::PositionPastEnd {

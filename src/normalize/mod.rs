@@ -857,6 +857,25 @@ pub enum NormalizationWarning {
         edit_kinds: Vec<String>,
     },
 
+    /// Normalization returned FEWER cis members than the input described: two
+    /// or more separately-reported variants were coalesced into one.
+    /// Code: `MEMBERS_COALESCED_FROM_REPORTED_FORM` (W5005).
+    ///
+    /// Purely informational — the normalized string is identical whether or not
+    /// this warning is produced. It carries the *provenance* the canonical form
+    /// deliberately does not: see `ErrorType::MembersCoalescedFromReportedForm`
+    /// for why that separation is the point rather than a compromise.
+    MembersCoalesced {
+        /// Accession the coalesced members sit on.
+        accession: String,
+        /// Coordinate system: "g" | "c" | "n" | "r" | "m"
+        coordinate_system: String,
+        /// How many cis members the INPUT described.
+        reported_members: usize,
+        /// How many the normalized form describes.
+        normalized_members: usize,
+    },
+
     /// A telomere/centromere marker could not be resolved to a concrete base.
     /// Currently only `cen` (a centromere is an assembly-annotated region, not a
     /// sequence-derivable nucleotide). The input is preserved verbatim.
@@ -1123,12 +1142,58 @@ fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<Normaliz
     }
 }
 
+/// The number of cis members a variant describes.
+///
+/// A cis allele reports its member count; everything else is one member. A
+/// `trans`/unphased group is deliberately NOT counted — its members are on
+/// different molecules, so they were never candidates for coalescing and a
+/// change in their number would mean something else entirely. An `uncertain`
+/// group is excluded for the same reason: `(...)` marks a predicted grouping
+/// rather than a set of separately-reported observations.
+fn cis_member_count(variant: &HgvsVariant) -> usize {
+    match variant {
+        HgvsVariant::Allele(allele)
+            if allele.phase == crate::hgvs::variant::AllelePhase::Cis && !allele.uncertain =>
+        {
+            allele.variants.len()
+        }
+        _ => 1,
+    }
+}
+
+/// The accession and coordinate-system letter to report a coalesce against.
+///
+/// Reads the first leaf carrying an accession, so a cis allele reports the
+/// accession its members share rather than `None`.
+fn accession_and_axis(variant: &HgvsVariant) -> Option<(String, String)> {
+    let leaf = crate::hgvs::variant::first_leaf_with_accession(variant)?;
+    let accession = leaf.accession()?.to_string();
+    let axis = match leaf {
+        HgvsVariant::Genome(_) => "g",
+        HgvsVariant::Cds(_) => "c",
+        HgvsVariant::Tx(_) => "n",
+        HgvsVariant::Rna(_) => "r",
+        HgvsVariant::Mt(_) => "m",
+        // Protein too: a `p.` cis allele coalesces just as the nucleotide axes
+        // do — `p.[Ala100Gly;Ala101Gly]` normalizes to
+        // `p.Ala100_Ala101delinsGlyGly`, two reported members becoming one —
+        // and the provenance `DNA/delins.md:79-84` is about is exactly as
+        // unrecoverable from that string. Omitting it dropped the warning
+        // silently on the axis where a database query is most likely to be
+        // looking for the individually reported form.
+        HgvsVariant::Protein(_) => "p",
+        _ => return None,
+    };
+    Some((accession, axis.to_string()))
+}
+
 impl NormalizationWarning {
     /// The warning's user-facing code string.
     pub fn code(&self) -> &'static str {
         match self {
             Self::RefSeqMismatch { .. } => "REFSEQ_MISMATCH",
             Self::OverlapConflict { .. } => "OVERLAP_CONFLICTING_EDITS",
+            Self::MembersCoalesced { .. } => "MEMBERS_COALESCED_FROM_REPORTED_FORM",
             Self::UnresolvableSpecialPosition { .. } => "UNRESOLVABLE_SPECIAL_POSITION",
             Self::TranscriptFlankNotDescribable { .. } => "TRANSCRIPT_FLANK_NOT_DESCRIBABLE",
             Self::CanonicalSplitSkipped { .. } => "CANONICAL_SPLIT_SKIPPED",
@@ -1184,6 +1249,18 @@ impl std::fmt::Display for NormalizationWarning {
                 coordinate_system,
                 location,
                 edit_kinds.join(", "),
+            ),
+            Self::MembersCoalesced {
+                accession,
+                coordinate_system,
+                reported_members,
+                normalized_members,
+            } => write!(
+                f,
+                "{accession}:{coordinate_system}. — input described {reported_members} cis \
+                 members, normalized form describes {normalized_members}; the individually \
+                 reported form is not recoverable from the normalized string \
+                 (DNA/delins.md:79-84)"
             ),
             Self::UnresolvableSpecialPosition { accession, marker } => write!(
                 f,
@@ -2463,6 +2540,37 @@ impl<P: ReferenceProvider> Normalizer<P> {
         }
 
         self.assert_seam_oracles(variant, &result.result);
+
+        // Provenance (#1235, `DNA/delins.md:79-84`). If the input described more
+        // cis members than the normalized form does, two or more separately
+        // reported variants have been coalesced, and that fact is not
+        // recoverable from the output string — by design, since making the
+        // string depend on the input's spelling is precisely the
+        // non-confluence #1235 removes.
+        //
+        // Emitted here rather than at any single coalescing site on purpose:
+        // several passes can reduce the member count (the live rule's adjacency
+        // coalesce, the prioritisation collapse, the sequence-first
+        // re-derivation), and the caller cares that it happened, not which pass
+        // did it. Comparing the counts at the one exit catches all of them and
+        // cannot drift as those passes change.
+        //
+        // It never rejects and never alters `result.result`.
+        let mut result = result;
+        let reported_members = cis_member_count(variant);
+        let normalized_members = cis_member_count(&result.result);
+        if normalized_members < reported_members {
+            if let Some((accession, coordinate_system)) = accession_and_axis(variant) {
+                result
+                    .warnings
+                    .push(NormalizationWarning::MembersCoalesced {
+                        accession,
+                        coordinate_system,
+                        reported_members,
+                        normalized_members,
+                    });
+            }
+        }
 
         Ok((result.result, result.warnings))
     }

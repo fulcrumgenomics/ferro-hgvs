@@ -1459,6 +1459,7 @@ class ErrorType(_NativeEnum):
     IntronicOnBareTranscript: ErrorType  # 43
     IncompleteCdsStartReference: ErrorType  # 44
     InsertionWithoutInsertedSequence: ErrorType  # 45
+    MembersCoalescedFromReportedForm: ErrorType  # 46
 
 class ErrorOverride(_NativeEnum):
     """Override behavior for a specific error type."""
