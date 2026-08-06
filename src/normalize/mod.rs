@@ -45,6 +45,11 @@ pub(crate) mod seqfirst;
 pub mod shuffle;
 pub mod validate;
 
+// The three block partitioners, re-exported for the `dump_partitions` example.
+// Dev-only measurement surface, not API — see the module's own doc.
+#[cfg(feature = "dev")]
+pub use merge::dev_partitioners;
+
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
 use crate::hgvs::edit::{
