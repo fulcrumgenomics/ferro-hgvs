@@ -2203,6 +2203,31 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
 
     let frame = axis_frame(kind, &template_accession, provider)?;
     let accession = template_accession.transcript_accession();
+
+    // `general.md:44` exempts deletions and duplications around an exon/exon
+    // junction from the 3' rule on the transcript axes, and the per-member
+    // pipeline honours it — so the members reaching this function are *already*
+    // clamped. Re-deriving across a junction throws that away: `c.[10del;13del]`
+    // on a transcript whose G-run spans c.9-c.33 arrives here as the correctly
+    // clamped `[c.11del;c.26del]` and comes back as `c.32_33del`, both members
+    // carried past their junctions and merged into one (#1450).
+    //
+    // The constraint belongs on the **input span**, here, and nowhere later. By
+    // the time `trim_common_flanks` has run, the two deletions have collapsed
+    // into a single run and which exon each came from is no longer recoverable
+    // from the resulting sequence; the merged piece then sits wholly inside one
+    // exon, so no check on the block, the partition or the shift can see that a
+    // junction was crossed. (`shift_pieces` in particular moves nothing for this
+    // shape, so a clamp there is unreachable — measured on #1450.)
+    //
+    // Declining rather than deriving per exon: the per-member result that
+    // survives a refusal *is* the expected answer, so refusing costs this shape
+    // nothing. Segmenting the block at exon edges would additionally buy
+    // confluence for cross-junction alleles; that is materially larger and is
+    // left open.
+    if crosses_exon_junction(kind, &accession, provider, &frame, c_lo, c_hi) {
+        return None;
+    }
     let start0 = w_lo + frame.delta - 1;
     let end0 = w_hi + frame.delta;
     if start0 < 0 {
@@ -3050,6 +3075,50 @@ struct AxisFrame {
     /// exception off the axis alone stamps a reading frame onto a transcript
     /// that has none (#1241).
     reading_frame: bool,
+}
+
+/// Whether `[lo, hi]` — a member-span union in axis coordinates — crosses an
+/// exon/exon junction of its own transcript (#1450).
+///
+/// The genomic axes have no exons and so never cross one. A transcript the
+/// provider cannot serve is reported as not crossing: the derivation is then no
+/// worse off than it was before this check existed, which is the same fallback
+/// `axis_frame` takes for a missing transcript.
+fn crosses_exon_junction<P: ReferenceProvider>(
+    kind: CisKind,
+    accession: &str,
+    provider: &P,
+    frame: &AxisFrame,
+    lo: i64,
+    hi: i64,
+) -> bool {
+    if matches!(kind, CisKind::Genome | CisKind::Mt) {
+        return false;
+    }
+    let Ok(transcript) = provider.get_transcript(accession) else {
+        return false;
+    };
+    // `axis + delta` is the 1-based transcript coordinate — the same conversion
+    // the window fetch performs immediately below the call site.
+    //
+    // Checked, and `try_from` rather than `as`, so neither an extreme authored
+    // coordinate nor an `exon.end` past `i64::MAX` can wrap this predicate into
+    // a wrong answer — a wrapped `junction` compares as negative and silently
+    // reports "no junction crossed", which is the direction that reinstates
+    // #1450. Both failures take the same conservative exit as an unservable
+    // transcript above.
+    //
+    // Note this hardens the predicate, not the whole path: an extreme
+    // coordinate still panics upstream at `w_hi = c_hi + CANONICAL_PAD`, which
+    // runs before this is reached and is untouched by this change. Tracked
+    // separately.
+    let (Some(tx_lo), Some(tx_hi)) = (lo.checked_add(frame.delta), hi.checked_add(frame.delta))
+    else {
+        return false;
+    };
+    transcript.exons.iter().any(|exon| {
+        i64::try_from(exon.end).is_ok_and(|junction| tx_lo <= junction && junction < tx_hi)
+    })
 }
 
 /// Resolve the group's [`AxisFrame`], or refuse the group.
@@ -7970,6 +8039,72 @@ mod tests {
     use crate::hgvs::parser::parse_hgvs;
     use crate::hgvs::variant::Accession;
     use crate::reference::MockProvider;
+
+    // ------------------------------------------------------------------
+    // Exon-junction guard on the derivation input (#1450)
+    // ------------------------------------------------------------------
+
+    /// The guard is asserted here, next to the code, rather than only through
+    /// `normalize()`. An integration assertion cannot isolate it: the derivation
+    /// returns `Some` only when its result *differs* from what the per-member
+    /// pipeline already produced, so a same-exon pair — the case that must stay
+    /// admitted — declines for an unrelated reason and would make an
+    /// integration-level "still derived" test pass vacuously.
+    ///
+    /// `MockProvider::with_test_data`'s `NM_001234.1` has exons at transcript
+    /// 1-15 / 16-30 / 31-44 and `cds_start = 5`, so the axis-to-transcript delta
+    /// is 4 and the junctions sit at `c.11|c.12` and `c.26|c.27`.
+    #[test]
+    fn the_exon_junction_guard_fires_only_across_a_junction() {
+        let provider = MockProvider::with_test_data();
+        let frame = AxisFrame {
+            delta: 4,
+            reading_frame: true,
+        };
+        let crosses =
+            |lo, hi| crosses_exon_junction(CisKind::Cds, "NM_001234.1", &provider, &frame, lo, hi);
+
+        // Spans that cross a junction — the defect.
+        assert!(
+            crosses(10, 13),
+            "c.10..c.13 crosses the exon-1/exon-2 junction"
+        );
+        assert!(
+            crosses(11, 12),
+            "the junction itself is crossed by its two flanking bases"
+        );
+        assert!(
+            crosses(13, 30),
+            "c.13..c.30 crosses the exon-2/exon-3 junction"
+        );
+
+        // Spans wholly inside one exon must stay admitted, or the guard would
+        // remove the sequence-first path from the transcript axes altogether.
+        assert!(!crosses(6, 11), "c.6..c.11 is inside exon 1");
+        assert!(
+            !crosses(12, 26),
+            "c.12..c.26 is exactly exon 2, edge to edge"
+        );
+        assert!(!crosses(27, 34), "c.27..c.34 is inside exon 3");
+        assert!(!crosses(20, 20), "a single position cannot cross anything");
+    }
+
+    /// The genomic axes have no exons, so the guard must never fire for them —
+    /// the whole `g.`/`m.` corpus depends on the derivation continuing to run.
+    #[test]
+    fn the_exon_junction_guard_never_fires_on_a_genomic_axis() {
+        let provider = MockProvider::with_test_data();
+        let frame = AxisFrame {
+            delta: 0,
+            reading_frame: false,
+        };
+        for kind in [CisKind::Genome, CisKind::Mt] {
+            assert!(
+                !crosses_exon_junction(kind, "NM_001234.1", &provider, &frame, 1, 10_000),
+                "a genomic axis has no exon junctions to cross"
+            );
+        }
+    }
 
     // ------------------------------------------------------------------
     // In-bounds seam oracle (#1353)
