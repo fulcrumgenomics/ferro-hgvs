@@ -2507,6 +2507,15 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         piece.ref_start += lo;
         piece.ref_end += lo;
     }
+    // `general.md:35`'s coding exception, applied here — before the 3'-shift and
+    // before the weight bound — for two independent reasons, each of which was
+    // measured by getting it wrong. See `coalesce_coding_frame_separation`.
+    let unwidened = coalesce_coding_frame_separation(
+        &mut pieces,
+        frame.reading_frame,
+        hi_ref != hi_alt,
+        &ref_bytes,
+    );
     shift_pieces(&mut pieces, &ref_bytes, direction);
     coalesce_adjacent_pieces(&mut pieces);
     // Partitioning decides where the members are; this decides how wide each
@@ -2544,7 +2553,26 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // Strict on purpose: #1229, #1231, #1233 and #1234 all sit exactly at
     // equality, and equality is where prioritisation (`general.md:56`) may
     // legitimately prefer the re-derived shape.
-    if changed_columns_of_pieces(&pieces) > changed_columns_of_edits(&edits) {
+    //
+    // The quantity judged is the **un-widened** partition's, which is what
+    // `unwidened` carries: `coalesce_coding_frame_separation` above widens, so
+    // letting the bound see its product would judge a widening against the
+    // input's weight — accepted for the spelling that arrived as one `delins`,
+    // refused for the spelling that arrived as separate members. Measured: 332
+    // converged classes lost per direction over the 11,272-class corpus (3':
+    // 8,007 -> 7,675) when the bound saw the widened pieces. The un-widened
+    // partition is put through the same 3'-shift, coalesce and shrink so the two
+    // weights are comparable.
+    let derived_columns = match unwidened {
+        None => changed_columns_of_pieces(&pieces),
+        Some(mut raw) => {
+            shift_pieces(&mut raw, &ref_bytes, direction);
+            coalesce_adjacent_pieces(&mut raw);
+            shrink_pieces_to_differences(&mut raw, &ref_bytes);
+            changed_columns_of_pieces(&raw)
+        }
+    };
+    if derived_columns > changed_columns_of_edits(&edits) {
         return None;
     }
 
@@ -5695,6 +5723,124 @@ fn split_codon_incompatible_triplets(
         );
         index += 2;
     }
+}
+
+/// Merge runs of change separated by a single unchanged base on a **reading
+/// frame** axis, returning the pieces as they were if anything merged.
+///
+/// # The rule
+///
+/// `general.md:34` describes two variants separated by one or more nucleotides
+/// individually; `general.md:35` excepts "two variants separated by one
+/// nucleotide, together affecting one amino acid", which is a coding-axis rule
+/// and reaches no genomic description at all. [`axis_min_separation`] is that
+/// distinction, already handed to the sequence-first splitter; the live path had
+/// no axis at all, so a single coincidentally matched base split coding `delins`
+/// descriptions the spec keeps whole. That is the gap #1235's widened axis gate
+/// exposed on `c.`/`n.`/`r.`.
+///
+/// Scoped to **length-changing** blocks. An equal-length block reaches
+/// [`apply_coding_codon_exception`], which applies the same exception
+/// triplet-precisely (`[Sub@p; Identity@p+1; Sub@p+2]` with `p` and `p+2` in one
+/// codon) and must keep owning that shape: merging it here instead would drop
+/// the codon half of the exception, which `general.md:35` states and
+/// `test_no_codon_frame_pair_straddles_codon_boundary` pins. On a
+/// length-changing block that shape cannot arise — the pieces do not pair up
+/// position-wise — so the two passes do not overlap.
+///
+/// The merge is **pairwise**, not whole-block: only pieces one unchanged base
+/// apart join, and a genuinely separated pair stays split. Refusing the whole
+/// partition instead (the first attempt) over-merges, and it also loses the
+/// distinction `separations_are_meaningful` draws for wider gaps.
+///
+/// # Placement, which is the whole of the difficulty
+///
+/// **Before the 3'-shift.** The shift moves a piece into an unchanged run, so a
+/// pair one base apart at partition time can be three apart by the time the
+/// post-shift passes see it. `NM_000143.3:c.44_47delinsATC` is the case:
+/// `TGCG -> ATC` partitions as `[44_45delinsAT]` + `[47del]`, one base apart,
+/// and the deletion then 3'-shifts down the `G` run at c.47-49 to `49del`.
+/// Running this after the shift leaves that pair unmerged and the oracle
+/// divergence in place.
+///
+/// **Exempt from the changed-columns weight bound**, which is why this returns
+/// the pieces it replaced rather than nothing. The bound compares the derived
+/// weight against the *input's*, so a widening judged by it is accepted for one
+/// spelling of a variant and refused for another —
+/// `c.9delinsATC` weighs 3 and `c.[8_9insA;9_10insC]` weighs 2 for the same
+/// variant, so the merged form clears the bound for the first and trips it for
+/// the second. Measured on that corpus: 332 converged classes lost per
+/// direction (3': 8,007 -> 7,675; 5': 8,007 -> 7,673) with the bound judging
+/// the merged pieces. This is the same rule
+/// [`coalesce_whole_block_inversion`] and [`apply_coding_codon_exception`] are
+/// placed by, stated there as: *any partition rule that widens a piece must run
+/// after the weight bound, never inside [`partition_block`]*. This one cannot
+/// run after it and still be before the shift, so the bound is handed the
+/// un-widened partition instead — the same exemption, reached the other way.
+///
+/// # Known residual: a gap the shift *creates*
+///
+/// Running before the shift is necessary and not sufficient. The shift moves
+/// piece boundaries, so it can also bring a pair that was two or more bases
+/// apart at partition time down to one — the mirror image of the case above,
+/// and invisible here because it has not happened yet.
+///
+/// Measured over 500,004 ClinVar rows: **3** land with a surviving one-base gap
+/// on a coding axis (`NM_001458.4:c.7242_7246delCAGCCinsAAACCTG`,
+/// `LRG_712t1:c.845_852delATCCCAATinsTCTTCATAGA`,
+/// `NM_001406642.1:c.1897_1910delinsTAATATAATT`), plus a second gap in two rows
+/// this pass does otherwise reduce. All are multi-member partitions where a
+/// *deletion* piece shifts toward a substitution.
+///
+/// Closing it means running the rule a second time after the shift, which needs
+/// the un-widened partition carried through that pass too — the bookkeeping
+/// above, done twice. Left undone deliberately: none of the four failures this
+/// pass was written for is in that class, and a second widening judged against
+/// the wrong weight is exactly the mistake this doc records.
+///
+/// Returns `None` when nothing merged, so the caller pays nothing on the path
+/// that does not widen.
+fn coalesce_coding_frame_separation(
+    pieces: &mut Vec<Piece>,
+    reading_frame: bool,
+    length_changing: bool,
+    ref_bytes: &[u8],
+) -> Option<Vec<Piece>> {
+    // `ref_end` is exclusive and a pure insertion occupies no width, so a gap of
+    // one is one unchanged *base* — the same counting `separations_are_meaningful`
+    // does, and for the same reason.
+    //
+    // Scanned before anything is copied: the copy exists only to hand the weight
+    // bound the un-widened partition, so a block that merges nothing must not pay
+    // for one. Every coding length-changing block reaches here.
+    let joins = |pair: &[Piece]| pair[1].ref_start.saturating_sub(pair[0].ref_end) == 1;
+    if !reading_frame || !length_changing || !pieces.windows(2).any(joins) {
+        return None;
+    }
+    let unwidened = pieces.clone();
+    let mut index = 1;
+    while index < pieces.len() {
+        // `gap == 1` puts `pieces[index].ref_start` at `previous.ref_end + 1`, and
+        // a piece never runs past the window, so `previous.ref_end` indexes a real
+        // byte. Read through `get` regardless: this is the only raw index in the
+        // pass, and declining to merge is a sound answer where a bare index would
+        // panic.
+        let Some(middle) = (joins(&pieces[index - 1..=index]))
+            .then(|| ref_bytes.get(pieces[index - 1].ref_end).copied())
+            .flatten()
+        else {
+            index += 1;
+            continue;
+        };
+        let next = pieces.remove(index);
+        let previous = &mut pieces[index - 1];
+        // The unchanged base is interior to the merged replacement now, so it has
+        // to be carried through explicitly.
+        previous.alt.push(middle);
+        previous.alt.extend_from_slice(&next.alt);
+        previous.ref_end = next.ref_end;
+    }
+    Some(unwidened)
 }
 
 /// Merge pieces the 3'-shift left touching.
@@ -10598,6 +10744,76 @@ mod tests {
             },
         ];
         coalesce_adjacent_pieces(&mut pieces);
+    }
+
+    /// `general.md:35`'s exception on a length-changing block, asserted against
+    /// the pass itself (#1235 review).
+    ///
+    /// Its integration-level sibling —
+    /// `merge_consecutive_edits_tests::coding_length_changing_block_merges_across_one_unchanged_base`
+    /// — can only assert that the `c.` answer equals its input, and that
+    /// equality is satisfied by *any* upstream decline (a window clamp, the
+    /// weight bound, the round-trip guard) just as well as by the merge. Only a
+    /// direct call proves the pass ran, so the discriminating assertion lives
+    /// here and that test carries the control that ties the two together.
+    ///
+    /// `TGCA -> AAC` is that test's `NM_TEST.1:c.2_5delinsAAC`. The payload
+    /// coincides at exactly one column, which is what leaves two runs one
+    /// unchanged base apart for the exception to close.
+    #[test]
+    fn coalesce_coding_frame_separation_merges_one_base_gap_only_in_frame() {
+        let reference = b"TGCA";
+        let split = partition_block(reference, b"AAC");
+        assert_eq!(
+            split.len(),
+            2,
+            "the fixture must actually split, else the merge below proves \
+             nothing; got {split:?}",
+        );
+        assert_eq!(
+            split[1].ref_start - split[0].ref_end,
+            1,
+            "and the two runs must be exactly one unchanged base apart, which is \
+             the gap the exception is scoped to; got {split:?}",
+        );
+
+        // In a reading frame the pair rejoins into the whole block, and the
+        // un-widened partition comes back for the weight bound to judge.
+        let mut in_frame = split.clone();
+        let unwidened = coalesce_coding_frame_separation(&mut in_frame, true, true, reference);
+        assert_eq!(
+            unwidened.as_deref(),
+            Some(&split[..]),
+            "a widening pass must return the pieces it replaced",
+        );
+        assert_eq!(in_frame.len(), 1, "got {in_frame:?}");
+        assert_eq!(in_frame[0].ref_start, 0);
+        assert_eq!(in_frame[0].ref_end, reference.len());
+        assert_eq!(in_frame[0].alt, b"AAC");
+
+        // With no reading frame it declines, which is `general.md:34`'s plain
+        // rule and the `n.` answer the sibling test pins end to end.
+        let mut no_frame = split.clone();
+        assert!(coalesce_coding_frame_separation(&mut no_frame, false, true, reference).is_none());
+        assert_eq!(
+            no_frame, split,
+            "a declined pass must leave the pieces untouched",
+        );
+
+        // And it declines an equal-length block even in frame, which is the
+        // half of the scoping that keeps `apply_coding_codon_exception` owning
+        // the `[Sub@p; Identity@p+1; Sub@p+2]` triplet — merging that shape here
+        // instead would drop the codon half of `general.md:35`. Asserted with
+        // this same pair so only the flag varies.
+        let mut equal_length = split.clone();
+        assert!(
+            coalesce_coding_frame_separation(&mut equal_length, true, false, reference).is_none()
+        );
+        assert_eq!(
+            equal_length, split,
+            "the length-changing scope is what routes an equal-length block to \
+             `apply_coding_codon_exception`",
+        );
     }
 
     /// The enumerated classes of disagreement between the two block splitters.

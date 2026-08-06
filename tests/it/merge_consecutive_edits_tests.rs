@@ -974,3 +974,77 @@ fn test_no_overlap_warning_for_adjacency() {
         codes
     );
 }
+
+// =====================================================================
+// Codon-frame exception on a LENGTH-CHANGING block (#1235).
+//
+// `general.md:35`'s exception is not only about two substitutions. Once
+// #1235 widened the sequence-first axis gate to `c.`/`n.`/`r.`, a lone
+// coding `delins` whose payload coincidentally aligns against one
+// interior base started splitting into an allele — the shape
+// `delins.md:44-47` keeps whole. `apply_coding_codon_exception` cannot
+// reach it: that pass matches `[Sub@p; Identity@p+1; Sub@p+2]` exactly,
+// and here neither member is a substitution.
+//
+// The axis is the whole discriminator, so both halves are asserted on
+// the same block and the same reference. `NM_TEST.1` has `cds_start = 1`,
+// so `c.N` and `n.N` address the identical base.
+// =====================================================================
+
+/// `c.2_5` is `TGCA` and the payload `AAC` aligns only at its last column
+/// (`C`), leaving a one-base gap between the two derived runs. On a reading
+/// frame that gap is `general.md:35`'s, so the block stays one `delins`.
+///
+/// Note the two runs are in *different* codons — `c.2` is in codon 1 and
+/// `c.5` in codon 2 — which is deliberate. `apply_coding_codon_exception`
+/// and `split_codon_incompatible_triplets` both apply the codon half of the
+/// exception, and both scope it to the three-column substitution triplet the
+/// spec's own wording describes. A wider merge is not "two variants" in that
+/// sense, so it is governed by the distance rule alone — the reading the
+/// SVD-WG states it is moving to outright (`general.md:39`).
+/// The assertion is `input == output`, which a *decline* satisfies as readily as
+/// the merge: if the sequence-first derivation refuses this block for some
+/// unrelated reason — a window clamp, the weight bound, the round-trip guard, a
+/// future `enclosing_exon` change — the coding answer is still its own input and
+/// the pass under test never ran (#1235 review). Two things stop that here:
+///
+/// * the `n.` control below, on the same reference and the same block, whose
+///   expected string *differs* from its input, so a derivation that declined for
+///   any axis-blind reason would fail it; and
+/// * `merge::tests::coalesce_coding_frame_separation_merges_one_base_gap_only_in_frame`,
+///   which asserts the merge against the pass directly and is the airtight half.
+#[test]
+fn coding_length_changing_block_merges_across_one_unchanged_base() {
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_simple_transcript(),
+            "NM_TEST.1:n.2_5delinsAAC"
+        ),
+        "NM_TEST.1:n.[2_3delinsAA;9del]",
+        "the derivation must reach this block at all, else the coding assertion \
+         below is satisfied by a decline and proves nothing",
+    );
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_simple_transcript(),
+            "NM_TEST.1:c.2_5delinsAAC"
+        ),
+        "NM_TEST.1:c.2_5delinsAAC",
+    );
+}
+
+/// The same block on `n.`, which has no reading frame, splits — and the
+/// deletion 3'-shifts down the `A` run at `n.5-9`, which is also why the
+/// merge above has to run *before* the shift: afterwards the two runs are
+/// four bases apart and no one-base rule can rejoin them.
+#[test]
+fn non_coding_length_changing_block_keeps_the_split() {
+    let result = normalize_with_provider(
+        provider_with_simple_transcript(),
+        "NM_TEST.1:n.2_5delinsAAC",
+    );
+    assert_eq!(
+        result, "NM_TEST.1:n.[2_3delinsAA;9del]",
+        "an axis with no reading frame gets `general.md:34`'s plain rule",
+    );
+}

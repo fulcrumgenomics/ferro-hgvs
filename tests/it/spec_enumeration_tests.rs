@@ -300,7 +300,39 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // time (2184 rows) was unchanged — nothing left the enumeration, one row
     // moved from a divergence to a pass. The total is 2172 as of #1498, which
     // did drop rows; see `ModeDivergencePinned` below.
-    (Status::ProjectionSplitsSingleMember, 9),
+    //
+    // 9 -> 13 in #1235's axis widening, and this is a **deliberate re-bless of a
+    // regression**, not a fix. All four rows are one input,
+    // `NM_004006.2:c.76_83inv` (`general.md:110`), reaching `project-c`,
+    // `project-n`, `project-r` and `project-p`:
+    //
+    //   c.76_83inv -> c.[76_77delinsTG;82_83delinsTT]
+    //   p.(Asn26_Gln28delinsCysAlaLeu) -> p.[(Asn26Cys);(Gln28Leu)]
+    //
+    // Read the status name and not only its headline citation: these enter by
+    // *shape* (a single member projecting to an allele), not by the divergence
+    // `delins.md:42` names — that passage is about two variants **one** base
+    // apart, and these are four apart, where `general.md:34` plainly asks for
+    // individual descriptions.
+    //
+    // What the four rows really record is that the transcript axes now answer as
+    // the genomic axis already did. `c.76_83` is `AATGCACA`, whose reverse
+    // complement `TGTGCATT` coincides at four of its eight columns, so the
+    // partition finds two runs 4 bases apart and `coalesce_whole_block_inversion`
+    // declines to rejoin them: 50% unchanged is above the ~25% a random reverse
+    // complement leaves, so `changed_columns_dominate_the_span` reads it as a
+    // near-palindrome carrying two independent changes rather than one inversion.
+    // None of that reads the axis — the block is equal-length, so neither
+    // `separations_are_meaningful` nor `coalesce_coding_frame_separation` is even
+    // consulted — so `g.` has always produced this split for this block. Widening
+    // the gate did not create the behaviour; it let the transcript axes see it.
+    //
+    // Left alone on purpose. Making these four rows pass means loosening
+    // `coalesce_whole_block_inversion`, which is axis-neutral and shipped, so it
+    // would move genomic representations for a class measured nowhere in this
+    // PR. That is its own change with its own blast radius, not a tail of this
+    // one. The corresponding `ProjectionPinned` fall is 1168 -> 1164.
+    (Status::ProjectionSplitsSingleMember, 13),
 ];
 
 /// Census of the **conformant** statuses — the counting half of
@@ -369,7 +401,10 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // 1167 -> 1168 in #1271: the LRG_199 `delins.md:44` row that used to land in
     // `ProjectionSplitsSingleMember` now projects as the single member the spec
     // states. See that status's note in `DIVERGENCE_BUDGET`.
-    (Status::ProjectionPinned, 1168),
+    // 1168 -> 1164 in #1235's axis widening: the four `c.76_83inv` rows moved the
+    // other way, into `ProjectionSplitsSingleMember`. The argument for accepting
+    // them is with that status, not here; the 2184-row total is again unchanged.
+    (Status::ProjectionPinned, 1164),
     (Status::ProjectionUnavailablePinned, 487),
     (Status::ProjectionErrorPinned, 210),
     // 132 -> 120 (#1498). The 12 rows are all LRG — `LRG_199:c.357+1G>A`,

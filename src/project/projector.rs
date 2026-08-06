@@ -13599,42 +13599,45 @@ mod tests {
         // Asserted so the protein expectation below cannot be read without the
         // nucleotide form that produces it. `ATGGATTATTGCTAA` →
         // `ATGATGGGGTATTGCTAA` has a *single-gap* explanation of the same weight
-        // as the input's two-gap one (five changed columns either way), and
-        // since #1235's sequence-first pass learned to type a derived tandem
-        // insertion as a `dup` it takes it: the inserted `ATG` repeats `c.1_3`.
+        // as the input's two-gap one (five changed columns either way), and the
+        // sequence-first pass takes it. It partitions the trimmed block
+        // `GAT -> ATGGGG` into an insertion and a two-base replacement one
+        // unchanged base apart, and `general.md:35` then merges them: `c.4`,
+        // `c.5` and `c.6` are one codon, so this is exactly "two variants
+        // separated by one nucleotide, together affecting one amino acid".
+        //
+        // It used to read `c.[1_3dup;5_6delinsGG]`, before
+        // `coalesce_coding_frame_separation` applied that exception on the live
+        // path. That split is the reason the protein expectation below moved
+        // twice: it reached the initiation codon, which forced `p.(Met1?)` for a
+        // variant whose 5'-most changed base is `c.4`.
         assert_eq!(
             format!("{}", proj.coding.as_ref().expect("coding expected")),
-            "NM_SEP.1:c.[1_3dup;5_6delinsGG]"
+            "NM_SEP.1:c.4_6delinsATGGGG"
         );
-        // `c.1_3dup` reaches the initiation codon, so the start-codon rule wins
-        // and the report is `p.(Met1?)` — not the `Asp2delinsMetGly` this test
-        // used to expect.
+        // The 5'-most base this variant changes is `c.4`, so the initiation
+        // codon is untouched and the consequence is the bounded in-frame one:
+        // codon 2 (`Asp`) replaced by `Met` and `Gly`.
         //
-        // That is right, and not merely conservative. Duplicating `ATG` leaves a
-        // start codon at c.1_3 *and* puts a second, in-frame one immediately
-        // after it: the product carries one N-terminal Met or two depending on
-        // which the ribosome uses, and nothing in the description says which. So
-        // "the consequence, on the protein level … can not be predicted"
-        // (`protein/substitution.md:52`, the sentence that defines `p.(Met1?)`)
-        // is an accurate statement about this variant. The old expectation
-        // asserted initiation at the *first* `ATG`, which is an assumption the
-        // description does not carry.
-        //
-        // The spec would force a computed answer only where a variant "activates
-        // an upstream/downstream translation initiation site"
-        // (`protein/extension.md:17`, normative) — a duplication activates no new
-        // site, it copies the existing one. It is otherwise silent on a start
-        // codon that is duplicated rather than disrupted: `substitution.md:45-65`
-        // offers `p.0`, `p.0?`, `p.(Met1?)` and the computed del/ins/ext forms as
-        // a menu with no rule for choosing, and its only prohibitions are the
-        // plain-substitution spellings (`substitution.md:49`,
-        // `checklist.md:65`). Choosing for the author is what
-        // `tests/it/issue_1079_start_loss_substitution.rs` and W3022
-        // (`error_handling/types.rs`) already decline to do.
-        assert!(proj.affects_init, "c.1_3dup reaches the initiation codon");
+        // This assertion has moved twice, and the second move undoes the first.
+        // While the derivation split the block into `c.[1_3dup;5_6delinsGG]` the
+        // `dup` reached `c.1_3`, `affects_init` was true, and the report was
+        // `p.(Met1?)` — an honest answer *about that description*, since a
+        // duplicated `ATG` leaves two in-frame start codons and nothing says
+        // which the ribosome uses. But the description was the problem: nothing
+        // in `c.[4del;6_7insGGGG]` touches `c.1_3`, and a partition that walks a
+        // change onto the initiation codon and then reports the start as
+        // unpredictable is `delins.md:47`'s harm exactly — "software tools
+        // making incorrect predictions for the consequences on protein level".
+        // With `general.md:35` applied on the live path the block stays one
+        // member and the consequence is computable again.
+        assert!(
+            !proj.affects_init,
+            "c.4_6delinsATGGGG does not reach the initiation codon"
+        );
         assert_eq!(
             format!("{}", proj.protein.expect("protein expected")),
-            "NP_SEP.1:p.(Met1?)"
+            "NP_SEP.1:p.(Asp2delinsMetGly)"
         );
     }
 
