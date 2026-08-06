@@ -38,7 +38,9 @@ pub mod apply;
 pub mod convert;
 mod parser;
 
-pub use apply::{apply_to_reference, canonical_spdi, AppliedVariant, MAX_APPLY_WINDOW};
+pub use apply::{
+    apply_to_reference, canonical_spdi, AppliedVariant, MAX_APPLY_WINDOW, MAX_SHIFT_TRACT,
+};
 pub use convert::{
     hgvs_to_spdi, hgvs_to_spdi_simple, spdi_to_hgvs, spdi_to_hgvs_with_ref, ConversionError,
 };
