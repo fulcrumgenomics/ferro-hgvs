@@ -3114,9 +3114,10 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // accession-string sort is not it — so those are left in authored order.
         //
         // Skip when the overlap passes above (`detect_insertion_overlaps`,
-        // `detect_overlap_conflicts`) flagged an `OverlapConflict`. Reordering is
-        // only meaning-preserving for *disjoint* members; a conflict means two
-        // members collide on one molecule, so they are NOT independent.
+        // `detect_overlap_conflicts`) flagged an `OverlapConflict` **and** the
+        // allele really was handed back untouched. Reordering is only
+        // meaning-preserving for *disjoint* members; a conflict means two members
+        // collide on one molecule, so they are NOT independent.
         // `merge_consecutive_edits` collapses strictly-adjacent members but does
         // not resolve a genuine overlap — that is exactly what those passes warn
         // about — so overlapping members can reach here. Leaving them in authored
@@ -3127,10 +3128,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // (`[(a;b)]`) are left untouched to preserve their authored form.
         // `sort_by` (not `sort_unstable_by`) is a belt-and-suspenders choice — the
         // key is already total, so stability is not relied upon.
+        //
+        // **The conflict alone does not earn the skip (#1414).** The reasoning
+        // above is a contract about output the pipeline did not touch, so it
+        // applies only when the output *is* untouched. A conflicting allele whose
+        // members were all rewritten has no verbatim form left to preserve, and
+        // skipping the sort for it produced two defects at once:
+        // out-of-genomic-order members — a direct violation of #1235's criterion
+        // 2 — and non-idempotence, since the rewritten output no longer conflicts
+        // and so takes the *other* branch of this gate on the second pass.
+        // Measured on `origin/main` at `94817bf6`, 41 inputs in four shape
+        // families reach it (`[inv;insAA]` 16, `[inv;insA]` 16, `[dup;inv]` 7,
+        // `[insA;inv]` 2); #1423 had
+        // repaired only the single example the issue cited, because it drops an
+        // identity a sibling *overlaps* and a zero-width junction insertion
+        // overlaps nothing.
+        //
+        // So the predicate is the conjunction, not the conflict alone: an
+        // allele emitted verbatim keeps its authored order, and everything else
+        // is sorted exactly as before.
         let has_overlap_conflict = all_warnings
             .iter()
             .any(|w| matches!(w, NormalizationWarning::OverlapConflict { .. }));
-        if is_cis && !allele.uncertain && !has_overlap_conflict && normalized.len() > 1 {
+        let emitted_verbatim = normalized == allele.variants;
+        if is_cis
+            && !allele.uncertain
+            && !(has_overlap_conflict && emitted_verbatim)
+            && normalized.len() > 1
+        {
             sort_cis_members_by_genomic_order(&mut normalized);
         }
 
