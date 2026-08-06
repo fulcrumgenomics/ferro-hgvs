@@ -219,6 +219,7 @@ mod issue_1431_single_position_repeat_anchor;
 mod issue_1437_dup_read_span_interior_sibling;
 mod issue_1448_partial_span_overlap;
 mod issue_1491_soft_masked_repeat_normalization;
+mod issue_1508_overlap_across_region_boundary;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;
