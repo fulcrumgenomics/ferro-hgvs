@@ -138,6 +138,35 @@ pub(crate) fn detect_insertion_overlaps(
     variants: &[HgvsVariant],
     phase: AllelePhase,
 ) -> Vec<NormalizationWarning> {
+    junction_overlaps(variants, phase, true)
+}
+
+/// Only the *interior-junction* half of [`detect_insertion_overlaps`]: a
+/// junction strictly inside a span edit that keeps the bases it spans.
+///
+/// This is the subset that is genuinely ambiguous about what the allele
+/// denotes, and it is the only subset the #1406 conflict-preservation gates may
+/// act on. The same-junction half must stay out of them: two insertions at one
+/// junction are a two-member **spelling** of a variant that also has a
+/// single-member spelling, and merging them is what makes the two converge.
+/// Treating that as unresolvable made `g.[263_264insAC;264_265insAA]` settle
+/// apart from `g.264_265insCAAA` — measured, and caught by
+/// `cis_spelling_confluence_gap::converged_pairs_stay_converged`, which reports
+/// it as "#1301 regressed". Losing confluence to gain a strict-mode property is
+/// the wrong trade: confluence is what downstream consumers key on.
+pub(crate) fn detect_interior_junction_conflicts(
+    variants: &[HgvsVariant],
+    phase: AllelePhase,
+) -> Vec<NormalizationWarning> {
+    junction_overlaps(variants, phase, false)
+}
+
+/// Shared body. `include_same_junction` selects branch (a) below.
+fn junction_overlaps(
+    variants: &[HgvsVariant],
+    phase: AllelePhase,
+    include_same_junction: bool,
+) -> Vec<NormalizationWarning> {
     if phase != AllelePhase::Cis || variants.len() < 2 {
         return Vec::new();
     }
@@ -159,6 +188,9 @@ pub(crate) fn detect_insertion_overlaps(
         region: Region,
         start: i64,
         end: i64,
+        /// Whether the edit **removes** every base it spans, leaving nothing
+        /// for an interior junction to be positioned against. See branch (b).
+        removes_its_bases: bool,
     }
 
     let mut insertions: Vec<Insertion> = Vec::new();
@@ -212,6 +244,7 @@ pub(crate) fn detect_insertion_overlaps(
                 region,
                 start,
                 end,
+                removes_its_bases: matches!(edit, NaEdit::Deletion { .. }),
             });
         }
     }
@@ -242,7 +275,7 @@ pub(crate) fn detect_insertion_overlaps(
             .push((ins.idx, ins.kind));
     }
     for ((accession, coord_system, _region, _gap), occupants) in &by_junction {
-        if occupants.len() < 2 {
+        if !include_same_junction || occupants.len() < 2 {
             continue;
         }
         // Render the junction via the occupant's HGVS Display (like branch (b)
@@ -259,7 +292,32 @@ pub(crate) fn detect_insertion_overlaps(
     }
 
     // (b) An insertion junction strictly interior to a span edit's range.
+    //
+    // **Except a pure deletion (#1406).** The conflict this branch reports is
+    // that the junction's position within the span is meaningful and the
+    // combination therefore has no single answer. A deletion removes every base
+    // it spans, so an interior junction has nothing left to be positioned
+    // against: `g.[2_3del;2_3insAA]` denotes `AA` in place of `2_3` whichever
+    // order the two members are applied in, and whichever interior junction the
+    // insertion had named. It composes uniquely, so it was never a conflict —
+    // the same argument #1411 used to stop rejecting `g.[24dup;24C>G]`, whose
+    // members likewise write to disjoint places.
+    //
+    // Reporting it anyway had a concrete cost beyond the false verdict: strict
+    // mode rejected the input while accepting its own lenient output
+    // (`g.2_3delinsAA`), which is the laundering #1406 row 3 is about, and the
+    // merged form is what `delins.md:86-89` asks for outright.
+    //
+    // Deletion only, deliberately. A `delins` does **not** qualify: its payload
+    // survives, so an interior insertion has a position relative to it —
+    // `g.[2_3delinsGG;2_3insA]` genuinely does not say whether the `A` lands
+    // before, inside or after the `GG`. Nor does `inv`, `dup` or `repeat`,
+    // each of which keeps the spanned bases and so keeps the interior junction
+    // meaningful. Those remain conflicts.
     for span in &spans {
+        if span.removes_its_bases {
+            continue;
+        }
         let interior = insertions.iter().filter(|ins| {
             // A `dup`/`repeat` is registered as both span and occupant, so it
             // meets itself here. The interior test already excludes it — its
@@ -832,23 +890,40 @@ mod tests {
     }
 
     #[test]
-    fn insertion_interior_to_deletion_emits_one_warning() {
+    fn insertion_interior_to_deletion_is_not_a_conflict() {
         // Insertion junction `5_6` is strictly interior to the deleted range
-        // `4_7` (positions 4..=7), so they overlap.
+        // `4_7`, but a deletion removes every base it spans, so the insertion
+        // has nothing left to be positioned against: the pair denotes the same
+        // bases whichever order it is applied in, and whichever interior
+        // junction the insertion had named. Not a conflict (#1406).
+        //
+        // `insertion_interior_to_delins_emits_one_warning` is the
+        // discriminating sibling: a `delins` keeps a payload, so an
+        // interior insertion *does* have a position relative to it. Only a
+        // pure deletion is exempt.
         let (variants, phase) = parse_allele("NG_012337.1:g.[4_7del;5_6insAA]");
         let warnings = detect_insertion_overlaps(&variants, phase);
-        assert_eq!(warnings.len(), 1, "expected one warning, got {warnings:?}");
+        assert!(
+            warnings.is_empty(),
+            "an insertion interior to a pure deletion composes uniquely, so it \
+             must not be reported; got {warnings:?}"
+        );
     }
 
     #[test]
     fn insertions_sharing_junction_and_interior_to_span_emit_two_warnings() {
         // `5_6insA` and `5_6insT` share junction `5` (branch (a)) *and* both
-        // sit strictly interior to the `4_7del` range positions 4..=7
+        // sit strictly interior to the `4_7delinsGG` range positions 4..=7
         // (branch (b)), so the pass emits two `OverlapConflict` warnings for
         // the one overlap cluster. The combined-shape outcome is still a
         // correct rejection; this pins the per-branch warning count so a
         // future dedup refactor doesn't silently change it.
-        let (variants, phase) = parse_allele("NG_012337.1:g.[4_7del;5_6insA;5_6insT]");
+        //
+        // The span is a `delins` rather than the `4_7del` this used to use:
+        // a pure deletion no longer contributes a branch-(b) warning (#1406),
+        // so with `del` here only branch (a) would fire and the test would no
+        // longer exercise the two-branch shape it exists for.
+        let (variants, phase) = parse_allele("NG_012337.1:g.[4_7delinsGG;5_6insA;5_6insT]");
         let warnings = detect_insertion_overlaps(&variants, phase);
         assert_eq!(warnings.len(), 2, "expected two warnings, got {warnings:?}");
         assert!(

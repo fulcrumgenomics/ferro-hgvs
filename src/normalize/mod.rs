@@ -3134,6 +3134,87 @@ impl<P: ReferenceProvider> Normalizer<P> {
             sort_cis_members_by_genomic_order(&mut normalized);
         }
 
+        // A conflict the input really had must survive into the output (#1406).
+        //
+        // #395 says an overlap-conflicting allele has no canonical form, so
+        // ferro preserves it verbatim and reports `W5002`, which strict mode
+        // promotes to an error. But strict mode re-reads a *description*, and it
+        // has no memory of what that description was normalized from — so the
+        // contract only holds if the emitted description still looks conflicting.
+        //
+        // It did not. The per-member pipeline repairs the members one at a time
+        // — an inversion whose span is its own reverse complement cancels to an
+        // identity, an interior insertion respells as a repeat — and the merge
+        // then collapses what is left. The conflict is gone from the output, so
+        // strict mode accepts a description it would have rejected had the
+        // caller written it directly:
+        //
+        //     in      g.[11_12inv;11_12insAA]   strict: REJECT (W5002)
+        //     lenient g.10_11A[4]               strict: ACCEPT
+        //
+        // That is the laundering #1406 row 3 reports, and it breaks the
+        // invariant `issue_1276_dup_junction_overlap::
+        // lenient_output_of_a_conflict_is_still_rejected_by_strict` already
+        // pins for the shapes it happens to cover.
+        //
+        // So: when the input conflicts and the output does not, hand back the
+        // input. That is #395's contract stated exactly — preserve it verbatim —
+        // rather than approximated by "skip some passes and hope the conflict
+        // survives them".
+        //
+        // Deliberately asked of the *members*, both detectors, on each side.
+        // `detect_insertion_overlaps` documents that it must see pre-merge
+        // members because the merge collapses the overlap out of view — and
+        // that collapse is precisely the erasure being detected here, so asking
+        // it of the post-merge output is the right question, not a misuse.
+        //
+        // Idempotent by construction: the value handed back is the input, whose
+        // conflict the next pass detects again, so it is returned unchanged a
+        // second time.
+        // Uncertain alleles included, unlike the sort gate above. That gate
+        // excludes them because member *order* inside `[(a;b)]` is authored
+        // presentation, which is not ours to change. This one is about whether
+        // the conflict survives into the output at all, and an uncertain allele
+        // launders exactly like a certain one — measured:
+        //
+        //     in  g.[(9_10insA;9_10inv)]   strict: REJECT (W5002)
+        //     out g.[(11dup;9_10=)]        strict: ACCEPT
+        //
+        // Excluding them would leave the hole this gate exists to close open on
+        // one spelling of the same input.
+        if is_cis {
+            let conflicts = |members: &[HgvsVariant]| {
+                !crate::normalize::overlap::detect_overlap_conflicts(members, allele.phase)
+                    .is_empty()
+                    || !crate::normalize::overlap::detect_interior_junction_conflicts(
+                        members,
+                        allele.phase,
+                    )
+                    .is_empty()
+            };
+            // A **plural** output only. Both detectors return nothing for fewer
+            // than two members (`overlap.rs`, first statement of each), so for a
+            // single-member output `!conflicts(&normalized)` is vacuously true
+            // and says nothing about whether the conflict was erased — there is
+            // simply nothing left for a second member to collide with.
+            //
+            // The distinction is real, not defensive. Members *shifted apart*
+            // while still plural is the laundering this gate is for. Members
+            // *composed into one edit* is the opposite: the colliding writes
+            // have been resolved into a single description that denotes a
+            // definite sequence, which is what `delins.md:86-89` asks for and
+            // what the deletion exemption below already relies on for
+            // `g.[2_3del;2_3insAA]` -> `g.2_3delinsAA`.
+            //
+            // Without this term the gate reverts #1423: `g.[11_12inv;11_12insAA]`
+            // collapses to the single member `g.10_11A[4]`, which cannot
+            // conflict, so the input was handed back and a merged, shipped form
+            // was undone.
+            if conflicts(&allele.variants) && normalized.len() > 1 && !conflicts(&normalized) {
+                normalized = allele.variants.clone();
+            }
+        }
+
         // HGVS requires consecutive edits in cis to render as a single edit.
         // Only unwrap when a merge actually collapsed multiple sub-variants —
         // pre-existing singleton alleles must round-trip with the Allele
