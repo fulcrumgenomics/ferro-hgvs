@@ -299,6 +299,11 @@ name = "derive_tx_placements"
 required-features = ["dev"]
 
 [[example]]
+name = "dump_normalized_corpus"
+required-features = ["dev"]
+test = true
+
+[[example]]
 name = "extract_biocommons_windows"
 required-features = ["dev"]
 
