@@ -1366,25 +1366,48 @@ impl MultiFastaProvider {
         })
     }
 
-    /// Resolve a sequence name, trying various forms
-    fn resolve_name(&self, name: &str) -> Option<String> {
-        // Direct lookup
+    /// The indexed FASTA record holding `name`'s **own** bases, or `None` when
+    /// the reference ships no record for that exact accession.
+    ///
+    /// This is the *substitution-free* half of [`resolve_name`](Self::resolve_name):
+    /// it accepts `name` itself, plus the one rename LRG's own file format
+    /// imposes — a bare `LRG_<N>` genomic accession is stored under the record
+    /// name `LRG_<N>g` (LRG's suffix convention; transcripts are `LRG_<N>t<k>`,
+    /// proteins `LRG_<N>p<k>`). That is a spelling of the same sequence, not a
+    /// fallback to a *different* one: LRG accessions carry no version, so
+    /// `LRG_<N>` denotes `LRG_<N>g` and nothing else. It deliberately omits
+    /// `resolve_name`'s version-strip and `chr`-alias fallbacks, which do serve
+    /// a different sequence than the one asked for.
+    ///
+    /// Callers use it to ask "do we ship this accession's own bases?" before
+    /// falling back to reconstructing them from somewhere else — see
+    /// `get_sequence` / `get_sequence_length`, where a bare `prepared.contains`
+    /// answered "no" for every `LRG_<N>` and so handed all 1294 LRG records to
+    /// chromosome synthesis instead of to their own frozen sequence — silently
+    /// wrong for the 165 whose placement is not an exact affine (#1462).
+    fn own_record(&self, name: &str) -> Option<String> {
         if self.prepared.contains(name) {
             return Some(name.to_string());
         }
-
-        // LRG genomic accession: HGVS `g.` variants reference the genomic
-        // sequence by its bare accession `LRG_<N>`, but the FASTA record is
-        // indexed under the LRG suffix convention `LRG_<N>g` (transcripts are
-        // `LRG_<N>t<k>`, proteins `LRG_<N>p<k>`, both of which match the index
-        // directly above). Map the bare genomic accession to its `g`-suffixed
-        // record so `LRG_<N>:g.` normalization can fetch reference bases
-        // instead of silently no-op'ing (issue #487).
         if is_bare_lrg_genomic_accession(name) {
             let genomic = format!("{name}g");
             if self.prepared.contains(&genomic) {
                 return Some(genomic);
             }
+        }
+        None
+    }
+
+    /// Resolve a sequence name, trying various forms
+    fn resolve_name(&self, name: &str) -> Option<String> {
+        // Direct lookup, plus the LRG bare-genomic → `LRG_<N>g` record rename
+        // (#487): HGVS `g.` variants name the genomic sequence by its bare
+        // accession `LRG_<N>`, but the FASTA indexes it under LRG's suffix
+        // convention. Both are "this accession's own bases", so they live
+        // together in `own_record`; everything below this point substitutes a
+        // *different* sequence and must stay after it.
+        if let Some(own) = self.own_record(name) {
+            return Some(own);
         }
 
         // Try chromosome alias FIRST (before version fallback)
@@ -1796,12 +1819,28 @@ impl MultiFastaProvider {
         // offset 0 is the parent's first base — parent coordinate
         // `parent_start`. The mapping below assumes `parent_start == 1` (it maps
         // the 0-based offset `start` to 1-based parent coordinate `start + 1`).
-        // The only reachable caller today is the FASTA-less #728 derived `NG_`,
-        // which always has `parent_start == 1` (`derived_placement.rs`); an
-        // LRG/RefSeqGene placement with `parent_start > 1` is never routed here.
-        // Guard the assumption in debug builds — a `parent_start > 1` placement
-        // would otherwise read the wrong window (or fail loud via `parent_to_nc`
-        // returning `None`) rather than corrupt bases.
+        // Reachable callers are parents that have a placement but no record of
+        // their own: the FASTA-less #728 derived `NG_`, which is constructed
+        // with `parent_start == 1` (`derived_placement.rs`), and a record-less
+        // LRG, which carries whatever its XML states (`LRG_998`, in the test
+        // below, is exactly that shape). So `parent_start == 1` is an
+        // assumption about the placement data, not an invariant this function
+        // can enforce.
+        //
+        // Until #1462 the set was far wider: every bare `LRG_<N>` was routed
+        // here, because the callers gated on `prepared.contains(id)`, which is
+        // `false` for `LRG_<N>` (the record is named `LRG_<N>g`). One real LRG
+        // placement carries `parent_start == 1049` and tripped this very
+        // assertion; a further 164 passed it and quietly served chromosome
+        // bases in place of the frozen LRG record. The callers now gate on
+        // `own_record`, so an LRG *with* a record never reaches here.
+        //
+        // Guard the assumption in debug builds. Note this does not make the
+        // release build safe: `parent_to_nc` declines only a position *below*
+        // `parent_start`, so a window low enough fails loud while a deeper one
+        // silently maps to the wrong bases. Hardening it to fail closed in
+        // release is #1494; this PR narrows who can reach it rather than
+        // changing what it does.
         debug_assert_eq!(
             placement.parent_start, 1,
             "synthesize_parent_sequence assumes parent_start == 1; offset the window \
@@ -3321,7 +3360,7 @@ impl ReferenceProvider for MultiFastaProvider {
         // before the version-fuzzy `resolve_name` fallback below so an absent
         // *exact* version is reconstructed rather than silently served a sibling
         // version's bases.
-        if !self.prepared.contains(id) {
+        if self.own_record(id).is_none() {
             if let Ok(("", acc)) = crate::hgvs::parser::accession::parse_accession(id) {
                 if let Some(placement) = self.genomic_placement(&acc) {
                     return self.synthesize_parent_sequence(&placement, start, end);
@@ -3380,7 +3419,7 @@ impl ReferenceProvider for MultiFastaProvider {
         // Mirror `get_sequence`: a placement-only parent (#728 derived `NG_`)
         // has no FASTA record, so its length is the placed span on the
         // chromosome. Checked before the version-fuzzy `sequence_length`.
-        if !self.prepared.contains(id) {
+        if self.own_record(id).is_none() {
             if let Ok(("", acc)) = crate::hgvs::parser::accession::parse_accession(id) {
                 if let Some(placement) = self.genomic_placement(&acc) {
                     return Ok(placement.nc_end - placement.nc_start + 1);
@@ -3685,6 +3724,108 @@ mod tests {
         // An NG_ parent with no loaded RefSeqGene alignments gets no placement.
         let ng = crate::hgvs::variant::Accession::new("NG", "007485", Some(1));
         assert!(provider.genomic_placement(&ng).is_none());
+    }
+
+    /// An LRG that has **both** its own FASTA record and a chromosomal
+    /// placement must be served from the record — #1462.
+    ///
+    /// LRG genomic sequences are frozen reference standards; that is the whole
+    /// point of the accession. The LRG↔chromosome mapping is only an affine
+    /// approximation (a real LRG XML lists the `mismatch`/`lrg_ins`/`other_ins`
+    /// diffs the affine cannot express), so synthesizing an LRG's bases from
+    /// the chromosome serves a *different* sequence — shifted wherever an indel
+    /// intervenes, and substituted wherever a mismatch does.
+    ///
+    /// It was reachable because `get_sequence` gated the synthesis path on
+    /// `prepared.contains(id)`, which is `false` for every bare `LRG_<N>`: the
+    /// record is indexed as `LRG_<N>g`. Measured against the prepared reference
+    /// (1294 LRG records), **164** served at least one wrong base — 2,017,282
+    /// bases in total, 44 of them at the wrong length — and a 165th carried a
+    /// placement with `parent_start == 1049`, tripping
+    /// `synthesize_parent_sequence`'s debug assertion outright.
+    /// `LRG_292:g.160875` served `T` for the record's `G`, a `+2` shift.
+    ///
+    /// The fixture mirrors that shape: a 12-base LRG record placed on a 10-base
+    /// chromosome window (a 2-base LRG insertion the affine cannot represent),
+    /// with disjoint alphabets so a single served base names which path ran.
+    #[test]
+    fn lrg_with_its_own_record_is_served_from_the_record_not_the_placement() {
+        let dir = tempdir().unwrap();
+        let fasta_path = dir.path().join("ref.fna");
+        let fai_path = dir.path().join("ref.fna.fai");
+        {
+            let mut f = File::create(&fasta_path).unwrap();
+            writeln!(f, ">NC_000017.11").unwrap();
+            writeln!(f, "AAAAAAAAAA").unwrap();
+            writeln!(f, ">LRG_999g").unwrap();
+            writeln!(f, "CGCGCGCGCGCG").unwrap();
+        }
+        {
+            // name<TAB>length<TAB>offset<TAB>line_bases<TAB>line_bytes.
+            // ">NC_000017.11\n" = 14 bytes → offset 14; 10 bases + "\n" ends at
+            // 25; ">LRG_999g\n" = 10 bytes → offset 35.
+            let mut f = File::create(&fai_path).unwrap();
+            writeln!(f, "NC_000017.11\t10\t14\t10\t11").unwrap();
+            writeln!(f, "LRG_999g\t12\t35\t12\t13").unwrap();
+        }
+        let mut provider = MultiFastaProvider::from_directory(dir.path()).unwrap();
+
+        // A placement does exist for LRG_999 — this is the discriminator. The
+        // fix must not work merely by there being nothing to synthesize from.
+        let xml_dir = dir.path().join("lrg");
+        std::fs::create_dir_all(&xml_dir).unwrap();
+        std::fs::write(
+            xml_dir.join("LRG_999.xml"),
+            r#"
+              <mapping coord_system="GRCh38" other_id="NC_000017.11" type="main_assembly">
+                <mapping_span lrg_start="1" lrg_end="12" other_start="1" other_end="10" strand="1" />
+              </mapping>
+            "#,
+        )
+        .unwrap();
+        provider.lrg_xml_dir = Some(xml_dir);
+        let lrg = crate::hgvs::variant::Accession::new("LRG", "999", None);
+        assert!(
+            provider.genomic_placement(&lrg).is_some(),
+            "fixture is only discriminating if a placement is available to be preferred"
+        );
+
+        // Exact strings, not a predicate: the two paths disagree at every base,
+        // so `"CGCG"` can only have come from the record.
+        assert_eq!(
+            provider.get_sequence("LRG_999", 0, 4).unwrap(),
+            "CGCG",
+            "LRG_999 must serve its own frozen record, not the placed chromosome window"
+        );
+        assert_eq!(
+            provider.get_sequence("LRG_999", 8, 12).unwrap(),
+            "CGCG",
+            "the tail past the placed span must come from the record too"
+        );
+        // The record's length, not the placed span's (12 vs 10) — the shape
+        // that made 44 real records report a length they do not have.
+        assert_eq!(provider.get_sequence_length("LRG_999").unwrap(), 12);
+
+        // Unchanged on purpose: an LRG with a placement but *no* record of its
+        // own is still synthesized from the chromosome. This is the #728 path
+        // the guard exists for, and narrowing it is the obvious over-fix.
+        let orphan = crate::hgvs::variant::Accession::new("LRG", "998", None);
+        std::fs::write(
+            provider.lrg_xml_dir.as_ref().unwrap().join("LRG_998.xml"),
+            r#"
+              <mapping coord_system="GRCh38" other_id="NC_000017.11" type="main_assembly">
+                <mapping_span lrg_start="1" lrg_end="10" other_start="1" other_end="10" strand="1" />
+              </mapping>
+            "#,
+        )
+        .unwrap();
+        assert!(provider.genomic_placement(&orphan).is_some());
+        assert_eq!(
+            provider.get_sequence("LRG_998", 0, 4).unwrap(),
+            "AAAA",
+            "an LRG with no FASTA record of its own is still synthesized from the placement"
+        );
+        assert_eq!(provider.get_sequence_length("LRG_998").unwrap(), 10);
     }
 
     // ----------------------------------------------------------------------
