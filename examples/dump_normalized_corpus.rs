@@ -118,6 +118,43 @@ const TX_CONTIG: &str = "chr_synth";
 const CDS_START: u64 = 1;
 const CDS_END: u64 = 15;
 
+/// The multi-exon transcript a `cx.` row is drawn against (#1478).
+///
+/// A *second* coding reference rather than a change to the one above. Re-pointing
+/// `CDS_START`/`CDS_END` or the exon layout in place would re-roll every existing
+/// `c.` row and make prior dumps incomparable for families that have nothing to do
+/// with splicing; an added axis leaves them byte-identical, exactly as an added
+/// family does.
+const TX_MULTI_ACCESSION: &str = "NM_TESTX.1";
+/// The contig the multi-exon synthetic transcript is placed on.
+const TX_MULTI_CONTIG: &str = "chr_synth_x";
+
+/// CDS of the multi-exon reference, 1-based inclusive over transcript coordinates.
+///
+/// `CDS_START` is **4**, not 1, which is the whole point: with a CDS starting at the
+/// first base there is no 5'UTR, so `c.-N` is unreachable and every 5'UTR shape
+/// measures as a confident zero. Three bases before it give `c.-3`..`c.-1`. The CDS
+/// is 12 bases (4..=15), still a multiple of three so it stays codon-complete, and
+/// five 3'UTR bases remain as on the single-exon reference.
+const CDS_START_MULTI: u64 = 4;
+const CDS_END_MULTI: u64 = 15;
+
+/// Exon blocks of the multi-exon transcript, as 0-based half-open ranges into the
+/// 20-base core.
+///
+/// Three exons, so there are **two** exon/exon junctions — at transcript 7/8 and
+/// 14/15. `general.md:44` exempts deletions and duplications around such a junction
+/// from the 3' rule, and #1450 is that the per-member pipeline honours the exemption
+/// while the sequence-first cis path does not. A single-exon reference has no
+/// junction at all, which is why that defect cannot appear in this corpus today.
+const EXON_SPANS: &[(usize, usize)] = &[(0, 7), (7, 14), (14, 20)];
+
+/// Intronic bases between consecutive exons in the genomic layout.
+///
+/// Long enough that an exon's genomic span cannot abut its neighbour's, so a shift
+/// that runs off an exon end lands in intron rather than silently in the next exon.
+const INTRON_LEN: usize = 10;
+
 /// The dump header, written on emit and required verbatim on read.
 const HEADER: &str = "reference\taxis\tdirection\tfamily\tinput\toutput\twas_fixed_point\n";
 
@@ -382,12 +419,7 @@ fn complement(base: u8) -> u8 {
 /// them to one form — and whether it can depends on whether the block was capped.
 fn long_inputs_for(axis: &str, core: &str) -> Vec<String> {
     let bytes = core.as_bytes();
-    let acc = if axis == "g" {
-        GENOMIC_CONTIG
-    } else {
-        TX_ACCESSION
-    };
-    let prefix = format!("{acc}:{axis}.");
+    let prefix = prefix_for(axis);
     let inverted: Vec<u8> = bytes.iter().rev().map(|b| complement(*b)).collect();
     let members: Vec<String> = (0..bytes.len())
         .filter(|&i| bytes[i] != inverted[i])
@@ -471,6 +503,27 @@ fn dump(seeds: u32) -> Vec<Row> {
     let mut rows = Vec::new();
     for (label, core) in long_corpus_sequences() {
         for (axis, direction, dir_label) in axes_and_directions() {
+            // The multi-exon axis is skipped for the long cores, and that is a
+            // correctness fix rather than a coverage choice.
+            //
+            // `EXON_SPANS` is a fixed 7/7/6 split of a **20-base** core, chosen
+            // so the junctions land inside the shapes the short corpus builds.
+            // `multi_exon_provider` hands `Transcript::new` the whole core
+            // regardless, so on a 1024-base core the transcript declares 1024
+            // bases while its exon table maps 20 and `spliced_genomic` emits
+            // only those 20 — every position past 20 is declared and unmapped.
+            // Rows drawn against that provider are not wrong-looking (all eight
+            // came out as fixed points) but they are not measuring anything
+            // either, and a future change touching genomic projection would get
+            // nonsense there that reads as real coverage.
+            //
+            // Scaling `EXON_SPANS` to the core instead would move the junction
+            // geometry the short corpus is tuned around. The long cores exist
+            // for `long_block_inversion`, which is about block size and not
+            // exon structure, so they lose nothing here.
+            if axis == "cx" {
+                continue;
+            }
             for input in long_inputs_for(axis, &core) {
                 let output = normalize_one(axis, &core, &input, direction);
                 rows.push(Row {
@@ -516,6 +569,8 @@ fn axes_and_directions() -> Vec<(&'static str, ShuffleDirection, &'static str)> 
         ("g", ShuffleDirection::FivePrime),
         ("c", ShuffleDirection::ThreePrime),
         ("c", ShuffleDirection::FivePrime),
+        ("cx", ShuffleDirection::ThreePrime),
+        ("cx", ShuffleDirection::FivePrime),
     ]
     .into_iter()
     .map(|(axis, direction)| {
@@ -578,21 +633,50 @@ fn hgvs_pos(axis: &str, i: usize) -> String {
         return pos(axis, i).to_string();
     }
     let p = pos(axis, i) as u64;
-    if p <= CDS_END {
-        p.to_string()
+    let (cds_start, cds_end) = cds_bounds(axis);
+    if p < cds_start {
+        // 5'UTR. Unreachable on the single-exon reference, where `CDS_START` is 1
+        // and no transcript position precedes the CDS — which is why `c.-N` never
+        // appeared in this corpus before #1478.
+        format!("-{}", cds_start - p)
+    } else if p <= cds_end {
+        (p - cds_start + 1).to_string()
     } else {
-        format!("*{}", p - CDS_END)
+        format!("*{}", p - cds_end)
+    }
+}
+
+/// CDS bounds of the coding reference `axis` is drawn against.
+///
+/// The general form is a no-op for `c.`: with `CDS_START == 1` the middle arm of
+/// `hgvs_pos` reduces to `p`, and the 5'UTR arm is unreachable, so every existing
+/// `c.` row spells exactly as it did before this function existed.
+fn cds_bounds(axis: &str) -> (u64, u64) {
+    if axis == "cx" {
+        (CDS_START_MULTI, CDS_END_MULTI)
+    } else {
+        (CDS_START, CDS_END)
+    }
+}
+
+/// The `<accession>:<axis letter>.` prefix a description on `axis` carries.
+///
+/// The corpus's axis token and the HGVS axis letter are different things. `cx` is a
+/// corpus dimension — the multi-exon coding reference — whose descriptions are
+/// spelled `c.` like any other coding variant. Interpolating the token directly, as
+/// both call sites used to, would emit `NM_TESTX.1:cx.`, which is not HGVS and
+/// would be recorded as a parse error rather than a measurement.
+fn prefix_for(axis: &str) -> String {
+    match axis {
+        "g" => format!("{GENOMIC_CONTIG}:g."),
+        "cx" => format!("{TX_MULTI_ACCESSION}:c."),
+        _ => format!("{TX_ACCESSION}:c."),
     }
 }
 
 fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
     let bytes = core.as_bytes();
-    let acc = if axis == "g" {
-        GENOMIC_CONTIG
-    } else {
-        TX_ACCESSION
-    };
-    let prefix = format!("{acc}:{axis}.");
+    let prefix = prefix_for(axis);
     let mut out = Vec::new();
     // The widest shape reads five consecutive offsets (`s`..`s+4`), so `s` runs to
     // `len - 5`. It deliberately runs that far rather than stopping short: on the
@@ -808,6 +892,7 @@ fn normalize_one(axis: &str, core: &str, input: &str, direction: ShuffleDirectio
     };
     let provider = match axis {
         "g" => genomic_provider(core),
+        "cx" => multi_exon_provider(core),
         _ => coding_provider(core),
     };
     let normalizer = Normalizer::with_config(
@@ -831,6 +916,76 @@ fn padded(core: &str) -> String {
 fn genomic_provider(core: &str) -> MockProvider {
     let mut provider = MockProvider::new();
     provider.add_genomic_sequence(GENOMIC_CONTIG, padded(core));
+    provider
+}
+
+/// Genomic sequence for the multi-exon transcript: the core's exon blocks laid out
+/// with `INTRON_LEN` bases of filler between them, padded on both sides.
+///
+/// The filler continues the pad's period-4 `ACGT` rotation rather than using a
+/// distinctive motif, so an intron cannot accidentally extend a repeat tract that
+/// ends at an exon boundary — which would make a shift's stopping point a property
+/// of the filler rather than of the exon edge.
+fn spliced_genomic(core: &str) -> String {
+    let pad = "ACGT".repeat(PAD_OFFSET / 4);
+    let mut out = String::with_capacity(2 * PAD_OFFSET + core.len() + 2 * INTRON_LEN);
+    out.push_str(&pad);
+    for (n, (from, to)) in EXON_SPANS.iter().enumerate() {
+        if n > 0 {
+            out.push_str(&"ACGT".repeat(INTRON_LEN.div_ceil(4))[..INTRON_LEN]);
+        }
+        out.push_str(&core[*from..*to]);
+    }
+    out.push_str(&pad);
+    out
+}
+
+/// Genomic start (1-based) of exon `n` under the `spliced_genomic` layout.
+fn exon_genomic_start(n: usize) -> u64 {
+    let exonic_before: usize = EXON_SPANS[..n].iter().map(|(f, t)| t - f).sum();
+    (PAD_OFFSET + 1 + exonic_before + n * INTRON_LEN) as u64
+}
+
+/// The multi-exon coding reference (#1478): three exons, `CDS_START_MULTI` past the
+/// transcript start so a 5'UTR exists, on the plus strand.
+fn multi_exon_provider(core: &str) -> MockProvider {
+    let mut provider = MockProvider::new();
+    let exons: Vec<Exon> = EXON_SPANS
+        .iter()
+        .enumerate()
+        .map(|(n, (from, to))| {
+            let g_start = exon_genomic_start(n);
+            Exon::with_genomic(
+                n as u32 + 1,
+                *from as u64 + 1,
+                *to as u64,
+                g_start,
+                g_start + (to - from) as u64 - 1,
+            )
+        })
+        .collect();
+    let g_start = exon_genomic_start(0);
+    let g_end = exon_genomic_start(EXON_SPANS.len() - 1)
+        + (EXON_SPANS[EXON_SPANS.len() - 1].1 - EXON_SPANS[EXON_SPANS.len() - 1].0) as u64
+        - 1;
+    let transcript = Transcript::new(
+        TX_MULTI_ACCESSION.to_string(),
+        Some("SYNTHX".to_string()),
+        Strand::Plus,
+        core.to_string(),
+        Some(CDS_START_MULTI),
+        Some(CDS_END_MULTI),
+        exons,
+        Some(TX_MULTI_CONTIG.to_string()),
+        Some(g_start),
+        Some(g_end),
+        GenomeBuild::GRCh38,
+        ManeStatus::None,
+        None,
+        None,
+    );
+    provider.add_genomic_sequence(TX_MULTI_CONTIG, spliced_genomic(core));
+    provider.add_transcript(transcript);
     provider
 }
 
@@ -1295,7 +1450,7 @@ mod tests {
     fn every_family_emits_rows_on_both_axes() {
         let core = &corpus_sequences(1)[0];
         for (family, _) in FAMILIES {
-            for axis in ["g", "c"] {
+            for axis in ["g", "c", "cx"] {
                 assert!(
                     !inputs_for(family, axis, core).is_empty(),
                     "family {family} emitted no {axis}. rows"
@@ -1574,6 +1729,97 @@ mod tests {
             straddling_rows > 0,
             "the coding corpus emitted 3'UTR rows but none straddling CDS_END, which is \
              the shape four of this campaign's five defects lived in"
+        );
+    }
+
+    /// The multi-exon axis reaches the 5'UTR, and the single-exon axis cannot.
+    ///
+    /// Both halves matter. The first is the gap #1478 closes; the second is why it
+    /// needed a second reference rather than a wider loop over the existing one —
+    /// with `CDS_START == 1` there is no transcript position before the CDS, so no
+    /// family, however written, can emit a `c.-N` row against it.
+    #[test]
+    fn only_the_multi_exon_axis_reaches_the_five_prime_utr() {
+        let core = &corpus_sequences(1)[0];
+        let names_five_prime_utr = |axis: &str| {
+            FAMILIES.iter().any(|(family, _)| {
+                inputs_for(family, axis, core)
+                    .iter()
+                    .any(|i| i.contains(".-") || i.contains(";-") || i.contains("_-"))
+            })
+        };
+        assert!(
+            names_five_prime_utr("cx"),
+            "the multi-exon axis emitted no 5'UTR (`c.-N`) row, so #1478's gap is not closed"
+        );
+        assert!(
+            !names_five_prime_utr("c"),
+            "the single-exon axis emitted a 5'UTR row, which CDS_START=1 makes impossible; \
+             the axis plumbing has drifted"
+        );
+    }
+
+    /// A `c.` position before the CDS is spelled `-N`, and the general form is a
+    /// no-op on the single-exon reference.
+    ///
+    /// The second assertion is the guard that this change did not move any existing
+    /// row: with `CDS_START == 1` the generalised `hgvs_pos` must still spell
+    /// transcript position `n` as plain `n`.
+    #[test]
+    fn coding_positions_before_the_cds_are_spelled_with_a_minus() {
+        assert_eq!(hgvs_pos("cx", 0), "-3");
+        assert_eq!(hgvs_pos("cx", 1), "-2");
+        assert_eq!(hgvs_pos("cx", 2), "-1");
+        assert_eq!(hgvs_pos("cx", 3), "1");
+        assert_eq!(hgvs_pos("cx", CDS_END_MULTI as usize - 1), "12");
+        assert_eq!(hgvs_pos("cx", CDS_END_MULTI as usize), "*1");
+
+        for i in 0..(CDS_END as usize) {
+            assert_eq!(
+                hgvs_pos("c", i),
+                (i + 1).to_string(),
+                "generalising hgvs_pos moved a single-exon coding position"
+            );
+        }
+    }
+
+    /// The multi-exon reference really is spliced: three exons, two junctions, and
+    /// genomic spans separated by intron rather than abutting.
+    ///
+    /// Without the gap the exons would be contiguous in genomic space and the
+    /// transcript would be a single-exon one wearing three exon records — which
+    /// would look right in the dump and still fail to express #1450.
+    #[test]
+    fn the_multi_exon_reference_is_actually_spliced() {
+        assert!(
+            EXON_SPANS.len() >= 3,
+            "need at least two exon/exon junctions"
+        );
+        let core = &corpus_sequences(1)[0];
+        let genomic = spliced_genomic(core);
+
+        for (n, (from, to)) in EXON_SPANS.iter().copied().enumerate() {
+            let g = exon_genomic_start(n) as usize;
+            assert_eq!(
+                &genomic[g - 1..g - 1 + (to - from)],
+                &core[from..to],
+                "exon {n} is not at the genomic offset its Exon record claims"
+            );
+            if n + 1 < EXON_SPANS.len() {
+                let end = g + (to - from) - 1;
+                assert_eq!(
+                    exon_genomic_start(n + 1) as usize - end - 1,
+                    INTRON_LEN,
+                    "exons {n} and {} abut; there is no intron between them",
+                    n + 1
+                );
+            }
+        }
+
+        let spliced: String = EXON_SPANS.iter().map(|(f, t)| &core[*f..*t]).collect();
+        assert_eq!(
+            spliced, *core,
+            "the exons do not reconstitute the transcript"
         );
     }
 
