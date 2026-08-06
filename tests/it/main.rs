@@ -354,6 +354,7 @@ mod mito_circular_audit;
 mod mito_heteroplasmy_audit;
 mod mosaic_chimeric_compact;
 mod mosaic_predicted_eqslash;
+mod msto_authored_cases;
 mod msto_regression_corpus;
 mod mutalyzer_grammar_tests;
 mod mutalyzer_normalize_tests;
