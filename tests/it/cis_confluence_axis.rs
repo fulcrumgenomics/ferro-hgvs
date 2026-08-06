@@ -172,12 +172,34 @@ const CDS_END: u64 = 63;
 /// joining the codon triplet to a touching run on both edges instead of
 /// declining the exception on the left — cost **44** classes here rather than
 /// 4, and was rejected for it.
+/// **Re-blessed when the axis gate opened to `c.`/`n.`/`r.`.** Widening
+/// `is_splittable_single_member` lets a lone transcript-axis member reach
+/// `sequence_first_pass`, which is the entire point of that change: converged
+/// rises **6 633 -> 8 006** and `split_two` falls by the same **1 373**, while
+/// `split_three` (115) and `split_more` (19) are **unchanged**. Every
+/// divergence figure moved down or stayed flat, which is the direction this pin
+/// demands.
+///
+/// The figure is now identical with and without `FERRO_ASSERT_IDEMPOTENT`
+/// (measured in both, `declined: 0` in both). That is #1493's doing rather than
+/// this branch's — it closed #1454, so the two classes that used to panic the
+/// oracle no longer do, and the per-configuration pins this file once carried
+/// were already collapsed on `main` before this change landed.
+///
+/// **The pinned figure is 8 003, not 8 006.** Both numbers above are true of
+/// the change that produced them, and neither is the number to pin: the axis
+/// gate raises converged by 1 373 against a `main` that already carries
+/// #1537's deliberate reduction of 4 (3') and 2 (5'). The composition was
+/// measured rather than arithmetic — 8 006 is what this branch scored against
+/// a `main` predating #1537, and re-running after the rebase gives 8 003 in
+/// **both** directions. That the two directions land on the same number, as
+/// they did before the rebase, is the reading to trust.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_629,
-    split_two: 4_509,
+    converged: 8_003,
+    split_two: 3_135,
     split_three: 115,
     split_more: 19,
     underdetermined: 0,
@@ -188,7 +210,7 @@ const THREE_PRIME: Census = Census {
 /// option, and confluence is a property of the normalizer rather than of one
 /// shuffle direction, so it is measured in full rather than spot-checked.
 ///
-/// It lands within five classes of the 3' figure (6 628 against 6 633), which
+/// It landed within five classes of the 3' figure (6 628 against 6 633), which
 /// is worth reading as evidence: the divergence is a property of how the
 /// partitioner splits a block, not of which end of an ambiguous run the shuffle
 /// walks to. A fix that moved only one of these two numbers would be treating a
@@ -199,12 +221,20 @@ const THREE_PRIME: Census = Census {
 /// different amounts is itself the expected reading of the note above: the
 /// affected classes are ones whose chain to a common form ran through an
 /// intermediate that only some shuffle directions produce.
+/// **Re-blessed with the axis gate**, and the two directions now agree exactly
+/// (both 8 006) rather than within five. The 5' figure moves by **1 378**
+/// against the 3' direction's 1 373 — five more, because the same change fixes
+/// an off-by-one in `enclosing_exon` that let a member sitting on an exon's
+/// first base escape the window clamp and shuffle across the junction. That is
+/// a 5'-only symptom, since the 3' walk moves away from the exon start. Both
+/// directions ending on the same number is the reading to trust: the residual
+/// is a property of the partitioner, not of a shuffle direction.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_626,
-    split_two: 4_532,
+    converged: 8_003,
+    split_two: 3_155,
     split_three: 105,
     split_more: 9,
     underdetermined: 0,
