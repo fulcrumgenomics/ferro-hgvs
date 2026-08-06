@@ -250,6 +250,46 @@ const FAMILIES: &[(&str, &str)] = &[
         "nested_spans",
         "#1451 — two spans sharing a bound, one containing the other",
     ),
+    (
+        "delins_hiding_an_inversion",
+        "#1454 — a spanning delins whose trailing piece is an exact reverse complement",
+    ),
+    // The four below close the corpus over its own output vocabulary: it *emitted*
+    // constructs it never fed back in, so a whole class of input went unmeasured.
+    // #1454 was one consequence — the corpus produced `inv` outputs but never an
+    // input whose derivation had to *decide* on `inv` — and it was found by accident
+    // rather than by the corpus, so there was no reason to think it was the only one.
+    //
+    // Measured on `5a19d1d2`, over 33,792 rows:
+    //
+    // | construct        | outputs | inputs |
+    // |------------------|--------:|-------:|
+    // | `inv`            |   3,113 |  3,072 |
+    // | repeat `N[k]`    |   1,558 |      0 |
+    // | `=`              |     152 |      0 |
+    // | 3+ member allele |     170 |      0 |
+    //
+    // `inv` is the interesting row and the reason `inv_member` is narrower than the
+    // other three. #1459 closed the raw count when it added `junction_interior_to_span`
+    // — but every one of those 3,072 inputs pairs the `inv` with an insertion that
+    // *overlaps* it, and none is lone. So the corpus could only ask what happens to an
+    // `inv` already in conflict, never what happens to a well-formed one.
+    (
+        "inv_member",
+        "an `inv` as an input, lone and beside a non-overlapping sibling — #1459 feeds `inv` only in a conflicting pairing",
+    ),
+    (
+        "three_member_allele",
+        "a three-member allele as an input — emitted on 170 rows, consumed on none",
+    ),
+    (
+        "identity_member",
+        "a no-change `=` member as an input — emitted on 152 rows, consumed on none",
+    ),
+    (
+        "repeat_expansion",
+        "a ranged repeat as an input — emitted on 1,558 rows, consumed on none",
+    ),
 ];
 
 /// The family drawn against the **long** cores, and the one shape in this file
@@ -372,6 +412,59 @@ fn long_inputs_for(axis: &str, core: &str) -> Vec<String> {
         return vec![whole];
     }
     vec![whole, format!("{prefix}[{}]", members.join(";"))]
+}
+
+/// Offset of the first tandem three-base repeat in `core`, if it has one.
+///
+/// Three bases rather than one, because `repeated.md:21` permits a repeat description
+/// on a `c.` reference **only** for units whose length is a multiple of three — a
+/// mononucleotide repeat there is spec-invalid (`c.2686A[10]` is called out by name),
+/// and a corpus that emits invalid input measures nothing useful. Three also lets the
+/// ranged spelling be used throughout, which is the form the pending Community
+/// Consultation proposal in that file's NOTE would leave as the only legal one.
+///
+/// Only 21 of the 48 corpus sequences contain such a tract, so `repeat_expansion`
+/// emits nothing for the rest. That is deliberate: synthesising a tract would mean
+/// describing a repeat the reference does not have.
+fn first_tandem_triplet(core: &str) -> Option<usize> {
+    let b = core.as_bytes();
+    (0..b.len().saturating_sub(5)).find(|&i| b[i..i + 3] == b[i + 3..i + 6])
+}
+
+/// A three-base payload for the leading piece of `delins_hiding_an_inversion`,
+/// chosen so the piece is a genuine, non-inverting change of `span`.
+///
+/// Two degeneracies have to be avoided, and both silently weaken the family rather
+/// than failing it. A payload equal to `span` makes the piece a no-op, leaving a
+/// one-piece shape that no longer tests a *split*. A payload equal to
+/// `revcomp(span)` makes the leading piece an inversion too, so the case no longer
+/// isolates a single mis-typed piece. Three candidates suffice: one span rules out
+/// at most two of them, and `the_head_payload_is_never_a_no_op_or_an_inversion`
+/// checks that exhaustively over all 64 spans rather than trusting the argument.
+fn head_payload(span: &str) -> &'static str {
+    let inverted = revcomp(span);
+    ["GGG", "CCC", "ACA"]
+        .into_iter()
+        .find(|c| *c != span && *c != inverted)
+        .expect("three candidates cannot all collide with one three-base span")
+}
+
+/// Reverse complement of `s`, which must be over `ACGT`.
+///
+/// Used to build the `delins_hiding_an_inversion` family, where the point is that a
+/// piece's payload equals the reverse complement of its own span and so should be
+/// typed `inv` rather than `delins`.
+fn revcomp(s: &str) -> String {
+    s.chars()
+        .rev()
+        .map(|c| match c {
+            'A' => 'T',
+            'C' => 'G',
+            'G' => 'C',
+            'T' => 'A',
+            other => unreachable!("corpus sequences are over ACGT, found {other}"),
+        })
+        .collect()
 }
 
 fn dump(seeds: u32) -> Vec<Row> {
@@ -604,6 +697,102 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
                 p(s),
                 p(s + 3)
             )),
+            // A length-preserving spanning delins over `s..s+5`, whose payload is a
+            // non-inverting three-base change of `s..s+2` followed by the exact
+            // reverse complement of `s+3..s+5`. The natural split is therefore
+            // `[s_s+2delins<head>; s+3_s+5inv]` — the trailing piece *is* an
+            // inversion, and #1454 is that ferro spells it `delins` on the first
+            // pass and only re-types it to `inv` on a second, so the first output is
+            // not a fixed point.
+            //
+            // Both spellings are emitted: the spanning form, and the pre-split form
+            // with the trailing piece written as `delins`. The latter is #1454's
+            // pass-1 output fed back in, which is the shape every other family here
+            // fails to build — measured on `ee0e37ac`, all 8,706 `delins` members
+            // the other five families emit have a payload that is *not* the reverse
+            // complement of its span, which is why the corpus reported zero
+            // non-idempotent rows while #1454 was open.
+            //
+            // **Three bases per piece, and the width is load-bearing.** A two-base
+            // head with a three-base tail reaches zero non-idempotent rows: the
+            // trailing piece gets typed `inv` on the first pass and the defect never
+            // appears. Three-and-three reaches 30. An odd-length span also can never
+            // equal its own reverse complement, so neither piece degenerates to a
+            // no-op the way a two-base piece does on `AT`, `TA`, `CG` or `GC`.
+            //
+            // This shape reads six offsets where every other family reads five, so
+            // it is bounded here rather than by widening the shared `last` — moving
+            // that would change what all five existing families emit and make every
+            // dump taken before this commit incomparable.
+            "delins_hiding_an_inversion" => {
+                if s + 6 > bytes.len() {
+                    continue;
+                }
+                let head = head_payload(&core[s..s + 3]);
+                let tail = revcomp(&core[s + 3..s + 6]);
+                out.push(format!("{prefix}{}_{}delins{head}{tail}", p(s), p(s + 5)));
+                out.push(format!(
+                    "{prefix}[{}_{}delins{head};{}_{}delins{tail}]",
+                    p(s),
+                    p(s + 2),
+                    p(s + 3),
+                    p(s + 5)
+                ));
+            }
+            // Three bases, never two: an even-length inversion is a no-op on a
+            // palindromic span (`AT`, `TA`, `CG`, `GC`), which would make the input
+            // an identity rather than an inversion and quietly weaken the family.
+            // An odd-length span can never equal its own reverse complement.
+            "inv_member" => {
+                out.push(format!("{prefix}{}_{}inv", p(s), p(s + 2)));
+                out.push(format!(
+                    "{prefix}[{}_{}inv;{}{}>{}]",
+                    p(s),
+                    p(s + 2),
+                    p(s + 4),
+                    base(s + 4),
+                    other(s + 4)
+                ));
+            }
+            // Three substitutions, each separated from the next by one unchanged
+            // base, so the allele is well-formed rather than a set of adjacent
+            // changes that should have been written as one edit.
+            "three_member_allele" => out.push(format!(
+                "{prefix}[{}{}>{};{}{}>{};{}{}>{}]",
+                p(s),
+                base(s),
+                other(s),
+                p(s + 2),
+                base(s + 2),
+                other(s + 2),
+                p(s + 4),
+                base(s + 4),
+                other(s + 4)
+            )),
+            // `=` is a member the normalizer *writes* when a piece cancels, so it is
+            // a shape a consumer can hold and feed back. Paired with a real change so
+            // the allele is not wholly vacuous.
+            "identity_member" => out.push(format!(
+                "{prefix}[{}_{}=;{}{}>{}]",
+                p(s),
+                p(s + 1),
+                p(s + 3),
+                base(s + 3),
+                other(s + 3)
+            )),
+            // A genuine two-copy reference tract expanded to three, in the ranged
+            // spelling. Emits nothing for a core with no tandem triplet — see
+            // `first_tandem_triplet`.
+            "repeat_expansion" => {
+                if s != 0 {
+                    continue;
+                }
+                if let Some(t) = first_tandem_triplet(core) {
+                    let unit = &core[t..t + 3];
+                    out.push(format!("{prefix}{}_{}{unit}[3]", p(t), p(t + 5)));
+                    out.push(format!("{prefix}{}_{}{unit}[1]", p(t), p(t + 5)));
+                }
+            }
             _ => unreachable!("unknown family {family}"),
         }
     }
@@ -1112,6 +1301,243 @@ mod tests {
                     "family {family} emitted no {axis}. rows"
                 );
             }
+        }
+    }
+
+    /// The corpus feeds back every construct it emits.
+    ///
+    /// Measured on `5a19d1d2`, before the four closing families existed, the corpus
+    /// *produced* repeat notation on 1,558 output rows, a no-change `=` on 152 and
+    /// three-member alleles on 170 — while feeding **none** of them in as an input.
+    /// #1454 was one consequence of that asymmetry, and it was found by accident
+    /// rather than by the corpus.
+    ///
+    /// `inv` is checked here too even though #1459 already feeds it, because all
+    /// 3,072 of those inputs pair it with an overlapping insertion. A count alone
+    /// would call that construct covered; it is the *lone* `inv` this asserts.
+    ///
+    /// This is the guard against the asymmetry reappearing, and it works in two
+    /// halves. The four literal assertions pin that each new family exists at all.
+    /// The loop after them is the closure check proper: it reads the constructs out
+    /// of the **dump's own outputs** and requires an input counterpart for each, so
+    /// a family added later that emits one of these without feeding it back fails
+    /// here. What it still cannot see is a construct outside the vocabulary below —
+    /// that vocabulary is a hand audit, and widening it is the manual step.
+    #[test]
+    fn the_corpus_is_closed_over_its_output_vocabulary() {
+        let core = &corpus_sequences(1)[0];
+        let inputs: Vec<String> = FAMILIES
+            .iter()
+            .flat_map(|(family, _)| {
+                ["g", "c"]
+                    .into_iter()
+                    .flat_map(move |axis| inputs_for(family, axis, core))
+            })
+            .collect();
+        let seen = |pred: &dyn Fn(&str) -> bool| inputs.iter().any(|i| pred(i));
+
+        // A *lone* `inv`, not merely any `inv`. #1459's `junction_interior_to_span`
+        // emits 3,072 inv inputs and every one pairs the inversion with an
+        // overlapping insertion, so a bare `contains("inv")` here would pass with
+        // `inv_member` deleted — asserting nothing this family provides.
+        assert!(
+            seen(&|i| i.contains("inv") && !i.contains(';')),
+            "no input exercises a lone `inv`; only conflicting pairings are covered"
+        );
+        assert!(
+            seen(&|i| i.contains("[3]") || i.contains("[1]")),
+            "no input exercises repeat notation"
+        );
+        // `=` can sit at either position in the allele, so match both delimiters
+        // rather than only the closing bracket.
+        assert!(
+            seen(&|i| i.contains("=;") || i.contains("=]")),
+            "no input exercises `=`"
+        );
+        assert!(
+            seen(&|i| i.matches(';').count() >= 2),
+            "no input exercises a three-member allele"
+        );
+
+        // The four assertions above pin that the new families exist. They do not,
+        // on their own, make the test live up to its name: the constructs are
+        // named here as literals, so a family that started *emitting* one without
+        // feeding it back would not move them. That is the asymmetry this module
+        // is about, one level up — a hardcoded audit going stale the same way the
+        // original one did.
+        //
+        // So close the loop against the dump itself: for each construct in the
+        // vocabulary, if any normalized **output** exhibits it, some **input**
+        // must too. This is what fails when a later family widens the output
+        // vocabulary and leaves the input side behind.
+        /// A named construct predicate, applied to both sides of the dump.
+        type Construct<'a> = (&'a str, &'a dyn Fn(&str) -> bool);
+
+        let rows = dump(1);
+        let vocabulary: &[Construct] = &[
+            ("lone `inv`", &|s: &str| {
+                s.contains("inv") && !s.contains(';')
+            }),
+            ("repeat notation", &|s: &str| {
+                s.contains("[3]") || s.contains("[1]")
+            }),
+            ("`=`", &|s: &str| s.contains("=;") || s.contains("=]")),
+            ("three-member allele", &|s: &str| {
+                s.matches(';').count() >= 2
+            }),
+        ];
+        for (name, exhibits) in vocabulary {
+            let in_output = rows.iter().any(|row| exhibits(&row.output));
+            let in_input = rows.iter().any(|row| exhibits(&row.input));
+            assert!(
+                !in_output || in_input,
+                "the corpus emits {name} as an output but never feeds one in, so it cannot \
+                 measure what normalization does to that form — add a family that does"
+            );
+        }
+    }
+
+    /// `repeat_expansion` describes a tract the reference actually has.
+    ///
+    /// The alternative — anchoring a repeat on a single copy — is spec-questionable
+    /// (`repeated.md` defines a repeat as a unit "present several times") and would
+    /// make the family assert something about the reference that is not true. The
+    /// consequence is partial coverage: only 21 of the 48 corpus sequences contain a
+    /// tandem triplet, so the family is silent on the rest. That trade is deliberate.
+    #[test]
+    fn the_repeat_family_only_describes_a_tract_the_reference_has() {
+        let mut covered = 0;
+        for core in corpus_sequences(24) {
+            let rows = inputs_for("repeat_expansion", "g", &core);
+            match first_tandem_triplet(&core) {
+                None => assert!(
+                    rows.is_empty(),
+                    "emitted a repeat for {core}, which has no tandem triplet"
+                ),
+                Some(t) => {
+                    covered += 1;
+                    assert_eq!(rows.len(), 2, "expected both counts for {core}");
+                    let unit = &core[t..t + 3];
+                    assert_eq!(
+                        &core[t + 3..t + 6],
+                        unit,
+                        "{unit} at {t} in {core} is not actually tandem"
+                    );
+                    assert!(
+                        rows[0].ends_with(&format!("{unit}[3]")),
+                        "unexpected spelling {}",
+                        rows[0]
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            covered, 21,
+            "tandem-triplet coverage moved; the generator or seed count changed"
+        );
+    }
+
+    /// `delins_hiding_an_inversion` emits both spellings, with the trailing piece an
+    /// exact reverse complement of its own span.
+    ///
+    /// Pinned as exact strings rather than as a predicate: a predicate over "some
+    /// member is an inversion" is satisfied by a corpus that emits the spanning form
+    /// alone, which is precisely the degenerate case this family exists to avoid.
+    ///
+    /// The head payload differs between the two cores below, and that is the point.
+    /// For `TTT` the first candidate `GGG` is neither the span nor its reverse
+    /// complement (`AAA`), so it is taken. For `CCC` the span rules out `CCC` and its
+    /// reverse complement rules out `GGG`, so `head_payload` falls through to `ACA`.
+    #[test]
+    fn the_inversion_family_emits_both_spellings_with_a_reverse_complement_tail() {
+        let homopolymer = "TTTTTTTTTAATATATTTTA";
+        assert_eq!(
+            inputs_for("delins_hiding_an_inversion", "g", homopolymer)[..2],
+            [
+                "NC_TEST.1:g.257_262delinsGGGAAA".to_string(),
+                "NC_TEST.1:g.[257_259delinsGGG;260_262delinsAAA]".to_string(),
+            ]
+        );
+
+        let four_letter = "CCCCCCCCTGACGTATCCTA";
+        assert_eq!(
+            inputs_for("delins_hiding_an_inversion", "g", four_letter)[..2],
+            [
+                "NC_TEST.1:g.257_262delinsACAGGG".to_string(),
+                "NC_TEST.1:g.[257_259delinsACA;260_262delinsGGG]".to_string(),
+            ]
+        );
+    }
+
+    /// The pieces are three bases each, and that width is load-bearing rather than
+    /// arbitrary.
+    ///
+    /// Measured on `ee0e37ac`: a two-base head with a three-base tail produces **0**
+    /// non-idempotent rows across the whole corpus, because the trailing piece is
+    /// typed `inv` on the first pass. Widening the head to three bases produces
+    /// **30**, all of them #1454's shape — a piece spelled `delins` on pass 1 and
+    /// re-typed `inv` on pass 2. So a future edit that narrows either piece silently
+    /// returns the corpus to being blind to the defect it was added for.
+    #[test]
+    fn the_inversion_family_uses_three_base_pieces() {
+        let core = &corpus_sequences(1)[0];
+        let split = inputs_for("delins_hiding_an_inversion", "g", core)
+            .into_iter()
+            .find(|s| s.contains('['))
+            .expect("the family emits a pre-split spelling");
+        let (head, tail) = split
+            .split_once(';')
+            .expect("the pre-split spelling has two members");
+        for (member, payload) in [(head, "head"), (tail, "tail")] {
+            let emitted = member
+                .rsplit_once("delins")
+                .expect("each member is a delins")
+                .1
+                .trim_end_matches(']');
+            assert_eq!(
+                emitted.len(),
+                3,
+                "the {payload} piece must be three bases, found {emitted:?} in {split}"
+            );
+        }
+    }
+
+    /// `head_payload` never degenerates: it is neither a no-op nor a second
+    /// inversion. Exhaustive over all 64 three-base spans, so the guarantee does not
+    /// rest on the corpus happening not to draw a colliding one.
+    #[test]
+    fn the_head_payload_is_never_a_no_op_or_an_inversion() {
+        for a in "ACGT".chars() {
+            for b in "ACGT".chars() {
+                for c in "ACGT".chars() {
+                    let span: String = [a, b, c].into_iter().collect();
+                    let payload = head_payload(&span);
+                    assert_ne!(payload, span, "head payload is a no-op on {span}");
+                    assert_ne!(
+                        payload,
+                        revcomp(&span),
+                        "head payload is itself an inversion on {span}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// An odd-length span can never equal its own reverse complement, which is why
+    /// the tail piece is three bases and not two: a two-base tail degenerates to a
+    /// no-op on every palindromic pair (`AT`, `TA`, `CG`, `GC`).
+    #[test]
+    fn a_three_base_span_never_equals_its_own_reverse_complement() {
+        for a in "ACGT".chars() {
+            for b in "ACGT".chars() {
+                for c in "ACGT".chars() {
+                    let span: String = [a, b, c].into_iter().collect();
+                    assert_ne!(revcomp(&span), span, "{span} is its own reverse complement");
+                }
+            }
+        }
+        for pair in ["AT", "TA", "CG", "GC"] {
+            assert_eq!(revcomp(pair), pair, "{pair} should be palindromic");
         }
     }
 
