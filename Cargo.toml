@@ -318,6 +318,11 @@ required-features = ["dev"]
 [[example]]
 name = "report_conformance_reference_gaps"
 required-features = ["dev"]
+
+[[example]]
+name = "generate_spec_citations"
+required-features = ["dev"]
+
 [[bin]]
 name = "ferro"
 path = "src/bin/ferro.rs"

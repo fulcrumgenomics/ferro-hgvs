@@ -1,0 +1,19 @@
+{
+  "entries": {
+    "dup_vs_ins": [
+      {
+        "excerpt": "when a variant can be described as a duplication, it must be described as a duplication and not as, e.g., an insertion",
+        "file": "docs/recommendations/DNA/duplication.md",
+        "heading": "Duplication"
+      }
+    ],
+    "three_prime_shift": [
+      {
+        "excerpt": "for all descriptions, the most 3' position possible of the reference sequence is arbitrarily assigned to have been changed.",
+        "file": "docs/recommendations/general.md",
+        "heading": "3'rule"
+      }
+    ]
+  },
+  "spec_version": "21.1.4"
+}
