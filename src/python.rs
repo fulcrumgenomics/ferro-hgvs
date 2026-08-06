@@ -310,15 +310,33 @@ fn parse_render_style_or_raise(
 
 /// Reference provider used by the Python wrappers.
 ///
-/// `MultiFasta` is wrapped in `Arc` because `MultiFastaProvider` is large and
-/// is cloned on every Python call to construct a fresh `Normalizer<P>`.
+/// **Both variants are `Arc`, and that is load-bearing, not stylistic.** Every
+/// reference-backed binding clones this to construct a fresh `Normalizer<P>`, so
+/// whatever the variant holds is copied once per Python call.
 ///
-/// `Mock` is boxed because `JsonProvider` is itself large (it owns the test
-/// reference maps); without the box this variant dwarfs the 8-byte `Arc`
-/// `MultiFasta` variant and trips `clippy::large_enum_variant`.
+/// `Mock` used to be a `Box`, chosen only to keep the enum small enough for
+/// `clippy::large_enum_variant`. That satisfied the size constraint and missed
+/// the cost one: `JsonProvider` derives `Clone`, and its `genomic_sequences` and
+/// `proteins` maps own their `String`s, so the per-call clone deep-copied the
+/// whole reference. Measured on a variant whose work is fixed — a 6-base
+/// deletion on a 600-base transcript — while only the *unread* remainder of the
+/// contig grew:
+///
+/// | contig bases | `normalize_variant` | `to_spdi` |
+/// |-------------:|--------------------:|----------:|
+/// |       10 000 |              1.2 µs |    1.0 µs |
+/// |      100 000 |              6.8 µs |    6.1 µs |
+/// |    1 000 000 |             21.8 µs |   17.5 µs |
+/// |    4 000 000 |            443.2 µs |   74.0 µs |
+///
+/// ~9 GB/s, i.e. memcpy speed, for bases no call ever reads. A single human
+/// chromosome in `genomic_sequences` would have cost tens of milliseconds and a
+/// full re-allocation of itself on *every* call. `Arc` makes the clone two
+/// refcount bumps, and it is still 8 bytes, so the original size constraint
+/// holds.
 #[derive(Clone)]
 enum PyProvider {
-    Mock(Box<JsonProvider>),
+    Mock(Arc<JsonProvider>),
     MultiFasta(Arc<MultiFastaProvider>),
 }
 
@@ -508,7 +526,7 @@ impl PyProvider {
     /// Load from a JSON file (delegates to JsonProvider::from_json).
     fn from_json(path: &Path) -> PyResult<Self> {
         JsonProvider::from_json(path)
-            .map(|p| PyProvider::Mock(Box::new(p)))
+            .map(|p| PyProvider::Mock(Arc::new(p)))
             .map_err(|e| {
                 ferro_typed(
                     "ReferenceDataError",
@@ -533,7 +551,7 @@ impl PyProvider {
 
     /// Default: built-in test data.
     fn test_data() -> Self {
-        PyProvider::Mock(Box::new(JsonProvider::with_test_data()))
+        PyProvider::Mock(Arc::new(JsonProvider::with_test_data()))
     }
 
     /// Build / extract a CdotMapper for this provider.
@@ -1224,6 +1242,24 @@ pub struct PyNormalizer {
     kind: ProviderKind,
 }
 
+/// Every method below that reaches the provider runs its work inside
+/// `py.detach`, so the GIL is released across the reference read (#1455).
+///
+/// The reads are not incidental: for a FASTA- or mmap-backed provider they are
+/// file I/O, and `canonical_spdi` issues several as its window doubles through
+/// a repeat tract. Held, the GIL serialises every other Python thread in the
+/// process for that whole time. Measured as the share of its solo rate a
+/// competing Python thread keeps while the call runs, all six entry points sat
+/// at 0.13-0.30 before this change — at or below a Rust call known to hold the
+/// GIL — and 1.21-1.49 after (`tests/python/test_issue_1455_gil_release.py`).
+///
+/// The shape is the same one `VariantProjector` already used: clone the owned
+/// inputs — a `&PyHgvsVariant` borrows Python-owned memory and so cannot cross
+/// into the closure — detach, and convert the result or the mapped error
+/// afterwards, since `ferro_typed` builds a Python exception and needs the GIL
+/// back. **Anything added here that touches the provider wants the same
+/// treatment**; the test above is parametrized over the entry points, so a new
+/// one has to be added to it.
 #[pymethods]
 impl PyNormalizer {
     /// Create a new normalizer
@@ -1360,10 +1396,10 @@ impl PyNormalizer {
     ///
     /// Returns:
     ///     SpdiVariant
-    fn to_spdi(&self, variant: &PyHgvsVariant) -> PyResult<PySpdiVariant> {
+    fn to_spdi(&self, py: Python<'_>, variant: &PyHgvsVariant) -> PyResult<PySpdiVariant> {
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
-        normalizer
-            .to_spdi(&variant.inner)
+        let inner_variant = variant.inner.clone();
+        py.detach(|| normalizer.to_spdi(&inner_variant))
             .map(|inner| PySpdiVariant { inner })
             .map_err(|e| ferro_typed("ProjectionError", format!("{e}"), &e))
     }
@@ -1398,10 +1434,10 @@ impl PyNormalizer {
     ///         sequence — a trans/mosaic/chimeric or null allele, members on
     ///         different accessions, members that overlap, an edit SPDI cannot
     ///         represent, or a span wider than 100 000 bases.
-    fn canonical_spdi(&self, variant: &PyHgvsVariant) -> PyResult<PySpdiVariant> {
+    fn canonical_spdi(&self, py: Python<'_>, variant: &PyHgvsVariant) -> PyResult<PySpdiVariant> {
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
-        normalizer
-            .canonical_spdi(&variant.inner)
+        let inner_variant = variant.inner.clone();
+        py.detach(|| normalizer.canonical_spdi(&inner_variant))
             .map(|inner| PySpdiVariant { inner })
             .map_err(|e| ferro_typed("ProjectionError", format!("{e}"), &e))
     }
@@ -1422,37 +1458,52 @@ impl PyNormalizer {
     ///
     /// Raises:
     ///     ProjectionError: as `canonical_spdi`.
-    fn apply_to_reference(&self, variant: &PyHgvsVariant) -> PyResult<PyAppliedVariant> {
+    fn apply_to_reference(
+        &self,
+        py: Python<'_>,
+        variant: &PyHgvsVariant,
+    ) -> PyResult<PyAppliedVariant> {
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
-        normalizer
-            .apply_to_reference(&variant.inner)
+        let inner_variant = variant.inner.clone();
+        py.detach(|| normalizer.apply_to_reference(&inner_variant))
             .map(|inner| PyAppliedVariant { inner })
             .map_err(|e| ferro_typed("ProjectionError", format!("{e}"), &e))
     }
 
     /// Normalize an HGVS variant
-    fn normalize_variant(&self, variant: &PyHgvsVariant) -> PyResult<PyHgvsVariant> {
+    fn normalize_variant(
+        &self,
+        py: Python<'_>,
+        variant: &PyHgvsVariant,
+    ) -> PyResult<PyHgvsVariant> {
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
+        let inner_variant = variant.inner.clone();
 
-        let normalized = normalizer.normalize(&variant.inner).map_err(|e| {
-            ferro_typed(
-                "NormalizationError",
-                format!("Normalization error: {e}"),
-                &e,
-            )
-        })?;
+        let normalized = py
+            .detach(|| normalizer.normalize(&inner_variant))
+            .map_err(|e| {
+                ferro_typed(
+                    "NormalizationError",
+                    format!("Normalization error: {e}"),
+                    &e,
+                )
+            })?;
 
         Ok(PyHgvsVariant { inner: normalized })
     }
 
     /// Parse and normalize an HGVS string
-    fn normalize(&self, hgvs_string: &str) -> PyResult<String> {
+    fn normalize(&self, py: Python<'_>, hgvs_string: &str) -> PyResult<String> {
+        // Parsed before detaching: it touches no reference, so it is not what
+        // #1455 is about, and keeping it here leaves the `ParseError` mapping a
+        // plain `?` instead of a two-variant error enum threaded through the
+        // closure.
         let variant = parse_hgvs(hgvs_string)
             .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
 
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
 
-        let normalized = normalizer.normalize(&variant).map_err(|e| {
+        let normalized = py.detach(|| normalizer.normalize(&variant)).map_err(|e| {
             ferro_typed(
                 "NormalizationError",
                 format!("Normalization error: {e}"),
@@ -1475,13 +1526,15 @@ impl PyNormalizer {
     /// with the warnings vec, which may be empty.
     fn normalize_with_warnings(
         &self,
+        py: Python<'_>,
         hgvs_string: &str,
     ) -> PyResult<PyNormalizeResultWithWarnings> {
+        // Parsed before detaching, as in `normalize`.
         let variant = parse_hgvs(hgvs_string)
             .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
         let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
-        let result = normalizer
-            .normalize_with_diagnostics(&variant)
+        let result = py
+            .detach(|| normalizer.normalize_with_diagnostics(&variant))
             .map_err(|e| {
                 ferro_typed(
                     "NormalizationError",
@@ -2864,9 +2917,18 @@ impl PyEquivalenceChecker {
     ///
     /// Returns:
     ///     EquivalenceResult with details about the comparison
-    fn check(&self, v1: &PyHgvsVariant, v2: &PyHgvsVariant) -> PyResult<PyEquivalenceResult> {
-        self.checker
-            .check(&v1.inner, &v2.inner)
+    fn check(
+        &self,
+        py: Python<'_>,
+        v1: &PyHgvsVariant,
+        v2: &PyHgvsVariant,
+    ) -> PyResult<PyEquivalenceResult> {
+        // Detached for the same reason as `Normalizer`'s reference-backed
+        // methods (#1455): settling a verdict normalizes both descriptions
+        // against the reference, and the strongest tier applies them to it, so
+        // one call reads up to two windows of `MAX_APPLY_WINDOW` bases.
+        let (first, second) = (v1.inner.clone(), v2.inner.clone());
+        py.detach(|| self.checker.check(&first, &second))
             .map(|r| r.into())
             .map_err(|e| {
                 ferro_typed(
@@ -2884,15 +2946,22 @@ impl PyEquivalenceChecker {
     ///
     /// Returns:
     ///     True if all variants are equivalent
-    fn all_equivalent(&self, variants: Vec<PyRef<PyHgvsVariant>>) -> PyResult<bool> {
+    fn all_equivalent(
+        &self,
+        py: Python<'_>,
+        variants: Vec<PyRef<PyHgvsVariant>>,
+    ) -> PyResult<bool> {
         let rust_variants: Vec<HgvsVariant> = variants.iter().map(|v| v.inner.clone()).collect();
-        self.checker.all_equivalent(&rust_variants).map_err(|e| {
-            ferro_typed(
-                "EquivalenceError",
-                format!("Equivalence check failed: {e}"),
-                &e,
-            )
-        })
+        // Already cloning every member, so the detach is free (#1455) — and this
+        // is the heaviest entry point of the three, being `check` over a list.
+        py.detach(|| self.checker.all_equivalent(&rust_variants))
+            .map_err(|e| {
+                ferro_typed(
+                    "EquivalenceError",
+                    format!("Equivalence check failed: {e}"),
+                    &e,
+                )
+            })
     }
 }
 

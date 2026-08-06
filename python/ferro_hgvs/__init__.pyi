@@ -617,7 +617,15 @@ class HgvsVariant:
     def __hash__(self) -> int: ...
 
 class Normalizer:
-    """HGVS variant normalizer using a reference provider."""
+    """HGVS variant normalizer using a reference provider.
+
+    Every method that reads the reference — :meth:`normalize`,
+    :meth:`normalize_variant`, :meth:`normalize_with_warnings`,
+    :meth:`to_spdi`, :meth:`canonical_spdi` and :meth:`apply_to_reference` —
+    releases the GIL for the duration of that work, so calls from several
+    ``threading.Thread`` workers overlap instead of serialising (#1455). A
+    ``Normalizer`` is safe to share between threads.
+    """
 
     def __init__(
         self,
@@ -937,7 +945,13 @@ class EquivalenceResult:
         ...
 
 class EquivalenceChecker:
-    """Equivalence checker for comparing HGVS variants."""
+    """Equivalence checker for comparing HGVS variants.
+
+    :meth:`check` and :meth:`all_equivalent` release the GIL while they read the
+    reference, so calls from several ``threading.Thread`` workers overlap
+    instead of serialising (#1455). An ``EquivalenceChecker`` is safe to share
+    between threads.
+    """
 
     def __init__(self, reference_json: str | None = None) -> None:
         """Create a new equivalence checker.
