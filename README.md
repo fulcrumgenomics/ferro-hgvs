@@ -224,6 +224,81 @@ ignore = ["W1001", "W2001"]  # Silently correct these
 reject = ["W3003"]           # Always reject these
 ```
 
+## Comparing normalization rules (`FERRO_PARTITION`)
+
+> **Unstable.** `FERRO_PARTITION` is an evaluation switch, **not** a supported feature. It is not covered by semantic versioning, its values may change, and it is expected to be removed once the normalization rule is settled. Do not depend on it in production pipelines.
+
+Normalization cuts each changed region of sequence into allele members. `FERRO_PARTITION` selects which rule does that cutting, so a candidate rule can be measured against the shipped one over a real corpus before anything changes for users.
+
+| Value | Rule |
+|-------|------|
+| unset / empty / `live` | The shipped rule. This is what every normal invocation uses. |
+| `shadow` | Cut only at alignment steps common to *every* minimal alignment. |
+| `canonical` | The member-count-minimal minimal alignment. |
+| `canonical-coalesced` | `canonical`, plus the `delins.md:44-47` merge: a split whose payload realigns as one block is re-spelled as a single `delins`. Applied after the downstream passes rather than at partition time, so it cuts identically to `canonical` and differs only in what survives. |
+
+With the variable unset — or set to the empty string — output is byte-identical to a build with no switch at all.
+
+### Running an A/B comparison
+
+Run the same input twice and diff the normalized descriptions. In `tsv` format the columns are `line, input, normalized, changed, status, detail`, so column 3 is the normalized string:
+
+```bash
+# 1. the shipped behaviour
+ferro normalize --input variants.txt --reference /path/to/reference \
+  --format tsv --error-mode lenient -j 10 > shipped.tsv
+
+# 2. the candidate rule
+FERRO_PARTITION=canonical ferro normalize --input variants.txt --reference /path/to/reference \
+  --format tsv --error-mode lenient -j 10 > candidate.tsv
+
+# 3. what moved
+diff <(cut -f3 shipped.tsv) <(cut -f3 candidate.tsv) | head
+
+# 4. how many moved, counting only rows that succeeded on both sides
+#    (columns 3/5 are `normalized`/`status`; a row that failed carries no
+#     normalized string, so comparing column 3 alone would score two different
+#     failures as identical)
+paste <(cut -f3,5 shipped.tsv) <(cut -f3,5 candidate.tsv) \
+  | awk -F'\t' '$2 == "ok" && $4 == "ok" && $1 != $3' | wc -l
+
+# and, separately, rows whose status itself changed
+paste <(cut -f5 shipped.tsv) <(cut -f5 candidate.tsv) | awk -F'\t' '$1 != $2' | wc -l
+```
+
+This works on a **stock release build** — the switch is not behind a build feature, so no special binary or wheel is needed.
+
+### Two traps worth knowing
+
+**A misspelled value looks like success, and nothing tells you.** An unrecognised value falls back to `live`, so `FERRO_PARTITION=canonicl` produces a clean, empty diff that reads as "the candidate changes nothing".
+
+The fallback does emit a warning through the `log` facade — but the `ferro` CLI installs no logger, so **that warning is not visible from the command line, and `RUST_LOG` will not surface it**. There is no signal at all.
+
+The defence is a positive control on an input **known** to differ — not on your own corpus, where a zero is ambiguous between "the switch is not taking effect" and "this corpus has no affected variants".
+
+These three run against the built-in test data, so they need no `--reference` and no prepared reference directory:
+
+```bash
+printf 'NM_001234.1:c.[2del;9del]\nNM_001234.1:c.[3del;9del]\nNM_001234.1:c.[2del;9dup]\n' > control.txt
+
+ferro normalize --input control.txt --format tsv --error-mode lenient | cut -f3
+#   NM_001234.1:c.[2del;11del]   <- live
+FERRO_PARTITION=canonical ferro normalize --input control.txt --format tsv --error-mode lenient | cut -f3
+#   NM_001234.1:c.[2del;33del]   <- canonical
+```
+
+If those two produce the same output, the variable is not reaching ferro and any comparison you run is meaningless. Only once the control differs is a zero on your own corpus informative.
+
+**From Python, it must be set before the first normalization.** The value is read once per process and cached, so:
+
+```python
+import os
+os.environ["FERRO_PARTITION"] = "canonical"   # must precede the first normalize call
+import ferro_hgvs
+```
+
+Setting it after any variant has been normalized silently does nothing, and it cannot be changed within a running process. Comparing two rules therefore means two separate processes (or two CLI runs, as above), not two calls in one script.
+
 ## Why ferro-hgvs?
 
 ferro-hgvs provides the most comprehensive HGVS variant normalization across all pattern types, with performance orders of magnitude faster than alternatives.
