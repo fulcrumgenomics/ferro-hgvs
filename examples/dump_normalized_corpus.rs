@@ -250,6 +250,10 @@ const FAMILIES: &[(&str, &str)] = &[
         "nested_spans",
         "#1451 — two spans sharing a bound, one containing the other",
     ),
+    (
+        "delins_hiding_an_inversion",
+        "#1454 — a spanning delins whose trailing piece is an exact reverse complement",
+    ),
 ];
 
 /// The family drawn against the **long** cores, and the one shape in this file
@@ -372,6 +376,42 @@ fn long_inputs_for(axis: &str, core: &str) -> Vec<String> {
         return vec![whole];
     }
     vec![whole, format!("{prefix}[{}]", members.join(";"))]
+}
+
+/// A three-base payload for the leading piece of `delins_hiding_an_inversion`,
+/// chosen so the piece is a genuine, non-inverting change of `span`.
+///
+/// Two degeneracies have to be avoided, and both silently weaken the family rather
+/// than failing it. A payload equal to `span` makes the piece a no-op, leaving a
+/// one-piece shape that no longer tests a *split*. A payload equal to
+/// `revcomp(span)` makes the leading piece an inversion too, so the case no longer
+/// isolates a single mis-typed piece. Three candidates suffice: one span rules out
+/// at most two of them, and `the_head_payload_is_never_a_no_op_or_an_inversion`
+/// checks that exhaustively over all 64 spans rather than trusting the argument.
+fn head_payload(span: &str) -> &'static str {
+    let inverted = revcomp(span);
+    ["GGG", "CCC", "ACA"]
+        .into_iter()
+        .find(|c| *c != span && *c != inverted)
+        .expect("three candidates cannot all collide with one three-base span")
+}
+
+/// Reverse complement of `s`, which must be over `ACGT`.
+///
+/// Used to build the `delins_hiding_an_inversion` family, where the point is that a
+/// piece's payload equals the reverse complement of its own span and so should be
+/// typed `inv` rather than `delins`.
+fn revcomp(s: &str) -> String {
+    s.chars()
+        .rev()
+        .map(|c| match c {
+            'A' => 'T',
+            'C' => 'G',
+            'G' => 'C',
+            'T' => 'A',
+            other => unreachable!("corpus sequences are over ACGT, found {other}"),
+        })
+        .collect()
 }
 
 fn dump(seeds: u32) -> Vec<Row> {
@@ -604,6 +644,48 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
                 p(s),
                 p(s + 3)
             )),
+            // A length-preserving spanning delins over `s..s+5`, whose payload is a
+            // non-inverting three-base change of `s..s+2` followed by the exact
+            // reverse complement of `s+3..s+5`. The natural split is therefore
+            // `[s_s+2delins<head>; s+3_s+5inv]` — the trailing piece *is* an
+            // inversion, and #1454 is that ferro spells it `delins` on the first
+            // pass and only re-types it to `inv` on a second, so the first output is
+            // not a fixed point.
+            //
+            // Both spellings are emitted: the spanning form, and the pre-split form
+            // with the trailing piece written as `delins`. The latter is #1454's
+            // pass-1 output fed back in, which is the shape every other family here
+            // fails to build — measured on `ee0e37ac`, all 8,706 `delins` members
+            // the other five families emit have a payload that is *not* the reverse
+            // complement of its span, which is why the corpus reported zero
+            // non-idempotent rows while #1454 was open.
+            //
+            // **Three bases per piece, and the width is load-bearing.** A two-base
+            // head with a three-base tail reaches zero non-idempotent rows: the
+            // trailing piece gets typed `inv` on the first pass and the defect never
+            // appears. Three-and-three reaches 30. An odd-length span also can never
+            // equal its own reverse complement, so neither piece degenerates to a
+            // no-op the way a two-base piece does on `AT`, `TA`, `CG` or `GC`.
+            //
+            // This shape reads six offsets where every other family reads five, so
+            // it is bounded here rather than by widening the shared `last` — moving
+            // that would change what all five existing families emit and make every
+            // dump taken before this commit incomparable.
+            "delins_hiding_an_inversion" => {
+                if s + 6 > bytes.len() {
+                    continue;
+                }
+                let head = head_payload(&core[s..s + 3]);
+                let tail = revcomp(&core[s + 3..s + 6]);
+                out.push(format!("{prefix}{}_{}delins{head}{tail}", p(s), p(s + 5)));
+                out.push(format!(
+                    "{prefix}[{}_{}delins{head};{}_{}delins{tail}]",
+                    p(s),
+                    p(s + 2),
+                    p(s + 3),
+                    p(s + 5)
+                ));
+            }
             _ => unreachable!("unknown family {family}"),
         }
     }
@@ -1112,6 +1194,110 @@ mod tests {
                     "family {family} emitted no {axis}. rows"
                 );
             }
+        }
+    }
+
+    /// `delins_hiding_an_inversion` emits both spellings, with the trailing piece an
+    /// exact reverse complement of its own span.
+    ///
+    /// Pinned as exact strings rather than as a predicate: a predicate over "some
+    /// member is an inversion" is satisfied by a corpus that emits the spanning form
+    /// alone, which is precisely the degenerate case this family exists to avoid.
+    ///
+    /// The head payload differs between the two cores below, and that is the point.
+    /// For `TTT` the first candidate `GGG` is neither the span nor its reverse
+    /// complement (`AAA`), so it is taken. For `CCC` the span rules out `CCC` and its
+    /// reverse complement rules out `GGG`, so `head_payload` falls through to `ACA`.
+    #[test]
+    fn the_inversion_family_emits_both_spellings_with_a_reverse_complement_tail() {
+        let homopolymer = "TTTTTTTTTAATATATTTTA";
+        assert_eq!(
+            inputs_for("delins_hiding_an_inversion", "g", homopolymer)[..2],
+            [
+                "NC_TEST.1:g.257_262delinsGGGAAA".to_string(),
+                "NC_TEST.1:g.[257_259delinsGGG;260_262delinsAAA]".to_string(),
+            ]
+        );
+
+        let four_letter = "CCCCCCCCTGACGTATCCTA";
+        assert_eq!(
+            inputs_for("delins_hiding_an_inversion", "g", four_letter)[..2],
+            [
+                "NC_TEST.1:g.257_262delinsACAGGG".to_string(),
+                "NC_TEST.1:g.[257_259delinsACA;260_262delinsGGG]".to_string(),
+            ]
+        );
+    }
+
+    /// The pieces are three bases each, and that width is load-bearing rather than
+    /// arbitrary.
+    ///
+    /// Measured on `ee0e37ac`: a two-base head with a three-base tail produces **0**
+    /// non-idempotent rows across the whole corpus, because the trailing piece is
+    /// typed `inv` on the first pass. Widening the head to three bases produces
+    /// **30**, all of them #1454's shape — a piece spelled `delins` on pass 1 and
+    /// re-typed `inv` on pass 2. So a future edit that narrows either piece silently
+    /// returns the corpus to being blind to the defect it was added for.
+    #[test]
+    fn the_inversion_family_uses_three_base_pieces() {
+        let core = &corpus_sequences(1)[0];
+        let split = inputs_for("delins_hiding_an_inversion", "g", core)
+            .into_iter()
+            .find(|s| s.contains('['))
+            .expect("the family emits a pre-split spelling");
+        let (head, tail) = split
+            .split_once(';')
+            .expect("the pre-split spelling has two members");
+        for (member, payload) in [(head, "head"), (tail, "tail")] {
+            let emitted = member
+                .rsplit_once("delins")
+                .expect("each member is a delins")
+                .1
+                .trim_end_matches(']');
+            assert_eq!(
+                emitted.len(),
+                3,
+                "the {payload} piece must be three bases, found {emitted:?} in {split}"
+            );
+        }
+    }
+
+    /// `head_payload` never degenerates: it is neither a no-op nor a second
+    /// inversion. Exhaustive over all 64 three-base spans, so the guarantee does not
+    /// rest on the corpus happening not to draw a colliding one.
+    #[test]
+    fn the_head_payload_is_never_a_no_op_or_an_inversion() {
+        for a in "ACGT".chars() {
+            for b in "ACGT".chars() {
+                for c in "ACGT".chars() {
+                    let span: String = [a, b, c].into_iter().collect();
+                    let payload = head_payload(&span);
+                    assert_ne!(payload, span, "head payload is a no-op on {span}");
+                    assert_ne!(
+                        payload,
+                        revcomp(&span),
+                        "head payload is itself an inversion on {span}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// An odd-length span can never equal its own reverse complement, which is why
+    /// the tail piece is three bases and not two: a two-base tail degenerates to a
+    /// no-op on every palindromic pair (`AT`, `TA`, `CG`, `GC`).
+    #[test]
+    fn a_three_base_span_never_equals_its_own_reverse_complement() {
+        for a in "ACGT".chars() {
+            for b in "ACGT".chars() {
+                for c in "ACGT".chars() {
+                    let span: String = [a, b, c].into_iter().collect();
+                    assert_ne!(revcomp(&span), span, "{span} is its own reverse complement");
+                }
+            }
+        }
+        for pair in ["AT", "TA", "CG", "GC"] {
+            assert_eq!(revcomp(pair), pair, "{pair} should be palindromic");
         }
     }
 
