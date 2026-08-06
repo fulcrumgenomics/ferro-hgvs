@@ -422,3 +422,5 @@ mod trans_mosaic_mixed;
 mod uta_loader_tests;
 mod variantvalidator_tests;
 mod web_service_tests;
+
+mod reported_confluence_pairs;
