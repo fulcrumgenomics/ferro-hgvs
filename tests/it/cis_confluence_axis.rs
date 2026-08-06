@@ -45,15 +45,52 @@
 //! just works. Its parameters are what the pins are measured over: regenerating
 //! with different `--seeds` re-rolls every number here.
 //!
-//! # The pins are per oracle configuration
+//! # The pins were once per oracle configuration, and no longer are (#1454)
 //!
-//! Each direction carries two pinned censuses, selected by [`expected_census`]:
-//! one for a plain run and one for `FERRO_ASSERT_IDEMPOTENT=1`. Two classes
-//! normalize to a non-fixed-point output (#1454), so the oracle turns them into
-//! panics that are counted `declined` instead of two distinct outputs. CI runs
-//! both configurations — `Test` without the oracles, `test-oracle` with them —
-//! so one pin could only ever be green in one job. Both collapse to a single
-//! constant once #1454 is fixed.
+//! Each direction used to carry two pinned censuses, selected by an
+//! `expected_census` helper: one for a plain run and one for
+//! `FERRO_ASSERT_IDEMPOTENT=1`. Two classes normalized to a non-fixed-point
+//! output (#1454), so the oracle turned them into panics that were counted
+//! `declined` rather than two distinct outputs, and one pin could only ever be
+//! green in one of CI's two jobs.
+//!
+//! #1454 is fixed, `declined` is 0 in both configurations, and the two censuses
+//! are now byte-identical — so there is one constant per direction again.
+//!
+//! **The collapse did not land where this module predicted, and the difference
+//! is the useful part.** The old text expected `converged` to rise by two. It
+//! rises by *one* per direction (3': 6632 -> 6633; 5': 6627 -> 6628), and it
+//! *falls* by one against the oracle pins (6634 -> 6633; 6629 -> 6628).
+//!
+//! Measured per class rather than inferred from the net figure — a `+1` is also
+//! what "converged three, broke two" looks like, and the two must be told apart.
+//! Diffing every class's output set across the fix: **exactly one class changes
+//! convergence status, and none regresses.**
+//!
+//! ```text
+//! s04-c-m2-sep3-p4-rot4   the pure #1454 class
+//!   before  [13_15delinsTAA;16_19delinsTAAT] | [13_15delinsTAA;16_19inv]
+//!   after   [13_15delinsTAA;16_19inv]                            CONVERGED
+//!
+//! s00-c-m2-sep5-p1-rot4   the issue's own reproducer
+//!   before  [10_12delinsTAA;13_15delinsTAT]  | [9dup;15del]
+//!   after   [10_12delinsTAA;13_15inv]        | [9dup;15del]      still splits
+//! ```
+//!
+//! The second class had the #1454 defect too, and the fix corrects it — that
+//! member is a fixed point now. The class nonetheless still splits, because its
+//! competing output is a different **partition** of the same variant rather than
+//! a different typing of one member, and no amount of inversion typing merges
+//! `[9dup;15del]` with a two-member delins. That residual belongs to the
+//! #1235 / #1419-#1421 partition-non-uniqueness family and is deliberately left
+//! alone here: choosing between those two partitions moves shipped
+//! representations, which is its own measurement.
+//!
+//! So the `+2` was never reachable by fixing #1454. It was an artifact: under
+//! the oracle, `s00-c-m2-sep5-p1-rot4`'s delins spelling *panicked*, leaving
+//! `[9dup;15del]` as the only surviving outcome, and a class with one outcome
+//! scores as `converged`. The oracle was crediting the defect with a convergence
+//! that was really a suppressed output.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -89,7 +126,7 @@ const CDS_END: u64 = 63;
 /// figure is a baseline that must only ever go down, and `converged` a floor
 /// that must only ever go up.
 ///
-/// **58.8% of designed classes converge** (6 632 of 11 272). The 4 640 that do
+/// **58.8% of designed classes converge** (6 633 of 11 272). The 4 639 that do
 /// not are the measurement this module exists to make: nothing in the repo
 /// could state that number before, because only 650 real rows reach the
 /// partitioner at all — and `multi_member_cis_axis` measures 82% convergence
@@ -100,43 +137,15 @@ const CDS_END: u64 = 63;
 /// zero, so every divergence is two well-formed, sequence-preserving outputs
 /// for one variant. That is the confluence defect itself, not a parse failure
 /// or a corrupted sequence wearing its clothes.
+///
+/// `converged` was 6 632 before #1454; see the module docs for which single
+/// class moved and why the other #1454 class could not.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_632,
-    split_two: 4_506,
-    split_three: 115,
-    split_more: 19,
-    underdetermined: 0,
-    sequence_changed: 0,
-};
-
-/// The same corpus measured with `FERRO_ASSERT_IDEMPOTENT=1`.
-///
-/// **The census is oracle-dependent, and that is a finding rather than a
-/// nuisance.** Two classes normalize to an output that is not a fixed point —
-/// `c.10_15delinsTAATAT` yields `c.[10_12delinsTAA;13_15delinsTAT]`, whose
-/// second member is re-typed `13_15inv` only on the following pass (#1454).
-/// With the oracle off those two classes produce two distinct outputs and land
-/// in `split_two`. With it on they panic, are recorded as `declined`, and their
-/// class collapses to a single outcome — so `converged` rises by two and
-/// `split_two` falls by two.
-///
-/// Pinning both configurations is deliberate. CI's gating `Test` job runs
-/// without the oracles and `test-oracle` runs with them, so a single pin can
-/// only ever be green in one of them; and a census that silently reported a
-/// different number depending on an environment variable is exactly the
-/// profile-dependent pin `CLAUDE.md` warns about for `FERRO_SWEEP_SEEDS`.
-///
-/// **When #1454 is fixed these two constants collapse into one.** That is the
-/// signal to delete this one and [`expected_census`] with it.
-const THREE_PRIME_UNDER_IDEMPOTENCY_ORACLE: Census = Census {
-    classes: 11_272,
-    spellings: 47_392,
-    declined: 2,
-    converged: 6_634,
-    split_two: 4_504,
+    converged: 6_633,
+    split_two: 4_505,
     split_three: 115,
     split_more: 19,
     underdetermined: 0,
@@ -147,7 +156,7 @@ const THREE_PRIME_UNDER_IDEMPOTENCY_ORACLE: Census = Census {
 /// option, and confluence is a property of the normalizer rather than of one
 /// shuffle direction, so it is measured in full rather than spot-checked.
 ///
-/// It lands within five classes of the 3' figure (6 627 against 6 632), which
+/// It lands within five classes of the 3' figure (6 628 against 6 633), which
 /// is worth reading as evidence: the divergence is a property of how the
 /// partitioner splits a block, not of which end of an ambiguous run the shuffle
 /// walks to. A fix that moved only one of these two numbers would be treating a
@@ -156,42 +165,13 @@ const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_627,
-    split_two: 4_531,
+    converged: 6_628,
+    split_two: 4_530,
     split_three: 105,
     split_more: 9,
     underdetermined: 0,
     sequence_changed: 0,
 };
-
-/// The 5' census under `FERRO_ASSERT_IDEMPOTENT=1`. Same two #1454 classes, same
-/// +2 / -2 shift as [`THREE_PRIME_UNDER_IDEMPOTENCY_ORACLE`]; see its docs.
-const FIVE_PRIME_UNDER_IDEMPOTENCY_ORACLE: Census = Census {
-    classes: 11_272,
-    spellings: 47_392,
-    declined: 2,
-    converged: 6_629,
-    split_two: 4_529,
-    split_three: 105,
-    split_more: 9,
-    underdetermined: 0,
-    sequence_changed: 0,
-};
-
-/// Picks the pin matching the oracle configuration this run was launched under.
-///
-/// Reads the environment directly rather than caching: the census tests run once
-/// each, so there is no hot path to protect, and a `OnceLock` here would make the
-/// choice depend on which test happened to touch it first.
-fn expected_census(
-    without_oracle: &'static Census,
-    with_oracle: &'static Census,
-) -> &'static Census {
-    match std::env::var("FERRO_ASSERT_IDEMPOTENT") {
-        Ok(v) if v != "0" && !v.is_empty() => with_oracle,
-        _ => without_oracle,
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Corpus
@@ -503,18 +483,10 @@ fn the_corpus_is_a_dense_set_of_real_confluence_classes() {
 
 #[test]
 fn three_prime_confluence_census() {
-    assert_census(
-        ShuffleDirection::ThreePrime,
-        "3prime",
-        expected_census(&THREE_PRIME, &THREE_PRIME_UNDER_IDEMPOTENCY_ORACLE),
-    );
+    assert_census(ShuffleDirection::ThreePrime, "3prime", &THREE_PRIME);
 }
 
 #[test]
 fn five_prime_confluence_census() {
-    assert_census(
-        ShuffleDirection::FivePrime,
-        "5prime",
-        expected_census(&FIVE_PRIME, &FIVE_PRIME_UNDER_IDEMPOTENCY_ORACLE),
-    );
+    assert_census(ShuffleDirection::FivePrime, "5prime", &FIVE_PRIME);
 }
