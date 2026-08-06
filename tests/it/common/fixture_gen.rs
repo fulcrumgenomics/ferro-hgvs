@@ -43,6 +43,36 @@ pub fn ensure_generated_fixture(
     label: &str,
     dependency: impl FnOnce(),
 ) {
+    ensure_generated(path, "--bin", generator, tmp_stem, label, dependency);
+}
+
+/// [`ensure_generated_fixture`], for a generator that is an `[[example]]`
+/// rather than a `[[bin]]`.
+///
+/// The two spec generators are binaries for a reason their `Cargo.toml` block
+/// spells out — tests must locate them with `CARGO_BIN_EXE_*` — and that reason
+/// does not apply to a generator no test resolves by path. So the corpus
+/// generators stay examples, and the regeneration flow takes the target kind
+/// instead of assuming one. `--example` and `--bin` are the only difference;
+/// everything that makes this safe to call concurrently is shared.
+pub fn ensure_generated_example_fixture(
+    path: &Path,
+    generator: &str,
+    tmp_stem: &str,
+    label: &str,
+    dependency: impl FnOnce(),
+) {
+    ensure_generated(path, "--example", generator, tmp_stem, label, dependency);
+}
+
+fn ensure_generated(
+    path: &Path,
+    target_kind: &str,
+    generator: &str,
+    tmp_stem: &str,
+    label: &str,
+    dependency: impl FnOnce(),
+) {
     if path.exists() {
         return;
     }
@@ -84,7 +114,7 @@ pub fn ensure_generated_fixture(
             "--quiet",
             "--features",
             "dev",
-            "--bin",
+            target_kind,
             generator,
             "--",
             "--output",

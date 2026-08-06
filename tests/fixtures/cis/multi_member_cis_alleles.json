@@ -1,0 +1,4125 @@
+{
+  "description": "Multi-member cis alleles harvested from the bulk corpora. These are the only inputs in those corpora that reach `canonicalize_from_sequence`, which is gated on `members.len() > 1`.",
+  "generator": "cargo run --features dev --example harvest_multi_member_cis",
+  "sources": [
+    "tests/fixtures/bulk/clinvar_hgvs_500k.json.gz",
+    "tests/fixtures/bulk/clinvar_hgvs_unique.json.gz",
+    "tests/fixtures/validation/cmrg_genes_exhaustive.json.gz",
+    "tests/fixtures/validation/paraphase_genes_exhaustive.json.gz"
+  ],
+  "rows_scanned": 9949738,
+  "rows": [
+    {
+      "input": "LRG_216t1:c.[453+625_545+921delinsTG;545+1271_677+737delinsCA]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "90463",
+      "gene": "MLH1",
+      "members": 2
+    },
+    {
+      "input": "LRG_501:g.[83418_83419insN;83419_83420ins[TAGCTTTGCTAGGTGTTAAATAGTAATGTAATTATATTTCCTATAATACAGCAATATA;84466_84575];83423_83424insAT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2535",
+      "gene": "FANCL",
+      "members": 3
+    },
+    {
+      "input": "LRG_542:g.[101177_102434delins36;107248_127198delins21]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "9499",
+      "gene": "ABCA1",
+      "members": 2
+    },
+    {
+      "input": "NC_000001.10:g.[227173033G>A;227170697C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "217876",
+      "members": 2
+    },
+    {
+      "input": "NC_000001.10:g.[5910699_6038368dup;6051187_6158763dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "431733",
+      "members": 2
+    },
+    {
+      "input": "NC_000001.11:g.[25301061C>G;25301552T>G;25301582G>C;25301618G>C;25301629C>T;25375385C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "208474",
+      "members": 6
+    },
+    {
+      "input": "NC_000001.11:g.[25301061C>G;25301552T>G;25301629C>T;25306613G>A;25306681T>C;25306719G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "202166",
+      "members": 6
+    },
+    {
+      "input": "NC_000002.10:g.[51151955_51190352del38398;51440969_51481281del40313]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "217510",
+      "members": 2
+    },
+    {
+      "input": "NC_000002.11:g.[202611376G>T;202574623G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "217879",
+      "members": 2
+    },
+    {
+      "input": "NC_000003.11:g.[33060002G>A;33065789G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "208495",
+      "members": 2
+    },
+    {
+      "input": "NC_000004.12:g.[10273397T>C;10322896G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1338751",
+      "members": 2
+    },
+    {
+      "input": "NC_000005.9:g.[225549G>C;240589A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "190221",
+      "members": 2
+    },
+    {
+      "input": "NC_000006.11:g.[129601216A>C;129823841T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "190218",
+      "members": 2
+    },
+    {
+      "input": "NC_000006.11:g.[39880653C>T;39877666G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "208497",
+      "members": 2
+    },
+    {
+      "input": "NC_000007.13:g.[87072999G>C;87082365C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "217883",
+      "members": 2
+    },
+    {
+      "input": "NC_000007.13:g.[94023928_94036950del;94039083_94045769dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2692362",
+      "members": 2
+    },
+    {
+      "input": "NC_000008.10:g.[103335671_103389222del53552;103662755_103870397del207643]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "559433",
+      "members": 2
+    },
+    {
+      "input": "NC_000008.10:g.[1719428C>T;1728664C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "217887",
+      "members": 2
+    },
+    {
+      "input": "NC_000012.11:g.[103271835C>A;103246681G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "217885",
+      "members": 2
+    },
+    {
+      "input": "NC_000012.11:g.[57906083C>T;57894189G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "189364",
+      "members": 2
+    },
+    {
+      "input": "NC_000014.9:g.[94381049G>A;94383051G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "219354",
+      "members": 2
+    },
+    {
+      "input": "NC_000017.10:g.[(59861786_59870957)_(59886119_59924461)dup;(?_59870952)_(59886124_?)dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2429295",
+      "members": 2
+    },
+    {
+      "input": "NC_000017.10:g.[41201181C>T;41201185A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624568",
+      "members": 2
+    },
+    {
+      "input": "NC_000017.11:g.[31162374_31182520del;31182521_31250996inv;31250997_31266506del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1678523",
+      "members": 3
+    },
+    {
+      "input": "NC_000018.9:g.[50994293A>G;51013178G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "375288",
+      "members": 2
+    },
+    {
+      "input": "NC_000022.10:g.[30057723_30063344del;30063345_30067790del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267491",
+      "members": 2
+    },
+    {
+      "input": "NC_000022.10:g.[40760969G>A;40757623G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "208488",
+      "members": 2
+    },
+    {
+      "input": "NC_000023.10:g.[(?_29619835)_(29843303_?);(?_30646799)_(30848980_?)dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "989434",
+      "gene": "IL1RAPL1",
+      "members": 2
+    },
+    {
+      "input": "NC_000023.11:g.[124350560_124365777del;124365777_124365917inv;124365911_124365916del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1210283",
+      "members": 3
+    },
+    {
+      "input": "NC_000023.11:g.[149482996C>T;149483005T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "221203",
+      "members": 2
+    },
+    {
+      "input": "NG_000006.1:g.[37931A>G;37935C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "15762",
+      "members": 2
+    },
+    {
+      "input": "NG_005905.2:g.[(147057_150288)_(160933_166866)del;(?_92501)_(135581_1441370)del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "373888",
+      "gene": "BRCA1",
+      "members": 2
+    },
+    {
+      "input": "NG_006669.1:g.[21404C>T;21740G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "17738",
+      "gene": "ABO",
+      "members": 2
+    },
+    {
+      "input": "NG_006672.1:g.[6309G>T;6310C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "18293",
+      "gene": "ACTA1",
+      "members": 2
+    },
+    {
+      "input": "NG_007080.2:g.[5900G>T;6286C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "6319",
+      "gene": "RPS19",
+      "members": 2
+    },
+    {
+      "input": "NG_007119.1:g.[8980G>C;9118C>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "10723",
+      "gene": "GLA",
+      "members": 2
+    },
+    {
+      "input": "NG_007267.1:g.[21073A>T;21075A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2240",
+      "gene": "NCF2",
+      "members": 2
+    },
+    {
+      "input": "NG_007280.1:g.[13217T>A;13219A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "11158",
+      "gene": "CD40LG",
+      "members": 2
+    },
+    {
+      "input": "NG_007385.1:g.[30208A>G;30234C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1981",
+      "gene": "ADA",
+      "members": 2
+    },
+    {
+      "input": "NG_007404.1:g.[27817C>T;40833G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "101229",
+      "gene": "COL3A1",
+      "members": 2
+    },
+    {
+      "input": "NG_007493.1:g.[50210C>T;68377C>T;68405G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "12304",
+      "gene": "NTRK1",
+      "members": 3
+    },
+    {
+      "input": "NG_007528.1:g.[11811C>T;12502G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "13157",
+      "gene": "RAG1",
+      "members": 2
+    },
+    {
+      "input": "NG_007941.2:g.[6500T>A;6503T>A;6509T>A]",
+      "source": "paraphase_genes_exhaustive.json.gz",
+      "variation_id": "31662",
+      "gene": "CYP21A2",
+      "members": 3
+    },
+    {
+      "input": "NG_008035.1:g.[19301T>G;19348G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "30118",
+      "gene": "CPT2",
+      "members": 2
+    },
+    {
+      "input": "NG_008035.1:g.[19484_19485delAG;19588T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "60702",
+      "gene": "CPT2",
+      "members": 2
+    },
+    {
+      "input": "NG_008055.1:g.[8083T>A;8091G>A;8546C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14182",
+      "gene": "MPZ",
+      "members": 3
+    },
+    {
+      "input": "NG_008094.1:g.[14951C>A;14988C>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "14535",
+      "gene": "LAMB2",
+      "members": 2
+    },
+    {
+      "input": "NG_008103.1:g.[20771G>C;22397A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "11911",
+      "gene": "IDUA",
+      "members": 2
+    },
+    {
+      "input": "NG_008290.1:g.[12642C>T;14644C>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "219354",
+      "gene": "SERPINA1",
+      "members": 2
+    },
+    {
+      "input": "NG_008358.1:g.[8473G>A;8735A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "177819",
+      "gene": "GJB2",
+      "members": 2
+    },
+    {
+      "input": "NG_008374.1:g.[7744C>T;9994T>C]",
+      "source": "paraphase_genes_exhaustive.json.gz",
+      "variation_id": "16876",
+      "gene": "CYP11B2",
+      "members": 2
+    },
+    {
+      "input": "NG_008374.1:g.[7797A>C;9994T>C]",
+      "source": "paraphase_genes_exhaustive.json.gz",
+      "variation_id": "16877",
+      "gene": "CYP11B2",
+      "members": 2
+    },
+    {
+      "input": "NG_008376.2:g.[7941C>T;9271G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16895",
+      "gene": "CYP2D6",
+      "members": 2
+    },
+    {
+      "input": "NG_008383.1:g.[3739G>C;3979C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16887",
+      "gene": "CYP2E1",
+      "members": 2
+    },
+    {
+      "input": "NG_008489.1:g.[40329A>C;40350G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4816",
+      "gene": "SLC26A4",
+      "members": 2
+    },
+    {
+      "input": "NG_008645.1:g.[5310G>A;16492G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1752",
+      "gene": "DBH",
+      "members": 2
+    },
+    {
+      "input": "NG_008675.1:g.[38863G>A;38901C>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "29642",
+      "gene": "COL6A2",
+      "members": 2
+    },
+    {
+      "input": "NG_008806.1:g.[75301T>C;75384G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3863",
+      "gene": "ATP7B",
+      "members": 2
+    },
+    {
+      "input": "NG_008866.1:g.[75620C>T;76659C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "12985",
+      "gene": "RYR1",
+      "members": 2
+    },
+    {
+      "input": "NG_008866.1:g.[94512C>G;151683G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "65396",
+      "gene": "RYR1",
+      "members": 2
+    },
+    {
+      "input": "NG_008936.2:g.[111409T>G;111410G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16751",
+      "gene": "EGR2",
+      "members": 2
+    },
+    {
+      "input": "NG_009005.1:g.[83693C>T;77906C>A]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "208495",
+      "gene": "GLB1",
+      "members": 2
+    },
+    {
+      "input": "NG_009015.1:g.[16571G>A;17296A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "10361",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NG_009015.1:g.[17237C>G;18135C>T;18183C>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "10392",
+      "gene": "G6PD",
+      "members": 3
+    },
+    {
+      "input": "NG_009015.1:g.[17296A>G;18133A>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "10382",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NG_009018.1:g.[134769_136954del2186;136931_139830del2900]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267490",
+      "gene": "NF1",
+      "members": 2
+    },
+    {
+      "input": "NG_009060.1:g.[18284_22307del4024;27134_45290dup18157]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "250922",
+      "gene": "LDLR",
+      "members": 2
+    },
+    {
+      "input": "NG_009060.1:g.[27134_32618del5485;4982_15965del10984]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "250921",
+      "gene": "LDLR",
+      "members": 2
+    },
+    {
+      "input": "NG_009073.1:g.[62900T>C;82737C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "7901",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NG_009092.1:g.[17030G>C;17031C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "453243",
+      "gene": "GUCY2D",
+      "members": 2
+    },
+    {
+      "input": "NG_009092.1:g.[17030G>C;17031C>T;17035C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "453244",
+      "gene": "GUCY2D",
+      "members": 3
+    },
+    {
+      "input": "NG_009208.2:g.[5134G=;17033C=;17058A=;17162C=]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "17709",
+      "gene": "RHCE",
+      "members": 4
+    },
+    {
+      "input": "NG_009265.1:g.[27852G>A;33529G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "36946",
+      "gene": "TERT",
+      "members": 2
+    },
+    {
+      "input": "NG_009299.1:g.[140610G>T;143694G>A]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "14131",
+      "gene": "MYH11",
+      "members": 2
+    },
+    {
+      "input": "NG_009778.1:g.[6174G>A;6548C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3667",
+      "gene": "LCAT",
+      "members": 2
+    },
+    {
+      "input": "NG_009783.1:g.[11128G>C;13322G>A]",
+      "source": "paraphase_genes_exhaustive.json.gz",
+      "variation_id": "4299",
+      "gene": "GBA1",
+      "members": 2
+    },
+    {
+      "input": "NG_009783.1:g.[12240T>G;13971G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4334",
+      "gene": "GBA1",
+      "members": 2
+    },
+    {
+      "input": "NG_009783.1:g.[14446T>C;14481G>C;14495G>C]",
+      "source": "paraphase_genes_exhaustive.json.gz",
+      "variation_id": "4297",
+      "gene": "GBA1",
+      "members": 3
+    },
+    {
+      "input": "NG_011449.1:g.[14863A>T;27506T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14902",
+      "gene": "HMGCR",
+      "members": 2
+    },
+    {
+      "input": "NG_011618.3:g.[228237A>G;228238A>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "179465",
+      "gene": "TTN",
+      "members": 2
+    },
+    {
+      "input": "NG_011618.3:g.[266064_266067delAACA;305207delG]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "178839",
+      "gene": "TTN",
+      "members": 2
+    },
+    {
+      "input": "NG_011633.1:g.[68987C>T;69000G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "7013",
+      "gene": "TECTA",
+      "members": 2
+    },
+    {
+      "input": "NG_011704.1:g.[29341G>A;29371G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "13065",
+      "gene": "RHAG",
+      "members": 2
+    },
+    {
+      "input": "NG_011900.2:g.[27401G>C;27399G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "10502",
+      "gene": "IDS",
+      "members": 2
+    },
+    {
+      "input": "NG_011977.1:g.[145790G>T;251173C>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "10464",
+      "gene": "COL4A5",
+      "members": 2
+    },
+    {
+      "input": "NG_012081.1:g.[25669_25670insA;25710T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "8911",
+      "gene": "HSD11B1",
+      "members": 2
+    },
+    {
+      "input": "NG_012137.1:g.[21147G>A;29457A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "12722",
+      "gene": "TPMT",
+      "members": 2
+    },
+    {
+      "input": "NG_012262.1:g.[90294A>G;92497G=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16773",
+      "gene": "TOP1",
+      "members": 2
+    },
+    {
+      "input": "NG_012646.1:g.[32860C>A;32875C>A]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "7874",
+      "gene": "TGFBI",
+      "members": 2
+    },
+    {
+      "input": "NG_012647.1:g.[56085G>A;56129C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2704",
+      "gene": "CACNA1H",
+      "members": 2
+    },
+    {
+      "input": "NG_013041.1:g.[5537T>C;10473G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2121",
+      "gene": "TSEN54",
+      "members": 2
+    },
+    {
+      "input": "NG_013356.1:g.[8852G>A;14565A>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "6872",
+      "gene": "NPHS1",
+      "members": 2
+    },
+    {
+      "input": "NG_013370.1:g.[12131G>A;17513T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "5706",
+      "gene": "CRLF1",
+      "members": 2
+    },
+    {
+      "input": "NG_015865.1:g.[8168C>G;8536G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "156155",
+      "gene": "EGLN1",
+      "members": 2
+    },
+    {
+      "input": "NG_016426.1:g.[136164A>G;172132G=;271318G=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3331",
+      "gene": "GABBR2",
+      "members": 3
+    },
+    {
+      "input": "NG_016465.1:g.[128647C>T;167489G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "7239",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NG_016465.1:g.[65343C>A;65347C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "40200",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NG_016598.1:g.[240110T>C;240113G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "13621",
+      "gene": "PHKB",
+      "members": 2
+    },
+    {
+      "input": "NG_016648.1:g.[20557T>C;22424C>T]",
+      "source": "clinvar_hgvs_500k.json.gz",
+      "variation_id": "8241",
+      "gene": "SLC10A2",
+      "members": 2
+    },
+    {
+      "input": "NG_017037.1:g.[9857A>G;18561G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "11906",
+      "gene": "UMPS",
+      "members": 2
+    },
+    {
+      "input": "NG_021243.1:g.[74172A>G;74253C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "39093",
+      "gene": "GNPTAB",
+      "members": 2
+    },
+    {
+      "input": "NG_023228.1:g.[17790A>G;17918T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "6080",
+      "gene": "APOL1",
+      "members": 2
+    },
+    {
+      "input": "NG_028349.1:g.[5741G>A;293708T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "7",
+      "gene": "NUBPL",
+      "members": 2
+    },
+    {
+      "input": "NG_031930.1:g.[73137G>A;73151G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "30731",
+      "gene": "PRICKLE2",
+      "members": 2
+    },
+    {
+      "input": "NG_032926.1:g.[6975C=;7061A>G;7111A=;7183A=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "36924",
+      "gene": "FCGR3B",
+      "members": 4
+    },
+    {
+      "input": "NG_034223.1:g.[5381C>A;5510G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "180222",
+      "gene": "CHCHD10",
+      "members": 2
+    },
+    {
+      "input": "NM_000016.6:c.[351A>C;362C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2503903",
+      "gene": "ACADM",
+      "members": 2
+    },
+    {
+      "input": "NM_000018.3:c.[194C>T;739A>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441528",
+      "gene": "ACADVL",
+      "members": 2
+    },
+    {
+      "input": "NM_000018.4:c.[1097G>A;869del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "867229",
+      "gene": "ACADVL",
+      "members": 2
+    },
+    {
+      "input": "NM_000018.4:c.[1310T>C;869del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "867230",
+      "gene": "ACADVL",
+      "members": 2
+    },
+    {
+      "input": "NM_000022.4:c.[1079-14_1079-4del;1079-15T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1983",
+      "gene": "ADA",
+      "members": 2
+    },
+    {
+      "input": "NM_000022.4:c.[455T>C;478+6T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624582",
+      "gene": "ADA",
+      "members": 2
+    },
+    {
+      "input": "NM_000030.2:c.[299_307dup;308G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "204181",
+      "gene": "AGXT",
+      "members": 2
+    },
+    {
+      "input": "NM_000030.2:c.[829_830insA;830C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "204202",
+      "gene": "AGXT",
+      "members": 2
+    },
+    {
+      "input": "NM_000030.3:c.[32C>T;836T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2681193",
+      "gene": "AGXT",
+      "members": 2
+    },
+    {
+      "input": "NM_000038.6:c.[5026A>G;7399C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3063816",
+      "gene": "APC",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.3:c.[137T>C;388T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441268",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.3:c.[305C>G;388T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441269",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.3:c.[349G>A;508G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441270",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.3:c.[388T>C;478C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "440870",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.3:c.[388T>C;805C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441267",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.3:c.[434G>A;526C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441262",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.3:c.[487C>T;91G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441264",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.3:c.[526C>T;725G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441265",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.3:c.[784G>A;787G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441263",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000041.4:c.[388=;526=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "17863",
+      "gene": "APOE",
+      "members": 2
+    },
+    {
+      "input": "NM_000046.5:c.[215T>A;219_230delinsG]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2626783",
+      "gene": "ARSB",
+      "members": 2
+    },
+    {
+      "input": "NM_000055.4:c.[1685-14T>A;428G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "13230",
+      "gene": "BCHE",
+      "members": 2
+    },
+    {
+      "input": "NM_000057.4:c.[1544dup;2468del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998048",
+      "gene": "BLM",
+      "members": 2
+    },
+    {
+      "input": "NM_000057.4:c.[2265_2268dup;2441T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998045",
+      "gene": "BLM",
+      "members": 2
+    },
+    {
+      "input": "NM_000057.4:c.[289C>T;649C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998003",
+      "gene": "BLM",
+      "members": 2
+    },
+    {
+      "input": "NM_000060.2:c.[1207T>G;1330G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1904",
+      "members": 2
+    },
+    {
+      "input": "NM_000060.2:c.[511G>A;1330G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "25016",
+      "members": 2
+    },
+    {
+      "input": "NM_000071.3:c.[233C>G;306G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2501029",
+      "gene": "CBS",
+      "members": 2
+    },
+    {
+      "input": "NM_000082.4:c.[275+768_399+346del;399+347_399+2002inv;399+2003_399+2557delinsTACTTAAT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2674622",
+      "gene": "ERCC8",
+      "members": 3
+    },
+    {
+      "input": "NM_000091.4:c.[1900G>A;1927G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "397582",
+      "gene": "COL4A3",
+      "members": 2
+    },
+    {
+      "input": "NM_000124.4:c.[1727C>G;1834C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998032",
+      "gene": "ERCC6",
+      "members": 2
+    },
+    {
+      "input": "NM_000138.5:c.[7238G>C;7244A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3338893",
+      "gene": "FBN1",
+      "members": 2
+    },
+    {
+      "input": "NM_000140.3:c.[1224T>A;1225C>T;1231T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "561",
+      "gene": "FECH",
+      "members": 3
+    },
+    {
+      "input": "NM_000142.4:c.[1130T>G;1138G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441276",
+      "gene": "FGFR3",
+      "members": 2
+    },
+    {
+      "input": "NM_000142.4:c.[1454A>G;1620C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441277",
+      "gene": "FGFR3",
+      "members": 2
+    },
+    {
+      "input": "NM_000145.4:c.[2039G>A;919G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3236850",
+      "gene": "FSHR",
+      "members": 2
+    },
+    {
+      "input": "NM_000146.3:c.[-178T>G;-182C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441527",
+      "gene": "FTL",
+      "members": 2
+    },
+    {
+      "input": "NM_000149.3:c.[59T>G;508G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "17716",
+      "gene": "FUT3",
+      "members": 2
+    },
+    {
+      "input": "NM_000152.5:c.[2228A>G;2237G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "561160",
+      "gene": "GAA",
+      "members": 2
+    },
+    {
+      "input": "NM_000152.5:c.[752C>T;761C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1321358",
+      "gene": "GAA",
+      "members": 2
+    },
+    {
+      "input": "NM_000155.2:c.[-1039_753del;820+50_*789delinsGAATAGACCCCA]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "242644",
+      "gene": "GALT",
+      "members": 2
+    },
+    {
+      "input": "NM_000155.2:c.[940A>G;-119_-116delGTCA]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "140570",
+      "gene": "GALT",
+      "members": 2
+    },
+    {
+      "input": "NM_000155.4:c.[413C>T;469G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1705146",
+      "gene": "GALT",
+      "members": 2
+    },
+    {
+      "input": "NM_000160.5:c.[1102G>A;674G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1064737",
+      "gene": "GCGR",
+      "members": 2
+    },
+    {
+      "input": "NM_000169.2:c.[196G>C;334C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "10723",
+      "gene": "GLA",
+      "members": 2
+    },
+    {
+      "input": "NM_000169.3:c.[167G>C;170A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4087231",
+      "gene": "GLA",
+      "members": 2
+    },
+    {
+      "input": "NM_000169.3:c.[351T>G;361G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1324467",
+      "gene": "GLA",
+      "members": 2
+    },
+    {
+      "input": "NM_000169.3:c.[359T>C;361G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4087236",
+      "gene": "GLA",
+      "members": 2
+    },
+    {
+      "input": "NM_000169.3:c.[370-183_547+41del;370-192A>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "10714",
+      "gene": "GLA",
+      "members": 2
+    },
+    {
+      "input": "NM_000178.4:c.[1139_1144del;941C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2627798",
+      "gene": "GSS",
+      "members": 2
+    },
+    {
+      "input": "NM_000179.3:c.[3601C>G;3724C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1172512",
+      "gene": "MSH6",
+      "members": 2
+    },
+    {
+      "input": "NM_000198.4:c.[742_743delinsAA;745C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "12186",
+      "gene": "HSD3B2",
+      "members": 2
+    },
+    {
+      "input": "NM_000200.2:c.[122G>A;141T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14913",
+      "gene": "HTN3",
+      "members": 2
+    },
+    {
+      "input": "NM_000202.6:c.[1403G>A;1394A>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "221203",
+      "gene": "IDS",
+      "members": 2
+    },
+    {
+      "input": "NM_000202.8:c.[1411G>C;1418C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "988700",
+      "gene": "IDS",
+      "members": 2
+    },
+    {
+      "input": "NM_000204.5:c.[142T>C;146A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4280441",
+      "gene": "CFI",
+      "members": 2
+    },
+    {
+      "input": "NM_000208.3:c.[1465A>G;3160G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "377384",
+      "gene": "INSR",
+      "members": 2
+    },
+    {
+      "input": "NM_000208.3:c.[2504G>T;2525C>T]",
+      "source": "clinvar_hgvs_500k.json.gz",
+      "variation_id": "377382",
+      "gene": "INSR",
+      "members": 2
+    },
+    {
+      "input": "NM_000208.3:c.[2997T>G;766C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "377383",
+      "gene": "INSR",
+      "members": 2
+    },
+    {
+      "input": "NM_000211.5:c.[1756C>T;742-14C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1065606",
+      "gene": "ITGB2",
+      "members": 2
+    },
+    {
+      "input": "NM_000215.3:c.[1796T>G;2125T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624581",
+      "gene": "JAK3",
+      "members": 2
+    },
+    {
+      "input": "NM_000218.2:c.[1249G>A;760G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "444879",
+      "gene": "KCNQ1",
+      "members": 2
+    },
+    {
+      "input": "NM_000231.2:c.[800G>C;801T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "551584",
+      "gene": "SGCG",
+      "members": 2
+    },
+    {
+      "input": "NM_000236.3:c.[88+16269C>T;88+8149G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14455",
+      "gene": "LIPC",
+      "members": 2
+    },
+    {
+      "input": "NM_000243.2:c.[1105C>T;1223G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "974964",
+      "gene": "MEFV",
+      "members": 2
+    },
+    {
+      "input": "NM_000243.2:c.[1437C>G;501G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "495755",
+      "gene": "MEFV",
+      "members": 2
+    },
+    {
+      "input": "NM_000243.2:c.[442G>C;2082G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2555",
+      "gene": "MEFV",
+      "members": 2
+    },
+    {
+      "input": "NM_000243.3:c.[329T>C;442G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1696111",
+      "gene": "MEFV",
+      "members": 2
+    },
+    {
+      "input": "NM_000249.3:c.[-27C>A;85G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "626261",
+      "gene": "MLH1",
+      "members": 2
+    },
+    {
+      "input": "NM_000251.3:c.[2635-3C>T;2635-5T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "691526",
+      "gene": "MSH2",
+      "members": 2
+    },
+    {
+      "input": "NM_000257.3:c.[1816G>A;2183C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "487487",
+      "gene": "MYH7",
+      "members": 2
+    },
+    {
+      "input": "NM_000260.4:c.[3256del;3260T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "11862",
+      "gene": "MYO7A",
+      "members": 2
+    },
+    {
+      "input": "NM_000260.4:c.[3547C>A;5637-3C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3249987",
+      "gene": "MYO7A",
+      "members": 2
+    },
+    {
+      "input": "NM_000260.4:c.[3784G>A;5086C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802544",
+      "gene": "MYO7A",
+      "members": 2
+    },
+    {
+      "input": "NM_000271.5:c.[2727C>T;2793C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "867233",
+      "gene": "NPC1",
+      "members": 2
+    },
+    {
+      "input": "NM_000277.1:c.[722delG;735G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "402236",
+      "gene": "PAH",
+      "members": 2
+    },
+    {
+      "input": "NM_000281.3:c.[79G>T;263G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "180130",
+      "gene": "PCBD1",
+      "members": 2
+    },
+    {
+      "input": "NM_000287.4:c.[*438TAAA[1];2578C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2627659",
+      "gene": "PEX6",
+      "members": 2
+    },
+    {
+      "input": "NM_000295.4:c.[1096G>A;35T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "626304",
+      "gene": "SERPINA1",
+      "members": 2
+    },
+    {
+      "input": "NM_000295.4:c.[1158dupC;863A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "626305",
+      "gene": "SERPINA1",
+      "members": 2
+    },
+    {
+      "input": "NM_000295.5:c.[190C>A;863A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "440501",
+      "gene": "SERPINA1",
+      "members": 2
+    },
+    {
+      "input": "NM_000295.5:c.[602A>G;863A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "440500",
+      "gene": "SERPINA1",
+      "members": 2
+    },
+    {
+      "input": "NM_000311.3:c.[385A>G;532G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "13399",
+      "gene": "PRNP",
+      "members": 2
+    },
+    {
+      "input": "NM_000329.3:c.[1206G>A;1207_1210dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802541",
+      "gene": "RPE65",
+      "members": 2
+    },
+    {
+      "input": "NM_000334.4:c.[4468T>C;4479G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "21158",
+      "gene": "SCN4A",
+      "members": 2
+    },
+    {
+      "input": "NM_000335.4:c.[3919C>T;694G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "440850",
+      "gene": "SCN5A",
+      "members": 2
+    },
+    {
+      "input": "NM_000339.2:c.[488C>T;2612G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "8596",
+      "gene": "SLC12A3",
+      "members": 2
+    },
+    {
+      "input": "NM_000342.4:c.[2687_2699dup;2710_2718del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "17777",
+      "gene": "SLC4A1",
+      "members": 2
+    },
+    {
+      "input": "NM_000348.4:c.[169G>T;691C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1298362",
+      "gene": "SRD5A2",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.2:c.[1622T>C;3113C>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "7901",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.2:c.[1A>G;6089G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "236068",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.2:c.[302+68C>T;4539+2028C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "225694",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.2:c.[5512C>G;5882G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "635154",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.3:c.[1411G>A;5693G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "812193",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.3:c.[1531C>T;872C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "812192",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.3:c.[1610G>A;5603A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1048163",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.3:c.[2588G>C;5603A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1048132",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.3:c.[3322C>T;6320G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1048126",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.3:c.[52C>T;5603A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1048166",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.3:c.[5461-10T>C;5603A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1048134",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000350.3:c.[5603A>T;5714+5G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1048131",
+      "gene": "ABCA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000353.3:c.[1085G>T;912+2T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "405",
+      "gene": "TAT",
+      "members": 2
+    },
+    {
+      "input": "NM_000358.2:c.[1637C>A;1652C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "7874",
+      "gene": "TGFBI",
+      "members": 2
+    },
+    {
+      "input": "NM_000359.3:c.[1403-355_2225+1704dup;2225+1706_2225+1707insCCACCATCTGTGACCACCATCTGT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4076949",
+      "gene": "TGM1",
+      "members": 2
+    },
+    {
+      "input": "NM_000372.5:c.[1205G>A;575C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1301878",
+      "gene": "TYR",
+      "members": 2
+    },
+    {
+      "input": "NM_000382.2:c.[733G>A;901G>C;906delT;909T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "438264",
+      "gene": "ALDH3A2",
+      "members": 4
+    },
+    {
+      "input": "NM_000400.4:c.[1381C>G;2150C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2429148",
+      "gene": "ERCC2",
+      "members": 2
+    },
+    {
+      "input": "NM_000402.4:c.[292G>A;466A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3339211",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_000404.2:c.[1285C>T;1097C>A]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "208495",
+      "gene": "GLB1",
+      "members": 2
+    },
+    {
+      "input": "NM_000426.3:c.[2461A>C;8282T>C]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "190218",
+      "gene": "LAMA2",
+      "members": 2
+    },
+    {
+      "input": "NM_000426.4:c.[2522G>A;2932G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802537",
+      "gene": "LAMA2",
+      "members": 2
+    },
+    {
+      "input": "NM_000426.4:c.[533C>T;8733G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802632",
+      "gene": "LAMA2",
+      "members": 2
+    },
+    {
+      "input": "NM_000436.3:c.[173C>T;398T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "8165",
+      "gene": "OXCT1",
+      "members": 2
+    },
+    {
+      "input": "NM_000441.2:c.[2168A>G;2326C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998002",
+      "gene": "SLC26A4",
+      "members": 2
+    },
+    {
+      "input": "NM_000444.4:c.[755T>C;759G>A]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "10818",
+      "gene": "PHEX",
+      "members": 2
+    },
+    {
+      "input": "NM_000448.2:c.[1213A>G;1871G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624578",
+      "gene": "RAG1",
+      "members": 2
+    },
+    {
+      "input": "NM_000448.2:c.[1229G>A;1863delG]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624576",
+      "gene": "RAG1",
+      "members": 2
+    },
+    {
+      "input": "NM_000448.2:c.[1681C>T;1815G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624575",
+      "gene": "RAG1",
+      "members": 2
+    },
+    {
+      "input": "NM_000448.2:c.[1871G>A;2182T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624579",
+      "gene": "RAG1",
+      "members": 2
+    },
+    {
+      "input": "NM_000448.2:c.[2119G>C;519delT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624580",
+      "gene": "RAG1",
+      "members": 2
+    },
+    {
+      "input": "NM_000452.2:c.[728T>C;785C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "8241",
+      "gene": "SLC10A2",
+      "members": 2
+    },
+    {
+      "input": "NM_000477.7:c.[1030G>A;67C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2627896",
+      "gene": "ALB",
+      "members": 2
+    },
+    {
+      "input": "NM_000482.4:c.[1008G>T;1134_1145dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "17908",
+      "gene": "APOA4",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.3:c.[1210-16_1210-13dup;1210-6delT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "495891",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.3:c.[1397C>G;3209G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "634835",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.3:c.[1521_1523delCTT;3080T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "634837",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.3:c.[2816A>G;2846A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "996223",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.3:c.[350G>A;1210-12[5]]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "209047",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.4:c.[1209+1988_1392+2067inv;1392+2072_1392+2074del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1704387",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.4:c.[1210-34TG[12];1210-9_1210-6del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "818121",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.4:c.[1523T>G;3752G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1300167",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.4:c.[1727G>C;2002C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "916697",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.4:c.[220C>T;3808G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "977735",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.4:c.[3469-189_3717+3822del;3469-331_3469-295del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "818128",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.4:c.[3846G>A;3848G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1300168",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000492.4:c.[4C>T;7A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1320029",
+      "gene": "CFTR",
+      "members": 2
+    },
+    {
+      "input": "NM_000496.2:c.[343C>A;355G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "217348",
+      "gene": "CRYBB2",
+      "members": 2
+    },
+    {
+      "input": "NM_000498.3:c.[541C>T;1157T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16876",
+      "gene": "CYP11B2",
+      "members": 2
+    },
+    {
+      "input": "NM_000498.3:c.[594A>C;1157T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16877",
+      "gene": "CYP11B2",
+      "members": 2
+    },
+    {
+      "input": "NM_000500.5:c.[701T>A;713T>A;719T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "65613",
+      "gene": "CYP21A2",
+      "members": 3
+    },
+    {
+      "input": "NM_000500.7:c.[710T>A;713T>A;719T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "31662",
+      "gene": "CYP21A2",
+      "members": 3
+    },
+    {
+      "input": "NM_000500.7:c.[844G>T;920_921insT;955C>T;1069C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "12182",
+      "gene": "CYP21A2",
+      "members": 4
+    },
+    {
+      "input": "NM_000500.9:c.[1019G>A;1360C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "12170",
+      "gene": "CYP21A2",
+      "members": 2
+    },
+    {
+      "input": "NM_000500.9:c.[710T>A;713T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1723345",
+      "gene": "CYP21A2",
+      "members": 2
+    },
+    {
+      "input": "NM_000500.9:c.[710T>A;719T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1723343",
+      "gene": "CYP21A2",
+      "members": 2
+    },
+    {
+      "input": "NM_000500.9:c.[713T>A;719T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1723344",
+      "gene": "CYP21A2",
+      "members": 2
+    },
+    {
+      "input": "NM_000501.4:c.[1034_1057dup;1741_1742delinsCA]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16733",
+      "gene": "ELN",
+      "members": 2
+    },
+    {
+      "input": "NM_000512.5:c.[1097T>C;451C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998033",
+      "gene": "GALNS",
+      "members": 2
+    },
+    {
+      "input": "NM_000512.5:c.[1140-730_1365-1530del;121-2779_567-248del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1048378",
+      "gene": "GALNS",
+      "members": 2
+    },
+    {
+      "input": "NM_000517.4:c.[339C>G;340_351delCTCCCCGCCGAG]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "375745",
+      "gene": "HBA2",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[154C>T;157G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446741",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[169G>C;259G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446734",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[176C>G;20A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446731",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[197A>T;367T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446744",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[19G>A;286A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446729",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[205C>T;20A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446748",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[20A>T;220G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446730",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[20A>T;249G>Y]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446737",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[20A>T;271G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446747",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[20A>T;364G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446736",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[20A>T;428C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446738",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[20A>T;70G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446735",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[278A>C;315G>Y]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446742",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[280T>C;364G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446740",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[295G>A;98T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446743",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[29C>A;364G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446745",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[334G>C;359G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446732",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[343C>A;359G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446733",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[34G>A;364G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446746",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[364G>C;79G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446739",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.4:c.[424C>G;433A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446749",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.5:c.[17del;9dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "869324",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.5:c.[316-12T>C;316-7C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "869111",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.5:c.[385_388delinsCCACA;397_407del]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "869313",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000518.5:c.[70G>T;79G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3777010",
+      "gene": "HBB",
+      "members": 2
+    },
+    {
+      "input": "NM_000520.4:c.[574G>C;598G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446267",
+      "gene": "HEXA",
+      "members": 2
+    },
+    {
+      "input": "NM_000527.4:c.[1268T>C;829G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "430765",
+      "gene": "LDLR",
+      "members": 2
+    },
+    {
+      "input": "NM_000527.4:c.[1690A>C;2396_2404delCGTCTTCCT]",
+      "source": "clinvar_hgvs_500k.json.gz",
+      "variation_id": "3737",
+      "gene": "LDLR",
+      "members": 2
+    },
+    {
+      "input": "NM_000527.4:c.[1979A>C;2359G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "430800",
+      "gene": "LDLR",
+      "members": 2
+    },
+    {
+      "input": "NM_000527.4:c.[649_654dupGATGGT;657_661delCCCCG]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "250923",
+      "gene": "LDLR",
+      "members": 2
+    },
+    {
+      "input": "NM_000527.4:c.[932A>G;939C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "430769",
+      "gene": "LDLR",
+      "members": 2
+    },
+    {
+      "input": "NM_000527.5:c.[1690A>C;2397_2405delCGTCTTCCT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3907507",
+      "gene": "LDLR",
+      "members": 2
+    },
+    {
+      "input": "NM_000530.6:c.[241C>T;337G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "208147",
+      "gene": "MPZ",
+      "members": 2
+    },
+    {
+      "input": "NM_000530.6:c.[341T>C;346A>C;382G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14180",
+      "gene": "MPZ",
+      "members": 3
+    },
+    {
+      "input": "NM_000536.3:c.[1403_1406delATCT;1A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624574",
+      "gene": "RAG2",
+      "members": 2
+    },
+    {
+      "input": "NM_000540.2:c.[14344G>A;14928C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1120218",
+      "gene": "RYR1",
+      "members": 2
+    },
+    {
+      "input": "NM_000540.2:c.[5726_5727delAG;9242T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "29876",
+      "gene": "RYR1",
+      "members": 2
+    },
+    {
+      "input": "NM_000540.2:c.[8026C>T;8360C>G]",
+      "source": "clinvar_hgvs_500k.json.gz",
+      "variation_id": "12985",
+      "gene": "RYR1",
+      "members": 2
+    },
+    {
+      "input": "NM_000540.3:c.[11941C>T;8342_8343del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2627379",
+      "gene": "RYR1",
+      "members": 2
+    },
+    {
+      "input": "NM_000548.3:c.[3623_3647del;3745_3756dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "64881",
+      "gene": "TSC2",
+      "members": 2
+    },
+    {
+      "input": "NM_000548.3:c.[4358_4359delCC; 4361_4372del12]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "65324",
+      "gene": "TSC2",
+      "members": 2
+    },
+    {
+      "input": "NM_000548.3:c.[976-20T>A;976-17_976-1dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "65347",
+      "gene": "TSC2",
+      "members": 2
+    },
+    {
+      "input": "NM_000548.5:c.[4570-18_4570-6del;4570-5CA[3]]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1700635",
+      "gene": "TSC2",
+      "members": 2
+    },
+    {
+      "input": "NM_000551.4:c.[340+617C>G;340+648T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "816687",
+      "gene": "VHL",
+      "members": 2
+    },
+    {
+      "input": "NM_000553.4:c.[375A>T;403A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "5453",
+      "gene": "WRN",
+      "members": 2
+    },
+    {
+      "input": "NM_000558.3:c.[235A>G;239C>G]",
+      "source": "paraphase_genes_exhaustive.json.gz",
+      "variation_id": "15762",
+      "gene": "HBA1",
+      "members": 2
+    },
+    {
+      "input": "NM_000559.2:c.[227C>T;409G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446752",
+      "gene": "HBG1",
+      "members": 2
+    },
+    {
+      "input": "NM_000559.2:c.[227C>T;410C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446751",
+      "gene": "HBG1",
+      "members": 2
+    },
+    {
+      "input": "NM_000570.4:c.[108C=;194A>G;244A=;316A=]",
+      "source": "paraphase_genes_exhaustive.json.gz",
+      "variation_id": "36924",
+      "gene": "FCGR3B",
+      "members": 4
+    },
+    {
+      "input": "NM_000603.4:c.[774T>C;894T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "496809",
+      "gene": "NOS3",
+      "members": 2
+    },
+    {
+      "input": "NM_000607.4:c.[113=;520=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16048",
+      "gene": "ORM1",
+      "members": 2
+    },
+    {
+      "input": "NM_000607.4:c.[113G>A;520=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16046",
+      "gene": "ORM1",
+      "members": 2
+    },
+    {
+      "input": "NM_000607.4:c.[113G>A;520G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16047",
+      "gene": "ORM1",
+      "members": 2
+    },
+    {
+      "input": "NM_000634.3:c.[1003C>T;92T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14816",
+      "gene": "CXCR1",
+      "members": 2
+    },
+    {
+      "input": "NM_000662.8:c.[*215=;*222=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "17807",
+      "gene": "NAT1",
+      "members": 2
+    },
+    {
+      "input": "NM_000769.4:c.[-806C>T;1A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "633860",
+      "gene": "CYP2C19",
+      "members": 2
+    },
+    {
+      "input": "NM_000769.4:c.[1004G>A;1197A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "633890",
+      "gene": "CYP2C19",
+      "members": 2
+    },
+    {
+      "input": "NM_000769.4:c.[332-23A>G;681G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "633856",
+      "gene": "CYP2C19",
+      "members": 2
+    },
+    {
+      "input": "NM_000770.3:c.[1196A>G;416G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "545584",
+      "gene": "CYP2C8",
+      "members": 2
+    },
+    {
+      "input": "NM_000771.3:c.[430C=;1075A=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "163020",
+      "gene": "CYP2C9",
+      "members": 2
+    },
+    {
+      "input": "NM_000771.3:c.[430C=;1075A>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "163021",
+      "gene": "CYP2C9",
+      "members": 2
+    },
+    {
+      "input": "NM_000771.3:c.[430C>T;1075A=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "177709",
+      "gene": "CYP2C9",
+      "members": 2
+    },
+    {
+      "input": "NM_000823.4:c.[1102C>T;481C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998042",
+      "gene": "GHRHR",
+      "members": 2
+    },
+    {
+      "input": "NM_000852.4:c.[313=;341=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16491",
+      "gene": "GSTP1",
+      "members": 2
+    },
+    {
+      "input": "NM_000852.4:c.[313A>G;341=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16492",
+      "gene": "GSTP1",
+      "members": 2
+    },
+    {
+      "input": "NM_000852.4:c.[313A>G;341C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16493",
+      "gene": "GSTP1",
+      "members": 2
+    },
+    {
+      "input": "NM_000894.2:c.[104T>C;82T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441529",
+      "gene": "LHB",
+      "members": 2
+    },
+    {
+      "input": "NM_001005741.2:c.[1448T>C;1483G>C;1497G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4297",
+      "gene": "GBA1",
+      "members": 3
+    },
+    {
+      "input": "NM_001005741.2:c.[880T>G;1342G>C]",
+      "source": "paraphase_genes_exhaustive.json.gz",
+      "variation_id": "4334",
+      "gene": "GBA1",
+      "members": 2
+    },
+    {
+      "input": "NM_001009944.3:c.[7735_7737del;7972_7979del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "8210",
+      "gene": "PKD1",
+      "members": 2
+    },
+    {
+      "input": "NM_001009944.3:c.[8200C>A;8204A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3907011",
+      "gene": "PKD1",
+      "members": 2
+    },
+    {
+      "input": "NM_001009944.3:c.[9428_9429insCACGA;9432_9433del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1172618",
+      "gene": "PKD1",
+      "members": 2
+    },
+    {
+      "input": "NM_001010867.4:c.[338_341+2del;341+5del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2429168",
+      "gene": "IBA57",
+      "members": 2
+    },
+    {
+      "input": "NM_001012331.1:c.[25C>T;1792C>T;1820G>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "12304",
+      "gene": "NTRK1",
+      "members": 3
+    },
+    {
+      "input": "NM_001017975.6:c.[2487_2491del;3490C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1332898",
+      "gene": "HFM1",
+      "members": 2
+    },
+    {
+      "input": "NM_001017975.6:c.[2562_2563del;4126del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1332897",
+      "gene": "HFM1",
+      "members": 2
+    },
+    {
+      "input": "NM_001022.4:c.[134_135inv;138_139dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "6318",
+      "gene": "RPS19",
+      "members": 2
+    },
+    {
+      "input": "NM_001040075.1:c.[533C=;646G=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14806",
+      "members": 2
+    },
+    {
+      "input": "NM_001040075.1:c.[533C=;646G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14805",
+      "members": 2
+    },
+    {
+      "input": "NM_001040075.1:c.[533C>T;646G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14804",
+      "members": 2
+    },
+    {
+      "input": "NM_001040142.2:c.[4565G>C;5644C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2627658",
+      "gene": "SCN2A",
+      "members": 2
+    },
+    {
+      "input": "NM_001042351.1:c.[202G>A;376A>G]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "10361",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001042351.1:c.[317C>G;544C>T;592C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "10392",
+      "gene": "G6PD",
+      "members": 3
+    },
+    {
+      "input": "NM_001042351.1:c.[376A>G;542A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "10382",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001042492.2:c.[6708delT;6710C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "812142",
+      "gene": "NF1",
+      "members": 2
+    },
+    {
+      "input": "NM_001080463.1:c.[11284A>G;5971A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "558741",
+      "gene": "DYNC2H1",
+      "members": 2
+    },
+    {
+      "input": "NM_001080463.1:c.[12602C>T;9865G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "558738",
+      "gene": "DYNC2H1",
+      "members": 2
+    },
+    {
+      "input": "NM_001080467.3:c.[1135C>T;2470C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1686946",
+      "gene": "MYO5B",
+      "members": 2
+    },
+    {
+      "input": "NM_001083614.2:c.[1279_1280insTCC;502A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "39788",
+      "gene": "EARS2",
+      "members": 2
+    },
+    {
+      "input": "NM_001105537.3:c.[4183delC;4185G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "627546",
+      "gene": "ZNF142",
+      "members": 2
+    },
+    {
+      "input": "NM_001110.4:c.[415C>T;424_425insCAGAG]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "88839",
+      "gene": "ADAM10",
+      "members": 2
+    },
+    {
+      "input": "NM_001110792.2:c.[1076_1102del;1124_1142del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "978958",
+      "gene": "MECP2",
+      "members": 2
+    },
+    {
+      "input": "NM_001110792.2:c.[859_907del;934_941del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4293340",
+      "gene": "MECP2",
+      "members": 2
+    },
+    {
+      "input": "NM_001127511.2:c.[-125delA;-195A>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "243004",
+      "gene": "APC",
+      "members": 2
+    },
+    {
+      "input": "NM_001127649.3:c.[34dup;669_814+1del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2155",
+      "gene": "PEX26",
+      "members": 2
+    },
+    {
+      "input": "NM_001127701.1:c.[187C>T;739C>T]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "219354",
+      "gene": "SERPINA1",
+      "members": 2
+    },
+    {
+      "input": "NM_001127701.1:c.[227_229delTCT;514G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "17972",
+      "gene": "SERPINA1",
+      "members": 2
+    },
+    {
+      "input": "NM_001130004.1:c.[2156A>C;2157G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "666549",
+      "gene": "ACTN1",
+      "members": 2
+    },
+    {
+      "input": "NM_001142800.1:c.[3906C>A;9405T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "560452",
+      "gene": "EYS",
+      "members": 2
+    },
+    {
+      "input": "NM_001142864.2:[c.3350C>T;c.6059C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "55809",
+      "gene": "PIEZO1",
+      "members": 2
+    },
+    {
+      "input": "NM_001142864.2:c.[1848+31C>G;2344G>A;2423G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "55813",
+      "gene": "PIEZO1",
+      "members": 3
+    },
+    {
+      "input": "NM_001144958.2:c.[430A>G;898G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802646",
+      "gene": "CRACR2A",
+      "members": 2
+    },
+    {
+      "input": "NM_001146312.2:c.[1589A>G;684dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "689479",
+      "gene": "MYOCD",
+      "members": 2
+    },
+    {
+      "input": "NM_001161404.1:c.[261C>G;275C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "222901",
+      "gene": "LIMS2",
+      "members": 2
+    },
+    {
+      "input": "NM_001164342.2:c.[1847C>T;2221G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "253111",
+      "gene": "ZBTB20",
+      "members": 2
+    },
+    {
+      "input": "NM_001171174.1:c.[841G>A;935C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "8152",
+      "gene": "CX3CR1",
+      "members": 2
+    },
+    {
+      "input": "NM_001178015.2:c.[1730A>T;3308A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1342974",
+      "gene": "SLC4A10",
+      "members": 2
+    },
+    {
+      "input": "NM_001194998.1:c.[3676_3678delAAC;3149T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446758",
+      "gene": "CEP152",
+      "members": 2
+    },
+    {
+      "input": "NM_001205293.3:c.[2253G>A;2255G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1342367",
+      "gene": "CACNA1E",
+      "members": 2
+    },
+    {
+      "input": "NM_001232.3:c.[730C>T;731A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "228471",
+      "gene": "CASQ2",
+      "members": 2
+    },
+    {
+      "input": "NM_001243279.3:c.[1385A>C;1394_1411del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "31142",
+      "gene": "ACSF3",
+      "members": 2
+    },
+    {
+      "input": "NM_001270888.1:c.[684C>T;790-37G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446176",
+      "gene": "SLC25A10",
+      "members": 2
+    },
+    {
+      "input": "NM_001271862.2:c.[136dup;809T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1184263",
+      "gene": "PNLDC1",
+      "members": 2
+    },
+    {
+      "input": "NM_001278064.1:c.[2652_2654delGAA;2660+2T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "453266",
+      "gene": "GRM1",
+      "members": 2
+    },
+    {
+      "input": "NM_001282225.2:c.[1196G>A;1367A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624589",
+      "gene": "ADA2",
+      "members": 2
+    },
+    {
+      "input": "NM_001282426.2:c.[391_397del;456_468del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3775985",
+      "gene": "PIK3CG",
+      "members": 2
+    },
+    {
+      "input": "NM_001288953.1:c.[1715A>G;1912T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "190388",
+      "gene": "TTC7A",
+      "members": 2
+    },
+    {
+      "input": "NM_001289396.1:c.[3495G>C;3917G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "374221",
+      "gene": "SMARCA2",
+      "members": 2
+    },
+    {
+      "input": "NM_001289862.1:c.[1243C>G;1250A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "224889",
+      "gene": "PER3",
+      "members": 2
+    },
+    {
+      "input": "NM_001291867.2:c.[107C>G;111del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2445205",
+      "gene": "NHS",
+      "members": 2
+    },
+    {
+      "input": "NM_001304548.2:c.[1337C>T;706G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2443913",
+      "gene": "CFAP47",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[1037A>T;637G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722605",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[1048G>C;406C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722606",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[1106T>C;499A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722660",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[1116G>A;1311=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722641",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[1159C>T;376A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722617",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[1347G>C;1360C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722628",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[1376G>T;1502T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722642",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[143T>C;202G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722711",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[143T>C;563C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722739",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[202G>A;563C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722696",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[202G>A;871G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722596",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[311G>A;376A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722693",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[376A>G;463C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722726",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[376A>G;563C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722698",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[376A>G;680G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722747",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[376A>G;871G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722597",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[376A>G;968T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1065168",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001360016.2:c.[769C>A;770G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1722757",
+      "gene": "G6PD",
+      "members": 2
+    },
+    {
+      "input": "NM_001369.3:c.[2577+5T>G;5413C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2665064",
+      "gene": "DNAH5",
+      "members": 2
+    },
+    {
+      "input": "NM_001372.4:c.[5641A>G;8894G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "617522",
+      "gene": "DNAH9",
+      "members": 2
+    },
+    {
+      "input": "NM_001375567.1:c.[1687C>T;3694G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1701017",
+      "gene": "FOCAD",
+      "members": 2
+    },
+    {
+      "input": "NM_001378615.1:c.[1880G>A;2206A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3384160",
+      "gene": "CC2D2A",
+      "members": 2
+    },
+    {
+      "input": "NM_001384732.1:c.[2854_2855insCT;3599C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2498122",
+      "gene": "CPLANE1",
+      "members": 2
+    },
+    {
+      "input": "NM_001386135.1:c.[2151dup;3059A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802572",
+      "gene": "AFF3",
+      "members": 2
+    },
+    {
+      "input": "NM_001388492.1:c.[5473A>G;8248G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802562",
+      "gene": "HTT",
+      "members": 2
+    },
+    {
+      "input": "NM_001399.5:c.[866G>C;868A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1256048",
+      "gene": "EDA",
+      "members": 2
+    },
+    {
+      "input": "NM_001567.3:c.[1687_1691delACCTC;35dupG]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "235823",
+      "gene": "INPPL1",
+      "members": 2
+    },
+    {
+      "input": "NM_001567.3:c.[2415+1G>A;768_769delAG]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "235825",
+      "gene": "INPPL1",
+      "members": 2
+    },
+    {
+      "input": "NM_001567.3:c.[24_39del16;753G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "235822",
+      "gene": "INPPL1",
+      "members": 2
+    },
+    {
+      "input": "NM_001814.6:c.[1211delA;190_191insA]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "634988",
+      "gene": "CTSC",
+      "members": 2
+    },
+    {
+      "input": "NM_001814.6:c.[716A>G;757+1G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "634989",
+      "gene": "CTSC",
+      "members": 2
+    },
+    {
+      "input": "NM_001849.3:c.[2489G>A;2527C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "29642",
+      "gene": "COL6A2",
+      "members": 2
+    },
+    {
+      "input": "NM_001928.2:c.[638T>G;640T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16565",
+      "gene": "CFD",
+      "members": 2
+    },
+    {
+      "input": "NM_001967.4:c.[1161_1166del;186_187del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1712517",
+      "gene": "EIF4A2",
+      "members": 2
+    },
+    {
+      "input": "NM_002055.4:c.[236G>A;667G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "190336",
+      "gene": "GFAP",
+      "members": 2
+    },
+    {
+      "input": "NM_002055.4:c.[988C>G;994G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "190352",
+      "gene": "GFAP",
+      "members": 2
+    },
+    {
+      "input": "NM_002185.5:c.[134A>C;537+1G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624585",
+      "gene": "IL7R",
+      "members": 2
+    },
+    {
+      "input": "NM_002185.5:c.[160T>C;245G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "624586",
+      "gene": "IL7R",
+      "members": 2
+    },
+    {
+      "input": "NM_002215.3:c.[1754A=;1784A=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14797",
+      "gene": "ITIH1",
+      "members": 2
+    },
+    {
+      "input": "NM_002215.3:c.[1754A=;1784A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14799",
+      "gene": "ITIH1",
+      "members": 2
+    },
+    {
+      "input": "NM_002215.3:c.[1754A>T;1784A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14798",
+      "gene": "ITIH1",
+      "members": 2
+    },
+    {
+      "input": "NM_002227.4:c.[2198C>T;2494C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1703485",
+      "gene": "JAK1",
+      "members": 2
+    },
+    {
+      "input": "NM_002238.3:c.[1066G>C;974C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "203434",
+      "gene": "KCNH1",
+      "members": 2
+    },
+    {
+      "input": "NM_002292.3:c.[4140C>A;4177C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14535",
+      "gene": "LAMB2",
+      "members": 2
+    },
+    {
+      "input": "NM_002470.3:c.[721A>G;724_725delTCinsTT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "587705",
+      "gene": "MYH3",
+      "members": 2
+    },
+    {
+      "input": "NM_002474.3:c.[3791T>C;3824G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "440783",
+      "gene": "MYH11",
+      "members": 2
+    },
+    {
+      "input": "NM_002501.3:c.[346C>T;348G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "559881",
+      "gene": "NFIX",
+      "members": 2
+    },
+    {
+      "input": "NM_002529.4:c.[253C>A;429-1G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "12305",
+      "gene": "NTRK1",
+      "members": 2
+    },
+    {
+      "input": "NM_002617.4:c.[13del;22_28delinsACCTGCGCCGCC]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "6775",
+      "gene": "PEX10",
+      "members": 2
+    },
+    {
+      "input": "NM_002691.4:c.[2052G>C;2816C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1119948",
+      "gene": "POLD1",
+      "members": 2
+    },
+    {
+      "input": "NM_002693.3:c.[1760C>T;752C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1698500",
+      "gene": "POLG",
+      "members": 2
+    },
+    {
+      "input": "NM_002977.3:c.[2794A>C;2971G>T]",
+      "source": "clinvar_hgvs_500k.json.gz",
+      "variation_id": "441531",
+      "gene": "SCN9A",
+      "members": 2
+    },
+    {
+      "input": "NM_003049.4:c.[601_611del;745C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "617621",
+      "gene": "SLC10A1",
+      "members": 2
+    },
+    {
+      "input": "NM_003242.6:c.[1152T>A;1163A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1878348",
+      "gene": "TGFBR2",
+      "members": 2
+    },
+    {
+      "input": "NM_003265.2:c.[2228G>A;2432G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "495312",
+      "gene": "TLR3",
+      "members": 2
+    },
+    {
+      "input": "NM_003365.3:c.[70-1G>A;73dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1064665",
+      "gene": "UQCRC1",
+      "members": 2
+    },
+    {
+      "input": "NM_003560.4:c.[2356G>A;668C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998023",
+      "gene": "PLA2G6",
+      "members": 2
+    },
+    {
+      "input": "NM_003718.5:c.[838C>T;839G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1299398",
+      "gene": "CDK13",
+      "members": 2
+    },
+    {
+      "input": "NM_003803.3:c.[64_66delGTGinsCTC;65T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "229030",
+      "gene": "MYOM1",
+      "members": 2
+    },
+    {
+      "input": "NM_003849.4:c.[460C>T;987dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998016",
+      "gene": "SUCLG1",
+      "members": 2
+    },
+    {
+      "input": "NM_003982.4:c.[1228C>T;1387del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998011",
+      "gene": "SLC7A7",
+      "members": 2
+    },
+    {
+      "input": "NM_004004.5:c.[134G>A;408C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267367",
+      "gene": "GJB2",
+      "members": 2
+    },
+    {
+      "input": "NM_004004.6:c.[101T>C;550C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3338645",
+      "gene": "GJB2",
+      "members": 2
+    },
+    {
+      "input": "NM_004006.3:c.[10086+1G>T;10126del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "11234",
+      "gene": "DMD",
+      "members": 2
+    },
+    {
+      "input": "NM_004153.4:c.[2483C>T;2484del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998022",
+      "gene": "ORC1",
+      "members": 2
+    },
+    {
+      "input": "NM_004260.4:c.[1724_1725del;691G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998012",
+      "gene": "RECQL4",
+      "members": 2
+    },
+    {
+      "input": "NM_004317.4:c.[867C>G;913C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2443824",
+      "gene": "GET3",
+      "members": 2
+    },
+    {
+      "input": "NM_004380.2:c.[4112T>A;4118C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "545604",
+      "gene": "CREBBP",
+      "members": 2
+    },
+    {
+      "input": "NM_004608.3:c.[-48-240A>G;-49+34G>T;1227G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "188053",
+      "gene": "TBX6",
+      "members": 3
+    },
+    {
+      "input": "NM_004646.3:c.[1339G>A;2456A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "6872",
+      "gene": "NPHS1",
+      "members": 2
+    },
+    {
+      "input": "NM_004646.4:c.[2552C>T;2618_2620delinsCC]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2582747",
+      "gene": "NPHS1",
+      "members": 2
+    },
+    {
+      "input": "NM_004752.3:c.[1136T>A;751C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "375590",
+      "gene": "GCM2",
+      "members": 2
+    },
+    {
+      "input": "NM_004771.4:c.[1046C>T;911C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1192505",
+      "gene": "MMP20",
+      "members": 2
+    },
+    {
+      "input": "NM_004826.3:c.[1184+3A>T;1252C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "235818",
+      "gene": "ECEL1",
+      "members": 2
+    },
+    {
+      "input": "NM_004826.3:c.[1252C>T;590G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "235817",
+      "gene": "ECEL1",
+      "members": 2
+    },
+    {
+      "input": "NM_004826.3:c.[344_355delACCTGGACGCCA;716dupA]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "235821",
+      "gene": "ECEL1",
+      "members": 2
+    },
+    {
+      "input": "NM_004959.4:c.[368G>C;386C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "12809",
+      "gene": "NR5A1",
+      "members": 2
+    },
+    {
+      "input": "NM_004992.3:c.[1155_1200del;987_988del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "560187",
+      "gene": "MECP2",
+      "members": 2
+    },
+    {
+      "input": "NM_005035.4:c.[1696C>T;3578C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1341469",
+      "gene": "POLRMT",
+      "members": 2
+    },
+    {
+      "input": "NM_005144.5:c.[1258del;1263_1283del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "7336",
+      "gene": "HR",
+      "members": 2
+    },
+    {
+      "input": "NM_005154.3:c.[2138T>G;2150A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "161994",
+      "gene": "USP8",
+      "members": 2
+    },
+    {
+      "input": "NM_005157.6:c.[1516G>A;1531G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3237368",
+      "gene": "ABL1",
+      "members": 2
+    },
+    {
+      "input": "NM_005215.4:c.[4009C>T;4210G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802587",
+      "gene": "DCC",
+      "members": 2
+    },
+    {
+      "input": "NM_005413.3:c.[206G>A;406_407dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441532",
+      "gene": "SIX3",
+      "members": 2
+    },
+    {
+      "input": "NM_005559.4:c.[2932A>G;2935del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3248677",
+      "gene": "LAMA1",
+      "members": 2
+    },
+    {
+      "input": "NM_005912.3:c.[105C>A;110A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "917498",
+      "gene": "MC4R",
+      "members": 2
+    },
+    {
+      "input": "NM_006000.3:c.[541G>A;547G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1686840",
+      "gene": "TUBA4A",
+      "members": 2
+    },
+    {
+      "input": "NM_006005.3:c.[2119G>T;2649del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "30552",
+      "gene": "WFS1",
+      "members": 2
+    },
+    {
+      "input": "NM_006218.3:c.[1634A>C;1658_1659delGTinsC]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "222469",
+      "gene": "PIK3CA",
+      "members": 2
+    },
+    {
+      "input": "NM_006302.2:c.[329G>A;65C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "375688",
+      "gene": "MOGS",
+      "members": 2
+    },
+    {
+      "input": "NM_006416.4:c.[147T>C;277delG;281delC]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4844",
+      "gene": "SLC35A1",
+      "members": 3
+    },
+    {
+      "input": "NM_006420.3:c.[242C>A;247_249delinsTT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "5051",
+      "gene": "ARFGEF2",
+      "members": 2
+    },
+    {
+      "input": "NM_006796.3:c.[1385C>T;1858C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "973107",
+      "gene": "AFG3L2",
+      "members": 2
+    },
+    {
+      "input": "NM_006796.3:c.[1814A>G;2375dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "973112",
+      "gene": "AFG3L2",
+      "members": 2
+    },
+    {
+      "input": "NM_006796.3:c.[1901_1902del;916A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "973111",
+      "gene": "AFG3L2",
+      "members": 2
+    },
+    {
+      "input": "NM_006876.2:[c.1168A>G;c.1217C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "51008",
+      "gene": "B4GAT1",
+      "members": 2
+    },
+    {
+      "input": "NM_006894.4:c.[472G>A;560T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "217371",
+      "gene": "FMO3",
+      "members": 2
+    },
+    {
+      "input": "NM_006894.4:c.[472G>A;923A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16318",
+      "gene": "FMO3",
+      "members": 2
+    },
+    {
+      "input": "NM_007055.4:c.[1909+22G>A;3337-11T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "805934",
+      "gene": "POLR3A",
+      "members": 2
+    },
+    {
+      "input": "NM_007262.4:c.[-24+75_-24+92dup;487G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446717",
+      "gene": "PARK7",
+      "members": 2
+    },
+    {
+      "input": "NM_007294.3:c.[-1A>G;3G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "487432",
+      "gene": "BRCA1",
+      "members": 2
+    },
+    {
+      "input": "NM_007294.3:c.[5243_5277+2788del;5277+2916_5277+2946delinsGG]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267496",
+      "gene": "BRCA1",
+      "members": 2
+    },
+    {
+      "input": "NM_007294.3:c.[594-2A>C;641A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "236265",
+      "gene": "BRCA1",
+      "members": 2
+    },
+    {
+      "input": "NM_007347.4:c.[1549G>A;2401G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "224506",
+      "gene": "AP4E1",
+      "members": 2
+    },
+    {
+      "input": "NM_012140.5:c.[657C>T;763-37G>A]",
+      "source": "clinvar_hgvs_500k.json.gz",
+      "variation_id": "974801",
+      "gene": "SLC25A10",
+      "members": 2
+    },
+    {
+      "input": "NM_012203.1:c.[84-8_84-5delCCCC;84-13_84-12delCC]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "204246",
+      "gene": "GRHPR",
+      "members": 2
+    },
+    {
+      "input": "NM_012434.5:c.[509T>C;511G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1705166",
+      "gene": "SLC17A5",
+      "members": 2
+    },
+    {
+      "input": "NM_014251.3:c.[1956C>A;1962del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1695398",
+      "gene": "SLC25A13",
+      "members": 2
+    },
+    {
+      "input": "NM_014363.5:c.[1634G>T;1640C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "424657",
+      "gene": "SACS",
+      "members": 2
+    },
+    {
+      "input": "NM_014363.6:c.[7504C>T;8132C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "691950",
+      "gene": "SACS",
+      "members": 2
+    },
+    {
+      "input": "NM_014425.5:c.[796+5G>A;805_806del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2498123",
+      "gene": "INVS",
+      "members": 2
+    },
+    {
+      "input": "NM_014780.5:c.[2164C>T;4911dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998015",
+      "gene": "CUL7",
+      "members": 2
+    },
+    {
+      "input": "NM_014780.5:c.[3129G>A;4763T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998018",
+      "gene": "CUL7",
+      "members": 2
+    },
+    {
+      "input": "NM_015046.5:c.[1807A>G;1957C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441280",
+      "gene": "SETX",
+      "members": 2
+    },
+    {
+      "input": "NM_015046.5:c.[3880C>T;822G>H]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "441281",
+      "gene": "SETX",
+      "members": 2
+    },
+    {
+      "input": "NM_015058.2:c.[3070G>A;4558C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2505503",
+      "gene": "VWA8",
+      "members": 2
+    },
+    {
+      "input": "NM_015311.3:c.[1273dup;836G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998035",
+      "gene": "OBSL1",
+      "members": 2
+    },
+    {
+      "input": "NM_015560.2:c.[870+32T>C;870+4T=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "5089",
+      "gene": "OPA1",
+      "members": 2
+    },
+    {
+      "input": "NM_016035.4(COQ4):c.[331G>T;356C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "431012",
+      "gene": "COQ4",
+      "members": 2
+    },
+    {
+      "input": "NM_016035.5:c.[284G>A;305G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "915835",
+      "gene": "COQ4",
+      "members": 2
+    },
+    {
+      "input": "NM_016035.5:c.[577C>T;718C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "915836",
+      "gene": "COQ4",
+      "members": 2
+    },
+    {
+      "input": "NM_016111.3:c.[514C>T;2034+1G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "236230",
+      "gene": "TELO2",
+      "members": 2
+    },
+    {
+      "input": "NM_016124.4:c.[602C>G;667T>G;744C>T;957G>A;1025T>C;1063G>A]",
+      "source": "paraphase_genes_exhaustive.json.gz",
+      "variation_id": "202166",
+      "gene": "RHD",
+      "members": 6
+    },
+    {
+      "input": "NM_016222.3:c.[711G>T;712C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "403734",
+      "gene": "DDX41",
+      "members": 2
+    },
+    {
+      "input": "NM_016239.4:c.[5192T>C;823G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1695345",
+      "gene": "MYO15A",
+      "members": 2
+    },
+    {
+      "input": "NM_016341.3:c.[6093T>C;6800G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "266012",
+      "gene": "PLCE1",
+      "members": 2
+    },
+    {
+      "input": "NM_016824.5:c.[1588G>A;86A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2921286",
+      "gene": "ADD3",
+      "members": 2
+    },
+    {
+      "input": "NM_017426.4:c.[1414G>A;1420C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2506594",
+      "gene": "NUP54",
+      "members": 2
+    },
+    {
+      "input": "NM_017565.4:c.[129del;734_735del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1189033",
+      "gene": "FAM20A",
+      "members": 2
+    },
+    {
+      "input": "NM_017777.4:c.[1115_1117del;1476T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802600",
+      "gene": "MKS1",
+      "members": 2
+    },
+    {
+      "input": "NM_018002.3:c.[1100C>G;2082+1G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "694386",
+      "gene": "OXR1",
+      "members": 2
+    },
+    {
+      "input": "NM_018100.3:c.[229C>A;662G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2067",
+      "gene": "EFHC1",
+      "members": 2
+    },
+    {
+      "input": "NM_018127.7:c.[1218+3A>C;2009del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "828177",
+      "gene": "ELAC2",
+      "members": 2
+    },
+    {
+      "input": "NM_018136.5:c.[1789C>T;2525_2531del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998020",
+      "gene": "ASPM",
+      "members": 2
+    },
+    {
+      "input": "NM_018662.3:c.[67+5859A>T;791G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "5172",
+      "gene": "DISC1",
+      "members": 2
+    },
+    {
+      "input": "NM_018671.5:c.[2678C>T;2779T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1164084",
+      "gene": "UNC45A",
+      "members": 2
+    },
+    {
+      "input": "NM_019098.5:c.[442A>G;446_447insT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "5224",
+      "gene": "CNGB3",
+      "members": 2
+    },
+    {
+      "input": "NM_019109.5:c.[212C>T;221A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1698558",
+      "gene": "ALG1",
+      "members": 2
+    },
+    {
+      "input": "NM_019616.4:c.[179G>T;190_191delinsTT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2582771",
+      "gene": "F7",
+      "members": 2
+    },
+    {
+      "input": "NM_019892.6:c.[1787G>C;746C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1065696",
+      "gene": "INPP5E",
+      "members": 2
+    },
+    {
+      "input": "NM_020485.4:c.[48G=;178C=;203A=;307C=]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "17709",
+      "gene": "RHCE",
+      "members": 4
+    },
+    {
+      "input": "NM_020877.5:c.[1546T>C;3637G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1342849",
+      "gene": "DNAH2",
+      "members": 2
+    },
+    {
+      "input": "NM_020964.2:c.[1188delC;2598A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267448",
+      "gene": "EPG5",
+      "members": 2
+    },
+    {
+      "input": "NM_020964.2:c.[1A>G;4108delC]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267447",
+      "gene": "EPG5",
+      "members": 2
+    },
+    {
+      "input": "NM_020964.2:c.[2461C>T;3582G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267446",
+      "gene": "EPG5",
+      "members": 2
+    },
+    {
+      "input": "NM_020964.2:c.[2T>C;5792delT]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267444",
+      "gene": "EPG5",
+      "members": 2
+    },
+    {
+      "input": "NM_020964.2:c.[3044C>T;6766+1G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267449",
+      "gene": "EPG5",
+      "members": 2
+    },
+    {
+      "input": "NM_020964.2:c.[3152C>G;4230G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "267445",
+      "gene": "EPG5",
+      "members": 2
+    },
+    {
+      "input": "NM_020975.4:c.[1896G>C;1897C>G;1900T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "13906",
+      "gene": "RET",
+      "members": 3
+    },
+    {
+      "input": "NM_020975.4:c.[2410G>A;2711C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "13945",
+      "gene": "RET",
+      "members": 2
+    },
+    {
+      "input": "NM_020975.4:c.[2410G>A;2832C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "618965",
+      "gene": "RET",
+      "members": 2
+    },
+    {
+      "input": "NM_021133.4:c.[175G>A;793G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4528891",
+      "gene": "RNASEL",
+      "members": 2
+    },
+    {
+      "input": "NM_021625.4:c.[2481_2484delCCGC;2486T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "378057",
+      "gene": "TRPV4",
+      "members": 2
+    },
+    {
+      "input": "NM_022124.5:c.[7762G>C;7764G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "517258",
+      "gene": "CDH23",
+      "members": 2
+    },
+    {
+      "input": "NM_022154.5:c.[97G>A;1004G>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "218898",
+      "gene": "SLC39A8",
+      "members": 2
+    },
+    {
+      "input": "NM_022662.4:c.[1778dup;2705-198C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "694458",
+      "gene": "ANAPC1",
+      "members": 2
+    },
+    {
+      "input": "NM_022662.4:c.[2705-198C>T;4373+1G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "694459",
+      "gene": "ANAPC1",
+      "members": 2
+    },
+    {
+      "input": "NM_022662.4:c.[2705-198C>T;4880_4881AC[1]]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "694496",
+      "gene": "ANAPC1",
+      "members": 2
+    },
+    {
+      "input": "NM_022844.2:c.[4578+1G>T;5273G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "14131",
+      "gene": "MYH11",
+      "members": 2
+    },
+    {
+      "input": "NM_023110.2:c.[2165C>A;2172C>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "16292",
+      "gene": "FGFR1",
+      "members": 2
+    },
+    {
+      "input": "NM_024063.3:c.[213T>G;1313T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1185004",
+      "gene": "AFG2B",
+      "members": 2
+    },
+    {
+      "input": "NM_024312.4:c.[3388_3389insC;3392C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "39094",
+      "gene": "GNPTAB",
+      "members": 2
+    },
+    {
+      "input": "NM_024312.4:c.[545T>A;614A>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "39095",
+      "gene": "GNPTAB",
+      "members": 2
+    },
+    {
+      "input": "NM_024312.5:c.[2715+1G>A;2980_2983del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998014",
+      "gene": "GNPTAB",
+      "members": 2
+    },
+    {
+      "input": "NM_024339.5:c.[624_636+2del;746C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802630",
+      "gene": "THOC6",
+      "members": 2
+    },
+    {
+      "input": "NM_024675.4:c.[520A>T;792del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1713228",
+      "gene": "PALB2",
+      "members": 2
+    },
+    {
+      "input": "NM_024753.5:c.[2569G>A;3130_3131dup]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2498130",
+      "gene": "TTC21B",
+      "members": 2
+    },
+    {
+      "input": "NM_025114.4:c.[943-4C>T;943-8A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2502259",
+      "gene": "CEP290",
+      "members": 2
+    },
+    {
+      "input": "NM_025237.3:c.[220+3A>T;221-67A>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "4784",
+      "gene": "SOST",
+      "members": 2
+    },
+    {
+      "input": "NM_031307.4:c.[497G>A;896T>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802568",
+      "gene": "PUS3",
+      "members": 2
+    },
+    {
+      "input": "NM_032119.4:c.[1718G>T;9440G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3338035",
+      "gene": "ADGRV1",
+      "members": 2
+    },
+    {
+      "input": "NM_032340.3:c.[23G>C;28C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "585258",
+      "gene": "UQCC2",
+      "members": 2
+    },
+    {
+      "input": "NM_032607.3:c.[732dup;739A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1120263",
+      "gene": "CREB3L3",
+      "members": 2
+    },
+    {
+      "input": "NM_032756.4:c.[832G>A;91T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1184733",
+      "gene": "HPDL",
+      "members": 2
+    },
+    {
+      "input": "NM_032888.4:c.[295G>A;3056C>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "827678",
+      "gene": "COL27A1",
+      "members": 2
+    },
+    {
+      "input": "NM_033028.4:r.[118_261del;118_373del]",
+      "source": "clinvar_hgvs_500k.json.gz",
+      "variation_id": "266081",
+      "gene": "BBS4",
+      "members": 2
+    },
+    {
+      "input": "NM_033064.5:c.[903C>G;965+3G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2491",
+      "gene": "ATCAY",
+      "members": 2
+    },
+    {
+      "input": "NM_033071.3:c.[1985A>G;9283G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "92124",
+      "gene": "SYNE1",
+      "members": 2
+    },
+    {
+      "input": "NM_033116.4:c.[1715G>T;1731+1G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "242987",
+      "gene": "NEK9",
+      "members": 2
+    },
+    {
+      "input": "NM_033380.2:c.[866G>T;4282C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "10464",
+      "gene": "COL4A5",
+      "members": 2
+    },
+    {
+      "input": "NM_033641.4:c.[1384G>A;2230G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3358929",
+      "gene": "COL4A6",
+      "members": 2
+    },
+    {
+      "input": "NM_052874.5:c.[133_134insGGATGTGCATTG;135_136delinsGA]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "162396",
+      "gene": "STX1B",
+      "members": 2
+    },
+    {
+      "input": "NM_058004.4:c.[1414A>C;355C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802598",
+      "gene": "PI4KA",
+      "members": 2
+    },
+    {
+      "input": "NM_130466.4:c.[1445T>A;1616T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1691088",
+      "gene": "UBE3B",
+      "members": 2
+    },
+    {
+      "input": "NM_130468.3:c.[403C>G;410T>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "446172",
+      "gene": "CHST14",
+      "members": 2
+    },
+    {
+      "input": "NM_130838.2:c.[255_259del;269del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "560186",
+      "gene": "UBE3A",
+      "members": 2
+    },
+    {
+      "input": "NM_133378.4:c.[45418A>G;45419A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "179465",
+      "gene": "TTN",
+      "members": 2
+    },
+    {
+      "input": "NM_133378.4:c.[68689_68692delAACA;98315delG]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "178839",
+      "gene": "TTN",
+      "members": 2
+    },
+    {
+      "input": "NM_138694.4:c.[2165C>T;7438A>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3769639",
+      "gene": "PKHD1",
+      "members": 2
+    },
+    {
+      "input": "NM_139025.3:c.[1342C>G;1523G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "5813",
+      "gene": "ADAMTS13",
+      "members": 2
+    },
+    {
+      "input": "NM_144997.5:c.[1301-7_1304delGTTACAGAGTT;1323delCinsGA]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "3377",
+      "gene": "FLCN",
+      "members": 2
+    },
+    {
+      "input": "NM_152393.3:c.[1849T>C;1850G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "228777",
+      "gene": "KLHL40",
+      "members": 2
+    },
+    {
+      "input": "NM_152564.5:c.[1044G>A;8916G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "998036",
+      "gene": "VPS13B",
+      "members": 2
+    },
+    {
+      "input": "NM_152703.5:c.[1076G>A;3353A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2498159",
+      "gene": "SAMD9L",
+      "members": 2
+    },
+    {
+      "input": "NM_152743.4:c.[638dup;803G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802567",
+      "gene": "BRAT1",
+      "members": 2
+    },
+    {
+      "input": "NM_153704.6:c.[1634G>A;2241G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2627377",
+      "gene": "TMEM67",
+      "members": 2
+    },
+    {
+      "input": "NM_170784.2:c.[250C>T;724G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "448914",
+      "gene": "MKKS",
+      "members": 2
+    },
+    {
+      "input": "NM_173467.5:c.[242T>G;634C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "2628318",
+      "gene": "MCAT",
+      "members": 2
+    },
+    {
+      "input": "NM_173591.3:c.[6220A>G;6221T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "229122",
+      "gene": "OTOGL",
+      "members": 2
+    },
+    {
+      "input": "NM_173628.4:c.[10496C>T;10784T>C]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "692269",
+      "gene": "DNAH17",
+      "members": 2
+    },
+    {
+      "input": "NM_173628.4:c.[11803C>T;6308C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1698435",
+      "gene": "DNAH17",
+      "members": 2
+    },
+    {
+      "input": "NM_176787.5:c.[1251+1G>T;2399G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1802592",
+      "gene": "PIGN",
+      "members": 2
+    },
+    {
+      "input": "NM_177987.3:c.[1033C>T;1039A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "930176",
+      "gene": "TUBB8",
+      "members": 2
+    },
+    {
+      "input": "NM_178014.4:c.[58-574C>A;58-593_58-575del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "1065830",
+      "gene": "TUBB",
+      "members": 2
+    },
+    {
+      "input": "NM_182961.4:c.[20263C>T;8889del]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "691949",
+      "gene": "SYNE1",
+      "members": 2
+    },
+    {
+      "input": "NM_198056.2:c.[1535C>T;1673A>G]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "440849",
+      "gene": "SCN5A",
+      "members": 2
+    },
+    {
+      "input": "NM_198056.2:c.[3694C>T;4859C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "440848",
+      "gene": "SCN5A",
+      "members": 2
+    },
+    {
+      "input": "NM_199461.2:c.[737G>A;826_827delinsTA]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "65392",
+      "gene": "NANOS1",
+      "members": 2
+    },
+    {
+      "input": "NM_206933.2:c.[12394del;14074G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "560515",
+      "gene": "USH2A",
+      "members": 2
+    },
+    {
+      "input": "NM_206933.2:c.[15319C>T;3902G>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "560517",
+      "gene": "USH2A",
+      "members": 2
+    },
+    {
+      "input": "NM_206933.2:c.[2299del;4714C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "560516",
+      "gene": "USH2A",
+      "members": 2
+    },
+    {
+      "input": "NM_206933.3:c.[12448A>G;5012G>A]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "812445",
+      "gene": "USH2A",
+      "members": 2
+    },
+    {
+      "input": "NM_207122.1:c.[260T>G;283C>T]",
+      "source": "clinvar_hgvs_unique.json.gz",
+      "variation_id": "218894",
+      "gene": "EXT2",
+      "members": 2
+    },
+    {
+      "input": "NP_000021.1:p.[Ala186Asp;Phe187Arg]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "204189",
+      "gene": "AGXT",
+      "members": 2
+    },
+    {
+      "input": "NP_000021.1:p.[Cys173Trp;His174Asn]",
+      "source": "cmrg_genes_exhaustive.json.gz",
+      "variation_id": "204188",
+      "gene": "AGXT",
+      "members": 2
+    }
+  ]
+}

@@ -1,0 +1,229 @@
+//! The confluence pairs reported from a downstream pipeline (#1419/#1420/#1421).
+//!
+//! # Why these are committed rather than left in the issues
+//!
+//! Each row is two spellings of **one** variant that ferro normalizes to two
+//! different strings. They are the only externally-reported instances of the
+//! #1235 defect class, they were found by running a real pipeline rather than by
+//! a generator, and until this module existed **not one of them was guarded by a
+//! test**. Filed is not the same as guarded: an issue records that something was
+//! once broken, but nothing re-checks it, so a change that silently reintroduces
+//! the defect passes CI and the report has to be made again.
+//!
+//! They also cover a shape the generated corpus in `cis_confluence_axis` does
+//! not reach — #1421's net insertions, where the payload is longer than the span
+//! it replaces.
+//!
+//! # What this pins, and what it deliberately does not
+//!
+//! It pins **convergence** — the two spellings must produce one output — and
+//! **sequence preservation**, checked through the SPDI applier in
+//! [`crate::common::cis_apply_oracle`] rather than through the normalizer, so a
+//! pass that converged on a wrong sequence fails here instead of looking like a
+//! success.
+//!
+//! It does **not** pin *which* string a pair converges on. That is an open
+//! product decision (#1235), and pinning a winner here would freeze it by
+//! accident. The census reports the current answer per row when it moves, so a
+//! change is visible in review without being asserted as correct.
+//!
+//! # Current status
+//!
+//! [`CONVERGING_PAIRS`] records how many converge today. Both spellings of every
+//! row are well-formed and sequence-preserving, so a split row is a pure
+//! representation difference rather than a correctness bug — which is precisely
+//! why it is damaging downstream: key-based aggregation silently files one
+//! variant under two keys and halves its count.
+
+use crate::common::cis_apply_oracle::{apply, normalize_in};
+use ferro_hgvs::ShuffleDirection;
+
+/// A 125 nt contig. Position 1 is offset 0 — the oracle's provider serves the
+/// core unpadded under the accession `TEMPLATE`.
+///
+/// Reproduced verbatim from the reports so these rows run against the same bases
+/// they were observed on. Synthetic: it names no real sequence.
+const TEMPLATE: &str = concat!(
+    "ATGCACCAGTCACCAGTCTGATGCGGATCACGTGCAATTGCACGTGCAATTGGATCCGATCG",
+    "TACGTACGATCGGCATGCATGCTAGCTAGCATCGATCGTAGCTAGCTAGCATCGATCGATCGA"
+);
+
+/// `(label, spelling A, spelling B)`.
+///
+/// A is the multi-member form as authored downstream; B is the spanning form of
+/// the same variant. The two are kept distinguishable rather than collapsed into
+/// an unordered pair because *which one a consumer has stored* decides what a
+/// convergence fix costs them.
+const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
+    // #1419 — two deletions versus the spanning delins.
+    (
+        "1419-r1",
+        "TEMPLATE:g.[19_23del;27_33del]",
+        "TEMPLATE:g.19_33delinsCGG",
+    ),
+    (
+        "1419-r2",
+        "TEMPLATE:g.[19_22del;26_36del]",
+        "TEMPLATE:g.19_36delinsGCG",
+    ),
+    (
+        "1419-r3",
+        "TEMPLATE:g.[19_24del;28_33del]",
+        "TEMPLATE:g.19_33delinsGGA",
+    ),
+    // #1420 — a dup, an insertion and a delins, each beside a deletion.
+    (
+        "1420-v2",
+        "TEMPLATE:g.[37dup;41del]",
+        "TEMPLATE:g.38_41delinsATTG",
+    ),
+    (
+        "1420-v3",
+        "TEMPLATE:g.[36_37insC;40del]",
+        "TEMPLATE:g.37_40delinsCATT",
+    ),
+    (
+        "1420-v4",
+        "TEMPLATE:g.[21delinsGC;24del]",
+        "TEMPLATE:g.21_24delinsGCTG",
+    ),
+    // #1421 — net insertions: the payload is longer than the span it replaces.
+    (
+        "1421-n1",
+        "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
+        "TEMPLATE:g.29_33delinsAACACATACTG",
+    ),
+    (
+        "1421-n2",
+        "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
+        "TEMPLATE:g.32_36delinsTTGGAATCGAC",
+    ),
+    (
+        "1421-n3",
+        "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
+        "TEMPLATE:g.34_38delinsTCACCTTTACG",
+    ),
+];
+
+/// How many reported pairs converge today, in each shuffle direction.
+///
+/// **This may only ever go up.** A drop means a change has regressed a defect
+/// somebody outside the project reported, and must not be re-blessed silently.
+const CONVERGING_PAIRS: usize = 0;
+
+/// Both directions, because a rule that converges only under the default 3'
+/// direction has not solved the problem: 5' is a supported option and reaches
+/// the same partitioner.
+const DIRECTIONS: [ShuffleDirection; 2] =
+    [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime];
+
+/// The premise every row rests on: the two spellings really are one variant.
+///
+/// Asserted first and separately. If a pair ever stopped denoting one sequence,
+/// the census below would be measuring nothing — two genuinely different
+/// variants are *supposed* to normalize differently.
+#[test]
+fn every_reported_pair_denotes_one_sequence() {
+    for (label, a, b) in REPORTED_PAIRS {
+        let left = apply(TEMPLATE, a);
+        let right = apply(TEMPLATE, b);
+        assert!(
+            left.is_some(),
+            "{label}: {a} does not apply to the reference"
+        );
+        assert!(
+            right.is_some(),
+            "{label}: {b} does not apply to the reference"
+        );
+        assert_eq!(
+            left, right,
+            "{label}: the two spellings denote different sequences, so this row \
+             is not a confluence pair and the census is measuring nothing"
+        );
+    }
+}
+
+/// Whatever each spelling normalizes to must still denote the sequence it
+/// started from.
+///
+/// Asserted outright rather than counted: converging on a *wrong* sequence would
+/// be worse than the divergence this module tracks, so there is no acceptable
+/// non-zero value.
+#[test]
+fn no_reported_pair_normalizes_to_a_different_sequence() {
+    for (label, a, b) in REPORTED_PAIRS {
+        let expected = apply(TEMPLATE, a).expect("pair applies");
+        for direction in DIRECTIONS {
+            for input in [a, b] {
+                let output = normalize_in(TEMPLATE, input, direction);
+                assert_eq!(
+                    apply(TEMPLATE, &output).as_deref(),
+                    Some(expected.as_str()),
+                    "{label}: under {direction:?}, normalizing {input} to {output} \
+                     changed the sequence it denotes"
+                );
+            }
+        }
+    }
+}
+
+/// The census, and the ratchet.
+///
+/// A count rather than nine separate assertions: the goal is total convergence,
+/// so partial progress should show up as one number moving rather than as nine
+/// test-file edits. The failure message prints every row's current pair of
+/// outputs, which is what a reader needs to decide whether a move is progress or
+/// a regression.
+#[test]
+fn the_reported_pair_census_is_unchanged() {
+    for direction in DIRECTIONS {
+        let mut converged: Vec<String> = Vec::new();
+        let mut split: Vec<String> = Vec::new();
+        for (label, a, b) in REPORTED_PAIRS {
+            let left = normalize_in(TEMPLATE, a, direction);
+            let right = normalize_in(TEMPLATE, b, direction);
+            if left == right {
+                converged.push(format!("{label} -> {left}"));
+            } else {
+                split.push(format!(
+                    "{label}\n      A {a}\n        -> {left}\n      B {b}\n        -> {right}"
+                ));
+            }
+        }
+        assert_eq!(
+            converged.len(),
+            CONVERGING_PAIRS,
+            "reported-pair convergence moved under {direction:?}.\n\n\
+             converged ({}):\n    {}\n\nstill split ({}):\n    {}\n\n\
+             If this went UP, raise CONVERGING_PAIRS and say so in the PR — it is \
+             a representation change for anyone storing the losing spelling. If it \
+             went DOWN, a change has regressed an externally-reported defect.",
+            converged.len(),
+            converged.join("\n    "),
+            split.len(),
+            split.join("\n    "),
+        );
+    }
+}
+
+/// Idempotence, which convergence alone does not imply.
+///
+/// A pass could converge two spellings onto a string that itself normalizes to
+/// something else. That would satisfy the census and still be unusable as a
+/// stable key, which is the whole point of the exercise.
+#[test]
+fn every_reported_output_is_a_fixed_point() {
+    for (label, a, b) in REPORTED_PAIRS {
+        for direction in DIRECTIONS {
+            for input in [a, b] {
+                let once = normalize_in(TEMPLATE, input, direction);
+                let twice = normalize_in(TEMPLATE, &once, direction);
+                assert_eq!(
+                    once, twice,
+                    "{label}: under {direction:?}, {input} normalized to {once}, \
+                     which is not a fixed point (it normalizes on to {twice})"
+                );
+            }
+        }
+    }
+}
