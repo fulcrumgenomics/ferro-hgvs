@@ -32,15 +32,32 @@
 //! same bases, and strict-**acceptable**. That is #1307, and it is the shape the
 //! rows below start from.
 //!
-//! ## The control
+//! ## The companion row, and what it does *not* guard
 //!
-//! `a_non_conflicting_allele_of_the_same_shape_still_merges` is what makes the
-//! rows above mean "no laundering" rather than "multi-member alleles stay
-//! multi-member". It is the *same* `dup`-plus-substitution shape one base to the
-//! left, where the duplication has a junction to be respelled at and so never
-//! becomes a conflict — and it must still collapse to one member. A gate keyed
-//! on the shape rather than on the conflict would refuse it too, and this test
-//! is what would notice.
+//! `a_non_conflicting_allele_of_the_same_shape_still_merges` pins that the
+//! *same* `dup`-plus-substitution shape one base to the left — where the
+//! duplication has a junction to be respelled at and so never becomes a
+//! conflict — still collapses to one member. That is a real regression guard for
+//! the merge outcome and worth keeping.
+//!
+//! **It is not a control on the gate's scoping**, though this header and that
+//! test's own docstring both used to claim it was (#1435). The claim was that a
+//! gate keyed on the `dup`-plus-substitution *shape* rather than on the conflict
+//! would refuse it, and the test would notice. It would not: `sequence_first_pass`
+//! runs *after* the legacy per-member collapse, so `g.[23dup;23A>G]` has already
+//! become the single member `g.22_23insG` by the time the gate is reached, and a
+//! shape-keyed gate would have nothing left to key on.
+//!
+//! Measured rather than argued, on this file's own fixture: instrumenting the
+//! gate reports `sequence_first_pass sees 1 member` for that input, so its
+//! `members.len() > 1` precondition is false and the gate never runs — and
+//! disabling the gate outright leaves the test passing unchanged.
+//!
+//! Left corrected rather than deleted because the wrong version was load-bearing
+//! in the wrong direction: it told a reader that gate scoping was already
+//! covered, which is exactly what stops someone writing the control that would
+//! cover it. **A genuine control needs an input that reaches
+//! `sequence_first_pass` with two members still intact.**
 
 use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::normalize::NormalizeConfig;
@@ -158,27 +175,36 @@ fn a_conflict_strict_rejects_survives_lenient_normalization() {
     }
 }
 
-/// The gate must key on the conflict, not on the shape it was found in.
+/// A non-conflicting `dup`-plus-substitution pair still collapses to one member.
 ///
-/// `g.[23dup;23A>G]` is the identical `dup`-plus-substitution pair one base to
-/// the left of #1307's. There it is *not* a conflict — the duplication has a
-/// junction 3' of itself to be respelled at, so the two members never end up
-/// coincident — and the derivation is expected to merge it into a single
-/// insertion exactly as it did before the gate existed.
+/// `g.[23dup;23A>G]` is the identical pair one base to the left of #1307's.
+/// There it is *not* a conflict — the duplication has a junction 3' of itself to
+/// be respelled at, so the two members never end up coincident — and the
+/// **legacy per-member collapse** merges it into a single insertion.
+///
+/// **This does not guard `sequence_first_pass`'s gate (#1435.)** It used to say
+/// it did — "a gate that refused this would be keyed on the shape rather than on
+/// the conflict" — and that is not reachable here. The collapse runs first, so
+/// the gate is handed one member, its `members.len() > 1` precondition is false,
+/// and it never runs: instrumenting it reports `sees 1 member` for this input,
+/// and disabling the gate outright leaves this test passing unchanged. A gate
+/// erroneously keyed on the shape would have nothing to key on.
+///
+/// What it does guard is the merge outcome, which is worth keeping on its own
+/// terms. See the module header for what a genuine control on the gate's
+/// scoping would need.
 #[test]
 fn a_non_conflicting_allele_of_the_same_shape_still_merges() {
     let input = "NC_TEST.1:g.[23dup;23A>G]";
     assert!(
         !strict_rejects("NC_TEST.1", input),
-        "`{input}` is the control precisely because it is *not* a conflict; if \
-         strict mode has started rejecting it, it can no longer show that the \
-         gate is scoped to conflicts rather than to the shape"
+        "`{input}` carries no conflict — the duplication writes at its own \
+         junction, clear of the substitution — so strict mode must accept it"
     );
     assert_eq!(
         normalize_lenient("NC_TEST.1", input),
         "NC_TEST.1:g.22_23insG",
-        "`{input}` carries no conflict, so the derivation must still merge it \
-         into one member — a gate that refused this would be keyed on the \
-         `dup`-plus-substitution shape rather than on the conflict"
+        "`{input}` must still collapse to one member through the legacy \
+         per-member collapse"
     );
 }

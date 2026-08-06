@@ -338,16 +338,34 @@ pub(crate) fn has_same_gap_insertions(variants: &[HgvsVariant], phase: AllelePha
 /// group:
 ///   * all sub-variants are same-accession genomic `NaEdit`s with simple
 ///     (certain, non-special, non-offset) positions, and one of
-///     ins/del/sub/delins (literal payloads only);
+///     ins/**dup**/del/sub/delins, and where the edit carries a payload at all
+///     that payload is literal (a `dup` carries none — it copies the range it
+///     names from the reference);
 ///   * the del/sub/delins spans form one contiguous interval with no
 ///     unchanged interior base (no holes);
-///   * every insertion attaches to that interval (its gap lies in
+///   * every insertion-like member attaches to that interval (its gap lies in
 ///     `[c_lo - 1, c_hi]`);
-///   * the group has BOTH an insertion and a del/sub/delins.
+///   * the group has BOTH an insertion-like member and a del/sub/delins.
 ///
-/// Anything else passes through untouched, so pure-insertion groups,
-/// pure-deletion groups (owned by `merge_consecutive_edits`), and
-/// non-overlapping inputs are unaffected.
+/// **`dup` is insertion-like here, not a span (#1436.)** The list above used to
+/// omit it, which read as an exhaustive precondition and told anyone tracing
+/// whether a `dup` can reach this collapse that it cannot. It can: the body
+/// treats it as one of the members that attaches to the del/sub/delins interval
+/// —
+///
+/// ```ignore
+/// let is_insertion_like = |e: &GEdit| matches!(e, GEdit::Ins { .. } | GEdit::Dup { .. });
+/// ```
+///
+/// — plus four further `GEdit::Dup` arms in the span and gap computations. That
+/// is the same read/write distinction #1411 drew: a `dup` writes at the junction
+/// 3' of the run it reads, so it attaches to an interval rather than forming
+/// one.
+///
+/// Anything else passes through untouched, so pure-insertion groups (including
+/// pure-`dup` ones, which have no del/sub/delins to attach to), pure-deletion
+/// groups (owned by `merge_consecutive_edits`), and non-overlapping inputs are
+/// unaffected.
 pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
     variants: Vec<HgvsVariant>,
     phase: AllelePhase,
