@@ -1601,6 +1601,73 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self.provider
     }
 
+    /// Apply this variant to the reference and return the window before and
+    /// after (#1159).
+    ///
+    /// The ground truth for equivalence: two descriptions denote the same edit
+    /// exactly when they produce the same resulting bases. Use
+    /// [`canonical_spdi`](Self::canonical_spdi) when a compact comparable key is
+    /// wanted instead of the bases themselves.
+    ///
+    /// # Errors
+    ///
+    /// Declines rather than guessing for anything without one well-defined
+    /// resulting sequence — a multi-molecule or null allele, members on different
+    /// accessions, members that overlap, an edit SPDI cannot represent, or a span
+    /// wider than [`crate::spdi::MAX_APPLY_WINDOW`]. See
+    /// [`crate::spdi::apply_to_reference`].
+    pub fn apply_to_reference(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<crate::spdi::AppliedVariant, FerroError> {
+        crate::spdi::apply_to_reference(variant, &self.provider)
+    }
+
+    /// An encoding-invariant SPDI key for this variant, derived from the bases it
+    /// results in rather than from how it was written (#1159).
+    ///
+    /// Two descriptions on one accession with the same resulting sequence give the
+    /// same triple, whatever their spelling, member count or member order — which
+    /// is what [`crate::spdi::hgvs_to_spdi`] cannot do, because it transliterates
+    /// the caller's own partitioning. `g.8_14delinsGATTA` and
+    /// `g.[8A>G;9G>A;11C>T;13_14del]` transliterate to one triple and four; they
+    /// canonicalize to the same one.
+    ///
+    /// See [`crate::spdi::apply`]'s module docs for the exact guarantee, and in
+    /// particular for what "canonical" does *not* claim here.
+    ///
+    /// # Errors
+    ///
+    /// As [`apply_to_reference`](Self::apply_to_reference).
+    pub fn canonical_spdi(
+        &self,
+        variant: &HgvsVariant,
+    ) -> Result<crate::spdi::SpdiVariant, FerroError> {
+        crate::spdi::canonical_spdi(variant, &self.provider)
+    }
+
+    /// The reference-aware SPDI transliteration of this variant.
+    ///
+    /// Unlike [`crate::spdi::hgvs_to_spdi_simple`], which is what the Python
+    /// `hgvs_to_spdi` used to be limited to, this resolves the edits that need the
+    /// reference to know their bases — `del`, `delins`, `inv`, `dup` — instead of
+    /// failing on them (#1159).
+    ///
+    /// This preserves the input's partitioning, so it is **not** an
+    /// encoding-invariant key; a cis allele is not one triple at all and is
+    /// refused here. Use [`canonical_spdi`](Self::canonical_spdi) for a key.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`crate::spdi::hgvs_to_spdi`] reports, as a [`FerroError`].
+    pub fn to_spdi(&self, variant: &HgvsVariant) -> Result<crate::spdi::SpdiVariant, FerroError> {
+        crate::spdi::hgvs_to_spdi(variant, &self.provider).map_err(|e| {
+            FerroError::UnsupportedVariant {
+                variant_type: format!("{variant}: cannot convert to SPDI — {e}"),
+            }
+        })
+    }
+
     /// Normalize a variant
     ///
     /// In strict mode (default), rejects variants with reference mismatches.

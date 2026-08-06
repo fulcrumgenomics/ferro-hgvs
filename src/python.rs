@@ -1177,6 +1177,46 @@ fn emit_reduced_capability_warning(
 }
 
 /// HGVS variant normalizer using a reference provider
+/// A variant applied to its reference: the same window before and after (#1159).
+#[pyclass(name = "AppliedVariant")]
+pub struct PyAppliedVariant {
+    inner: crate::spdi::AppliedVariant,
+}
+
+#[pymethods]
+impl PyAppliedVariant {
+    /// The accession every member acts on.
+    #[getter]
+    fn accession(&self) -> &str {
+        &self.inner.accession
+    }
+
+    /// 0-based start of the window both sequences cover.
+    #[getter]
+    fn start(&self) -> u64 {
+        self.inner.start
+    }
+
+    /// The reference bases over the window.
+    #[getter]
+    fn reference(&self) -> &str {
+        &self.inner.reference
+    }
+
+    /// The same window after every member has been applied.
+    #[getter]
+    fn resulting(&self) -> &str {
+        &self.inner.resulting
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "AppliedVariant(accession={:?}, start={}, reference={:?}, resulting={:?})",
+            self.inner.accession, self.inner.start, self.inner.reference, self.inner.resulting
+        )
+    }
+}
+
 #[pyclass(name = "Normalizer")]
 pub struct PyNormalizer {
     provider: PyProvider,
@@ -1301,6 +1341,93 @@ impl PyNormalizer {
     /// Parse an HGVS string
     fn parse(&self, hgvs_string: &str) -> PyResult<PyHgvsVariant> {
         parse(hgvs_string)
+    }
+
+    /// Convert a variant to SPDI, resolving edits that need the reference (#1159).
+    ///
+    /// The module-level `hgvs_to_spdi` does no reference lookup, so it fails on
+    /// every edit whose bases only the reference knows — `del`, `delins`, `inv`,
+    /// `dup` all raise `ProjectionError`. This uses the reference this Normalizer
+    /// already holds and resolves them.
+    ///
+    /// This preserves how the variant was written, so it is a transliteration and
+    /// **not** an encoding-invariant key: a spanning `delins` and its decomposed
+    /// allele give different answers, and a multi-member allele is not one triple
+    /// at all and is refused. Use `canonical_spdi` for a key.
+    ///
+    /// Args:
+    ///     variant: The variant to convert.
+    ///
+    /// Returns:
+    ///     SpdiVariant
+    fn to_spdi(&self, variant: &PyHgvsVariant) -> PyResult<PySpdiVariant> {
+        let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
+        normalizer
+            .to_spdi(&variant.inner)
+            .map(|inner| PySpdiVariant { inner })
+            .map_err(|e| ferro_typed("ProjectionError", format!("{e}"), &e))
+    }
+
+    /// An encoding-invariant SPDI key, derived from the bases the variant results
+    /// in rather than from how it was written (#1159).
+    ///
+    /// Two descriptions on one accession that denote the same edit give the **same**
+    /// key, whatever their spelling, member count or member order:
+    ///
+    ///     n.canonical_spdi(p("TEMPLATE:g.8_14delinsGATTA")) ==
+    ///     n.canonical_spdi(p("TEMPLATE:g.[8A>G;9G>A;11C>T;13_14del]"))
+    ///
+    /// which is what makes it usable as a match key between two pipelines that
+    /// spell variants differently. Normalized HGVS strings cannot serve for that,
+    /// because normalization is not encoding-invariant for complex indels (#1157).
+    ///
+    /// The key is blunt-trimmed to the block that actually changed, which is
+    /// deterministic and independent of how wide a span the input named. It is not
+    /// claimed to be "maximally shifted" in the SPDI specification's sense —
+    /// equality is the contract, not byte-compatibility with another
+    /// implementation's canonical form.
+    ///
+    /// Args:
+    ///     variant: The variant to key.
+    ///
+    /// Returns:
+    ///     SpdiVariant
+    ///
+    /// Raises:
+    ///     ProjectionError: if the variant has no single well-defined resulting
+    ///         sequence — a trans/mosaic/chimeric or null allele, members on
+    ///         different accessions, members that overlap, an edit SPDI cannot
+    ///         represent, or a span wider than 100 000 bases.
+    fn canonical_spdi(&self, variant: &PyHgvsVariant) -> PyResult<PySpdiVariant> {
+        let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
+        normalizer
+            .canonical_spdi(&variant.inner)
+            .map(|inner| PySpdiVariant { inner })
+            .map_err(|e| ferro_typed("ProjectionError", format!("{e}"), &e))
+    }
+
+    /// Apply a variant to the reference and return the window before and after
+    /// (#1159).
+    ///
+    /// The ground truth for equivalence, and the more general primitive of the
+    /// two: two descriptions denote the same edit exactly when they produce the
+    /// same `resulting` bases. `canonical_spdi` is this reduced to a compact key.
+    ///
+    /// Args:
+    ///     variant: The variant to apply.
+    ///
+    /// Returns:
+    ///     AppliedVariant with `accession`, `start` (0-based), `reference` and
+    ///     `resulting`.
+    ///
+    /// Raises:
+    ///     ProjectionError: as `canonical_spdi`.
+    fn apply_to_reference(&self, variant: &PyHgvsVariant) -> PyResult<PyAppliedVariant> {
+        let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
+        normalizer
+            .apply_to_reference(&variant.inner)
+            .map(|inner| PyAppliedVariant { inner })
+            .map_err(|e| ferro_typed("ProjectionError", format!("{e}"), &e))
     }
 
     /// Normalize an HGVS variant
@@ -6034,6 +6161,7 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Batch processing classes
     m.add_class::<PyBatchProgress>()?;
     m.add_class::<PyBatchResult>()?;
+    m.add_class::<PyAppliedVariant>()?;
     m.add_class::<PyBatchProcessor>()?;
     m.add_class::<PyBatchStream>()?;
     m.add_class::<PyBatchItem>()?;

@@ -1,0 +1,799 @@
+//! Apply a variant to its reference, and derive an encoding-invariant key from
+//! the result (#1159).
+//!
+//! # Why this exists
+//!
+//! [`crate::spdi::hgvs_to_spdi`] converts one description into one SPDI triple.
+//! That is a *transliteration*: it preserves however the caller chose to
+//! partition the change, so two descriptions of the same edit convert to
+//! different triples. `TEMPLATE:g.8_14delinsGATTA` and
+//! `TEMPLATE:g.[8A>G;9G>A;11C>T;13_14del]` denote the same resulting sequence and
+//! transliterate to one triple and four.
+//!
+//! Callers who want a key that is equal **iff two descriptions denote the same
+//! edit** therefore cannot use it, and #1159 records what they do instead:
+//! normalize both and compare the strings.
+//!
+//! That was failing when #1159 was filed, for the reasons #1157 and #1158
+//! recorded. **Both are now closed and fixed on `main`** — #1157 by #1160/#1161
+//! and #1158 by #1237/#1341 — and the normalizer is measurably confluent on
+//! #1157's own shape today. So the argument for this module is no longer "the
+//! normalize-and-compare route is broken"; it is that the route couples a key to
+//! the normalizer, and every future confluence fix then churns stored keys.
+//! `canonical_spdi` has no normalizer dependency at all, which is the property
+//! worth having.
+//!
+//! [`canonical_spdi`] answers the question directly instead: apply every member
+//! to the reference, then read the difference back out of the *resulting bases*.
+//! Partitioning cannot survive that, because it is not represented in the
+//! sequence.
+//!
+//! # What the key does and does not guarantee
+//!
+//! **Guaranteed:** two variants on one accession with the same resulting
+//! sequence produce the same `SpdiVariant`, whatever their spelling, member count
+//! or member order. That is the property #1159 asks for and what the tests pin.
+//!
+//! **Also guaranteed, as of the 3' padding:** the change is rolled to its
+//! 3'-most equivalent position. A blunt trim over a window wide enough to
+//! contain the roll *is* the maximal 3' shift, so `g.3_5del` and `g.4_6del` —
+//! the same deletion spelled one base apart in a tract — now key identically.
+//! Before the window was padded they did not, and that was the defect: the
+//! window was exactly the members' own span, leaving the trim no room to move.
+//!
+//! **Still not claimed:** byte-compatibility with the SPDI specification's own
+//! canonical form. The form targeted here is **3'-maximal**, per `general.md:34`;
+//! NCBI's is extended in *both* directions over the repeat, so the two differ on
+//! a rolled indel — `9:G:` here against `8:GG:G` there. Equality across spellings
+//! is the contract, not agreement with another implementation.
+//!
+//! **Not claimed either:** that a no-op carries a canonical position. `g.3A>A`
+//! and `g.5T>T` both change nothing but key as `3::` and `5::`. Giving that one
+//! answer means choosing one, and nothing here needs it.
+
+use crate::error::FerroError;
+use crate::hgvs::variant::HgvsVariant;
+use crate::reference::ReferenceProvider;
+use crate::spdi::SpdiVariant;
+
+/// A variant applied to its reference.
+///
+/// The window is the union of every member's footprint, so `reference` and
+/// `resulting` are directly comparable strings of the same locus before and
+/// after. `resulting` is what #1159 calls the ground truth for equivalence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedVariant {
+    /// The accession every member acts on.
+    pub accession: String,
+    /// 0-based start of the window both strings cover.
+    pub start: u64,
+    /// The reference bases over the window.
+    pub reference: String,
+    /// The same window after every member has been applied.
+    pub resulting: String,
+}
+
+/// Largest window, in bases, that [`apply_to_reference`] will fetch.
+///
+/// A variant spanning more than this is declined rather than served: the point
+/// of the primitive is a comparable local window, and a caller asking about a
+/// megabase deletion wants a different tool. Mirrors the equivalence checker's
+/// own bound, for the same reason.
+pub const MAX_APPLY_WINDOW: u64 = 100_000;
+
+/// Longest repeat tract [`canonical_spdi`] will roll a change 3' through.
+///
+/// Named separately from [`MAX_APPLY_WINDOW`] because it bounds a different
+/// thing, and saying so is the point. `MAX_APPLY_WINDOW` answers "how much
+/// reference will I read for this variant", which the caller can predict from
+/// the description alone. This one answers "how long a tract will I tolerate
+/// *around* it", which the caller cannot predict — it is a property of the
+/// variant's neighbourhood in the reference.
+///
+/// That makes a previously total function partial on a new axis, which is the
+/// strongest argument against extending the window at all. The mitigation is
+/// this: its own name, a generous size, and its own error variant, so the
+/// failure reads as "this variant sits in a repeat tract longer than N" rather
+/// than as a generic decline the caller must guess the cause of.
+///
+/// 32 KB is far above any tract a key is meaningful for — the longest known
+/// pathogenic expansions run to a few tens of kilobases, and a change that rolls
+/// that far is a structural event rather than the local edit this key describes.
+pub const MAX_SHIFT_TRACT: u64 = 32_768;
+
+/// Apply every member of `variant` to `provider`'s reference and return the
+/// before/after window.
+///
+/// # Errors
+///
+/// Declines — rather than guessing — when a single resulting sequence is not
+/// well defined: a non-cis allele (trans / mosaic / chimeric / unknown phase, all
+/// of which describe more than one molecule), a null or unknown allele, members
+/// on different accessions, members whose edits SPDI cannot represent, members
+/// that overlap (applying them depends on order, so there is no one answer), a
+/// stated deletion that disagrees with the reference, or a window wider than
+/// [`MAX_APPLY_WINDOW`].
+pub fn apply_to_reference<P: ReferenceProvider + ?Sized>(
+    variant: &HgvsVariant,
+    provider: &P,
+) -> Result<AppliedVariant, FerroError> {
+    apply_to_reference_padded(variant, provider, 0).map(|(applied, _)| applied)
+}
+
+/// As [`apply_to_reference`], but fetching `pad_3prime` extra reference bases
+/// past the members' own span, and reporting whether the full pad was served.
+///
+/// The pad is what gives [`canonical_spdi`]'s blunt trim room to roll a change
+/// 3'. **Only the 3' side is padded, and that is not an oversight.** Prepending
+/// `n` bases of 5' flank adds exactly `n` to the common prefix, so
+/// `position = start + prefix` is unchanged — left context cannot move the key,
+/// and fetching it would be cost with no effect.
+///
+/// The returned flag says the window is **final**: it ends where the pad asked,
+/// or where the sequence itself ends. False means the contig ran out first, so
+/// a change still touching the 3' edge has genuinely nowhere left to roll.
+///
+/// A provider that can serve neither the wider span nor a length to bound it by
+/// is a third case, and it declines rather than reporting either — the caller
+/// could not otherwise tell "the change stops here" from "I could not read far
+/// enough to find out", and would key off a window that may have cut the roll
+/// short.
+fn apply_to_reference_padded<P: ReferenceProvider + ?Sized>(
+    variant: &HgvsVariant,
+    provider: &P,
+    pad_3prime: u64,
+) -> Result<(AppliedVariant, bool), FerroError> {
+    // `UnsupportedVariant` carries only a `variant_type` string, so the variant
+    // and the reason both go in it — a caller that cannot apply a description
+    // needs to know which one and why, and a bare type name would say neither.
+    let decline = |reason: &str| FerroError::UnsupportedVariant {
+        variant_type: format!("{variant}: cannot apply to reference — {reason}"),
+    };
+
+    let (accession, triples) = variant_edit_triples(variant, provider).ok_or_else(|| {
+        decline(
+            "no single resulting sequence is defined for it — it is a multi-molecule \
+             or null allele, spans more than one accession, or carries an edit SPDI \
+             cannot represent",
+        )
+    })?;
+
+    let (mut start, mut end) = (u64::MAX, u64::MIN);
+    for triple in &triples {
+        start = start.min(triple.position);
+        // Checked: `position` is provider-derived and `deletion` caller-derived,
+        // so nothing upstream bounds their sum. A wrap here would silently
+        // shrink the window and key the variant off the wrong bases.
+        let triple_end = triple
+            .position
+            .checked_add(triple.deletion.len() as u64)
+            .ok_or_else(|| decline("its span overflows the coordinate space"))?;
+        end = end.max(triple_end);
+    }
+    if start > end {
+        return Err(decline("its members name no reference span"));
+    }
+    if end - start > MAX_APPLY_WINDOW {
+        return Err(decline(&format!(
+            "it spans {} bases, more than the {MAX_APPLY_WINDOW}-base limit",
+            end - start
+        )));
+    }
+
+    // Clamp the pad to the contig when its length is knowable. A failed lookup
+    // is not fatal: `get_sequence_length` carries a trait default that always
+    // errors (`provider.rs:424`), so an out-of-tree provider that serves bases
+    // perfectly well may not implement it, and refusing there would regress a
+    // caller that works today. The padded fetch is simply attempted and, if the
+    // provider cannot serve it, the unpadded window is used instead.
+    let requested_end = end.saturating_add(pad_3prime);
+    let known_length = provider.get_sequence_length(&accession).ok();
+    let wanted_end = known_length.map_or(requested_end, |length| requested_end.min(length));
+
+    let reference = fetch_window(provider, &accession, start, wanted_end).ok_or_else(|| {
+        // Falling back to the unpadded window here would be the wrong kind of
+        // safe. The caller cannot then tell "the change genuinely stops here"
+        // from "I could not read far enough to find out", and would key the
+        // variant off a window that may have cut the roll short — two spellings
+        // either side of the cut keying differently, which is the exact
+        // non-convergence this padding removes. Declining says so instead.
+        if wanted_end > end {
+            decline(
+                "its reference window could not be widened far enough to settle where the \
+                 change ends — the provider served neither the wider span nor a length to \
+                 bound it by",
+            )
+        } else {
+            decline("its reference window could not be read")
+        }
+    })?;
+
+    // The roll is complete when the window ends where we asked, or where the
+    // sequence itself ends. Only a *known* length makes the second case
+    // trustworthy: without one, a short window is indistinguishable from a
+    // provider that simply stopped, which is why the fetch above declines
+    // rather than falling back.
+    let window_is_final =
+        wanted_end == requested_end || known_length.is_some_and(|length| wanted_end == length);
+
+    let resulting = apply_triples(&reference, start, &triples).ok_or_else(|| {
+        decline(
+            "its members overlap, or a stated reference base disagrees with the \
+             reference",
+        )
+    })?;
+
+    Ok((
+        AppliedVariant {
+            accession,
+            start,
+            reference,
+            resulting,
+        },
+        window_is_final,
+    ))
+}
+
+/// An encoding-invariant SPDI key for `variant`, derived from the bases it
+/// results in rather than from how it was written (#1159).
+///
+/// Two descriptions on one accession denoting the same resulting sequence give
+/// the same triple, whatever their spelling, member count or member order. See
+/// the module docs for what this does and does not claim.
+///
+/// # Errors
+///
+/// As [`apply_to_reference`].
+pub fn canonical_spdi<P: ReferenceProvider + ?Sized>(
+    variant: &HgvsVariant,
+    provider: &P,
+) -> Result<SpdiVariant, FerroError> {
+    /// First pad tried once a change is found to reach the window's 3' edge.
+    /// Doubling from here makes a homopolymer cost `O(log tract)` fetches, and
+    /// covers every non-repeat case in one.
+    const FIRST_PAD: u64 = 64;
+
+    let mut pad = 0u64;
+    loop {
+        let (applied, window_is_final) = apply_to_reference_padded(variant, provider, pad)?;
+        let (offset, deletion, insertion) =
+            trim_common_flanks(applied.reference.as_bytes(), applied.resulting.as_bytes());
+
+        // A description that changes nothing has no block to roll, and the
+        // 3'-edge test below is vacuously true for it — every base matches, so
+        // the trimmed block sits at the window's end however wide the window is.
+        // Without this the loop would widen to the accession's end chasing an
+        // edge it can never leave, then decline a variant that is merely inert.
+        //
+        // It does **not** make two no-ops agree, and measuring rather than
+        // assuming is what showed that: `g.3A>A` keys as `3::` and `g.5T>T` as
+        // `5::`, each at its own position. That is a real residual — a key
+        // meaning "nothing changed" arguably should not carry a position at all
+        // — but it is pre-existing, orthogonal to the 3'-shift this change is
+        // about, and giving it an answer means choosing one, so it is left
+        // stated rather than silently picked.
+        let is_no_op = deletion.is_empty() && insertion.is_empty();
+
+        // The blunt trim *is* the maximal 3' shift, but only over a window wide
+        // enough to contain the roll. While the trimmed block still runs to the
+        // window's 3' edge, the shift may have been cut off by the window rather
+        // than by the sequence, so widen and ask again.
+        let reaches_edge = offset + deletion.len() == applied.reference.len();
+
+        if is_no_op || !reaches_edge || !window_is_final {
+            return Ok(SpdiVariant {
+                sequence: applied.accession,
+                position: applied.start + offset as u64,
+                deletion: String::from_utf8_lossy(deletion).into_owned(),
+                insertion: String::from_utf8_lossy(insertion).into_owned(),
+            });
+        }
+
+        // Decline rather than answer over a truncated window. Returning the
+        // clamped key would not be a smaller answer, it would be a *different*
+        // one: two spellings either side of the cap key differently, which is
+        // exactly the non-convergence this function exists to remove.
+        if pad >= MAX_SHIFT_TRACT {
+            return Err(FerroError::UnsupportedVariant {
+                variant_type: format!(
+                    "{variant}: cannot derive a stable key — it sits in a repeat tract \
+                     still running past {MAX_SHIFT_TRACT} bases 3' of it, so how far the \
+                     change shifts depends on how much reference is read"
+                ),
+            });
+        }
+        pad = if pad == 0 {
+            FIRST_PAD
+        } else {
+            pad.saturating_mul(2)
+        };
+    }
+}
+
+/// Strip the bases the two windows share at each end, returning the offset of the
+/// remaining block and the two differing slices.
+///
+/// This is what makes the key window-independent: a wider window differs from a
+/// narrower one only by flanking bases that are identical on both sides, and
+/// those are exactly what is removed. Case-insensitive, because reference FASTAs
+/// are often soft-masked and case carries no biological meaning — the same
+/// reasoning `apply_triples` already applies to stated deletions.
+fn trim_common_flanks<'a>(reference: &'a [u8], resulting: &'a [u8]) -> (usize, &'a [u8], &'a [u8]) {
+    let max_prefix = reference.len().min(resulting.len());
+    let mut prefix = 0;
+    while prefix < max_prefix && reference[prefix].eq_ignore_ascii_case(&resulting[prefix]) {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < max_prefix - prefix
+        && reference[reference.len() - 1 - suffix]
+            .eq_ignore_ascii_case(&resulting[resulting.len() - 1 - suffix])
+    {
+        suffix += 1;
+    }
+    (
+        prefix,
+        &reference[prefix..reference.len() - suffix],
+        &resulting[prefix..resulting.len() - suffix],
+    )
+}
+
+/// Apply SPDI triples to `reference` — the bases spanning the interbase
+/// interval that begins at `win_start` — and return the edited sequence.
+///
+/// Triples are applied from the 3' end (descending position) so that an earlier
+/// splice never shifts the coordinates of a later one. Each triple's stated
+/// deleted bases are validated against the actual reference bases at that span;
+/// if they disagree (a ref-mismatched input — e.g. `c.5A>G` where the reference
+/// base is not `A`), we cannot faithfully reconstruct the edit, so we decline
+/// (`None`) rather than assert a sequence equivalence we cannot trust. Also
+/// returns `None` if any triple falls outside the window (a defensive guard;
+/// callers build the window to cover every triple), or if two triples overlap
+/// (see [`triples_are_disjoint`]).
+pub(crate) fn apply_triples(
+    reference: &str,
+    win_start: u64,
+    triples: &[SpdiVariant],
+) -> Option<String> {
+    let ref_bytes = reference.as_bytes();
+    let mut bytes = ref_bytes.to_vec();
+    let mut ordered: Vec<&SpdiVariant> = triples.iter().collect();
+    ordered.sort_by_key(|t| std::cmp::Reverse(t.position));
+    if !triples_are_disjoint(&ordered) {
+        return None;
+    }
+    for t in ordered {
+        let rel = t.position.checked_sub(win_start)? as usize;
+        let end = rel.checked_add(t.deletion.len())?;
+        if end > ref_bytes.len() {
+            return None;
+        }
+        // Validate the stated deletion against the original reference span.
+        // (Checked against `ref_bytes`, not the mutated `bytes`: descending
+        // order means every already-applied splice sits strictly 3' of `rel`,
+        // so this span is untouched either way.)
+        if !ref_bytes[rel..end].eq_ignore_ascii_case(t.deletion.as_bytes()) {
+            return None;
+        }
+        // The splice targets the mutated buffer, whose length no longer matches
+        // the reference once a length-changing edit has been applied. The
+        // disjointness guard above already makes `end <= bytes.len()` hold;
+        // bound it explicitly anyway so a future change cannot turn a logic
+        // slip back into an out-of-bounds panic (#1244).
+        if end > bytes.len() {
+            return None;
+        }
+        bytes.splice(rel..end, t.insertion.bytes());
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Whether no two of `ordered` claim the same reference base.
+///
+/// `ordered` must be sorted by descending position, as [`apply_triples`] leaves
+/// it. That descending application order is what lets each stated deletion be
+/// validated against the pristine reference: every already-applied splice sits
+/// strictly 3' of the next one, so the span about to be read is untouched. The
+/// argument holds only while the triples are disjoint — overlapping ones both
+/// invalidate that validation and can index past the end of the shrinking
+/// buffer, which is the out-of-bounds panic of #1244.
+///
+/// Declining is also the honest answer semantically: an allele whose members
+/// claim the same base has no single well-defined resulting sequence, so there
+/// is nothing to compare. The caller uses the comparison only to *upgrade* a
+/// `NotEquivalent` verdict, so a decline never invents an equivalence.
+///
+/// Two triples that merely abut are disjoint, and so is any number of pure
+/// insertions at one interbase position — an insertion deletes nothing and
+/// therefore claims no base.
+fn triples_are_disjoint(ordered: &[&SpdiVariant]) -> bool {
+    // Walk 5' -> 3' (the reverse of `ordered`) carrying the furthest 3' reach
+    // of every triple seen so far. Comparing against the running maximum rather
+    // than the immediate predecessor is what makes this complete: one long
+    // triple can span several shorter ones that do not touch each other.
+    let mut reach: Option<u64> = None;
+    for t in ordered.iter().rev() {
+        let Some(end) = t.position.checked_add(t.deletion.len() as u64) else {
+            return false;
+        };
+        if reach.is_some_and(|r| r > t.position) {
+            return false;
+        }
+        reach = Some(reach.map_or(end, |r| r.max(end)));
+    }
+    true
+}
+
+/// The SPDI triples that make up `variant`'s resulting sequence, and the single
+/// accession they act on.
+///
+/// `None` when a single resulting sequence is undefined or cannot be derived —
+/// see [`apply_to_reference`]'s error list, which this decides.
+pub(crate) fn variant_edit_triples<P: ReferenceProvider + ?Sized>(
+    variant: &HgvsVariant,
+    provider: &P,
+) -> Option<(String, Vec<SpdiVariant>)> {
+    use crate::hgvs::variant::AllelePhase;
+
+    let members: Vec<&HgvsVariant> = match variant {
+        HgvsVariant::Allele(allele) => {
+            // A single resulting sequence is only well-defined for a cis allele —
+            // every edit applied to the same molecule.
+            if allele.phase != AllelePhase::Cis {
+                return None;
+            }
+            allele.variants.iter().collect()
+        }
+        HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => return None,
+        single => vec![single],
+    };
+    if members.is_empty() {
+        return None;
+    }
+
+    let mut accession: Option<String> = None;
+    let mut triples = Vec::with_capacity(members.len());
+    for member in members {
+        let spdi = crate::spdi::hgvs_to_spdi(member, provider).ok()?;
+        match &accession {
+            None => accession = Some(spdi.sequence.clone()),
+            Some(acc) if *acc != spdi.sequence => return None,
+            Some(_) => {}
+        }
+        triples.push(spdi);
+    }
+
+    // Two insertions at one interbase have no order between them, and this path
+    // *publishes* a key — so it must decline rather than let the application
+    // order pick a winner. Measured before this guard, on the fixture contig:
+    //
+    //     g.[5_6insA;5_6insC]  ->  5::CA
+    //     g.[5_6insC;5_6insA]  ->  8::CA
+    //
+    // One variant, two keys, decided by nothing the description states. HGVS
+    // spells "insert both, in this order" as a single ordered compound payload
+    // (`ins[A;C]`, general.md:79), so a caller who means an order has a way to
+    // say it and a caller who wrote two members has not said one.
+    //
+    // **Deliberately here and not in `triples_are_disjoint`.** That predicate is
+    // shared with `EquivalenceChecker`, where the permissive reading is correct:
+    // a decline there only forgoes upgrading a `NotEquivalent` verdict, so it can
+    // never invent an equivalence, and two pinned tests depend on it. One
+    // predicate cannot serve both a checker that may guess and a key that may
+    // not.
+    let mut zero_width: Vec<u64> = triples
+        .iter()
+        .filter(|t| t.deletion.is_empty())
+        .map(|t| t.position)
+        .collect();
+    zero_width.sort_unstable();
+    if zero_width.windows(2).any(|pair| pair[0] == pair[1]) {
+        return None;
+    }
+
+    accession.map(|acc| (acc, triples))
+}
+
+/// Read `[start, end)` from `accession`, or `None` if the provider cannot serve
+/// exactly that many bases.
+///
+/// Tries the genomic accessor first and falls back to the generic one, so a
+/// contig and a transcript are both reachable.
+pub(crate) fn fetch_window<P: ReferenceProvider + ?Sized>(
+    provider: &P,
+    accession: &str,
+    start: u64,
+    end: u64,
+) -> Option<String> {
+    let bases = provider
+        .get_genomic_sequence(accession, start, end)
+        .or_else(|_| provider.get_sequence(accession, start, end))
+        .ok()?;
+    if bases.len() as u64 != end - start {
+        return None;
+    }
+    Some(bases)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hgvs::parser::parse_hgvs;
+    use crate::reference::MockProvider;
+
+    /// A 40-base contig whose bases are known, so the expected triples can be
+    /// written by hand rather than read back out of the code under test.
+    ///
+    ///  1-based: 1234567890...
+    ///           GGATTACAGGCATTAGCCTGAGGATTACAGGCATTAGCCT
+    fn provider() -> MockProvider {
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_KEY.1", "GGATTACAGGCATTAGCCTGAGGATTACAGGCATTAGCCT");
+        // A second contig, so "members on different accessions" can be tested as
+        // the real thing rather than as an absent-reference failure.
+        provider.add_genomic_sequence("NC_OTHER.1", "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT");
+        provider
+    }
+
+    fn key(descriptor: &str) -> SpdiVariant {
+        let variant = parse_hgvs(descriptor).expect("fixture must parse");
+        canonical_spdi(&variant, &provider())
+            .unwrap_or_else(|e| panic!("`{descriptor}` must canonicalize: {e}"))
+    }
+
+    /// #1159's whole point: a spanning `delins` and its decomposed cis allele are
+    /// the same edit, and must produce the same key.
+    ///
+    /// `hgvs_to_spdi` cannot do this — it transliterates the partitioning, so it
+    /// answers with one triple for the first and four for the second. The key is
+    /// derived from the resulting bases, where partitioning is not represented.
+    #[test]
+    fn a_spanning_delins_and_its_decomposition_share_one_key() {
+        // Reference 3..=7 is `ATTAC`; replace it with `GGCTA` piecewise. Every
+        // one of the five bases changes, so the decomposition is five members —
+        // A>G, T>G, T>C, A>T, C>A.
+        let spanning = key("NC_KEY.1:g.3_7delinsGGCTA");
+        let decomposed = key("NC_KEY.1:g.[3A>G;4T>G;5T>C;6A>T;7C>A]");
+        assert_eq!(
+            spanning, decomposed,
+            "the same edit written two ways must give one key"
+        );
+        // And the key really is the minimal changed block, not the input's span.
+        assert_eq!(spanning.sequence, "NC_KEY.1");
+        assert_eq!(
+            (spanning.deletion.as_str(), spanning.insertion.as_str()),
+            ("ATTAC", "GGCTA")
+        );
+    }
+
+    /// Member order must not matter, since a cis allele is a set of edits on one
+    /// molecule.
+    ///
+    /// Note what this test alone cannot show: it uses two substitutions at 3 and
+    /// 7, which are disjoint whichever order they are applied in, so
+    /// `apply_triples` sorts them to one sequence and the assertion holds even
+    /// for an implementation that keyed off application order. The case that
+    /// discriminates is two insertions at one interbase, and it is
+    /// `coincident_insertions_are_declined_rather_than_ordered` below.
+    #[test]
+    fn member_order_does_not_change_the_key() {
+        assert_eq!(key("NC_KEY.1:g.[3A>G;7C>A]"), key("NC_KEY.1:g.[7C>A;3A>G]"));
+    }
+
+    /// The pad doubles until it contains the roll, and a tract that outruns the
+    /// cap is declined rather than answered over a truncated window.
+    ///
+    /// Both halves need a tract longer than `FIRST_PAD`, so this builds its own
+    /// contig rather than using the 40-base fixture: 300 `A`s, which forces at
+    /// least one doubling (64 -> 128 -> 256 -> 512), and a tract past
+    /// `MAX_SHIFT_TRACT`, which must decline.
+    ///
+    /// Without the doubling the first pad would silently cap the roll and the
+    /// two spellings would key apart — the same defect one order of magnitude
+    /// further out, which is exactly the failure a single fixed pad would hide.
+    #[test]
+    fn the_pad_grows_until_it_contains_the_roll_then_declines() {
+        let homopolymer = |run: usize| {
+            let mut provider = MockProvider::new();
+            provider.add_genomic_sequence("NC_RUN.1", format!("C{}C", "A".repeat(run)));
+            provider
+        };
+
+        // A 300-base `A` run at 2..=301. Deleting any one `A` leaves the same
+        // sequence, so every spelling must key identically — which needs a
+        // window wider than one `FIRST_PAD`.
+        let provider = homopolymer(300);
+        let key_of = |descriptor: &str| {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            canonical_spdi(&variant, &provider).expect("must canonicalize")
+        };
+        let first = key_of("NC_RUN.1:g.2del");
+        assert_eq!(first, key_of("NC_RUN.1:g.150del"));
+        assert_eq!(first, key_of("NC_RUN.1:g.301del"));
+        assert_eq!(
+            (first.position, first.deletion.as_str()),
+            // 0-based, so the 3'-most `A` of a run occupying 1-based 2..=301.
+            (300, "A"),
+            "the deletion must roll to the 3' end of the run"
+        );
+
+        // Past the cap it declines, and says why rather than returning a key
+        // derived from however much reference it happened to read.
+        let huge = homopolymer(MAX_SHIFT_TRACT as usize + 1_000);
+        let variant = parse_hgvs("NC_RUN.1:g.2del").expect("fixture must parse");
+        let error = canonical_spdi(&variant, &huge)
+            .expect_err("a tract past the cap has no window-independent key");
+        let message = error.to_string();
+        assert!(
+            message.contains("repeat tract"),
+            "the decline must name the tract, not read as a generic failure; got: {message}"
+        );
+    }
+
+    /// Two insertions at one interbase have no order between them, so the key
+    /// declines rather than inventing one.
+    ///
+    /// Before this guard the two spellings produced **different keys** —
+    /// `5::CA` and `8::CA` — which is worse than declining: a caller comparing
+    /// keys would read one variant as two. HGVS spells "insert both, in this
+    /// order" as a single ordered payload (`ins[A;C]`, `general.md:79`), so a
+    /// caller who means an order has a way to say it.
+    ///
+    /// The decline is asserted on both spellings, because a guard that fired on
+    /// only one would leave exactly the asymmetry it exists to remove.
+    #[test]
+    fn coincident_insertions_are_declined_rather_than_ordered() {
+        for descriptor in [
+            "NC_KEY.1:g.[5_6insA;5_6insC]",
+            "NC_KEY.1:g.[5_6insC;5_6insA]",
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            assert!(
+                canonical_spdi(&variant, &provider()).is_err(),
+                "`{descriptor}` has no order between its two insertions, so no single \
+                 key describes it — declining is the answer, not picking one"
+            );
+        }
+        // The single-member spelling states its own order, so it still keys.
+        //
+        // Note the payload comes back **rotated**, `CA` at 8 rather than `AC` at
+        // 5: the reference reads `AC` at 6-7, so inserting `AC` at 5|6 is the
+        // same edit as inserting `CA` at 7|8, and the 3' roll takes it there.
+        // Pinned rather than left as "some key" because a rotation is exactly
+        // the kind of thing that looks like a bug to the next reader, and
+        // because it is the property that makes the roll worth having.
+        let ordered = key("NC_KEY.1:g.5_6insAC");
+        assert_eq!((ordered.position, ordered.insertion.as_str()), (8, "CA"));
+    }
+
+    /// The same change spelled at two positions in a tract keys identically.
+    ///
+    /// This is what the 3' padding buys, and it is the property #1159 needs:
+    /// without a window wider than the members' own span the blunt trim has no
+    /// room to roll, so each spelling keys where it was written. Measured before
+    /// the padding: `g.3_5del` gave `2:ATT:` and `g.4_6del` gave `3:TTA:`; `g.1del`
+    /// gave `0:G:` and `g.2del` gave `1:G:`.
+    ///
+    /// The pairs are asserted equal *and* pinned to the 3'-most form, because
+    /// equality alone is satisfied by two spellings agreeing on a wrong answer.
+    #[test]
+    fn one_change_spelled_two_ways_in_a_tract_keys_once() {
+        // `GG` at 1-2: deleting either `G` leaves the same sequence.
+        let first = key("NC_KEY.1:g.1del");
+        assert_eq!(first, key("NC_KEY.1:g.2del"));
+        assert_eq!((first.position, first.deletion.as_str()), (1, "G"));
+
+        // `GG` at 9-10, away from the contig edge.
+        let inner = key("NC_KEY.1:g.9del");
+        assert_eq!(inner, key("NC_KEY.1:g.10del"));
+        assert_eq!((inner.position, inner.deletion.as_str()), (9, "G"));
+
+        // `ATT` at 3-5 and `TTA` at 4-6 remove the same three bases, because
+        // `ref[2] == ref[5] == 'A'`.
+        let rolled = key("NC_KEY.1:g.3_5del");
+        assert_eq!(rolled, key("NC_KEY.1:g.4_6del"));
+        assert_eq!((rolled.position, rolled.deletion.as_str()), (3, "TTA"));
+
+        // An insertion and the `dup` that denotes it are one variant.
+        let inserted = key("NC_KEY.1:g.13_14insT");
+        assert_eq!(inserted, key("NC_KEY.1:g.14dup"));
+        assert_eq!((inserted.position, inserted.insertion.as_str()), (14, "T"));
+    }
+
+    /// A net deletion and a net insertion round-trip through the same path, and
+    /// the key trims to the block that actually changed.
+    #[test]
+    fn the_key_is_the_minimal_changed_block() {
+        // `g.3_5del` removes three bases. The block is reported one position 3'
+        // of where it was authored, as `TTA` rather than `ATT`, because
+        // `ref[2] == ref[5] == 'A'` and the change therefore rolls: deleting
+        // `ATT` at 2 and deleting `TTA` at 3 leave the same sequence.
+        //
+        // That roll is the whole point — before the window was padded 3' this
+        // returned `2:ATT:` here while `g.4_6del`, the same deletion spelled one
+        // base over, returned `3:TTA:`. Two keys, one variant. Which of the two
+        // survives is the 3'-maximal one, per `general.md:34`, and it is the
+        // form the sibling spelling already keyed to, so converging here costs
+        // no shipped key that was not already ambiguous.
+        let deletion = key("NC_KEY.1:g.3_5del");
+        assert_eq!(deletion.deletion, "TTA");
+        assert_eq!(deletion.insertion, "");
+        // A pure insertion deletes nothing.
+        let insertion = key("NC_KEY.1:g.5_6insCCC");
+        assert_eq!(insertion.deletion, "");
+        assert_eq!(insertion.insertion, "CCC");
+    }
+
+    /// Two genuinely different edits must not collide — a key that made
+    /// everything equal would pass every test above.
+    #[test]
+    fn different_edits_get_different_keys() {
+        assert_ne!(key("NC_KEY.1:g.3A>G"), key("NC_KEY.1:g.3A>C"));
+        assert_ne!(key("NC_KEY.1:g.3A>G"), key("NC_KEY.1:g.4T>G"));
+        assert_ne!(key("NC_KEY.1:g.3_5del"), key("NC_KEY.1:g.3_6del"));
+    }
+
+    /// `apply_to_reference` returns the window before and after, and the two
+    /// differ exactly by the edit.
+    #[test]
+    fn apply_to_reference_returns_both_windows() {
+        let variant = parse_hgvs("NC_KEY.1:g.3_7delinsGGCTA").unwrap();
+        let applied = apply_to_reference(&variant, &provider()).expect("applies");
+        assert_eq!(applied.accession, "NC_KEY.1");
+        assert_eq!(applied.start, 2, "0-based interbase start of g.3");
+        assert_eq!(applied.reference, "ATTAC");
+        assert_eq!(applied.resulting, "GGCTA");
+    }
+
+    /// The shapes with no single resulting sequence must decline, not guess.
+    ///
+    /// Each is a distinct reason, and a caller needs the decline rather than an
+    /// answer derived from one arbitrary reading of an ambiguous input. Every
+    /// fixture is `expect`ed to parse, so one that stopped parsing fails loudly
+    /// instead of being skipped — a skipped fixture asserts nothing.
+    #[test]
+    fn shapes_without_one_resulting_sequence_decline() {
+        for (descriptor, why) in [
+            (
+                "NC_KEY.1:g.[3_5del;4T>G]",
+                "overlapping members — applying them depends on order",
+            ),
+            (
+                "NC_KEY.1:g.[3A>G(;)7C>A]",
+                "trans phase — two molecules, not one sequence",
+            ),
+            (
+                "[NC_KEY.1:g.3A>G;NC_OTHER.1:g.7T>G]",
+                "members on different accessions",
+            ),
+        ] {
+            let variant = parse_hgvs(descriptor)
+                .unwrap_or_else(|e| panic!("fixture `{descriptor}` must parse: {e}"));
+            assert!(
+                apply_to_reference(&variant, &provider()).is_err(),
+                "`{descriptor}` must decline ({why})"
+            );
+            assert!(
+                canonical_spdi(&variant, &provider()).is_err(),
+                "`{descriptor}` must decline for the key too ({why})"
+            );
+        }
+    }
+
+    /// The control for the test above: a single-member variant on a served
+    /// accession applies. Without this, every decline assertion would also be
+    /// satisfied by an `apply_to_reference` that declined *everything*.
+    #[test]
+    fn a_plain_single_member_variant_applies() {
+        let variant = parse_hgvs("NC_KEY.1:g.3A>G").expect("must parse");
+        assert!(apply_to_reference(&variant, &provider()).is_ok());
+        assert!(canonical_spdi(&variant, &provider()).is_ok());
+    }
+
+    /// An unknown accession declines rather than panicking.
+    #[test]
+    fn an_unreadable_reference_declines() {
+        let variant = parse_hgvs("NC_ABSENT.1:g.3A>G").unwrap();
+        assert!(apply_to_reference(&variant, &provider()).is_err());
+    }
+}

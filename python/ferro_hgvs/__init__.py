@@ -126,6 +126,7 @@ __all__ = [
     "Normalizer",
     # SPDI classes
     "SpdiVariant",
+    "AppliedVariant",
     # Coordinate classes
     "ZeroBasedPos",
     "OneBasedPos",
