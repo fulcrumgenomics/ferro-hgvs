@@ -1971,41 +1971,63 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// two-member `g.[261_262insGA;263_264insAA]` denote the same variant, and
     /// until this widened, only one of them was allowed to be re-derived.
     ///
-    /// The **axis** restriction below is a separate, still-live gate — kept
-    /// exactly as narrow as before (`g.`/`m.` only) — and unaffected by the
-    /// above. Widening the edit-type half was measured to move nothing; the
-    /// costs recorded below are what widening the *axis* half would move, and
-    /// they are **not** paid by this change:
+    /// The **axis** gate is open to the transcript axes as of #1235: `c.`, `n.`
+    /// and `r.` join `g.`/`m.` in the match below. #1237 had narrowed it to
+    /// `g.`/`m.` on the grounds that `merge::canonicalize_from_sequence` refused
+    /// the transcript axes anyway; a prior PR removed that refusal for
+    /// **alleles**, which left a lone `c.`/`n.`/`r.` member as the one shape
+    /// still held back on axis grounds. The asymmetry was real — a lone spelling
+    /// that the allele spelling of the same variant would re-partition could
+    /// stay unsplit — and closing it is what the widening does.
     ///
-    /// #1237 narrowed the axis to `g.`/`m.` on the grounds that
-    /// `merge::canonicalize_from_sequence` refused the transcript axes anyway.
-    /// A prior PR removed that refusal for **alleles**, so lone `c.`/`n.`/`r.`
-    /// members are the one shape still held back on axis grounds, and the
-    /// asymmetry is real: a lone spelling that the allele spelling of the same
-    /// variant would re-partition can stay unsplit.
+    /// # What widening the axis cost, measured rather than predicted
     ///
-    /// Widening the axis was tried and is **not** a drive-by change. It moves
-    /// four tests, and one of them is not ours to move unilaterally:
+    /// An earlier revision of this comment held the axis shut behind four tests
+    /// it predicted would move. **Exactly one of the four moved anything
+    /// committed, and it was fixed rather than re-blessed** — so the conformance
+    /// decision the comment was waiting on turned out not to exist.
+    /// Measured twice: once with only the widening applied (this branch's first
+    /// commit, `feat(normalize): widen the axis gate to c./n./r.`) and again at
+    /// the branch tip. Commit subjects rather than hashes, because rebasing
+    /// rewrites the hashes and a citation nobody can resolve is worse than none.
     ///
     /// * `normalize_tests::test_normalize_inversion_unchanged` and
-    ///   `rna_coding_consistency::parity_safe_regime::inversion_parity` — a lone
-    ///   `c.10_15inv` with an unchanged interior starts splitting into
-    ///   `[10_11delinsCA;14_15delinsAC]`. Coherent with #1230 on `g.`, and the
-    ///   parity test would need the `c_to_r` alphabet conversion its `delins`
-    ///   sibling already uses. Both are legitimately re-blessable.
-    /// * `spec_enumeration_tests::enumeration_replays_recorded_behavior` — a
-    ///   regenerated recording.
-    /// * `mutalyzer_normalize_tests::gate_normalized_snapshot` — **3 hermetic
-    ///   divergences from the Mutalyzer oracle.** That is output moving away
-    ///   from an independent oracle, which is a conformance decision needing its
-    ///   own measurement pass, not a side effect of this one.
+    ///   `rna_coding_consistency::parity_safe_regime::inversion_parity` — **did
+    ///   not move.** Both pass unmodified with only the widening applied and at
+    ///   the tip; the predicted lone-`inv` split does not arise on the `main`
+    ///   this branch sits on. Neither file is touched by this branch.
+    /// * `spec_enumeration_tests::enumeration_replays_recorded_behavior` — the
+    ///   gitignored recording does regenerate, but that test compares ferro
+    ///   against itself; the two **committed** census guards are what judge
+    ///   behaviour, and they do not move. `DIVERGENCE_BUDGET` and
+    ///   `PASSING_CENSUS` are byte-identical to `main`, so the diff there is
+    ///   commentary only. Per this branch's own two measurements
+    ///   `ProjectionSplitsSingleMember` went 9 -> 13 and back to 9 inside the
+    ///   branch; only the net is asserted anywhere.
+    /// * `mutalyzer_normalize_tests::gate_normalized_snapshot` — the prediction
+    ///   that held, and at exactly the stated count. With only the widening
+    ///   applied it fails with **3 hermetic divergences**, one variant in three
+    ///   spellings:
+    ///   `NM_000143.3:c.44_47delinsATC` (also `…delTGCGinsATC`, `…del4insATC`)
+    ///   rendered as `c.[44_45delinsAT;49del]`.
     ///
-    /// So the axis stays gated until that pass happens; only the edit-type
-    /// half opened here.
+    /// **How those three were adjudicated: they were not.** The divergence is
+    /// `general.md:35`'s coding exception — two changes one base apart within
+    /// one reading frame — which the live path could not apply because it had no
+    /// axis to apply it on. `merge::coalesce_coding_frame_separation` supplies
+    /// it, and that function's own doc names this same `c.44_47delinsATC` as the
+    /// case it was written for. At the tip `gate_normalized_snapshot` passes all
+    /// **26** covered rows (0 fail, 0 known_bug, 0 improvement) with **no
+    /// Mutalyzer snapshot, `cases.json` row or oracle baseline changed** — this
+    /// branch touches no file under `tests/fixtures/`. So ferro agrees with the
+    /// oracle again and there was no conformance decision left to take.
     fn is_splittable_single_member(variant: &HgvsVariant) -> bool {
         let edit = match variant {
             HV::Genome(g) => &g.loc_edit.edit,
             HV::Mt(m) => &m.loc_edit.edit,
+            HV::Cds(c) => &c.loc_edit.edit,
+            HV::Tx(t) => &t.loc_edit.edit,
+            HV::Rna(r) => &r.loc_edit.edit,
             _ => return false,
         };
         edit.inner().is_some()
