@@ -494,13 +494,38 @@ impl Transcript {
         }
     }
 
-    /// Get sequence at a position range (0-based). Returns `None` if the
-    /// transcript has no cached sequence bases or the range is out of bounds.
+    /// Get sequence at a position range (0-based, half-open). Returns `None` if
+    /// the transcript has no cached sequence bases or the range is out of
+    /// bounds.
+    ///
+    /// # A zero-length range is empty, not invalid (#1472)
+    ///
+    /// `start == end` names the interbase point before `start` and reads no
+    /// bases, so it yields `""`. This used to require `start < end` and so
+    /// returned `None`, which the provider reported as `Position 9-9 out of
+    /// range` — and that is exactly the window an **insertion** or a
+    /// **duplication** has. `apply_to_reference` therefore declined every
+    /// insertion and `dup` on the transcript axes while accepting substitutions
+    /// and deletions on the same record, which made a primitive documented as
+    /// encoding-*invariant* answer differently for two spellings of one variant:
+    /// `n.[9dup;10dup;11dup]` resolved and the `n.9_10insTAA` that ferro's own
+    /// normalizer returns for it did not.
+    ///
+    /// The contig path (`MockProvider::get_genomic_sequence`, which rejects on
+    /// `start > end`) and `FastaProvider`'s indexed read already answered `""`
+    /// here, so this adopts their convention rather than inventing a third.
+    ///
+    /// **Zero length and out of range stay separate questions.** `start` must
+    /// still name a base the sequence has, so a zero-length read at or past
+    /// `len` is `None` — matching the contig path's `start >= len` guard,
+    /// including at exactly `len` (the junction past the last base). An inverted
+    /// range is likewise still `None`; it shared the old `start < end` test, so
+    /// relaxing that test had to keep rejecting it explicitly.
     pub fn get_sequence(&self, start: u64, end: u64) -> Option<&str> {
         let seq = self.sequence.as_deref()?;
         let start = start as usize;
         let end = end as usize;
-        if end <= seq.len() && start < end {
+        if start < seq.len() && end <= seq.len() && start <= end {
             Some(&seq[start..end])
         } else {
             None
@@ -1176,6 +1201,48 @@ mod tests {
     fn test_get_sequence() {
         let tx = make_test_transcript();
         assert_eq!(tx.get_sequence(0, 3), Some("ATG"));
+    }
+
+    /// #1472 — a zero-length range is empty, not out of bounds.
+    ///
+    /// Unit-level rather than only through a provider because the contract
+    /// belongs to this function: the provider merely maps `None` onto
+    /// `InvalidCoordinates`, so an integration assertion would be measuring the
+    /// dispatch as much as the bounds test. The 20-base fixture makes each
+    /// boundary explicit.
+    #[test]
+    fn get_sequence_treats_a_zero_length_range_as_empty() {
+        let tx = make_test_transcript(); // "ATGCATGCATGCATGCATGC", 20 bases
+
+        // Interior interbase points read no bases and are legal.
+        assert_eq!(tx.get_sequence(0, 0), Some(""));
+        assert_eq!(tx.get_sequence(9, 9), Some(""));
+        assert_eq!(tx.get_sequence(19, 19), Some(""));
+
+        // Non-empty reads are unaffected, bases included.
+        assert_eq!(tx.get_sequence(0, 3), Some("ATG"));
+        assert_eq!(tx.get_sequence(16, 20), Some("ATGC"));
+    }
+
+    /// The discriminating half of #1472: only zero *length* was relaxed, not
+    /// out of *range* and not an inverted range. Both shared the old
+    /// `start < end` test, so a fix that simply dropped it would pass the
+    /// zero-length assertions above and break these.
+    #[test]
+    fn get_sequence_still_rejects_out_of_range_and_inverted_ranges() {
+        let tx = make_test_transcript(); // 20 bases
+
+        // Zero length at or past the end: `start` names no base the sequence
+        // has. `20` is the junction past the last base, which the contig path
+        // also refuses via its `start >= len` guard — the two must agree.
+        assert_eq!(tx.get_sequence(20, 20), None);
+        assert_eq!(tx.get_sequence(999, 999), None);
+
+        // Non-empty but past the end.
+        assert_eq!(tx.get_sequence(18, 21), None);
+
+        // Inverted.
+        assert_eq!(tx.get_sequence(11, 9), None);
     }
 
     #[test]

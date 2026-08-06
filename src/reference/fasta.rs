@@ -831,7 +831,14 @@ impl MmapFastaProvider {
         start: u64,
         end: u64,
     ) -> Result<String, FerroError> {
-        if start >= entry.length || end > entry.length || start >= end {
+        // `start > end` rather than `start >= end`: a zero-length range is empty,
+        // not invalid, and reads no bases (#1472). The loop below is already
+        // safe for it — `bytes_read < 0` never runs — and this is what the
+        // indexed read a few hundred lines up already does, via its
+        // `if start >= actual_end { return Ok(String::new()) }`. The two served
+        // the same provider and disagreed, so an insertion resolved or not
+        // depending on whether the record happened to be mmap-backed.
+        if start >= entry.length || end > entry.length || start > end {
             return Err(FerroError::InvalidCoordinates {
                 msg: format!(
                     "Position {}-{} out of range for {} (length {})",
