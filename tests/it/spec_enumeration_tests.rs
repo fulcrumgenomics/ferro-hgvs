@@ -296,9 +296,10 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // 10 -> 9 in #1271: that LRG_199 row is the one this status was created to
     // surface, and extending `separations_are_meaningful` to net deletions is
     // what stops it splitting. The row it vacates reappears in
-    // `PASSING_CENSUS`'s `ProjectionPinned` (1167 -> 1168), so the 2184-row total
-    // is unchanged — nothing left the enumeration, one row moved from a
-    // divergence to a pass.
+    // `PASSING_CENSUS`'s `ProjectionPinned` (1167 -> 1168), so the total at that
+    // time (2184 rows) was unchanged — nothing left the enumeration, one row
+    // moved from a divergence to a pass. The total is 2172 as of #1498, which
+    // did drop rows; see `ModeDivergencePinned` below.
     (Status::ProjectionSplitsSingleMember, 9),
 ];
 
@@ -307,7 +308,7 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
 ///
 /// **Why this exists (#1272).** `divergence_budget_is_unchanged` iterates only
 /// [`DIVERGENCE_BUDGET`], so every status in `KNOWN_PASSING_STATUSES` was
-/// counted by nothing at all. That is 2136 of the enumeration's 2184 rows, free
+/// counted by nothing at all. That is 2125 of the enumeration's 2172 rows, free
 /// to move among themselves with no signal — a projection could go from
 /// rendering a string to erroring and no test would notice, because
 /// `every_observed_status_is_accounted_for` only rejects status names it has
@@ -337,9 +338,9 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     //    1 row   ProjectionErrorPinned -> ProjectionPinned
     //
     // Net: ProjectionPinned -13, ProjectionErrorPinned -5,
-    // ProjectionUnavailablePinned +18. The deltas cancel, so the 2184-row total
-    // across this census and `DIVERGENCE_BUDGET` is unchanged — nothing was
-    // dropped from the enumeration, only moved. Every row that moved to
+    // ProjectionUnavailablePinned +18. The deltas cancel, so the total at that
+    // time (2184 rows) across this census and `DIVERGENCE_BUDGET` was
+    // unchanged — nothing was dropped from the enumeration, only moved. Every row that moved to
     // `Unavailable` was a projection that had no business rendering:
     //
     // * `r.spl` / `r.spl?` / `r.0` are RNA-level *effects*, not sequence
@@ -371,7 +372,20 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     (Status::ProjectionPinned, 1168),
     (Status::ProjectionUnavailablePinned, 487),
     (Status::ProjectionErrorPinned, 210),
-    (Status::ModeDivergencePinned, 132),
+    // 132 -> 120 (#1498). The 12 rows are all LRG — `LRG_199:c.357+1G>A`,
+    // `LRG_199:g.954966C>T`, `LRG_199:g.981731G>A` and `LRG_476:g.4950_39800=`,
+    // one per mode — and **no row entered**, which is what says this is the LRG
+    // population and not a wider move. Diffed row-by-row against `origin/main`
+    // rather than inferred from the net, since a -12 is also what "13 left, 1
+    // arrived" looks like.
+    //
+    // They did not become conformant: with the bare-`LRG_<N>` version check
+    // fixed they now reach projection, where the committed reference slice
+    // cannot serve `LRG_199` / `LRG_163t1`, so they are excluded as a fixture
+    // gap. That is why the enumeration total drops 2184 -> 2172 rather than
+    // staying flat. The generator names the absent transcripts on every run, so
+    // the exclusion is reported rather than silent.
+    (Status::ModeDivergencePinned, 120),
 ];
 
 /// Does a projected string match the form the spec states? Mirrors

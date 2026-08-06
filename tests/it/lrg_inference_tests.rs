@@ -14,6 +14,8 @@
 
 use std::collections::HashMap;
 
+use ferro_hgvs::error_handling::ErrorConfig;
+use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_with_config};
 use ferro_hgvs::hgvs::variant::Accession;
 use ferro_hgvs::parse_hgvs;
 use rstest::rstest;
@@ -290,4 +292,88 @@ fn lrg_zero_and_leading_zero_discriminators_are_accepted() {
         Accession::new("LRG", "999999t999999", None).inferred_variant_type(),
         Some("c")
     );
+}
+
+// ---------------------------------------------------------------------------
+// Strict-mode acceptance of the versionless LRG spelling (#1498)
+// ---------------------------------------------------------------------------
+
+/// Strict mode must accept a bare `LRG_<N>` — it is the only legal spelling.
+///
+/// W3001 (`missing accession version`) is scoped by the spec to databases that
+/// version at all: `background/refseq.md` L23 requires a version "only when the
+/// reference sequence databases use versioning to distinguish between unique
+/// sequences", naming RefSeq and Ensembl. LRG is listed separately (L66-69) as
+/// `LRG_199` / `LRG_199t1` / `LRG_199p1`, none versioned.
+///
+/// Before #1498, strict mode — which is `ferro normalize`'s **default**
+/// `--error-mode` — rejected every one of these with "Accession 'LRG_292' is
+/// missing a version suffix", making LRG genomic variants unusable by default.
+#[test]
+fn strict_mode_accepts_versionless_lrg_accessions() {
+    for input in [
+        "LRG_292:g.160875del",
+        "LRG_1:g.50dup",
+        "LRG_199t1:c.79del",
+        "LRG_199p1:p.Ser68Arg",
+        "LRG_163t1:n.5C>T",
+    ] {
+        let parsed = parse_hgvs_with_config(input, ErrorConfig::strict());
+        assert!(
+            parsed.is_ok(),
+            "strict mode must accept the versionless LRG form {input}: {:?}",
+            parsed.err(),
+        );
+    }
+}
+
+/// The discriminating half: exempting LRG must not exempt RefSeq or Ensembl,
+/// which the spec explicitly does require to be versioned.
+#[test]
+fn strict_mode_still_rejects_versionless_refseq_and_ensembl() {
+    for (input, accession) in [
+        ("NM_000088:c.100A>G", "NM_000088"),
+        ("NG_012232:g.100del", "NG_012232"),
+        ("NC_000023:g.100del", "NC_000023"),
+        ("ENST00000380152:c.100A>G", "ENST00000380152"),
+    ] {
+        // Assert *which* error, not merely that there is one. A bare `is_err()`
+        // is satisfied by any unrelated parse failure, and this is the control
+        // that rules out the over-broad fix (marking every family
+        // version-optional, or dropping the check) — so it has to fail for the
+        // specific reason it names, or it stops discriminating.
+        let err = match parse_hgvs_with_config(input, ErrorConfig::strict()) {
+            Ok(v) => panic!("strict mode must still reject {input}, got {v:?}"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("missing a version suffix"),
+            "{input} must be rejected for its missing version, got: {err}"
+        );
+        assert!(
+            err.contains(accession),
+            "the diagnostic for {input} must name `{accession}`, got: {err}"
+        );
+    }
+}
+
+/// Lenient mode emits no W3001 for a versionless LRG either — the warning was
+/// as wrong as the rejection, it was just survivable.
+#[test]
+fn lenient_mode_emits_no_missing_version_warning_for_lrg() {
+    let parsed = parse_hgvs_lenient("LRG_292:g.160875del").unwrap();
+    assert!(
+        !parsed
+            .warnings
+            .iter()
+            .any(|w| w.error_type.code() == "W3001"),
+        "got warnings: {:?}",
+        parsed.warnings,
+    );
+    // Still fires for a genuinely versionless RefSeq accession.
+    let refseq = parse_hgvs_lenient("NM_000088:c.100A>G").unwrap();
+    assert!(refseq
+        .warnings
+        .iter()
+        .any(|w| w.error_type.code() == "W3001"));
 }

@@ -1166,22 +1166,18 @@ pub fn detect_missing_versions(input: &str) -> Vec<DetectedCorrection> {
                 .unwrap_or(false);
 
         if !has_version && !optional {
-            // LRG transcript (`LRG_NNNtM`) and protein (`LRG_NNNpM`) refs
-            // encode the version as an alphabetic suffix immediately after
-            // the numeric ID, not as `.<version>`. Skip them rather than
-            // flagging a false W3001.
-            let is_lrg_suffix_ref = accession_alpha == "LRG_"
-                && digit_end < bytes.len()
-                && bytes[digit_end].is_ascii_alphabetic();
-            if !is_lrg_suffix_ref {
-                hits.push(DetectedCorrection::new(
-                    ErrorType::MissingVersion,
-                    accession_full.to_string(),
-                    String::new(),
-                    prefix_start,
-                    digit_end,
-                ));
-            }
+            // `optional` now covers LRG wholesale (#1498), which subsumes the
+            // narrower carve-out that used to live here for `LRG_NNNtM` /
+            // `LRG_NNNpM` only. That carve-out was the tell: it exempted the
+            // two *suffixed* LRG spellings while leaving the bare genomic
+            // `LRG_NNN` — equally versionless — to be flagged.
+            hits.push(DetectedCorrection::new(
+                ErrorType::MissingVersion,
+                accession_full.to_string(),
+                String::new(),
+                prefix_start,
+                digit_end,
+            ));
         }
 
         i = digit_end;
@@ -1199,14 +1195,29 @@ pub fn detect_missing_versions(input: &str) -> Vec<DetectedCorrection> {
 /// Per HGVS `background/refseq.md` (L24-25) "RefSeq **and Ensembl** reference
 /// sequence identifiers use version numbers … variant descriptions lacking a
 /// version number are **not** valid" — so Ensembl (`ENST`/`ENSP`/`ENSG`/`ENSR`)
-/// requires a version just like RefSeq (#933). No family is version-optional;
-/// the flag is retained for shape/future use.
+/// requires a version just like RefSeq (#933).
+///
+/// **LRG is version-optional, and is the reason the flag exists** (#1498). The
+/// spec scopes the requirement to the databases that version at all — L23:
+/// "versioned reference sequence identifiers are required **only when** the
+/// reference sequence databases use versioning to distinguish between unique
+/// sequences" — and names RefSeq and Ensembl as those databases. LRG is listed
+/// separately (L66-69) with its canonical spellings `LRG_199`, `LRG_199t1`,
+/// `LRG_199p1`, none of which carry a version: an LRG record's sequence is
+/// frozen, so there is nothing for a version to distinguish.
+///
+/// Treating `LRG_` as version-required made strict mode reject
+/// `LRG_292:g.100del` — the *only* legal spelling — while still accepting
+/// `LRG_292.1:g.100del` and silently dropping the illegal suffix. Since
+/// `--error-mode` defaults to strict, that made every LRG genomic variant
+/// unusable by default.
 fn classify_accession_prefix(prefix: &str) -> (bool, bool) {
     match prefix {
-        "NM_" | "NP_" | "NC_" | "NG_" | "NR_" | "NT_" | "NW_" | "XM_" | "XP_" | "XR_" | "LRG_" => {
+        "NM_" | "NP_" | "NC_" | "NG_" | "NR_" | "NT_" | "NW_" | "XM_" | "XP_" | "XR_" => {
             (true, false)
         }
         "ENST" | "ENSP" | "ENSG" | "ENSR" => (true, false),
+        "LRG_" => (true, true),
         _ => (false, false),
     }
 }
@@ -4683,17 +4694,35 @@ mod tests {
         assert!(hits.is_empty());
     }
 
+    /// A bare `LRG_<N>` genomic accession is the **complete, correct** form —
+    /// LRG identifiers carry no version at all, so W3001 must not fire (#1498).
+    ///
+    /// `background/refseq.md` L23-25 scopes the requirement precisely: "versioned
+    /// reference sequence identifiers are required **only when** the reference
+    /// sequence databases use versioning to distinguish between unique
+    /// sequences", and then names RefSeq and Ensembl as the databases that do.
+    /// LRG is listed separately (L66-69) with its canonical spellings `LRG_199`,
+    /// `LRG_199t1`, `LRG_199p1` — none versioned. LRG's guarantee is that a
+    /// record's sequence never changes, so there is nothing to version.
+    ///
+    /// This test previously asserted the opposite (`hits.len() == 1`); it was
+    /// pinning the defect rather than a contract.
     #[test]
-    fn test_detect_missing_versions_lrg() {
+    fn test_detect_missing_versions_lrg_genomic_no_hit() {
         let hits = detect_missing_versions("LRG_199:c.100A>G");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].original, "LRG_199");
+        assert!(
+            hits.is_empty(),
+            "a bare LRG genomic accession is complete and must not trigger W3001, got {hits:?}",
+        );
+        // The `g.` axis is the one the defect actually blocked in strict mode.
+        assert!(detect_missing_versions("LRG_292:g.160875del").is_empty());
     }
 
     #[test]
     fn test_detect_missing_versions_lrg_transcript_no_hit() {
-        // LRG transcript references (`LRG_NNNtM`) carry the version as a
-        // `t<digit>` suffix directly after the numeric ID, not as `.<digit>`.
+        // LRG transcript references (`LRG_NNNtM`) name the annotated transcript
+        // number, not a version (`refseq.md` L140: "an annotated transcript
+        // variant 1 is described as t1"). Either way, no `.<version>` is due.
         let hits = detect_missing_versions("LRG_292t1:c.100A>G");
         assert!(
             hits.is_empty(),
@@ -4709,6 +4738,30 @@ mod tests {
             hits.is_empty(),
             "LRG protein suffix should not trigger W3001, got {hits:?}",
         );
+    }
+
+    /// The discriminating case: exempting LRG must not exempt anything else.
+    /// The obvious over-broad fix — dropping the check, or marking every family
+    /// version-optional — passes every assertion above and fails these.
+    #[test]
+    fn test_detect_missing_versions_lrg_exemption_does_not_leak() {
+        for versioned_family in [
+            "NM_000088:c.100A>G",
+            "NG_012232:g.100del",
+            "NC_000023:g.100del",
+            "NP_003997:p.Ser68Arg",
+            "ENST00000380152:c.100A>G",
+        ] {
+            assert_eq!(
+                detect_missing_versions(versioned_family).len(),
+                1,
+                "{versioned_family} is a RefSeq/Ensembl accession and still requires a version",
+            );
+        }
+        // An inner accession inside an LRG-parented compound is still checked.
+        let hits = detect_missing_versions("LRG_199(NM_004006):c.93+1G>T");
+        assert_eq!(hits.len(), 1, "got {hits:?}");
+        assert_eq!(hits[0].original, "NM_004006");
     }
 
     // Accession prefix case tests
