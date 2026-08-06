@@ -236,6 +236,40 @@ fn junction_overlaps(
                     gap: end,
                     kind,
                 });
+                // …and *only* as a junction occupant (#1437). A `dup`/`repeat`
+                // **reads** its span and **writes** at the junction 3' of it
+                // (`duplication.md:5`), so registering the read span here would
+                // report a sibling that collides with nothing.
+                //
+                // That is the reading #1411 corrected in `detect_overlap_conflicts`
+                // — key on what a member writes, not on what it reads — and
+                // leaving branch (b) on the old reading made the two detectors
+                // disagree. Measured on the 24 bp `NC_TEST.1` fixture, strict
+                // mode, every sibling strictly interior to the `dup`'s read span
+                // and disjoint from its write at `9|10`:
+                //
+                //     g.[4_9dup;6T>C]     ACCEPTED   g.5_6insCTTTTT
+                //     g.[4_9dup;8T>C]     ACCEPTED   g.7_8insCTTTTT
+                //     g.[4_9dup;9T>C]     ACCEPTED   g.8_9insCTTTTT
+                //     g.[4_9dup;6_7insT]  REJECTED   W5002 (dup, ins)
+                //
+                // The verdict turned on the sibling's edit *kind*, not on whether
+                // anything collided: a substitution is not an `NaEdit::Insertion`,
+                // so branch (b) never examined it.
+                //
+                // Accepting is also the cheap direction for representation
+                // stability, in #1411's sense: the rejected shapes have no shipped
+                // normalized form, while the three accepted ones do
+                // (`g.5_6insCTTTTT` and friends), so resolving the other way would
+                // move output that consumers already hold.
+                //
+                // `repeat` goes with `dup`, not just `dup` alone: the per-member
+                // pipeline picks between the two spellings by axis (CDS gives
+                // `c.5_6dup`, genomic gives `g.1005_1006A[4]`), so exempting one
+                // and not the other would make this detector spelling-sensitive —
+                // the very defect the junction registration above exists to
+                // prevent.
+                continue;
             }
             spans.push(Span {
                 idx,
