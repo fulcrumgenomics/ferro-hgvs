@@ -461,6 +461,33 @@ pub enum ErrorType {
     /// projection-side decline (#972).
     IncompleteCdsStartReference,
 
+    /// Normalization returned FEWER cis members than the input described —
+    /// two or more separately-reported variants were coalesced into one.
+    ///
+    /// Purely informational: the normalized string is unchanged by this
+    /// warning's existence, and no mode rejects on it.
+    ///
+    /// It exists because `DNA/delins.md:79-84` gives the spec's reason for
+    /// describing nearby variants individually — *"the two variants may have
+    /// been reported (or might occur) individually"* — and names the concrete
+    /// risk: "an overlap with the description of the combined variant might be
+    /// missed in the annotation step (database queries)". That is
+    /// **provenance**, and it lives in the input's spelling; the reference and
+    /// the observed bases carry no trace of it.
+    ///
+    /// ferro cannot answer it in the canonical string. Making the output depend
+    /// on which spelling arrived is the definition of non-confluence, which is
+    /// what #1235 exists to remove — and the cost is measured, not assumed: a
+    /// single input-relative comparand in the normalizer's weight bound cost 427
+    /// converged classes per shuffle direction over the 11,272-class corpus.
+    ///
+    /// So the spelling-dependence goes where it is harmless. The string stays a
+    /// function of the denoted sequence; this warning carries how the variant
+    /// was reported. Two spellings of one variant still normalize to one string
+    /// — they simply carry different diagnostics, which is exactly what lets a
+    /// downstream query recover the individually-reported form.
+    MembersCoalescedFromReportedForm,
+
     /// An insertion with no inserted sequence — a bare `ins` (e.g.
     /// `c.100_101ins`).
     ///
@@ -530,6 +557,7 @@ impl ErrorType {
             ErrorType::IntronicOnBareTranscript => "W4007",
             ErrorType::IncompleteCdsStartReference => "W5004",
             ErrorType::InsertionWithoutInsertedSequence => "W3027",
+            ErrorType::MembersCoalescedFromReportedForm => "W5005",
         }
     }
 
@@ -587,6 +615,7 @@ impl ErrorType {
         ErrorType::TranscriptFlankNotDescribable,
         ErrorType::IntronicOnBareTranscript,
         ErrorType::IncompleteCdsStartReference,
+        ErrorType::MembersCoalescedFromReportedForm,
     ];
 
     /// Parse a warning code (e.g. `"W3007"`) into its `ErrorType`.
@@ -689,6 +718,9 @@ impl ErrorType {
             ErrorType::InsertionWithoutInsertedSequence => {
                 "insertion with no inserted sequence (a bare `ins`)"
             }
+            ErrorType::MembersCoalescedFromReportedForm => {
+                "separately-reported variants were coalesced into fewer members"
+            }
         }
     }
 
@@ -789,6 +821,9 @@ impl ErrorType {
             // The inserted bases are simply absent; ferro cannot invent them,
             // and an insertion of nothing is not a variant. All modes reject.
             ErrorType::InsertionWithoutInsertedSequence => false,
+            // Nothing to correct: the coalesced form is the canonical one. This
+            // records provenance the string deliberately does not carry.
+            ErrorType::MembersCoalescedFromReportedForm => false,
         }
     }
 
@@ -878,7 +913,8 @@ impl ErrorType {
             | ErrorType::NonConformantBracketCardinality
             | ErrorType::IntronicOnBareTranscript
             | ErrorType::IncompleteCdsStartReference
-            | ErrorType::InsertionWithoutInsertedSequence => true,
+            | ErrorType::InsertionWithoutInsertedSequence
+            | ErrorType::MembersCoalescedFromReportedForm => true,
         }
     }
 
@@ -969,6 +1005,10 @@ impl ErrorType {
             ErrorType::IncompleteCdsStartReference => (
                 "ENST00000381176.3:c.10A>G (transcript is cds_start_NF)",
                 "(no auto-correct; use the genomic g. or non-coding n. representation)",
+            ),
+            ErrorType::MembersCoalescedFromReportedForm => (
+                "g.[100del;102_105del] reported as 2 members",
+                "g.100_105delinsAC (1 member; provenance carried by W5005)",
             ),
             ErrorType::InsertionWithoutInsertedSequence => (
                 "c.100_101ins",
@@ -1399,6 +1439,7 @@ mod tests {
             ErrorType::IntronicOnBareTranscript,
             ErrorType::IncompleteCdsStartReference,
             ErrorType::InsertionWithoutInsertedSequence,
+            ErrorType::MembersCoalescedFromReportedForm,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
         // this match fails to compile until `every_variant` is extended.
@@ -1450,7 +1491,8 @@ mod tests {
                 | ErrorType::NonConformantBracketCardinality
                 | ErrorType::IntronicOnBareTranscript
                 | ErrorType::IncompleteCdsStartReference
-                | ErrorType::InsertionWithoutInsertedSequence => {}
+                | ErrorType::InsertionWithoutInsertedSequence
+                | ErrorType::MembersCoalescedFromReportedForm => {}
             }
             assert!(
                 ErrorType::ALL.contains(&v),

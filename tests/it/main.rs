@@ -58,6 +58,7 @@ mod clinvar_hgvs_tests;
 mod clinvar_tests;
 mod clinvar_validation;
 mod cmrg_exhaustive_tests;
+mod coalesced_members_diagnostic;
 mod coderabbit_config_paths;
 mod comma_products_allele;
 mod compound_cross_reference;
