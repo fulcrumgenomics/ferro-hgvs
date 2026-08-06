@@ -88,7 +88,117 @@ pub(crate) fn detect_overlap_conflicts(
             edit_kinds,
         });
     }
+
+    // Spans that *intersect* without coinciding (#1448).
+    //
+    // The grouping above keys on exact `(accession, coord_system, region, start,
+    // end)` equality, so two members that overlap only partially — or that nest —
+    // land in different groups and were reported by nothing. Strict mode
+    // therefore accepted them, and they denote no sequence at all: the
+    // independent applier declines them in either member order.
+    //
+    //     g.[10_14del;12_16del]        ACCEPTED, applies to nothing
+    //     g.[10_14inv;12_16inv]        ACCEPTED, applies to nothing
+    //     g.[10_14del;10_16del]        ACCEPTED, applies to nothing (nested)
+    //
+    // Measured over two-member span-edit alleles on four sequences: 10,499 of
+    // the 25,848 strict mode accepted — 41% — denoted nothing.
+    //
+    // **Restricted to edits whose write footprint *is* their span**, which is
+    // the #1411 principle and what makes the `dup` behaviour fall out rather
+    // than need a special case: a `dup`/`repeat` reads its span and writes at
+    // the junction 3' of it, so two overlapping `dup` spans genuinely do
+    // compose, and none appeared in the measured families.
+    // `detect_insertion_overlaps` owns the junction geometry.
+    //
+    // Pairwise rather than grouped, and skipping pairs whose keys are equal, so
+    // an exactly-coincident pair is reported once — by the loop above, which
+    // names every member of its group — rather than twice.
+    for (i, first) in variants.iter().enumerate() {
+        let Some((coord_system, region, first_start, first_end)) = span_writer_footprint(first)
+        else {
+            continue;
+        };
+        let Some(first_accession) = first.accession().map(|a| a.to_string()) else {
+            continue;
+        };
+        for (j, second) in variants.iter().enumerate().skip(i + 1) {
+            let Some((second_system, second_region, second_start, second_end)) =
+                span_writer_footprint(second)
+            else {
+                continue;
+            };
+            let Some(second_accession) = second.accession().map(|a| a.to_string()) else {
+                continue;
+            };
+            if first_accession != second_accession
+                || coord_system != second_system
+                || region != second_region
+            {
+                continue;
+            }
+            // Coincident pairs belong to the grouped loop above.
+            if first_start == second_start && first_end == second_end {
+                continue;
+            }
+            // A reversed span is not an interval, so do not test it as one.
+            // SVD-WG006 admits `<high>_<low>` for a circular deletion or
+            // duplication, and `genome_range` passes those through with
+            // `start > end` — nothing upstream reorders them. Read as an
+            // ordinary interval, `m.16569_5del` claims to end before it begins,
+            // so the test below would decide the pair by accident rather than
+            // by geometry. Declining to judge it is the conservative answer and
+            // the same one #1423 reached for the containment test next door: a
+            // missed report is a verdict this pass simply does not make, while a
+            // wrong one is a rejection the caller cannot explain.
+            let reversed = first_start > first_end || second_start > second_end;
+            // Closed intervals: they intersect when neither ends before the
+            // other begins.
+            if reversed || first_end < second_start || second_end < first_start {
+                continue;
+            }
+            let kinds: Vec<String> = [i, j]
+                .iter()
+                .filter_map(|&idx| edit_kind(&variants[idx]).map(|s| s.to_string()))
+                .collect();
+            warnings.push(NormalizationWarning::OverlapConflict {
+                accession: first_accession.clone(),
+                coordinate_system: coord_system.to_string(),
+                location: location_for_variant(first)
+                    .expect("span_writer_footprint established a renderable location"),
+                edit_kinds: kinds,
+            });
+        }
+    }
     warnings
+}
+
+/// The reference span an edit **writes over**, for the edits whose write
+/// footprint is their own span.
+///
+/// `None` for anything else, which is what keeps the intersection test above
+/// narrow:
+///
+/// - an **insertion** writes at a zero-width junction, not over a span;
+/// - a **`dup`/`repeat`** reads its span and writes at the junction 3' of it
+///   (`duplication.md:5`), so two overlapping `dup` spans compose uniquely —
+///   the #1411 principle, and the reason no `dup` family appears in #1448's
+///   measured census.
+///
+/// Both of those geometries belong to [`detect_insertion_overlaps`].
+fn span_writer_footprint(variant: &HgvsVariant) -> Option<(&'static str, Region, i64, i64)> {
+    let edit = inner_edit(variant)?;
+    if !matches!(
+        edit,
+        NaEdit::Substitution { .. }
+            | NaEdit::SubstitutionNoRef { .. }
+            | NaEdit::Deletion { .. }
+            | NaEdit::Delins { .. }
+            | NaEdit::Inversion { .. }
+    ) {
+        return None;
+    }
+    simple_span(variant)
 }
 
 /// Detect overlaps that involve at least one junction-anchored edit within a
@@ -907,6 +1017,34 @@ mod tests {
             panic!("expected OverlapConflict, got {:?}", warnings[0]);
         };
         assert_eq!(location, "*1_*2");
+    }
+
+    /// Two **overlapping `dup` spans** are not a coincident-bounds conflict (#1448).
+    ///
+    /// The intersection test added for #1448 is restricted to edits whose write
+    /// footprint *is* their span. A `dup` reads its span and writes at the
+    /// junction 3' of it (`duplication.md:5`), so overlapping read spans do not
+    /// mean colliding writes — and keying the test on the read span instead,
+    /// the reading #1411 corrected, would report these.
+    ///
+    /// Asserted here rather than end to end because
+    /// `detect_insertion_overlaps` reports an overlapping `dup` pair for its own
+    /// separate reasons (#1437); this pins only what *this* detector decides.
+    #[test]
+    fn overlapping_duplication_spans_are_not_a_coincident_conflict() {
+        for input in [
+            "NG_012337.1:g.[10_14dup;12_16dup]",
+            "NG_012337.1:g.[10_14dup;10_16dup]",
+        ] {
+            let (variants, phase) = parse_allele(input);
+            let warnings = detect_overlap_conflicts(&variants, phase);
+            assert!(
+                warnings.is_empty(),
+                "`{input}`: two duplications write at different junctions, so \
+                 their overlapping read spans are not a coincident-bounds \
+                 conflict; got {warnings:?}"
+            );
+        }
     }
 
     #[test]

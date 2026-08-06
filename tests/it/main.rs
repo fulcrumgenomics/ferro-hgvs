@@ -212,6 +212,7 @@ mod issue_1426_junction_insertion_settles_in_one_pass;
 mod issue_1429_derivation_honours_shuffle_direction;
 mod issue_1431_single_position_repeat_anchor;
 mod issue_1437_dup_read_span_interior_sibling;
+mod issue_1448_partial_span_overlap;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;
