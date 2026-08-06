@@ -902,7 +902,15 @@ fn no_tandem_tract_allele_normalizes_to_a_different_sequence() {
 /// It runs in the `sweeps` job only — `cis_junction_crossing_shift` is inside
 /// `SWEEP_FILTER`, which `test` and `test-oracle` negate — so it is exercised at
 /// the full corpus with the oracles set, which is the configuration that found
-/// all five. Measured at 280s for 829,440 cases.
+/// all five. Measured at 280s for 829,440 cases over two axes (`c.`, `n.`).
+///
+/// #1471 added a third (non-coding `r.`), taking it to **1,244,160 cases**. That
+/// count is exact and deterministic — three axes over the same corpus, shapes and
+/// positions — so it is quoted where a wall-clock is not: the machine this was
+/// developed on was running three concurrent copies of this sweep at a load
+/// average of 81, which makes any timing taken there contention noise rather than
+/// a measurement. Expect roughly 1.5x the 280s above on a quiet machine, and
+/// treat the `sweeps` job's own duration as the figure of record.
 ///
 /// Run it locally in the configuration `sweeps` uses — the oracles are not
 /// optional here, since four of the five defects above were *reported* by
@@ -928,13 +936,67 @@ fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
     let mut skipped = 0usize;
     let mut overlapping: Vec<String> = Vec::new();
     let mut changed: Vec<String> = Vec::new();
+    // Per axis, not just in aggregate. `checked` sums all three, and the floor
+    // below is a *per-seed* constant, so dropping an entire axis would remove a
+    // third of the corpus and still clear it — the aggregate cannot detect its
+    // own coverage being deleted. That matters most for `r.`, which is the axis
+    // this sweep gained last and the cheapest one to remove if the runtime is
+    // ever trimmed.
+    let mut per_axis: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
 
     let seeds = sweep_seeds(48);
     for seq in sweep_sequences(seeds) {
-        // `c.` and `n.` share the generator; `r.` is excluded because its
-        // `U`/`T` alphabet makes the payload construction below a different
-        // problem, and `issue_1235_transcript_axes.rs` pins that axis by hand.
-        for (accession, axis) in [("NM_TEST.1", "c"), ("NR_TEST.1", "n")] {
+        // All three transcript axes share the generator.
+        //
+        // `r.` was excluded until #1471 on two grounds, both of which were
+        // measured and neither of which held:
+        //
+        // * *"its `U`/`T` alphabet makes the payload construction below a
+        //   different problem"* — it does not. The parser accepts the
+        //   DNA-alphabet payloads this generator already builds and renders
+        //   them in the RNA alphabet on output, so not one line below changes:
+        //   `NR_TEST.1:r.5_6insAA` parses as `r.5_6insaa` and `r.5T>A` as
+        //   `r.5u>a`. The oracle needs no adjustment either — `apply_with`
+        //   applies an `r.` description to the same bases as its `n.` twin
+        //   (verified byte-identical), because `hgvs_to_spdi` folds the
+        //   alphabet.
+        // * *"`issue_1235_transcript_axes.rs` pins that axis by hand"* — it
+        //   does, with 13 `r.` cases including a non-coding one, but they are
+        //   substitutions and `delins`. Those reach `canonicalize_from_sequence`
+        //   and never the *repair* passes, so none of them produces two
+        //   junction-occupying members shifting onto one junction.
+        //
+        // That second gap is what #1453 fell through: on a non-coding `r.`
+        // record every repair routed through `respell_at_gap` was a silent
+        // no-op, so `r.[9dup;10dup;11dup]` normalized to `r.[9dup;11dup;11dup]`
+        // — one interbase point claimed twice, denoting no sequence. It was
+        // invisible to this suite and to two of the three seam oracles: the
+        // output is well-formed, so `FERRO_ASSERT_REPARSE` accepts it, and every
+        // coordinate is in range, so `FERRO_ASSERT_IN_BOUNDS` does too. Only the
+        // apply oracle distinguishes it, as `CoincidentInsertions`.
+        //
+        // Verified against the defect rather than assumed: with #1465's fix
+        // reverted, this arm fails at **four** seeds on the earliest shapes it
+        // emits — `r.[2dup;4dup] -> r.[9dup;9dup]` and nine more, the collector's
+        // cap. (The 849-output figure quoted in #1453 and #1471 comes from a
+        // purpose-built 63 nt census in #1465, not from this sweep's 20-mers;
+        // the two corpora are not comparable and only the *direction* carries
+        // over.)
+        //
+        // **Non-coding `r.` only, and coding `r.` is a deliberate remaining
+        // gap** — not a covered one. It would be convenient to say `c.` already
+        // sweeps it, since `axis_frame` gives both `reading_frame: true`, but
+        // that is only true of the frame: the two still take different code
+        // paths (`build_rna_merged` vs `build_cds_merged`, and
+        // `cds_relative_gap(Region::Rna)` vs `(Region::Cds)`), so a coding `r.`
+        // defect could hide exactly the way the non-coding one did.
+        //
+        // The reason to stop here is cost, stated plainly: each axis is +50% on
+        // what is already the slowest test in the suite. Non-coding `r.` buys a
+        // *measured* gap — 849 corrupt outputs — and coding `r.` buys an
+        // unmeasured one. Worth adding if a defect ever turns up there, or if
+        // this sweep is made cheaper.
+        for (accession, axis) in [("NM_TEST.1", "c"), ("NR_TEST.1", "n"), ("NR_TEST.1", "r")] {
             // Built once per (sequence, axis) and cloned per case. `SyntheticBuilder`
             // pads, maps to a genomic contig and reverse-complements on demand, so
             // constructing one inside the innermost loop dominated the test:
@@ -945,6 +1007,7 @@ fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
             } else {
                 SyntheticBuilder::noncoding(&seq, Strand::Plus).build()
             };
+            let checked_before_axis = checked;
             for first_start in 2..=11usize {
                 for first_len in 1..=2usize {
                     let first_end = first_start + first_len - 1;
@@ -1041,6 +1104,7 @@ fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
                     }
                 }
             }
+            *per_axis.entry(axis).or_insert(0) += checked - checked_before_axis;
         }
     }
 
@@ -1051,6 +1115,22 @@ fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
         checked > floor,
         "transcript-axis sweep covered too little: {checked} over {seeds} seeds (floor {floor})"
     );
+    // Each axis clears the floor on its own. Pinning the axis *set* as well as
+    // the counts, so that deleting an arm fails here with the axis named rather
+    // than silently shrinking a total that stays above the bar.
+    assert_eq!(
+        per_axis.keys().copied().collect::<Vec<_>>(),
+        vec!["c", "n", "r"],
+        "the transcript-axis sweep must run all three axes; got {per_axis:?}"
+    );
+    for (axis, axis_checked) in &per_axis {
+        assert!(
+            *axis_checked > floor,
+            "transcript-axis sweep covered too little on the `{axis}.` axis: \
+             {axis_checked} over {seeds} seeds (floor {floor}); the aggregate \
+             {checked} can hide this because the other axes make up the total"
+        );
+    }
     assert!(
         skipped * 2 < checked,
         "too many transcript-axis cases skipped: {skipped} of {checked}"
