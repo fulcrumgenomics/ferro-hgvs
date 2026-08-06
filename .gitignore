@@ -86,6 +86,8 @@ manuscript/
 # committing a build artifact — and a multi-megabyte one.
 /tests/fixtures/cis/cis_confluence_corpus.json
 /tests/fixtures/cis/.cis_confluence_corpus.*.tmp
+/tests/fixtures/cis/cis_confluence_nr_corpus.json
+/tests/fixtures/cis/.cis_confluence_nr_corpus.*.tmp
 
 # Generated reference caches (cdot rkyv, TranscriptDb)
 *.tdb
