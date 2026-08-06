@@ -228,12 +228,18 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
   or the variable may be removed once the choice is settled. Do not depend on
   it in production.
 
+  The value is <splitter>[-coalesced]. The splitter is how a block is cut:
+
     live       the shipped rule (default; also used when unset or empty)
     shadow     cut at the steps common to every minimal alignment
     canonical  the member-count-minimal minimal alignment
-    canonical-coalesced
-               canonical, plus the delins.md:44-47 merge -- a split whose
-               payload realigns as one block becomes a single delins
+
+  The optional -coalesced suffix additionally applies the delins.md:44-47
+  merge -- a split whose payload realigns as one block becomes a single
+  delins -- to whatever those members came out as. It composes with every
+  splitter, so all of these are accepted:
+
+    live-coalesced, shadow-coalesced, canonical-coalesced
 
   An unrecognised value falls back to `live`, so a misspelling looks exactly
   like 'the candidate changes nothing'. The fallback logs a warning through the
@@ -3896,7 +3902,14 @@ mod tests {
             .expect("`normalize` subcommand")
             .clone();
         let help = normalize.render_long_help().to_string();
-        for value in ["live", "shadow", "canonical", "canonical-coalesced"] {
+        for value in [
+            "live",
+            "shadow",
+            "canonical",
+            "canonical-coalesced",
+            "live-coalesced",
+            "shadow-coalesced",
+        ] {
             assert!(
                 help.contains(value),
                 "`normalize --help` does not mention the `{value}` partition rule; \

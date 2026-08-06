@@ -230,12 +230,15 @@ reject = ["W3003"]           # Always reject these
 
 Normalization cuts each changed region of sequence into allele members. `FERRO_PARTITION` selects which rule does that cutting, so a candidate rule can be measured against the shipped one over a real corpus before anything changes for users.
 
-| Value | Rule |
+The value is `<splitter>[-coalesced]`. The splitter chooses how a block is cut:
+
+| Value | Splitter |
 |-------|------|
 | unset / empty / `live` | The shipped rule. This is what every normal invocation uses. |
 | `shadow` | Cut only at alignment steps common to *every* minimal alignment. |
 | `canonical` | The member-count-minimal minimal alignment. |
-| `canonical-coalesced` | `canonical`, plus the `delins.md:44-47` merge: a split whose payload realigns as one block is re-spelled as a single `delins`. Applied after the downstream passes rather than at partition time, so it cuts identically to `canonical` and differs only in what survives. |
+
+The optional `-coalesced` suffix additionally applies the `delins.md:44-47` merge: a split whose payload realigns as one block is re-spelled as a single `delins`. That is a *re-spelling of members*, not a way of cutting them — it runs after the downstream passes and reads only the derived members and the reference — so it composes with every splitter and never changes the cut. All three of `live-coalesced`, `shadow-coalesced` and `canonical-coalesced` are accepted; `live-coalesced` is the one that measures the merge against the shipped cut.
 
 With the variable unset — or set to the empty string — output is byte-identical to a build with no switch at all.
 

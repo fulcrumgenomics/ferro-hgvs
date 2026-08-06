@@ -2012,13 +2012,17 @@ fn seqfirst_shadow_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("FERRO_SEQFIRST_SHADOW").as_deref() == Ok("1"))
 }
 
-/// Which block partitioner [`canonicalize_from_sequence`] cuts with.
+/// Which block splitter [`canonicalize_from_sequence`] cuts with.
 ///
-/// Three rules exist and they are not variations on one — see
+/// Three splitters exist and they are not variations on one — see
 /// [`crate::normalize::seqfirst::partition::CanonicalAlignment`] for what
 /// separates the latter two.
+///
+/// This is the **step-2** choice on its own: how a block is cut into members.
+/// What is done to those members afterwards is [`PartitionRule::coalesce`], and
+/// keeping the two apart is the point — see that field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PartitionRule {
+enum BlockSplitter {
     /// [`partition_block`]: a single-gap alignment search plus its two narrow
     /// escapes. The shipped rule, and the default.
     Live,
@@ -2028,15 +2032,46 @@ enum PartitionRule {
     /// [`partition_block_canonical`]: the member-count-minimal minimal alignment
     /// (`mutalyzer-algebra`'s `canonical`).
     Canonical,
-    /// `Canonical`, plus the terminal `delins.md:44-47` re-spelling applied
-    /// after the downstream passes — see
-    /// [`coalesce_payload_alignment_split`].
-    CanonicalCoalesced,
+}
+
+/// What `FERRO_PARTITION` selects: a block splitter, plus whether the terminal
+/// `delins.md:44-47` re-spelling runs.
+///
+/// **The two fields are independent on purpose.** The coalesce pass
+/// ([`coalesce_payload_alignment_split`]) is a step-3 re-spelling — *given*
+/// members, spell them the way `delins.md:44-47` recommends — and it reads only
+/// the derived piece list and the reference. It has no dependence on which
+/// splitter produced those pieces. Modelling it as a fourth splitter, as this
+/// enum first did, made it reachable *only* behind `canonical`, so it could
+/// never be measured against (or rescue churn produced by) the shipped `live`
+/// splitter. That is a step-3 pass bolted onto a step-2 choice; #1430 asks for
+/// exactly the separation this struct makes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PartitionRule {
+    /// Step 2 — how a changed block is cut into members.
+    splitter: BlockSplitter,
+    /// Step 3 — whether [`coalesce_payload_alignment_split`] runs on the derived
+    /// members, whatever cut them.
+    coalesce: bool,
+}
+
+impl PartitionRule {
+    /// The shipped configuration: the live splitter, no coalesce pass.
+    const LIVE: Self = Self {
+        splitter: BlockSplitter::Live,
+        coalesce: false,
+    };
 }
 
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
 ///
-/// Unset, empty, or unrecognised all yield [`PartitionRule::Live`], so no
+/// The grammar is `<splitter>[-coalesced]`, where `<splitter>` is one of
+/// `live`, `shadow` or `canonical`. The suffix is the step-3 flag and composes
+/// with every splitter, so `live-coalesced` measures the `delins.md:44-47`
+/// re-spelling against the **shipped** cut rather than only against the
+/// canonical one.
+///
+/// Unset, empty, or unrecognised all yield [`PartitionRule::LIVE`], so no
 /// environment can make ferro emit something other than its shipped
 /// representation by accident. An unrecognised value is warned about rather than
 /// rejected: this is a measurement knob, and a typo that silently selected a
@@ -2047,19 +2082,27 @@ enum PartitionRule {
 /// environment variable — the cached read below can only ever be exercised once
 /// per process.
 fn partition_rule_from_env(value: Option<&str>) -> PartitionRule {
-    match value {
-        None | Some("") | Some("live") => PartitionRule::Live,
-        Some("shadow") => PartitionRule::Shadow,
-        Some("canonical") => PartitionRule::Canonical,
-        Some("canonical-coalesced") => PartitionRule::CanonicalCoalesced,
-        Some(other) => {
+    let Some(value) = value else {
+        return PartitionRule::LIVE;
+    };
+    let (name, coalesce) = match value.strip_suffix("-coalesced") {
+        Some(name) => (name, true),
+        None => (value, false),
+    };
+    let splitter = match name {
+        "" if !coalesce => return PartitionRule::LIVE,
+        "live" => BlockSplitter::Live,
+        "shadow" => BlockSplitter::Shadow,
+        "canonical" => BlockSplitter::Canonical,
+        _ => {
             log::warn!(
-                "FERRO_PARTITION={other} is not one of \
-                 live|shadow|canonical|canonical-coalesced; using live"
+                "FERRO_PARTITION={value} is not one of \
+                 live|shadow|canonical, optionally suffixed `-coalesced`; using live"
             );
-            PartitionRule::Live
+            return PartitionRule::LIVE;
         }
-    }
+    };
+    PartitionRule { splitter, coalesce }
 }
 
 /// Which partitioner this process cuts blocks with, from `FERRO_PARTITION`.
@@ -2283,22 +2326,19 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // else. The other two arms fall back to it when their splitter declines,
     // rather than abandoning the canonicalization, so a bake-off run measures the
     // partitioners and not their decline rates.
-    let mut pieces = match partition_rule() {
-        PartitionRule::Live => partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
-        PartitionRule::Shadow => partition_block_sequence_first(
+    //
+    // Only the *splitter* is read here. The `-coalesced` half of the selection is
+    // a step-3 re-spelling applied after the downstream passes below, so it never
+    // reaches partitioning — see `coalesce_payload_alignment_split`.
+    let mut pieces = match partition_rule().splitter {
+        BlockSplitter::Live => partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
+        BlockSplitter::Shadow => partition_block_sequence_first(
             &ref_bytes[lo..hi_ref],
             &result[lo..hi_alt],
             axis_min_separation(frame.reading_frame),
         )
         .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
-        PartitionRule::Canonical => {
-            partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
-                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
-        }
-        PartitionRule::CanonicalCoalesced => {
-            // Identical to `Canonical` here on purpose. The `delins.md:44-47`
-            // merge is applied *after* the downstream passes below, not as part
-            // of partitioning — see `coalesce_payload_alignment_split`.
+        BlockSplitter::Canonical => {
             partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
                 .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
         }
@@ -2449,7 +2489,11 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // Placement relative to the 3'-shift and the width minimisation is NOT the
     // mechanism: moving the call across those produced byte-identical censuses.
     // Only the bound matters.
-    if partition_rule() == PartitionRule::CanonicalCoalesced {
+    //
+    // Gated on the step-3 flag alone, never on which splitter ran: the pass reads
+    // only the derived piece list and the reference, so binding it to `canonical`
+    // put it out of reach of the shipped cut it most needs to be measured against.
+    if partition_rule().coalesce {
         coalesce_payload_alignment_split(&mut pieces, &ref_bytes);
     }
 
@@ -4043,7 +4087,7 @@ fn partition_block_sequence_first(
 /// Returns `None` only when the alignment grid would exceed
 /// [`MAX_SEQFIRST_GRID_CELLS`]; the caller falls back to [`partition_block`].
 ///
-/// Reached only under `FERRO_PARTITION=canonical` and from the `dump_partitions`
+/// Reached only under `FERRO_PARTITION=canonical[-coalesced]` and from the `dump_partitions`
 /// example; it does not decide any shipped result.
 fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
     use crate::normalize::seqfirst::align::AlignmentDag;
@@ -4213,8 +4257,14 @@ fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> b
 ///
 /// Called after the 3'-shift, the adjacency coalesce and
 /// `shrink_pieces_to_differences`, so every earlier pass sees exactly what it
-/// would have seen under [`PartitionRule::Canonical`] and this is a terminal
-/// re-spelling of an answer already derived from the sequence.
+/// would have seen with the same [`BlockSplitter`] and the flag off, and this is
+/// a terminal re-spelling of an answer already derived from the sequence.
+///
+/// That is also why it is gated on [`PartitionRule::coalesce`] rather than on any
+/// splitter: it reads the derived piece list and the reference and nothing else,
+/// so it composes with whichever splitter cut the block. It was originally
+/// reachable only behind the canonical splitter, which meant the one cut it could
+/// never be measured against was the shipped one.
 ///
 /// Running it inside the partitioner instead was measured, and it costs **427
 /// converged classes per direction** over the 11,272-class corpus (5':
@@ -9767,39 +9817,89 @@ mod tests {
             for value in [None, Some(""), Some("live")] {
                 assert_eq!(
                     partition_rule_from_env(value),
-                    PartitionRule::Live,
+                    PartitionRule::LIVE,
                     "{value:?}"
                 );
             }
-            for typo in ["cannonical", "LIVE", "shadow ", "1", "true"] {
+            // `-coalesced` is a suffix on a splitter name, never a rule of its
+            // own: a bare `-coalesced`, or one on a splitter that does not
+            // exist, has to fall through to the shipped configuration like any
+            // other typo rather than turning the step-3 pass on by itself.
+            for typo in [
+                "cannonical",
+                "LIVE",
+                "shadow ",
+                "1",
+                "true",
+                "-coalesced",
+                "coalesced",
+                "cannonical-coalesced",
+                "live-coalesce",
+                "LIVE-COALESCED",
+            ] {
                 assert_eq!(
                     partition_rule_from_env(Some(typo)),
-                    PartitionRule::Live,
+                    PartitionRule::LIVE,
                     "{typo} must not select a rule"
                 );
             }
         }
 
-        /// The two non-default rules are reachable, and only by their own names.
+        /// The non-default rules are reachable, and only by their own names.
+        ///
+        /// The grammar is `<splitter>[-coalesced]`, and both halves are pinned
+        /// here: the splitter each name selects, and whether the step-3
+        /// re-spelling runs. Without this the knob's newest value would be the
+        /// one value nothing exercised, so a typo in the parse would have
+        /// surfaced only as a silent fallback to `live` during a bake-off —
+        /// exactly the failure the knob's own doc says it is designed to make
+        /// loud.
         #[test]
         fn the_alternative_rules_are_selected_by_name() {
-            assert_eq!(
-                partition_rule_from_env(Some("shadow")),
-                PartitionRule::Shadow
-            );
-            assert_eq!(
-                partition_rule_from_env(Some("canonical")),
-                PartitionRule::Canonical
-            );
-            // The rule this change adds. Without it the knob's newest value was
-            // the one value nothing exercised, so a typo in the match arm would
-            // have surfaced only as a silent fallback to `Live` during a
-            // bake-off — exactly the failure the knob's own doc says it is
-            // designed to make loud.
-            assert_eq!(
-                partition_rule_from_env(Some("canonical-coalesced")),
-                PartitionRule::CanonicalCoalesced
-            );
+            let cases = [
+                ("shadow", BlockSplitter::Shadow, false),
+                ("canonical", BlockSplitter::Canonical, false),
+                ("canonical-coalesced", BlockSplitter::Canonical, true),
+                // The value this change adds. Its whole purpose is that the
+                // step-3 re-spelling becomes measurable against the *shipped*
+                // cut, so the splitter here must be `Live`.
+                ("live-coalesced", BlockSplitter::Live, true),
+                ("shadow-coalesced", BlockSplitter::Shadow, true),
+            ];
+            for (value, splitter, coalesce) in cases {
+                assert_eq!(
+                    partition_rule_from_env(Some(value)),
+                    PartitionRule { splitter, coalesce },
+                    "{value}"
+                );
+            }
+        }
+
+        /// The step-3 flag is orthogonal to the step-2 splitter.
+        ///
+        /// The property the unbinding rests on, stated directly: every splitter
+        /// is reachable with the coalesce pass both on and off, and turning the
+        /// pass on never moves the splitter. Before this change the pass existed
+        /// only as a fourth "splitter" glued to `canonical`, so the `live`
+        /// column below was unreachable and the shipped cut could not be
+        /// measured with it.
+        #[test]
+        fn the_coalesce_flag_composes_with_every_splitter() {
+            for (name, splitter) in [
+                ("live", BlockSplitter::Live),
+                ("shadow", BlockSplitter::Shadow),
+                ("canonical", BlockSplitter::Canonical),
+            ] {
+                let plain = partition_rule_from_env(Some(name));
+                let coalesced = partition_rule_from_env(Some(&format!("{name}-coalesced")));
+                assert_eq!(plain.splitter, splitter, "{name}");
+                assert!(!plain.coalesce, "{name} must not coalesce");
+                assert_eq!(
+                    coalesced.splitter, splitter,
+                    "{name}-coalesced must keep {name}'s cut"
+                );
+                assert!(coalesced.coalesce, "{name}-coalesced must coalesce");
+            }
         }
 
         /// This suite's expectations are the live rule's, and the cached read
@@ -9817,7 +9917,7 @@ mod tests {
                 std::env::var_os("FERRO_PARTITION").is_none(),
                 "this suite's expectations are the live rule's; FERRO_PARTITION must be unset"
             );
-            assert_eq!(partition_rule(), PartitionRule::Live);
+            assert_eq!(partition_rule(), PartitionRule::LIVE);
         }
 
         /// The canonical arm produces pieces that denote the block, so the arm is
