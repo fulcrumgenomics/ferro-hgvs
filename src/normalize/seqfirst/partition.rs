@@ -11,7 +11,7 @@
 //! the overlap and ordering defects the repair passes exist to fix become
 //! unrepresentable rather than repaired.
 
-use super::align::{AlignmentDag, Dominators};
+use super::align::{AlignmentDag, Dominators, Step};
 use super::MIN_SEPARATION;
 
 /// One member of the canonicalized allele, as a half-open reference span
@@ -201,6 +201,244 @@ pub(crate) fn member_alt_spans(
         prev_alt_end = alt_end;
     }
     Some(spans)
+}
+
+/// One maximal run of change along a single alignment: the reference and
+/// alternate spans it consumes, both half-open and both relative to the start of
+/// their block.
+///
+/// A pure insertion has `ref_start == ref_end`; a pure deletion has
+/// `alt_start == alt_end`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CanonicalRun {
+    ref_start: u32,
+    ref_end: u32,
+    alt_start: u32,
+    alt_end: u32,
+}
+
+/// Whether a run is open at this point of the walk.
+///
+/// The cost of a change step depends on it — the first change after a match
+/// opens a new run and costs one member, every change after that is free — so it
+/// is part of the shortest-path state rather than something recoverable from the
+/// cell alone.
+const RUN_CLOSED: usize = 0;
+/// A run is open: the next change step extends it rather than opening another.
+const RUN_OPEN: usize = 1;
+
+/// The **canonical** alignment: among the minimal alignments the DAG encodes,
+/// one that splits the block into the fewest members.
+///
+/// This is the second of the two rules `mutalyzer-algebra` distinguishes, and
+/// the one ferro did not have. [`partition_members_with`] implements the
+/// *dominator* rule — cut at the steps common to **every** minimal alignment,
+/// which is algebra's `local_supremal`. This implements algebra's `canonical`:
+///
+/// > Traverse (BFS) the LCS graph to extract the canonical variant, i.e.
+/// > minimize the number of separate variants within an allele.
+///
+/// The two answer different questions and neither subsumes the other. The
+/// dominator rule describes the *union* of what every minimal alignment changes,
+/// so it is independent of which alignment you pick; this rule picks one
+/// alignment and describes exactly what it changes.
+///
+/// # Why minimising members is a second key and not a competing one
+///
+/// Every path through [`AlignmentDag`] is distance-minimal by construction —
+/// that is what the DAG encodes — so ranking its paths by member count cannot
+/// trade edit distance away. Minimal distance stays the primary key; member
+/// count is applied strictly within it.
+///
+/// # Cost
+///
+/// One reverse topological sweep plus one forward walk, both `Θ(n·m)` — the same
+/// order as [`AlignmentDag::build`] and [`AlignmentDag::dominators`]. The cost of
+/// a *path* is the number of maximal change runs on it, not its edge count, so
+/// the sweep carries the two-valued run state described above rather than a
+/// plain per-cell distance.
+///
+/// # The tie-break is an implementer's choice
+///
+/// Member-count-minimal alignments are **not** unique. `AAC -> AC` deletes
+/// either of the two `A`s for one member either way, and nothing in the HGVS
+/// spec reaches the choice. The **3'-most** alignment is taken, matching
+/// `general.md:41` ("the most 3' position possible of the reference sequence is
+/// arbitrarily assigned to have been changed") and the tie-break
+/// [`AlignmentDag`]'s live counterpart already applies.
+///
+/// It is realised as a preference order on the forward walk: at every cell, among
+/// the out-edges that preserve the minimum, take `Match` first. Preferring the
+/// match defers change for as long as the alignment allows, which *is* the 3'
+/// placement — on `AAC -> AC` it matches reference offset 0 and deletes offset 1.
+///
+/// Ties that survive that — a cell whose only optimal steps are two different
+/// *kinds* of change — are broken by [`AlignmentDag::out_edges`]'s own order
+/// (`Match`, `Sub`, `Del`, `Ins`). That residual order is arbitrary and is
+/// deliberately not dressed up as a rule: a run's ref and alt spans are fixed by
+/// where it starts and ends, and the order of steps *within* it does not move
+/// either. It is stated only so the function is deterministic by construction
+/// rather than by accident.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalAlignment {
+    runs: Vec<CanonicalRun>,
+}
+
+impl CanonicalAlignment {
+    /// Select the canonical alignment of `dag`.
+    ///
+    /// `dag`'s blocks must have had their common flanks trimmed, for the same
+    /// reason [`AlignmentDag::build`] states: an untrimmed flank base is
+    /// absorbed into a neighbouring member and changes the answer.
+    pub(crate) fn of(dag: &AlignmentDag) -> Self {
+        let ref_len = dag.ref_len();
+        let alt_len = dag.alt_len();
+        let width = alt_len as usize + 1;
+        let size = (ref_len as usize + 1) * width;
+        let index = |i: u32, j: u32| i as usize * width + j as usize;
+        let sink = (ref_len, alt_len);
+
+        // `to_go[state * size + cell]` is the fewest additional members any
+        // minimal alignment can reach the sink with, from that cell and that run
+        // state. `u32::MAX` marks "not yet computed"; every cell in the DAG
+        // reaches the sink, so no cell keeps it.
+        let mut to_go = vec![u32::MAX; 2 * size];
+        to_go[RUN_CLOSED * size + index(sink.0, sink.1)] = 0;
+        to_go[RUN_OPEN * size + index(sink.0, sink.1)] = 0;
+
+        // `cells()` is topological (ascending `i + j`), and every edge strictly
+        // increases `i + j`, so walking it backwards visits every successor
+        // before its predecessor.
+        let cells: Vec<(u32, u32)> = dag.cells().collect();
+        for &(i, j) in cells.iter().rev() {
+            if (i, j) == sink {
+                continue;
+            }
+            for state in [RUN_CLOSED, RUN_OPEN] {
+                let mut best = u32::MAX;
+                for (next_i, next_j, step) in dag.out_edges(i, j) {
+                    let (cost, next_state) = step_cost(step, state);
+                    let onward = to_go[next_state * size + index(next_i, next_j)];
+                    if onward != u32::MAX {
+                        best = best.min(onward + cost);
+                    }
+                }
+                to_go[state * size + index(i, j)] = best;
+            }
+        }
+
+        // Walk forward, taking at each cell the first out-edge that preserves
+        // the minimum. `out_edges` yields `Match` before any change step, so
+        // "first" is the 3'-most preference documented above.
+        let mut runs: Vec<CanonicalRun> = Vec::new();
+        let (mut i, mut j) = (0u32, 0u32);
+        let mut state = RUN_CLOSED;
+        while (i, j) != sink {
+            let target = to_go[state * size + index(i, j)];
+            let chosen = dag.out_edges(i, j).find(|&(next_i, next_j, step)| {
+                let (cost, next_state) = step_cost(step, state);
+                let onward = to_go[next_state * size + index(next_i, next_j)];
+                onward != u32::MAX && onward + cost == target
+            });
+            // Unreachable: `to_go` was computed from these same edges, so some
+            // edge attains it. Declining beats panicking inside a library, and a
+            // truncated answer cannot escape: `canonicalize_from_sequence`
+            // re-applies the rebuilt edits and compares them against `result`
+            // (`merge.rs`, the `if reapplied != result { return None; }` just
+            // before it returns `Some(rebuilt)`). That is a *runtime* refusal
+            // carried into release builds, not the `debug_assert_eq!` beside it,
+            // so a partial partition declines rather than being emitted.
+            let Some((next_i, next_j, step)) = chosen else {
+                debug_assert!(false, "no out-edge of ({i},{j}) attains its own optimum");
+                break;
+            };
+            if step == Step::Match {
+                state = RUN_CLOSED;
+            } else {
+                if state == RUN_CLOSED {
+                    runs.push(CanonicalRun {
+                        ref_start: i,
+                        ref_end: i,
+                        alt_start: j,
+                        alt_end: j,
+                    });
+                }
+                if let Some(run) = runs.last_mut() {
+                    run.ref_end = next_i;
+                    run.alt_end = next_j;
+                }
+                state = RUN_OPEN;
+            }
+            (i, j) = (next_i, next_j);
+        }
+
+        Self { runs }
+    }
+
+    /// The member blocks of the canonical alignment, ascending and disjoint.
+    pub(crate) fn members(&self) -> Vec<MemberBlock> {
+        self.runs
+            .iter()
+            .map(|run| MemberBlock {
+                ref_start: run.ref_start,
+                ref_end: run.ref_end,
+            })
+            .collect()
+    }
+
+    /// The alternate-block span each member consumes, parallel to
+    /// [`CanonicalAlignment::members`].
+    ///
+    /// Unlike [`member_alt_spans`] this needs no dominator lookup and cannot
+    /// decline: the spans are read straight off the chosen path, which pins one
+    /// alternate coordinate per boundary by construction.
+    pub(crate) fn alt_spans(&self) -> Vec<(u32, u32)> {
+        self.runs
+            .iter()
+            .map(|run| (run.alt_start, run.alt_end))
+            .collect()
+    }
+}
+
+/// The member cost of taking `step` with a run in `state`, and the state it
+/// leaves behind.
+///
+/// A match closes any open run and costs nothing. A change step costs one member
+/// when it opens a run and nothing when it extends one — which is what makes the
+/// path cost the number of maximal change runs rather than the number of edges.
+fn step_cost(step: Step, state: usize) -> (u32, usize) {
+    match step {
+        Step::Match => (0, RUN_CLOSED),
+        Step::Sub | Step::Del | Step::Ins => (u32::from(state == RUN_CLOSED), RUN_OPEN),
+    }
+}
+
+/// Partition the reference block by the **canonical** rule: the member blocks of
+/// a member-count-minimal minimal alignment.
+///
+/// The counterpart of [`partition_members_with`] for the other of the two rules
+/// — see [`CanonicalAlignment`] for what distinguishes them, and for the
+/// tie-break this makes among equally-few-member alignments.
+///
+/// It takes no `min_separation`, and that absence is deliberate. Merging runs
+/// across a short unchanged gap **widens** a member past what the alignment
+/// changes, so a merged partition claims more changed columns than the block's
+/// edit distance: #1260's `AAAAAAA -> AACACAAAA` is distance 2, and merging its
+/// two insertion runs across the single matched base between them yields one
+/// member spanning `2..3` with a 3-base payload — 3 changed columns for a
+/// distance-2 block. Distance-minimality is the property this rule exists to
+/// have, so the separation rule stays where it belongs, on the dominator side.
+// No caller outside this module's own tests. `partition_block_canonical` does
+// not route through here — it calls `CanonicalAlignment::of` and then
+// `members()`/`alt_spans()` directly, because it needs both halves and this
+// returns only the first — and `dump_partitions` reaches the canonical rule
+// through `dev_partitioners`, which wraps `partition_block_canonical`. So the
+// sole call site is `round_trips_exhaustively_over_a_small_alphabet` below.
+// Scoped rather than allowed module-wide, so a helper that becomes unreachable
+// still warns.
+#[allow(dead_code)]
+pub(crate) fn partition_members_canonical(dag: &AlignmentDag) -> Vec<MemberBlock> {
+    CanonicalAlignment::of(dag).members()
 }
 
 #[cfg(test)]
@@ -515,6 +753,26 @@ mod tests {
 
     #[test]
     fn round_trips_exhaustively_over_a_small_alphabet() {
+        let all = small_alphabet_words(5);
+        for r in &all {
+            for a in &all {
+                assert!(
+                    round_trips(r, a),
+                    "{} -> {} does not round-trip",
+                    String::from_utf8_lossy(r),
+                    String::from_utf8_lossy(a)
+                );
+            }
+        }
+    }
+
+    /// Every word over `{A, C}` up to `max_len`, shortest first.
+    ///
+    /// A two-letter alphabet and short blocks maximise the number of *distinct*
+    /// minimal alignments per block, which is the regime the canonical rule is
+    /// about — over four letters most blocks have one minimal alignment and the
+    /// selection has nothing to select.
+    fn small_alphabet_words(max_len: u32) -> Vec<Vec<u8>> {
         fn words(len: u32) -> Vec<Vec<u8>> {
             if len == 0 {
                 return vec![Vec::new()];
@@ -529,17 +787,166 @@ mod tests {
             }
             out
         }
-        let all: Vec<Vec<u8>> = (0..=5u32).flat_map(words).collect();
+        (0..=max_len).flat_map(words).collect()
+    }
+
+    /// Changed columns a member set claims: `max(ref_span, alt_len)` summed,
+    /// mirroring `merge::changed_columns_of_pieces`.
+    fn changed_columns(members: &[MemberBlock], alt_spans: &[(u32, u32)]) -> u32 {
+        members
+            .iter()
+            .zip(alt_spans)
+            .map(|(member, (alt_start, alt_end))| {
+                (member.ref_end - member.ref_start).max(alt_end - alt_start)
+            })
+            .sum()
+    }
+
+    /// The canonical rule may not describe more change than the block contains.
+    ///
+    /// This is the property that separates it from the dominator rule and the
+    /// reason it takes no `min_separation`: its members come from **one**
+    /// alignment, so their changed columns must total exactly the block's
+    /// Levenshtein distance. Anything that merges or widens a member breaks this
+    /// — see `partition_members_canonical`'s doc for the worked #1260 case that
+    /// a separation threshold would push to 3 columns on a distance-2 block.
+    ///
+    /// Exhaustive over `{A, C}` up to length 6 both sides (16 129 pairs): a
+    /// two-letter alphabet is where alternative minimal alignments are dense, so
+    /// a selection rule that silently picks a non-minimal path shows up here and
+    /// nowhere cheaper.
+    #[test]
+    fn canonical_members_claim_exactly_the_blocks_edit_distance() {
+        let all = small_alphabet_words(6);
+        let mut checked = 0usize;
         for r in &all {
             for a in &all {
-                assert!(
-                    round_trips(r, a),
+                let dag = AlignmentDag::build(r, a);
+                let canonical = CanonicalAlignment::of(&dag);
+                assert_eq!(
+                    changed_columns(&canonical.members(), &canonical.alt_spans()),
+                    dag.edit_distance(),
+                    "{} -> {} claims a non-minimal number of changed columns",
+                    String::from_utf8_lossy(r),
+                    String::from_utf8_lossy(a)
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 127 * 127, "expected the full sweep, ran {checked}");
+    }
+
+    /// The members must denote the block they were derived from.
+    ///
+    /// Distance-minimality above says the members are *small enough*; this says
+    /// they are *right*. Without it a rule that dropped a run entirely would
+    /// score better on changed columns, not worse.
+    #[test]
+    fn canonical_members_rebuild_the_alternate_block() {
+        let all = small_alphabet_words(6);
+        for r in &all {
+            for a in &all {
+                let dag = AlignmentDag::build(r, a);
+                let canonical = CanonicalAlignment::of(&dag);
+                let members = canonical.members();
+                let spans = canonical.alt_spans();
+                let mut rebuilt = Vec::new();
+                let mut ref_cursor = 0usize;
+                for (member, (alt_start, alt_end)) in members.iter().zip(&spans) {
+                    assert!(
+                        member.ref_start as usize >= ref_cursor,
+                        "members overlap or are out of order: {members:?}"
+                    );
+                    rebuilt.extend_from_slice(&r[ref_cursor..member.ref_start as usize]);
+                    rebuilt.extend_from_slice(&a[*alt_start as usize..*alt_end as usize]);
+                    ref_cursor = member.ref_end as usize;
+                }
+                rebuilt.extend_from_slice(&r[ref_cursor..]);
+                assert_eq!(
+                    rebuilt,
+                    *a,
                     "{} -> {} does not round-trip",
                     String::from_utf8_lossy(r),
                     String::from_utf8_lossy(a)
                 );
             }
         }
+    }
+
+    /// The tie-break, pinned on the smallest block that has one.
+    ///
+    /// `AAC -> AC` deletes either `A` for one member either way, so member count
+    /// cannot choose and `general.md:41`'s 3' rule does: the deleted base is
+    /// reference offset **1**, not 0. Pinned because the tie-break is an
+    /// implementer's choice — nothing in the spec forces it — so a change to it
+    /// is a change of representation and must be a deliberate edit rather than a
+    /// side effect of touching the walk order.
+    #[test]
+    fn canonical_breaks_a_member_count_tie_three_prime_most() {
+        let dag = AlignmentDag::build(b"AAC", b"AC");
+        assert_eq!(
+            partition_members_canonical(&dag),
+            vec![MemberBlock {
+                ref_start: 1,
+                ref_end: 2
+            }]
+        );
+    }
+
+    /// The canonical rule can report **more** members than the dominator rule,
+    /// and this pins the smallest block where it does.
+    ///
+    /// It is tempting to assume that minimising members bounds it below the
+    /// dominator partition. It does not, and the two rules are not comparable at
+    /// all: the dominator rule merges runs separated by fewer than
+    /// [`MIN_SEPARATION`] unchanged bases, which the canonical rule has no
+    /// counterpart for and deliberately does not want — merging is what would
+    /// cost it distance-minimality.
+    ///
+    /// `A -> CAC` is #1260's own block, trimmed, and it is the shortest block in
+    /// the `{A, C}` sweep where they diverge. It is distance 2 (one `C` inserted
+    /// either side of the `A`) and admits exactly one minimal alignment, so this
+    /// is not a tie-break disagreement: the dominator rule merges the two forced
+    /// insertion junctions across the single matched base between them into one
+    /// member claiming **3** changed columns, while the canonical rule reports
+    /// them as two pure insertions claiming **2**.
+    ///
+    /// Recorded rather than asserted away because it is the whole reason both
+    /// rules are worth measuring. Neither is a better approximation of the other:
+    /// one is minimal in members-after-merging and the other in changed columns,
+    /// and the spec does not settle which a description should be.
+    #[test]
+    fn canonical_can_report_more_members_than_the_dominator_rule() {
+        let dag = AlignmentDag::build(b"A", b"CAC");
+        let dominators = dag.dominators();
+        assert_eq!(
+            partition_members_with(&dag, &dominators, MIN_SEPARATION),
+            vec![MemberBlock {
+                ref_start: 0,
+                ref_end: 1
+            }],
+            "the dominator rule merges both insertions into one spanning member"
+        );
+        let canonical = CanonicalAlignment::of(&dag);
+        assert_eq!(
+            canonical.members(),
+            vec![
+                MemberBlock {
+                    ref_start: 0,
+                    ref_end: 0
+                },
+                MemberBlock {
+                    ref_start: 1,
+                    ref_end: 1
+                },
+            ],
+            "the canonical rule keeps them as two pure insertions"
+        );
+        assert_eq!(
+            changed_columns(&canonical.members(), &canonical.alt_spans()),
+            dag.edit_distance(),
+            "and only the canonical partition claims exactly the block's distance"
+        );
     }
 
     proptest::proptest! {

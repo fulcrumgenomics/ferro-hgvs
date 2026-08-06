@@ -2012,6 +2012,73 @@ fn seqfirst_shadow_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("FERRO_SEQFIRST_SHADOW").as_deref() == Ok("1"))
 }
 
+/// Which block partitioner [`canonicalize_from_sequence`] cuts with.
+///
+/// Three rules exist and they are not variations on one — see
+/// [`crate::normalize::seqfirst::partition::CanonicalAlignment`] for what
+/// separates the latter two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PartitionRule {
+    /// [`partition_block`]: a single-gap alignment search plus its two narrow
+    /// escapes. The shipped rule, and the default.
+    Live,
+    /// [`partition_block_sequence_first`]: cut at the steps common to every
+    /// minimal alignment (`mutalyzer-algebra`'s `local_supremal`).
+    Shadow,
+    /// [`partition_block_canonical`]: the member-count-minimal minimal alignment
+    /// (`mutalyzer-algebra`'s `canonical`).
+    Canonical,
+}
+
+/// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
+///
+/// Unset, empty, or unrecognised all yield [`PartitionRule::Live`], so no
+/// environment can make ferro emit something other than its shipped
+/// representation by accident. An unrecognised value is warned about rather than
+/// rejected: this is a measurement knob, and a typo that silently selected a
+/// different partitioner would poison a bake-off far more quietly than one that
+/// silently ran the default and said so.
+///
+/// Split out from [`partition_rule`] so the mapping is testable without an
+/// environment variable — the cached read below can only ever be exercised once
+/// per process.
+fn partition_rule_from_env(value: Option<&str>) -> PartitionRule {
+    match value {
+        None | Some("") | Some("live") => PartitionRule::Live,
+        Some("shadow") => PartitionRule::Shadow,
+        Some("canonical") => PartitionRule::Canonical,
+        Some(other) => {
+            log::warn!("FERRO_PARTITION={other} is not one of live|shadow|canonical; using live");
+            PartitionRule::Live
+        }
+    }
+}
+
+/// Which partitioner this process cuts blocks with, from `FERRO_PARTITION`.
+///
+/// A **development-only bake-off switch**. Read once and cached, like
+/// [`seqfirst_shadow_enabled`], so the default path pays one relaxed atomic load
+/// per canonicalized block and nothing else; with the variable unset the result
+/// is byte-identical to having no switch at all.
+fn partition_rule() -> PartitionRule {
+    static RULE: std::sync::OnceLock<PartitionRule> = std::sync::OnceLock::new();
+    *RULE.get_or_init(|| partition_rule_from_env(std::env::var("FERRO_PARTITION").ok().as_deref()))
+}
+
+/// The unchanged-base separation threshold an axis merges runs below.
+///
+/// A reading-frame axis gets `general.md:35`'s coding one-amino-acid exception
+/// ([`crate::normalize::seqfirst::MIN_SEPARATION`], 2); every other axis gets the
+/// general rule ([`MIN_SEPARATION_NO_FRAME`], 1). See the latter for why applying
+/// the exception everywhere is wrong.
+fn axis_min_separation(reading_frame: bool) -> u32 {
+    if reading_frame {
+        crate::normalize::seqfirst::MIN_SEPARATION
+    } else {
+        MIN_SEPARATION_NO_FRAME
+    }
+}
+
 /// A piece list rendered on one line with `alt` as text rather than bytes.
 ///
 /// Only used by the `FERRO_SEQFIRST_SHADOW` report, whose whole value is being
@@ -2178,20 +2245,47 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         return None; // no net change; leave it to the existing pipeline.
     }
 
-    let mut pieces = partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
+    // Which rule cuts the block. `FERRO_PARTITION` unset — the only configuration
+    // that ships — takes the `Live` arm, so this is `partition_block` and nothing
+    // else. The other two arms fall back to it when their splitter declines,
+    // rather than abandoning the canonicalization, so a bake-off run measures the
+    // partitioners and not their decline rates.
+    let mut pieces = match partition_rule() {
+        PartitionRule::Live => partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
+        PartitionRule::Shadow => partition_block_sequence_first(
+            &ref_bytes[lo..hi_ref],
+            &result[lo..hi_alt],
+            axis_min_separation(frame.reading_frame),
+        )
+        .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
+        PartitionRule::Canonical => {
+            partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
+                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
+        }
+    };
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
     // about the *split* and not about a downstream pass. Never affects `pieces`.
     if seqfirst_shadow_enabled() {
-        // Reading-frame axes get the coding one-amino-acid exception
-        // (`seqfirst::MIN_SEPARATION`, 2); every other axis gets the general
-        // rule (`MIN_SEPARATION_NO_FRAME`, 1). Same distinction
-        // `apply_coding_codon_exception` uses below, via the same `AxisFrame`.
-        let min_separation = if frame.reading_frame {
-            crate::normalize::seqfirst::MIN_SEPARATION
-        } else {
-            MIN_SEPARATION_NO_FRAME
-        };
+        // The audit's live baseline, computed independently of `partition_rule()`.
+        //
+        // It cannot be `pieces`: since `FERRO_PARTITION` was added, `pieces` is
+        // whatever rule the environment selected, so
+        // `FERRO_SEQFIRST_SHADOW=1 FERRO_PARTITION=shadow` would compare the
+        // sequence-first splitter with *itself* and report `SEQFIRST_AGREE` on
+        // every block — a full denominator and zero disagreements, which reads
+        // as the strongest possible result and is produced by comparing a thing
+        // with itself. That is the precise failure the denominator below exists
+        // to rule out. `canonical` would not be vacuous but would label its
+        // output `live=`, which is worse than useless in a bake-off log.
+        //
+        // The extra `partition_block` call is paid only when the shadow audit is
+        // on, which is already a measurement-only path.
+        let live = partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
+        // Per-axis separation threshold (see `axis_min_separation`) — the same
+        // distinction `apply_coding_codon_exception` uses below, via the same
+        // `AxisFrame`.
+        let min_separation = axis_min_separation(frame.reading_frame);
         let block = &ref_bytes[lo..hi_ref];
         let mut shadow = partition_block_sequence_first(block, &result[lo..hi_alt], min_separation);
         // `min_separation` alone captures only the distance half of
@@ -2216,13 +2310,13 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         // minimisation. The shrink runs here before the 3'-shift, whereas the
         // returned `pieces` are shrunk after it — see
         // `shrinking_before_and_after_the_three_prime_shift_agree`.
-        let mut min_live = pieces.clone();
+        let mut min_live = live.clone();
         shrink_pieces_to_differences(&mut min_live, block);
         let mut min_shadow = shadow.clone();
         if let Some(min_shadow) = min_shadow.as_mut() {
             shrink_pieces_to_differences(min_shadow, block);
         }
-        if shadow.as_ref() == Some(&pieces) {
+        if shadow.as_ref() == Some(&live) {
             // The denominator. Without it, `grep -c SEQFIRST_SHADOW` returning 0
             // cannot be told apart from a shadow that never ran — the failure
             // mode that would make an audit of the disagreements vacuous.
@@ -2232,7 +2326,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
                 "SEQFIRST_MINAGREE ref={} alt={} live={:?} shadow={:?}",
                 String::from_utf8_lossy(block),
                 String::from_utf8_lossy(&result[lo..hi_alt]),
-                DebugPieces(&pieces),
+                DebugPieces(&live),
                 shadow.as_deref().map(DebugPieces),
             );
         } else {
@@ -2245,7 +2339,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
                 "SEQFIRST_SHADOW ref={} alt={} live={:?} shadow={:?} min_live={:?} min_shadow={:?}",
                 String::from_utf8_lossy(block),
                 String::from_utf8_lossy(&result[lo..hi_alt]),
-                DebugPieces(&pieces),
+                DebugPieces(&live),
                 shadow.as_deref().map(DebugPieces),
                 DebugPieces(&min_live),
                 min_shadow.as_deref().map(DebugPieces),
@@ -3780,6 +3874,152 @@ fn partition_block_sequence_first(
             })
             .collect(),
     )
+}
+
+/// Partition a changed block by the **canonical** rule: the member-count-minimal
+/// minimal alignment, via
+/// [`crate::normalize::seqfirst::partition::CanonicalAlignment`].
+///
+/// Same contract as [`partition_block`] — pieces are disjoint, ascending, and
+/// reconstruct `result` when substituted into `reference` — and the same
+/// precondition as [`partition_block_sequence_first`]: `reference` and `result`
+/// must already have their common flanks trimmed.
+///
+/// Takes no `min_separation`. The canonical rule describes exactly what one
+/// alignment changes, so merging runs across a short unchanged gap would make it
+/// claim more changed columns than the block's edit distance —
+/// `partition_members_canonical`'s doc works the case through.
+///
+/// Returns `None` only when the alignment grid would exceed
+/// [`MAX_SEQFIRST_GRID_CELLS`]; the caller falls back to [`partition_block`].
+///
+/// Reached only under `FERRO_PARTITION=canonical` and from the `dump_partitions`
+/// example; it does not decide any shipped result.
+fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
+    use crate::normalize::seqfirst::align::AlignmentDag;
+    use crate::normalize::seqfirst::partition::CanonicalAlignment;
+
+    // Refuse an oversized grid before building it, for the same reason
+    // `partition_block_sequence_first` does: the allocation is the cost, and
+    // `(n + 1) * (m + 1)` is itself an overflow site.
+    let cells = reference
+        .len()
+        .checked_add(1)?
+        .checked_mul(result.len().checked_add(1)?)?;
+    if cells > MAX_SEQFIRST_GRID_CELLS {
+        return None;
+    }
+
+    let dag = AlignmentDag::build(reference, result);
+    let canonical = CanonicalAlignment::of(&dag);
+    Some(
+        canonical
+            .members()
+            .iter()
+            .zip(canonical.alt_spans())
+            .map(|(member, (alt_start, alt_end))| Piece {
+                ref_start: member.ref_start as usize,
+                ref_end: member.ref_end as usize,
+                alt: result[alt_start as usize..alt_end as usize].to_vec(),
+            })
+            .collect(),
+    )
+}
+
+/// The three block partitioners, callable by name for measurement.
+///
+/// **Dev-only measurement surface, not API.** It exists so the `dump_partitions`
+/// example can run all three rules over the same blocks and print them side by
+/// side; nothing here is part of ferro's supported interface, none of it is
+/// covered by semantic versioning, and it may change or vanish with the
+/// bake-off it serves. Production code must go through
+/// `canonicalize_from_sequence`, which is where the axis, the window and the
+/// downstream passes are applied.
+///
+/// Gated on the `dev` feature, and re-exported as
+/// `ferro_hgvs::normalize::dev_partitioners` only there, because the underlying
+/// functions are private to this module and should stay that way.
+#[cfg(feature = "dev")]
+pub mod dev_partitioners {
+    use super::Piece;
+
+    /// The default unchanged-base separation threshold for the `shadow` rule:
+    /// the coding one-amino-acid exception (`general.md:35`).
+    ///
+    /// A raw block carries no axis, so a caller measuring blocks in isolation has
+    /// to choose. See `MIN_SEPARATION_NO_FRAME` for why the other value is the
+    /// right one on an axis with no reading frame.
+    pub const DEFAULT_MIN_SEPARATION: u32 = crate::normalize::seqfirst::MIN_SEPARATION;
+
+    /// One derived member of a partitioned block, as 0-based half-open offsets
+    /// into the reference block plus its replacement bases.
+    ///
+    /// A pure insertion has `ref_start == ref_end`; a pure deletion has an empty
+    /// `alt`.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct DevPiece {
+        pub ref_start: usize,
+        pub ref_end: usize,
+        pub alt: Vec<u8>,
+    }
+
+    /// Re-shape the module-private `Piece` into the public one.
+    ///
+    /// A free function rather than a `From` impl on purpose: an
+    /// `impl From<&Piece> for DevPiece` would put a module-private type into a
+    /// public trait implementation, which is exactly the leak this whole module
+    /// exists to avoid.
+    fn convert(pieces: &[Piece]) -> Vec<DevPiece> {
+        pieces
+            .iter()
+            .map(|piece| DevPiece {
+                ref_start: piece.ref_start,
+                ref_end: piece.ref_end,
+                alt: piece.alt.clone(),
+            })
+            .collect()
+    }
+
+    /// The shipped rule: `partition_block`'s single-gap alignment search.
+    ///
+    /// Never declines — an unsplittable block comes back as one spanning member.
+    pub fn live(reference: &[u8], result: &[u8]) -> Vec<DevPiece> {
+        convert(&super::partition_block(reference, result))
+    }
+
+    /// The dominator rule: cut at the steps common to every minimal alignment.
+    ///
+    /// `None` when the sequence-first splitter declines — an oversized alignment
+    /// grid, or an alternate-span derivation that refused.
+    pub fn shadow(reference: &[u8], result: &[u8], min_separation: u32) -> Option<Vec<DevPiece>> {
+        super::partition_block_sequence_first(reference, result, min_separation)
+            .as_deref()
+            .map(convert)
+    }
+
+    /// The canonical rule: the member-count-minimal minimal alignment.
+    ///
+    /// `None` only when the alignment grid would be oversized.
+    pub fn canonical(reference: &[u8], result: &[u8]) -> Option<Vec<DevPiece>> {
+        super::partition_block_canonical(reference, result)
+            .as_deref()
+            .map(convert)
+    }
+
+    /// The block's unit-cost Levenshtein distance — the floor every arm's
+    /// changed-column count is measured against.
+    pub fn edit_distance(reference: &[u8], result: &[u8]) -> u32 {
+        crate::normalize::seqfirst::align::AlignmentDag::build(reference, result).edit_distance()
+    }
+
+    /// Changed columns a member set claims, `sum(max(ref_span, alt_len))` — the
+    /// same measure `changed_columns_of_pieces` applies inside the normalizer.
+    pub fn changed_columns(pieces: &[DevPiece]) -> usize {
+        pieces
+            .iter()
+            .map(|piece| (piece.ref_end - piece.ref_start).max(piece.alt.len()))
+            .sum()
+    }
 }
 
 /// Alignment columns a description marks as changed.
@@ -8842,6 +9082,136 @@ mod tests {
     /// choosing the separation per axis at the `canonicalize_from_sequence` call
     /// site rather than changing this default — is pinned separately, by
     /// `sequence_first_split_axis_separation_matches_general_rule`.
+    /// The `FERRO_PARTITION` bake-off knob.
+    ///
+    /// The knob exists to make three partitioners measurable side by side. Its
+    /// most important property is therefore the one nobody looks at: that leaving
+    /// it alone changes nothing at all.
+    mod partition_rule_knob {
+        use super::*;
+
+        /// The shadow audit's baseline is the **live** rule, not whatever
+        /// `FERRO_PARTITION` selected.
+        ///
+        /// Regression guard for a defect introduced with the knob itself: the
+        /// audit read its baseline off `pieces`, which stopped being live's
+        /// output the moment the knob could change it. Under
+        /// `FERRO_SEQFIRST_SHADOW=1 FERRO_PARTITION=shadow` it therefore compared
+        /// the sequence-first splitter with itself and logged `SEQFIRST_AGREE`
+        /// for every block — a full denominator with zero disagreements, which
+        /// is the most convincing possible result and is worth nothing. Under
+        /// `canonical` it labelled canonical's pieces `live=`.
+        ///
+        /// What this test can and cannot do: `partition_rule()` caches in a
+        /// `OnceLock`, so one process cannot exercise two rules and the audit
+        /// itself is unreachable from here. What it *can* pin is the premise the
+        /// fix rests on — that live and canonical genuinely disagree on some
+        /// block, so which one the audit names is observable rather than moot.
+        /// `A -> ACA` is the smallest such block: both spellings denote `ACA`,
+        /// but live anchors the inserted `AC` at reference 0 while canonical
+        /// takes the 3'-most optimal step and anchors `CA` at reference 1.
+        /// The end-to-end guard needs an isolated process per rule (#1444
+        /// follow-up).
+        #[test]
+        fn live_and_canonical_disagree_so_the_audit_baseline_is_observable() {
+            let live = partition_block(b"A", b"ACA");
+            let canonical =
+                partition_block_canonical(b"A", b"ACA").expect("grid is far below the bound");
+            assert_ne!(
+                live, canonical,
+                "if these ever agree, pick another block — this test is vacuous otherwise"
+            );
+        }
+
+        /// Unset means `live`, and so does anything the knob does not recognise.
+        ///
+        /// This is the property the default path depends on. A knob that fell
+        /// through to a different rule on an empty string, or that treated a
+        /// typo (`FERRO_PARTITION=cannonical`) as an instruction rather than as
+        /// noise, would silently re-partition every block for whoever set it —
+        /// which for this repo is a representation change, not a configuration.
+        #[test]
+        fn unset_and_unrecognised_values_select_the_live_rule() {
+            for value in [None, Some(""), Some("live")] {
+                assert_eq!(
+                    partition_rule_from_env(value),
+                    PartitionRule::Live,
+                    "{value:?}"
+                );
+            }
+            for typo in ["cannonical", "LIVE", "shadow ", "1", "true"] {
+                assert_eq!(
+                    partition_rule_from_env(Some(typo)),
+                    PartitionRule::Live,
+                    "{typo} must not select a rule"
+                );
+            }
+        }
+
+        /// The two non-default rules are reachable, and only by their own names.
+        #[test]
+        fn the_two_alternative_rules_are_selected_by_name() {
+            assert_eq!(
+                partition_rule_from_env(Some("shadow")),
+                PartitionRule::Shadow
+            );
+            assert_eq!(
+                partition_rule_from_env(Some("canonical")),
+                PartitionRule::Canonical
+            );
+        }
+
+        /// This suite's expectations are the live rule's, and the cached read
+        /// agrees with the pure mapping above.
+        ///
+        /// Every other test in this file asserts a *shipped* representation, and
+        /// switching the rule moves dozens of them at once (measured: 36 under
+        /// `shadow`, 33 under `canonical`). This is the one that names the cause.
+        /// It therefore **fails by design** during a deliberate
+        /// `FERRO_PARTITION=…` bake-off run — that failure is the message
+        /// "you are not measuring the shipped rule", not a defect.
+        #[test]
+        fn the_suite_runs_on_the_live_rule() {
+            assert!(
+                std::env::var_os("FERRO_PARTITION").is_none(),
+                "this suite's expectations are the live rule's; FERRO_PARTITION must be unset"
+            );
+            assert_eq!(partition_rule(), PartitionRule::Live);
+        }
+
+        /// The canonical arm produces pieces that denote the block, so the arm is
+        /// wired to something that works rather than merely something that
+        /// compiles.
+        ///
+        /// Uses the spec's own worked example (`delins.md:44`,
+        /// `LRG_199t1:c.850_901`) because it is the block with the most
+        /// alternative minimal alignments in the calibration corpus — the regime
+        /// where a mis-selected path would still round-trip but claim more
+        /// columns than the block's distance.
+        #[test]
+        fn the_canonical_arm_denotes_the_block_it_partitions() {
+            let reference = b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT";
+            let result = b"TTCCTCGATGCCTG";
+            let pieces =
+                partition_block_canonical(reference, result).expect("grid is far below the bound");
+            let mut rebuilt = Vec::new();
+            let mut cursor = 0usize;
+            for piece in &pieces {
+                rebuilt.extend_from_slice(&reference[cursor..piece.ref_start]);
+                rebuilt.extend_from_slice(&piece.alt);
+                cursor = piece.ref_end;
+            }
+            rebuilt.extend_from_slice(&reference[cursor..]);
+            assert_eq!(rebuilt, result.to_vec(), "canonical pieces: {pieces:?}");
+            assert_eq!(
+                changed_columns_of_pieces(&pieces),
+                crate::normalize::seqfirst::align::AlignmentDag::build(reference, result)
+                    .edit_distance() as usize,
+                "the canonical arm must claim exactly the block's edit distance"
+            );
+        }
+    }
+
     mod seqfirst_shadow_audit {
         use super::*;
 
