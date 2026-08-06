@@ -104,8 +104,8 @@ const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_632,
-    split_two: 4_506,
+    converged: 8_005,
+    split_two: 3_133,
     split_three: 115,
     split_more: 19,
     underdetermined: 0,
@@ -135,8 +135,8 @@ const THREE_PRIME_UNDER_IDEMPOTENCY_ORACLE: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 2,
-    converged: 6_634,
-    split_two: 4_504,
+    converged: 8_007,
+    split_two: 3_131,
     split_three: 115,
     split_more: 19,
     underdetermined: 0,
@@ -147,7 +147,7 @@ const THREE_PRIME_UNDER_IDEMPOTENCY_ORACLE: Census = Census {
 /// option, and confluence is a property of the normalizer rather than of one
 /// shuffle direction, so it is measured in full rather than spot-checked.
 ///
-/// It lands within five classes of the 3' figure (6 627 against 6 632), which
+/// It lands within five classes of the 3' figure (8 000 against 8 005), which
 /// is worth reading as evidence: the divergence is a property of how the
 /// partitioner splits a block, not of which end of an ambiguous run the shuffle
 /// walks to. A fix that moved only one of these two numbers would be treating a
@@ -156,8 +156,8 @@ const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_627,
-    split_two: 4_531,
+    converged: 8_000,
+    split_two: 3_158,
     split_three: 105,
     split_more: 9,
     underdetermined: 0,
@@ -170,8 +170,8 @@ const FIVE_PRIME_UNDER_IDEMPOTENCY_ORACLE: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 2,
-    converged: 6_629,
-    split_two: 4_529,
+    converged: 8_002,
+    split_two: 3_156,
     split_three: 105,
     split_more: 9,
     underdetermined: 0,
