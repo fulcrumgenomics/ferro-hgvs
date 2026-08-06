@@ -177,9 +177,17 @@ fn an_out_of_phase_anchor_is_refused_in_both_case_conventions() {
     let masked = spdi_err(&padded(MASKED_CAG), "TEMPLATE:g.260CAG[5]");
     let upper = spdi_err(&padded(UPPER_CAG), "TEMPLATE:g.260CAG[5]");
     assert_eq!(masked, upper, "masking must not change the diagnostic");
+    // The text changed in #1492: the decline now names the anchor the caller
+    // wrote (260) instead of the unit-wide fallback span (260-262) the tract
+    // search invented. The *behaviour* this test exists for — refused, and
+    // refused identically in both case conventions — is unchanged.
     assert!(
-        masked.contains("repeat span TEMPLATE:260-262 does not match repeat unit CAG"),
+        masked.contains("no CAG repeat is anchored at TEMPLATE:260"),
         "unexpected diagnostic: {masked}"
+    );
+    assert!(
+        !masked.contains("260-262"),
+        "the decline must not quote a span the caller never wrote: {masked}"
     );
 }
 
