@@ -7327,7 +7327,7 @@ fn respell_at_sequence_end<P: ReferenceProvider>(
                 }
         }
         HgvsVariant::Rna(r) => {
-            let Some((region, axis)) = cds_axis_end(span, provider, raw_length, Region::Rna) else {
+            let Some((region, axis)) = rna_axis_end(span, provider, raw_length) else {
                 return;
             };
             let utr3 = region == Region::ThreePrimeUtr;
@@ -7354,9 +7354,15 @@ fn respell_at_sequence_end<P: ReferenceProvider>(
     // outside the member's own region — which is the case this guard exists for,
     // so keying the check on `span.region` would make it vacuously true for the
     // one input it has to judge.
+    //
+    // `rna_axis_end` rather than `cds_axis_end` for the same reason the arm
+    // above uses it: on a non-coding record `cds_axis_end` declines, which made
+    // this verification reject a write the arm had just made correctly (#1453).
+    // The two must be the same resolution or the guard judges the arm against a
+    // convention the arm does not use.
     let written = match variant {
         HgvsVariant::Cds(_) => cds_axis_end(span, provider, raw_length, Region::Cds),
-        HgvsVariant::Rna(_) => cds_axis_end(span, provider, raw_length, Region::Rna),
+        HgvsVariant::Rna(_) => rna_axis_end(span, provider, raw_length),
         _ => Some((span.region, axis)),
     };
     let landed = placed && written.is_some_and(|w| member_endpoints(variant) == Some((w, w)));
@@ -7388,6 +7394,87 @@ fn cds_axis_end<P: ReferenceProvider>(
 ) -> Option<(Region, i64)> {
     let (cds_start, cds_end) = ordered_cds_bounds(&span.provider_key, provider)?;
     cds_axis_position(i64::try_from(length).ok()?, cds_start, cds_end, body)
+}
+
+/// [`cds_axis_end`] for the `r.` axis, with the non-coding fallback (#1453).
+///
+/// A record with no CDS has nothing to resolve through, and needs none: its
+/// `r.` axis is the transcript's own, so the last base is `length` in the
+/// member's own region — the same answer [`respell_at_sequence_end`]'s `Tx` arm
+/// reaches directly. `cds_axis_end` declines that record, and it is called
+/// twice in that function — once to place the write and once to verify it — so
+/// the fallback has to be in one shared place or the two disagree.
+fn rna_axis_end<P: ReferenceProvider>(
+    span: &MemberSpan,
+    provider: &P,
+    length: u64,
+) -> Option<(Region, i64)> {
+    if rna_axis_is_transcript_relative(span, provider) {
+        return Some((span.region, i64::try_from(length).ok()?));
+    }
+    cds_axis_end(span, provider, length, Region::Rna)
+}
+
+/// Whether `span` sits on an `r.` axis that numbers its **transcript** rather
+/// than its CDS — i.e. a `Region::Rna` member on a record with no CDS at all
+/// (#1453).
+///
+/// The two `r.` repair arms — [`respell_at_gap`] and [`respell_at_sequence_end`]
+/// — resolve their coordinates through the CDS, via [`cds_relative_gap`] and
+/// [`cds_axis_end`] respectively. That is right on a coding record and is what
+/// names a junction on the CDS start `r.-1_1` rather than the non-existent
+/// `r.0` (#1284). Both route through [`ordered_cds_bounds`], which requires
+/// **both** bounds, so on a non-coding record they returned `None`, the write
+/// was reverted, and *every* repair became a silent no-op on a non-coding `r.`
+/// member.
+///
+/// What that cost, measured on `coalesce_members_at_one_junction`: it grouped
+/// the two colliding members and read both payloads before the revert threw its
+/// write away, so `NR_TEST.1:r.[9dup;10dup;11dup]` normalized to
+/// `r.[9dup;11dup;11dup]`. Two members claiming one interbase point denote no
+/// sequence, and no seam oracle sees it — the output is well-formed, so the
+/// re-parse oracle accepts it, and every coordinate is in range, so the
+/// in-bounds oracle does too. Over a 3,200-row corpus of nearby junction-
+/// occupying cis members on a non-coding transcript, 849 outputs repeated a
+/// member and 1,046 disagreed with the `n.` axis of the same record; both go to
+/// 0 with this fallback in place.
+///
+/// # Why this predicate and not "`ordered_cds_bounds` declined"
+///
+/// It is deliberately the same fallback [`region_sequence_delta`] and
+/// [`axis_frame`] already make, and deliberately no wider — the three have to
+/// agree about which records and regions are transcript-relative, or a repair
+/// reads its bases through one convention and names them under another. So:
+///
+/// * **`Region::Rna` only.** `region_sequence_delta` falls back for that region
+///   alone; `FivePrimeUtr` (`r.-N`) and `ThreePrimeUtr` (`r.*N`) still require
+///   CDS bounds, because without a CDS those regions do not exist and there is
+///   no position for a fallback to name.
+/// * **`cds_start` alone**, rather than any `ordered_cds_bounds` failure — and
+///   rather than "both bounds absent", which is the narrower test this
+///   predicate first carried. `region_sequence_delta` and `axis_frame` both key
+///   on `cds_start` only, so requiring `cds_end` to be absent too made the
+///   three *disagree* on a record annotated with a stop codon but no start
+///   codon. `CdotTranscript::from_*` reaches that shape from real data: its CDS
+///   guard is an **or** (`start_codon.is_some() || stop_codon.is_some()`) and
+///   then assigns both fields straight through, so a 5'-incomplete record
+///   (`cds_start_NF`, #972) arrives as `(None, Some(end))`. On those records the
+///   repair declined and #1453's repeated member survived — verbatim
+///   `r.[9dup;11dup;11dup]`, against `n.9_10insTAA` on the same transcript.
+///   The other two failures must keep refusing, and still do, because both
+///   carry a `cds_start` for [`ordered_cds_bounds`] to reject: **inverted**
+///   bounds are a malformed record whose CDS-relative axis is incoherent (see
+///   [`ordered_cds_bounds`]), and a record carrying `cds_start` without
+///   `cds_end` has a genuinely CDS-relative axis whose 3'UTR simply cannot be
+///   named.
+/// * **The provider must resolve the record.** `is_ok_and` is false for one it
+///   cannot, which keeps refusing: an unresolvable transcript gives no grounds
+///   to claim its axis is transcript-relative.
+fn rna_axis_is_transcript_relative<P: ReferenceProvider>(span: &MemberSpan, provider: &P) -> bool {
+    span.region == Region::Rna
+        && provider
+            .get_transcript(&span.provider_key)
+            .is_ok_and(|tx| tx.cds_start.is_none())
 }
 
 // ----------------------------------------------------------------------------
@@ -7754,6 +7841,31 @@ fn respell_at_gap<P: ReferenceProvider>(
             .then(|| Some((u64::try_from(gap_start).ok()?, u64::try_from(gap_end).ok()?)))?
     };
     let same_region_gap = ((span.region, gap_start), (span.region, gap_end));
+
+    // Where an `r.` gap lands, which depends on whether the record has a CDS
+    // (#1453).
+    //
+    // On a **coding** transcript the `r.` axis is CDS-relative, so the gap is
+    // resolved through the transcript exactly as `c.`'s is — that is what names
+    // the junction on the CDS start `r.-1_1` rather than the non-existent `r.0`
+    // (#1284). A **non-coding** record has no CDS to resolve through and its
+    // `r.` axis numbers the transcript directly, so the gap is
+    // `[junction, junction + 1]` on the axis itself: the `n.` arm's arithmetic
+    // below, including its refusal of a gap that would name position 0, since
+    // this axis has no zero either.
+    //
+    // `cds_relative_gap` alone *refused* that second case, which reverted the
+    // write and made every repair routed through here a silent no-op on a
+    // non-coding `r.` member. See [`rna_axis_is_transcript_relative`] for what
+    // that cost, and for why the fallback is keyed on that predicate rather
+    // than on `cds_relative_gap` returning `None`.
+    let rna_gap = || -> Option<((Region, i64), (Region, i64))> {
+        if rna_axis_is_transcript_relative(span, provider) {
+            return (gap_start != 0 && gap_end != 0).then_some(same_region_gap);
+        }
+        cds_relative_gap(Region::Rna)
+    };
+
     let (placed, intended) = match variant {
         HgvsVariant::Genome(g) => (
             unsigned_gap().is_some_and(|(start, end)| {
@@ -7822,7 +7934,7 @@ fn respell_at_gap<P: ReferenceProvider>(
             ),
             None => (false, same_region_gap),
         },
-        HgvsVariant::Rna(r) => match cds_relative_gap(Region::Rna) {
+        HgvsVariant::Rna(r) => match rna_gap() {
             Some(intended) => (
                 set_endpoints(
                     &mut r.loc_edit.location,
