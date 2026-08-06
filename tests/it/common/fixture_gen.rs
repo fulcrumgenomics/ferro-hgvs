@@ -43,7 +43,7 @@ pub fn ensure_generated_fixture(
     label: &str,
     dependency: impl FnOnce(),
 ) {
-    ensure_generated(path, "--bin", generator, tmp_stem, label, dependency);
+    ensure_generated(path, "--bin", generator, &[], tmp_stem, label, dependency);
 }
 
 /// [`ensure_generated_fixture`], for a generator that is an `[[example]]`
@@ -55,20 +55,37 @@ pub fn ensure_generated_fixture(
 /// generators stay examples, and the regeneration flow takes the target kind
 /// instead of assuming one. `--example` and `--bin` are the only difference;
 /// everything that makes this safe to call concurrently is shared.
+///
+/// `generator_args` are passed through ahead of `--output`, so one generator can
+/// back several fixtures that differ only in its flags — which is how the `g,c`
+/// and the `n,r` confluence corpora are both produced by
+/// `generate_cis_confluence_corpus`. Each such fixture needs its **own** path and
+/// `tmp_stem`; reusing either across two argument sets would let whichever test
+/// ran first install its corpus under the other's name.
 pub fn ensure_generated_example_fixture(
     path: &Path,
     generator: &str,
+    generator_args: &[&str],
     tmp_stem: &str,
     label: &str,
     dependency: impl FnOnce(),
 ) {
-    ensure_generated(path, "--example", generator, tmp_stem, label, dependency);
+    ensure_generated(
+        path,
+        "--example",
+        generator,
+        generator_args,
+        tmp_stem,
+        label,
+        dependency,
+    );
 }
 
 fn ensure_generated(
     path: &Path,
     target_kind: &str,
     generator: &str,
+    generator_args: &[&str],
     tmp_stem: &str,
     label: &str,
     dependency: impl FnOnce(),
@@ -117,8 +134,9 @@ fn ensure_generated(
             target_kind,
             generator,
             "--",
-            "--output",
         ])
+        .args(generator_args)
+        .arg("--output")
         .arg(&tmp)
         .status()
         .unwrap_or_else(|e| panic!("failed to run `{generator}` binary: {e}"));
