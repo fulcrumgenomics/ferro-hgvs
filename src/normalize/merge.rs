@@ -2388,6 +2388,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // Only the *splitter* is read here. The `-coalesced` half of the selection is
     // a step-3 re-spelling applied after the downstream passes below, so it never
     // reaches partitioning — see `coalesce_payload_alignment_split`.
+    let mut spec_preference = SpecPreference::Derived;
     let mut pieces = match partition_rule().splitter {
         BlockSplitter::Live => partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
         BlockSplitter::Shadow => partition_block_sequence_first(
@@ -2397,8 +2398,16 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         )
         .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
         BlockSplitter::Canonical => {
-            partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
-                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
+            match partition_block_canonical_with_provenance(
+                &ref_bytes[lo..hi_ref],
+                &result[lo..hi_alt],
+            ) {
+                Some((canonical_pieces, preference)) => {
+                    spec_preference = preference;
+                    canonical_pieces
+                }
+                None => partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
+            }
         }
     };
     // Shadow the sequence-first splitter on the very same trimmed block, before
@@ -2526,7 +2535,51 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // Strict on purpose: #1229, #1231, #1233 and #1234 all sit exactly at
     // equality, and equality is where prioritisation (`general.md:56`) may
     // legitimately prefer the re-derived shape.
-    if changed_columns_of_pieces(&pieces) > changed_columns_of_edits(&edits) {
+    // A **single** member is exempt, and that exemption is what lets a
+    // spec-preferred whole-span form survive (#1440).
+    //
+    // The bound exists to stop the derivation naming more changed columns than
+    // the input's own spelling did. Read as written, it vetoes the spec's
+    // preferred answer in exactly the cases where the spec prefers it: that form
+    // routinely costs *more* columns than the split it replaces — 52 against a
+    // block edit distance of 39 on `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`, and
+    // 12 against 8 on the `AACAACCGCGTG` inversion, whose merged `inv` this bound
+    // rejected outright.
+    //
+    // Changed columns are a proxy for over-description, and the proxy inverts at
+    // one member: a lone `delins` or `inv` spanning the change is the *least*
+    // described form available — one item, no separate variants claimed — however
+    // many columns it names. Over-description is naming more variants than the
+    // evidence supports, which is a statement about member count, not width. So
+    // the bound applies where it is meaningful (a multi-member re-derivation
+    // heavier than what was written) and stands aside where it is not.
+    //
+    // Measured: with the bound applied to single members, `issue_1040` fails 9 of
+    // 16 under `canonical-coalesced`; exempting them clears every dense-inversion
+    // case. Strict on purpose otherwise — #1229, #1231, #1233 and #1234 all sit
+    // exactly at equality, and equality is where prioritisation (`general.md:56`)
+    // may legitimately prefer the re-derived shape.
+    // Scoped to the canonical splitter, and that scoping is load-bearing rather
+    // than timid: `select_spec_preferred_partition` is the only thing that
+    // deliberately chooses a whole-span member on spec grounds, and it runs only
+    // there. Exempting single members on *every* arm was measured and is wrong —
+    // it moved the shipped `live` path from 4 failures to 22, because a lone
+    // piece that the live rule produced incidentally is not a spec-preferred
+    // selection and the bound is still the right check for it.
+    //
+    // The honest limitation: this reads the arm rather than the provenance of the
+    // pieces. The exemption really belongs to "this partition was chosen because
+    // the spec prefers it", which wants that signal threaded out of the
+    // partitioner rather than re-derived from a global.
+    // The exemption is keyed on *why* the partition has this shape, carried out
+    // of the partitioner as `SpecPreference`, not re-derived from the arm. The
+    // `len() == 1` conjunct is a conservative re-check: the passes between
+    // partitioning and here can narrow a piece, and the provenance only speaks
+    // for a partition that is still the single whole-span member it described.
+    let spec_preferred_single = spec_preference == SpecPreference::WholeSpan && pieces.len() == 1;
+    if !spec_preferred_single
+        && changed_columns_of_pieces(&pieces) > changed_columns_of_edits(&edits)
+    {
         return None;
     }
 
@@ -4180,7 +4233,41 @@ fn partition_block_sequence_first(
 ///
 /// Reached only under `FERRO_PARTITION=canonical[-coalesced]` and from the `dump_partitions`
 /// example; it does not decide any shipped result.
+/// Why a partition has the shape it does.
+///
+/// Carried out of the partitioner because the downstream weight bound needs to
+/// distinguish a whole-span member the spec *asked for* from one that a
+/// minimising search merely arrived at. The two are byte-identical as piece
+/// lists, so the distinction cannot be recovered by inspecting them — and it is
+/// not cosmetic: exempting every single-member partition from the bound, rather
+/// than only the deliberate ones, was measured to move the shipped `live` path
+/// from 4 failures to 22.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SpecPreference {
+    /// Arrived at by minimising — the ordinary case, and subject to the bound.
+    Derived,
+    /// Chosen because a spec rule prefers the whole span as one member, over a
+    /// split that costs strictly fewer changed columns. See
+    /// [`select_spec_preferred_partition`].
+    WholeSpan,
+}
+
+/// [`partition_block_canonical`], keeping the reason for its answer.
+fn partition_block_canonical_with_provenance(
+    reference: &[u8],
+    result: &[u8],
+) -> Option<(Vec<Piece>, SpecPreference)> {
+    partition_block_canonical_inner(reference, result)
+}
+
 fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piece>> {
+    partition_block_canonical_inner(reference, result).map(|(pieces, _)| pieces)
+}
+
+fn partition_block_canonical_inner(
+    reference: &[u8],
+    result: &[u8],
+) -> Option<(Vec<Piece>, SpecPreference)> {
     use crate::normalize::seqfirst::align::AlignmentDag;
     use crate::normalize::seqfirst::partition::CanonicalAlignment;
 
@@ -4197,18 +4284,157 @@ fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piec
 
     let dag = AlignmentDag::build(reference, result);
     let canonical = CanonicalAlignment::of(&dag);
-    Some(
-        canonical
-            .members()
-            .iter()
-            .zip(canonical.alt_spans())
-            .map(|(member, (alt_start, alt_end))| Piece {
-                ref_start: member.ref_start as usize,
-                ref_end: member.ref_end as usize,
-                alt: result[alt_start as usize..alt_end as usize].to_vec(),
-            })
-            .collect(),
-    )
+    let minimal: Vec<Piece> = canonical
+        .members()
+        .iter()
+        .zip(canonical.alt_spans())
+        .map(|(member, (alt_start, alt_end))| Piece {
+            ref_start: member.ref_start as usize,
+            ref_end: member.ref_end as usize,
+            alt: result[alt_start as usize..alt_end as usize].to_vec(),
+        })
+        .collect();
+    Some(select_spec_preferred_partition(minimal, reference, result))
+}
+
+/// Choose between the DAG's minimal-distance partition and the whole span as a
+/// single member, by the spec's own preference rather than by edit distance.
+///
+/// # Why this is a selection and not a post-pass
+///
+/// The DAG minimises changed columns, then member count. Neither is a rule the
+/// spec states, and **the spec's preferred form is routinely outside the
+/// minimal-distance set entirely** — measured on the spec's own worked example
+/// (`LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`), where the recommended single
+/// `delins` costs 52 changed columns against a block edit distance of 39. No
+/// tie-break, weighting or secondary key inside the partitioner can reach a
+/// candidate 13 columns above its own floor, so the whole-span form has to be
+/// *offered* as a competitor instead of derived.
+///
+/// The same shape drives the two families that a canonical-partitioner default
+/// otherwise breaks. Both want the whole span and get a scattered split:
+///
+/// ```text
+/// g.257_268inv               -> g.[257A>C;260_261delinsG;263C>G;265delinsTT;268G>T]
+/// g.257_266delinsTGTCACGACT  -> g.[257_258delinsT;261G>C;264T>G;266delinsCT]
+/// ```
+///
+/// Recognising them downstream cannot work: `coalesce_whole_block_inversion`'s
+/// admission heuristics (`every_separation_is_a_single_base` /
+/// `changed_columns_dominate_the_span`) were fitted against the *live*
+/// partitioner's output distribution, and a more fragmented partition satisfies
+/// neither, so the `is_inversion` test they guard is never reached.
+///
+/// # Why it cannot cost confluence
+///
+/// It reads only `reference` and `result` — the block and the sequence it
+/// denotes. It has no access to the input's spelling, which is what makes it
+/// spelling-independent *by construction* rather than by measurement. That is
+/// precisely the property the earlier block-level coalesce lacked: judged
+/// against the input's own weight it cost 427 converged classes per direction,
+/// because the same widening was accepted for one spelling and refused for
+/// another.
+/// Whether an equal-length span changes more columns than it leaves alone, read
+/// off the **sequence relation** rather than off any partition of it.
+///
+/// This is `changed_columns_dominate_the_span`'s statistic, computed where it is
+/// invariant. Reverse complementing a random block leaves roughly a quarter of
+/// its positions coincidentally unchanged (#1461's real 457 nt case measures
+/// 32.8%), while a span that is very nearly its own reverse complement leaves
+/// far more — `AAGCTA -> TAGCTT` leaves 66.7%, and its two changed bases are two
+/// independent variants that `general.md:34` requires be described individually.
+///
+/// Density is the only property that separates those two, which the #1461 pair
+/// pins directly: the inversion that must be recognised has gaps of **5** while
+/// the control that must not has a single gap of **4**, so no threshold on
+/// separation can admit one and refuse the other.
+///
+/// Callers must have established that the two slices are the same length.
+fn relation_is_dense(reference: &[u8], result: &[u8]) -> bool {
+    debug_assert_eq!(reference.len(), result.len());
+    let changed = reference
+        .iter()
+        .zip(result)
+        .filter(|(before, after)| before != after)
+        .count();
+    changed * 2 > reference.len()
+}
+
+fn select_spec_preferred_partition(
+    minimal: Vec<Piece>,
+    reference: &[u8],
+    result: &[u8],
+) -> (Vec<Piece>, SpecPreference) {
+    if minimal.len() < 2 {
+        return (minimal, SpecPreference::Derived);
+    }
+
+    // `general.md:34` — two variants separated by one or more unchanged
+    // nucleotides are described individually, and its rationale
+    // (`delins.md:81-84`: they may have been reported, or may occur, separately)
+    // reaches any single spanning description. Refuse before considering any
+    // merge, so a wide unchanged run is never swallowed.
+    //
+    // Measured lower bound: the split of `delins.md:44-47`'s own worked example
+    // leaves a **6**-base gap, so any cap below 6 rejects the one case the spec
+    // states outright. Measured upper bound: the correct ClinVar rejoins top out
+    // at 8, while the harmful cis merges sit at 9 and above.
+    //
+    // Omitting this was a real regression, not a hypothetical: without it a pair
+    // 52 unchanged bases apart merged into one 55-base `delins`
+    // (`issue_1234_sibling_clamped_shift`, `issue_1281_reducing_member_shift`).
+    if minimal
+        .windows(2)
+        .any(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) > COALESCE_MAX_SEPARATION)
+    {
+        return (minimal, SpecPreference::Derived);
+    }
+    let whole = Piece {
+        ref_start: 0,
+        ref_end: reference.len(),
+        alt: result.to_vec(),
+    };
+
+    // **Density is the discriminator, and it decides both families.** A span
+    // whose relation changes more columns than it leaves alone is one change; a
+    // sparse one is several independent changes that `general.md:34` requires be
+    // described individually (rationale at `delins.md:81-84` — they may have been
+    // reported, or may occur, separately). Typing the merged span is left to the
+    // passes downstream: a reverse complement renders `inv` per `general.md:56`'s
+    // priority, anything else renders `delins`.
+    //
+    // The density MUST be read off the sequence relation rather than off the
+    // partition's changed columns, and that distinction is the whole defect this
+    // arm otherwise hits. `changed_columns_dominate_the_span` counts the columns
+    // a *partition* names, and minimising exactly that count is the canonical
+    // partitioner's objective — so canonical drives the discriminator's own
+    // statistic below its threshold and defeats its own recognizer. Measured on
+    // `AACAACCGCGTG -> CACGCGGTTGTT`: the relation changes 8 of 12 columns, while
+    // canonical's partition of it names only 6 of 12 and so reads as sparse. The
+    // relation is partition-independent; the piece count is not.
+    //
+    // The control that keeps this honest is `AAGCTA -> TAGCTT`: also a whole-span
+    // reverse complement, but 2 of 6 columns, so it stays two members. Separation
+    // cannot substitute for density here — #1461's real 457 nt inversion has gaps
+    // of **5** against the control's **4**, so every threshold on separation
+    // either refuses the inversion or admits the control.
+    if reference.len() == result.len() && relation_is_dense(reference, result) {
+        return (vec![whole], SpecPreference::WholeSpan);
+    }
+
+    // `delins.md:44-47` — when the payload can be read off the span in order, the
+    // members exist only because payload bases coincide with reference bases, and
+    // "the 'delins' format is recommended". The net-length condition keeps two
+    // genuinely separate substitutions individual, per `delins.md:17`; it is not
+    // needed above because an equal-length sparse relation is already refused by
+    // the density test.
+    if result.len() < reference.len()
+        && payload_embeds_within_budget(reference, result, COALESCE_MISMATCH_BUDGET)
+    {
+        return (vec![whole], SpecPreference::WholeSpan);
+    }
+
+    (minimal, SpecPreference::Derived)
 }
 
 /// Whether `result` embeds in `reference` as a **subsequence**, i.e. whether the
@@ -4254,7 +4480,7 @@ fn payload_embeds_as_subsequence(reference: &[u8], result: &[u8]) -> bool {
 ///
 /// Raising this is a representation change: it merges blocks that are currently
 /// spelled as separate members. Measure before moving it.
-const COALESCE_MISMATCH_BUDGET: usize = 1;
+const COALESCE_MISMATCH_BUDGET: usize = 2;
 
 /// Widest run of unchanged reference bases the coalesce pass will merge across.
 ///
