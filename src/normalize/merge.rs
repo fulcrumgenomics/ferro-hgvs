@@ -1730,12 +1730,26 @@ const MAX_CANONICAL_WINDOW: i64 = 4096;
 /// Padding either side of the changed interval, giving the 3'-shift room.
 const CANONICAL_PAD: i64 = 128;
 
-/// Longest changed block the canonicalizer will attempt to partition.
+/// Longest **length-changing** block the canonicalizer will attempt to
+/// partition.
 ///
-/// This is a cost bound, not a policy: the alignment is quadratic in the block
-/// length, and a block this long is a structural event rather than a few
-/// nucleotide changes. It is deliberately far above the size at which the
-/// separation rule (`delins.md:17`) is the interesting question.
+/// Equal-length blocks are exempt: [`best_alignment`] returns their
+/// position-wise pairing immediately, so there is no gap placement to search for
+/// and nothing here to protect. They are bounded instead by
+/// [`MAX_CANONICAL_WINDOW`], the widest window the canonicalizer will fetch at
+/// all.
+///
+/// This is a cost bound, not a policy, and a block this long is a structural
+/// event rather than a few nucleotide changes. It is deliberately far above the
+/// size at which the separation rule (`delins.md:17`) is the interesting
+/// question.
+///
+/// It does **not** bound a quadratic cost, despite what an earlier revision of
+/// this comment claimed. A placement scores in O(1) because the score is
+/// separable, so [`best_alignment`]'s search is linear; the one quadratic step —
+/// ranking a tie by what it separates — carries its own and tighter bound in
+/// [`MAX_TIE_BREAK_SWEEP`], which binds first at every length this constant
+/// reaches.
 ///
 /// It is *not* the `delins.md:44-47` "coincidental alignment" guard. That
 /// concern — a large replacement whose interior only accidentally aligns, which
@@ -3483,9 +3497,26 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
             alt: result.to_vec(),
         }]
     };
-    // One bound for every regime now that every length-changing regime has a
-    // real guard — see `separations_are_meaningful` (#1271).
-    if reference.len() > MAX_SPLIT_BLOCK || result.len() > MAX_SPLIT_BLOCK {
+    // Scoped to length-changing blocks, because that is the only regime the cap
+    // reaches at all. An equal-length block has no gap to place, so
+    // `best_alignment` returns the position-wise pairing on its first statement
+    // and the whole partition is linear — there is no search here to bound.
+    //
+    // Note what the cap does *not* do, even where it applies: it does not bound
+    // a quadratic cost. Scoring one placement is O(1) because the score is
+    // separable, which makes `best_alignment`'s search linear, and the one
+    // quadratic step — ranking a tie by what it separates — carries its own and
+    // tighter bound in `MAX_TIE_BREAK_SWEEP` (256), which binds first.
+    //
+    // Capping it anyway cost confluence rather than time: the un-partitioned
+    // whole block is refused by the weight bound whenever the input was spelled
+    // as its individual changes, so a 1100 nt near-palindrome left
+    // `g.257_1356inv` and `g.[257C>A;267A>C;1346G>T;1356T>G]` both stable — one
+    // variant, two normal forms, with an exact boundary at the cap (1024
+    // confluent, 1026 not) that gave the length short-circuit away.
+    if reference.len() != result.len()
+        && (reference.len() > MAX_SPLIT_BLOCK || result.len() > MAX_SPLIT_BLOCK)
+    {
         return whole();
     }
     let Some(columns) = best_alignment(reference, result) else {
