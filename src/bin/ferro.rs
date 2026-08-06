@@ -218,6 +218,42 @@ enum Commands {
     },
 
     /// Normalize HGVS variants
+    #[command(long_about = "Normalize HGVS variants (3'/5' shifting).
+
+UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
+
+  Selects which rule cuts a changed block into allele members. It exists so a
+  candidate normalization can be measured against the shipped one on a real
+  corpus, and it is NOT covered by semantic versioning: the values may change
+  or the variable may be removed once the choice is settled. Do not depend on
+  it in production.
+
+    live       the shipped rule (default; also used when unset or empty)
+    shadow     cut at the steps common to every minimal alignment
+    canonical  the member-count-minimal minimal alignment
+    canonical-coalesced
+               canonical, plus the delins.md:44-47 merge -- a split whose
+               payload realigns as one block becomes a single delins
+
+  An unrecognised value falls back to `live`, so a misspelling looks exactly
+  like 'the candidate changes nothing'. The fallback logs a warning through the
+  `log` facade, but this CLI installs no logger, so that warning is NOT visible
+  here and RUST_LOG will not surface it. The only defence is to confirm your
+  comparison reports some differences before concluding it reports none.
+
+  It is read once per process and cached, so it cannot be changed after the
+  first variant is normalized. That is also why this is an environment variable
+  and not a command-line flag — a real flag would need the value threaded
+  through the call path rather than read from a process-global.
+
+  To compare the shipped output against a candidate, run twice and diff column
+  3 (the normalized description) of the TSV output:
+
+    ferro normalize -i variants.txt --reference DIR -f tsv -j 10 > shipped.tsv
+    FERRO_PARTITION=canonical \\
+      ferro normalize -i variants.txt --reference DIR -f tsv -j 10 > candidate.tsv
+    diff <(cut -f3 shipped.tsv) <(cut -f3 candidate.tsv)
+")]
     Normalize {
         /// HGVS variant to normalize
         variant: Option<String>,
@@ -3839,6 +3875,41 @@ fn run_build_transcript(
 
 #[cfg(test)]
 mod tests {
+    /// `normalize --help` must name every `FERRO_PARTITION` value the parser
+    /// accepts.
+    ///
+    /// This documentation went stale within an hour of being written: the
+    /// `canonical-coalesced` rule landed while the PR describing the switch was
+    /// open, and nothing connected the two. That matters more than an ordinary
+    /// doc drift, because the help text itself warns that an unrecognised value
+    /// falls back to `live` with no CLI-visible signal — so a reader who does
+    /// not find a value here reasonably concludes it does not exist.
+    ///
+    /// Pinned against the rendered help rather than the source string, so a
+    /// clap attribute that silently stopped being applied would also fail.
+    #[test]
+    fn normalize_help_documents_every_partition_value() {
+        use clap::CommandFactory;
+        let mut command = super::Cli::command();
+        let mut normalize = command
+            .find_subcommand_mut("normalize")
+            .expect("`normalize` subcommand")
+            .clone();
+        let help = normalize.render_long_help().to_string();
+        for value in ["live", "shadow", "canonical", "canonical-coalesced"] {
+            assert!(
+                help.contains(value),
+                "`normalize --help` does not mention the `{value}` partition rule; \
+                 every value `partition_rule_from_env` accepts has to appear here, \
+                 because an unrecognised one falls back to `live` silently"
+            );
+        }
+        assert!(
+            help.contains("FERRO_PARTITION"),
+            "the switch itself must be named in the help"
+        );
+    }
+
     use super::*;
 
     #[test]
