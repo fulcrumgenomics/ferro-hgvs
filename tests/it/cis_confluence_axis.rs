@@ -100,12 +100,26 @@ const CDS_END: u64 = 63;
 /// zero, so every divergence is two well-formed, sequence-preserving outputs
 /// for one variant. That is the confluence defect itself, not a parse failure
 /// or a corrupted sequence wearing its clothes.
+/// **Re-blessed when the axis gate opened to `c.`/`n.`/`r.`.** Widening
+/// `is_splittable_single_member` lets a lone transcript-axis member reach
+/// `sequence_first_pass`, which is the entire point of that change: converged
+/// rises **6 632 -> 8 005**, `split_two` falls by the same **1 373**, and
+/// `split_three` (115) and `split_more` (19) are **unchanged**. Every divergence
+/// figure moved down or stayed flat, which is the direction this pin demands.
+///
+/// The 3' figures move by exactly 1 373 in both oracle configurations. The 5'
+/// figures move by 1 378, five more, because the same commit fixes an
+/// off-by-one in `enclosing_exon` that let a member sitting on an exon's first
+/// base escape the window clamp and shuffle across the junction — a 5'-only
+/// symptom, since the 3' walk moves away from the exon start. Both directions
+/// end at 8 005 / 8 007, which is the reading to trust: the residual is a
+/// property of the partitioner, not of a shuffle direction.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_632,
-    split_two: 4_506,
+    converged: 8_005,
+    split_two: 3_133,
     split_three: 115,
     split_more: 19,
     underdetermined: 0,
@@ -135,8 +149,8 @@ const THREE_PRIME_UNDER_IDEMPOTENCY_ORACLE: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 2,
-    converged: 6_634,
-    split_two: 4_504,
+    converged: 8_007,
+    split_two: 3_131,
     split_three: 115,
     split_more: 19,
     underdetermined: 0,
@@ -156,8 +170,8 @@ const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_627,
-    split_two: 4_531,
+    converged: 8_005,
+    split_two: 3_153,
     split_three: 105,
     split_more: 9,
     underdetermined: 0,
@@ -170,8 +184,8 @@ const FIVE_PRIME_UNDER_IDEMPOTENCY_ORACLE: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 2,
-    converged: 6_629,
-    split_two: 4_529,
+    converged: 8_007,
+    split_two: 3_151,
     split_three: 105,
     split_more: 9,
     underdetermined: 0,
