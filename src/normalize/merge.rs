@@ -2028,6 +2028,10 @@ enum PartitionRule {
     /// [`partition_block_canonical`]: the member-count-minimal minimal alignment
     /// (`mutalyzer-algebra`'s `canonical`).
     Canonical,
+    /// `Canonical`, plus the terminal `delins.md:44-47` re-spelling applied
+    /// after the downstream passes — see
+    /// [`coalesce_payload_alignment_split`].
+    CanonicalCoalesced,
 }
 
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
@@ -2047,8 +2051,12 @@ fn partition_rule_from_env(value: Option<&str>) -> PartitionRule {
         None | Some("") | Some("live") => PartitionRule::Live,
         Some("shadow") => PartitionRule::Shadow,
         Some("canonical") => PartitionRule::Canonical,
+        Some("canonical-coalesced") => PartitionRule::CanonicalCoalesced,
         Some(other) => {
-            log::warn!("FERRO_PARTITION={other} is not one of live|shadow|canonical; using live");
+            log::warn!(
+                "FERRO_PARTITION={other} is not one of \
+                 live|shadow|canonical|canonical-coalesced; using live"
+            );
             PartitionRule::Live
         }
     }
@@ -2287,6 +2295,13 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
             partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
                 .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
         }
+        PartitionRule::CanonicalCoalesced => {
+            // Identical to `Canonical` here on purpose. The `delins.md:44-47`
+            // merge is applied *after* the downstream passes below, not as part
+            // of partitioning — see `coalesce_payload_alignment_split`.
+            partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
+                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
+        }
     };
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
@@ -2301,8 +2316,9 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         // every block — a full denominator and zero disagreements, which reads
         // as the strongest possible result and is produced by comparing a thing
         // with itself. That is the precise failure the denominator below exists
-        // to rule out. `canonical` would not be vacuous but would label its
-        // output `live=`, which is worse than useless in a bake-off log.
+        // to rule out. `canonical` and `canonical-coalesced` would not be
+        // vacuous but would label their output `live=`, which is worse than
+        // useless in a bake-off log.
         //
         // The extra `partition_block` call is paid only when the shadow audit is
         // on, which is already a measurement-only path.
@@ -2414,6 +2430,27 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // legitimately prefer the re-derived shape.
     if changed_columns_of_pieces(&pieces) > changed_columns_of_edits(&edits) {
         return None;
+    }
+
+    // `delins.md:44-47`, applied AFTER the weight bound, for exactly the reason
+    // the note on `coalesce_whole_block_inversion` below gives: this pass widens,
+    // and "a widening judged against the *input's* weight is accepted for one
+    // spelling of a variant and refused for another."
+    //
+    // Measured, because it was first placed before the bound: judged there it
+    // costs 427 converged classes per direction over the 11,272-class corpus
+    // (5': 8,387 -> 7,960), with 427 regressions and 0 gains. Every one is a
+    // pair whose merged form is accepted for the spelling that was already a
+    // single `delins` -- whose input weight is the wide one -- and refused for
+    // the spelling that arrived as separate members. The re-spelling itself is
+    // spelling-independent; the bound it was being judged against is not.
+    // That input-relative comparand is #1440.
+    //
+    // Placement relative to the 3'-shift and the width minimisation is NOT the
+    // mechanism: moving the call across those produced byte-identical censuses.
+    // Only the bound matters.
+    if partition_rule() == PartitionRule::CanonicalCoalesced {
+        coalesce_payload_alignment_split(&mut pieces, &ref_bytes);
     }
 
     // Applied *after* the weight bound for the same reason the codon exception
@@ -3995,7 +4032,235 @@ fn partition_block_canonical(reference: &[u8], result: &[u8]) -> Option<Vec<Piec
     )
 }
 
-/// The three block partitioners, callable by name for measurement.
+/// Whether `result` embeds in `reference` as a **subsequence**, i.e. whether the
+/// whole block can be described by deletion alone.
+///
+/// This is `delins.md:44-47`'s "parts of the inserted sequence *align* with the
+/// reference sequence" stated exactly: when it holds, every base of the payload
+/// can be read off the reference in order, so a partitioner that cuts at those
+/// coincidences produces extra members that exist **only** because payload bases
+/// happen to match reference bases between them. The spec's answer to that shape
+/// is unambiguous — "The 'delins' format is recommended".
+///
+/// # Why a two-pointer walk and not the counting DP
+///
+/// The adjudication's predicate is `count_minimal_embeddings(ref, payload).1 > 0`,
+/// where the DP returns `(minimum deletion runs, number of embeddings achieving
+/// it)`. The count is zero exactly when no embedding exists, so **for the
+/// predicate the DP is equivalent to a subsequence test** and this runs in `O(n)`
+/// with no allocation instead of `O(n·m)`. The DP is still the right tool for the
+/// *non-uniqueness* count (how many equally-compliant splits exist), which this
+/// pass does not need — it merges regardless of whether the split it replaces was
+/// unique.
+///
+/// Vacuously true for an empty `result`: a wholly deleted block is one member
+/// already, so the caller's member-count gate is what declines it.
+fn payload_embeds_as_subsequence(reference: &[u8], result: &[u8]) -> bool {
+    let mut reference = reference.iter();
+    result
+        .iter()
+        .all(|base| reference.any(|candidate| candidate == base))
+}
+
+/// How many substituted positions the coalesce pass tolerates inside an
+/// otherwise coincidental split.
+///
+/// **One**, and the value is measured rather than chosen. The spec's own worked
+/// example, `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`, needs exactly one: its
+/// minimal split is four coincidental deletions plus a single substitution, so a
+/// pure-subsequence test cannot see it. The dominant churn class needs zero. Two
+/// substitutions six bases apart — the case `delins.md:17` requires to stay
+/// individual — needs two, and also fails the net-deletion condition, so it is
+/// excluded twice over.
+///
+/// Raising this is a representation change: it merges blocks that are currently
+/// spelled as separate members. Measure before moving it.
+const COALESCE_MISMATCH_BUDGET: usize = 1;
+
+/// Widest run of unchanged reference bases the coalesce pass will merge across.
+///
+/// **Eight**, and the value is measured, not chosen.
+///
+/// `delins.md:44-47`'s own worked example is the lower bound: the canonical
+/// arm's split of it leaves a **6**-base gap, so any cap below that rejects the
+/// one case the spec states outright. (The 4-member alternative the spec quotes
+/// has gaps of 4/5/4; canonical cuts it differently.)
+///
+/// The upper bound comes from the corpora. Over 500k ClinVar rows the 78 splits
+/// this pass correctly rejoins have a maximum separation of **8** (median 2,
+/// p90 3). Over the 592 real multi-member cis alleles, the members it must NOT
+/// merge sit at `[1, 4, 9, 21, 26, 58, 166, 234, 604, 973, 1562]`. Eight is the
+/// widest value that admits every correct rejoin, and it excludes 9 of those 11.
+///
+/// **The two at 1 and 4 are not separable by separation** and are a known gap:
+/// they are genuinely distinct variants that happen to sit as close together as
+/// a coincidental split. Distinguishing them needs something this pass does not
+/// look at.
+///
+/// Without this cap the pass merges genuinely separate members of a multi-member
+/// cis allele, which `delins.md:17` and `general.md:34` require to stay
+/// individual. Measured over the 592 real multi-member cis alleles, the members
+/// it wrongly merged sat a median of **58** unchanged bases apart (p90 604, max
+/// 1,562), while the 78 coincidental splits it correctly rejoined on ClinVar sat
+/// a median of **2** apart (p90 3, max 8). The two populations barely overlap,
+/// and separation is what separates them.
+const COALESCE_MAX_SEPARATION: usize = 8;
+
+/// Whether `payload` can be read out of `span` by deleting bases and
+/// substituting at most `budget` of them.
+///
+/// `budget == 0` is exactly [`payload_embeds_as_subsequence`], and is dispatched
+/// to it: that case is the common one and answers in `O(n)` with no allocation.
+///
+/// Above zero this is an `O(n·m)` rolling DP over the minimum number of
+/// substituted positions across every embedding — the same shape as the
+/// adjudication's counting DP, but minimising mismatches instead of counting
+/// deletion runs. An oversized grid falls back to the exact subsequence test
+/// rather than declining outright: that is conservative in the safe direction,
+/// since it can only make the pass fire *less*.
+fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> bool {
+    if budget == 0 {
+        return payload_embeds_as_subsequence(span, payload);
+    }
+    // Each payload base must consume a span base, so a longer payload cannot
+    // embed however many substitutions are allowed.
+    if payload.len() > span.len() {
+        return false;
+    }
+    let cells = match span
+        .len()
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(payload.len().checked_add(1)?))
+    {
+        Some(cells) if cells <= MAX_SEQFIRST_GRID_CELLS => cells,
+        _ => return payload_embeds_as_subsequence(span, payload),
+    };
+    let _ = cells;
+
+    // `best[j]` is the fewest substitutions needed to embed `payload[j..]` into
+    // the span suffix under consideration. Consuming the whole span with payload
+    // left over is impossible, so those cells stay saturated.
+    const UNREACHABLE: u32 = u32::MAX / 2;
+    let m = payload.len();
+    let mut best = vec![UNREACHABLE; m + 1];
+    best[m] = 0;
+    for &span_base in span.iter().rev() {
+        let mut next = vec![UNREACHABLE; m + 1];
+        // Deleting every remaining span base is always available and free.
+        next[m] = 0;
+        for j in (0..m).rev() {
+            let deleted = best[j];
+            let consumed = best[j + 1].saturating_add(u32::from(span_base != payload[j]));
+            next[j] = deleted.min(consumed);
+        }
+        best = next;
+    }
+    best[0] as usize <= budget
+}
+
+/// Re-spell a multi-member allele as the single `delins` the spec recommends,
+/// when the split exists only because payload bases coincide with reference
+/// bases between the members.
+///
+/// This is `DNA/delins.md:44-47` — "parts of the inserted sequence *align* with
+/// the reference sequence ... **The 'delins' format is recommended**".
+///
+/// # It runs last, and that placement is the whole design
+///
+/// Called after the 3'-shift, the adjacency coalesce and
+/// `shrink_pieces_to_differences`, so every earlier pass sees exactly what it
+/// would have seen under [`PartitionRule::Canonical`] and this is a terminal
+/// re-spelling of an answer already derived from the sequence.
+///
+/// Running it inside the partitioner instead was measured, and it costs **427
+/// converged classes per direction** over the 11,272-class corpus (5':
+/// 8,387 -> 7,960, with `split 3` going 0 -> 59 and `split 4+` 0 -> 9). The
+/// reason is that the passes above then operate on a merged block for one
+/// spelling and an unmerged block for another, so a merge that is itself
+/// deterministic still moves two spellings apart.
+///
+/// That is the separation issue #1430 asks for: step 2 derives a representative
+/// variant from the sequence, step 3 makes *that variant* spec-compliant. The
+/// coalesce belongs in step 3. (The exon-junction clamp, `general.md:44`, really
+/// is a step-2 constraint — an illegal merge destroys a member boundary — but
+/// this one destroys nothing and re-spells only.)
+///
+/// # The two conditions
+///
+/// **1. The payload embeds as an ordered subsequence of the span.** Then every
+/// base of the merged payload can be read off the reference in order, so the
+/// members exist only through coincidence. See
+/// [`payload_embeds_as_subsequence`].
+///
+/// **2. The span must lose length** (`payload.len() < span.len()`). Two
+/// independent lines of evidence require this and neither is optional:
+///
+/// * Two plain substitutions six bases apart embed trivially with no deletion,
+///   and `delins.md:17` requires those to stay individual.
+/// * Measured per spelling, #1421's family runs *opposite* to #1419/#1420's: for
+///   a **net insertion** the split form is the canonical one, not the span form.
+///   A blanket "prefer fewer members" gets that third of the family backwards.
+///
+/// Condition 1 already implies `payload.len() <= span.len()`, and equality means
+/// the payload *is* the span (an unchanged block), so the strict `<` both
+/// enforces net deletion and excludes the degenerate case.
+///
+/// # Confluence
+///
+/// Its input is the fully-derived piece list, which under the canonical rule is a
+/// function of the denoted sequence rather than of the input's spelling. A
+/// deterministic function of a spelling-independent object is spelling
+/// independent, so two spellings that converged still converge. The block-level
+/// version of this pass did *not* have that property, which is what the 427-class
+/// measurement above records.
+fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
+    if pieces.len() < 2 {
+        return;
+    }
+    let (start, end) = (pieces[0].ref_start, pieces[pieces.len() - 1].ref_end);
+    // Defensive: a malformed piece list is a bug upstream, not something to
+    // re-spell. Declining leaves the derived answer untouched.
+    if start >= end || end > reference.len() {
+        return;
+    }
+
+    // What the pieces denote over `[start, end)`: each piece's payload, with the
+    // untouched reference between them spliced back in.
+    let mut payload = Vec::new();
+    let mut cursor = start;
+    for piece in pieces.iter() {
+        if piece.ref_start < cursor || piece.ref_end < piece.ref_start || piece.ref_end > end {
+            return;
+        }
+        payload.extend_from_slice(&reference[cursor..piece.ref_start]);
+        payload.extend_from_slice(&piece.alt);
+        cursor = piece.ref_end;
+    }
+    payload.extend_from_slice(&reference[cursor..end]);
+
+    // Refuse to merge across a wide run of unchanged bases: that is a genuine
+    // multi-member allele, not one variant split by coincidence. See
+    // `COALESCE_MAX_SEPARATION`.
+    if pieces
+        .windows(2)
+        .any(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) > COALESCE_MAX_SEPARATION)
+    {
+        return;
+    }
+
+    let span = &reference[start..end];
+    if payload.len() < span.len()
+        && payload_embeds_within_budget(span, &payload, COALESCE_MISMATCH_BUDGET)
+    {
+        *pieces = vec![Piece {
+            ref_start: start,
+            ref_end: end,
+            alt: payload,
+        }];
+    }
+}
+
+/// The four block partitioners, callable by name for measurement.
 ///
 /// **Dev-only measurement surface, not API.** It exists so the `dump_partitions`
 /// example can run all three rules over the same blocks and print them side by
@@ -9331,23 +9596,21 @@ mod tests {
     /// `sequence_first_split_axis_separation_matches_general_rule`.
     /// The `FERRO_PARTITION` bake-off knob.
     ///
-    /// The knob exists to make three partitioners measurable side by side. Its
+    /// The knob exists to make four partitioners measurable side by side. Its
     /// most important property is therefore the one nobody looks at: that leaving
     /// it alone changes nothing at all.
     mod partition_rule_knob {
         use super::*;
 
-        /// The shadow audit's baseline is the **live** rule, not whatever
+        /// The audit's `live=` baseline must be `partition_block`, not whatever
         /// `FERRO_PARTITION` selected.
         ///
-        /// Regression guard for a defect introduced with the knob itself: the
-        /// audit read its baseline off `pieces`, which stopped being live's
-        /// output the moment the knob could change it. Under
-        /// `FERRO_SEQFIRST_SHADOW=1 FERRO_PARTITION=shadow` it therefore compared
-        /// the sequence-first splitter with itself and logged `SEQFIRST_AGREE`
-        /// for every block — a full denominator with zero disagreements, which
-        /// is the most convincing possible result and is worth nothing. Under
-        /// `canonical` it labelled canonical's pieces `live=`.
+        /// Deleted once already: this branch's rebase resolved a conflict in
+        /// favour of the pre-fix side, dropping both the independent `live`
+        /// binding and this guard, so the vacuity returned silently. Under
+        /// `FERRO_SEQFIRST_SHADOW=1 FERRO_PARTITION=shadow` the audit then
+        /// compared the sequence-first splitter with itself and logged
+        /// `SEQFIRST_AGREE` on every block.
         ///
         /// What this test can and cannot do: `partition_rule()` caches in a
         /// `OnceLock`, so one process cannot exercise two rules and the audit
@@ -9397,7 +9660,7 @@ mod tests {
 
         /// The two non-default rules are reachable, and only by their own names.
         #[test]
-        fn the_two_alternative_rules_are_selected_by_name() {
+        fn the_alternative_rules_are_selected_by_name() {
             assert_eq!(
                 partition_rule_from_env(Some("shadow")),
                 PartitionRule::Shadow
@@ -9405,6 +9668,15 @@ mod tests {
             assert_eq!(
                 partition_rule_from_env(Some("canonical")),
                 PartitionRule::Canonical
+            );
+            // The rule this change adds. Without it the knob's newest value was
+            // the one value nothing exercised, so a typo in the match arm would
+            // have surfaced only as a silent fallback to `Live` during a
+            // bake-off — exactly the failure the knob's own doc says it is
+            // designed to make loud.
+            assert_eq!(
+                partition_rule_from_env(Some("canonical-coalesced")),
+                PartitionRule::CanonicalCoalesced
             );
         }
 
@@ -9456,6 +9728,466 @@ mod tests {
                     .edit_distance() as usize,
                 "the canonical arm must claim exactly the block's edit distance"
             );
+        }
+
+        /// Substitute each piece's payload back into `reference`.
+        fn denotation(reference: &[u8], pieces: &[Piece]) -> Vec<u8> {
+            let mut rebuilt = Vec::new();
+            let mut cursor = 0usize;
+            for piece in pieces {
+                rebuilt.extend_from_slice(&reference[cursor..piece.ref_start]);
+                rebuilt.extend_from_slice(&piece.alt);
+                cursor = piece.ref_end;
+            }
+            rebuilt.extend_from_slice(&reference[cursor..]);
+            rebuilt
+        }
+
+        /// Apply the terminal coalesce to a piece list, as
+        /// `canonicalize_from_sequence` does after its downstream passes.
+        fn coalesced(reference: &[u8], pieces: &[Piece]) -> Vec<Piece> {
+            let mut pieces = pieces.to_vec();
+            coalesce_payload_alignment_split(&mut pieces, reference);
+            pieces
+        }
+
+        /// The real block behind `NC_000001.10:g.240370952_240370985delinsT`
+        /// (GRCh37), the largest single class of representation churn the
+        /// canonical arm introduces: 121 of the moved rows are this shape.
+        ///
+        /// The block holds four `T`s, so the single payload base can align to
+        /// any of them — the split is coincidence, and `delins.md:44-47`
+        /// recommends the `delins`.
+        #[test]
+        fn the_coalesce_pass_merges_a_payload_alignment_split() {
+            let reference = b"CTCTACCCGGAGCGGCAATACCCCCTCCGCCCCC";
+            let result = b"T";
+
+            let canonical =
+                partition_block_canonical(reference, result).expect("grid is below the bound");
+            assert_eq!(
+                canonical.len(),
+                2,
+                "precondition: canonical splits this block ({canonical:?})"
+            );
+
+            let merged = coalesced(reference, &canonical);
+            assert_eq!(
+                merged.len(),
+                1,
+                "must restore the single delins ({merged:?})"
+            );
+            assert_eq!(merged[0].ref_start, 0);
+            assert_eq!(merged[0].ref_end, reference.len());
+            assert_eq!(
+                denotation(reference, &merged),
+                denotation(reference, &canonical),
+                "re-spelling must not change what the pieces denote"
+            );
+        }
+
+        /// Two genuinely separate substitutions six unchanged bases apart.
+        /// `delins.md:17` requires these to stay individual, and the
+        /// net-deletion condition is what enforces it: the payload embeds
+        /// trivially, but the span loses no length.
+        #[test]
+        fn the_net_deletion_condition_keeps_two_substitutions_split() {
+            let reference = b"ACCCCCCA";
+            let result = b"TCCCCCCT";
+            let canonical =
+                partition_block_canonical(reference, result).expect("grid is below the bound");
+            assert_eq!(canonical.len(), 2, "precondition: two members");
+            assert_eq!(
+                coalesced(reference, &canonical),
+                canonical,
+                "a span that loses no length must not be merged"
+            );
+        }
+
+        /// A **net insertion** must not be merged either. Measured per spelling,
+        /// #1421's family runs opposite to #1419/#1420's: for a net insertion the
+        /// split form is the canonical one, so a blanket preference for fewer
+        /// members gets that family backwards. The net-deletion condition
+        /// excludes it structurally — a subsequence embedding cannot lengthen.
+        #[test]
+        fn a_net_insertion_is_never_merged() {
+            let reference = b"ACGT";
+            let pieces = vec![
+                Piece {
+                    ref_start: 0,
+                    ref_end: 1,
+                    alt: b"AAAA".to_vec(),
+                },
+                Piece {
+                    ref_start: 3,
+                    ref_end: 4,
+                    alt: b"TTTT".to_vec(),
+                },
+            ];
+            assert_eq!(
+                coalesced(reference, &pieces),
+                pieces,
+                "a net insertion must survive as separate members"
+            );
+        }
+
+        /// The pass declines a single member rather than re-spelling it, so a
+        /// block that was never split cannot be widened.
+        #[test]
+        fn a_single_member_is_left_alone() {
+            let reference = b"ACGTACGT";
+            let pieces = vec![Piece {
+                ref_start: 2,
+                ref_end: 6,
+                alt: b"T".to_vec(),
+            }];
+            assert_eq!(coalesced(reference, &pieces), pieces);
+        }
+
+        /// The spec's own worked example, `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`
+        /// (real transcript bases). `delins.md:44-47` pins the single `delins`
+        /// and explicitly names the four-member split as the description to
+        /// avoid; the canonical arm emits *five* members.
+        ///
+        /// The pure-subsequence predicate cannot see this case — its minimal
+        /// split carries one substitution — which is what
+        /// `COALESCE_MISMATCH_BUDGET` exists for.
+        #[test]
+        fn the_coalesce_pass_reaches_the_spec_worked_example() {
+            let reference = b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT";
+            let result = b"TTCCTCGATGCCTG";
+
+            let canonical =
+                partition_block_canonical(reference, result).expect("grid is below the bound");
+            assert_eq!(
+                canonical.len(),
+                5,
+                "precondition: canonical fragments the spec's example ({canonical:?})"
+            );
+            assert!(
+                !payload_embeds_as_subsequence(reference, result),
+                "precondition: one substituted position puts it out of the exact test's reach"
+            );
+
+            let merged = coalesced(reference, &canonical);
+            assert_eq!(
+                merged.len(),
+                1,
+                "the spec's recommended single delins must be restored ({merged:?})"
+            );
+            assert_eq!(merged[0].alt, result.to_vec());
+            assert_eq!(
+                denotation(reference, &merged),
+                denotation(reference, &canonical),
+                "re-spelling must not change what the pieces denote"
+            );
+        }
+
+        /// The budget is one substituted position, and the value is what keeps
+        /// two genuinely separate substitutions apart even before the
+        /// net-deletion condition is consulted.
+        #[test]
+        fn the_mismatch_budget_is_one_substituted_position() {
+            assert_eq!(COALESCE_MISMATCH_BUDGET, 1);
+            // the spec's example: four coincidental deletions plus one substitution
+            assert!(payload_embeds_within_budget(
+                b"CAGGGATATGAGAGAACTTCTTCCCCTAAGCCTCGATTCAAGAGCTATGCCT",
+                b"TTCCTCGATGCCTG",
+                1
+            ));
+            // two substitutions six bases apart need two, and are refused at one
+            assert!(!payload_embeds_within_budget(b"ACCCCCCA", b"TCCCCCCT", 1));
+            assert!(payload_embeds_within_budget(b"ACCCCCCA", b"TCCCCCCT", 2));
+            // a budget cannot rescue a payload longer than its span
+            assert!(!payload_embeds_within_budget(b"AC", b"ACGT", 9));
+            // budget 0 is exactly the subsequence test
+            assert!(payload_embeds_within_budget(b"ACGT", b"AT", 0));
+            assert!(!payload_embeds_within_budget(b"ACGT", b"TA", 0));
+        }
+
+        /// A deterministic, seeded byte drawn from a small alphabet.
+        ///
+        /// Not `rand`: the table must enumerate the *same* cases on every run, or
+        /// a failure cannot be reproduced from the printed case description.
+        fn draw(seed: &mut u64, alphabet: &[u8]) -> u8 {
+            // xorshift64*, inline so the table has no dependency and no RNG state
+            // shared with anything else.
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 7;
+            *seed ^= *seed << 17;
+            alphabet[(*seed % alphabet.len() as u64) as usize]
+        }
+
+        /// What the payload does to the span's length, which is the axis
+        /// `delins.md:17` and #1421 turn on.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        enum Shape {
+            /// Pure deletion members: the payload embeds by construction.
+            Deletion,
+            /// Deletion members plus one substituted position.
+            OneMismatch,
+            /// Members that replace as many bases as they consume.
+            LengthNeutral,
+            /// Members that add bases.
+            NetInsertion,
+        }
+
+        /// One generated case, carrying enough context to reproduce a failure.
+        struct Case {
+            span: Vec<u8>,
+            pieces: Vec<Piece>,
+            gap: usize,
+            shape: Shape,
+        }
+
+        impl Case {
+            fn describe(&self) -> String {
+                format!(
+                    "gap={} shape={:?} members={} span={}",
+                    self.gap,
+                    self.shape,
+                    self.pieces.len(),
+                    String::from_utf8_lossy(&self.span)
+                )
+            }
+        }
+
+        /// Build one case: `members` members of `width` reference bases each,
+        /// separated by `gap` unchanged bases, over a span drawn from `alphabet`.
+        fn build(
+            members: usize,
+            width: usize,
+            gap: usize,
+            shape: Shape,
+            alphabet: &[u8],
+            seed: &mut u64,
+        ) -> Case {
+            let mut span = Vec::new();
+            let mut pieces = Vec::new();
+            for i in 0..members {
+                if i > 0 {
+                    for _ in 0..gap {
+                        span.push(draw(seed, alphabet));
+                    }
+                }
+                let start = span.len();
+                for _ in 0..width {
+                    span.push(draw(seed, alphabet));
+                }
+                let alt = match shape {
+                    Shape::Deletion => Vec::new(),
+                    // One substituted position, in the first member only.
+                    Shape::OneMismatch if i == 0 => vec![b'N'],
+                    Shape::OneMismatch => Vec::new(),
+                    Shape::LengthNeutral => vec![b'N'; width],
+                    Shape::NetInsertion => vec![b'N'; width + 2],
+                };
+                pieces.push(Piece {
+                    ref_start: start,
+                    ref_end: span.len(),
+                    alt,
+                });
+            }
+            Case {
+                span,
+                pieces,
+                gap,
+                shape,
+            }
+        }
+
+        /// The generated corpus. Geometry axes are the ones the corpora showed
+        /// matter: separations spanning the coincidental range (0-8) and the real
+        /// multi-member cis range (9-1562), several member counts and widths, and
+        /// every length shape.
+        fn cases() -> Vec<Case> {
+            const GAPS: &[usize] = &[
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 21, 26, 32, 58, 100, 166, 234, 400, 604,
+                973, 1562,
+            ];
+            const WIDTHS: &[usize] = &[1, 2, 3, 5, 8];
+            const MEMBERS: &[usize] = &[2, 3, 4, 5];
+            const SHAPES: &[Shape] = &[
+                Shape::Deletion,
+                Shape::OneMismatch,
+                Shape::LengthNeutral,
+                Shape::NetInsertion,
+            ];
+            // A homopolymer maximises accidental embedding; four bases is the
+            // ordinary case. Both matter — coincidence is the whole subject.
+            const ALPHABETS: &[&[u8]] = &[b"A", b"AC", b"ACGT"];
+
+            let mut seed = 0x9E37_79B9_7F4A_7C15u64;
+            let mut out = Vec::new();
+            for &gap in GAPS {
+                for &width in WIDTHS {
+                    for &members in MEMBERS {
+                        for &shape in SHAPES {
+                            for alphabet in ALPHABETS {
+                                out.push(build(members, width, gap, shape, alphabet, &mut seed));
+                            }
+                        }
+                    }
+                }
+            }
+            out
+        }
+
+        /// Drive the generated corpus against the pass's *invariants*.
+        ///
+        /// Deliberately not a lookup table of expected merge/no-merge: computing
+        /// the expectation from the same conditions the pass applies would only
+        /// restate the implementation. These are properties that hold for
+        /// reasons outside it — sequence preservation, the spec's rules on when
+        /// members stay individual, and internal consistency.
+        #[test]
+        fn the_coalesce_pass_holds_its_invariants_over_the_generated_corpus() {
+            let cases = cases();
+            assert!(cases.len() >= 5000, "corpus is {} cases", cases.len());
+
+            let mut merged_count = 0usize;
+            for case in &cases {
+                let mut pieces = case.pieces.clone();
+                coalesce_payload_alignment_split(&mut pieces, &case.span);
+                let merged = pieces.len() == 1 && case.pieces.len() > 1;
+                if merged {
+                    merged_count += 1;
+                }
+                let ctx = case.describe();
+
+                // 1. It is a re-spelling: the denoted sequence never moves.
+                assert_eq!(
+                    denotation(&case.span, &pieces),
+                    denotation(&case.span, &case.pieces),
+                    "denotation changed [{ctx}]"
+                );
+
+                // 2. It never merges across a wide separation -- those are
+                //    separate variants (`delins.md:17`, `general.md:34`).
+                if case.gap > COALESCE_MAX_SEPARATION {
+                    assert!(!merged, "merged across a {}-base gap [{ctx}]", case.gap);
+                }
+
+                // 3. It never merges a shape that does not lose length. A
+                //    length-neutral block is substitutions; a longer one is
+                //    #1421's net-insertion family, where the split form is the
+                //    canonical one.
+                if matches!(case.shape, Shape::LengthNeutral | Shape::NetInsertion) {
+                    assert!(!merged, "merged a non-shortening block [{ctx}]");
+                }
+
+                // 4. It only ever reduces the member count.
+                assert!(
+                    pieces.len() <= case.pieces.len(),
+                    "member count grew [{ctx}]"
+                );
+
+                // 5. Idempotent: a second application changes nothing, so the
+                //    output is a fixed point of the pass.
+                let mut again = pieces.clone();
+                coalesce_payload_alignment_split(&mut again, &case.span);
+                assert_eq!(again, pieces, "not idempotent [{ctx}]");
+            }
+
+            // The corpus must actually exercise the merging path, or every
+            // assertion above is vacuous.
+            assert!(
+                merged_count > 100,
+                "only {merged_count} of {} cases merged -- the corpus is not exercising the pass",
+                cases.len()
+            );
+        }
+
+        /// Widening the separation can only ever *withdraw* a merge, never create
+        /// one. Checked by holding everything else fixed and walking the gap up.
+        #[test]
+        fn widening_the_separation_is_monotone() {
+            let mut seed = 0x0DDB_1A5E_5BAD_5EEDu64;
+            for &width in &[1usize, 3, 8] {
+                for &members in &[2usize, 3] {
+                    let mut still_merging = true;
+                    for gap in 0..=(COALESCE_MAX_SEPARATION + 4) {
+                        let case = build(members, width, gap, Shape::Deletion, b"ACGT", &mut seed);
+                        let mut pieces = case.pieces.clone();
+                        coalesce_payload_alignment_split(&mut pieces, &case.span);
+                        let merged = pieces.len() == 1;
+                        // Asserted **before** `still_merging` is updated, and on
+                        // `!merged || still_merging`. Both halves matter: the
+                        // earlier form cleared the flag first and tested
+                        // `merged || !still_merging`, which is a tautology — a
+                        // merge satisfies the left side, and a non-merge has just
+                        // set `still_merging = false` and so satisfies the right.
+                        // It could not fail for any input. The condition was also
+                        // inverted: a *non*-merge while still merging is the
+                        // normal transition this walk is looking for, and a merge
+                        // *after* one is the violation.
+                        assert!(
+                            !merged || still_merging,
+                            "merge reappeared after it stopped [{}]",
+                            case.describe()
+                        );
+                        if !merged {
+                            still_merging = false;
+                        }
+                    }
+                }
+            }
+        }
+
+        /// **Known limit, pinned rather than fixed.**
+        ///
+        /// Three of the 592 real multi-member cis alleles are merged by this pass
+        /// when they should stay individual. They are genuine separate variants
+        /// that happen to sit as close together as a coincidental split — their
+        /// separations are 1 and 4 unchanged bases, inside the range where every
+        /// correct rejoin also lives (ClinVar's 78 correct rejoins run 1..8).
+        ///
+        /// **Separation cannot distinguish them, and neither can any other
+        /// property of the sequence.** `delins.md:79-84` gives the spec's own
+        /// discriminator: *"the two variants may have been reported (or might
+        /// occur) individually"* — provenance, which lives in the input's
+        /// spelling and nowhere in the reference or the observed bases.
+        ///
+        /// Reading the input's spelling to recover it is exactly what forfeits
+        /// confluence, and the cost is measured rather than assumed: the weight
+        /// bound above compares against the input's own edits, and that single
+        /// input-relative comparand cost **427 converged classes** per direction
+        /// until this pass was moved past it. Confluence and provenance are
+        /// incompatible for this class; #1235 chooses confluence.
+        ///
+        /// If provenance is ever needed, carry it beside the string as metadata —
+        /// not in it. This assertion exists so that anyone reaching for the input
+        /// form has to move it deliberately and read this first.
+        #[test]
+        fn close_separate_variants_are_a_known_limit_not_a_bug() {
+            let mut seed = 0x5EED_1235_5EED_1235u64;
+            for &gap in &[1usize, 4] {
+                let case = build(2, 3, gap, Shape::Deletion, b"ACGT", &mut seed);
+                let mut pieces = case.pieces.clone();
+                coalesce_payload_alignment_split(&mut pieces, &case.span);
+                assert_eq!(
+                    pieces.len(),
+                    1,
+                    "pinned: the pass merges at separation {gap}, which is right for a \
+                     coincidental split and wrong for two genuinely separate variants — \
+                     the sequence cannot tell them apart [{}]",
+                    case.describe()
+                );
+            }
+        }
+
+        #[test]
+        fn payload_embedding_is_an_ordered_subsequence_test() {
+            assert!(payload_embeds_as_subsequence(b"ACGT", b"AT"));
+            assert!(payload_embeds_as_subsequence(b"ACGT", b"ACGT"));
+            // order matters: the bases are present but not in this order
+            assert!(!payload_embeds_as_subsequence(b"ACGT", b"TA"));
+            // a base the block does not hold at all
+            assert!(!payload_embeds_as_subsequence(b"AAAA", b"C"));
+            // each payload base must consume its own reference base
+            assert!(!payload_embeds_as_subsequence(b"A", b"AA"));
+            // vacuous for an empty payload; the caller's member gate declines it
+            assert!(payload_embeds_as_subsequence(b"ACGT", b""));
         }
     }
 
