@@ -497,6 +497,46 @@
         "dna-delins-vs-two-substitutions-145-147",
         "rna-delins-vs-two-substitutions-142-144"
       ]
+    },
+    {
+      "id": "exon-junction-dup-converge-from-the-far-side",
+      "question": "When a duplication is already spelled on the far (3') side of an exon/exon junction — `LRG_199t1:c.3922dup`, which denotes the same transcript sequence as `c.3921dup` because both positions carry a `T` — must normalization shift it 5' back to `c.3921dup`, or is `c.3922dup` a legitimate description of a different genomic event that happens to yield the same transcript?",
+      "status": "undecided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/DNA/duplication.md:26",
+          "quote": "the variant is described as `LRG_199t1:c.3921dup` (`NC_000023.10:g.32459297dup`) and not as `c.3922dup`"
+        },
+        {
+          "clause": "docs/recommendations/DNA/duplication.md:148",
+          "quote": "an exception was made to prevent that when `c.3922dup` is translated back to a genomic position, one would end up at the wrong nucleotide, in the wrong exon"
+        },
+        {
+          "clause": "docs/recommendations/general.md:44",
+          "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences"
+        }
+      ],
+      "rationale": "MEASURED, 2026-08-07, against the prepared reference: `c.3920` is `A`, `c.3921` is `T`, `c.3922` is `T`. So at the TRANSCRIPT level the two spellings denote one and the same sequence — verified by applying each and comparing. Ferro nonetheless treats both as fixed points: `c.3921dup` normalizes to itself (which is `general.md:44` working, and the direction the exception is normally tested) and `c.3922dup` also normalizes to itself. Projected, they land 2,790 bp apart — `LRG_199:g.903430dup` against `g.906220dup`, matching the spec's own `g.32459297dup` against `g.32456507dup`. A consumer submitting the other spelling therefore gets a different genomic locus.\n\nTHE READING THAT ARGUES FOR CONVERGING THEM. `duplication.md:26` does not merely prefer `c.3921dup`; it names it as THE description and says the variant is 'not' described as `c.3922dup`. `:148` gives the reason, and it is a correctness reason rather than a stylistic one: translating `c.3922dup` back to a genomic position lands 'at the wrong nucleotide, in the wrong exon'. Read that way, `c.3922dup` is simply a wrong description of this variant, and a normalizer that leaves it standing has failed to repair an input the spec explicitly rejects. Confluence points the same way: two spellings of one transcript sequence reaching two outputs is precisely the non-confluence the project is otherwise working to remove.\n\nTHE READING THAT ARGUES AGAINST. `general.md:44` states the exception as a SUSPENSION of the 3'rule around an exon/exon junction — it says the rule does not apply there. It does not say to shift 5' back, and no clause anywhere prescribes a 5' shift as the remedy. `duplication.md:26`'s worked example runs in one direction only: it starts from a genomic change and asks how to describe it on the coding reference. It says nothing about what to do with an input already spelled on the far side. And `c.3922dup` may not be a mis-spelling at all: read literally it describes the duplication of the first base of the next exon, which is a DIFFERENT genomic event (`g.32456507dup`) that happens to yield the same mature transcript. Collapsing it onto `c.3921dup` would then destroy information the submitter supplied, not repair an error.\n\nWHAT IS NOT ESTABLISHED, and what would settle it: whether the spec intends `c.3922dup` to be unspellable on this reference (in which case ferro should either repair or reject it) or merely non-preferred for the g.32459297 event (in which case ferro is right to leave it alone). Nothing in the checkout answers that; `:26`, `:60` and `:148` all argue from the genomic side. Settling it is also a REPRESENTATION CHANGE — every stored `c.3922dup`-shaped description moves — so it needs the operator, not whoever next touches the exon-junction code.\n\nBoth behaviours are pinned as observations, not requirements, in tests/it/spec_worked_examples.rs, whose `LRG_199t1:c.3922dup` row deliberately carries a null `spec_expected` and whose exon-junction test asserts only that the pair does NOT converge today — so a change that converged them would fail loudly and be routed back here rather than landing as a side effect.",
+      "applies_to": [],
+      "equivalence_classes": []
+    },
+    {
+      "id": "rna-repeat-range-plus-unit-redundancy",
+      "status": "undecided",
+      "question": "On an RNA reference, may a repeat be written with BOTH a position range and the repeat unit (`r.-6_-3g[6]`)? `RNA/repeated.md:22` marks that shape invalid as redundant; `:27` publishes exactly that shape as valid.",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/RNA/repeated.md:22",
+          "quote": "the format <code class=\"invalid\">r.-125_-123cug[4]</code> should not be used; it contains redundant information (`-125_-123` and `cug`)."
+        },
+        {
+          "clause": "docs/recommendations/RNA/repeated.md:27",
+          "quote": "As such, `NM_024312.4:r.-6_-3g[6]` is valid as the reading frame is not affected."
+        }
+      ],
+      "rationale": "The two clauses are five lines apart in one document and cannot both hold. `:22` states the rule: a description carrying both a range and a unit is invalid because the range already fixes the unit — its example is `r.-125_-123cug[4]`. `:27` then publishes `NM_024312.4:r.-6_-3g[6]`, which is the same shape (range `-6_-3` plus unit `g`), as the worked example of the UTR carve-out to the multiple-of-3 restriction. Whatever `:27` is demonstrating, it demonstrates it using a spelling `:22` forbids.\n\nMEASURED, 2026-08-07: ferro answers BOTH WAYS depending on input-hygiene mode, which is worth recording precisely because it looks like one behaviour and is not. Through the plain library path (`parse_hgvs`, no preprocessing) the published form is left alone: `r.-6_-3g[6]` in, `r.-6_-3g[6]` out — the `:27` answer. Through `--error-mode lenient` the preprocessor strips the redundant label (W3013 RedundantRepeatLabel) and normalization emits `r.-6_-3[6]` — the `:22` answer. Through `--error-mode strict` the same repair becomes a rejection. So the divergence lives in the INPUT-HYGIENE layer, not in the normalizer, and the three modes are three different readings of the same conflict.\n\nWHAT IS NOT ESTABLISHED. Following the rule at `:22` over the example at `:27` is the defensible reading — a rule generalises and an example does not, and `:22` gives its reason — and that is what the lenient path does. But it is a reading, and it is not the project's to make: the conflict is upstream's, and either clause could be the one that is wrong. Nobody has ruled, so all three behaviours are pinned as observations in tests/fixtures/spec-worked-examples/cases.json rather than reconciled, and ferro is NOT being 'fixed' to match an example its own document forbids.\n\nWhat would settle it: an upstream correction. Owed as a #466 entry against the HGVS nomenclature repository — either `:22` should carve out the UTR case, or `:27` should be respelled as `r.-6_-3[6]`.\n\nNote this record is about SPELLING REDUNDANCY only. The multiple-of-3 restriction that `:24-27` is actually about is not in doubt: ferro implements it exactly, including the UTR carve-out, and all six of the spec's worked examples for it reproduce.",
+      "applies_to": [],
+      "equivalence_classes": []
     }
   ]
 }

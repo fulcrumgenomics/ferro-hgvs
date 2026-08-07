@@ -573,7 +573,7 @@ individually" — which is **provenance**, recoverable only from the input's spe
 
 The `rulings` section of `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json` is the
 decision log, pinned by `ruling_records_are_intact` (ids **and** statuses; keep `RULING_STATUSES`
-in sync). **Three of its six records are `undecided`**, and the first below is an operator
+in sync). **Five of its eight records are `undecided`**, and the first below is an operator
 decision that blocks other work — read them before re-deriving the same argument:
 
 | record | what is open |
@@ -581,6 +581,8 @@ decision that blocks other work — read them before re-deriving the same argume
 | `adjudication-precedence-order` | **Two competing precedence orders are on record and neither is chosen.** It does not reopen the two records decided below, but it governs how the next such conflict is ranked |
 | `canonical-form-choice-when-both-legal` | Which of two legal forms ships. An open *product* decision |
 | `codon-carve-out-shape-restriction` | `delins.md:18` names no edit type; ferro applies it only to sub/unchanged/sub |
+| `exon-junction-dup-converge-from-the-far-side` | `LRG_199t1:c.3921dup` and `c.3922dup` denote one transcript sequence but are two fixed points, projecting 2,790 bp apart. `duplication.md:26` argues for converging them, `general.md:44` does not prescribe the 5' shift that would |
+| `rna-repeat-range-plus-unit-redundancy` | `RNA/repeated.md:22` calls range-plus-unit invalid, `:27` publishes exactly that shape as valid. Upstream's conflict (#466); ferro answers both ways depending on input-hygiene mode |
 
 The three `decided` records, and the scope each was decided **at** — read the record before
 citing it, because both of the 2026-08-07 rulings are narrower than their one-line summary:

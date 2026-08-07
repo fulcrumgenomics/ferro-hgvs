@@ -820,6 +820,18 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // The one the spec does settle: `delins.md:18`'s explicit exception for two
     // variants one nucleotide apart affecting one amino acid.
     ("delins-codon-carve-out-gap-one", "decided"),
+    // `DNA/duplication.md:26` names `c.3921dup` as *the* description "and not
+    // `c.3922dup`", which argues for converging them; `general.md:44` only
+    // suspends the 3'rule around the junction and never prescribes a 5' shift
+    // back, so `c.3922dup` may describe a different genomic event yielding the
+    // same transcript. Measured: both are fixed points, projecting 2,790 bp
+    // apart. Undecided, and a representation change either way.
+    ("exon-junction-dup-converge-from-the-far-side", "undecided"),
+    // `RNA/repeated.md:22` marks range-plus-unit invalid as redundant while
+    // `:27` publishes exactly that shape as valid, five lines later. Ferro
+    // answers both ways depending on input-hygiene mode. Upstream's conflict to
+    // settle (#466), not ferro's.
+    ("rna-repeat-range-plus-unit-redundancy", "undecided"),
 ];
 
 /// Ruling records must stay well-formed, and `undecided` must stay undecided.
