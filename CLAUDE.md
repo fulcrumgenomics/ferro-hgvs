@@ -335,6 +335,69 @@ Contributor-facing guidance is in `CONTRIBUTING.md`. The checker is
 `tests/python/test_representation_change_trailer.py`, because three copies of one list drift
 silently.
 
+### Record every adjudication as a committed test or ruling record, in the same change
+
+**Policy.** When you decide what the *correct* normalization behaviour is — not how to
+implement it — that decision lands in a committed test or ruling record **in the same PR**, with
+a comment stating the question, the ruling, and the authority. An adjudication that lives only in
+a PR description, an issue comment, or a working document is lost: the next person re-derives it
+from scratch, and often re-derives it differently.
+
+This is cheap because the machinery already exists (the five committed guards are tabulated
+directly above). The policy is about using it consistently, not about building anything.
+
+**What counts as an adjudication:** a ruling that one clause governs another where they conflict;
+a determination that ferro's output is right or wrong against a cited clause; a decision to follow
+or deviate from Mutalyzer; a choice between two competing representations of one variant; or a
+question deliberately left open. Implementation choices, refactors and performance work are not
+adjudications and do not need records.
+
+**Where it goes:**
+
+| the adjudication is about | record it in |
+|---|---|
+| two spec clauses in tension | a `rulings` record in `hgvs_spec_normalization_overrides.json` |
+| two spellings that must converge on one output | an `equivalence_classes` entry + `EQUIVALENCE_CLASS_VERDICTS` |
+| a deliberate, known deviation from the spec's stated form | `KNOWN_DIVERGENT_INPUTS`, which pins it *as* a deviation |
+| a deliberate deviation from Mutalyzer where the spec is silent | a `rulings` record — there is no spec form to diverge *from*, so `KNOWN_DIVERGENT_INPUTS` is the wrong home (see `adjudication-precedence-order`) |
+| a concrete input whose correct output is now settled | an ordinary `tests/it/*` test pinning the exact string |
+
+**State which kind of record it is, because they are not interchangeable:**
+
+- **adjudicated-correct** — pin the exact expected output and cite the clause. This is a real
+  guard: it fails when behaviour regresses away from a decided answer.
+- **adjudicated-deviation** — pin it as a deviation so it stays visible. `KNOWN_DIVERGENT_INPUTS`
+  exists for this, and `ferro_produces_the_form_the_spec_states` deliberately fails when a listed
+  input *starts* matching the spec, so a fixed deviation cannot rot in the list unnoticed.
+- **undecided** — a first-class state. The generator refuses an `undecided` record that names a
+  governing clause, so an open question cannot smuggle in a ruling nobody made. Prefer an honest
+  `undecided` record to no record.
+
+**A test that merely pins today's output is not an adjudication record.** It is a change
+detector, and this repo has already been bitten by the difference —
+`pinned_v21_normalization_behavior` compares ferro against itself (see the note above about
+stale-local-artifact detectors). What makes a record an adjudication is the *authority*: an exact
+`file:line` into `assets/hgvs-nomenclature`, a named Mutalyzer measurement, or an explicit
+"undecided, and here is why". Without one, you have frozen the current behaviour including
+whatever is wrong with it.
+
+**Cite the clause exactly, and quote it.** `rulings` citations carry a verbatim quote the
+generator checks against the spec checkout, so a submodule bump that moves a clause fails the
+build instead of leaving the citation pointing at unrelated prose. Do the same in prose comments:
+`general.md:34`, not "the separation rule".
+
+**Record what was refuted, not only what was decided.** Measurements that killed a plausible
+belief are worth as much as the ruling itself, because the belief will recur. Existing examples
+worth imitating: `MIN_SEPARATION_NO_FRAME`'s doc comment explains why applying the coding
+exception everywhere is wrong; `apply_coding_codon_exception` records the worked
+`c.10_13delinsTCAG` case showing why the rule tests the triplet rather than the hull;
+`split_codon_incompatible_triplets` names the two tests that pin both sides of its boundary.
+
+**Deviating from the reference implementation needs a record, not just a rationale.** Precedence
+is **spec-explicit > Mutalyzer > our judgement**. Where the spec is explicit and Mutalyzer differs,
+that is a deliberate divergence and it gets a record saying so — otherwise the next person
+measures Mutalyzer, finds a mismatch, and "fixes" a conformance decision.
+
 ### Python Tests
 ```bash
 pytest tests/python/ -v              # Run all Python tests
