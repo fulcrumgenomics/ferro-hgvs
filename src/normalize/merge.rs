@@ -9799,14 +9799,36 @@ mod tests {
         // Mixed pair: a substitution consuming offset 10 leaves offsets 11..12
         // unchanged before the insertion at 12.
         assert!(
-            separations_are_meaningful(&[sub(10, b"A"), ins(12, b"T")], 1),
+            separations_are_meaningful(&[sub(10, b"A"), ins(13, b"T")], 1),
             "two unchanged bases separate a substitution at 10 from an \
-             insertion at 12"
+             insertion at 13"
         );
         assert!(
             !separations_are_meaningful(&[sub(10, b"A"), ins(11, b"T")], 1),
             "an insertion at the junction immediately 3' of a substitution is \
              adjacent to it, not separated"
+        );
+
+        // The two cases above both clear `MIN_PIECE_SEPARATION` (1), so they
+        // pin the junction-has-no-width rule without ever distinguishing the
+        // two thresholds. Raise `net_change` past
+        // `MAX_SINGLE_BASE_SEPARATION_CHANGE` so `RAISED_PIECE_SEPARATION` (2)
+        // applies, and the one-base gap that passed above now fails — which is
+        // what makes the insertion's zero width load-bearing rather than
+        // incidental.
+        assert!(
+            !separations_are_meaningful(
+                &[sub(10, b"A"), ins(12, b"T")],
+                MAX_SINGLE_BASE_SEPARATION_CHANGE + 1
+            ),
+            "one unchanged base does not satisfy the raised separation"
+        );
+        assert!(
+            separations_are_meaningful(
+                &[sub(10, b"A"), ins(13, b"T")],
+                MAX_SINGLE_BASE_SEPARATION_CHANGE + 1
+            ),
+            "two unchanged bases do satisfy the raised separation"
         );
     }
 
