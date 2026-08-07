@@ -11,6 +11,7 @@ make this check pass on exactly the changes it exists to catch.
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -157,3 +158,85 @@ def test_both_streams_on_stdin_is_rejected() -> None:
     with pytest.raises(SystemExit) as excinfo:
         check_representation_change.main(["--changed-files", "-", "--declaration-file", "-"])
     assert excinfo.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# The changelog consumer must agree with this checker about what "declining" means
+# ---------------------------------------------------------------------------
+
+
+def test_decline_vocabulary_matches_the_changelog_config() -> None:
+    """`release-plz.toml`'s exclusion rule and `NONE_VALUES` must accept the same words.
+
+    They are two halves of one decision and they drift silently. If the checker accepts a
+    decline the changelog rule does not, that PR passes CI and then renders under
+    **Representation changes** as if it moved output — which is #1526, the bug this test
+    was written for. If the changelog excludes a word the checker rejects, a contributor
+    is told to declare something the changelog then hides.
+    """
+    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
+    match = re.search(r'footer = "\(\?i\)\^Representation-Change:[^"]*?\(([^)]+)\)', config)
+    assert match is not None, (
+        "no case-insensitive Representation-Change exclusion rule found in release-plz.toml; "
+        "the decline vocabulary cannot be checked"
+    )
+    configured = frozenset(match.group(1).split("|"))
+    assert configured == check_representation_change.NONE_VALUES, (
+        f"release-plz.toml excludes {sorted(configured)} but the checker treats "
+        f"{sorted(check_representation_change.NONE_VALUES)} as declines; a word in one and "
+        "not the other either leaks a non-change into the changelog or hides a real one"
+    )
+
+
+def test_both_representation_change_rules_are_case_insensitive() -> None:
+    """A case-sensitive *inclusion* rule drops a lowercase `representation-change:` — a real
+    disclosure — silently into `Other`, since the checker accepts any casing."""
+    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
+    rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
+    assert len(rules) == 2, f"expected an exclusion and an inclusion rule, found {rules}"
+    for rule in rules:
+        assert rule.startswith("(?i)"), (
+            f"rule {rule!r} is case-sensitive; the checker's own trailer regex is not, so the "
+            "two disagree about whether `REPRESENTATION-CHANGE:` is a declaration"
+        )
+
+
+def test_contributing_documents_the_same_decline_vocabulary() -> None:
+    """CONTRIBUTING.md is the third place these words appear, and prose drifts fastest.
+
+    A contributor reads the doc, not the config or this script, so a word documented here
+    but not accepted by both is guidance that fails CI, and one accepted but not documented
+    is a decline nobody knows they can make.
+    """
+    doc = (Path(__file__).resolve().parents[2] / "CONTRIBUTING.md").read_text(encoding="utf-8")
+    documented = {
+        word
+        for word in re.findall(r"`([a-z/]+)`(?=[,\s]|$)", doc)
+        if word in check_representation_change.NONE_VALUES
+    }
+    assert documented == check_representation_change.NONE_VALUES, (
+        f"CONTRIBUTING.md documents {sorted(documented)} as declines but the checker accepts "
+        f"{sorted(check_representation_change.NONE_VALUES)}"
+    )
+
+
+def test_the_decline_exclusion_precedes_the_inclusion() -> None:
+    """git-cliff takes the FIRST matching parser, so swapping these two lines silently
+    restores #1526 in full.
+
+    Verified against git-cliff 2.13.1 rather than assumed: with the exclusion second, all
+    four trailers -- `none`, `NONE`, and both real disclosures -- group under
+    **Representation changes**. Every other guard in this file still passes in that state,
+    which is why the ordering needs one of its own.
+    """
+    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
+    rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
+    assert len(rules) == 2, f"expected an exclusion and an inclusion rule, found {rules}"
+    exclusion, inclusion = rules
+    assert any(word in exclusion for word in check_representation_change.NONE_VALUES), (
+        f"the first Representation-Change rule is {exclusion!r}, which does not name a decline "
+        "value; the exclusion must come first or every decline is grouped as a real change"
+    )
+    assert not any(word in inclusion for word in check_representation_change.NONE_VALUES), (
+        f"the second rule is {inclusion!r}, which looks like the exclusion -- the two are reversed"
+    )

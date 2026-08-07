@@ -96,7 +96,32 @@ releasing, not after.
 # The trailer is what gets a note in automatically, at release time.
 [changelog]
 commit_parsers = [
-  { footer = "^Representation-Change:", group = "<!-- 0 -->Representation changes" },
+  # `Representation-Change: none` declares that a change moves NO output, so it must not
+  # be listed as one. git-cliff matches a footer rule on the trailer's *presence*, not its
+  # value, so without this exclusion #1523 -- a CI-only change that correctly declined --
+  # rendered under "Representation changes" in v0.13.1 (#1526).
+  #
+  # That matters as much as the opposite failure. v0.13.0 under-reported (nothing declared,
+  # section empty, disclosure reconstructed by hand from a 5.7M-row corpus diff, #1522);
+  # listing non-changes is the same loss of trust from the other side, and it compounds,
+  # because declining is the COMMON case for changes under those directories.
+  #
+  # Ordering is load-bearing: git-cliff takes the FIRST matching parser, so this exclusion
+  # must precede the inclusion below. `[^\S\r\n]` is horizontal-only whitespace -- `\s`
+  # would span the newline into the next trailer and let `Representation-Change:` followed
+  # by a line reading `none` count as a decline.
+  #
+  # `(?i)` because the checker accepts `NONE`/`None` as declines (its own regex is
+  # case-insensitive); without the flag an uppercase decline is grouped as a real change,
+  # which is this bug in miniature. Verified against git-cliff 2.13.1.
+  #
+  # The decline vocabulary is kept in step with `NONE_VALUES` in
+  # `scripts/check_representation_change.py` by `test_decline_vocabulary_matches_the_changelog_config`.
+  { footer = "(?i)^Representation-Change:[^\\S\\r\\n]*(none|no|n/a|na)[^\\S\\r\\n]*$", group = "<!-- 7 -->Other" },
+  # `(?i)` here too, and not only on the exclusion above: the checker accepts any casing,
+  # so a lowercase `representation-change: 577 rows move` is a REAL disclosure that a
+  # case-sensitive rule drops silently into `Other`. Verified against git-cliff 2.13.1.
+  { footer = "(?i)^Representation-Change:", group = "<!-- 0 -->Representation changes" },
   { message = "^feat", group = "<!-- 1 -->Added" },
   { message = "^changed", group = "<!-- 2 -->Changed" },
   { message = "^deprecated", group = "<!-- 3 -->Deprecated" },
