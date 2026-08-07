@@ -180,6 +180,77 @@ struct Cli {
     /// Diff mode: the candidate dump.
     #[arg(long, requires = "compare")]
     against: Option<PathBuf>,
+    /// Also check, per row, whether the normalized output denotes the **same
+    /// bases** as its input, and report the rows where it does not (#1514).
+    ///
+    /// Dump mode only. Findings go to stderr and the dump itself is unchanged,
+    /// so a verified run stays byte-comparable with every existing baseline.
+    #[arg(long, conflicts_with_all = ["compare", "against"])]
+    verify_spdi: bool,
+}
+
+/// What [`verify_row`] concluded about one row.
+///
+/// Three outcomes, not two, and the third is the one that matters for reading
+/// the summary: `canonical_spdi` declines an allele whose members overlap, and
+/// on this corpus that is thousands of rows. Folding those into "different"
+/// buried 45 real findings under ~6,700 rows of noise the first time this
+/// check was written by hand.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpdiVerdict {
+    /// Input and output denote the same bases.
+    Same,
+    /// They denote different bases — the finding this flag exists for.
+    Different,
+    /// One side could not be applied, so the question has no answer here.
+    /// Not a failure.
+    Unverifiable,
+}
+
+/// Whether `row`'s output denotes the same bases as its input.
+///
+/// Compared through [`Normalizer::canonical_spdi`], which derives its key from
+/// the bases a description *produces* rather than from how it is written, and
+/// maximally 3'-shifts it. Two spellings of one edit therefore key identically
+/// by construction, so a difference here is a difference in meaning and not in
+/// notation — which is exactly what a row-movement count cannot tell you.
+///
+/// Wrapped in `catch_unwind` for the same reason [`normalize_one`] is: this runs
+/// over every row of a corpus built to contain the shapes that break things, and
+/// one panicking row must not take the whole dump with it.
+fn verify_row(row: &Row) -> (SpdiVerdict, String, String) {
+    let declined = |what: &str| format!("<{what}>");
+    let (Ok(input), Ok(output)) = (parse_hgvs(&row.input), parse_hgvs(&row.output)) else {
+        return (
+            SpdiVerdict::Unverifiable,
+            declined("unparseable"),
+            declined("unparseable"),
+        );
+    };
+    let direction = match row.direction {
+        "5prime" => ShuffleDirection::FivePrime,
+        _ => ShuffleDirection::ThreePrime,
+    };
+    let normalizer = Normalizer::with_config(
+        provider_for(row.axis, &row.reference),
+        NormalizeConfig::default().with_direction(direction),
+    );
+    let key = |v: &_| match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        normalizer.canonical_spdi(v)
+    })) {
+        Ok(Ok(k)) => Some(k.to_string()),
+        Ok(Err(_)) => None,
+        Err(_) => None,
+    };
+    match (key(&input), key(&output)) {
+        (Some(a), Some(b)) if a == b => (SpdiVerdict::Same, a, b),
+        (Some(a), Some(b)) => (SpdiVerdict::Different, a, b),
+        (a, b) => (
+            SpdiVerdict::Unverifiable,
+            a.unwrap_or_else(|| declined("declined")),
+            b.unwrap_or_else(|| declined("declined")),
+        ),
+    }
 }
 
 fn main() -> ExitCode {
@@ -213,6 +284,41 @@ fn main() -> ExitCode {
             row.was_fixed_point
         );
     }
+    if cli.verify_spdi {
+        let (mut same, mut different, mut unverifiable) = (0usize, 0usize, 0usize);
+        for row in &rows {
+            let (verdict, key_in, key_out) = verify_row(row);
+            match verdict {
+                SpdiVerdict::Same => same += 1,
+                SpdiVerdict::Unverifiable => unverifiable += 1,
+                SpdiVerdict::Different => {
+                    different += 1;
+                    // Stable, greppable, and on stderr: the recipe for "did this
+                    // change make anything newly wrong" is to run this on both
+                    // revisions and diff the two reports. Putting it in the dump
+                    // instead would add a column, and the reader exact-matches
+                    // the header — every committed baseline would stop loading.
+                    eprintln!(
+                        "SPDI-MISMATCH\t{}\t{} {}\t{}\n    in : {}  => {}\n    out: {}  => {}",
+                        row.family,
+                        row.axis,
+                        row.direction,
+                        row.reference,
+                        row.input,
+                        key_in,
+                        row.output,
+                        key_out
+                    );
+                }
+            }
+        }
+        eprintln!(
+            "verified {} rows: {different} denote different bases, {same} agree, \
+             {unverifiable} unverifiable (member overlap or unparseable)",
+            rows.len()
+        );
+    }
+
     match &cli.out {
         Some(path) => {
             if let Err(e) = fs::write(path, &out) {
@@ -886,15 +992,25 @@ fn inputs_for(family: &str, axis: &str, core: &str) -> Vec<String> {
 /// Normalize, reporting a decline or a panic as data rather than aborting the dump.
 /// A row that errors on one revision and succeeds on the other is exactly the
 /// cheap-vs-expensive distinction the diff needs to see, so it must not be dropped.
+/// The provider a row is drawn against, selected by axis label.
+///
+/// Factored out of [`normalize_one`] so the `--verify-spdi` pass reads the same
+/// reference the row was normalized against. Building a second, subtly different
+/// provider there would make the verification answer a question about the wrong
+/// sequence — and it would do so silently, since both would still produce keys.
+fn provider_for(axis: &str, core: &str) -> MockProvider {
+    match axis {
+        "g" => genomic_provider(core),
+        "cx" => multi_exon_provider(core),
+        _ => coding_provider(core),
+    }
+}
+
 fn normalize_one(axis: &str, core: &str, input: &str, direction: ShuffleDirection) -> String {
     let Ok(variant) = parse_hgvs(input) else {
         return "<parse-error>".to_string();
     };
-    let provider = match axis {
-        "g" => genomic_provider(core),
-        "cx" => multi_exon_provider(core),
-        _ => coding_provider(core),
-    };
+    let provider = provider_for(axis, core);
     let normalizer = Normalizer::with_config(
         provider,
         NormalizeConfig::default().with_direction(direction),
@@ -1204,6 +1320,98 @@ fn compare(before: &PathBuf, after: &PathBuf) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn row(axis: &'static str, reference: &str, input: &str, output: &str) -> Row {
+        Row {
+            reference: reference.to_string(),
+            axis,
+            direction: "3prime",
+            family: "test",
+            input: input.to_string(),
+            output: output.to_string(),
+            was_fixed_point: false,
+        }
+    }
+
+    /// All three verdicts, on real rows drawn from the corpus's own cores.
+    ///
+    /// The one that earns the test is `Unverifiable`. `canonical_spdi` declines an
+    /// allele whose members overlap, and this corpus is deliberately full of those
+    /// — 20,526 of 78,028 rows. Classifying a decline as `Different` would report
+    /// twenty thousand findings and bury the eighty real ones, which is exactly
+    /// what the first hand-written cut of this check did.
+    #[test]
+    fn verify_row_separates_disagreement_from_unanswerable() {
+        // Same bases, different spelling: a 3'-shifted duplication.
+        let (verdict, key_in, key_out) = verify_row(&row(
+            "c",
+            "TTTTTTTTTAATATATTTTA",
+            "NM_TEST.1:c.2_3dup",
+            "NM_TEST.1:c.8_9dup",
+        ));
+        assert!(matches!(verdict, SpdiVerdict::Same));
+        assert_eq!(key_in, key_out, "one edit, two spellings, one key");
+
+        // Different bases. The #1513 shape: two insertions at neighbouring
+        // junctions, concatenated as though they shared one.
+        let (verdict, key_in, key_out) = verify_row(&row(
+            "c",
+            "TAAAATTATATTTATTATTT",
+            "NM_TEST.1:c.[1_2insAA;2_3insTT]",
+            "NM_TEST.1:c.2_3insTTAA",
+        ));
+        assert!(
+            matches!(verdict, SpdiVerdict::Different),
+            "{key_in} vs {key_out} denote different bases"
+        );
+        assert_ne!(key_in, key_out);
+
+        // Unanswerable: the members overlap, so there is no single resulting
+        // sequence to key on — on either side.
+        let (verdict, _, _) = verify_row(&row(
+            "c",
+            "GCGCTAGTCTCGCCCTGTTA",
+            "NM_TEST.1:c.[11_12del;11_12inv]",
+            "NM_TEST.1:c.[11_12del;11_12inv]",
+        ));
+        assert!(matches!(verdict, SpdiVerdict::Unverifiable));
+
+        // An unparseable side is unanswerable too, not a disagreement. `<declined>`
+        // and `<panic>` are values `normalize_one` really writes into a dump.
+        let (verdict, _, _) = verify_row(&row(
+            "c",
+            "GCGCTAGTCTCGCCCTGTTA",
+            "NM_TEST.1:c.2_3dup",
+            "<declined>",
+        ));
+        assert!(matches!(verdict, SpdiVerdict::Unverifiable));
+    }
+
+    /// The verification reads the same reference the row was normalized against.
+    ///
+    /// `provider_for` is shared with `normalize_one` for this reason: a second,
+    /// subtly different provider would answer about the wrong sequence and would
+    /// do it silently, since both still produce keys.
+    #[test]
+    fn verification_uses_the_rows_own_axis_provider() {
+        // The multi-exon reference numbers its CDS from transcript 4, so `c.1` is
+        // a different base there than on the single-exon one. Same descriptor,
+        // different provider, different key.
+        let core = "GCGCTAGTCTCGCCCTGTTA";
+        let single = verify_row(&row("c", core, "NM_TEST.1:c.1_2dup", "NM_TEST.1:c.1_2dup"));
+        let multi = verify_row(&row(
+            "cx",
+            core,
+            "NM_TESTX.1:c.1_2dup",
+            "NM_TESTX.1:c.1_2dup",
+        ));
+        assert!(matches!(single.0, SpdiVerdict::Same));
+        assert!(matches!(multi.0, SpdiVerdict::Same));
+        assert_ne!(
+            single.1, multi.1,
+            "the two axes place `c.1` at different transcript positions"
+        );
+    }
 
     /// Trap 1 from the module docs, pinned. Keying a row on the input string alone
     /// merges rows drawn against different reference sequences — which is how a
