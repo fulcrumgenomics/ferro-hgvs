@@ -256,7 +256,30 @@ Two test modules actually read it — `tests/it/hgvs_spec_normalization_tests.rs
 |---|---|---|
 | `ferro_produces_the_form_the_spec_states` | `hgvs_spec_normalization_tests.rs` | ferro's output vs the **spec's** stated form, plus `KNOWN_DIVERGENT_INPUTS` |
 | `status_census_is_unchanged` | `hgvs_spec_normalization_tests.rs` | per-status row counts |
+| `spec_equivalence_classes_converge` | `hgvs_spec_normalization_tests.rs` | one normalized output per curated equivalence class, plus `EQUIVALENCE_CLASS_VERDICTS` |
+| `ruling_records_are_intact` | `hgvs_spec_normalization_tests.rs` | the ruling records' ids and decided/undecided statuses (`RULING_STATUSES`) |
 | `DIVERGENCE_BUDGET` / `PASSING_CENSUS` | `spec_enumeration_tests.rs` | per-status row counts, together totalling every row |
+
+**Statuses only ask whether ferro *changed* a string — never whether two rows are the same
+variant.** That is why the spec's own non-confluent pair
+(`LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` and the `c.[850_869del;…]` split it names as that
+variant's "alternative description", `DNA/delins.md:44-47`) sat in the fixture as two `preserved`
+rows and passed. The `equivalence_classes` section of
+`hgvs_spec_normalization_overrides.json` closes that: it declares which harvested inputs denote
+one variant, and `spec_equivalence_classes_converge` fails when a class yields more than one
+output. The disagreements it currently finds are **expected and pinned** — converging them is
+#1235's job and a representation change for a downstream consumer, not something to fix in a test
+PR. Members that cannot be evaluated hermetically (`needs-reference`, or a description ferro
+refuses) are skipped rather than compared, so an error string never counts as a representation.
+
+The sibling `rulings` section is the decision log for clauses that **conflict at equal RFC 2119
+strength** (`style.md:9` binds the spec to RFC 2119; items 3 and 4 make RECOMMENDED == SHOULD and
+cover SHOULD NOT). Each record names the clauses in tension, which one governs, which is deviated
+from, and why. `undecided` is a first-class state and the generator **refuses** to build a record
+that is `undecided` yet names a governing clause — an unsettled question must not be able to
+smuggle in a ruling nobody made. Every citation carries a verbatim quote that the generator checks
+against the spec checkout, so a submodule bump that moves a clause fails the build instead of
+leaving the citation pointing at unrelated prose.
 
 Requires the `assets/hgvs-nomenclature` submodule (`git submodule update --init assets/hgvs-nomenclature`); without it the generator fails with `no HGVS strings harvested from …`, naming that command.
 
