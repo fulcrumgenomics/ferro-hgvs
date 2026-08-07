@@ -4028,17 +4028,33 @@ fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
 /// Column `i` of a whole-span reverse complement coincides exactly when column
 /// `n-1-i` does — both say `b[i] == complement(b[n-1-i])` — so the coincidences
 /// come in **mirror pairs**, and an odd `n` has a centre column that can never
-/// coincide. For a uniform random block the count of unchanged columns is
-/// therefore
+/// coincide. Both halves of that hold over a uniform A/C/G/T alphabet and not
+/// beyond it: [`crate::sequence::complement_base`] maps the self-complementary
+/// IUPAC codes to themselves (`N -> N`, `S -> S`, `W -> W`), so a centre column
+/// holding one of those *does* coincide, and real reference sequences carry `N`
+/// at assembly gaps. For a uniform random block the count of unchanged columns
+/// is therefore
 ///
 /// ```text
-/// U = 2 · Binomial(floor(n/2), 1/4)      E[U] = n/4      sd(U) = sqrt(3n/8)
+/// m = floor(n/2)                         the number of mirror pairs
+/// U = 2 · Binomial(m, 1/4)               E[U] = m/2      sd(U) = sqrt(3m/4)
 /// ```
 ///
-/// The mean is `n/4` — a quarter of the span — for **every** `n`. That is the
-/// part the earlier comment had right, and the part that misleads: it read a
-/// mean as if it were the whole distribution, and concluded that an observation
-/// above it was "far above chance". Measured against the actual distribution:
+/// Stated in `m`, not `n`, because the centre column of an odd span is not part
+/// of a pair: for even `n` the mean is `n/4` — a quarter of the span — but for
+/// odd `n` it is `(n−1)/4`, and the same `−1` runs through the standard
+/// deviation. An earlier revision of this comment gave only the even-`n` forms
+/// and asserted them for "every `n`"; #1461's span is 457, so the mean it
+/// implies is 114.25 rather than 114 and its `z` comes out at `+2.73` rather
+/// than the `+2.75` tabulated below. The table was computed correctly and only
+/// the prose over-generalised, which is exactly the failure #1461 is about — a
+/// statistic stated more broadly than it holds, then cited as evidence.
+/// [`the_unchanged_column_moments_reproduce_the_tabulated_z_scores`] now pins
+/// the two against each other so the generalisation cannot recur silently.
+///
+/// The other misreading, which the earlier revision also made, is to treat the
+/// mean as if it were the whole distribution and conclude that an observation
+/// above it is "far above chance". Measured against the actual distribution:
 ///
 /// | block | span | unchanged | z | P(at least this many) |
 /// |---|---|---|---|---|
@@ -4053,7 +4069,7 @@ fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
 /// nt, not because 32.8% is a low fraction.
 ///
 /// The discriminating quantity is `n`. The distribution's relative spread is
-/// `sd/mean = sqrt(6/n)`, so it is 100% of the mean at `n = 6` and 11.5% at
+/// `sd/mean = sqrt(3/m)`, so it is 100% of the mean at `n = 6` and 11.5% at
 /// `n = 457`: a density reading carries almost no information about a short
 /// block and a great deal about a long one. Any future rule that wants to argue
 /// from coincidence rates must scale with `n`; this one does not.
@@ -8830,6 +8846,59 @@ mod tests {
         // structurally above: the case to admit fails `every_separation_is_a_
         // single_base` (its widest real gap is 5) while the case to refuse has a
         // gap of 4, so no threshold on separation admits one without the other.
+    }
+
+    /// The moments quoted in [`changed_columns_dominate_the_span`]'s doc must
+    /// reproduce the z column of the table beneath them (#1530).
+    ///
+    /// That doc is the one place in this file that argues from a distribution
+    /// rather than from a pinned string, and its own thesis is that a statistic
+    /// stated more broadly than it holds gets cited later as evidence. It then
+    /// did exactly that: `E[U] = n/4` and `sd(U) = sqrt(3n/8)` are the **even**-`n`
+    /// case of `U = 2·Binomial(floor(n/2), 1/4)`, asserted for "**every** `n`" two
+    /// lines after the comment notes that an odd `n` has a centre column that can
+    /// never coincide. #1461's span is odd (457), so the displayed formulas give
+    /// `z = +2.73` where the table says `+2.75`.
+    ///
+    /// Pinned executably rather than corrected in prose alone, because prose is
+    /// what was wrong: the table was right the whole time, which is precisely
+    /// why nothing caught the generalisation.
+    #[test]
+    fn the_unchanged_column_moments_reproduce_the_tabulated_z_scores() {
+        /// `U = 2 · Binomial(m, 1/4)` where `m = floor(n/2)` is the number of
+        /// mirror pairs — the centre column of an odd span is not one, and over
+        /// an A/C/G/T alphabet can never coincide (a self-complementary IUPAC
+        /// code such as `N` does, which is why the model is stated over A/C/G/T).
+        fn moments(n: usize) -> (f64, f64) {
+            let m = (n / 2) as f64;
+            (m / 2.0, (3.0 * m / 4.0).sqrt())
+        }
+
+        // (span, unchanged columns, the z the doc's table states)
+        for (n, unchanged, tabulated) in [
+            (6usize, 4.0, 1.67), // `AAGCTA -> TAGCTT`, the #1040 control
+            (8, 4.0, 1.15),      // `AATGCACA -> TGTGCATT` (#1517)
+            (457, 150.0, 2.75),  // #1461, and the only odd span of the three
+        ] {
+            let (mean, sd) = moments(n);
+            let z = (unchanged - mean) / sd;
+            assert!(
+                (z - tabulated).abs() < 0.005,
+                "n = {n}: the stated moments give z = {z:.4}, but the table says {tabulated}"
+            );
+        }
+
+        // The discriminating half. Restating the moments in `n` alone is the
+        // mistake being fixed, so pin that the two forms genuinely disagree —
+        // otherwise the simpler-looking `n/4` reads as an equivalent rewrite.
+        assert_eq!(moments(8), (2.0, 3f64.sqrt()), "even n: m/2 == n/4");
+        let (odd_mean, _) = moments(457);
+        assert_eq!(odd_mean, 114.0);
+        assert_ne!(
+            odd_mean,
+            457.0 / 4.0,
+            "an odd span's centre column is unpaired, so `n/4` overstates the mean"
+        );
     }
 
     // ------------------------------------------------------------------
