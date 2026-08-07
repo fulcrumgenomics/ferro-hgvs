@@ -8,12 +8,19 @@ on:
       - '.github/actionlint.yaml'
   # No `branches:` filter — see the note in `ci.yml`. It matches the pull
   # request's base, so a stacked PR editing a workflow skipped actionlint
-  # entirely. The `paths:` filter below is kept: it matches changed files,
-  # not the base, and is the point of this workflow.
+  # entirely.
+  #
+  # And no `paths:` filter, deliberately, even though this job only ever has
+  # something to say about `.github/`. A `paths:` filter that does not match
+  # means the workflow never runs, and a workflow that never runs reports no
+  # check at all — which is indistinguishable, to a required-status-check rule,
+  # from a check that simply has not finished. So while the filter was here,
+  # making `zizmor + actionlint` a required context on `main` left every PR that
+  # touched no workflow stuck on "Expected — waiting for status to be reported"
+  # and permanently unmergeable. Linting the workflows on a PR that changed none
+  # of them costs well under a minute and buys a context that always reports,
+  # which is the price of being able to require it.
   pull_request:
-    paths:
-      - '.github/workflows/**'
-      - '.github/actionlint.yaml'
 
 permissions:
   contents: read
