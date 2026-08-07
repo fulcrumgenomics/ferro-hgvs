@@ -805,19 +805,104 @@ mod decisions {
     const NON_CONFLUENT: &str = "non-confluent";
     const NOT_EVALUABLE: &str = "not-evaluable";
 
+    /// True when `head` — the text before a target's first colon — is a
+    /// reference accession rather than the opening of a bare coordinate
+    /// fragment.
+    ///
+    /// HGVS puts the coordinate system immediately after the reference's colon,
+    /// so a fragment carrying no accession *begins* with one of the
+    /// single-letter descriptors followed by a dot. Anything else in that
+    /// position is the reference — accessions (`NC_000023.11`, `LRG_199t1`,
+    /// `NM_004006.2`) never take that shape.
+    fn is_accession(head: &str) -> bool {
+        !matches!(
+            head.as_bytes(),
+            [b'g' | b'o' | b'm' | b'c' | b'n' | b'r' | b'p', b'.', ..]
+        )
+    }
+
     /// Re-anchor `target` onto `reference`, replacing any accession it carries.
     ///
     /// The accession is everything before the **first** colon, which is where
     /// HGVS puts it; a colon later in the string belongs to an inner reference
     /// (`g.10_11ins[NC_…:g.20_30]`) and must be left alone.
+    ///
+    /// The first colon only delimits the accession when something
+    /// accession-shaped precedes it (#1530). A member that is a bare fragment
+    /// *and* carries an inner reference — `g.10_11ins[NC_2.1:g.20_30]` — puts
+    /// the inner colon first, and splitting there yields `X.1:g.20_30`: a
+    /// different, still well-formed variant, so nothing downstream would catch
+    /// it. Latent while every curated member reaches here with a leading
+    /// accession via `input_prefixed`; gated now rather than when it goes live.
+    ///
+    /// This is the same defect `spec_harvest::prefix::default_prefixed` fixed
+    /// for the harvester in #955 — an inner `[…:<sys>.…]` read as the variant's
+    /// own accession — arrived at from the opposite side: there a bare fragment
+    /// was wrongly judged *already* prefixed, here it is wrongly *re*-anchored.
     fn anchor(target: &str, reference: Option<&str>) -> String {
         match reference {
             None => target.to_string(),
             Some(accession) => match target.split_once(':') {
-                Some((_, rest)) => format!("{accession}:{rest}"),
-                None => format!("{accession}:{target}"),
+                Some((head, rest)) if is_accession(head) => format!("{accession}:{rest}"),
+                _ => format!("{accession}:{target}"),
             },
         }
+    }
+
+    /// Fail unless a ruling record is well formed *as a record* — everything
+    /// that can be judged from the record alone, with no spec checkout and no
+    /// fixture rows.
+    ///
+    /// Extracted so it can be unit-tested directly. The committed consumer
+    /// `ruling_records_are_intact` asserts exactly these properties; a gate that
+    /// is weaker than the test it backstops lets a malformed record into the
+    /// artifact and only fails later, at the far end of the build.
+    fn validate_ruling_shape(owner: &str, ruling: &overrides::Ruling) -> anyhow::Result<()> {
+        if ruling.rationale.trim().is_empty() {
+            anyhow::bail!("{owner}: a ruling record must say why");
+        }
+        if ruling.clauses.is_empty() {
+            anyhow::bail!("{owner}: a ruling record must cite at least one clause");
+        }
+        let cited: BTreeSet<&str> = ruling.clauses.iter().map(|c| c.clause.as_str()).collect();
+        for role in ruling.governing.iter().chain(ruling.deviates_from.iter()) {
+            if !cited.contains(role.as_str()) {
+                anyhow::bail!(
+                    "{owner}: names {role:?} as governing or deviated-from, but that clause is \
+                     not in `clauses` — every role must point at a cited, quote-verified clause"
+                );
+            }
+        }
+        match ruling.status {
+            overrides::RulingStatus::Decided if ruling.governing.is_none() => {
+                anyhow::bail!("{owner}: a `decided` ruling must name the clause it holds to govern")
+            }
+            // The whole point of the `undecided` state is that nobody has
+            // ruled. A governing clause — or a deviated-from one, which
+            // implies a side was chosen — is an invented ruling, so it is a
+            // build failure rather than a lint.
+            overrides::RulingStatus::Undecided
+                if ruling.governing.is_some() || !ruling.deviates_from.is_empty() =>
+            {
+                anyhow::bail!(
+                    "{owner}: an `undecided` ruling must not name a governing or deviated-from \
+                     clause — record the conflict, not a ruling nobody made"
+                )
+            }
+            // The other half of the same rule, and the half this gate was
+            // missing (#1530): `undecided` asserts that clauses *conflict*, so a
+            // record citing one clause states no conflict — it states a position
+            // while declining to name it as one. Only the `decided` arm may cite
+            // a single clause, where it is a settled carve-out naming the clause
+            // it applies.
+            overrides::RulingStatus::Undecided if ruling.clauses.len() < 2 => anyhow::bail!(
+                "{owner}: an `undecided` ruling cites {} clause(s); an unsettled question needs \
+                 both sides on the record",
+                ruling.clauses.len()
+            ),
+            _ => {}
+        }
+        Ok(())
     }
 
     /// Split a `path:line` or `path:start-end` clause into its parts.
@@ -972,41 +1057,9 @@ mod decisions {
             if !seen_rulings.insert(ruling.id.as_str()) {
                 anyhow::bail!("{owner}: duplicate id");
             }
-            if ruling.rationale.trim().is_empty() {
-                anyhow::bail!("{owner}: a ruling record must say why");
-            }
-            if ruling.clauses.is_empty() {
-                anyhow::bail!("{owner}: a ruling record must cite at least one clause");
-            }
+            validate_ruling_shape(&owner, ruling)?;
             for citation in &ruling.clauses {
                 verify_citation(spec_dir, &owner, citation)?;
-            }
-            let cited: BTreeSet<&str> = ruling.clauses.iter().map(|c| c.clause.as_str()).collect();
-            for role in ruling.governing.iter().chain(ruling.deviates_from.iter()) {
-                if !cited.contains(role.as_str()) {
-                    anyhow::bail!(
-                        "{owner}: names {role:?} as governing or deviated-from, but that clause is \
-                         not in `clauses` — every role must point at a cited, quote-verified clause"
-                    );
-                }
-            }
-            match ruling.status {
-                overrides::RulingStatus::Decided if ruling.governing.is_none() => anyhow::bail!(
-                    "{owner}: a `decided` ruling must name the clause it holds to govern"
-                ),
-                // The whole point of the `undecided` state is that nobody has
-                // ruled. A governing clause — or a deviated-from one, which
-                // implies a side was chosen — is an invented ruling, so it is a
-                // build failure rather than a lint.
-                overrides::RulingStatus::Undecided
-                    if ruling.governing.is_some() || !ruling.deviates_from.is_empty() =>
-                {
-                    anyhow::bail!(
-                        "{owner}: an `undecided` ruling must not name a governing or deviated-from \
-                         clause — record the conflict, not a ruling nobody made"
-                    )
-                }
-                _ => {}
             }
             for input in &ruling.applies_to {
                 if !by_input.contains_key(input.as_str()) {
@@ -1059,6 +1112,124 @@ mod decisions {
                 "X.1:c.235_237delinsTAT"
             );
             assert_eq!(anchor("NM_1.1:c.1del", None), "NM_1.1:c.1del");
+        }
+
+        /// The discriminating case for [`anchor`]: a member with **no** leading
+        /// accession whose only colon is an inner reference's. `split_once(':')`
+        /// alone splits there and returns a different variant
+        /// (`X.1:g.20_30`) — silently, since the result is still well-formed.
+        #[test]
+        fn anchor_prefixes_a_bare_fragment_that_carries_an_inner_reference() {
+            assert_eq!(
+                anchor("g.10_11ins[NC_2.1:g.20_30]", Some("X.1")),
+                "X.1:g.10_11ins[NC_2.1:g.20_30]"
+            );
+            // Every coordinate-system descriptor, so the shape test cannot be
+            // narrowed to the one letter this case happens to use.
+            for prefix in ["g", "o", "m", "c", "n", "r", "p"] {
+                assert_eq!(
+                    anchor(&format!("{prefix}.1_2ins[NC_2.1:g.20_30]"), Some("X.1")),
+                    format!("X.1:{prefix}.1_2ins[NC_2.1:g.20_30]")
+                );
+            }
+            // …and the converse still holds: a *real* leading accession is
+            // replaced, not prefixed, even though it too precedes a colon.
+            assert_eq!(
+                anchor("NC_1.1:g.10_11ins[NC_2.1:g.20_30]", Some("X.1")),
+                "X.1:g.10_11ins[NC_2.1:g.20_30]"
+            );
+        }
+
+        fn citation(clause: &str) -> overrides::Citation {
+            overrides::Citation {
+                clause: clause.to_string(),
+                quote: "quoted".to_string(),
+            }
+        }
+
+        fn ruling(
+            status: overrides::RulingStatus,
+            clauses: &[&str],
+            governing: Option<&str>,
+            deviates_from: &[&str],
+        ) -> overrides::Ruling {
+            overrides::Ruling {
+                id: "r".to_string(),
+                question: "q".to_string(),
+                status,
+                clauses: clauses.iter().map(|c| citation(c)).collect(),
+                governing: governing.map(str::to_string),
+                deviates_from: deviates_from.iter().map(|c| c.to_string()).collect(),
+                rationale: "because".to_string(),
+                applies_to: Vec::new(),
+                equivalence_classes: Vec::new(),
+            }
+        }
+
+        /// The gate this module exists to be: the *build* must refuse every
+        /// malformed ruling that `ruling_records_are_intact` refuses, or the
+        /// committed test is stricter than the generator that backstops it.
+        #[test]
+        fn an_undecided_ruling_must_put_both_sides_on_the_record() {
+            use overrides::RulingStatus::{Decided, Undecided};
+
+            // The one the generator used to let through: `undecided` is a claim
+            // that two clauses conflict, so a single citation states no conflict.
+            assert!(
+                validate_ruling_shape("r", &ruling(Undecided, &["a.md:1"], None, &[])).is_err()
+            );
+            assert!(validate_ruling_shape(
+                "r",
+                &ruling(Undecided, &["a.md:1", "b.md:2"], None, &[])
+            )
+            .is_ok());
+
+            // Already gated, re-asserted here so the arm cannot be rewritten in
+            // terms of the clause count alone.
+            assert!(validate_ruling_shape(
+                "r",
+                &ruling(Undecided, &["a.md:1", "b.md:2"], Some("a.md:1"), &[])
+            )
+            .is_err());
+            assert!(validate_ruling_shape(
+                "r",
+                &ruling(Undecided, &["a.md:1", "b.md:2"], None, &["a.md:1"])
+            )
+            .is_err());
+
+            // A `decided` record *may* cite one clause — a settled carve-out
+            // names only the clause it applies. The two-clause rule is the
+            // undecided arm's alone.
+            assert!(
+                validate_ruling_shape("r", &ruling(Decided, &["a.md:1"], Some("a.md:1"), &[]))
+                    .is_ok()
+            );
+            assert!(validate_ruling_shape("r", &ruling(Decided, &["a.md:1"], None, &[])).is_err());
+        }
+
+        #[test]
+        fn every_named_role_must_be_a_cited_clause() {
+            use overrides::RulingStatus::Decided;
+            assert!(
+                validate_ruling_shape("r", &ruling(Decided, &["a.md:1"], Some("z.md:9"), &[]))
+                    .is_err()
+            );
+            assert!(validate_ruling_shape(
+                "r",
+                &ruling(Decided, &["a.md:1"], Some("a.md:1"), &["z.md:9"])
+            )
+            .is_err());
+        }
+
+        #[test]
+        fn a_ruling_must_cite_a_clause_and_say_why() {
+            use overrides::RulingStatus::Decided;
+            assert!(
+                validate_ruling_shape("r", &ruling(Decided, &[], Some("a.md:1"), &[])).is_err()
+            );
+            let mut silent = ruling(Decided, &["a.md:1"], Some("a.md:1"), &[]);
+            silent.rationale = "   ".to_string();
+            assert!(validate_ruling_shape("r", &silent).is_err());
         }
 
         #[test]

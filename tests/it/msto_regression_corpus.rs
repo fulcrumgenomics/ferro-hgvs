@@ -12,10 +12,13 @@
 //! [`MSTO_ISSUES`] enumerates every issue `msto` has filed against
 //! `fulcrumgenomics/ferro-hgvs` (`gh issue list --author msto --state all`)
 //! and, for each, the test functions that reference it by number
-//! (`issue_<N>`, `#<N>`, or `issue #<N>`, either in the function's own name
-//! or in a comment immediately above it). Where no such test exists, the
-//! `tests` slice is empty — that is itself the finding for a `high`-labeled
-//! issue, per [`no_high_priority_issue_is_unguarded_without_being_named`].
+//! (`issue_<N>`, `#<N>`, or `issue #<N>`) — in the function's own name, in a
+//! comment immediately above it, or, for a module that is one issue family end
+//! to end, in that module's doc. The two sections below record why the
+//! module-doc form was admitted and where it is *not* claimed. Where no such
+//! reference exists the `tests` slice is empty — that is itself the finding for
+//! a `high`-labeled issue, per
+//! [`no_high_priority_issue_is_unguarded_without_being_named`].
 //!
 //! ## Python guards count, and used not to
 //!
@@ -79,16 +82,19 @@
 //! pair at all. There is no string to pin.
 //!
 //! What it can be measured by is whether each of its three stages holds as a
-//! property, so its slice names one guard per stage rather than a reproduction.
+//! property, so its slice names one *or more* guards per stage rather than a
+//! reproduction — currently two, three and two, plus one whole-proposal census.
 //! See [`issue_1430_is_measured_by_a_property_not_by_an_expected_output`], which
 //! pins that reading so it cannot quietly be replaced by an ordinary
-//! input/expected row.
+//! input/expected row. What it requires is that no stage is left uncovered, not
+//! that any stage carry a particular number of guards.
 //!
 //! ## A citation is not a guarantee that the test guards the issue
 //!
-//! The attribution rule is mechanical — `#<N>` in the function's name or in the
-//! comment above it — and that is deliberate, because a judgement-based rule
-//! rots faster than the thing it describes. But mechanical means it also catches
+//! The attribution rule is mechanical — `#<N>` in the function's name, in the
+//! comment above it, or in the doc of a module that is one issue family end to
+//! end — and that is deliberate, because a judgement-based rule rots faster
+//! than the thing it describes. But mechanical means it also catches
 //! *cross-references*: a test whose comment names an issue to explain why the
 //! fixture was built a certain way, or as a historical aside, reads identically
 //! to a test that reproduces it.
@@ -164,8 +170,9 @@ struct MstoIssue {
     /// Issue state as of the last `gh issue list` enumeration.
     state: State,
     /// `(repo-relative file path, test function name)` pairs that reference
-    /// this issue number in the function's own name or in a comment
-    /// immediately above it. Empty means no such test was found.
+    /// this issue number in the function's own name, in a comment immediately
+    /// above it, or — where the whole module is one issue family — in that
+    /// module's doc. Empty means no such reference was found.
     tests: &'static [(&'static str, &'static str)],
     /// One-line mechanism note for the eleven issues the sequence-first
     /// migration review flagged as at risk. `None` for every other issue.
@@ -176,11 +183,17 @@ struct MstoIssue {
 /// (`gh issue list -R fulcrumgenomics/ferro-hgvs --state all --author msto`),
 /// mapped to the tests that reference it by number.
 ///
-/// Assembled by searching `tests/` and `src/` for `issue_<N>`, `#<N>`, and
-/// `issue #<N>` occurring in a test function's own name or in a comment
-/// directly above it. This is a name-based search: a test that exercises an
-/// issue's behavior without ever citing the issue number is not in this
-/// table.
+/// Assembled by searching `tests/` (Rust and Python) and `src/` for
+/// `issue_<N>`, `#<N>`, and `issue #<N>` occurring in a test function's own
+/// name, in a comment directly above it, or in the doc of a module that is one
+/// issue family end to end. This is a *citation*-based search: a test that
+/// exercises an issue's behavior without the number appearing in any of those
+/// three places is not in this table.
+///
+/// The module-doc form is not a loophole — it is claimed only where the module
+/// really is about one issue family, which is how the bindings' guards and the
+/// two `reported_*` tables are written. See the module doc for both cases and
+/// for the one it deliberately does not reach (#200).
 #[rustfmt::skip]
 static MSTO_ISSUES: &[MstoIssue] = &[
     MstoIssue { number: 30, high: false, state: State::Closed, tests: &[], note: None },
@@ -269,7 +282,8 @@ static MSTO_ISSUES: &[MstoIssue] = &[
     MstoIssue { number: 1419, high: true, state: State::Open, tests: &[("tests/it/reported_confluence_pairs.rs", "every_reported_output_is_a_fixed_point"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged"), ("tests/it/reported_partition_verdicts.rs", "each_pair_reaches_its_canonical_form_from_exactly_one_spelling"), ("tests/it/reported_partition_verdicts.rs", "every_canonical_row_already_prints_its_wanted_form"), ("tests/it/reported_partition_verdicts.rs", "every_gap_row_is_returned_exactly_as_authored"), ("tests/it/reported_partition_verdicts.rs", "every_reported_pair_is_still_one_variant_by_equivalence"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_normalizes_as_recorded_under_five_prime"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_still_normalizes_as_the_reports_recorded"), ("tests/it/reported_partition_verdicts.rs", "only_the_named_rows_answer_differently_in_the_two_directions"), ("tests/it/reported_partition_verdicts.rs", "reference_bases_are_what_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "the_open_gap_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_spec_authority_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_two_reported_modules_describe_the_same_pairs"), ("tests/it/reported_partition_verdicts.rs", "the_wanted_form_of_every_gap_row_is_its_siblings_output")], note: None },
     MstoIssue { number: 1420, high: true, state: State::Open, tests: &[("tests/it/reported_confluence_pairs.rs", "every_reported_output_is_a_fixed_point"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged"), ("tests/it/reported_partition_verdicts.rs", "each_pair_reaches_its_canonical_form_from_exactly_one_spelling"), ("tests/it/reported_partition_verdicts.rs", "every_canonical_row_already_prints_its_wanted_form"), ("tests/it/reported_partition_verdicts.rs", "every_gap_row_is_returned_exactly_as_authored"), ("tests/it/reported_partition_verdicts.rs", "every_reported_pair_is_still_one_variant_by_equivalence"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_normalizes_as_recorded_under_five_prime"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_still_normalizes_as_the_reports_recorded"), ("tests/it/reported_partition_verdicts.rs", "only_the_named_rows_answer_differently_in_the_two_directions"), ("tests/it/reported_partition_verdicts.rs", "reference_bases_are_what_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "reported_spans_change_the_columns_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "the_open_gap_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_spec_authority_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_two_reported_modules_describe_the_same_pairs"), ("tests/it/reported_partition_verdicts.rs", "the_wanted_form_of_every_gap_row_is_its_siblings_output")], note: None },
     MstoIssue { number: 1421, high: true, state: State::Open, tests: &[("tests/it/reported_confluence_pairs.rs", "every_reported_output_is_a_fixed_point"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged"), ("tests/it/reported_partition_verdicts.rs", "each_pair_reaches_its_canonical_form_from_exactly_one_spelling"), ("tests/it/reported_partition_verdicts.rs", "every_canonical_row_already_prints_its_wanted_form"), ("tests/it/reported_partition_verdicts.rs", "every_gap_row_is_returned_exactly_as_authored"), ("tests/it/reported_partition_verdicts.rs", "every_reported_pair_is_still_one_variant_by_equivalence"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_normalizes_as_recorded_under_five_prime"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_still_normalizes_as_the_reports_recorded"), ("tests/it/reported_partition_verdicts.rs", "only_the_named_rows_answer_differently_in_the_two_directions"), ("tests/it/reported_partition_verdicts.rs", "reference_bases_are_what_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "the_1421_spans_separate_by_two_nucleotides_not_one"), ("tests/it/reported_partition_verdicts.rs", "the_open_gap_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_spec_authority_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_two_reported_modules_describe_the_same_pairs"), ("tests/it/reported_partition_verdicts.rs", "the_wanted_form_of_every_gap_row_is_its_siblings_output")], note: None },
-    // #1430's slice is one guard per proposed stage, not a reproduction — see
+    // #1430's slice is one or more guards per proposed stage, not a
+    // reproduction — see
     // `issue_1430_is_measured_by_a_property_not_by_an_expected_output`.
     MstoIssue { number: 1430, high: true, state: State::Open, tests: &[("src/normalize/merge.rs", "the_coalesce_pass_merges_a_payload_alignment_split"), ("src/normalize/merge.rs", "the_coalesce_pass_reaches_the_spec_worked_example"), ("src/normalize/seqfirst/partition.rs", "canonical_members_claim_exactly_the_blocks_edit_distance"), ("src/normalize/seqfirst/partition.rs", "canonical_members_rebuild_the_alternate_block"), ("src/normalize/seqfirst/partition.rs", "round_trips_exhaustively_over_a_small_alphabet"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged")], note: None },
 ];
