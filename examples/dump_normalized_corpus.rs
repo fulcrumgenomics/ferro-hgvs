@@ -83,6 +83,19 @@
 //!    brings its own designed references because a random core cannot be asked to
 //!    have a coincidence pattern.
 //!
+//! ## One family knows its own ground truth, and that buys three oracles
+//!
+//! Everything above measures **movement** — two dumps, one diff — and never
+//! whether an output is *right*. Thirteen of the fifteen families cannot be asked:
+//! they are sets of descriptions with no record of what the description was meant
+//! to denote. `separated_revcomp_runs` is built the other way round, choosing the
+//! alternate first and deriving the reference around it, so `(reference,
+//! alternate)` is exact for every row. The test module turns that into three real
+//! oracles — sequence preservation, confluence, and separation-rule conformance —
+//! and two of the three are currently red against `main`. Read their doc comments
+//! before quoting them; each records what it measured and which half of its
+//! finding is a settled defect and which is an open decision.
+//!
 //! ## The corpus is deliberately independent of `tests/it/common/`
 //!
 //! An example cannot reach test helpers, so the reference construction below is its
@@ -2377,8 +2390,45 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // `separated_revcomp_runs` — the family
+    // `separated_revcomp_runs` — the family, and the three oracles it enables
     // ----------------------------------------------------------------------
+    //
+    // Everything above measures *movement*: two dumps, one diff, "did this change
+    // the output". Nothing above ever asks whether an output is **right**, and for
+    // thirteen of the fifteen families it cannot — they are sets of descriptions,
+    // with no record of what the description was meant to denote.
+    //
+    // `separated_revcomp_runs` is built the other way round: the generator picks
+    // the alternate first (`revcomp(span)`) and derives the reference around it, so
+    // `(reference, alternate)` is known exactly for every row. That makes three
+    // real oracles available for free, and each of them can catch a class of defect
+    // a movement count cannot see:
+    //
+    // 1. **apply** — the output denotes the intended bases. #1416, #1453 and #1431
+    //    were each an output that denoted the wrong sequence or none at all, and
+    //    each was found by hand.
+    // 2. **confluence** — the three spellings of one design agree, and their common
+    //    answer is a fixed point.
+    // 3. **separation** — the members obey `general.md:34`/`:35`, checked against
+    //    the sequence rather than against a pinned string.
+
+    /// Run `f` over every row `separated_revcomp_runs` contributes to a dump.
+    ///
+    /// Deliberately re-derives the rows rather than filtering [`dump`]: the oracles
+    /// need the *design* behind each row — its span, its intended alternate, its run
+    /// layout — and a `Row` carries only a label.
+    fn for_each_revcomp_row(
+        mut f: impl FnMut(&RevcompDesign, &'static str, &'static str, &str, &str),
+    ) {
+        for design in revcomp_designs() {
+            for (axis, direction, dir_label) in axes_and_directions() {
+                for input in revcomp_inputs_for(axis, &design) {
+                    let output = normalize_one(axis, &design.core, &input, direction);
+                    f(&design, axis, dir_label, &input, &output);
+                }
+            }
+        }
+    }
 
     /// The designed blocks really do have the run structure their parameters claim.
     ///
@@ -2462,6 +2512,888 @@ mod tests {
                 "NC_TEST.1:g.257_264delinsTGTGCATT".to_string(),
                 "NC_TEST.1:g.[257_258delinsTG;263_264delinsTT]".to_string(),
             ]
+        );
+    }
+
+    /// An odd separation needs three runs, and that is a fact about reverse
+    /// complements rather than a quirk of the five literals.
+    ///
+    /// Exhaustive over every block of length <= 8 with exactly two changed runs:
+    /// none of them has an odd gap. If this ever finds one, the argument in
+    /// [`revcomp_span`]'s docs is wrong and the three-run layout it justifies is
+    /// unnecessary.
+    #[test]
+    fn two_changed_runs_can_never_be_an_odd_number_of_columns_apart() {
+        let mut odd_gaps_seen: Vec<String> = Vec::new();
+        let mut spans: Vec<Vec<u8>> = vec![Vec::new()];
+        for _ in 0..8 {
+            spans = spans
+                .iter()
+                .flat_map(|span| {
+                    b"ACGT".iter().map(|base| {
+                        let mut wider = span.clone();
+                        wider.push(*base);
+                        wider
+                    })
+                })
+                .collect();
+            for span in &spans {
+                let text = std::str::from_utf8(span).expect("ACGT is valid UTF-8");
+                let alternate = revcomp(text);
+                let changed: Vec<bool> = span
+                    .iter()
+                    .zip(alternate.as_bytes())
+                    .map(|(r, a)| r != a)
+                    .collect();
+                let runs = changed_runs(&changed);
+                if runs.len() != 2 {
+                    continue;
+                }
+                let gap = runs[1].0 - (runs[0].0 + runs[0].1);
+                if !gap.is_multiple_of(2) {
+                    odd_gaps_seen.push(format!("{text} -> {alternate} (gap {gap})"));
+                }
+            }
+        }
+        assert!(
+            odd_gaps_seen.is_empty(),
+            "a two-run block with an odd gap exists, so `revcomp_span`'s parity argument — \
+             and the three-run layout it justifies — is wrong: {odd_gaps_seen:?}"
+        );
+    }
+
+    /// Maximal runs of `true`, as `(offset, length)` — edges included.
+    ///
+    /// The sibling of [`interior_runs`], which drops the edge runs on purpose. A
+    /// *changed* run at the edge of a block is ordinary (a minimal block starts and
+    /// ends changed), whereas an *unchanged* run at the edge is an untrimmed flank,
+    /// which is why the two functions differ.
+    fn changed_runs(flags: &[bool]) -> Vec<(usize, usize)> {
+        let mut runs = Vec::new();
+        let mut i = 0;
+        while i < flags.len() {
+            if !flags[i] {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < flags.len() && flags[i] {
+                i += 1;
+            }
+            runs.push((start, i - start));
+        }
+        runs
+    }
+
+    /// Gaps between **multi-column** changed runs of every reverse-complement block
+    /// `input` names, in unchanged reference columns.
+    ///
+    /// A member counts as a reverse-complement block when its inserted bases are the
+    /// reverse complement of the bases it replaces — however it is spelled, so an
+    /// `inv` and the `delins` that says the same thing both qualify. Only gaps whose
+    /// *both* flanking runs are at least [`REVCOMP_RUN_WIDTH`] columns are reported,
+    /// which is precisely the shape a gate keyed on "multi-column pieces at a
+    /// separation" engages on.
+    ///
+    /// A block with one changed run contributes nothing, so the separation-0 design
+    /// does not appear here — adjacency *is* one run, which is the content of the
+    /// merge rule rather than a gap in the measurement.
+    fn separated_revcomp_gaps(input: &str, core: &str) -> Vec<usize> {
+        let Ok(variant) = parse_hgvs(input) else {
+            return Vec::new();
+        };
+        let Ok(facts) = member_facts_of(&variant, &genomic_provider(core)) else {
+            return Vec::new();
+        };
+        let mut gaps = Vec::new();
+        for member in &facts {
+            if member.reference.is_empty() || member.alternate != revcomp(&member.reference) {
+                continue;
+            }
+            let changed: Vec<bool> = member
+                .reference
+                .bytes()
+                .zip(member.alternate.bytes())
+                .map(|(r, a)| r != a)
+                .collect();
+            gaps.extend(changed_runs(&changed).windows(2).filter_map(|pair| {
+                let ((start, len), (next, next_len)) = (pair[0], pair[1]);
+                (len >= REVCOMP_RUN_WIDTH && next_len >= REVCOMP_RUN_WIDTH)
+                    .then(|| next - (start + len))
+            }));
+        }
+        gaps
+    }
+
+    /// No other family builds a reverse-complement block whose multi-column changed
+    /// runs are separated at all.
+    ///
+    /// This is the structural claim the family exists to fix, asserted rather than
+    /// argued. `delins_hiding_an_inversion` is the only other family that builds a
+    /// reverse-complement piece and its pieces are three columns wide and adjacent;
+    /// `long_block_inversion` builds a kilobase one, but its perturbations are
+    /// *single*-column runs. So a gate keyed on multi-column pieces at a separation
+    /// engaged on no row of this corpus, and a change to one measured `0 of 78,028`
+    /// for structural reasons rather than safe ones.
+    ///
+    /// The second half is what keeps the first honest: the new family really does
+    /// reach every separation it claims. Separation 0 is excluded there because it
+    /// is not a gap — two adjacent runs are one run — and that is the merge case,
+    /// not a hole.
+    #[test]
+    fn only_this_family_separates_the_runs_of_a_reverse_complement_block() {
+        let core = &corpus_sequences(1)[0];
+        for (family, _) in FAMILIES {
+            for input in inputs_for(family, "g", core) {
+                assert!(
+                    separated_revcomp_gaps(&input, core).is_empty(),
+                    "family {family} already builds a separated reverse-complement block \
+                     ({input}), so the structural gap this family was added for has moved"
+                );
+            }
+        }
+        for (_, long_core) in long_corpus_sequences() {
+            for input in long_inputs_for("g", &long_core) {
+                assert!(
+                    separated_revcomp_gaps(&input, &long_core).is_empty(),
+                    "{} already builds a separated reverse-complement block",
+                    LONG_FAMILY.0
+                );
+            }
+        }
+
+        let reached: std::collections::BTreeSet<usize> = revcomp_designs()
+            .iter()
+            .flat_map(|design| {
+                revcomp_inputs_for("g", design)
+                    .into_iter()
+                    .flat_map(|input| separated_revcomp_gaps(&input, &design.core))
+            })
+            .collect();
+        assert_eq!(
+            reached,
+            REVCOMP_SEPARATIONS
+                .iter()
+                .copied()
+                .filter(|separation| *separation > 0)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "the family does not reach every separation it claims"
+        );
+        // …and separation 0 is present as the one shape that has no gap at all.
+        let merged = revcomp_designs()
+            .into_iter()
+            .find(|design| design.separation == 0)
+            .expect("the separation-0 design exists");
+        let changed: Vec<bool> = merged
+            .span
+            .bytes()
+            .zip(merged.alternate.bytes())
+            .map(|(r, a)| r != a)
+            .collect();
+        assert_eq!(
+            changed_runs(&changed),
+            vec![(0, 2 * REVCOMP_RUN_WIDTH)],
+            "the separation-0 design must present as one run, which is what adjacency means"
+        );
+    }
+
+    // -- Oracle 1: sequence preservation -----------------------------------
+
+    /// Where a design's core sits inside the sequence `accession` serves.
+    ///
+    /// `None` for the multi-exon *contig*, where the core is interleaved with
+    /// introns and so is not one contiguous run — a single offset cannot describe
+    /// it, and guessing one would compare the wrong bases while still producing a
+    /// verdict.
+    fn reference_frame(accession: &str, core: &str) -> Option<(String, usize)> {
+        match accession {
+            GENOMIC_CONTIG | TX_CONTIG => Some((padded(core), PAD_OFFSET)),
+            TX_ACCESSION | TX_MULTI_ACCESSION => Some((core.to_string(), 0)),
+            _ => None,
+        }
+    }
+
+    /// What the apply oracle concluded about one row.
+    #[derive(Debug)]
+    enum ApplyVerdict {
+        /// Applying the normalized output to the reference reproduces the alternate
+        /// the generator intended.
+        Preserved,
+        /// It reproduces something else — the defect class this oracle exists for.
+        Wrong { got: String, want: String },
+        /// It could not be applied, so the question has no answer here. Not a
+        /// failure: `apply_to_reference` declines an allele whose members overlap,
+        /// and a normalized output can be a sentinel like `<declined>`.
+        Unapplicable(String),
+    }
+
+    /// Apply `output` to the design's reference and compare with `design.alternate`.
+    ///
+    /// This is the oracle a movement count cannot be: it asks what the output
+    /// *means*, against a ground truth the generator wrote down before the
+    /// normalizer ever ran. Comparing the output against its own input instead —
+    /// which is what `--verify-spdi` does — cannot catch a spelling that was already
+    /// wrong on the way in, and cannot say which of two disagreeing spellings is
+    /// the wrong one.
+    fn apply_verdict(axis: &str, design: &RevcompDesign, output: &str) -> ApplyVerdict {
+        let Ok(variant) = parse_hgvs(output) else {
+            return ApplyVerdict::Unapplicable(format!("output does not parse: {output}"));
+        };
+        let provider = provider_for(axis, &design.core);
+        let applied = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ferro_hgvs::spdi::apply_to_reference(&variant, &provider)
+        })) {
+            Ok(Ok(applied)) => applied,
+            Ok(Err(e)) => return ApplyVerdict::Unapplicable(e.to_string()),
+            Err(_) => return ApplyVerdict::Unapplicable("panicked while applying".to_string()),
+        };
+        let Some((sequence, base)) = reference_frame(&applied.accession, &design.core) else {
+            return ApplyVerdict::Unapplicable(format!(
+                "no contiguous frame for {}",
+                applied.accession
+            ));
+        };
+        let start = applied.start as usize;
+        let stop = start + applied.reference.len();
+        // A window that does not match the bases this frame serves means the two
+        // sides are talking about different sequences, and any verdict drawn from
+        // them would be about the wrong locus. Say so rather than compare.
+        if stop > sequence.len() || sequence[start..stop] != applied.reference {
+            return ApplyVerdict::Unapplicable(format!(
+                "the applied window {start}..{stop} does not match the reference frame"
+            ));
+        }
+        let got = format!(
+            "{}{}{}",
+            &sequence[..start],
+            applied.resulting,
+            &sequence[stop..]
+        );
+        let block = base + design.offset;
+        let want = format!(
+            "{}{}{}",
+            &sequence[..block],
+            design.alternate,
+            &sequence[block + design.span.len()..]
+        );
+        if got == want {
+            ApplyVerdict::Preserved
+        } else {
+            ApplyVerdict::Wrong { got, want }
+        }
+    }
+
+    /// **Oracle 1.** Every normalized output still denotes the bases the generator
+    /// intended.
+    ///
+    /// An output that denotes a different sequence — or none — is invisible to a
+    /// movement count, to the idempotency oracle (a wrong form can be a perfectly
+    /// stable fixed point) and to the re-parse oracle (a wrong form parses fine).
+    /// It has produced at least three filed defects here (#1416, #1453, #1431),
+    /// each found by hand. This is the check that sees it.
+    ///
+    /// **Green on the first run**: 270 of 270 rows applied and every one produced
+    /// the alternate the generator built; nothing was declined. That is a real
+    /// result rather than a vacuous one — the `preserved > 0` assertion below is
+    /// what stops a run where everything declined from reading as a clean bill of
+    /// health.
+    #[test]
+    fn every_normalized_output_denotes_the_intended_alternate() {
+        let mut preserved = 0usize;
+        let mut declined: Vec<String> = Vec::new();
+        let mut wrong: Vec<String> = Vec::new();
+        for_each_revcomp_row(|design, axis, direction, input, output| {
+            match apply_verdict(axis, design, output) {
+                ApplyVerdict::Preserved => preserved += 1,
+                // Kept, not merely counted: a run where *everything* declined
+                // would otherwise report a clean bill of health, and the reason
+                // is the only thing that distinguishes the two.
+                ApplyVerdict::Unapplicable(reason) => declined.push(reason),
+                ApplyVerdict::Wrong { got, want } => wrong.push(format!(
+                    "[{} {} {}] {input}\n      -> {output}\n      got  {got}\n      want {want}",
+                    design.label, axis, direction
+                )),
+            }
+        });
+        assert!(
+            wrong.is_empty(),
+            "{} normalized outputs denote bases other than the alternate the generator built \
+             ({preserved} preserved, {} unapplicable):\n{}",
+            wrong.len(),
+            declined.len(),
+            wrong.join("\n")
+        );
+        // A corpus where nothing could be applied would pass the assertion above
+        // while measuring nothing — the same "a zero is not a result" confusion the
+        // shape families were added to end, one level down.
+        assert!(
+            preserved > 0,
+            "no row could be applied at all, so this oracle measured nothing; the first \
+             declines were: {:?}",
+            declined.iter().take(5).collect::<Vec<_>>()
+        );
+    }
+
+    // -- Oracle 2: confluence ----------------------------------------------
+
+    /// **Oracle 2.** The three spellings of one design normalize to one string, and
+    /// that string is a fixed point.
+    ///
+    /// Both halves are needed and neither implies the other. Agreement alone is
+    /// satisfied by three spellings that all normalize to a form the normalizer
+    /// would move again on the next pass; a fixed point alone is satisfied by three
+    /// *different* stable answers. Asserting the pair is what makes this a
+    /// confluence property rather than a table of expected strings — nothing here
+    /// says which of the three forms should win.
+    /// **Currently red, deliberately.** Measured on the first run of this oracle,
+    /// over the 90 confluence classes the family builds (15 designs x 3 axes x 2
+    /// directions): **38 do not converge**, and **0 outputs fail the fixed-point
+    /// half**. So the failure is entirely disagreement between spellings, never
+    /// drift within one.
+    ///
+    /// The 38 fall out by axis, and the split is the finding:
+    ///
+    /// | axis | non-confluent classes of 30 |
+    /// |---|---:|
+    /// | `g.` | **0** |
+    /// | `c.` (single exon) | 14 |
+    /// | `cx.` (three exons, 5'UTR) | 24 |
+    ///
+    /// A reverse-complement block converges on the genomic axis and stops
+    /// converging on a coding reference, and every failing class crosses a CDS
+    /// boundary. Smallest reproducer — the separation-0 design at offset 0, whose
+    /// block is four bases and whose three spellings are three *distinct fixed
+    /// points*:
+    ///
+    /// ```text
+    /// NM_TESTX.1:c.-3_1inv                       ->  NM_TESTX.1:c.-3_1inv
+    /// NM_TESTX.1:c.-3_1delinsTGGT                ->  NM_TESTX.1:c.-3_1delinsTGGT
+    /// NM_TESTX.1:c.[-3_-2delinsTG;-1_1delinsGT]  ->  unchanged
+    /// ```
+    ///
+    /// The same three spellings on the single-exon coding reference all converge to
+    /// `NM_TEST.1:c.1_4inv`, so the block is not the problem — the 5'UTR crossing
+    /// is. At separation 1 the same thing happens one level down:
+    /// `NM_TEST.1:c.[9_10delinsTT;12_13delinsAA;15_*1delinsTT]` re-types the first
+    /// two members `inv` and leaves the third, the one straddling `CDS_END`, as a
+    /// `delins`.
+    ///
+    /// Part of this is #1517 (an `inv` spelling and a split spelling that are both
+    /// fixed points), but the axis dependence is not: #1517 is axis-neutral by its
+    /// own scope note, and `g.` is clean here. That half is unfiled.
+    ///
+    /// **Not weakened to pass.** Both halves are asserted together on purpose; a
+    /// version that only checked the fixed-point half would be green and would be
+    /// measuring nothing this family was added for.
+    #[test]
+    #[ignore = "red on first run: 38 of 90 confluence classes disagree, all on coding \
+                axes crossing a CDS boundary; see this test's docs"]
+    fn the_three_spellings_of_a_design_converge_to_one_fixed_point() {
+        let mut split: Vec<String> = Vec::new();
+        let mut drifting: Vec<String> = Vec::new();
+        for design in revcomp_designs() {
+            for (axis, direction, dir_label) in axes_and_directions() {
+                let inputs = revcomp_inputs_for(axis, &design);
+                let outputs: Vec<String> = inputs
+                    .iter()
+                    .map(|input| normalize_one(axis, &design.core, input, direction))
+                    .collect();
+                let distinct: std::collections::BTreeSet<&str> =
+                    outputs.iter().map(String::as_str).collect();
+                if distinct.len() > 1 {
+                    split.push(format!(
+                        "[{} {axis} {dir_label}] {} distinct outputs:\n{}",
+                        design.label,
+                        distinct.len(),
+                        inputs
+                            .iter()
+                            .zip(&outputs)
+                            .map(|(i, o)| format!("      {i}\n        -> {o}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ));
+                }
+                for output in &outputs {
+                    let again = normalize_one(axis, &design.core, output, direction);
+                    if &again != output {
+                        drifting.push(format!(
+                            "[{} {axis} {dir_label}] {output}\n        -> {again}",
+                            design.label
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            split.is_empty() && drifting.is_empty(),
+            "{} designs do not converge and {} outputs are not fixed points\n\
+             --- non-confluent ---\n{}\n--- not a fixed point ---\n{}",
+            split.len(),
+            drifting.len(),
+            split.join("\n"),
+            drifting.join("\n")
+        );
+    }
+
+    // -- Oracle 3: separation-rule conformance ------------------------------
+
+    /// One member of a normalized output, in its accession's own 0-based frame.
+    ///
+    /// **An insertion consumes no reference position.** Modelling every member as
+    /// the closed interval `[lo, hi]` and leaving an insertion's interval *empty*
+    /// (`lo = A + 1`, `hi = A`) is what makes the single formula
+    /// `sep = next.lo - prev.hi - 1` hold for every pair. Treating `A_B` as a
+    /// two-base consumed span instead double-counts the junction and shifts every
+    /// separation in the distribution by one — which invalidates the whole census,
+    /// not just the insertion rows.
+    struct MemberFacts {
+        lo: i64,
+        hi: i64,
+        reference: String,
+        alternate: String,
+    }
+
+    /// Read every member of `variant` as a [`MemberFacts`].
+    ///
+    /// Via SPDI rather than by decoding each `NaEdit` by hand: SPDI is already the
+    /// `(position, deleted, inserted)` triple this needs, it resolves the short
+    /// forms that name no bases (`del`, `dup`, `inv`) against the reference, and it
+    /// puts every axis in one frame — so a `c.` allele and a `g.` allele are
+    /// measured by the same arithmetic instead of by two decoders that can drift.
+    fn member_facts_of(
+        variant: &ferro_hgvs::HgvsVariant,
+        provider: &MockProvider,
+    ) -> Result<Vec<MemberFacts>, String> {
+        use ferro_hgvs::HgvsVariant;
+        let members: Vec<&HgvsVariant> = match variant {
+            HgvsVariant::Allele(allele) => allele.variants.iter().collect(),
+            other => vec![other],
+        };
+        let mut facts = Vec::with_capacity(members.len());
+        for member in members {
+            let spdi = ferro_hgvs::spdi::hgvs_to_spdi(member, provider)
+                .map_err(|e| format!("{member}: {e}"))?;
+            let lo = spdi.position as i64;
+            facts.push(MemberFacts {
+                lo,
+                hi: lo + spdi.deletion.len() as i64 - 1,
+                reference: spdi.deletion,
+                alternate: spdi.insertion,
+            });
+        }
+        facts.sort_by_key(|f| (f.lo, f.hi));
+        Ok(facts)
+    }
+
+    /// Which reference columns of `reference` are matched in **every** minimal
+    /// alignment of `reference` against `alternate`.
+    ///
+    /// A `delins` of unequal length has many minimal alignments, so "unchanged
+    /// interior" is alignment-dependent and a naive column-by-column comparison
+    /// invents violations that the description does not commit to. The rule used
+    /// here is the conservative one: a column counts as unchanged only when **no**
+    /// minimal-cost path consumes it — neither by deleting it nor by substituting
+    /// it. Forward and backward Levenshtein DP give exactly that, since a path
+    /// through column `i` costs `prefix(i, j) + step + suffix(i + 1, j')`, and the
+    /// column is free to be changed iff some `(j, step)` reaches the optimum.
+    ///
+    /// An insertion is deliberately not a way to "consume" a reference column: it
+    /// advances only the alternate, so it leaves the column matched.
+    ///
+    /// The direction of the conservatism matters. This can **under**-report — a
+    /// column changed in every alignment a human would draw may still be reachable
+    /// by some exotic minimal path — and it must never **over**-report, because a
+    /// violation claimed here is a claim that the description is wrong.
+    fn forced_unchanged(reference: &[u8], alternate: &[u8]) -> Vec<bool> {
+        let (n, m) = (reference.len(), alternate.len());
+        let idx = |i: usize, j: usize| i * (m + 1) + j;
+
+        let mut prefix = vec![0usize; (n + 1) * (m + 1)];
+        for i in 0..=n {
+            prefix[idx(i, 0)] = i;
+        }
+        for j in 0..=m {
+            prefix[idx(0, j)] = j;
+        }
+        for i in 1..=n {
+            for j in 1..=m {
+                let cost = usize::from(reference[i - 1] != alternate[j - 1]);
+                prefix[idx(i, j)] = (prefix[idx(i - 1, j)] + 1)
+                    .min(prefix[idx(i, j - 1)] + 1)
+                    .min(prefix[idx(i - 1, j - 1)] + cost);
+            }
+        }
+
+        let mut suffix = vec![0usize; (n + 1) * (m + 1)];
+        for i in 0..=n {
+            suffix[idx(i, m)] = n - i;
+        }
+        for j in 0..=m {
+            suffix[idx(n, j)] = m - j;
+        }
+        for i in (0..n).rev() {
+            for j in (0..m).rev() {
+                let cost = usize::from(reference[i] != alternate[j]);
+                suffix[idx(i, j)] = (suffix[idx(i + 1, j)] + 1)
+                    .min(suffix[idx(i, j + 1)] + 1)
+                    .min(suffix[idx(i + 1, j + 1)] + cost);
+            }
+        }
+
+        let distance = prefix[idx(n, m)];
+        (0..n)
+            .map(|i| {
+                let changeable = (0..=m).any(|j| {
+                    let before = prefix[idx(i, j)];
+                    // Delete reference[i].
+                    if before + 1 + suffix[idx(i + 1, j)] == distance {
+                        return true;
+                    }
+                    // Substitute reference[i] for alternate[j].
+                    j < m
+                        && reference[i] != alternate[j]
+                        && before + 1 + suffix[idx(i + 1, j + 1)] == distance
+                });
+                !changeable
+            })
+            .collect()
+    }
+
+    /// Maximal runs of `true` with a `false` on both sides, as `(offset, length)`.
+    ///
+    /// Interior only: a leading or trailing run of unchanged columns is a
+    /// description that failed to trim its own flanks, which is a different defect
+    /// with a different rule, and folding the two together would make each
+    /// unreadable.
+    fn interior_runs(flags: &[bool]) -> Vec<(usize, usize)> {
+        let mut runs = Vec::new();
+        let mut i = 0;
+        while i < flags.len() {
+            if !flags[i] {
+                i += 1;
+                continue;
+            }
+            let start = i;
+            while i < flags.len() && flags[i] {
+                i += 1;
+            }
+            if start > 0 && i < flags.len() {
+                runs.push((start, i - start));
+            }
+        }
+        runs
+    }
+
+    /// The codon a reference column falls in, or `None` when it has no frame.
+    ///
+    /// `general.md:35`'s carve-out is about a single amino acid, so it needs a real
+    /// reading frame: never on `g.`, and never in a UTR of a coding reference. A
+    /// column with no codon cannot license a merge across an unchanged base, which
+    /// is the half of the rule that is easy to lose.
+    fn codon_index(axis: &str, accession: &str, column: i64) -> Option<i64> {
+        if accession != TX_ACCESSION && accession != TX_MULTI_ACCESSION {
+            return None;
+        }
+        let (cds_start, cds_end) = cds_bounds(axis);
+        let transcript_position = column + 1;
+        if transcript_position < cds_start as i64 || transcript_position > cds_end as i64 {
+            return None;
+        }
+        Some((transcript_position - cds_start as i64) / 3)
+    }
+
+    /// A way one description can merge more than the spec allows.
+    ///
+    /// All three are **over**-merges, which is the direction the rules constrain:
+    /// `general.md:34` compels one description for adjacent changes and separate
+    /// ones past a single unchanged base, and `general.md:35` is the one carve-out.
+    /// Splitting further than required is not a violation of either.
+    #[derive(Debug)]
+    enum SeparationFinding {
+        /// Two members with no unchanged reference column between them
+        /// (`general.md:34`, `DNA/delins.md:16-18`).
+        AdjacentMembersLeftSplit { at: i64 },
+        /// One member spans two or more forced-unchanged columns
+        /// (`general.md:34`).
+        MergedAcrossUnchangedInterior {
+            at: i64,
+            length: usize,
+            inversion: bool,
+        },
+        /// One member spans a single forced-unchanged column with no codon to
+        /// license it (`general.md:35`).
+        MergedAcrossOneColumnWithoutACodon { at: i64, inversion: bool },
+    }
+
+    impl SeparationFinding {
+        /// How the offending member reads, which is what decides whether the
+        /// finding is settled or contested.
+        ///
+        /// A member whose payload is the exact reverse complement of its own span
+        /// is an **inversion**, and `general.md:56` ranks inversion above the
+        /// residual `delins` — which is the argument #1517 makes for preferring
+        /// `inv` over the split. `general.md:34` says "and **not** as a delins",
+        /// so it does not literally reach an `inv`. A member that is *not* an
+        /// inversion has no such defence: it is a delins, and the clause names it.
+        fn spelling(inversion: bool) -> &'static str {
+            if inversion {
+                "member, itself an exact inversion (the contested #1517 class),"
+            } else {
+                "`delins` member"
+            }
+        }
+
+        /// Whether this finding's offending member is an exact inversion.
+        fn is_inversion(&self) -> bool {
+            match self {
+                Self::AdjacentMembersLeftSplit { .. } => false,
+                Self::MergedAcrossUnchangedInterior { inversion, .. }
+                | Self::MergedAcrossOneColumnWithoutACodon { inversion, .. } => *inversion,
+            }
+        }
+
+        /// The finding as a line a reader can act on: what was violated, where,
+        /// and which clause says so.
+        ///
+        /// Spelled out rather than left to `{:?}` because the column is the
+        /// reproducer — a finding without its 0-based reference column cannot be
+        /// checked by hand against the block it came from.
+        fn describe(&self) -> String {
+            match self {
+                Self::AdjacentMembersLeftSplit { at } => format!(
+                    "general.md:34 — members meet at reference column {at} with no unchanged \
+                     base between them, so they are one description"
+                ),
+                Self::MergedAcrossUnchangedInterior {
+                    at,
+                    length,
+                    inversion,
+                } => format!(
+                    "general.md:34 — one {} spans {length} unchanged reference columns from \
+                     {at}, which no minimal alignment can consume",
+                    Self::spelling(*inversion)
+                ),
+                Self::MergedAcrossOneColumnWithoutACodon { at, inversion } => format!(
+                    "general.md:35 — one {} spans the unchanged reference column {at} with \
+                     no codon shared by the changes flanking it",
+                    Self::spelling(*inversion)
+                ),
+            }
+        }
+    }
+
+    /// Judge one normalized output against the separation rules.
+    ///
+    /// `Err` means the output could not be read as a set of reference footprints at
+    /// all — a sentinel, an unparseable string, an edit SPDI declines — and is
+    /// counted as unevaluated rather than silently passed.
+    fn separation_findings(
+        axis: &str,
+        core: &str,
+        output: &str,
+    ) -> Result<Vec<SeparationFinding>, String> {
+        let variant = parse_hgvs(output).map_err(|e| format!("{output}: {e}"))?;
+        let provider = provider_for(axis, core);
+        let named = match &variant {
+            ferro_hgvs::HgvsVariant::Allele(allele) => allele.variants.first().unwrap_or(&variant),
+            other => other,
+        };
+        let accession = named
+            .accession()
+            .map(ToString::to_string)
+            .unwrap_or_default();
+        let facts = member_facts_of(&variant, &provider)?;
+        let mut findings = Vec::new();
+        for pair in facts.windows(2) {
+            if pair[1].lo - pair[0].hi - 1 == 0 {
+                findings.push(SeparationFinding::AdjacentMembersLeftSplit { at: pair[1].lo });
+            }
+        }
+        for member in &facts {
+            let inversion =
+                !member.reference.is_empty() && member.alternate == revcomp(&member.reference);
+            let flags = forced_unchanged(member.reference.as_bytes(), member.alternate.as_bytes());
+            for (offset, length) in interior_runs(&flags) {
+                let at = member.lo + offset as i64;
+                if length >= 2 {
+                    findings.push(SeparationFinding::MergedAcrossUnchangedInterior {
+                        at,
+                        length,
+                        inversion,
+                    });
+                    continue;
+                }
+                // A single unchanged column is merged across only when the changes
+                // on either side of it sit in one codon. Both flanks are read, not
+                // just one: a merge is licensed by the amino acid the pair shares,
+                // so a pair straddling a codon boundary is not licensed even though
+                // each half has a frame.
+                let before = codon_index(axis, &accession, at - 1);
+                let after = codon_index(axis, &accession, at + 1);
+                if before.is_none() || before != after {
+                    findings.push(SeparationFinding::MergedAcrossOneColumnWithoutACodon {
+                        at,
+                        inversion,
+                    });
+                }
+            }
+        }
+        Ok(findings)
+    }
+
+    /// The forced-unchanged DP behaves, on cases whose answers are computable by
+    /// hand — including the two that make it non-trivial.
+    #[test]
+    fn the_forced_unchanged_dp_only_claims_columns_no_minimal_alignment_moves() {
+        let flags = |r: &str, a: &str| forced_unchanged(r.as_bytes(), a.as_bytes());
+
+        // The worked case: equal lengths, so the only minimal alignment is the
+        // column-by-column one and the four interior columns are all forced.
+        assert_eq!(
+            flags("AATGCACA", "TGTGCATT"),
+            vec![false, false, true, true, true, true, false, false]
+        );
+        assert_eq!(interior_runs(&flags("AATGCACA", "TGTGCATT")), vec![(2, 4)]);
+
+        // Unequal lengths, where a naive column comparison invents a violation.
+        // `AAA` -> `AA` deletes any one of the three A's, so no column is forced.
+        assert!(flags("AAA", "AA").iter().all(|forced| !forced));
+
+        // …and where the shift genuinely cannot reach the middle: `CAG` -> `TAG`
+        // has one minimal alignment (substitute the C), so `A` and `G` are forced,
+        // but neither is *interior* — there is no changed column after them.
+        assert_eq!(flags("CAG", "TAG"), vec![false, true, true]);
+        assert!(interior_runs(&flags("CAG", "TAG")).is_empty());
+
+        // An insertion does not consume a reference column, so the reference is
+        // wholly matched and no interior run exists.
+        assert!(flags("AC", "AGC").iter().all(|forced| *forced));
+
+        // A genuine spanning delins over an unchanged single base: `CAG` -> `TAT`
+        // has cost 2, and the middle `A` cannot be consumed by any 2-cost path.
+        assert_eq!(flags("CAG", "TAT"), vec![false, true, false]);
+        assert_eq!(interior_runs(&flags("CAG", "TAT")), vec![(1, 1)]);
+    }
+
+    /// The member model puts an insertion on an empty interval, so one separation
+    /// formula covers every pair.
+    #[test]
+    fn an_insertion_consumes_no_reference_column() {
+        let core = &corpus_sequences(1)[0];
+        let provider = genomic_provider(core);
+        let variant = parse_hgvs("NC_TEST.1:g.[257_258del;258_259insTT]").expect("parses");
+        let facts = member_facts_of(&variant, &provider).expect("both members convert");
+        assert_eq!(facts.len(), 2);
+        // The deletion consumes 0-based 256..=257; the insertion sits at the
+        // junction after 257 and consumes nothing, so its interval is empty.
+        assert_eq!((facts[0].lo, facts[0].hi), (256, 257));
+        assert_eq!((facts[1].lo, facts[1].hi), (258, 257));
+        // …and the uniform formula reads that junction as adjacent, not as a
+        // two-base span that would put the two members one column apart.
+        assert_eq!(facts[1].lo - facts[0].hi - 1, 0);
+    }
+
+    /// **Oracle 3.** No normalized output merges across more than the spec allows.
+    ///
+    /// Checked against the sequence, not against a pinned string: because
+    /// `(reference, alternate)` is known by construction, every member's own
+    /// `(deleted, inserted)` pair is recoverable and the rule can be evaluated
+    /// directly. `general.md:34` — changes separated by one or more unchanged
+    /// nucleotides are described individually, and adjacent ones as a single
+    /// description. `general.md:35` — the one carve-out, a single unchanged
+    /// nucleotide inside one codon, which needs a reading frame and so cannot apply
+    /// on `g.` or in a UTR. `DNA/delins.md:16-18` for the merged form itself.
+    /// **Currently red, deliberately.** Measured on the first run of this oracle,
+    /// over the 270 rows the family contributes: **138 of 270 outputs violate**,
+    /// 132 are clean, 0 unevaluated. The 176 findings partition into two classes
+    /// that are not the same claim, and the split is very lopsided:
+    ///
+    /// | class | findings | status |
+    /// |---|---:|---|
+    /// | the offending member is itself an **exact reverse complement** | 174 | **contested — #1517** |
+    /// | two adjacent members, neither an inversion, left split | 2 | settled; `general.md:34` |
+    ///
+    /// The contested class is #1517's own subject, read in the opposite direction.
+    /// `general.md:34` says two separated variants are described individually "and
+    /// **not** as a `delins`" — it does not name `inv`, and `general.md:56` ranks
+    /// inversion above the residual `delins`, which is exactly #1517's argument for
+    /// preferring `NM_004006.2:c.76_83inv` over the split. #1517 records the
+    /// counter-reading this oracle encodes as an available reading, not a settled
+    /// one. So these 174 are a decision the repository has not taken rather than a
+    /// defect this oracle found — and the classification is by the member's
+    /// *content*, not its spelling, so a whole-block reverse complement written
+    /// `delins` lands here too.
+    ///
+    /// The settled class is two rows, and it is new. The separation-0 design at
+    /// offset 0 on `cx`, in both directions:
+    ///
+    /// ```text
+    /// core  ACCAGCTAGCTAGCTAGCTA   (CDS_START_MULTI = 4, so c.-3 == transcript 1)
+    /// NM_TESTX.1:c.[-3_-2delinsTG;-1_1delinsGT]  ->  unchanged
+    /// NM_TEST.1:c.[1_2delinsTG;3_4delinsGT]      ->  NM_TEST.1:c.1_4inv
+    /// ```
+    ///
+    /// Neither member is an inversion on its own (`AC` -> `TG`, `CA` -> `GT`); only
+    /// their union is, so `general.md:56` offers no defence and `general.md:34`'s
+    /// plainest case applies — two adjacent changes are one description. The same
+    /// input merges on the single-exon coding reference and does not on the
+    /// multi-exon one, purely because the block starts in the 5'UTR.
+    ///
+    /// That axis dependence runs through the contested class too and is worth
+    /// separating from #1517, which its own scope note calls axis-neutral:
+    /// `NM_TEST.1:c.9_*5delinsTTCGTATACGTT` holds eight unchanged interior columns
+    /// inside one member, while the identical block on `g.` comes out as
+    /// `g.[265_266inv;275_276inv]`.
+    ///
+    /// **Not weakened to pass.** Narrowing this to the settled class alone would
+    /// still be red, and narrowing it to zero would make it documentation.
+    #[test]
+    #[ignore = "red on first run: 2 settled violations (a CDS-boundary split that the \
+                single-exon axis merges, unfiled) and 174 contested ones (#1517); see \
+                this test's docs"]
+    fn no_normalized_output_merges_across_an_unchanged_interior() {
+        let (mut clean, mut unevaluated) = (0usize, 0usize);
+        let (mut contested, mut settled) = (0usize, 0usize);
+        let mut violations: Vec<String> = Vec::new();
+        for_each_revcomp_row(|design, axis, direction, input, output| {
+            match separation_findings(axis, &design.core, output) {
+                Err(_) => unevaluated += 1,
+                Ok(findings) if findings.is_empty() => clean += 1,
+                Ok(findings) => {
+                    for finding in &findings {
+                        if finding.is_inversion() {
+                            contested += 1;
+                        } else {
+                            settled += 1;
+                        }
+                    }
+                    violations.push(format!(
+                        "[{} {} {}] {input}\n      -> {output}\n{}",
+                        design.label,
+                        axis,
+                        direction,
+                        findings
+                            .iter()
+                            .map(|f| format!("      {}", f.describe()))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ));
+                }
+            }
+        });
+        assert!(
+            violations.is_empty(),
+            "{} of {} normalized outputs violate the separation rules ({clean} clean, \
+             {unevaluated} unevaluated); {settled} findings name a `delins` member and are \
+             settled, {contested} name an exact inversion and are #1517's open \
+             question:\n{}",
+            violations.len(),
+            violations.len() + clean + unevaluated,
+            violations.join("\n")
+        );
+        assert!(
+            clean > 0,
+            "no row could be evaluated at all, so this oracle measured nothing"
         );
     }
 
