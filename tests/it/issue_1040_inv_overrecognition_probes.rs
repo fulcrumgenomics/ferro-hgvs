@@ -268,12 +268,18 @@ fn a_dense_inversion_is_recognised_across_multi_base_separations() {
     // is **4**. The inversion that must be recognised has the *wider* gaps, so
     // every threshold on separation either refuses #1461 or admits the control.
     //
-    // Density does separate them. Reverse complementing a random block leaves
-    // roughly a quarter of its positions coincidentally unchanged, which is what
-    // #1461's 32.8% looks like; the control leaves 66.7% unchanged because that
-    // span is very nearly its own reverse complement. Hence
-    // `changed_columns_dominate_the_span`, and hence this test: 8 of 12 columns
-    // change here, against 2 of 6 in the control.
+    // Density does separate them, which is `changed_columns_dominate_the_span`
+    // and hence this test: 8 of 12 columns change here, against 2 of 6 in the
+    // control.
+    //
+    // It separates them as a *length-correlated proxy*, though, and not because
+    // an unchanged fraction says whether a reverse complement is structural.
+    // Coincidences come in mirror pairs, so for a random block the unchanged
+    // count is `2 * Binomial(floor(n/2), 1/4)` — mean `n/4` at every `n`.
+    // Against that distribution the control's 66.7% is only +1.67 sd, which
+    // about **one in six** genuine 6 nt inversions reaches; #1461's 32.8% is
+    // +2.75 sd, which 0.45% reach. The separation comes from `n`, not from the
+    // fraction. `changed_columns_dominate_the_span`'s doc works this through.
     let core = "AACAACCGCGTG";
     let expected = format!("{G}:g.257_268inv");
     for input in [

@@ -3961,14 +3961,52 @@ fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
 /// [`every_separation_is_a_single_base`] breaks
 /// `a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation`.
 ///
-/// Density does separate them, and for a reason rather than by fitting. Reverse
-/// complementing a random block leaves roughly a quarter of its positions
-/// coincidentally unchanged, which is what #1461's 32.8% looks like. The #1040
-/// control leaves 66.7% unchanged — far above chance, because that span is very
-/// nearly its own reverse complement and the two edits are independent changes
-/// sitting inside it, exactly as that test's comment argues. Requiring the
-/// changed columns to be the majority says the reverse-complement relation is
-/// doing work across the whole span instead of describing a near-palindrome.
+/// Density does separate the two rows of that table, and this rule is what
+/// admits #1461. What it is *not* is a test that the reverse-complement relation
+/// is real, and an earlier revision of this comment claimed it was. That claim
+/// is corrected here rather than deleted, because the mistake in it is an easy
+/// one to make again.
+///
+/// # Why an unchanged column count is weak evidence at small `n`
+///
+/// Unchanged columns are not independent, and they do not arrive one at a time.
+/// Column `i` of a whole-span reverse complement coincides exactly when column
+/// `n-1-i` does — both say `b[i] == complement(b[n-1-i])` — so the coincidences
+/// come in **mirror pairs**, and an odd `n` has a centre column that can never
+/// coincide. For a uniform random block the count of unchanged columns is
+/// therefore
+///
+/// ```text
+/// U = 2 · Binomial(floor(n/2), 1/4)      E[U] = n/4      sd(U) = sqrt(3n/8)
+/// ```
+///
+/// The mean is `n/4` — a quarter of the span — for **every** `n`. That is the
+/// part the earlier comment had right, and the part that misleads: it read a
+/// mean as if it were the whole distribution, and concluded that an observation
+/// above it was "far above chance". Measured against the actual distribution:
+///
+/// | block | span | unchanged | z | P(at least this many) |
+/// |---|---|---|---|---|
+/// | `AAGCTA -> TAGCTT` (the #1040 control) | 6 | 4 (66.7%) | +1.67 | **15.6%** |
+/// | `AATGCACA -> TGTGCATT` (#1517) | 8 | 4 (50.0%) | +1.15 | **26.2%** |
+/// | `NC_000013.10:g.100809575_100810031inv` (#1461) | 457 | 150 (32.8%) | +2.75 | **0.45%** |
+///
+/// So roughly **one in six** genuine 6 nt inversions leaves two thirds of its
+/// columns unchanged, and roughly **one in four** genuine 8 nt inversions leaves
+/// half of them unchanged. Neither is a near-palindrome signature; both are
+/// ordinary draws. Only #1461's is rare, and it is rare because the span is 457
+/// nt, not because 32.8% is a low fraction.
+///
+/// The discriminating quantity is `n`. The distribution's relative spread is
+/// `sd/mean = sqrt(6/n)`, so it is 100% of the mean at `n = 6` and 11.5% at
+/// `n = 457`: a density reading carries almost no information about a short
+/// block and a great deal about a long one. Any future rule that wants to argue
+/// from coincidence rates must scale with `n`; this one does not.
+///
+/// What this predicate honestly is, then, is a **length-correlated proxy** that
+/// separates the two cases in the table and is calibrated on them. It is not
+/// evidence about whether a given reverse-complement relation is structural, and
+/// no comment here should say that it is.
 ///
 /// Additive by construction: this is an `||` alternative to the single-base gate,
 /// so every block that coalesces today still coalesces. Only a block that is
