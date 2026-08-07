@@ -10,6 +10,12 @@ on:
   # GitHub still rendered "All checks have passed" — a green badge that
   # carried no information. Run on every pull request whatever it targets.
   pull_request:
+    # `edited` is load-bearing for `representation-change` below: the declaration
+    # lives in the PR description, and the default activity set
+    # (opened/synchronize/reopened) does not fire when a description is edited. Without
+    # it, adding the trailer a red check just asked for re-runs nothing and the check
+    # stays red until an unrelated push.
+    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -158,6 +164,56 @@ jobs:
         run: uv run poe check-format
       - name: Run mypy
         run: uv run poe check-typing
+
+  # A change under `src/normalize/`, `src/hgvs/`, `src/spdi/` or `src/project/` can move
+  # the normalized string a downstream consumer stores read counts against, so it must say
+  # whether it does. `release-plz.toml` renders the changelog's **Representation changes**
+  # section from a `Representation-Change:` trailer on the squash commit (#1433) — the
+  # machinery works, but across the v0.13.0 cycle 87 commits landed carrying zero trailers
+  # while 46 touched those directories, and the section rendered empty. An empty section
+  # looks identical whether nothing moved or nobody declared, so it went unnoticed for ~90
+  # commits and the disclosure had to be reconstructed by hand before release (#1522).
+  #
+  # `Representation-Change: none` passes. The point is to force the judgement, not to force
+  # a disclosure; what this rejects is silence.
+  representation-change:
+    name: Representation change declared
+    runs-on: ubuntu-latest
+    # `pull_request` only. The check reads the PR description, which is what becomes the
+    # squash commit body and therefore what git-cliff's footer rule matches. A push to
+    # `main` has no equivalent to read, and by then the declaration is already merged.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Collect the changed files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # `--no-renames` so a rename reports BOTH paths. With git's rename detection
+          # on (the default), moving `src/normalize/foo.rs` out of a watched directory
+          # reports only the destination, so the change that removed it from
+          # `src/normalize/` would need no declaration -- exactly backwards.
+          git diff --name-only --no-renames "$BASE_SHA...$HEAD_SHA" > changed-files.txt
+          echo "changed files:"
+          cat changed-files.txt
+      - name: Capture the PR description
+        # Through `env`, never interpolated into the script body: a PR description is
+        # attacker-controlled text and `${{ }}` inside `run` would splice it into the shell.
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: printf '%s' "$PR_BODY" > pr-body.txt
+      - name: Require a Representation-Change declaration
+        run: |
+          python scripts/check_representation_change.py \
+            --changed-files changed-files.txt \
+            --declaration-file pr-body.txt
 
   clippy:
     name: Clippy
