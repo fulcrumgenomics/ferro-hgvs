@@ -3244,6 +3244,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 &mut result,
                 allele.phase,
                 allele.uncertain,
+                &self.provider,
             );
 
             pass += 1;

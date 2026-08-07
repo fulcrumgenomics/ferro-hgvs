@@ -679,37 +679,20 @@ fn body_region(kind: CisKind) -> Region {
 /// a disqualifying position (offset / special / mixed-region), or an
 /// uncertain / non-`NaEdit` edit — the caller treats that as "decline to
 /// collapse".
+///
+/// Written as [`member_axis_endpoints`] plus [`join_pos`], because that *is*
+/// what it was: the per-axis `simple_*_range` helpers each fold their two ends
+/// through `join_pos`, and folding them here instead keeps the two readers from
+/// drifting apart. The single-region requirement is the whole of the difference
+/// between them (#1482) — which is worth being able to see in one place, since
+/// it is also the whole of the defect that motivated the other reader.
 fn cis_axis_parts(
     v: &HgvsVariant,
     kind: CisKind,
 ) -> Option<(&Accession, Region, i64, i64, &NaEdit)> {
-    let (accession, region, s, e, edit) = match (kind, v) {
-        (CisKind::Genome, HgvsVariant::Genome(g)) => {
-            let (r, s, e) = simple_genome_range(&g.loc_edit.location)?;
-            (&g.accession, r, s, e, &g.loc_edit.edit)
-        }
-        (CisKind::Mt, HgvsVariant::Mt(m)) => {
-            let (r, s, e) = simple_genome_range(&m.loc_edit.location)?;
-            (&m.accession, r, s, e, &m.loc_edit.edit)
-        }
-        (CisKind::Cds, HgvsVariant::Cds(c)) => {
-            let (r, s, e) = simple_cds_range(&c.loc_edit.location)?;
-            (&c.accession, r, s, e, &c.loc_edit.edit)
-        }
-        (CisKind::Tx, HgvsVariant::Tx(t)) => {
-            let (r, s, e) = simple_tx_range(&t.loc_edit.location)?;
-            (&t.accession, r, s, e, &t.loc_edit.edit)
-        }
-        (CisKind::Rna, HgvsVariant::Rna(rv)) => {
-            let (r, s, e) = simple_rna_range(&rv.loc_edit.location)?;
-            (&rv.accession, r, s, e, &rv.loc_edit.edit)
-        }
-        _ => return None,
-    };
-    if !edit.is_certain() {
-        return None;
-    }
-    Some((accession, region, s, e, edit.inner()?))
+    let (accession, start, end, edit) = member_axis_endpoints(v, kind)?;
+    let (region, s, e) = join_pos(Some(start), Some(end))?;
+    Some((accession, region, s, e, edit))
 }
 
 /// Whether a merged anchor restates the reference bases under its own span —
@@ -1068,11 +1051,31 @@ fn anchor_from_loc_edit<L>(
     }
 }
 
-/// Both endpoints of an interval must share the same `Region` for the
-/// interval to be merge-eligible. Cross-region ranges (`c.-1_1`, etc.)
-/// have no valid HGVS syntax, so failing this check on a parsed
-/// `Interval` indicates upstream malformedness rather than a normal
-/// merge barrier; we treat it as ineligible just in case.
+/// Fold two endpoints into one interval, **refusing a pair that straddles a
+/// region boundary**.
+///
+/// The refusal is a limit of the *merge* path, not a property of HGVS.
+///
+/// This comment used to say cross-region ranges "have no valid HGVS syntax, so
+/// failing this check on a parsed `Interval` indicates upstream malformedness".
+/// **That is false**, and #1482 is what it cost. `c.15_*1del` deletes across a
+/// stop codon — an ordinary and common real variant — and `c.-1_1`, which the
+/// old comment offered as its example of the impossible thing, is written out in
+/// `consultation/SVD-WG001.md:37`.
+///
+/// Refusing here is still right: the merge coalesces members onto one axis and
+/// has no representation for a span numbered on two. What was wrong was
+/// inheriting the refusal *and its justification* elsewhere. [`member_span`]
+/// did, and because every sibling-awareness pass drops a `None` through
+/// `filter_map` rather than declining, a boundary-crossing member became
+/// invisible **as a sibling** module-wide — which is how
+/// `c.[15_*1del;15_*1insCC]` came to normalize into an allele ferro's own parser
+/// rejects. That reader now converts each endpoint onto the sequence axis
+/// instead; see [`member_span`] for the whole argument.
+///
+/// So: use this when the caller genuinely needs one region for one axis, and
+/// read the `None` as "this pass cannot express that span", never as "that span
+/// is malformed".
 fn join_pos(
     start: Option<(Region, i64)>,
     end: Option<(Region, i64)>,
@@ -3301,6 +3304,48 @@ fn region_sequence_delta<P: ReferenceProvider>(
         Region::FivePrimeUtr => cds_start(),
         Region::ThreePrimeUtr => Some(ordered_cds_bounds(provider_key, provider)?.1),
         Region::TxUpstream | Region::TxDownstream => None,
+    }
+}
+
+/// [`region_sequence_delta`] widened to the two `n.` regions that lie *outside*
+/// the served sequence, for **comparison only**.
+///
+/// `region_sequence_delta` refuses `TxUpstream` (`n.-N`) and `TxDownstream`
+/// (`n.*N`) because there are no bases to read there, and that is the right
+/// answer for every caller that reads bases. It is the wrong answer for
+/// [`member_span`], whose callers only ever *compare* members: refusing there
+/// does not make a pass conservative, it makes the member invisible, which is
+/// the whole of #1482.
+///
+/// Measured, before this existed: `n.[-5=;-6_-4del]` normalized to
+/// `n.-6_-4del` on `main` and to `n.[-6_-4del;-5=]` with `member_span`
+/// converting through `region_sequence_delta` alone —
+/// `drop_identity_members_covered_by_siblings` stopped seeing that the deletion
+/// covers the identity. `n.[-5=;-5del]` was worse: it kept both members on one
+/// position, which is the overlap that pass exists to remove.
+///
+/// The offsets are the ones the axes actually mean, so a cross-region
+/// comparison is meaningful rather than merely consistent: `n.-1` is the base
+/// immediately 5' of `n.1`, so `n.-N` is transcript position `1 - N`; `n.*N` is
+/// `N` bases past the end, so it is `length + N`.
+///
+/// **The positions it yields for those two regions are virtual** — outside
+/// `[1, length]` by construction. Nothing may read bases through them, and
+/// nothing does: every base read in this module goes through
+/// `provider.get_sequence`, whose `u64::try_from` refuses a non-positive
+/// coordinate, and [`respell_at_gap`] refuses such a member outright rather
+/// than relying on that.
+fn region_span_delta<P: ReferenceProvider>(
+    region: Region,
+    provider_key: &str,
+    provider: &P,
+) -> Option<i64> {
+    match region {
+        Region::TxUpstream => Some(1),
+        Region::TxDownstream => {
+            i64::try_from(provider.get_sequence_length(provider_key).ok()?).ok()
+        }
+        other => region_sequence_delta(other, provider_key, provider),
     }
 }
 
@@ -5626,9 +5671,33 @@ struct MemberSpan {
     /// lookup through it would silently fail and skip the rewrite; every other
     /// provider lookup in this module already reduces first.
     provider_key: String,
+    /// The region the span **starts** in. For a member wholly inside one region
+    /// this is its region; for one crossing a boundary it is where the span
+    /// begins, which is the axis its written coordinates are numbered on.
     region: Region,
+    /// **Sequence** coordinates, 1-based inclusive — the representation in which
+    /// any two members of one molecule are comparable and every length is right.
+    ///
+    /// The `c.`/`n.` axis is piecewise: three regions numbered by three
+    /// independent integer sequences (`-n`, `n`, `*n`), so an axis coordinate
+    /// does not order against one in another region — `c.*1` is 3' of `c.15`
+    /// while `1 < 15` — and a span crossing a boundary has no meaningful axis
+    /// length: `c.15_*1` is two bases, but `1 - 15` is `-14`. Converting each
+    /// endpoint through `region_sequence_delta` removes both problems at the
+    /// source, which is why this is the default representation and the axis one
+    /// below has to be asked for by name (#1482).
     start: i64,
     end: i64,
+    /// The coordinates as **written**, on the member's own axis.
+    ///
+    /// Only for rendering a position back onto that axis; `respell_as` is the
+    /// sole consumer. Meaningless as a length or an ordering whenever
+    /// `crosses_regions` is set, which is precisely why comparisons use the
+    /// sequence pair above.
+    axis_start: i64,
+    axis_end: i64,
+    /// Whether the two endpoints lie in different regions.
+    crosses_regions: bool,
     /// Whether the edit consumes the reference bases under its span.
     claims_bases: bool,
     /// Whether an insertion landing flush against this edit is the adjacency the
@@ -5642,21 +5711,143 @@ struct MemberSpan {
     junction: Option<i64>,
 }
 
-/// Read a member's span for the clamp pass, or `None` for a member this pass
-/// cannot place (wrong kind, uncertain edit, offset / special position).
-fn member_span(v: &HgvsVariant, kind: CisKind) -> Option<MemberSpan> {
-    let (accession, region, start, end, edit) = cis_axis_parts(v, kind)?;
+/// Read a member's span for the sibling-awareness passes, or `None` for a member
+/// they cannot place (wrong kind, uncertain edit, offset / special position, or
+/// a region the provider cannot convert onto the sequence axis).
+///
+/// # Why this takes a provider (#1482)
+///
+/// It used to route through `cis_axis_parts` -> `join_pos`, which refuses an
+/// interval whose two endpoints are in different regions. `join_pos`' comment
+/// justified that by claiming cross-region ranges "have no valid HGVS syntax".
+/// **That is false.** `c.15_*1del` spans the CDS/3'UTR boundary and `c.-1_1del`
+/// the 5'UTR/CDS boundary; both are ordinary descriptions, and deleting across a
+/// stop codon is a common real variant. The comment even names `c.-1_1` as its
+/// example of the impossible thing.
+///
+/// The refusal is defensible for the *merge* path, which coalesces members onto
+/// one axis and has no representation for such a span. It was never defensible
+/// here, and here it did not read as a refusal at all: this function returned
+/// `None`, and every pass that consumes it drops a `None` through `filter_map`
+/// rather than declining. A boundary-crossing member was therefore invisible
+/// **as a sibling** across the whole module — it could not collide with a
+/// duplication, block a sibling shift, bound a repeat tract, or take part in a
+/// junction merge.
+///
+/// What that produced was an allele ferro's own parser rejects:
+///
+/// ```text
+/// NM_TEST.1:c.[15_*1del;15_*1insCC]  ->  NM_TEST.1:c.[14_15dup;15_*1del]
+/// ```
+///
+/// `c.15_*1insCC` alone correctly becomes `c.14_15dup` (`duplication.md:18`
+/// makes `dup` mandatory when a variant can be described as one). Beside a
+/// sibling deleting `c.15` the two claim the same base, and
+/// `respell_colliding_duplications` — which exists to turn exactly that
+/// duplication back into an insertion, a form that "claims nothing and so cannot
+/// collide" — never saw the deletion.
+///
+/// # Why the whole span converts, rather than the collision test being patched
+///
+/// Patching one predicate fixes one symptom. The defect is that the *span
+/// representation* cannot express these members, so every pass keyed on it is
+/// blind in the same way. Converting here fixes them together and makes the
+/// class unable to recur: a future pass gets a comparable span for free.
+///
+/// # Why the conversion is [`region_span_delta`] and not [`region_sequence_delta`]
+///
+/// Requiring a conversion here is a way to *lose* visibility as well as gain it,
+/// and the two `n.` regions outside the transcript are where that bites:
+/// `region_sequence_delta` refuses them because they hold no bases, which is
+/// right for reading and wrong for comparing. Refusing here would not make a
+/// pass conservative, it would make an `n.-5del` invisible to its siblings in
+/// exactly the way this function exists to stop — measured, it un-fixed
+/// `n.[-5=;-5del]` into an allele with two members on one position. So the
+/// conversion used here widens to those regions with virtual positions; see
+/// `region_span_delta` for why nothing can read bases through one.
+///
+/// What it does still decline — `Cds` on a record with no CDS, an inverted CDS —
+/// every pass that compares members already declined for itself, so moving the
+/// conversion here only stops each pass repeating it.
+fn member_span<P: ReferenceProvider>(
+    v: &HgvsVariant,
+    kind: CisKind,
+    provider: &P,
+) -> Option<MemberSpan> {
+    let (accession, (start_region, axis_start), (end_region, axis_end), edit) =
+        member_axis_endpoints(v, kind)?;
+    let provider_key = accession.transcript_accession();
+    let to_sequence = |region: Region, coord: i64| -> Option<i64> {
+        region_span_delta(region, &provider_key, provider)?.checked_add(coord)
+    };
+    let start = to_sequence(start_region, axis_start)?;
+    let end = to_sequence(end_region, axis_end)?;
     Some(MemberSpan {
         accession: accession.full(),
-        provider_key: accession.transcript_accession(),
-        region,
+        provider_key,
+        region: start_region,
         start,
         end,
+        axis_start,
+        axis_end,
+        crosses_regions: start_region != end_region,
         claims_bases: claims_reference_bases(edit),
         absorbs_a_flush_insertion: merges_with_a_flush_insertion(edit),
         blocks_shift: blocks_sibling_shift(edit),
+        // Sequence coordinates in, sequence coordinate out: `junction_of` is
+        // arithmetic on the two ends, so it carries whichever representation it
+        // is given, and every consumer of `junction` compares it with `start` /
+        // `end` above.
         junction: junction_of(edit, start, end),
     })
+}
+
+/// What [`member_axis_endpoints`] reads off one member: its accession, each
+/// endpoint as `(region, written position)`, and the edit.
+type MemberAxisEndpoints<'v> = (&'v Accession, (Region, i64), (Region, i64), &'v NaEdit);
+
+/// Both endpoints of a member's location with **each keeping its own region**.
+///
+/// The cross-region counterpart of `cis_axis_parts`, which routes through
+/// `join_pos` and so refuses exactly the members [`member_span`] must see.
+fn member_axis_endpoints(v: &HgvsVariant, kind: CisKind) -> Option<MemberAxisEndpoints<'_>> {
+    let (accession, start, end, edit) = match (kind, v) {
+        (CisKind::Genome, HgvsVariant::Genome(g)) => (
+            &g.accession,
+            simple_genome_pos(&g.loc_edit.location.start)?,
+            simple_genome_pos(&g.loc_edit.location.end)?,
+            &g.loc_edit.edit,
+        ),
+        (CisKind::Mt, HgvsVariant::Mt(m)) => (
+            &m.accession,
+            simple_genome_pos(&m.loc_edit.location.start)?,
+            simple_genome_pos(&m.loc_edit.location.end)?,
+            &m.loc_edit.edit,
+        ),
+        (CisKind::Cds, HgvsVariant::Cds(c)) => (
+            &c.accession,
+            simple_cds_pos(&c.loc_edit.location.start)?,
+            simple_cds_pos(&c.loc_edit.location.end)?,
+            &c.loc_edit.edit,
+        ),
+        (CisKind::Tx, HgvsVariant::Tx(t)) => (
+            &t.accession,
+            simple_tx_pos(&t.loc_edit.location.start)?,
+            simple_tx_pos(&t.loc_edit.location.end)?,
+            &t.loc_edit.edit,
+        ),
+        (CisKind::Rna, HgvsVariant::Rna(rv)) => (
+            &rv.accession,
+            simple_rna_pos(&rv.loc_edit.location.start)?,
+            simple_rna_pos(&rv.loc_edit.location.end)?,
+            &rv.loc_edit.edit,
+        ),
+        _ => return None,
+    };
+    if !edit.is_certain() {
+        return None;
+    }
+    Some((accession, start, end, edit.inner()?))
 }
 
 /// Whether an edit consumes the reference bases under its span.
@@ -5777,22 +5968,16 @@ fn blocks_sibling_shift(edit: &NaEdit) -> bool {
 /// live list keeps the pass independent of member order.
 ///
 /// [`ShuffleDirection::FivePrime`]: crate::normalize::ShuffleDirection
-/// One sibling's bounds, on the **sequence** axis rather than its own region's.
 ///
-/// [`clamp_sibling_crossing_shifts`] compares a moving member against every
-/// sibling, and the two need not share a region — a member shifting out of the
-/// CDS is bounded by siblings still inside it (#1418). Region axes are not
-/// comparable position-by-position (`c.12` and `c.*1` are adjacent bases with
-/// unrelated numbers), so each span is converted once, here, via
-/// [`region_sequence_delta`], and the pass then does ordinary arithmetic.
-struct SiblingBound {
-    claims_bases: bool,
-    blocks_shift: bool,
-    start: i64,
-    end: i64,
-    junction: Option<i64>,
-}
-
+/// Siblings are compared against the moving member on the **sequence** axis,
+/// which is what [`MemberSpan`] already carries (#1482). The two need not share
+/// a region — a member shifting out of the CDS is bounded by siblings still
+/// inside it (#1418) — and region axes are not comparable position-by-position
+/// (`c.12` and `c.*1` are adjacent bases with unrelated numbers), so every
+/// comparison below is on the converted coordinates rather than the written
+/// ones. This pass used to re-convert each span itself through
+/// [`region_sequence_delta`]; that conversion now happens once, in
+/// [`member_span`].
 pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
     before: &[HgvsVariant],
     after: &mut [HgvsVariant],
@@ -5809,8 +5994,14 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
     let Some(kind) = cis_kind_of(&after[0]) else {
         return;
     };
-    let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
-    let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+    let pre: Vec<Option<MemberSpan>> = before
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
+    let post: Vec<Option<MemberSpan>> = after
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
 
     for i in 0..after.len() {
         let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
@@ -5827,21 +6018,16 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
         //
         // Regions cannot be compared position-by-position: `c.12` and `c.*1` are
         // adjacent bases with unrelated numbers. So the whole pass runs on the
-        // **sequence** axis, via the same `region_sequence_delta` conversion the
-        // in-bounds oracle and the payload reads use. Within one region that is a
-        // constant offset and changes nothing, which is why the arithmetic below
-        // is untouched; across regions it is what makes the comparison mean
-        // anything at all.
+        // **sequence** axis, which is the representation `MemberSpan` now carries
+        // (#1482). Within one region that is a constant offset from the written
+        // numbers and changes nothing, which is why the arithmetic below is
+        // untouched; across regions it is what makes the comparison mean anything
+        // at all.
         //
         // A region with no conversion — an `n.` position outside the transcript —
-        // is skipped, the same conservative answer its sibling reads give.
-        let seq = |s: &MemberSpan| -> Option<(i64, i64)> {
-            let delta = region_sequence_delta(s.region, &s.provider_key, provider)?;
-            Some((s.start.checked_add(delta)?, s.end.checked_add(delta)?))
-        };
-        let (Some((b_start, b_end)), Some((a_start, a_end))) = (seq(b), seq(a)) else {
-            continue;
-        };
+        // has no span at all, so it was already skipped by the `pre`/`post` reads
+        // above.
+        let ((b_start, b_end), (a_start, a_end)) = ((b.start, b.end), (a.start, a.end));
         // A member that did not move cannot have crossed anything.
         let delta = a_start - b_start;
         if delta == 0 {
@@ -5879,24 +6065,14 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
         // Matched on accession alone, not on region: a sibling in the 3'UTR is
         // on this member's coordinate line just as much as one in the CDS, and
         // filtering by region was the other half of #1418 — it hid exactly the
-        // siblings a boundary-crossing member sweeps over. `seq` puts both on
-        // the sequence axis, which is what makes them comparable; a sibling
-        // whose region has no conversion is dropped rather than mis-placed.
-        let siblings: Vec<SiblingBound> = (0..pre.len())
+        // siblings a boundary-crossing member sweeps over. Their spans are
+        // already on the sequence axis, which is what makes them comparable; a
+        // sibling whose region has no conversion has no span and so is absent.
+        let siblings: Vec<&MemberSpan> = (0..pre.len())
             .filter(|&j| j != i)
             .flat_map(|j| [pre[j].as_ref(), post[j].as_ref()])
             .flatten()
             .filter(|s| s.accession == a.accession)
-            .filter_map(|s| {
-                let delta = region_sequence_delta(s.region, &s.provider_key, provider)?;
-                Some(SiblingBound {
-                    claims_bases: s.claims_bases,
-                    blocks_shift: s.blocks_shift,
-                    start: s.start.checked_add(delta)?,
-                    end: s.end.checked_add(delta)?,
-                    junction: s.junction.and_then(|j| j.checked_add(delta)),
-                })
-            })
             .collect();
 
         let pull = if delta > 0 {
@@ -5980,17 +6156,26 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
             continue;
         };
         if pull != 0 {
-            if a.region == b.region {
+            // `crosses_regions` joins the region test for the same reason the
+            // test is there (#1482): both translates add `-pull` to the written
+            // axis number, and a member whose two ends sit in different regions
+            // has no single axis to add to — `c.15_*1` shifted 5' by one is
+            // `c.14_15`, not `c.14_*0`. Such a member is *visible* here now,
+            // which is the point, but it is repaired by the restore below rather
+            // than by arithmetic on a number that means two things.
+            if a.region == b.region && !a.crosses_regions && !b.crosses_regions {
                 // A duplication blocks a sibling's shift without claiming bases,
                 // so it reaches this pass too — and its payload is read from
                 // under its own span, so it cannot simply be slid (#1280, #1292).
                 match a.junction {
                     Some(_) => translate_junction_member(&mut after[i], -pull, kind, a, provider),
-                    None => translate_member(&mut after[i], -pull, kind, a),
+                    None => translate_member(&mut after[i], -pull, kind, a, provider),
                 }
             } else {
-                // The member crossed a region boundary, and the pull would carry
-                // it back across (#1418). Neither translate can express that:
+                // The member crossed a region boundary — either by shifting into
+                // a new one (#1418) or by spanning one to begin with (#1482) —
+                // and the pull would carry it back across. Neither translate can
+                // express that:
                 // both add `-pull` to the axis number and then verify the result
                 // landed in `from.region`, so a `c.*1` pulled seven bases 5'
                 // would be written as `c.*-6` and reverted — silently leaving the
@@ -6075,8 +6260,14 @@ pub(crate) fn demote_repeats_spanning_siblings<P: ReferenceProvider>(
     let Some(kind) = cis_kind_of(&after[0]) else {
         return;
     };
-    let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
-    let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+    let pre: Vec<Option<MemberSpan>> = before
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
+    let post: Vec<Option<MemberSpan>> = after
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
 
     for i in 0..after.len() {
         let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
@@ -6207,7 +6398,27 @@ pub(crate) fn demote_repeats_spanning_siblings<P: ReferenceProvider>(
             );
             continue;
         }
-        respell_as(&mut after[i], kind, a.region, start, a.end, source);
+        // A member spanning two regions is *seen* by the sibling tests above —
+        // that is #1482 — but cannot be re-spelled here: `respell_as` writes one
+        // pair of numbers onto one axis, and a tract running from the CDS into
+        // the 3'UTR has no such pair. The `respell_at_gap` route above resolves
+        // both ends through the transcript and does handle it.
+        if a.crosses_regions {
+            continue;
+        }
+        // The axis pair, not the sequence one: this writes positions back onto
+        // the member's own axis, while `start`/`end` are sequence coordinates
+        // (#1482). Within one region the two differ by a constant, so the
+        // `start < a.start` test above and this write agree about the span.
+        respell_as(
+            &mut after[i],
+            kind,
+            a.region,
+            a.axis_end - length + 1,
+            a.axis_end,
+            source,
+            provider,
+        );
     }
 }
 
@@ -6315,7 +6526,10 @@ pub(crate) fn demote_coincident_tract_repeats<P: ReferenceProvider>(
     let Some(kind) = cis_kind_of(&members[0]) else {
         return;
     };
-    let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
+    let spans: Vec<Option<MemberSpan>> = members
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
     // A member participates only if it is a repeat that grew its tract by a
     // whole number of units; `growth` carries the payload and the unit.
     let growth: Vec<Option<(Vec<Base>, Vec<Base>)>> = (0..members.len())
@@ -6432,8 +6646,14 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
     let Some(kind) = cis_kind_of(&after[0]) else {
         return;
     };
-    let pre: Vec<Option<MemberSpan>> = before.iter().map(|v| member_span(v, kind)).collect();
-    let post: Vec<Option<MemberSpan>> = after.iter().map(|v| member_span(v, kind)).collect();
+    let pre: Vec<Option<MemberSpan>> = before
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
+    let post: Vec<Option<MemberSpan>> = after
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
     // The members `post` was measured from. The loop below translates `after`
     // in place, so by the time member `i` inspects a sibling `j < i` that has
     // already moved, `after[j]` no longer matches `post[j]` — pairing them
@@ -6448,10 +6668,13 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
         let (Some(b), Some(a)) = (pre[i].as_ref(), post[i].as_ref()) else {
             continue;
         };
-        let (Some(before_junction), Some(after_junction)) = (
-            cis_axis_parts(&before[i], kind).and_then(|(_, _, s, e, edit)| junction_of(edit, s, e)),
-            cis_axis_parts(&after[i], kind).and_then(|(_, _, s, e, edit)| junction_of(edit, s, e)),
-        ) else {
+        // Taken off the spans rather than re-derived from the parsed locations,
+        // so that these two junctions and every sibling bound below are on one
+        // axis. `MemberSpan::junction` is `junction_of` applied to the same edit,
+        // on **sequence** coordinates (#1482); reading it from `cis_axis_parts`
+        // instead yields the written axis number, which no longer compares
+        // against `s.start`/`s.end`.
+        let (Some(before_junction), Some(after_junction)) = (b.junction, a.junction) else {
             continue;
         };
         if before_junction == after_junction || b.region != a.region {
@@ -6554,14 +6777,11 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
         // payload does not commute keeps the stricter rule above: one short, and
         // from either snapshot.
         let payload = junction_payload(&after[i], kind, a, provider);
-        // Every junction compared below sits on `a`'s own region axis, so one
-        // offset serves them all (#1284). A region with no conversion — an
-        // `n.` position outside the transcript — has no bases to rotate
-        // against, and refusing here is the same conservative answer the
-        // payload reads below give.
-        let Some(axis_delta) = region_sequence_delta(a.region, &a.provider_key, provider) else {
-            continue;
-        };
+        // Every junction compared below is already on the sequence axis (#1482),
+        // so no per-region offset is applied here. A region with no conversion —
+        // an `n.` position outside the transcript — has no span at all and so
+        // never reaches this point, which is the same conservative answer the
+        // per-pass conversion used to give.
         let across_junctions = (0..pre.len())
             .filter(|&j| j != i)
             .flat_map(|j| {
@@ -6607,7 +6827,6 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
                                 after_junction,
                                 junction,
                                 &a.provider_key,
-                                axis_delta,
                                 provider,
                             )
                         })
@@ -6650,15 +6869,7 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
         // travelling. `before_junction` always can, since that is where the
         // shift began.
         let legal = |j: i64| {
-            payload_at_junction(
-                payload,
-                after_junction,
-                j,
-                &a.provider_key,
-                axis_delta,
-                provider,
-            )
-            .is_some()
+            payload_at_junction(payload, after_junction, j, &a.provider_key, provider).is_some()
         };
         let destination = if five_prime {
             let floor = limit.min(before_junction).max(after_junction);
@@ -6719,15 +6930,20 @@ impl RepeatSource {
 
 /// Replace `variant`'s edit with `source`'s plain form over `[start, end]`.
 ///
+/// `start` and `end` are positions on the member's **own axis** — the numbers
+/// that get written — not the sequence coordinates [`MemberSpan`] carries
+/// (#1482). The caller supplies them from `axis_start`/`axis_end`.
+///
 /// Reverts on any axis this pass cannot rewrite, or if the result does not land
 /// exactly where intended on the same region.
-fn respell_as(
+fn respell_as<P: ReferenceProvider>(
     variant: &mut HgvsVariant,
     kind: CisKind,
     region: Region,
     start: i64,
     end: i64,
     source: RepeatSource,
+    provider: &P,
 ) {
     let original = variant.clone();
     let placed = match variant {
@@ -6750,9 +6966,16 @@ fn respell_as(
         }
         _ => false,
     };
+    // Read back on the axis it was written on, and required to sit in one
+    // region: a write that landed with its two ends in different regions is not
+    // the span this function was asked for, and before #1482 `member_span`
+    // reported such a result as `None` and so reverted it. Keeping that refusal
+    // explicit is what stops the wider span reader from quietly widening what
+    // this pass is willing to write.
     let landed = placed
-        && member_span(variant, kind)
-            .is_some_and(|s| s.region == region && s.start == start && s.end == end);
+        && member_span(variant, kind, provider).is_some_and(|s| {
+            !s.crosses_regions && s.region == region && s.axis_start == start && s.axis_end == end
+        });
     if !landed {
         *variant = original;
     }
@@ -6822,7 +7045,22 @@ where
 /// where intended on the *same* region — the guard against an axis whose
 /// integer coordinate is not simply translatable (a `c.` span that would cross
 /// into the 5'UTR or `*`-region, a genomic base that would underflow).
-fn translate_member(variant: &mut HgvsVariant, delta: i64, kind: CisKind, from: &MemberSpan) {
+fn translate_member<P: ReferenceProvider>(
+    variant: &mut HgvsVariant,
+    delta: i64,
+    kind: CisKind,
+    from: &MemberSpan,
+    provider: &P,
+) {
+    // A member whose ends sit in different regions has no single axis number to
+    // add `delta` to (#1482). Adding it to both writes a span that is not a
+    // translation of this one: `c.15_*1` moved 3' by one becomes `c.16_*2`, and
+    // `c.16` is a coding position on a CDS that ends at 15. The sequence pair
+    // *does* translate, so the `landed` check below would accept it — the
+    // refusal has to be explicit rather than left to the verification.
+    if from.crosses_regions {
+        return;
+    }
     let original = variant.clone();
     let moved = match variant {
         HgvsVariant::Genome(g) => {
@@ -6845,7 +7083,7 @@ fn translate_member(variant: &mut HgvsVariant, delta: i64, kind: CisKind, from: 
         _ => false,
     };
     let landed = moved
-        && member_span(variant, kind).is_some_and(|s| {
+        && member_span(variant, kind, provider).is_some_and(|s| {
             s.region == from.region && s.start == from.start + delta && s.end == from.end + delta
         });
     if !landed {
@@ -6944,7 +7182,10 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
     let Some(kind) = cis_kind_of(&members[0]) else {
         return;
     };
-    let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
+    let spans: Vec<Option<MemberSpan>> = members
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
 
     for i in 0..members.len() {
         let Some(dup) = spans[i].as_ref() else {
@@ -7007,24 +7248,19 @@ pub(crate) fn respell_colliding_duplications<P: ReferenceProvider>(
             continue;
         }
         // The duplicated bases, read from the reference: `[start, end]` 1-based
-        // inclusive is `[start - 1, end)` half-open 0-based, after `delta` puts
-        // the member's region axis onto the served sequence (#1284).
-        let Some(delta) = region_sequence_delta(dup.region, &dup.provider_key, provider) else {
+        // inclusive is `[start - 1, end)` half-open 0-based. The span is already
+        // on the served sequence's axis (#1284, #1482), so there is no per-region
+        // conversion left to apply here.
+        //
+        // Checked because `dup.start` comes off a parsed description by way of a
+        // conversion that adds the record's CDS bounds, so it is not bounded by
+        // anything this function controls; an unchecked subtraction panics in a
+        // debug build where the refusal one line below is the answer every other
+        // unrepresentable coordinate here already gets.
+        let Some(from_sequence) = dup.start.checked_sub(1) else {
             continue;
         };
-        // Checked, matching the two sibling conversions (`cds_relative_gap` and
-        // `payload_at_junction`). `dup.start`/`dup.end` come off a parsed
-        // description and `delta` off the record's CDS bounds, so neither is
-        // bounded by anything this function controls; an unchecked `i64` add
-        // panics in a debug build where the refusal one line below is the answer
-        // every other unrepresentable coordinate here already gets.
-        let (Some(from_axis), Some(to_axis)) = (
-            dup.start.checked_sub(1).and_then(|s| s.checked_add(delta)),
-            dup.end.checked_add(delta),
-        ) else {
-            continue;
-        };
-        let (Ok(from), Ok(to)) = (u64::try_from(from_axis), u64::try_from(to_axis)) else {
+        let (Ok(from), Ok(to)) = (u64::try_from(from_sequence), u64::try_from(dup.end)) else {
             continue;
         };
         let Ok(copied) = provider.get_sequence(&dup.provider_key, from, to) else {
@@ -7151,7 +7387,10 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
     let Some(kind) = cis_kind_of(&members[0]) else {
         return;
     };
-    let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
+    let spans: Vec<Option<MemberSpan>> = members
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
 
     // Group by (accession, region, junction). Only members that occupy a
     // junction and claim no bases participate.
@@ -7186,7 +7425,7 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
     let origins: Vec<Option<(i64, i64)>> = if before.len() == members.len() {
         before
             .iter()
-            .map(|v| member_span(v, kind).map(|s| (s.start, s.end)))
+            .map(|v| member_span(v, kind, provider).map(|s| (s.start, s.end)))
             .collect()
     } else {
         vec![None; members.len()]
@@ -7294,18 +7533,20 @@ pub(crate) fn coalesce_members_at_one_junction<P: ReferenceProvider>(
 /// `None` when some step is not payload-preserving, or the reference cannot be
 /// read — the caller's signal to leave the member where it is rather than emit
 /// a description of different bases.
+///
+/// `from` and `to` are **sequence** junctions, which is what
+/// [`MemberSpan::junction`] carries (#1482): the bases stepped over are read
+/// straight off the served sequence, with no per-region conversion left to
+/// apply. Every caller passes junctions taken from a span, so they arrive
+/// already converted.
 fn payload_at_junction<P: ReferenceProvider>(
     payload: &[Base],
     from: i64,
     to: i64,
     key: &str,
-    delta: i64,
     provider: &P,
 ) -> Option<Vec<Base>> {
-    // `from`/`to` are junctions on the member's own region axis; `delta` puts
-    // the base they step over onto the sequence the provider serves.
     let base_at = |position: i64| -> Option<Base> {
-        let position = position.checked_add(delta)?;
         let (start, end) = (
             u64::try_from(position.checked_sub(1)?).ok()?,
             u64::try_from(position).ok()?,
@@ -7366,27 +7607,25 @@ fn translate_junction_member<P: ReferenceProvider>(
     ) else {
         return;
     };
+    // Both junctions are sequence coordinates (#1482), so `delta` is a plain
+    // count of bases and the rotation reads the reference directly.
     let destination = junction + delta;
-    let Some(axis_delta) = region_sequence_delta(from.region, &from.provider_key, provider) else {
-        return;
-    };
     let Some(moved) = payload_at_junction(
         &payload,
         junction,
         destination,
         &from.provider_key,
-        axis_delta,
         provider,
     ) else {
         return;
     };
 
     let original = variant.clone();
-    translate_member(variant, delta, kind, from);
+    translate_member(variant, delta, kind, from, provider);
     if *variant == original {
         return; // the translation was refused; nothing to repair
     }
-    let landed = member_span(variant, kind)
+    let landed = member_span(variant, kind, provider)
         .filter(|s| s.junction == Some(destination))
         .and_then(|s| junction_payload(variant, kind, &s, provider));
     if landed.as_deref() == Some(moved.as_slice()) {
@@ -7467,10 +7706,11 @@ fn translate_junction_member<P: ReferenceProvider>(
 /// Insertions stay out of it under either predicate, and must: an insertion's
 /// span *is* the gap it occupies, so `g.264_265insA` nominally covers position
 /// 264 while changing nothing there.
-pub(crate) fn drop_identity_members_covered_by_siblings(
+pub(crate) fn drop_identity_members_covered_by_siblings<P: ReferenceProvider>(
     members: &mut Vec<HgvsVariant>,
     phase: AllelePhase,
     uncertain: bool,
+    provider: &P,
 ) {
     if phase != AllelePhase::Cis || uncertain || members.len() < 2 {
         return;
@@ -7478,7 +7718,10 @@ pub(crate) fn drop_identity_members_covered_by_siblings(
     let Some(kind) = cis_kind_of(&members[0]) else {
         return;
     };
-    let spans: Vec<Option<MemberSpan>> = members.iter().map(|v| member_span(v, kind)).collect();
+    let spans: Vec<Option<MemberSpan>> = members
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
     let is_identity = |v: &HgvsVariant| {
         matches!(
             cis_axis_parts(v, kind).map(|(_, _, _, _, edit)| edit),
@@ -7562,17 +7805,15 @@ fn junction_payload<P: ReferenceProvider>(
             sequence: InsertedSequence::Literal(literal),
         } => Some(literal.bases().to_vec()),
         NaEdit::Duplication { .. } => {
-            // The span is on the member's own region axis; shift it onto the
-            // served sequence before reading (#1284).
-            let delta = region_sequence_delta(span.region, &span.provider_key, provider)?;
-            // Checked, for the same reason as the sibling conversions in
-            // `respell_colliding_duplications` and `cds_relative_gap`: the span
-            // comes off a parsed description and `delta` off the record's CDS
-            // bounds, so an unchecked `i64` add would panic in a debug build
-            // where every other unrepresentable coordinate here declines.
+            // The span is already on the served sequence's axis (#1284, #1482),
+            // so it is read directly. Checked for the same reason as the sibling
+            // conversion in `respell_colliding_duplications`: the span reaches
+            // here through an addition of the record's CDS bounds, so an
+            // unchecked subtraction would panic in a debug build where every
+            // other unrepresentable coordinate here declines.
             let (from, to) = (
-                u64::try_from(span.start.checked_sub(1)?.checked_add(delta)?).ok()?,
-                u64::try_from(span.end.checked_add(delta)?).ok()?,
+                u64::try_from(span.start.checked_sub(1)?).ok()?,
+                u64::try_from(span.end).ok()?,
             );
             let copied = provider.get_sequence(&span.provider_key, from, to).ok()?;
             if copied.len() as i64 != span.end - span.start + 1 {
@@ -7584,15 +7825,6 @@ fn junction_payload<P: ReferenceProvider>(
     }
 }
 
-/// Both endpoints of a member's location as `(region, axis position)`, **not**
-/// requiring the two to share a region.
-///
-/// [`member_span`] folds them through `join_pos`, which refuses a
-/// region-spanning range because the pass's own adjacency arithmetic is
-/// region-local. That refusal is right for a *span* and wrong for verifying a
-/// *gap*: an interbase point on the CDS start is legitimately named `c.-1_1`,
-/// and reading it back through `member_span` would report `None` and force a
-/// correct repair to revert. Used only by [`respell_at_gap`].
 /// Re-spell a member whose landing junction is one past the sequence end as the
 /// equivalent boundary `delins` on the last base (#1327).
 ///
@@ -8038,7 +8270,10 @@ fn member_endpoints(v: &HgvsVariant) -> Option<((Region, i64), (Region, i64))> {
 ///
 /// The junction is passed rather than read off `span`, because where it sits
 /// depends on the spelling: `span.end` is the junction for a duplication, but
-/// one position past it for an insertion, whose span is the gap itself.
+/// one position past it for an insertion, whose span is the gap itself. It is a
+/// **sequence** coordinate, like every other position [`MemberSpan`] carries
+/// (#1482); on the genomic and `n.` axes that is the axis number itself, and on
+/// the CDS-relative ones `cds_relative_gap` below names it back.
 ///
 /// Reverts unless the result reads back exactly as intended.
 ///
@@ -8059,7 +8294,10 @@ fn member_endpoints(v: &HgvsVariant) -> Option<((Region, i64), (Region, i64))> {
 ///
 /// The verification is [`member_endpoints`] rather than [`member_span`] for
 /// that reason: the correct answer here is a range whose ends sit in two
-/// regions, and `member_span` refuses those by construction.
+/// regions, and what this has to confirm is that each end was *written* in the
+/// region it belongs to. `member_span` answers in sequence coordinates (#1482),
+/// which is the right question for comparing members and the wrong one for
+/// checking a spelling.
 /// What [`respell_at_gap`] does when the gap it is told to write runs one base
 /// past the end of the sequence.
 ///
@@ -8096,6 +8334,17 @@ fn respell_at_gap<P: ReferenceProvider>(
     provider: &P,
     on_overrun: TerminalOverrun,
 ) {
+    // A member in a region with no bases of its own — `n.-N` / `n.*N` — carries
+    // a **virtual** sequence position (see `region_span_delta`), which is enough
+    // to compare it against a sibling and not enough to write it back. The
+    // genomic and `n.` arms below take `gap_start` as an axis number directly,
+    // which is only true where the two coincide, so refuse here rather than let
+    // a virtual coordinate reach them and re-spell the member several bases
+    // over. `region_sequence_delta`, deliberately, not `region_span_delta`:
+    // "has real bases" is exactly the question being asked.
+    if region_sequence_delta(span.region, &span.provider_key, provider).is_none() {
+        return;
+    }
     let original = variant.clone();
     let (gap_start, gap_end) = (junction, junction + 1);
 
@@ -8104,11 +8353,11 @@ fn respell_at_gap<P: ReferenceProvider>(
     // CDS-relative one is resolved through the transcript.
     let cds_relative_gap = |body: Region| -> Option<((Region, i64), (Region, i64))> {
         let (cds_start, cds_end) = ordered_cds_bounds(&span.provider_key, provider)?;
-        let delta = region_sequence_delta(span.region, &span.provider_key, provider)?;
-        let left = junction.checked_add(delta)?;
-        let right = left.checked_add(1)?;
+        // `junction` is already a sequence coordinate (#1482); only the way back
+        // onto the axis is left to do.
+        let right = junction.checked_add(1)?;
         Some((
-            cds_axis_position(left, cds_start, cds_end, body)?,
+            cds_axis_position(junction, cds_start, cds_end, body)?,
             cds_axis_position(right, cds_start, cds_end, body)?,
         ))
     };
@@ -8184,12 +8433,14 @@ fn respell_at_gap<P: ReferenceProvider>(
     // caller wanted repaired stays unrepaired, which is the pre-existing
     // spelling of the input rather than a new defect, and every coordinate it
     // names exists.
+    //
+    // `junction` is a sequence coordinate (#1482), so the overrun test is a
+    // direct comparison with the length. `delta` is still read, because
+    // `respell_at_sequence_end` names the last base back on the *member's* axis
+    // and needs the offset to get there.
     if let Some(delta) = region_sequence_delta(span.region, &span.provider_key, provider) {
-        let Some(last) = junction.checked_add(delta) else {
-            return;
-        };
         if let Ok(length) = provider.get_sequence_length(&span.provider_key) {
-            if u64::try_from(last) == Ok(length) {
+            if u64::try_from(junction) == Ok(length) {
                 match on_overrun {
                     TerminalOverrun::RespellAtBoundary => {
                         respell_at_sequence_end(variant, span, &edit, delta, length, provider);
@@ -8997,6 +9248,90 @@ mod tests {
         );
         // No transcript position 0 or below.
         assert_eq!(cds_axis_position(0, 13, 24, Region::Cds), None);
+    }
+
+    /// A member whose two ends lie in different regions has a span (#1482).
+    ///
+    /// This is the root cause, pinned at the reader rather than only through an
+    /// end-to-end description. `member_span` used to route through
+    /// `cis_axis_parts` -> `join_pos`, which refuses a cross-region interval on
+    /// the (false) grounds that such a range "has no valid HGVS syntax". It
+    /// returned `None`, and every sibling-awareness pass drops a `None` through
+    /// `filter_map` rather than declining — so `c.12_*1del` was invisible **as a
+    /// sibling** module-wide, and `respell_colliding_duplications` could not see
+    /// the collision it exists to repair.
+    ///
+    /// Pinned as sequence coordinates because that is what makes the member
+    /// comparable with siblings in other regions at all: `c.12_*1` is two bases,
+    /// while its written endpoints differ by `1 - 12 = -11`.
+    #[test]
+    fn a_member_spanning_a_region_boundary_has_a_span() {
+        // CDS is transcript 13..=24, so `c.12` is transcript 24 and `c.*1` is 25;
+        // `c.-1` is 12 and `c.1` is 13.
+        let provider = bounds_transcript_provider();
+        let span = |descriptor: &str| {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            member_span(&variant, CisKind::Cds, &provider)
+        };
+
+        let across_the_stop = span("NM_TEST.1:c.12_*1del").expect("CDS/3'UTR span must be read");
+        assert_eq!((across_the_stop.start, across_the_stop.end), (24, 25));
+        assert_eq!(
+            (across_the_stop.axis_start, across_the_stop.axis_end),
+            (12, 1),
+            "the written pair is kept for whoever has to render it back"
+        );
+        assert!(across_the_stop.crosses_regions);
+        assert_eq!(across_the_stop.region, Region::Cds, "where the span begins");
+        assert_eq!(
+            across_the_stop.end - across_the_stop.start + 1,
+            2,
+            "two bases; the written endpoints would have said -11"
+        );
+
+        let across_the_start = span("NM_TEST.1:c.-1_1del").expect("5'UTR/CDS span must be read");
+        assert_eq!((across_the_start.start, across_the_start.end), (12, 13));
+        assert!(across_the_start.crosses_regions);
+        assert_eq!(across_the_start.region, Region::FivePrimeUtr);
+
+        // A member wholly inside one region is unaffected, and is the control
+        // that says the conversion did not simply shift everything.
+        let inside = span("NM_TEST.1:c.11_12del").expect("in-CDS span must be read");
+        assert_eq!((inside.start, inside.end), (23, 24));
+        assert_eq!((inside.axis_start, inside.axis_end), (11, 12));
+        assert!(!inside.crosses_regions);
+    }
+
+    /// The collision the boundary-crossing member was invisible to.
+    ///
+    /// `respell_colliding_duplications` turns a duplication that claims a
+    /// sibling's bases back into an insertion, "a form that claims nothing and so
+    /// cannot collide" (#1320/#1323). With `c.12_*1del` reading as `None` it saw
+    /// no sibling at all and left `c.[11_12dup;12_*1del]` standing — two members
+    /// claiming transcript 24, which ferro's own `parse_hgvs` rejects as a
+    /// self-cancelling allele.
+    ///
+    /// Asserted on the *predicate*, not on a normalized string, so it pins the
+    /// step that was broken rather than any downstream spelling of the repair.
+    #[test]
+    fn a_duplication_collides_with_a_boundary_crossing_sibling() {
+        let provider = bounds_transcript_provider();
+        let span = |descriptor: &str| {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            member_span(&variant, CisKind::Cds, &provider).expect("span must be read")
+        };
+        let dup = span("NM_TEST.1:c.11_12dup");
+        let del = span("NM_TEST.1:c.12_*1del");
+        assert!(del.claims_bases);
+        assert!(
+            del.start <= dup.end && del.end >= dup.start,
+            "the deletion claims transcript {}..={} and the duplication {}..={}; \
+             they meet at 24, which is the collision the repair pass looks for",
+            del.start,
+            del.end,
+            dup.start,
+            dup.end
+        );
     }
 
     #[test]
