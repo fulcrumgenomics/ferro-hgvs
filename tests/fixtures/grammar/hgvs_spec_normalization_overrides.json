@@ -193,6 +193,25 @@
       "note": "Same shape as the `235_237` class and the same carve-out, but here the spec does mark the split spelling invalid — so the split member is a `false-acceptance` row. Note the spec's own layout is off: the `:42` NOTE sits under the `c.9002_9009delinsTTT` bullet while the variant it names belongs to the `:37` bullet (`c.145_147` is `CGC`; `145C>T` + `147C>G` gives `TGG`). The two members are cited separately for that reason. This class is what the `false-acceptance` census cannot say: ferro not only accepts a spelling the spec forbids, it keeps it as a second fixed point for a variant it already has a form for."
     },
     {
+      "id": "dna-delins-vs-two-substitutions-79-80",
+      "reference": "LRG_199t1",
+      "members": [
+        "LRG_199t1:c.79_80delinsTT",
+        "c.[79G>T;80C>T]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/DNA/substitution.md:30",
+          "quote": "`LRG_199t1:c.79_80delinsTT`"
+        },
+        {
+          "clause": "docs/recommendations/DNA/substitution.md:32",
+          "quote": "changes involving two or more consecutive nucleotides are described as deletion-insertion (delins) so the description <code class=\"invalid\">c.[79G>T;80C>T]</code> is not correct"
+        }
+      ],
+      "note": "SEPARATION ZERO, which is what distinguishes this class from every other one here. `c.79` and `c.80` are consecutive — no unchanged nucleotide between them — where the `145_147` and `235_237` classes are separation ONE (`c.146`, `c.236` unchanged) and fall under the codon carve-out `delins-codon-carve-out-gap-one`. Ruling `delins-adjacent-members-when-both-consume-reference` is about separation zero and cited `145-147` before this class existed, which associated a decided ruling with the exemplar of a different one. The class is built from that ruling's own governing clause: `substitution.md:32` renders the split spelling `class=\"invalid\"` and calls it \"not correct\" in as many words, which is the strongest verdict the recommendations pass on any spelling this project has litigated."
+    },
+    {
       "id": "rna-delins-vs-two-substitutions-142-144",
       "members": [
         "r.142_144delinsugg",
@@ -537,6 +556,65 @@
       "rationale": "The two clauses are five lines apart in one document and cannot both hold. `:22` states the rule: a description carrying both a range and a unit is invalid because the range already fixes the unit — its example is `r.-125_-123cug[4]`. `:27` then publishes `NM_024312.4:r.-6_-3g[6]`, which is the same shape (range `-6_-3` plus unit `g`), as the worked example of the UTR carve-out to the multiple-of-3 restriction. Whatever `:27` is demonstrating, it demonstrates it using a spelling `:22` forbids.\n\nMEASURED, 2026-08-07: ferro answers BOTH WAYS depending on input-hygiene mode, which is worth recording precisely because it looks like one behaviour and is not. Through the plain library path (`parse_hgvs`, no preprocessing) the published form is left alone: `r.-6_-3g[6]` in, `r.-6_-3g[6]` out — the `:27` answer. Through `--error-mode lenient` the preprocessor strips the redundant label (W3013 RedundantRepeatLabel) and normalization emits `r.-6_-3[6]` — the `:22` answer. Through `--error-mode strict` the same repair becomes a rejection. So the divergence lives in the INPUT-HYGIENE layer, not in the normalizer, and the three modes are three different readings of the same conflict.\n\nWHAT IS NOT ESTABLISHED. Following the rule at `:22` over the example at `:27` is the defensible reading — a rule generalises and an example does not, and `:22` gives its reason — and that is what the lenient path does. But it is a reading, and it is not the project's to make: the conflict is upstream's, and either clause could be the one that is wrong. Nobody has ruled, so all three behaviours are pinned as observations in tests/fixtures/spec-worked-examples/cases.json rather than reconciled, and ferro is NOT being 'fixed' to match an example its own document forbids.\n\nWhat would settle it: an upstream correction. Owed as a #466 entry against the HGVS nomenclature repository — either `:22` should carve out the UTR case, or `:27` should be respelled as `r.-6_-3[6]`.\n\nNote this record is about SPELLING REDUNDANCY only. The multiple-of-3 restriction that `:24-27` is actually about is not in doubt: ferro implements it exactly, including the UTR carve-out, and all six of the spec's worked examples for it reproduce.",
       "applies_to": [],
       "equivalence_classes": []
+    },
+    {
+      "id": "delins-adjacent-members-when-both-consume-reference",
+      "question": "When a normalized cis allele leaves two members with no unchanged nucleotide between them, and both members consume reference bases, is that a description the recommendations admit?",
+      "status": "decided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/DNA/delins.md:16",
+          "quote": "changes involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants"
+        },
+        {
+          "clause": "docs/recommendations/DNA/substitution.md:32",
+          "quote": "changes involving two or more consecutive nucleotides are described as deletion-insertion (delins) so the description <code class=\"invalid\">c.[79G>T;80C>T]</code> is not correct"
+        },
+        {
+          "clause": "docs/recommendations/general.md:34",
+          "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/general.md:56",
+          "quote": "the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion"
+        },
+        {
+          "clause": "docs/recommendations/DNA/duplication.md:18",
+          "quote": "when a variant can be described as a duplication, it **must** be described as a duplication and not as, e.g., an insertion"
+        }
+      ],
+      "governing": "docs/recommendations/DNA/substitution.md:32",
+      "deviates_from": [
+        "docs/recommendations/general.md:56"
+      ],
+      "rationale": "NO CLAUSE LICENSES A SPLIT AT SEPARATION ZERO, AND THE SPEC MARKS ONE INVALID BY NAME. `general.md:34` and `delins.md:17` govern members separated by ONE OR MORE nucleotides; they say nothing about members separated by none. `delins.md:16` covers that case directly — two or more consecutive changed nucleotides are ONE delins — and `substitution.md:32` supplies the worked counterexample: for `LRG_199t1:c.79_80delinsTT` the split spelling `c.[79G>T;80C>T]` is rendered `class=\"invalid\"` and called \"not correct\" in as many words. That is why `substitution.md:32` and not `:16` is named governing: it is the one place the spec adjudicates the shape rather than defining a type.\n\nTHE ONE CLAUSE THAT COULD BE READ THE OTHER WAY IS `general.md:56`, and it is deviated from. Prioritisation ranks substitution first, so a reader can argue that a one-base changed column adjacent to a delins should stay a substitution. It should not: `:56` ranks the type of ONE description of ONE change, `delins` is absent from its list entirely, and `substitution.md:32` is that argument's own counterexample.\n\nSCOPE, WHICH IS LOAD-BEARING. This settles only the case where BOTH adjacent members consume reference bases — `sub`, `del`, `delins` or `inv` on each side. Where either member is a `dup` or an `ins` the ruling does not reach, because `duplication.md:18` requires a variant describable as a duplication to be described as one, and merging would destroy it. That is a real second conflict and it is left open here. The re-measurement below turned up a THIRD shape the scope clause did not contemplate: an adjacent pair one side of which is a repeat expansion (`NC_TEST.1:g.[266_273del;274_278T[1];280_283del]`). Repeat notation is outside this ruling as written; it is named here rather than quietly folded in, and it is also left open.\n\nTHIS IS AN ADJUDICATED-CORRECT RECORD, AND IT WAS NOT ONE WHEN IT WAS FIRST WRITTEN. The first revision framed the ruling as pinning a DEVIATION: ferro normalized `NM_TEST.1:c.10_13delinsTAAT` to `c.[10_12delinsTAA;13A>T]`, cutting the block at the codon boundary between codon 4 (`c.10_12`) and codon 5 (`c.13_15`) and leaving the halves flush, so the test asserted the WRONG form to keep the gap visible. PR #1537 (\"never split a delins into members on consecutive nucleotides\") merged and closed #1524 before this record was pushed, and ferro now emits the merged `c.10_13delinsTAAT`. The pinned test therefore asserts the SPEC'S form and passes: it is a regression guard against a decided answer, not a deviation marker. The two kinds are not interchangeable, so the record says which it is.\n\nTHE FIGURES MOVED WITH IT, AND THE OLD ONES ARE KEPT BECAUSE THE MEASUREMENT KILLED THE CLAIM. Measured before #1537 over the 11,272-class designed cis corpus (`examples/generate_cis_confluence_corpus.rs`) in the 3' direction: 4,639 divergent classes; 104 of them left an interior gap of zero in a normalized output; 65 of the 104 had an adjacent pair in which both members consume reference — ALL 65 on the `c.` axis and none on `g.`, which is what identified the codon-precision splitter as the producer. Re-measured after #1537 on the same corpus and the same direction: 4,643 divergent classes; 36 leave a zero interior gap in any output (31 counting only the most-split output, which is the shape census's `has-0` bucket); and ZERO fall in this ruling's scope. Every surviving zero-gap adjacency is carved out — 33 classes with a `dup` or an `ins` on one side, 3 with a repeat — so the whole remaining population is precisely the part this record declined to reach. The headline \"65 classes, all on the coding axis\" is dead, and the axis argument that rode on it is dead with it; #1537 removed the shape rather than moving it to another axis.\n\nTHE RULING GENERALISES; IT WAS NOT FITTED TO ONE REPRODUCER. This record's shape census found the defect on the designed cis corpus independently of issue #1524, which had already filed it at 61 rows / 59 distinct over a different corpus — two disjoint corpora, one clause, the same answer, which is the evidence that the reading is about the description rather than about one generator. (Note #1524's title and body cite `DNA/delins.md:15`, the one-nucleotide substitution clause; the text they mean is at `:16`.) Mutalyzer was not consulted and would not be the authority here in any case: the spec states this answer in as many words at `substitution.md:32`, and both precedence orders on record in `adjudication-precedence-order` rank the spec first where it speaks, so this ruling does not depend on which of them is chosen.",
+      "equivalence_classes": [
+        "dna-delins-vs-two-substitutions-79-80"
+      ]
+    },
+    {
+      "id": "separation-is-a-property-of-the-spelling-not-of-the-variant",
+      "question": "The separation rule keys on the number of unchanged nucleotides between two variants, but two spellings of one variant can present different separations. On which of them is the rule to be evaluated?",
+      "status": "undecided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/general.md:34",
+          "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/DNA/delins.md:17",
+          "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/DNA/delins.md:79-84",
+          "quote": "the two variants may have been reported (or might occur) individually"
+        },
+        {
+          "clause": "docs/consultation/open-issues.md:77-78",
+          "quote": "one variant can be described using different formats. This is undesired; HGVS recommendations should be extended by specifying when to use which format."
+        }
+      ],
+      "rationale": "THE QUANTITY THE RULE KEYS ON IS NOT A FUNCTION OF THE VARIANT. `general.md:34` and `delins.md:17` are stated over \"two variants\", which presupposes a decomposition; the separation between them is read off that decomposition, not off the reference and the denoted sequence. A normalizer sees only the latter pair, so the rule as written is not evaluable on what a normalizer knows.\n\nDEMONSTRATED, NOT ARGUED. On a synthetic transcript whose `c.9` is `T` and whose `c.10`/`c.11` are both `A`, the spellings `c.[9del;10del;13del]` and `c.[9del;11del;13del]` denote the same sequence — verified by applying each to the reference through `hgvs_to_spdi`, independently of the normalizer. The first presents separations of 0 and 2, the second separations of 1 and 1. `general.md:34` merges the first pair and splits the second, so it returns two answers for one variant. Both are pinned in `tests/it/cis_confluence_adjudication.rs`.\n\nAT CORPUS SCALE, RE-MEASURED AFTER #1537. Over the 11,272-class designed cis corpus, 642 of the 9,442 distinct `(axis, reference, denoted sequence)` variants are reachable from more than one design, and 286 of those from designs whose separation parameters differ — both unchanged by #1537, which is itself the point: that PR settled the separation-ZERO question, and this record is about every other separation. And of the 4,643 classes that diverge in the 3' direction, 4,568 (98.4%) have the single spanning spelling reaching an output DISJOINT from every output the multi-member spellings reach — i.e. ferro is preserving the partition it was handed rather than deriving one. That is what evaluating a spelling-relative rule looks like from the outside, and it is the mechanism behind two thirds of the pile. (The pre-#1537 figures were 4,639 and 4,567; the shape this record describes is untouched.)\n\nTHE SPEC'S OWN DISCRIMINATOR IS PROVENANCE, WHICH MAKES THIS UNFIXABLE AS STATED. `delins.md:79-84` gives the reason for preferring individual descriptions: \"the two variants may have been reported (or might occur) individually\". Provenance is carried only by the input's spelling. A normalizer that reads it back is, by construction, not confluent; one that ignores it must pick a canonical partition for every `(reference, sequence)` pair, which is `canonical-form-choice-when-both-legal`. `open-issues.md:77-78` records that the committee agrees the gap is a gap.\n\nWHAT IS NOT ESTABLISHED. Which partition should be canonical. Nothing here chooses one, and nothing here should be read as choosing one: the choice moves a stored representation for a downstream consumer and is an operator decision, ranked by `adjudication-precedence-order`. What this record adds is that the question cannot be deferred to `general.md:34`, because `:34` does not answer it.\n\nRE-CHECKED AGAINST #1537, AND STILL UNDECIDED. #1537 (\"never split a delins into members on consecutive nucleotides\") settled the separation-ZERO case and is recorded at `delins-adjacent-members-when-both-consume-reference`. It does not reach this record: the demonstration above turns on a separation-0 pair being MERGED while a separation-1 pair is SPLIT, and #1537 strengthened exactly the first half — `c.[9del;10del;13del]` still normalizes to `c.[9_10del;13del]` and `c.[9del;11del;13del]` still normalizes to itself, so the two spellings of one variant still reach two outputs. Both pinned assertions passed unchanged across #1537. The record stays `undecided`."
     }
   ]
 }
