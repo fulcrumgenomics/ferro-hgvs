@@ -72,6 +72,17 @@
 //!    scale is expensive in a way adding a family is not — check the dump cost
 //!    before crossing a kilobase core with anything.
 //!
+//! 5. **…and only at the sequence structure it builds them from** (`#1517`). The
+//!    families are drawn *on* the random cores, so any property of the reference
+//!    itself is whatever the xorshift produced. Where a reverse-complement block
+//!    coincides with its own reference is exactly such a property, and the one
+//!    family that built such a block —`delins_hiding_an_inversion` — emits its
+//!    pieces adjacent, so nothing in the corpus separated two multi-column runs of
+//!    an inversion and a gate keyed on that measured `0 of 78,028`.
+//!    `separated_revcomp_runs` is the answer, and like `long_block_inversion` it
+//!    brings its own designed references because a random core cannot be asked to
+//!    have a coincidence pattern.
+//!
 //! ## The corpus is deliberately independent of `tests/it/common/`
 //!
 //! An example cannot reach test helpers, so the reference construction below is its
@@ -504,6 +515,213 @@ fn near_palindromic_core(len: usize) -> String {
     String::from_utf8(seq).expect("ACGT is valid UTF-8")
 }
 
+/// The family drawn against the **reverse-complement designs**, and the one shape
+/// in this file whose point is the *distance between* its changed runs (#1454's
+/// shape, at a separation this corpus could not previously reach).
+///
+/// Kept out of [`FAMILIES`] for the same reason [`LONG_FAMILY`] is: it cannot be
+/// drawn on an arbitrary core. Whether a reverse-complement block coincides with
+/// its own reference at a given column is a property of the *sequence*, not of the
+/// description, so a family crossed with the random 20-mers gets whatever
+/// coincidence structure the xorshift happened to produce — which is why
+/// `delins_hiding_an_inversion`, the only other family that builds a
+/// reverse-complement block, emits its two pieces at **separation 0** and at no
+/// other separation. A gate that engages only at separation >= 2 with multi-column
+/// pieces therefore fires on no row of this corpus, and a change to one measures a
+/// blast radius of zero for structural reasons rather than for safe ones.
+///
+/// The designs below fix that by building the *reference* around the intended
+/// coincidence pattern instead of reading it off a random core — the same trade
+/// `long_corpus_sequences` makes for scale.
+const REVCOMP_FAMILY: (&str, &str) = (
+    "separated_revcomp_runs",
+    "a reverse-complement block whose changed runs are multi-column and separated \
+     by 0, 1, 2, 4 or 8 unchanged columns",
+);
+
+/// Reference columns in each changed run of a `separated_revcomp_runs` design.
+///
+/// **Two, never one**, and that is the whole point of the family. A one-column run
+/// is a substitution, and the separation rules for substitutions are already dense
+/// in this corpus (`three_member_allele`, `dup_plus_sub`, `del_plus_sub`). What no
+/// family builds is a *multi-column* changed run — a piece that has to be typed
+/// `delins` or `inv` rather than `>` — at a separation greater than zero.
+const REVCOMP_RUN_WIDTH: usize = 2;
+
+/// Unchanged reference columns between consecutive changed runs.
+///
+/// `0` is the merge case (`general.md:34`, `DNA/delins.md:16-18` — adjacent changes
+/// are one description), `1` is the codon carve-out (`general.md:35` — merged only
+/// when both changes fall inside one codon, which needs a reading frame and so can
+/// never apply on `g.`), and `2`/`4`/`8` are the split cases. `8` is also
+/// `COALESCE_MAX_SEPARATION`, so the sweep sits on that boundary rather than
+/// stopping short of it.
+const REVCOMP_SEPARATIONS: &[usize] = &[0, 1, 2, 4, 8];
+
+/// Offsets into the core at which a design's block is planted.
+///
+/// Three, because the *axis* geometry is what varies with the offset and not the
+/// block: at 0 the block starts in the `cx` reference's 5'UTR, at 8 it runs past
+/// `CDS_END` into the 3'UTR, and every offset crosses at least one of the two
+/// `EXON_SPANS` junctions. The block itself is identical at all three, so a
+/// difference between them is a difference the axis made.
+const REVCOMP_SPAN_OFFSETS: &[usize] = &[0, 4, 8];
+
+/// Length of a `separated_revcomp_runs` core.
+///
+/// The same 20 as [`corpus_sequences`] deliberately: `CDS_START`/`CDS_END` and
+/// `EXON_SPANS` are both tuned to a 20-base core, so matching it is what lets these
+/// designs run on all three axes rather than being restricted to `g.`/`c.` the way
+/// the kilobase cores are.
+const REVCOMP_CORE_LEN: usize = 20;
+
+/// One `separated_revcomp_runs` design: a reference, a block inside it, and the
+/// alternate that block's inversion produces.
+///
+/// Both sides are recorded because this family is the only one in the file that
+/// knows its own **ground truth**. Every other family is a set of descriptions and
+/// nothing more, so the harness can ask whether an output *moved* but never whether
+/// it is *right*. Here the generator built `alternate` itself, which is what makes
+/// the three oracles in the test module possible at all.
+struct RevcompDesign {
+    /// The dump's `reference` column. A label rather than the core, matching
+    /// [`long_corpus_sequences`], so a row names the design it came from.
+    label: String,
+    /// The 20-base reference sequence.
+    core: String,
+    /// 0-based offset of the block within `core`.
+    offset: usize,
+    /// Unchanged columns between consecutive changed runs.
+    separation: usize,
+    /// The block's reference bases: `core[offset..offset + span.len()]`.
+    span: String,
+    /// `revcomp(span)` — what the block reads after the inversion. This is the
+    /// **intended alternate**, and the apply oracle checks the normalized output
+    /// against it rather than against the input.
+    alternate: String,
+}
+
+/// The block of a design at `separation`, as literal reference bases.
+///
+/// Written out rather than generated, because each one is a small hand
+/// construction that a reader should be able to check by eye — and
+/// `the_designed_blocks_have_the_coincidence_structure_they_claim` re-derives the
+/// run structure from the string, so a typo fails rather than silently producing a
+/// different shape. `AATGCACA` (separation 4) is the worked case: it reverse
+/// complements to `TGTGCATT`, coinciding at its four interior columns and leaving
+/// two 2-base changes.
+///
+/// **Why the odd separation needs three runs.** A column of a block coincides with
+/// its own reverse complement iff `span[i] == complement(span[L-1-i])`, and
+/// complement is an involution — so column `i` coincides exactly when its mirror
+/// `L-1-i` does. The changed/unchanged pattern of *any* whole-block inversion is
+/// therefore a palindrome, and an odd-length block's centre column is its own
+/// mirror and can never coincide. Two changed runs separated by an odd gap would
+/// need that gap to straddle the centre of an even-length block (impossible: the
+/// gap is centred, so its length has the parity of the block) or to sit at the
+/// centre of an odd-length block (impossible: the centre column is always changed).
+/// So separation 1 is unreachable with two runs and reachable with three, whose
+/// two gaps are mirror images of each other. That is a fact about reverse
+/// complements, not a limitation of these five strings.
+fn revcomp_span(separation: usize) -> &'static str {
+    match separation {
+        0 => "ACCA",
+        1 => "AACTTGAA",
+        2 => "AACGAA",
+        4 => "AATGCACA",
+        8 => "AACGTATACGAA",
+        other => unreachable!("no design for separation {other}"),
+    }
+}
+
+/// The changed runs of a design at `separation`, as `(start, length)` block-local.
+///
+/// Derived from the parameters rather than from the sequence, because at separation
+/// **0** the two runs are adjacent and the sequence alone cannot tell them apart
+/// from one run of four — and telling them apart is the entire content of the
+/// merge case. `the_designed_blocks_have_the_coincidence_structure_they_claim`
+/// pins the two views against each other: the union of these runs must be exactly
+/// the set of columns the reverse complement actually changes.
+fn revcomp_runs(separation: usize) -> Vec<(usize, usize)> {
+    let count = if separation.is_multiple_of(2) { 2 } else { 3 };
+    let stride = REVCOMP_RUN_WIDTH + separation;
+    (0..count)
+        .map(|n| (n * stride, REVCOMP_RUN_WIDTH))
+        .collect()
+}
+
+/// The full design set: every separation at every offset.
+fn revcomp_designs() -> Vec<RevcompDesign> {
+    let mut designs = Vec::new();
+    for &separation in REVCOMP_SEPARATIONS {
+        let span = revcomp_span(separation);
+        for &offset in REVCOMP_SPAN_OFFSETS {
+            // A design whose block ran off the end of the core would silently
+            // produce a truncated span while its label still named the separation
+            // it no longer has.
+            assert!(
+                offset + span.len() <= REVCOMP_CORE_LEN,
+                "separation-{separation} block does not fit at offset {offset}"
+            );
+            designs.push(RevcompDesign {
+                label: format!("revcomp_sep{separation}_at{offset}"),
+                core: revcomp_core(offset, span),
+                offset,
+                separation,
+                span: span.to_string(),
+                alternate: revcomp(span),
+            });
+        }
+    }
+    designs
+}
+
+/// A design's core: filler everywhere, with `span` planted at `offset`.
+///
+/// The filler is period-4 `GCTA`, one rotation out of phase with the `ACGT` pad
+/// [`padded`] wraps a `g.` core in. That is deliberate — an in-phase filler would
+/// let the pad's own rotation continue straight through the flank, so a tract
+/// ending at the block edge could extend into the pad and a shift's stopping point
+/// would become a property of the padding rather than of the block.
+fn revcomp_core(offset: usize, span: &str) -> String {
+    let mut core: Vec<u8> = (0..REVCOMP_CORE_LEN).map(|i| b"GCTA"[i % 4]).collect();
+    core[offset..offset + span.len()].copy_from_slice(span.as_bytes());
+    String::from_utf8(core).expect("GCTA and the designed spans are valid UTF-8")
+}
+
+/// The three spellings of one design's variant, on `axis`.
+///
+/// All three denote the same bases by construction, so they are a **confluence
+/// class**: `the_three_spellings_of_a_design_converge` requires one output from
+/// all three, and the apply oracle requires that output to produce `alternate`.
+///
+/// The split spelling is the load-bearing one. It writes each changed run as its
+/// own `delins` member, which is the form the spec mandates at separation >= 2
+/// (`general.md:34`) and forbids at separation 0 (`DNA/delins.md:16-18`) — so
+/// across the five separations the same spelling is required, carved out, and
+/// forbidden in turn, and the normalizer has to tell those cases apart.
+fn revcomp_inputs_for(axis: &str, design: &RevcompDesign) -> Vec<String> {
+    let prefix = prefix_for(axis);
+    let p = |i: usize| hgvs_pos(axis, design.offset + i);
+    let last = design.span.len() - 1;
+    let members: Vec<String> = revcomp_runs(design.separation)
+        .iter()
+        .map(|&(start, len)| {
+            format!(
+                "{}_{}delins{}",
+                p(start),
+                p(start + len - 1),
+                &design.alternate[start..start + len]
+            )
+        })
+        .collect();
+    vec![
+        format!("{prefix}{}_{}inv", p(0), p(last)),
+        format!("{prefix}{}_{}delins{}", p(0), p(last), design.alternate),
+        format!("{prefix}[{}]", members.join(";")),
+    ]
+}
+
 fn complement(base: u8) -> u8 {
     match base {
         b'A' => b'T',
@@ -637,6 +855,26 @@ fn dump(seeds: u32) -> Vec<Row> {
                     axis,
                     direction: dir_label,
                     family: LONG_FAMILY.0,
+                    was_fixed_point: output == input,
+                    input,
+                    output,
+                });
+            }
+        }
+    }
+    // The reverse-complement designs are drawn against their own references for the
+    // same reason the long cores are: the property they vary — where a
+    // reverse-complement block coincides with its own reference — is a property of
+    // the sequence, so it cannot be crossed with the random cores below.
+    for design in revcomp_designs() {
+        for (axis, direction, dir_label) in axes_and_directions() {
+            for input in revcomp_inputs_for(axis, &design) {
+                let output = normalize_one(axis, &design.core, &input, direction);
+                rows.push(Row {
+                    reference: design.label.clone(),
+                    axis,
+                    direction: dir_label,
+                    family: REVCOMP_FAMILY.0,
                     was_fixed_point: output == input,
                     input,
                     output,
@@ -2135,6 +2373,95 @@ mod tests {
         assert!(
             !report.contains("No row moved"),
             "a report with a moved row must not claim a zero:\n{report}"
+        );
+    }
+
+    // ----------------------------------------------------------------------
+    // `separated_revcomp_runs` — the family
+    // ----------------------------------------------------------------------
+
+    /// The designed blocks really do have the run structure their parameters claim.
+    ///
+    /// Two views of the same thing are pinned against each other. [`revcomp_runs`]
+    /// derives the runs from `(width, separation)`; this re-derives them from the
+    /// **sequence**, by comparing the block with its own reverse complement column
+    /// by column. A typo in one of the five literals in [`revcomp_span`] moves the
+    /// second view and not the first, so it fails here rather than silently
+    /// contributing a design at a separation nobody asked for.
+    ///
+    /// Separation 0 is the one case where the two views legitimately differ: two
+    /// adjacent 2-column runs are indistinguishable *as a sequence* from one
+    /// 4-column run, which is exactly what "adjacent changes are one description"
+    /// means. So the sequence view is checked against the **union** of the runs,
+    /// and the count is checked only where a gap separates them.
+    #[test]
+    fn the_designed_blocks_have_the_coincidence_structure_they_claim() {
+        for &separation in REVCOMP_SEPARATIONS {
+            let span = revcomp_span(separation);
+            let alternate = revcomp(span);
+            let runs = revcomp_runs(separation);
+
+            let changed: Vec<usize> = (0..span.len())
+                .filter(|&i| span.as_bytes()[i] != alternate.as_bytes()[i])
+                .collect();
+            let designed: Vec<usize> = runs
+                .iter()
+                .flat_map(|&(start, len)| start..start + len)
+                .collect();
+            assert_eq!(
+                changed, designed,
+                "separation-{separation} block {span} inverts to {alternate}, which changes \
+                 columns {changed:?} — not the {designed:?} its run layout claims"
+            );
+            assert!(
+                runs.iter().all(|&(_, len)| len >= REVCOMP_RUN_WIDTH),
+                "separation-{separation} has a run narrower than {REVCOMP_RUN_WIDTH} columns, \
+                 so it is a substitution shape and not the multi-column one this family adds"
+            );
+            for pair in runs.windows(2) {
+                let [(start, len), (next, _)] = [pair[0], pair[1]];
+                assert_eq!(
+                    next - (start + len),
+                    separation,
+                    "runs of the separation-{separation} block are {} columns apart",
+                    next - (start + len)
+                );
+            }
+            assert_eq!(
+                runs.last().map(|&(s, l)| s + l),
+                Some(span.len()),
+                "the separation-{separation} block has unchanged columns outside its outermost \
+                 runs, so its stated span is not minimal"
+            );
+        }
+    }
+
+    /// The worked case is in the corpus, verbatim.
+    ///
+    /// `AATGCACA` reverse complements to `TGTGCATT`: a true inversion that coincides
+    /// with its own reference at its four interior columns, leaving two 2-base
+    /// changes separated by four unchanged ones. It is the shape the family exists
+    /// for, so it is pinned as a literal rather than left to be implied by the
+    /// parameters.
+    #[test]
+    fn the_worked_case_is_the_separation_four_design() {
+        assert_eq!(revcomp_span(4), "AATGCACA");
+        assert_eq!(revcomp("AATGCACA"), "TGTGCATT");
+        assert_eq!(revcomp_runs(4), vec![(0, 2), (6, 2)]);
+        // …and it reaches the dump, with both flanking runs multi-column.
+        let design = revcomp_designs()
+            .into_iter()
+            .find(|d| d.separation == 4 && d.offset == 0)
+            .expect("the separation-4 design exists");
+        assert!(design.core.starts_with("AATGCACA"));
+        assert_eq!(design.alternate, "TGTGCATT");
+        assert_eq!(
+            revcomp_inputs_for("g", &design),
+            vec![
+                "NC_TEST.1:g.257_264inv".to_string(),
+                "NC_TEST.1:g.257_264delinsTGTGCATT".to_string(),
+                "NC_TEST.1:g.[257_258delinsTG;263_264delinsTT]".to_string(),
+            ]
         );
     }
 
