@@ -757,16 +757,32 @@ fn spec_equivalence_classes_converge() {
 /// is what stops one being upgraded to `decided` without a reviewable diff, and
 /// stops an inconvenient record being deleted.
 const RULING_STATUSES: &[(&str, &str)] = &[
-    // `delins.md:17` (SHOULD NOT merge separated variants) against `delins.md:47`
-    // ("the delins format is recommended"), both SHOULD-strength under
-    // `style.md:9`, both reaching the `:44-47` example. Undecided: it governs
-    // ~138 of 208 adjudicated corpus rows, so settling it either way is a
-    // migration, and no operator ruling has been made.
+    // `delins.md:17` ("described individually … not as a delins") against
+    // `delins.md:47` ("the delins format is recommended"), both reaching the
+    // `:44-47` example. Undecided: it governs ~138 of 208 adjudicated corpus
+    // rows, so settling it either way is a migration, and no operator ruling
+    // has been made. Note both clauses are *lowercase* prose — the record's
+    // former "equal RFC 2119 strength" argument was withdrawn, because a census
+    // of `docs/recommendations/` finds an uppercase keyword in exactly one
+    // place outside `style.md` (`RNA/adjoined_transcript.md:21`).
     ("delins-merge-vs-individual-gap-two-or-more", "undecided"),
     // `general.md:34` against `general.md:56` on `c.76_83inv`, whose reverse
-    // complement coincides with the reference at 4 of 8 columns. Undecided and
-    // under active adjudication.
-    ("inversion-vs-two-substitutions-76-83", "undecided"),
+    // complement coincides with the reference at its 4 interior columns.
+    // Renamed from `inversion-vs-two-substitutions-76-83`: the competing
+    // members are two `delins` (`c.[76_77delinsTG;82_83delinsTT]`), and `:56`
+    // ranks substitution above inversion while not listing `delins` at all, so
+    // the old name carried #1230's answer onto a case `:56` does not reach.
+    ("inversion-vs-two-delins-76-83", "undecided"),
+    // Which authority ranks after the spec — the reference implementation, the
+    // shipped representation, or the filer's issues. Two orders are on record
+    // and neither was chosen; it decides both records above.
+    ("adjudication-precedence-order", "undecided"),
+    // Which of two legal descriptions of one variant ships. An open product
+    // decision, recorded as one so a measurement is not read as a mandate.
+    ("canonical-form-choice-when-both-legal", "undecided"),
+    // `delins.md:18` names no edit type; ferro applies it only to
+    // sub/unchanged/sub. Measured inert over 5.76M rows, never adjudicated.
+    ("codon-carve-out-shape-restriction", "undecided"),
     // The one the spec does settle: `delins.md:18`'s explicit exception for two
     // variants one nucleotide apart affecting one amino acid.
     ("delins-codon-carve-out-gap-one", "decided"),
