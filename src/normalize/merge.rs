@@ -7622,13 +7622,39 @@ fn translate_junction_member<P: ReferenceProvider>(
 
     let original = variant.clone();
     translate_member(variant, delta, kind, from, provider);
-    if *variant == original {
-        return; // the translation was refused; nothing to repair
-    }
+    // A refused translation is **not** "nothing to repair" (#1513). It used to
+    // return here, and that turned a correctly-computed barrier into a silent
+    // no-op: the caller had already decided this member must not sit where it
+    // does, and returning leaves it exactly there.
+    //
+    // `translate_member` refuses whenever the destination has no spelling *as
+    // this edit kind* — and for a duplication near the 5' end of an axis with no
+    // zero, that is routine rather than exotic. On `TAAAATTATATTTATTATTT`,
+    // `c.[1_2insAA;2_3insTT]` shifts its insertion 3' to `c.4_5dup`, sweeping
+    // across the `insTT` junction it does not commute with;
+    // `clamp_sibling_crossing_junctions` computes the barrier correctly and asks
+    // for junction 1, which for a two-base `dup` means the span `c.0_1`. There
+    // is no `c.0`, so the write reverted, the member stayed at `4_5`, and the
+    // allele went on to merge into `c.2_3insTTAA` — a description of **different
+    // bases** than the input.
+    //
+    // The repair the caller wants exists: the member re-spelled as a plain
+    // insertion carrying `moved` at `destination`, which is what the rest of this
+    // function already does for a translation that landed but changed meaning.
+    // A zero-width junction has a spelling everywhere a span may not, so falling
+    // through reaches it. `respell_at_gap` reverts anything it cannot place, and
+    // the guard at the end restores `original` when it does, so a member that
+    // truly cannot be moved is left as it was — the old behaviour, now reached by
+    // failing to place rather than by declining to try.
+    let translation_refused = *variant == original;
     let landed = member_span(variant, kind, provider)
         .filter(|s| s.junction == Some(destination))
         .and_then(|s| junction_payload(variant, kind, &s, provider));
-    if landed.as_deref() == Some(moved.as_slice()) {
+    // Only meaningful when the translation actually happened: on a refusal the
+    // member is still `original`, so this reads the payload it carries *where it
+    // was*, and if the barrier asked for the position it already occupies there
+    // was nothing to do in the first place.
+    if !translation_refused && landed.as_deref() == Some(moved.as_slice()) {
         return; // the spelling still denotes the same bases
     }
     let edit = NaEdit::Insertion {

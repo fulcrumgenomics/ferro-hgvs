@@ -224,6 +224,7 @@ mod issue_1482_boundary_crossing_sibling;
 mod issue_1491_soft_masked_repeat_normalization;
 mod issue_1492_anchor_decline_names_the_caller_span;
 mod issue_1508_overlap_across_region_boundary;
+mod issue_1513_adjacent_junction_insertions;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;
