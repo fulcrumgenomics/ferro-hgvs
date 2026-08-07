@@ -321,6 +321,13 @@ test = true
 name = "extract_biocommons_windows"
 required-features = ["dev"]
 
+# `test = true` so the unit tests guarding `serve_transcripts_whole` — the
+# widening the harvested-case gate depends on for fidelity — actually run.
+[[example]]
+name = "extract_case_harvest_windows"
+required-features = ["dev"]
+test = true
+
 [[example]]
 name = "generate_conformance_summary"
 required-features = ["dev"]
