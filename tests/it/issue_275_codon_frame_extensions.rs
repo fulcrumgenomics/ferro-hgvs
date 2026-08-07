@@ -192,24 +192,36 @@ fn codon_frame_chain_strict_then_gap_in_next_codon() {
     //   Codon-frame [3,4] + 6 (relaxed)  →  delins[3,6] alt=TGAT
     //     (middle ref=A injected at position 5).
     //   Post-decompose: ref=GCAA vs alt=TGAT  →  Sub@3, Sub@4, Id@5, Sub@6.
-    //   build_split_variants (CDS, codon-frame aware) keeps Sub@3 alone
-    //     (no Sub-Id-Sub triplet starting at i=0); at i=1 the
-    //     [Sub@4; Id@5; Sub@6] triplet matches and same_codon(4,6) = codon 2,
-    //     so it emits as a single 3-base delins. The trailing Sub@3 falls
-    //     into the substitution run and flushes as `c.3G>T`.
+    //   build_split_variants (CDS, codon-frame aware) collects Sub@3 into the
+    //     pending run; at i=1 the [Sub@4; Id@5; Sub@6] triplet matches and
+    //     same_codon(4,6) = codon 2, but c.3 is changed and *touches* c.4, so
+    //     c.4 is not a variant of its own — it belongs to the delins spanning
+    //     c.3_4 (`delins.md:16`) — and the pair `general.md:35` is offered
+    //     (`3_4delins` and `6A>T`) affects codons 1 and 2, i.e. two amino
+    //     acids. The exception declines; `general.md:34` describes the two
+    //     individually.
+    //
+    // **Re-blessed by #1524.** This previously read
+    // `c.[3G>T;4_6delinsGAT]`, whose members end at 3 and begin at 4 — two
+    // changed nucleotides with nothing between them, which `delins.md:16`
+    // forbids outright. That output was one of the 59 shapes a 5,761,894-row
+    // corpus audit found; see `issue_1524_adjacent_split_members` for the
+    // ruling and its authority.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:c.[3G>T;4C>G;6A>T]"),
-        "NM_TEST.1:c.[3G>T;4_6delinsGAT]",
+        "NM_TEST.1:c.[3_4delinsTG;6A>T]",
     );
 }
 
 #[test]
 fn codon_frame_chain_rna_strict_then_gap_in_next_codon() {
     // RNA analogue of the c. chain test above. Same positions, lowercase
-    // bases for r. display.
+    // bases for r. display — and re-blessed with it by #1524, which is the
+    // point of keeping the pair: the two axes must decline the exception on
+    // the same geometry.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:r.[3g>u;4c>g;6a>u]"),
-        "NM_TEST.1:r.[3g>u;4_6delinsgau]",
+        "NM_TEST.1:r.[3_4delinsug;6a>u]",
     );
 }
 
@@ -351,13 +363,17 @@ fn codon_frame_multibase_delins_head_then_sub_one_codon() {
     //   strict merge 3+4 → delins[3,4] alt=CG.
     //   codon-frame [3,4] + 6 → delins[3,6] alt=CGAT.
     //   post-decompose: ref GCAA vs alt CGAT → Sub@3, Sub@4, Id@5, Sub@6.
-    //   build_split_variants emits Sub@3 (`c.3G>C`), then the
-    //   [Sub@4; Id@5; Sub@6] triplet in codon 2 as a 3-base delins.
-    // The relaxation's spec rationale applies cleanly here: codons 1
-    // (c.3 alone) and 2 (c.4..6 together) each emit in canonical form.
+    //   build_split_variants collects Sub@3, then declines the
+    //   [Sub@4; Id@5; Sub@6] triplet because c.3 touches c.4.
+    //
+    // **Re-blessed by #1524**, for the same reason as
+    // `codon_frame_chain_strict_then_gap_in_next_codon` above: the old
+    // `c.[3G>C;4_6delinsGAT]` put members on the consecutive nucleotides 3 and
+    // 4. The output is now the input's own spelling, which is what the chain
+    // was decomposing and re-assembling in the first place.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:c.[3_4delinsCG;6A>T]"),
-        "NM_TEST.1:c.[3G>C;4_6delinsGAT]",
+        "NM_TEST.1:c.[3_4delinsCG;6A>T]",
     );
 }
 

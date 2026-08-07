@@ -257,13 +257,21 @@ class TestNormalizeDelinsSubOnlyDecompose:
         self,
     ) -> None:
         # ref c.10..c.13 = GTGC, alt = ATCA → [Sub(G>A); Identity(T);
-        # Sub(G>C); Sub(C>A)]. The (10, 12) pair is in codon 4 and
-        # preserves as a 3-base delins; c.13 sits in codon 5, so the
-        # spec exception "two variants together affecting one amino
-        # acid" does not extend to it and it emits as a separate sub.
+        # Sub(G>C); Sub(C>A)]. The (10, 12) pair is in codon 4 and the
+        # codon-frame exception applies to it; c.13 sits in codon 5, so
+        # the spec exception "two variants together affecting one amino
+        # acid" does not reach it.
+        #
+        # It is emitted as one member anyway (#1524). Splitting here would
+        # put members on c.12 and c.13 — *consecutive* nucleotides — which
+        # `delins.md:16` rules out ("changes involving two or more
+        # consecutive nucleotides are described as deletion/insertion
+        # variants"), and `general.md:34` cannot defend, since it governs
+        # members "separated by one or more" nucleotides and so does not
+        # reach separation 0. The codon exception decides what may merge,
+        # not what may be split apart.
         result = ferro_hgvs.normalize("NM_000088.3:c.10_13delinsATCA")
-        assert "10_12delinsATC" in result
-        assert "13C>A" in result
+        assert result == "NM_000088.3:c.10_13delinsATCA"
 
 
 class TestNormalizeEmptyInsertDelinsToDel:

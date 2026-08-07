@@ -10833,29 +10833,40 @@ fn build_variant_at(
 ///    When `codon_frame_aware` is true, the scan looks ahead at each
 ///    position for a `[Sub@i; Identity@i+1; Sub@i+2]` triplet whose CDS
 ///    endpoints (`hgvs_start + i`, `hgvs_start + i + 2`) share a codon.
-///    Such a triplet emits as a single 3-base `delins` with alt
-///    sequence `[Sub@i.alt, Identity@i+1.base, Sub@i+2.alt]`. The flag
+///    Such a triplet contributes the three positions
+///    `[Sub@i.alt, Identity@i+1.base, Sub@i+2.alt]` to the pending run,
+///    which renders as a 3-base `delins` when nothing adjoins it. The flag
 ///    is true only for `c.` (CDS) variants — `g.`, `n.`, `r.`, and `m.`
 ///    have no codon-frame and skip this branch. The exception is
 ///    deliberately narrow (length-3, exact pattern, in-codon endpoints)
 ///    so it matches the spec text "two variants separated by one
 ///    nucleotide, together affecting one amino acid".
 ///
-/// 2. **Adjacent-substitution coalescence** (`substitution.md`,
-///    issue #182). Consecutive `Substitution` sub-edits whose positions
-///    are strictly adjacent (no gap, no `Inversion` or `IdentityAt`
-///    between them) group into a single `delins` variant — "changes
-///    involving two or more consecutive nucleotides are described as
-///    deletion/insertion".
+/// 2. **Adjacent-change coalescence** (`delins.md:16`, issue #182,
+///    issue #1524). Sub-edits occupying strictly adjacent positions —
+///    no gap, no `Inversion` between them — group into a single `delins`
+///    variant: "changes involving two or more consecutive nucleotides are
+///    described as deletion/insertion (delins) variants".
+///
+///    The codon-frame triplet is inside this rule, not beside it, and that
+///    is what #1524 fixed. The triplet used to be emitted as its own
+///    member, which put two members on consecutive nucleotides whenever
+///    `i - 1` or `i + 3` was also changed. Both edges are now closed, and
+///    differently: on the right the triplet stays in the run so `i + 3`
+///    joins it, while on the left rule 1 **declines** — a changed `i - 1`
+///    means `i` is not one of `general.md:35`'s "two variants" at all.
 ///
 /// 3. **Inversion as a hard barrier** (issue #166). An `Inversion`
-///    always emits standalone and breaks any in-flight substitution
-///    run, preserving the inv-priority decomposition.
+///    always emits standalone and breaks any in-flight run,
+///    preserving the inv-priority decomposition. It can never *be*
+///    adjacent to another member: `decompose_delins` emits one only for a
+///    whole **maximal** contiguous mismatch run, so a neighbouring
+///    mismatch would have been part of the same run.
 ///
 /// Singleton sub-runs stay as `Substitution`. `IdentityAt` not consumed
 /// by a codon-frame triplet drops (an unchanged base is not an edit) and
-/// always ends any in-flight substitution run — the gap means the
-/// surrounding subs are no longer "consecutive".
+/// always ends any in-flight run — the gap means the
+/// surrounding changes are no longer "consecutive".
 fn build_split_variants(
     template: &HgvsVariant,
     subedits: Vec<DelinsSubedit>,
@@ -10865,9 +10876,14 @@ fn build_split_variants(
     let abs = |idx: usize| -> u64 { idx as u64 + hgvs_start };
 
     let mut output: Vec<HgvsVariant> = Vec::new();
-    // Pending run of strictly-adjacent Substitution sub-edits, in
-    // left-to-right order. Each entry is `(position, reference, alternative)`
-    // with `position` the 0-indexed offset into the variant's ref window.
+    // Pending run of strictly-adjacent sub-edit positions, in left-to-right
+    // order. Each entry is `(position, reference, alternative)` with
+    // `position` the 0-indexed offset into the variant's ref window.
+    //
+    // Entries are mismatches except for the unchanged centre a codon-frame
+    // triplet contributes, which enters as `reference == alternative`
+    // (#1524). A run therefore always *begins* and *ends* on a mismatch,
+    // which is the precondition `push_typed_replacement` relies on.
     let mut run: Vec<(usize, Base, Base)> = Vec::new();
 
     let n = subedits.len();
@@ -10897,7 +10913,37 @@ fn build_split_variants(
                 },
             ) = (&subedits[i], &subedits[i + 1], &subedits[i + 2])
             {
-                if *pm == *p1 + 1 && *p3 == *p1 + 2 {
+                // `general.md:35` licenses the merge for "two **variants**
+                // separated by one nucleotide". When `p1 - 1` is itself changed,
+                // `p1` is not a variant: `delins.md:16` makes it part of the
+                // `delins` spanning the run it sits in, and the thing separated
+                // from `p3` by one nucleotide is that whole run — which reaches
+                // beyond the one codon the exception is about. So the pattern
+                // the exception describes is not present and the branch declines
+                // (#1524).
+                //
+                // This is the same precondition `merge::apply_coding_codon_exception`
+                // has always enforced on its own side of the seam
+                // (`is_substitution(&pieces[index - 1])` — the left piece must
+                // be a *lone* substitution). The two are implementations of one
+                // rule and this one was missing the test, so adding it removes a
+                // disagreement between the paths rather than imposing a new
+                // restriction.
+                //
+                // It is also what keeps the joining below from over-merging, and
+                // that was measured rather than reasoned: without this guard,
+                // `c.9_13delinsACAAC` on `TTTTTTTTTAATATAT…`
+                // (`[Sub@9; Sub@10; Identity@11; Sub@12; Sub@13]`, codon 4 =
+                // 10-12) collapses to a single `c.9_13delinsACAAC` spanning the
+                // unchanged 11 — where the two real variants, `9_10delinsAC` and
+                // `12_13delinsAC`, span three codons and are exactly what
+                // `general.md:34` says to describe individually. That form cost
+                // 44 classes of `cis_confluence_axis`'s 3' census
+                // (converged 6633 -> 6589) and 44 of its 5' census, because the
+                // multi-member spelling of each still split.
+                let left_endpoint_is_a_lone_variant =
+                    !matches!(run.last(), Some((previous, _, _)) if *previous + 1 == *p1);
+                if *pm == *p1 + 1 && *p3 == *p1 + 2 && left_endpoint_is_a_lone_variant {
                     let cds_p1 = abs(*p1) as i64;
                     let cds_p3 = abs(*p3) as i64;
                     if merge::same_codon(cds_p1, cds_p3) {
@@ -10914,20 +10960,65 @@ fn build_split_variants(
                         // prints the alt sequence. Forwarding the raw
                         // ref byte from `decompose_delins` is therefore
                         // safe for both coordinate systems.
+                        // The triplet **enters the pending run** instead of
+                        // being emitted beside it (#1524).
+                        //
+                        // The run is empty or separated here — the guard above
+                        // has already declined the adjacent-left case — so this
+                        // is not about the left edge. It is about the right one.
+                        // Emitting the triplet directly ended the member at `p3`
+                        // and started the next one at `p3 + 1` whenever the
+                        // following position was also changed, which puts two
+                        // members on *consecutive* nucleotides with nothing
+                        // unchanged between them. `delins.md:16` forbids exactly
+                        // that — "changes involving two or more consecutive
+                        // nucleotides are described as deletion/insertion
+                        // (delins) variants" — and `general.md:34` governs
+                        // members "separated by one or more" nucleotides, so it
+                        // does not reach separation 0: there is no competing
+                        // clause and nothing to trade off. Leaving the triplet in
+                        // the run lets the ordinary adjacency test below absorb
+                        // `p3 + 1`, and the member comes out as one `delins`.
+                        //
+                        // Measured against the prepared reference:
+                        // `NM_000083.3:c.2461_2464delinsCTCC` decomposed to
+                        // `[Sub@2461; Identity@2462; Sub@2463; Sub@2464]`, the
+                        // triplet fired at 2461 because 2461-2463 is one codon,
+                        // and the output was `c.[2461_2463delinsCTC;2464G>C]` —
+                        // 2463 and 2464 consecutive, in two members. It is now
+                        // `c.2461_2464delinsCTCC`, the input's own spelling: this
+                        // is one of several rows the corpus audit found where the
+                        // input was already correct and ferro made it wrong.
+                        //
+                        // The unchanged centre enters the run as its own
+                        // ref-equals-alt entry, which is what lets a run carry an
+                        // interior identity at all. `flush_substitution_run`
+                        // re-emits the whole run through
+                        // `push_typed_replacement`, so the triplet alone still
+                        // renders exactly as it did — the span `[p1, p3]` with
+                        // alt `[a1, bm, a3]`, typed rather than assumed to be a
+                        // `delins`. That typing stays correct for a joined run
+                        // too: both ends are still mismatches, so `Identity`,
+                        // `Substitution`, `Deletion`, `Insertion` and
+                        // `Duplication` remain unreachable and only `Inversion`
+                        // can come back, exactly as `push_typed_replacement`'s
+                        // own note argues. (The triplet reaches an inversion only
+                        // when the untouched middle base is its own complement —
+                        // `W`, `S`, `N` — which is why the reference in
+                        // `codon_triplet_over_an_ambiguous_centre_is_an_inversion`
+                        // carries an `N`.)
+                        //
+                        // The flush is still unconditional: a run that ends at
+                        // `p1 - 2` or earlier is separated from the triplet by at
+                        // least one unchanged nucleotide, and `general.md:34`
+                        // keeps it a member of its own. That boundary is the
+                        // discriminating case, pinned by
+                        // `issue_1524_adjacent_split_members::
+                        // a_run_separated_from_the_triplet_still_splits`.
                         flush_substitution_run(&mut output, template, hgvs_start, &mut run);
-                        let s = abs(*p1);
-                        let e = abs(*p3);
-                        // Typed rather than assumed to be a `delins`, for the
-                        // reason `push_typed_replacement` gives. This branch
-                        // reaches an inversion only when the untouched middle
-                        // base is its own complement (`W`, `S`, `N`) — every
-                        // other base makes `alt[1] == bm != complement(bm)` and
-                        // rules the whole span out — which is why the reference
-                        // in `codon_triplet_over_an_ambiguous_centre_is_an_inversion`
-                        // carries an `N`.
-                        let ref_bases = [*r1, *bm, *r3];
-                        let alt_bases = vec![*a1, *bm, *a3];
-                        push_typed_replacement(&mut output, template, s, e, &ref_bases, alt_bases);
+                        run.push((*p1, *r1, *a1));
+                        run.push((*pm, *bm, *bm));
+                        run.push((*p3, *r3, *a3));
                         i += 3;
                         continue;
                     }
@@ -10985,9 +11076,10 @@ fn build_split_variants(
 /// spec's edit priority instead of assumed to be a `delins` (#1454).
 ///
 /// `build_split_variants` re-groups the sub-edits `decompose_delins` reports,
-/// and both of its multi-base groupings — the codon-frame triplet and the
-/// adjacent-substitution run — **form spans that did not exist when
-/// `decompose_delins` typed the input**. The inversion test it ran was against
+/// and its multi-base grouping — the run of strictly adjacent positions, which
+/// since #1524 absorbs the codon-frame triplet rather than sitting beside it —
+/// **forms spans that did not exist when `decompose_delins` typed the input**.
+/// The inversion test it ran was against
 /// the input's own maximal contiguous mismatch runs, and it deliberately does
 /// not carve a reverse-complement *sub*-run out of a longer contiguous change
 /// (#1034, #1040). But once a re-grouping has made such a sub-run a member in
@@ -11086,12 +11178,17 @@ fn spans_a_whole_inversion(ref_bases: &[Base], alt_bases: &[Base]) -> bool {
     )
 }
 
-/// Flush a pending run of consecutive substitution sub-edits into `output`.
+/// Flush a pending run of consecutive sub-edit positions into `output`.
 /// A length-1 run emits a `Substitution`; a length-2+ run emits a single
 /// `Delins` over `[run.first.position, run.last.position]` with `sequence`
 /// = concatenated `alternative` bases — or an `Inversion` when that span is a
 /// whole reverse complement, see [`push_typed_replacement`]. See
-/// `build_split_variants` for the spec rationale (issue #182).
+/// `build_split_variants` for the spec rationale (issue #182, issue #1524).
+///
+/// A length-1 run is always a genuine substitution: the only run entry whose
+/// `reference` equals its `alternative` is the unchanged centre of a
+/// codon-frame triplet, and that arrives flanked by the triplet's two
+/// mismatches, so it can never be alone in the run.
 fn flush_substitution_run(
     output: &mut Vec<HgvsVariant>,
     template: &HgvsVariant,

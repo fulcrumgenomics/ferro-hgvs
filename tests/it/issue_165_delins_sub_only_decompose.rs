@@ -219,26 +219,42 @@ fn cds_embedded_codon_frame_triplet_preserved_within_longer_span() {
     // produces `c.10_13delinsTCAG` (codon-frame merge on the first pair
     // then strict-adjacent chain with the third sub).
     //
-    // The principled decomposition: the (10, 12) pair satisfies the
-    // codon-frame exception and emits as a 3-base delins; c.13 is in a
-    // different codon and emits as a separate sub. The chained 4-base
-    // delins is non-canonical (spec exception is defined for a *pair*,
-    // not a chain).
+    // **Re-blessed by #1524.** This used to pin
+    // `c.[10_12delinsTCA;13C>G]` on the argument that "the chained 4-base
+    // delins is non-canonical (spec exception is defined for a *pair*, not a
+    // chain)". That argument is about how the member is *reached*; it does not
+    // defend the string it produces, whose members end at 12 and begin at 13 —
+    // two changed nucleotides with nothing between them, which
+    // `delins.md:16` forbids outright ("changes involving two or more
+    // consecutive nucleotides are described as deletion/insertion (delins)
+    // variants").
+    //
+    // Nor is the chained form reached by chaining the exception. The exception
+    // merges 10 with 12; `delins.md:16` then *requires* 13 in the same member
+    // because it touches 12. The only other way to honour `delins.md:16` here
+    // would be `c.[10C>T;12_13delinsAG]`, which breaks `general.md:35` for the
+    // 10/12 pair. One member spanning 10..13 is the only description that
+    // satisfies both.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:c.[10C>T;12C>A;13C>G]"),
-        "NM_TEST.1:c.[10_12delinsTCA;13C>G]",
+        "NM_TEST.1:c.10_13delinsTCAG",
     );
 }
 
 #[test]
 fn cds_embedded_codon_frame_triplet_from_literal_delins() {
     // Same shape as the cis-allele case above but entered as a literal
-    // delins. ref c.10..c.13 = CCCC. alt = TCAG matches the [Sub;
-    // Identity; Sub; Sub] decomposition: the (10, 12) pair preserves as
-    // a codon-frame delins and c.13 splits off as a single sub.
+    // delins. ref c.10..c.13 = CCCC. alt = TCAG decomposes to
+    // [Sub@10; Identity@11; Sub@12; Sub@13]: the (10, 12) pair takes the
+    // codon-frame exception and c.13 joins them because it touches c.12.
+    //
+    // **Re-blessed by #1524** together with its cis-allele twin above; this is
+    // the literal-`delins` half of the corpus shape
+    // `NM_000083.3:c.2461_2464delinsCTCC`, which the audit found ferro
+    // splitting into two touching members.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:c.10_13delinsTCAG"),
-        "NM_TEST.1:c.[10_12delinsTCA;13C>G]",
+        "NM_TEST.1:c.10_13delinsTCAG",
     );
 }
 
@@ -253,14 +269,19 @@ fn cds_two_codon_frame_triplets_back_to_back() {
     //   pos 14 C=C   (identity) — codon 5
     //   pos 15 G>T   (sub)      — codon 5
     //
-    // Both (10, 12) and (13, 15) match the codon-frame exception, so
-    // each triplet emits as its own 3-base delins. The two delins are
-    // strictly adjacent (12 + 1 == 13) but do not re-merge: each is
-    // emitted independently by `build_split_variants`'s triplet
-    // lookahead, and the outer cis-allele wrapper preserves them.
+    // The (10, 12) triplet takes the codon-frame exception. The (13, 15) one
+    // does not: c.13 touches c.12, so it is not a variant of its own
+    // (`delins.md:16`) and the pair the exception would be offered spans
+    // codons 4 and 5 — two amino acids, not one. c.13 therefore joins the
+    // first member and c.15 is left on its own, one unchanged nucleotide away.
+    //
+    // **Re-blessed by #1524.** The old expectation's own comment said the two
+    // members were "strictly adjacent (12 + 1 == 13) but do not re-merge",
+    // reasoned entirely from `build_split_variants`' emission order and citing
+    // no clause. `delins.md:16` is the clause, and it says they are one delins.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:c.10_15delinsTCAGCT"),
-        "NM_TEST.1:c.[10_12delinsTCA;13_15delinsGCT]",
+        "NM_TEST.1:c.[10_13delinsTCAG;15G>T]",
     );
 }
 
@@ -319,12 +340,13 @@ fn round_trip_codon_frame_pair_is_stable() {
 
 #[test]
 fn round_trip_embedded_triplet_is_stable() {
-    // c.[10_12delinsTCA;13C>G] re-merges via the cis-allele path
-    // (strict-adjacent merge of the trailing sub onto the delins
-    // produces `c.10_13delinsTCAG`) and then re-decomposes to the same
-    // canonical form.
+    // The embedded triplet plus its touching neighbour is one member, and that
+    // member is a fixed point. **Re-blessed by #1524**; before it, the form
+    // pinned here was `c.[10_12delinsTCA;13C>G]`, which is a fixed point too —
+    // which is exactly why no oracle caught the defect and why it took a
+    // corpus audit of absolute output rather than of moved rows.
     let once = normalize_with(provider_simple(), "NM_TEST.1:c.10_13delinsTCAG");
     let twice = normalize_with(provider_simple(), &once);
     assert_eq!(once, twice);
-    assert_eq!(once, "NM_TEST.1:c.[10_12delinsTCA;13C>G]");
+    assert_eq!(once, "NM_TEST.1:c.10_13delinsTCAG");
 }
