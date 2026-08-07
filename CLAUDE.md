@@ -287,6 +287,52 @@ Requires the `assets/hgvs-nomenclature` submodule (`git submodule update --init 
 
 Because the fixture is no longer in git, per-PR `parse-error → preserved` status transitions are reviewed via the PR description and the accompanying test/parser changes, not a committed diff.
 
+### Declaring a representation change: a REQUIRED check, not a convention
+
+A PR touching `src/normalize/`, `src/hgvs/`, `src/spdi/` or `src/project/` must carry a
+`Representation-Change:` trailer **in its PR description**, or the `Representation change
+declared` check fails. That context is in `main`'s ruleset, so a missing trailer **blocks the
+merge**.
+
+```
+Representation-Change: 577 rows move, 360 merge / 205 split / 12 respell.
+  Previously-accepted inputs, so a real migration for the consumer.
+```
+
+**`Representation-Change: none` is a first-class answer, not an opt-out.** `none`, `no`, `n/a` and
+`na` all count, in any casing, and a declining trailer is excluded from the changelog's
+**Representation changes** section — so declaring it costs the reader nothing. Most changes under
+those directories move no output at all (a comment, a doc, a new unit test), and that is the
+expected case. What the check rejects is *silence*, because an absent trailer is
+indistinguishable from an unconsidered one.
+
+**It must be in the PR description, not only in a commit message.** GitHub builds the squash
+commit body from the description, and `release-plz.toml`'s parsers match the commit *footer*; a
+trailer on an intermediate commit is discarded by the squash and never reaches the changelog.
+
+**Why this is enforced rather than encouraged.** The mechanism to route these trailers into the
+changelog landed mid-cycle and was then used **zero** times: across the v0.13.0 cycle 87 commits
+landed carrying no trailer while 46 touched those four directories, so the changelog's
+Representation changes section rendered empty. An empty section looks identical whether it is
+empty because nothing moved or because nobody declared anything, so it went unnoticed for ~90
+commits and the disclosure had to be reconstructed after the fact — normalizing ClinVar, Paraphase
+and CMRG (5,761,302 expressions) through both releases and diffing row by row, which found 577
+stored strings moved and 326,404 inputs newly normalized. None of that was visible from the
+changelog as generated.
+
+**How to measure, if the answer is not obviously `none`.** `examples/dump_normalized_corpus.rs`
+diffs two revisions over a synthetic shape-family corpus (`--out` on each side, then `--compare`);
+read its `--verify-spdi` report to separate "moved" from "denotes different bases". That corpus is
+deliberately enriched for churn-prone shapes, so quote its rate as *of the affected family*, never
+as a repo-wide figure — for consumer impact, normalize a real corpus through both revisions with
+`ferro normalize -i <inputs> --reference <dir> -f tsv` instead.
+
+Contributor-facing guidance is in `CONTRIBUTING.md`. The checker is
+`scripts/check_representation_change.py`; its decline vocabulary is pinned against
+`release-plz.toml` and `CONTRIBUTING.md` by tests in
+`tests/python/test_representation_change_trailer.py`, because three copies of one list drift
+silently.
+
 ### Python Tests
 ```bash
 pytest tests/python/ -v              # Run all Python tests
