@@ -272,10 +272,12 @@ output. The disagreements it currently finds are **expected and pinned** — con
 PR. Members that cannot be evaluated hermetically (`needs-reference`, or a description ferro
 refuses) are skipped rather than compared, so an error string never counts as a representation.
 
-The sibling `rulings` section is the decision log for clauses that **conflict at equal RFC 2119
-strength** (`style.md:9` binds the spec to RFC 2119; items 3 and 4 make RECOMMENDED == SHOULD and
-cover SHOULD NOT). Each record names the clauses in tension, which one governs, which is deviated
-from, and why. `undecided` is a first-class state and the generator **refuses** to build a record
+The sibling `rulings` section is the decision log for clauses that **conflict while pointing at the
+same description**. (This used to say "conflict at equal RFC 2119 strength", citing `style.md:9`.
+That framing is withdrawn — uppercase RFC 2119 keywords appear exactly once outside `style.md`
+itself, so essentially every clause in play is lowercase prose and keyword strength cannot rank
+them. See [Reading the spec](#reading-the-spec).) Each record names the clauses in tension, which
+one governs, which is deviated from, and why. `undecided` is a first-class state and the generator **refuses** to build a record
 that is `undecided` yet names a governing clause — an unsettled question must not be able to
 smuggle in a ruling nobody made. Every citation carries a verbatim quote that the generator checks
 against the spec checkout, so a submodule bump that moves a clause fails the build instead of
@@ -446,3 +448,82 @@ It also downloads genomic-parent placement data used to project transcript-coord
 - **LRG XML** genomic mapping → per-`LRG_` `GenomicPlacement` (parsed on demand).
 
 `ReferenceProvider::genomic_placement` exposes these; `VariantProjector::project_to_genomic` composes the `NM_`→`NC_` (cdot) step with the `NC_`→`NG_`/`LRG_` affine transform to re-express coordinates in the parent frame. With no placement it declines rather than emit chromosome coordinates under the parent accession.
+
+## Reading the spec
+
+Four findings that change how a clause argument should be framed. Each is checkable from the
+pinned `assets/hgvs-nomenclature` checkout; re-check rather than trust this list.
+
+### Almost nothing in the recommendations is normative
+
+`style.md:9` binds the spec to RFC 2119, which invites the habit of arguing that clause A is a
+SHOULD and clause B a MUST. That argument almost never works here, because **uppercase RFC 2119
+keywords appear exactly once outside `style.md` itself**:
+
+```bash
+grep -rnoE '\b(MUST|SHOULD|RECOMMENDED|MAY|SHALL|REQUIRED|OPTIONAL)( NOT)?\b' \
+  assets/hgvs-nomenclature/docs/recommendations/ | grep -v '/style\.md'
+# -> docs/recommendations/RNA/adjoined_transcript.md:21:SHOULD   (and nothing else)
+```
+
+Every clause this project has litigated — `general.md:34`, `:35`, `:56`, `:58`,
+`DNA/delins.md:17`, `:18`, `:47`, `DNA/inversion.md:20` — is lowercase prose. Read strictly,
+none of them is normative. That does not make them ignorable: it makes most of these questions
+house-style choices the spec leaves open, which ferro still has to answer. Argue them on the
+spec's worked examples and on downstream cost, not on keyword strength. (`general.md:58` and
+`DNA/duplication.md:18` are read as strong because of their wording — "are not allowed",
+"**must**" — not because RFC 2119 makes them so; say which you mean.)
+
+The `rulings[delins-merge-vs-individual-gap-two-or-more]` record used to argue from "the two
+clauses are the same RFC 2119 strength". It does not any more, for this reason.
+
+### There is no minimality principle, and stability is the spec's first stated value
+
+`background/basics.md:38`: "The recommendations for the description of sequence variants are
+designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**." Minimality is
+absent, and stability leads. Ferro's column-minimal objective is therefore **our policy**, not
+compliance — never cite the spec for it. `DNA/delins.md:44-47` in fact recommends a
+*non-minimal* description in its own worked example (66 columns where 40 suffice), and `:47`
+recommends the **spanning delins**; the split is what `:46` calls the "alternative description".
+That direction has been retold backwards at least once, so state it explicitly whenever you
+cite the passage.
+
+### A split is rarely unique, which is a stability argument by itself
+
+Exact enumeration over 40 rows found **27 that admit more than one equally-compliant split**,
+median 2 and **max 125**; the spec's own `:44-47` example admits five. So adopting a split
+trades one stable canonical form for an arbitrary pick out of a family — and the arbitrariness
+is invisible in any single-row before/after comparison, which is how it keeps getting missed.
+
+### Read the Q&A, not only the Notes and Examples
+
+`DNA/delins.md`'s trailing `!!! note` blocks are adjudicative, not colour. A claim that "no
+sequence-local rule separates these two cases" was withdrawn once `:86-89` was read: the Q&A
+carries the worked answer (`NM_007294.3:c.2077delinsATA`) and `:89` records that the passage
+permitting the two-member spelling was *removed* by the committee. `:79-84` likewise carries the
+spec's own discriminator — "the two variants may have been reported (or might occur)
+individually" — which is **provenance**, recoverable only from the input's spelling.
+
+## Adjudication records: where the open questions live
+
+The `rulings` section of `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json` is the
+decision log, pinned by `ruling_records_are_intact` (ids **and** statuses; keep `RULING_STATUSES`
+in sync). **Five of its six records are `undecided`**, and the first three below are operator
+decisions that block other work — read them before re-deriving the same argument:
+
+| record | what is open |
+|---|---|
+| `delins-merge-vs-individual-gap-two-or-more` | `DNA/delins.md:17` vs `:44-47`. Governs ~138 of 208 adjudicated genomic rows |
+| `inversion-vs-two-delins-76-83` | `c.76_83inv` as one `inv` or two `delins` (#1517). Three costed options, none chosen |
+| `adjudication-precedence-order` | **Two competing precedence orders are on record and neither is chosen.** It decides both rows above |
+| `canonical-form-choice-when-both-legal` | Which of two legal forms ships. An open *product* decision |
+| `codon-carve-out-shape-restriction` | `delins.md:18` names no edit type; ferro applies it only to sub/unchanged/sub |
+
+Two things follow for representation-stability work specifically. The repository's doctrine reads
+as "do not move a normalized output", while the downstream filer has said instability is
+acceptable **provided it is declared a breaking change** — different bars, and which one applies
+is part of what `adjudication-precedence-order` leaves open. And Mutalyzer is not a spec oracle:
+its normalizer re-derives a description by minimizing a **weighted description length** with
+constants dated 2014, and has no separation rule at all, so a separation disagreement with it is
+two objectives meeting rather than evidence it knows something the spec does not. The full
+forensics are in that record and on `MIN_PIECE_SEPARATION` in `src/normalize/merge.rs`.

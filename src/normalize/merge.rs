@@ -1817,6 +1817,36 @@ const MAX_SPLIT_BLOCK: usize = 1024;
 /// It applies only where the block's net length change is at most
 /// [`MAX_SINGLE_BASE_SEPARATION_CHANGE`]; beyond that the threshold rises to
 /// [`RAISED_PIECE_SEPARATION`].
+///
+/// # Mutalyzer does not have a separation rule, so do not read one out of it
+///
+/// Recorded here because the question — "maybe the reference implementation
+/// knows something the recommendations do not" — recurs on every divergence
+/// at this threshold, and answering it costs a source dig each time.
+///
+/// Mutalyzer's `/api/normalize` re-derives a description from the *mutated
+/// sequence*: `Description.normalize()` -> `mutate()` -> `extract()` ->
+/// `describe_dna(reference, observed)`. `extract()` minimizes a **weighted
+/// description length**; the weights are constants in the extractor, dated
+/// 2014 — seven years before SVD-WG010, the (rejected) proposal that would
+/// have restated this rule positionally. The strings "separated by", "amino
+/// acid" and "SVD-WG" occur nowhere in its source, its tests or its commit
+/// history. A stratified 72-row probe found the weight model predicts its
+/// answers on **91.7%** (66/72), against **79.2%** for the best achievable
+/// separation threshold — i.e. cost, not distance, is what it is computing.
+///
+/// Two consequences. A Mutalyzer/ferro disagreement about separation is two
+/// objectives meeting, not evidence about `general.md:34`. And where the spec
+/// speaks plainly Mutalyzer is measurably wrong: it splits
+/// `LRG_199t1:c.145_147delinsTGG` into `c.[145C>T;147C>G]`, the form
+/// `DNA/delins.md:42` says in as many words "is not correct".
+///
+/// Ferro's split at separation 2 is therefore a **deliberate** divergence:
+/// `general.md:34` splits there (and the rejected SVD-WG010's own example at
+/// `:45` splits `c.[235A>T;238G>T]` at exactly two nucleotides) while Mutalyzer
+/// merges on 23 of 25 measured rows. Which authority governs that choice is
+/// itself unsettled — see `rulings[adjudication-precedence-order]` in
+/// `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`.
 const MIN_PIECE_SEPARATION: usize = 1;
 
 /// The separation [`separations_are_meaningful`] requires once the block's net
@@ -1936,6 +1966,15 @@ const MAX_SEQFIRST_GRID_CELLS: usize =
 /// must split at one unchanged base, the Mutalyzer block changes 15 and must
 /// not. Every value in between scores identically, so `4` is a choice inside a
 /// measured window, not a calibrated constant.
+///
+/// **No threshold at all satisfies #1157 and #1232 simultaneously**, and that
+/// is a measured non-existence rather than a value nobody has found yet: the
+/// two demand that a 7-nt block stay whole while a 5-nt block splits, which no
+/// monotone bound on block length or net change can deliver. That pair is
+/// resolved instead by adopting the split as the default and carrying
+/// `LRG_199` and #422 as *named* exceptions — see
+/// [`split_buys_no_higher_priority_type`] and the `issue_422_*` tests. Do not
+/// go looking for the value that reconciles them.
 const MAX_SINGLE_BASE_SEPARATION_CHANGE: usize = 4;
 
 /// [`partition_block_sequence_first`]'s separation threshold on an axis with no
@@ -2010,6 +2049,22 @@ impl Piece {
 /// a whole suite run is tens of thousands of lines that no level or target filter
 /// could reach when they were written straight to stderr. Capture them with
 /// `RUST_LOG=ferro_hgvs::normalize::merge=debug`.
+///
+/// # Promoting it is a churn event, not a drop-in — measured
+///
+/// The sequence-first splitter is more principled (confluence is structural
+/// rather than repaired), which makes it tempting to flip on. Measured against
+/// the live `partition_block` on the 14 blocks drawn from the #1419/#1420/#1421
+/// examples, it **disagrees on 13**, and on several it yields a *third*
+/// representation matching neither side of the current non-confluence. So
+/// promoting it does not converge the disputed pairs onto one of their existing
+/// forms; it re-buckets them onto new ones, which for the downstream consumer
+/// is a re-normalization of the whole stored library.
+///
+/// Note also that "more principled" is not a spec argument here: no minimality
+/// or confluence principle appears in the recommendations at all — see
+/// `changed_columns_of_pieces` and `background/basics.md:38`. Measure the blast
+/// radius on shipped forms before proposing the flip.
 fn seqfirst_shadow_enabled() -> bool {
     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var("FERRO_SEQFIRST_SHADOW").as_deref() == Ok("1"))
@@ -4514,6 +4569,21 @@ fn changed_columns_of_edits(edits: &[GEdit]) -> usize {
 }
 
 /// The same measure for a derived piece set (see `changed_columns_of_edits`).
+///
+/// # Minimizing this is ferro policy, not compliance
+///
+/// The recommendations state their design values at `background/basics.md:38`
+/// — "designed to be **stable**, **meaningful**, **memorable**, and
+/// **unequivocal**". Minimality is **not** among them, and stability is first.
+/// So a column count is a tie-break this project chose; it is never the answer
+/// to "what does the spec require", and no comment here should imply otherwise.
+///
+/// The spec in fact prefers a non-minimal description in its own worked
+/// example: `DNA/delins.md:44-47`'s spanning
+/// `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` covers 66 columns where the split
+/// alternative at `:46` needs 40, and `:47` recommends the spanning form
+/// anyway. Whether that carve-out governs the general instruction at `:17` is
+/// open — `rulings[delins-merge-vs-individual-gap-two-or-more]`.
 fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
     pieces
         .iter()
@@ -4584,6 +4654,26 @@ fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
 /// 1167 -> 1168 passing. Whatever made the naive attempt fail was fixed
 /// elsewhere in the meantime, plausibly by #1237's regime-aware bound and the
 /// sequence-first splitter that followed it.
+///
+/// # Measuring separation over a corpus: get the insertion arithmetic right
+///
+/// This function works on `Piece`s, where a pure insertion is already a
+/// zero-width span. A corpus census works on *HGVS members*, where it is not,
+/// and the difference has produced two published-then-retracted numbers.
+///
+/// Model each member as a closed interval and an insertion `A_B` as the
+/// **empty** interval `lo = A + 1, hi = A` — an insertion consumes no reference
+/// base, it names the junction it sits in. Then
+///
+/// ```text
+/// separation = next.lo - prev.hi - 1
+/// ```
+///
+/// Treating `A_B` as a consumed two-base span instead reported "121 pairs at
+/// separation 0 — a spec violation", where the true count over 5.76M rows is
+/// **zero**. Correcting it also moved the whole gap distribution materially
+/// (gap 2 had been quoted at 42.7%, gap 3 at 14.8%), so any figure taken from a
+/// pre-correction distribution must be **re-derived rather than adjusted**.
 fn separations_are_meaningful(pieces: &[Piece], net_change: usize) -> bool {
     // `ref_end` is exclusive and a pure insertion has `ref_start == ref_end`, so
     // this already counts unchanged *bases* rather than event indices: a
@@ -9660,6 +9750,85 @@ mod tests {
         assert_eq!(
             pieces[0].ref_start, 2,
             "the first piece must be the lone 5' substitution; got {pieces:?}"
+        );
+    }
+
+    /// An insertion occupies no reference base, so it contributes no width to
+    /// the separation between its neighbours.
+    ///
+    /// This is the arithmetic every corpus census of "how far apart are two
+    /// members" has to get right, and getting it wrong is not visible in the
+    /// output — it is visible only as a wrong *number*. Modelling an
+    /// insertion's `A_B` anchor as a consumed two-base span once produced a
+    /// reported "121 pairs at separation 0 — a spec violation", where the true
+    /// count over 5.76M rows is zero, and it shifted the whole gap distribution
+    /// with it. See `separations_are_meaningful`'s doc comment.
+    ///
+    /// Asserted against the function rather than through `normalize` on
+    /// purpose: end-to-end the answer would be decided by `best_alignment`'s
+    /// choice of gap placement, which is what the fixture would really be
+    /// pinning.
+    #[test]
+    fn an_insertion_contributes_no_width_to_the_separation_it_sits_in() {
+        let ins = |at: usize, alt: &[u8]| Piece {
+            ref_start: at,
+            ref_end: at,
+            alt: alt.to_vec(),
+        };
+        let sub = |at: usize, alt: &[u8]| Piece {
+            ref_start: at,
+            ref_end: at + 1,
+            alt: alt.to_vec(),
+        };
+
+        // Two insertions at reference offsets 10 and 11: exactly one unchanged
+        // base (offset 10) lies between them, so `next.ref_start - prev.ref_end`
+        // is 1 and `MIN_PIECE_SEPARATION` is met. Were the anchors read as
+        // two-base spans the same pair would compute as separation 0 and be
+        // refused.
+        assert!(
+            separations_are_meaningful(&[ins(10, b"A"), ins(11, b"T")], 2),
+            "one unchanged base separates insertions at 10 and 11"
+        );
+        // Two insertions at the *same* junction genuinely have nothing between
+        // them, and that is the only way a pair of insertions reaches 0.
+        assert!(
+            !separations_are_meaningful(&[ins(10, b"A"), ins(10, b"T")], 2),
+            "insertions at one junction are not separated at all"
+        );
+        // Mixed pair: a substitution consuming offset 10 leaves offsets 11..12
+        // unchanged before the insertion at 12.
+        assert!(
+            separations_are_meaningful(&[sub(10, b"A"), ins(13, b"T")], 1),
+            "two unchanged bases separate a substitution at 10 from an \
+             insertion at 13"
+        );
+        assert!(
+            !separations_are_meaningful(&[sub(10, b"A"), ins(11, b"T")], 1),
+            "an insertion at the junction immediately 3' of a substitution is \
+             adjacent to it, not separated"
+        );
+
+        // The two cases above both clear `MIN_PIECE_SEPARATION` (1), so they
+        // pin the junction-has-no-width rule without ever distinguishing the
+        // two thresholds. Raise `net_change` past
+        // `MAX_SINGLE_BASE_SEPARATION_CHANGE` so `RAISED_PIECE_SEPARATION` (2)
+        // applies, and the one-base gap that passed above now fails — which is
+        // what makes the insertion's zero width load-bearing rather than
+        // incidental.
+        assert!(
+            !separations_are_meaningful(
+                &[sub(10, b"A"), ins(12, b"T")],
+                MAX_SINGLE_BASE_SEPARATION_CHANGE + 1
+            ),
+            "one unchanged base does not satisfy the raised separation"
+        );
+        assert!(
+            separations_are_meaningful(
+                &[sub(10, b"A"), ins(13, b"T")],
+                MAX_SINGLE_BASE_SEPARATION_CHANGE + 1
+            ),
+            "two unchanged bases do satisfy the raised separation"
         );
     }
 

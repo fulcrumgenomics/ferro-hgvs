@@ -324,12 +324,16 @@
   "rulings": [
     {
       "id": "delins-merge-vs-individual-gap-two-or-more",
-      "question": "When two variants are separated by two or more nucleotides and part of an inserted sequence aligns with the reference, does the spec's SHOULD NOT against merging govern, or its RECOMMENDED for the delins format?",
+      "question": "When two variants are separated by two or more nucleotides and part of an inserted sequence aligns with the reference, does `delins.md:17`'s instruction to describe them individually govern, or `delins.md:47`'s recommendation of the delins format?",
       "status": "undecided",
       "clauses": [
         {
           "clause": "docs/recommendations/DNA/delins.md:17",
           "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/DNA/delins.md:46",
+          "quote": "parts of the inserted sequence \"align\" with the reference sequence, giving an alternative description like `c.[850_869del;874_881del;887_897del;901_902insG]`"
         },
         {
           "clause": "docs/recommendations/DNA/delins.md:47",
@@ -340,7 +344,7 @@
           "quote": "are to be interpreted as described in [RFC 2119]"
         }
       ],
-      "rationale": "The two clauses are the same RFC 2119 strength and point opposite ways at the same description. `style.md:9` binds the spec to RFC 2119; item 3 there makes \"RECOMMENDED\" equal to SHOULD and item 4 covers SHOULD NOT. The `:44-47` example's own alternative splits at gaps of 4, 5 and 3 nucleotides — every one at least 2 — so `:17` read literally demands exactly the individual description that `:47` rejects three lines later, and neither carries the greater weight. RFC 2119 does not break the tie; it licenses deviating from a SHOULD once the implications are weighed, which is a judgement the spec text leaves to the implementer. THE PROJECT HAS NOT MADE THAT JUDGEMENT. Nothing here should be read as one. What is established is only the cost: this reading governs roughly 138 of 208 adjudicated corpus rows, so whichever way it is settled is a representation change for a stored library, not a local fix. An operator ruling is what closes this record.",
+      "rationale": "Both clauses are lowercase prose, and that is the first thing to get right about this record. `style.md:9` binds the spec to RFC 2119, but a census of `docs/recommendations/` at spec checkout `6f85311` finds an uppercase RFC 2119 keyword in exactly ONE place outside `style.md` itself — `RNA/adjoined_transcript.md:21` (`SHOULD`). Neither `:17`'s \"should be described individually\" nor `:47`'s \"is recommended\" is among them. An earlier revision of this rationale argued that the question was a tie between two clauses of equal RFC 2119 strength; that argument does not survive its own citation and is withdrawn. Read strictly, neither clause is normative at all, so this is a house-style choice the spec leaves open rather than a compliance question — which changes how it should be argued, but not that ferro must answer it on every such block. Re-run the census before citing it: `grep -rnoE '\\b(MUST|SHOULD|RECOMMENDED|MAY|SHALL|REQUIRED|OPTIONAL)( NOT)?\\b' docs/recommendations/`.\n\nThe conflict itself is real and unchanged. `:46` observes that parts of the inserted sequence align with the reference and offers `c.[850_869del;874_881del;887_897del;901_902insG]` as an alternative description; `:47` then recommends the delins format because it is simpler and prevents software tools making incorrect predictions on protein level. That alternative splits at gaps of 4, 5 and 3 nucleotides — every one at least two — so `:17` read literally demands exactly the description `:47` advises against, three lines later, in the spec's own worked example.\n\nTHREE DIFFERENT ANSWERS to this question were live in the project's working record when this record was rewritten (2026-08-07), which is why it is being restated rather than closed. (1) This record: no ruling. (2) A campaign document: implementor's choice, both forms \"recommended\", therefore not a conformance defect in either direction and ferro's existing treatment stands. (3) A measurement-driven session note: `:44-47` governs `:17` empirically, because Mutalyzer converges on the merge on the four probes measured. Only this record is enforced by CI, and it is the one asserting that no answer exists.\n\nWhat IS established is the cost, and it is measured rather than estimated. A hand adjudication of the 208 genomic-axis rows that move under the candidate split classified them STORED 144 / NEW 17 / SILENT 43 and recommended DO NOT SPLIT; on 128 of the 208 the stored form is the submitter's own input. A companion pass adjudicated 652 transcript-axis rows (619 `c.`, 33 `n.`) by shape. Both were derived independently of ferro — separate shape parser, faidx, cdot byte scan and sequence applier, nothing asking ferro for an answer — and both live outside the repository; the reasoning is recorded here because that, not the row list, is what a future session needs. The reading that `:44-47` is a specific carve-out governing alignment-driven splits over the general `:17` is the single point that could flip 138 of the 208, and its own author rates confidence in it as moderate: a legal reading, not a measurement.\n\nTHE PROJECT HAS NOT MADE THAT JUDGEMENT. Nothing here should be read as one. An operator ruling is what closes this record, and whichever way it goes it is a representation change for a stored library rather than a local fix.",
       "applies_to": [
         "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG",
         "c.[850_869del;874_881del;887_897del;901_902insG]"
@@ -350,8 +354,8 @@
       ]
     },
     {
-      "id": "inversion-vs-two-substitutions-76-83",
-      "question": "For `c.76_83inv`, where the reverse complement coincides with the reference at half its columns, does the SHOULD NOT against merging separated variants govern, or does prioritisation make it one inversion?",
+      "id": "inversion-vs-two-delins-76-83",
+      "question": "For `c.76_83inv`, whose reverse complement coincides with the reference at its four interior columns, is the edit one inversion or the two `delins` members those columns separate?",
       "status": "undecided",
       "clauses": [
         {
@@ -363,14 +367,86 @@
           "quote": "the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion"
         },
         {
+          "clause": "docs/recommendations/DNA/inversion.md:5",
+          "quote": "a sequence change where, compared to a reference sequence, **more than one nucleotide** replacing the original sequence is the reverse complement of the original sequence"
+        },
+        {
+          "clause": "docs/recommendations/DNA/inversion.md:33-34",
+          "quote": "**`NM_004006.2:c.4145_4160inv`**<br> inversion of the 16 nucleotides from position `c.4145` to `c.4160`."
+        },
+        {
           "clause": "docs/recommendations/style.md:9",
           "quote": "are to be interpreted as described in [RFC 2119]"
         }
       ],
-      "rationale": "`NM_004006.2:c.76_83` is `AATGCACA`; its reverse complement `TGTGCATT` agrees with the reference at 4 of the 8 columns, so the same edit is describable either as one inversion spanning 76_83 or as two changed runs separated by unchanged bases. `:56` ranks inversion above the alternatives once an inversion is admitted as a possible type; `:34` says separated variants are described individually. Both are SHOULD-strength under `style.md:9`. Which applies depends on whether the coinciding columns are read as part of the inversion or as gaps between two variants, and the spec does not say. THIS IS UNDER ACTIVE ADJUDICATION AND NO RULING HAS BEEN MADE. Recorded here so the question is visible rather than re-derived; the adjudication outcome, not this record, will decide it.",
+      "rationale": "THE RECORD'S FORMER ID AND QUESTION WERE BOTH WRONG, AND THE ERROR INVERTED THE ARGUMENT. It was `inversion-vs-two-substitutions-76-83`. The competing members are not substitutions: `NM_004006.2:c.76_83` is `AATGCACA`, its reverse complement is `TGTGCATT`, and the two coincide at the four INTERIOR columns — so the alternative description is `c.[76_77delinsTG;82_83delinsTT]`, two two-base `delins`. That distinction decides the `:56` argument. `:56` ranks substitution ABOVE inversion, so a genuine two-substitution shape splits (which is #1230's case), whereas `delins` does not appear in `:56`'s list at all, so `:56` cannot rank the alternative here. A record titled \"inversion vs two substitutions\" invites a reader to carry #1230's answer onto a case the cited clause does not reach. Bases re-derived for this record from `LRG_199t1` (identical sequence to `NM_004006.2`; CDS starts at transcript position 245, checked by `c.1_3 == ATG`).\n\nTHE FORMER RATIONALE ALSO SAID \"THE SPEC DOES NOT SAY\", AND THAT IS NOT ACCURATE EITHER. `inversion.md:33-34` publishes `NM_004006.2:c.4145_4160inv` as a worked inversion example. The spec prints no bases for it — unlike the two examples above it, which carry `<code class=\"sub\">` spans — but the transcript does: `c.4145_4160` is `TCCAGGAGTCCCTCAC`, whose reverse complement `GTGAGGGACTCCTGGA` coincides with the reference at TWO THREE-BASE INTERIOR RUNS (10 of 16 columns changed). So the spec's own published inversion has a large unchanged interior, and `general.md:34` demonstrably does not decompose it into separated variants in the spec's own usage. Note precisely what that is worth: the example is the spec's, the bases are derived, so this is stronger than \"spec-silent\" and weaker than a verbatim statement. The derivation was re-run against the prepared reference for this record. It also refutes a claim once used as a pillar of #1230's argument — that every worked inversion example in the spec changes all of its bases.\n\nMEASURED ALTERNATIVES, NONE OF THEM RULED ON. Mutalyzer types this shape `inv` on 26 of 26 probes across spans of 4–24 nt and interior gaps of 2–18 nt, including a real 20-mer (`NR_145819.1:n.390_409`) with a 16-base unchanged interior — which refutes the separate claim that nobody accepts an `inv` with a large unchanged interior. Three options were costed. (A) Type it `inv` unconditionally: matches Mutalyzer 26/26, moves ONE corpus row, requires flipping two checked-in guards. (B) Gate on member type: keeps those guards green and moves nothing measured, but that zero is structurally blind — see the corpus-blindness note in the repository `CLAUDE.md`. (C) Pin the split as a deliberate divergence from Mutalyzer. Option A's stability cost is measured at zero in the sense that matters: ferro's `inv`-spelling output already equals Mutalyzer's on 22 of 22, so the form A converges on is the form ferro already ships. Blast radius instrumented at the coalesce gate: 588 blocks reach it across 500,596 rows, of which exactly TWO are whole-span reverse complements.\n\nALSO REFUTED, recorded so it is not re-derived: \"4 unchanged columns of 8 is far above the ~25% chance rate\" is a mean-versus-distribution error. Unchanged columns under a random 8-mer inversion are `2 * Binom(4, 1/4)`, so 4-of-8 sits at +1.15 sd and roughly 26% of genuine 8-nt inversions look at least this coincidental. Span LENGTH, not coincidence density, is what discriminates.\n\nNO RULING HAS BEEN MADE. Choosing among A, B and C is an operator decision, and it turns on which precedence order governs — see `adjudication-precedence-order`, which is itself undecided. Tracked by #1517.",
       "applies_to": [
         "c.76_83inv"
       ]
+    },
+    {
+      "id": "adjudication-precedence-order",
+      "question": "Where the spec does not settle a normalization question, what ranks next — the reference implementation, the downstream consumer's already-shipped representation, or the filer's open issues?",
+      "status": "undecided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/style.md:9",
+          "quote": "are to be interpreted as described in [RFC 2119]"
+        },
+        {
+          "clause": "docs/background/basics.md:38",
+          "quote": "The recommendations for the description of sequence variants are designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**."
+        },
+        {
+          "clause": "docs/consultation/open-issues.md:77-78",
+          "quote": "one variant can be described using different formats. This is undesired; HGVS recommendations should be extended by specifying when to use which format."
+        }
+      ],
+      "rationale": "TWO DIFFERENT PRECEDENCE ORDERS ARE ON THE PROJECT'S RECORD AND THEY ARE NOT RECONCILABLE BY READING. One: spec-explicit > Mutalyzer > our judgement — the reference implementation breaks ties where the spec is silent. The other: (1) the spec where it speaks, (2) the downstream filer's at-risk issues, (3) downstream representation stability, breaking ties toward the already-shipped form — in which Mutalyzer does not appear at all. Each was stated as adopted policy in a different working session; neither was ever written into the repository, so a future session adopts whichever it happens to read first. THE PROJECT HAS NOT CHOSEN BETWEEN THEM.\n\nIT IS NOT AN ABSTRACT CHOICE. Under the first order `inversion-vs-two-delins-76-83` resolves to `inv` (Mutalyzer 26/26) and ferro's split at a two-nucleotide separation becomes a divergence to be recorded; under the second, both turn instead on shipped-form stability and on the filer's issues. Two concrete divergences are already live. (a) At separation 2 the spec splits — `general.md:34`, and the rejected proposal's own example at `SVD-WG010.md:45` splits `LRG_199t1:c.[235A>T;238G>T]` at exactly two nucleotides — while Mutalyzer merges on 23 of 25 measured rows. (b) On the codon carve-out Mutalyzer splits `LRG_199t1:c.145_147delinsTGG` into `c.[145C>T;147C>G]`, the form `delins.md:42` says in as many words \"is not correct\". Case (b) is why \"spec-explicit > Mutalyzer\" is a DERIVED ordering rather than an invented one: where the spec speaks plainly, Mutalyzer is measurably wrong.\n\nWHAT MUTALYZER ACTUALLY IS, so the ranking is not re-litigated from scratch. Its `/api/normalize` re-derives a description from the mutated sequence (`Description.normalize()` -> `mutate()` -> `extract()` -> `describe_dna(reference, observed)`), and the extractor minimizes a WEIGHTED DESCRIPTION LENGTH. It has no separation rule at all: the weights are dated 2014, seven years before SVD-WG010, and the strings \"separated by\", \"amino acid\" and \"SVD-WG\" occur nowhere in its source, its tests or its commit history. A stratified 72-row probe found the weight model predicts its answers on 91.7% (66/72), against 79.2% for the best possible separation threshold. So a Mutalyzer/ferro disagreement about separation is not evidence that Mutalyzer knows something the spec does not; it is two different objectives meeting.\n\nAN UNRESOLVED COLLISION SITS ON TOP OF THIS. Issue #1430's premise is that Mutalyzer's delins-merging is a non-spec-compliant shortcut of exactly the kind the separation rule forbids — while the first precedence order uses Mutalyzer to adjudicate that very behaviour. The two cannot both be applied as written. A staged design (derive confluently first, apply spec compliance on top) would reconcile them, but that is a proposal, not a decision anyone has taken.\n\nTHE TIE-BREAK RULE IS AMBIGUOUS AT THE OTHER END TOO. The repository's stability doctrine reads as \"do not move a normalized output\"; the downstream filer whose pipeline keys on that string has said instability is acceptable PROVIDED IT IS DECLARED A BREAKING CHANGE. Those are compatible readings that set very different bars — \"batch this into a migration\" versus \"ship it with a Representation-Change declaration\" — and the machinery for the looser one is now in the tree (#1523's required declaration). Settling the precedence order should settle this with it.\n\nINTEROP DIRECTION HAS BEEN MEASURED ONCE AND IS INCONCLUSIVE, which is worth knowing before anyone quotes it. On a 56-row sample a candidate change moved ferro 45% away from Mutalyzer, 27% toward it and 29% to a third form: net +10 of 56 rows moving AWAY minus TOWARD, 95% CI -4.3% to +40.0%, WHICH CROSSES ZERO (the point estimate and the interval are both stated as away-minus-toward, so a positive number means worse; quoting one as toward-minus-away leaves an interval that does not bracket its own estimate). The point estimate says worse; the sample cannot establish it. All 25 \"away\" rows differ in member ARITY rather than spelling, and most third-form rows are Mutalyzer emitting cross-reference notation ferro does not emit at all — a capability gap, not a disagreement about representation. Quoting \"45% away\" without the interval would be worse than not quoting it.\n\nThe spec itself concedes the gap this record sits in: `open-issues.md:77-78` says one variant can be described using different formats and that this \"is undesired\". `style.md:9`'s RFC 2119 reference is cited for what it licenses rather than what it mandates — deviation from a SHOULD once the implications are weighed — and `basics.md:38` is cited because the spec's own first stated design value is STABILITY, which is also the property the downstream consumer keys on. An operator ruling is what closes this record. Recording the tension is the point; nothing here chooses."
+    },
+    {
+      "id": "canonical-form-choice-when-both-legal",
+      "question": "When two descriptions of one variant are both legal under the recommendations, which one does ferro ship?",
+      "status": "undecided",
+      "clauses": [
+        {
+          "clause": "docs/background/basics.md:38",
+          "quote": "The recommendations for the description of sequence variants are designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**."
+        },
+        {
+          "clause": "docs/consultation/open-issues.md:77-78",
+          "quote": "one variant can be described using different formats. This is undesired; HGVS recommendations should be extended by specifying when to use which format."
+        },
+        {
+          "clause": "docs/consultation/open-issues.md:90-91",
+          "quote": "both `g.186_191del` and `g.123_191CAG[21]` are correct following current HGVS recommendations. HGVS recommendations therefore require further specifications to indicate when to use which format."
+        },
+        {
+          "clause": "docs/recommendations/DNA/delins.md:47",
+          "quote": "**The \"delins\" format is recommended**"
+        }
+      ],
+      "rationale": "THE SPEC AGREES THIS IS A GAP AND SAYS SO. On insertions, `open-issues.md:77-78`: one variant can be described using different formats, and \"This is undesired; HGVS recommendations should be extended by specifying when to use which format.\" On repeats versus deletions and duplications, `:90-91` says the same of `g.186_191del` and `g.123_191CAG[21]`, both correct under current recommendations. So where ferro picks, it is filling a gap the spec acknowledges, not deviating from a rule.\n\nNO MINIMALITY PRINCIPLE EXISTS IN THE SPEC. `basics.md:38` states the design values: STABLE, meaningful, memorable, unequivocal. Minimality is absent from that list, and stability is FIRST. Ferro's column-minimal objective is therefore a ferro policy choice and must never be cited as a compliance requirement. Worse for the objective: `delins.md:44-47` recommends a NON-MINIMAL description in the spec's own worked example — the spanning `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` covers 66 columns where the split alternative needs 40, and `:47` recommends the spanning form anyway. (Stated carefully because it has already been retold backwards once: `:47` recommends the DELINS, i.e. the spanning form; the split is what `:46` calls the \"alternative description\".)\n\nTHE OBJECTIVE HAS BEEN MEASURED AGAINST ALTERNATIVES AND THE RESULTS ARE ON RECORD. A fewest-members-subject-to-minimal-edit-distance partitioner systematically produces exactly the splits `delins.md:44-47` advises against; the live splitter's restrictions, which read as limitations, are implementing that passage. Its TOTAL cost was measured, not only its confluence gain: Mutalyzer agreement 200/234 -> 177/234, and release-to-release drift 31 -> 849 rows, a 27x increase. No spec MUST is violated by either — but per the keyword census recorded in `delins-merge-vs-individual-gap-two-or-more`, essentially every clause in play is lowercase prose, so \"no MUST violated\" is a weak defence for either side.\n\nSPLITS ARE ALSO NON-UNIQUE, which is a stability argument in its own right and the cleanest one available. Exact enumeration over 40 rows found 27 that admit more than one equally-compliant split, median 2 and MAX 125; the spec's own `:44-47` example admits five. Adopting a split therefore trades one stable canonical form for an arbitrary pick from a family, and the arbitrariness is invisible in any single-row comparison.\n\nTHE PROJECT HAS NOT CHOSEN. This is an open product decision rather than a spec question, and it is deliberately recorded as one so that a future session does not read a measurement as a mandate."
+    },
+    {
+      "id": "codon-carve-out-shape-restriction",
+      "question": "`delins.md:18`'s exception names no edit type, but ferro applies it only to a substitution / unchanged base / substitution shape. Does the exception reach other shapes?",
+      "status": "undecided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/DNA/delins.md:18",
+          "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/general.md:35",
+          "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/DNA/duplication.md:18",
+          "quote": "when a variant can be described as a duplication, it **must** be described as a duplication and not as, e.g., an insertion"
+        }
+      ],
+      "rationale": "The clause is written without reference to edit type: \"two variants separated by one nucleotide, together affecting one amino acid\". Ferro's `apply_coding_codon_exception` fires only where the two variants are SUBSTITUTIONS flanking one unchanged base, so on the face of the text ferro applies less of the exception than the spec states. WHETHER THAT NARROWING IS WRONG HAS NOT BEEN DEMONSTRATED, and it is recorded here as an open question rather than as a defect or as a decision.\n\nWhat is established is a measurement and two constraints. The measurement: across 5.76M corpus rows the restriction produced no output identifiable as wrong — no row was found where a non-substitution pair one nucleotide apart, together affecting one amino acid, should have merged and did not. That is evidence of inertness on the corpora at hand, not evidence of correctness, and a corpus zero is a claim about the corpus (see the repository `CLAUDE.md`). The two constraints bound how far a widening could go. First, `general.md:35`'s \"together affecting one amino acid\" cannot cover a frameshift pair, because a frameshift does not affect one amino acid. Second, `duplication.md:18` requires that a variant describable as a duplication be described as one, so a widened carve-out must not turn `c.[4C>T;5dup]` into `c.4delinsTA` — note that this \"must\" is lowercase prose in the spec, like nearly everything else litigated here, and is being read as strong because of its wording rather than because RFC 2119 makes it so.\n\nThis record exists because the narrowing was nominated for one and never filed, so the next session to notice it re-derives the same measurement. Widening the shape to any pair type would be an output-moving change and needs the usual representation-change treatment. NO RULING HAS BEEN MADE."
     },
     {
       "id": "delins-codon-carve-out-gap-one",
@@ -380,10 +456,18 @@
         {
           "clause": "docs/recommendations/DNA/delins.md:18",
           "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/general.md:39",
+          "quote": "The new recommendation will be: **two variants separated by less than two nucleotides should be described as a \"delins\"**."
+        },
+        {
+          "clause": "docs/consultation/SVD-WG010.md:5",
+          "quote": "Status: rejected"
         }
       ],
       "governing": "docs/recommendations/DNA/delins.md:18",
-      "rationale": "Unlike the two records above, the spec settles this one: `:18` is an explicit exception to the SHOULD NOT at `:17`, stated at the same place and with the same scope, so there is no conflict to weigh and no deviation to record. Merging is what the spec asks for, and the reason it gives at `:19` is exactly the confluence argument — leaving the two substitutions separate lets tools predict two conflicting consequences at one position. Note the carve-out is scoped to the coding sequence and to one amino acid; `general.md:36-39` records that the SVD-WG intends to replace it with a purely positional rule (\"separated by less than two nucleotides\"), which would widen it. Decided against the current text, to be revisited if that proposal is adopted.",
+      "rationale": "Unlike the undecided records here, the spec settles this one: `:18` is an explicit exception to the instruction at `:17`, stated in the same place and with the same scope, so there is no conflict to weigh and no deviation to record. Merging is what the spec asks for, and the reason it gives at `:19` is exactly the confluence argument — leaving the two substitutions separate lets tools predict two conflicting consequences at one position. The carve-out is scoped to the coding sequence and to one amino acid; ferro applies the codon half triplet-precisely, after partitioning, in `apply_coding_codon_exception`.\n\nCORRECTION (2026-08-07): an earlier revision of this rationale said `general.md:36-39` \"records that the SVD-WG intends to replace it with a purely positional rule ... to be revisited if that proposal is adopted\", which reads as though the proposal were live. IT IS NOT. `general.md:39`'s forward reference — \"two variants separated by less than two nucleotides should be described as a delins\" — is proposal SVD-WG010, which opened for Community Consultation in May 2021 and was REJECTED in July 2021; `SVD-WG010.md:5` carries the status banner. `general.md:36-39` is therefore dead text: a future-tense description of a proposal that was declined and never removed from the page. Do not cite it, and do not cite SVD-WG010 as a live rule either. The codon-conditioned exception at `:18` / `general.md:35` remains the law, and this record is decided against it, not \"pending\" anything.",
       "applies_to": [
         "c.235_237delinsTAT",
         "c.[235A>T;237G>T]",
