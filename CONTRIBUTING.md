@@ -78,6 +78,22 @@ Representation-Change: c.<cds_end>_*1ins<A> now renders as
   anyone normalizing to a fixed point sees no change.
 ```
 
+**If your change moves nothing, say that** — `Representation-Change: none` is a
+first-class answer, not a way of opting out:
+
+```
+ci: pin the workflow's action hashes
+
+Representation-Change: none
+```
+
+`none`, `no`, `n/a` and `na` all count, in any casing. A declining trailer is
+excluded from the changelog's **Representation changes** section, so declaring it
+costs the reader nothing while leaving the judgement on the record. CI enforces
+the distinction: a change touching `src/normalize/`, `src/hgvs/`, `src/spdi/` or
+`src/project/` with no trailer at all fails the `Representation change declared`
+check, because an absent trailer is indistinguishable from an unconsidered one.
+
 **Indent continuation lines**, as above. Git only folds a multi-line trailer
 value into the trailer when the continuations are whitespace-prefixed: measured
 against git-cliff 2.13.1, the unindented form still groups correctly (its footer
