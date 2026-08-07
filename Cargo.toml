@@ -74,9 +74,13 @@ lru = "0.12.5"
 [features]
 default = []
 dhat-heap = ["dep:dhat"]
-# rayon is now an unconditional dependency (the CLI `-j` batch drivers use it);
-# this feature is retained as a no-op alias and to gate the library `parallel`
-# module's public API.
+# rayon is an unconditional dependency (the CLI `-j` batch drivers use it), so
+# this feature enables nothing and excludes no code from any build. It once
+# gated the library `parallel` module's public API; because that gate could not
+# express a capability difference, only a visibility one, it read as "this
+# build cannot do parallelism" and was misread that way (#1504, #1507). The API
+# is now unconditional and this is a no-op alias retained so `--features
+# parallel` and the `python` feature below keep resolving.
 parallel = []
 validation = ["dep:ahash"]
 # The Python batch API parallelizes across a rayon pool, so the `parallel`

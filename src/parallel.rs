@@ -1,13 +1,12 @@
 //! Parallel processing support for ferro-hgvs
 //!
 //! This module provides parallel variants of parsing and normalization
-//! operations using rayon. Enable with the `parallel` feature.
+//! operations using rayon. It is available in every build — rayon is an
+//! unconditional dependency, so there is no feature to enable.
 //!
 //! # Example
 //!
 //! ```no_run
-//! # #[cfg(feature = "parallel")]
-//! # fn main() {
 //! use ferro_hgvs::parallel::{parse_hgvs_parallel, normalize_parallel};
 //! use ferro_hgvs::{JsonProvider, Normalizer};
 //!
@@ -27,9 +26,6 @@
 //! let provider = JsonProvider::with_test_data();
 //! let normalizer = Normalizer::new(provider);
 //! let _normalized = normalize_parallel(&normalizer, &parsed);
-//! # }
-//! # #[cfg(not(feature = "parallel"))]
-//! # fn main() {}
 //! ```
 
 use rayon::prelude::*;
@@ -121,7 +117,6 @@ pub fn parse_and_normalize_parallel<P: ReferenceProvider + Sync, S: AsRef<str> +
 /// function would have produced at that position.
 ///
 /// ```no_run
-/// # #[cfg(feature = "parallel")]
 /// # fn main() -> std::io::Result<()> {
 /// use std::io::{BufRead, BufReader};
 /// use ferro_hgvs::parallel::parse_hgvs_streaming;
@@ -135,8 +130,6 @@ pub fn parse_and_normalize_parallel<P: ReferenceProvider + Sync, S: AsRef<str> +
 /// }
 /// # Ok(())
 /// # }
-/// # #[cfg(not(feature = "parallel"))]
-/// # fn main() {}
 /// ```
 pub fn parse_hgvs_streaming<I, S>(
     variants: I,

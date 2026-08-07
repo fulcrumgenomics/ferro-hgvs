@@ -492,7 +492,6 @@ impl<P: ReferenceProvider> BatchProcessor<P> {
 /// dedicated pool of `N` threads. These have no progress-callback variants —
 /// ordered progress under parallelism is ill-defined; use the serial
 /// `*_with_progress` methods when a callback is needed.
-#[cfg(feature = "parallel")]
 impl<P: ReferenceProvider + Sync> BatchProcessor<P> {
     /// Parse multiple HGVS strings in parallel. Order-preserving; equivalent to
     /// [`parse`](Self::parse) but spread across `num_threads` workers.

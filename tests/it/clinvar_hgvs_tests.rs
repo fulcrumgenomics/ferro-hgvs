@@ -6,7 +6,6 @@
 
 use ferro_hgvs::parse_hgvs;
 use flate2::read::GzDecoder;
-#[cfg(feature = "parallel")]
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -89,20 +88,9 @@ fn test_clinvar_hgvs_500k_benchmark() {
     eprintln!("Total test cases: {}", total);
 
     let start = Instant::now();
-    #[cfg(feature = "parallel")]
     let case_failures: Vec<(&str, String)> = fixture
         .test_cases
         .par_iter()
-        .filter_map(|case| {
-            parse_hgvs(case.input)
-                .err()
-                .map(|e| (case.input, e.to_string()))
-        })
-        .collect();
-    #[cfg(not(feature = "parallel"))]
-    let case_failures: Vec<(&str, String)> = fixture
-        .test_cases
-        .iter()
         .filter_map(|case| {
             parse_hgvs(case.input)
                 .err()
@@ -210,20 +198,9 @@ fn test_clinvar_hgvs_unique_benchmark() {
     eprintln!("Total test cases: {}", total);
 
     let start = Instant::now();
-    #[cfg(feature = "parallel")]
     let case_failures: Vec<(&str, String)> = fixture
         .test_cases
         .par_iter()
-        .filter_map(|case| {
-            parse_hgvs(case.input)
-                .err()
-                .map(|e| (case.input, e.to_string()))
-        })
-        .collect();
-    #[cfg(not(feature = "parallel"))]
-    let case_failures: Vec<(&str, String)> = fixture
-        .test_cases
-        .iter()
         .filter_map(|case| {
             parse_hgvs(case.input)
                 .err()

@@ -46,18 +46,19 @@
 //! - **Progress Tracking**: Optional callbacks for monitoring long-running batches
 //! - **Error Aggregation**: Collect all errors without stopping the batch
 //! - **Statistics**: Detailed success/failure counts and processing rates
-//! - **Parallel Support**: Enable `parallel` feature for multi-threaded processing
+//! - **Parallel Support**: multi-threaded processing via the `*_parallel` and
+//!   `*_streaming` methods, available in every build
 
 mod processor;
 
-// Gated to match its only consumers, both of which are `parallel`-only: the
-// `#[cfg(feature = "parallel")]` impl block in `processor.rs` and the streaming
-// functions in `crate::parallel`. `default = []`, so without this the module
-// compiles in a featureless build with nothing constructing `StreamingMap` —
-// dead code that `dead_code`'s warn-by-default level let through every existing
-// clippy job (they all pass `--features dev` or `--all-features`). The
-// release-profile lint added in this PR is what surfaced it.
-#[cfg(feature = "parallel")]
+// Ungated, matching its consumers: the streaming impl block in `processor.rs`
+// and the streaming functions in `crate::parallel`. Both were once
+// `#[cfg(feature = "parallel")]` and this followed them, which made the module
+// dead in a featureless build — dead code that `dead_code`'s warn-by-default
+// level let through every clippy job, since they all pass `--features dev` or
+// `--all-features`. #1507 removed those gates (rayon is unconditional, so they
+// gated visibility rather than capability), which removes the dead-code
+// condition at its source.
 pub(crate) mod streaming;
 
 pub use processor::{

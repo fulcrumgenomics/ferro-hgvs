@@ -47,7 +47,6 @@ pub mod legacy;
 pub mod liftover;
 pub mod mave;
 pub mod normalize;
-#[cfg(feature = "parallel")]
 pub mod parallel;
 /// Performance-comparison table types + rendering (used by the
 /// `generate_perf_tables` example and its tests).
