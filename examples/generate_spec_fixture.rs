@@ -70,7 +70,8 @@ fn run(cli: &Cli) -> anyhow::Result<()> {
     let candidates = sources::discover(&cli.spec_dir)?;
     let overrides = overrides::load(&cli.overrides)?;
     let rows = runner::build_rows(&candidates, &overrides)?;
-    let rendered = render::render(&rows, &cli.spec_dir)?;
+    let decisions = decisions::resolve(&rows, &overrides, &cli.spec_dir)?;
+    let rendered = render::render(&rows, &decisions, &cli.spec_dir)?;
 
     if cli.check {
         check_up_to_date(&cli.output, &rendered, "fixture", "generate_spec_fixture")?;
@@ -99,6 +100,123 @@ mod overrides {
     pub struct Overrides {
         #[serde(default)]
         pub by_input: BTreeMap<String, OverrideEntry>,
+        /// Curated declarations that two or more harvested rows denote the
+        /// **same variant**. See [`EquivalenceClass`].
+        #[serde(default)]
+        pub equivalence_classes: Vec<EquivalenceClass>,
+        /// Curated records of how the project read the spec where its own
+        /// clauses conflict. See [`Ruling`].
+        #[serde(default)]
+        pub rulings: Vec<Ruling>,
+    }
+
+    /// A pointer into the vendored spec checkout, carrying the text it points at.
+    ///
+    /// `clause` is `<path-relative-to-spec-dir>:<line>` or `…:<start>-<end>` —
+    /// the same path form the harvester records in `source_paths`, so a citation
+    /// and a row's provenance are directly comparable.
+    ///
+    /// `quote` is what makes the citation self-verifying: the generator asserts
+    /// the text appears within the cited lines, so bumping the spec submodule in
+    /// a way that moves a clause fails the build instead of silently leaving a
+    /// citation pointing at unrelated prose. A bare line number would still
+    /// "resolve" against any file long enough to have that line.
+    #[derive(Debug, Clone, Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct Citation {
+        pub clause: String,
+        pub quote: String,
+    }
+
+    /// Two or more harvested inputs that denote **one** variant.
+    ///
+    /// The classes cannot be derived: deciding that two descriptions denote one
+    /// variant means applying both to a reference sequence, which many rows
+    /// cannot do (the `needs-reference` bucket). So they are curated from the
+    /// spec's own equivalence statements — "alternatively", "can also be
+    /// described as", "giving an alternative description like" — exactly as the
+    /// `by_input` overrides are curated from its validity statements.
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct EquivalenceClass {
+        /// Stable identifier. This is what the test consumer's pinned
+        /// known-non-confluent list keys on, so it must not be renamed casually.
+        pub id: String,
+        /// Row inputs, verbatim as harvested. Every one must exist as a row.
+        pub members: Vec<String>,
+        /// Accession all members are evaluated under, replacing whatever
+        /// accession each member's row would otherwise carry.
+        ///
+        /// Needed because the spec routinely writes one member of a pair as a
+        /// bare fragment (`c.[235A>T;237G>T]`), which the harvester prefixes
+        /// with the per-coordinate-system default rather than with the
+        /// accession of the worked example it sits under — and, twice, writes
+        /// the two members under *different* accession versions
+        /// (`NM_004006.2` / `NM_004006.1`, DNA/insertion.md:74). Comparing
+        /// members across different references would report a difference of
+        /// reference sequence as a difference of representation.
+        ///
+        /// Deliberately declared on the class rather than fixed by editing each
+        /// row's `input_prefixed`: that would move rows' `current` values and
+        /// the census pinned against them, for no gain outside this comparison.
+        #[serde(default)]
+        pub reference: Option<String>,
+        /// Where the spec says these are one variant. Must be non-empty.
+        pub citations: Vec<Citation>,
+        /// Why this is a class, in prose.
+        pub note: String,
+    }
+
+    /// Whether the project has taken a position on a contested reading.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+    #[serde(rename_all = "kebab-case")]
+    pub enum RulingStatus {
+        /// The project has ruled. `governing` names the clause held to govern.
+        Decided,
+        /// The project has **not** ruled. `governing` must be absent — an
+        /// undecided record states the conflict and stops there, so nobody can
+        /// read a ruling out of a record that never made one.
+        Undecided,
+    }
+
+    /// A record of how the project reads the spec where the spec conflicts with
+    /// itself, and of what it has *not* decided.
+    ///
+    /// `style.md:9` binds the spec to RFC 2119, and items 3 and 4 there make
+    /// "RECOMMENDED" equal to SHOULD and cover SHOULD NOT. Two SHOULD-strength
+    /// clauses can therefore reach the same description and point opposite ways,
+    /// with nothing in the text to break the tie — RFC 2119 instead licenses
+    /// deviation once the implications are weighed. This record is where that
+    /// weighing is written down.
+    #[derive(Debug, Clone, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct Ruling {
+        /// Stable identifier; pinned by the test consumer.
+        pub id: String,
+        /// The contested question, in one sentence.
+        pub question: String,
+        pub status: RulingStatus,
+        /// Every clause the record is about, cited and quote-verified. A
+        /// conflict record names both sides; a settled carve-out may name one.
+        pub clauses: Vec<Citation>,
+        /// The `clause` string, drawn from [`Self::clauses`], held to govern.
+        /// Required when `decided`, forbidden when `undecided`.
+        #[serde(default)]
+        pub governing: Option<String>,
+        /// The `clause` strings, drawn from [`Self::clauses`], deviated from in
+        /// reaching the ruling. Necessarily empty when `undecided`: a record
+        /// that has not chosen a side has not deviated from one either.
+        #[serde(default)]
+        pub deviates_from: Vec<String>,
+        /// Why. For an undecided record: what the project has and has not
+        /// established, and what would settle it.
+        pub rationale: String,
+        /// Row inputs the ruling bears on. Every one must exist as a row.
+        #[serde(default)]
+        pub applies_to: Vec<String>,
+        /// Equivalence-class ids the ruling bears on, if any.
+        #[serde(default)]
+        pub equivalence_classes: Vec<String>,
     }
 
     /// `spec_expected` uses the doubly-optional pattern so the override file
@@ -459,6 +577,22 @@ mod runner {
         Ok(rows)
     }
 
+    /// A normalizer over the hermetic provider, for callers outside `build_rows`.
+    pub fn new_normalizer() -> Normalizer<MockProvider> {
+        Normalizer::new(MockProvider::new())
+    }
+
+    /// Run one description and report `(rendering, evaluated_cleanly)`.
+    ///
+    /// `false` means ferro refused it — the rendering is then the parse or
+    /// normalize error text, which is not a representation and must not be
+    /// compared against one.
+    pub fn observe(normalizer: &Normalizer<MockProvider>, target: &str) -> (String, bool) {
+        let outcome = run_ferro(normalizer, target);
+        let ok = outcome.parse_ok && outcome.normalize_ok;
+        (outcome.current, ok)
+    }
+
     fn run_ferro(normalizer: &Normalizer<MockProvider>, input: &str) -> FerroOutcome {
         let failed = |current: String, parse_ok: bool| FerroOutcome {
             current,
@@ -594,6 +728,356 @@ mod runner {
     }
 }
 
+// ---------- decisions ----------
+
+/// Resolution and validation of the two curated decision-log sections:
+/// equivalence classes (Task 1) and rulings (Task 2).
+///
+/// Everything here is a **build-time gate**. A class naming an input the
+/// harvester no longer produces, a citation whose quote has moved in the spec
+/// checkout, an `undecided` record that quietly grew a governing clause — each
+/// fails generation, which is the same guard the `by_input` overrides already
+/// get (`overrides reference unknown inputs`). The test consumer then re-derives
+/// the verdicts live; nothing downstream trusts what is written here.
+mod decisions {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// One member of a class, as evaluated.
+    #[derive(Debug, Serialize)]
+    pub struct ResolvedMember {
+        /// The harvested input, verbatim.
+        pub input: String,
+        /// What ferro was actually run against — the row's target, re-anchored
+        /// onto the class `reference` when the class declares one.
+        pub target: String,
+        /// ferro's rendering, or its refusal text when `evaluable` is false.
+        pub normalized: String,
+        /// False when this member cannot contribute to the comparison: it needs
+        /// real reference bases, or ferro refuses it outright. Such a member is
+        /// neither evidence of confluence nor of its absence.
+        pub evaluable: bool,
+        /// Why it is not evaluable. Absent when it is.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub skipped_because: Option<String>,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct ResolvedClass {
+        pub id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub reference: Option<String>,
+        pub citations: Vec<overrides::Citation>,
+        pub note: String,
+        pub members: Vec<ResolvedMember>,
+        /// The distinct renderings the evaluable members produced. One entry is
+        /// confluence; more than one is the defect the class exists to name.
+        pub distinct_outputs: Vec<String>,
+        pub verdict: &'static str,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct ResolvedRuling {
+        pub id: String,
+        pub question: String,
+        pub status: overrides::RulingStatus,
+        pub clauses: Vec<overrides::Citation>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub governing: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        pub deviates_from: Vec<String>,
+        pub rationale: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        pub applies_to: Vec<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        pub equivalence_classes: Vec<String>,
+    }
+
+    #[derive(Debug, Serialize)]
+    pub struct Decisions {
+        pub equivalence_classes: Vec<ResolvedClass>,
+        pub rulings: Vec<ResolvedRuling>,
+    }
+
+    /// Verdict strings. Written on the row for readers; the test consumer
+    /// re-derives its own rather than reading these.
+    const CONFLUENT: &str = "confluent";
+    const NON_CONFLUENT: &str = "non-confluent";
+    const NOT_EVALUABLE: &str = "not-evaluable";
+
+    /// Re-anchor `target` onto `reference`, replacing any accession it carries.
+    ///
+    /// The accession is everything before the **first** colon, which is where
+    /// HGVS puts it; a colon later in the string belongs to an inner reference
+    /// (`g.10_11ins[NC_…:g.20_30]`) and must be left alone.
+    fn anchor(target: &str, reference: Option<&str>) -> String {
+        match reference {
+            None => target.to_string(),
+            Some(accession) => match target.split_once(':') {
+                Some((_, rest)) => format!("{accession}:{rest}"),
+                None => format!("{accession}:{target}"),
+            },
+        }
+    }
+
+    /// Split a `path:line` or `path:start-end` clause into its parts.
+    fn parse_clause(clause: &str) -> anyhow::Result<(&str, usize, usize)> {
+        let (path, lines) = clause
+            .rsplit_once(':')
+            .ok_or_else(|| anyhow::anyhow!("citation {clause:?} is not `<path>:<line>`"))?;
+        let (first, last) = match lines.split_once('-') {
+            Some((a, b)) => (a, b),
+            None => (lines, lines),
+        };
+        let parse = |s: &str| {
+            s.parse::<usize>()
+                .map_err(|_| anyhow::anyhow!("citation {clause:?} has a non-numeric line"))
+        };
+        let (first, last) = (parse(first)?, parse(last)?);
+        if first == 0 || last < first {
+            anyhow::bail!("citation {clause:?} has an empty or inverted line range");
+        }
+        Ok((path, first, last))
+    }
+
+    /// Fail unless the citation resolves against the spec checkout **and** the
+    /// quoted text is still on the cited lines.
+    fn verify_citation(
+        spec_dir: &Path,
+        owner: &str,
+        citation: &overrides::Citation,
+    ) -> anyhow::Result<()> {
+        let (path, first, last) = parse_clause(&citation.clause)?;
+        let full = spec_dir.join(path);
+        let text = std::fs::read_to_string(&full).map_err(|e| {
+            anyhow::anyhow!(
+                "{owner}: citation {:?} names {} which cannot be read: {e}",
+                citation.clause,
+                full.display()
+            )
+        })?;
+        let lines: Vec<&str> = text.lines().collect();
+        if last > lines.len() {
+            anyhow::bail!(
+                "{owner}: citation {:?} runs past the end of {path} ({} lines)",
+                citation.clause,
+                lines.len()
+            );
+        }
+        if citation.quote.trim().is_empty() {
+            anyhow::bail!("{owner}: citation {:?} has an empty quote", citation.clause);
+        }
+        // Join on a space so a quote may span the cited lines. Both sides are
+        // whitespace-collapsed, so re-wrapping the spec's prose does not
+        // invalidate a citation while moving it elsewhere still does.
+        let collapse = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+        let haystack = collapse(&lines[first - 1..last].join(" "));
+        if !haystack.contains(&collapse(&citation.quote)) {
+            anyhow::bail!(
+                "{owner}: citation {:?} no longer quotes the spec. Expected to find\n  {:?}\nwithin those lines, which currently read\n  {:?}\nThe spec submodule moved under this citation — re-point it rather than deleting the quote.",
+                citation.clause,
+                citation.quote,
+                haystack
+            );
+        }
+        Ok(())
+    }
+
+    pub fn resolve(
+        rows: &[runner::Row],
+        overrides: &overrides::Overrides,
+        spec_dir: &Path,
+    ) -> anyhow::Result<Decisions> {
+        let by_input: BTreeMap<&str, &runner::Row> =
+            rows.iter().map(|r| (r.input.as_str(), r)).collect();
+        let normalizer = runner::new_normalizer();
+
+        let mut seen_ids: BTreeSet<&str> = BTreeSet::new();
+        let mut classes = Vec::with_capacity(overrides.equivalence_classes.len());
+        for class in &overrides.equivalence_classes {
+            let owner = format!("equivalence class {:?}", class.id);
+            if !seen_ids.insert(class.id.as_str()) {
+                anyhow::bail!("{owner}: duplicate id");
+            }
+            if class.members.len() < 2 {
+                anyhow::bail!("{owner}: a class needs at least two members");
+            }
+            if class.citations.is_empty() {
+                anyhow::bail!(
+                    "{owner}: a class must cite where the spec says its members are one variant"
+                );
+            }
+            for citation in &class.citations {
+                verify_citation(spec_dir, &owner, citation)?;
+            }
+
+            let mut members = Vec::with_capacity(class.members.len());
+            let mut distinct: BTreeSet<String> = BTreeSet::new();
+            for input in &class.members {
+                let row = by_input.get(input.as_str()).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "{owner}: member {input:?} is not a fixture row (typo or spec drift)"
+                    )
+                })?;
+                let target = anchor(
+                    row.input_prefixed.as_deref().unwrap_or(&row.input),
+                    class.reference.as_deref(),
+                );
+                let (normalized, ok) = runner::observe(&normalizer, &target);
+                // Two ways a member cannot contribute. A row the auditor already
+                // marked reference-dependent is skipped without running, since
+                // the hermetic provider would only produce a lookup error; a row
+                // ferro refuses is skipped on the refusal itself.
+                let skipped_because =
+                    if row.status == "needs-reference" || row.requires_reference == Some(true) {
+                        Some("needs real reference bases".to_string())
+                    } else if !ok {
+                        Some(format!("ferro does not evaluate it: {normalized}"))
+                    } else {
+                        None
+                    };
+                if skipped_because.is_none() {
+                    distinct.insert(normalized.clone());
+                }
+                members.push(ResolvedMember {
+                    input: input.clone(),
+                    target,
+                    normalized,
+                    evaluable: skipped_because.is_none(),
+                    skipped_because,
+                });
+            }
+
+            let verdict = match distinct.len() {
+                0 | 1 if members.iter().filter(|m| m.evaluable).count() < 2 => NOT_EVALUABLE,
+                1 => CONFLUENT,
+                _ => NON_CONFLUENT,
+            };
+            classes.push(ResolvedClass {
+                id: class.id.clone(),
+                reference: class.reference.clone(),
+                citations: class.citations.clone(),
+                note: class.note.clone(),
+                members,
+                distinct_outputs: distinct.into_iter().collect(),
+                verdict,
+            });
+        }
+
+        let class_ids: BTreeSet<&str> = classes.iter().map(|c| c.id.as_str()).collect();
+        let mut seen_rulings: BTreeSet<&str> = BTreeSet::new();
+        let mut rulings = Vec::with_capacity(overrides.rulings.len());
+        for ruling in &overrides.rulings {
+            let owner = format!("ruling {:?}", ruling.id);
+            if !seen_rulings.insert(ruling.id.as_str()) {
+                anyhow::bail!("{owner}: duplicate id");
+            }
+            if ruling.rationale.trim().is_empty() {
+                anyhow::bail!("{owner}: a ruling record must say why");
+            }
+            if ruling.clauses.is_empty() {
+                anyhow::bail!("{owner}: a ruling record must cite at least one clause");
+            }
+            for citation in &ruling.clauses {
+                verify_citation(spec_dir, &owner, citation)?;
+            }
+            let cited: BTreeSet<&str> = ruling.clauses.iter().map(|c| c.clause.as_str()).collect();
+            for role in ruling.governing.iter().chain(ruling.deviates_from.iter()) {
+                if !cited.contains(role.as_str()) {
+                    anyhow::bail!(
+                        "{owner}: names {role:?} as governing or deviated-from, but that clause is \
+                         not in `clauses` — every role must point at a cited, quote-verified clause"
+                    );
+                }
+            }
+            match ruling.status {
+                overrides::RulingStatus::Decided if ruling.governing.is_none() => anyhow::bail!(
+                    "{owner}: a `decided` ruling must name the clause it holds to govern"
+                ),
+                // The whole point of the `undecided` state is that nobody has
+                // ruled. A governing clause — or a deviated-from one, which
+                // implies a side was chosen — is an invented ruling, so it is a
+                // build failure rather than a lint.
+                overrides::RulingStatus::Undecided
+                    if ruling.governing.is_some() || !ruling.deviates_from.is_empty() =>
+                {
+                    anyhow::bail!(
+                        "{owner}: an `undecided` ruling must not name a governing or deviated-from \
+                         clause — record the conflict, not a ruling nobody made"
+                    )
+                }
+                _ => {}
+            }
+            for input in &ruling.applies_to {
+                if !by_input.contains_key(input.as_str()) {
+                    anyhow::bail!(
+                        "{owner}: applies_to {input:?} is not a fixture row (typo or spec drift)"
+                    );
+                }
+            }
+            for id in &ruling.equivalence_classes {
+                if !class_ids.contains(id.as_str()) {
+                    anyhow::bail!("{owner}: names unknown equivalence class {id:?}");
+                }
+            }
+            rulings.push(ResolvedRuling {
+                id: ruling.id.clone(),
+                question: ruling.question.clone(),
+                status: ruling.status,
+                clauses: ruling.clauses.clone(),
+                governing: ruling.governing.clone(),
+                deviates_from: ruling.deviates_from.clone(),
+                rationale: ruling.rationale.clone(),
+                applies_to: ruling.applies_to.clone(),
+                equivalence_classes: ruling.equivalence_classes.clone(),
+            });
+        }
+
+        Ok(Decisions {
+            equivalence_classes: classes,
+            rulings,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn anchor_replaces_only_the_leading_accession() {
+            assert_eq!(
+                anchor("NM_004006.2:c.[235A>T;237G>T]", Some("LRG_199t1")),
+                "LRG_199t1:c.[235A>T;237G>T]"
+            );
+            // A colon inside an inserted-range payload is not the accession.
+            assert_eq!(
+                anchor("NC_1.1:g.10_11ins[NC_2.1:g.20_30]", Some("NC_9.9")),
+                "NC_9.9:g.10_11ins[NC_2.1:g.20_30]"
+            );
+            assert_eq!(
+                anchor("c.235_237delinsTAT", Some("X.1")),
+                "X.1:c.235_237delinsTAT"
+            );
+            assert_eq!(anchor("NM_1.1:c.1del", None), "NM_1.1:c.1del");
+        }
+
+        #[test]
+        fn parses_single_lines_and_ranges() {
+            assert_eq!(
+                parse_clause("docs/recommendations/DNA/delins.md:47").unwrap(),
+                ("docs/recommendations/DNA/delins.md", 47, 47)
+            );
+            assert_eq!(
+                parse_clause("docs/recommendations/DNA/delins.md:44-47").unwrap(),
+                ("docs/recommendations/DNA/delins.md", 44, 47)
+            );
+            assert!(parse_clause("docs/recommendations/DNA/delins.md").is_err());
+            assert!(parse_clause("a.md:0").is_err());
+            assert!(parse_clause("a.md:9-4").is_err());
+        }
+    }
+}
+
 // ---------- render ----------
 
 mod render {
@@ -605,6 +1089,11 @@ mod render {
         spec: SpecBlock<'a>,
         generated_utc: String,
         summary: Summary,
+        /// Curated "these spellings are one variant" declarations, resolved
+        /// against ferro's current output. See `decisions`.
+        equivalence_classes: &'a [decisions::ResolvedClass],
+        /// Curated records of contested spec readings. See `decisions`.
+        rulings: &'a [decisions::ResolvedRuling],
         rows: &'a [runner::Row],
     }
 
@@ -621,6 +1110,10 @@ mod render {
         by_status: BTreeMap<String, usize>,
         by_coordinate_system: BTreeMap<String, usize>,
         by_source_kind: BTreeMap<String, usize>,
+        /// Equivalence-class verdicts, so the decision log's headline number
+        /// sits beside the row census rather than having to be counted by hand.
+        equivalence_classes_by_verdict: BTreeMap<String, usize>,
+        rulings_by_status: BTreeMap<String, usize>,
     }
 
     fn read_submodule_commit(spec_dir: &Path) -> anyhow::Result<String> {
@@ -647,12 +1140,29 @@ mod render {
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     }
 
-    pub fn render(rows: &[runner::Row], spec_dir: &Path) -> anyhow::Result<String> {
+    pub fn render(
+        rows: &[runner::Row],
+        decisions: &decisions::Decisions,
+        spec_dir: &Path,
+    ) -> anyhow::Result<String> {
         let commit_sha = read_submodule_commit(spec_dir)?;
         let mut summary = Summary {
             total: rows.len(),
             ..Default::default()
         };
+        for c in &decisions.equivalence_classes {
+            *summary
+                .equivalence_classes_by_verdict
+                .entry(c.verdict.to_string())
+                .or_default() += 1;
+        }
+        for r in &decisions.rulings {
+            let key = serde_json::to_value(r.status)?
+                .as_str()
+                .unwrap_or("unknown")
+                .to_string();
+            *summary.rulings_by_status.entry(key).or_default() += 1;
+        }
         for r in rows {
             *summary.by_status.entry(r.status.clone()).or_default() += 1;
             *summary
@@ -666,8 +1176,12 @@ mod render {
         }
         let doc = Document {
             description:
-                "HGVS v21.0 spec normalization fixture - pins ferro's current normalize() output. \
-                          Companion to issue #84.",
+                "HGVS v21.0 spec normalization fixture - pins ferro's current normalize() output \
+                 for every variant string in the spec, plus the curated decision log: \
+                 `equivalence_classes` (spellings the spec states denote one variant, and whether \
+                 ferro converges them) and `rulings` (how the project reads clauses that conflict \
+                 at equal RFC 2119 strength, including what it has not decided). \
+                 Companion to issue #84.",
             spec: SpecBlock {
                 source: "https://github.com/HGVSnomenclature/hgvs-nomenclature",
                 tag: "21.0.0",
@@ -675,6 +1189,8 @@ mod render {
             },
             generated_utc: "fixture-byte-stable".to_string(),
             summary,
+            equivalence_classes: &decisions.equivalence_classes,
+            rulings: &decisions.rulings,
             rows,
         };
         let mut out = serde_json::to_string_pretty(&doc)?;

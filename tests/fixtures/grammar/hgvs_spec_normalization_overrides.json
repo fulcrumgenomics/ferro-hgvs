@@ -142,5 +142,261 @@
       "spec_expected": null,
       "note": "Superseded SVD-WG004 ISCN proposal (chrN:, reference-after-`g.`), abandoned by ISCN2020/HGVS. ferro rejects it; force spec-rejects (see #546). (#955)"
     }
-  }
+  },
+  "equivalence_classes": [
+    {
+      "id": "dna-delins-vs-aligned-split-850-901",
+      "reference": "LRG_199t1",
+      "members": [
+        "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG",
+        "c.[850_869del;874_881del;887_897del;901_902insG]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/DNA/delins.md:44-47",
+          "quote": "parts of the inserted sequence \"align\" with the reference sequence, giving an alternative description like"
+        }
+      ],
+      "note": "The spec's own non-confluent pair, and the reason this section exists. It states outright that the bracketed split is \"an alternative description\" of the delins, i.e. one variant with two spellings. Both are `preserved`, so ferro has two stable fixed points for one variant and the row-level status bucket reports that as full conformance. The bare member is anchored on `LRG_199t1` because the spec writes it under that worked example; without the anchor the harvester's per-coordinate-system default (`NM_004006.2`) would make the two members differ by reference sequence as well as by representation. Governed by ruling `delins-merge-vs-individual-gap-two-or-more`."
+    },
+    {
+      "id": "dna-delins-vs-two-substitutions-235-237",
+      "members": [
+        "c.235_237delinsTAT",
+        "c.[235A>T;237G>T]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/DNA/delins.md:19",
+          "quote": "two different substitutions at one position (e.g., `c.235_237delinsTAT` (`p.Lys79Tyr`) versus `c.[235A>T;237G>T]`"
+        }
+      ],
+      "note": "One codon, two substitutions one nucleotide apart: `235A>T` + `237G>T` over reference `A?G` is exactly `delinsTAT`. The spec presents the pair to argue that the split spelling makes tools predict conflicting protein consequences, so the delins spelling is the one it wants — but it marks neither `<code class=\"invalid\">`, and ferro preserves both. Falls inside the codon carve-out settled by ruling `delins-codon-carve-out-gap-one`."
+    },
+    {
+      "id": "dna-delins-vs-two-substitutions-145-147",
+      "reference": "LRG_199t1",
+      "members": [
+        "LRG_199t1:c.145_147delinsTGG",
+        "c.[145C>T;147C>G]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/DNA/delins.md:37",
+          "quote": "`LRG_199t1:c.145_147delinsTGG`"
+        },
+        {
+          "clause": "docs/recommendations/DNA/delins.md:42",
+          "quote": "so the description <code class=\"invalid\">c.[145C>T;147C>G]</code> is not correct"
+        }
+      ],
+      "note": "Same shape as the `235_237` class and the same carve-out, but here the spec does mark the split spelling invalid — so the split member is a `false-acceptance` row. Note the spec's own layout is off: the `:42` NOTE sits under the `c.9002_9009delinsTTT` bullet while the variant it names belongs to the `:37` bullet (`c.145_147` is `CGC`; `145C>T` + `147C>G` gives `TGG`). The two members are cited separately for that reason. This class is what the `false-acceptance` census cannot say: ferro not only accepts a spelling the spec forbids, it keeps it as a second fixed point for a variant it already has a form for."
+    },
+    {
+      "id": "rna-delins-vs-two-substitutions-142-144",
+      "members": [
+        "r.142_144delinsugg",
+        "r.[142c>u;144a>g]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/RNA/delins.md:40",
+          "quote": "the variant can also be described as `r.[142c>u;144a>g]`, i.e. two substitutions"
+        }
+      ],
+      "note": "The RNA-level twin of the `145_147` class — the same variant on the same transcript, one coordinate system over. The spec goes further here than on the DNA side and says the split format is *preferred* when either substitution is a known polymorphism, which is a third, frequency-dependent tiebreak the description string cannot carry."
+    },
+    {
+      "id": "dna-insertion-n-run-vs-repeat-count-761-762",
+      "reference": "NM_004006.2",
+      "members": [
+        "NM_004006.2:c.761_762insNNNNN",
+        "NM_004006.1:c.761_762insN[5]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/DNA/insertion.md:74",
+          "quote": "`NM_004006.2:c.761_762insNNNNN` (alternatively `NM_004006.1:c.761_762insN[5]`)"
+        }
+      ],
+      "note": "Five unspecified nucleotides, written out or written as a repeat count. The spec's two spellings carry *different accession versions* (`.2` and `.1`) — plainly a typo in the spec, since the prose describes one insertion; the class anchors both on `NM_004006.2` so the comparison is about representation rather than about which transcript version was meant."
+    },
+    {
+      "id": "rna-insertion-n-run-vs-repeat-count-761-762",
+      "reference": "NM_004006.2",
+      "members": [
+        "NM_004006.2:r.761_762insnnnnn",
+        "r.761_762insn[5]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/RNA/insertion.md:38",
+          "quote": "`NM_004006.2:r.761_762insnnnnn` (alternatively `r.761_762insn[5]`)"
+        }
+      ],
+      "note": "RNA twin of `dna-insertion-n-run-vs-repeat-count-761-762`. Anchored because the spec writes the second spelling as a bare fragment under an `NM_004006.2` example, while the harvester's default `r.` accession is `NM_004006.3`."
+    },
+    {
+      "id": "rna-repeat-range-vs-unit-124",
+      "members": [
+        "r.-124_-123[14]",
+        "r.-124ug[14]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/RNA/repeated.md:31",
+          "quote": "`r.-124_-123[14]` (alternatively `r.-124ug[14]`)"
+        }
+      ],
+      "note": "One repeat, spelled by the span of its first unit or by the unit's own sequence. Both are HGVS-legal and the spec offers them as equals, so nothing in the text picks a canonical one — a representation choice ferro makes silently."
+    },
+    {
+      "id": "rna-repeat-range-vs-unit-124-two-alleles",
+      "members": [
+        "r.-124_-123[14];[18]",
+        "r.-124ug[14];[18]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/RNA/repeated.md:36",
+          "quote": "`r.-124_-123[14];[18]` (alternatively `r.-124ug[14];[18]`)"
+        }
+      ],
+      "note": "The same span-vs-unit choice as `rna-repeat-range-vs-unit-124`, carried onto a two-allele description. Listed separately because a per-allele form could in principle converge where the single-allele one does not."
+    },
+    {
+      "id": "protein-extension-stop-glyph-110",
+      "members": [
+        "p.Ter110GlnextTer17",
+        "p.*110Glnext*17"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/protein/extension.md:30",
+          "quote": "`p.Ter110GlnextTer17` (alternatively `p.*110Glnext*17`)"
+        }
+      ],
+      "note": "Positive control. `Ter` and `*` are co-equal stop spellings (`checklist.md:63`), and ferro already converges them onto `Ter`, so this class is expected to pass — it is here to show the assertion distinguishes a class ferro handles from one it does not, rather than failing on everything."
+    },
+    {
+      "id": "protein-extension-stop-glyph-327",
+      "members": [
+        "p.Ter327ArgextTer?",
+        "p.*327Argext*?"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/protein/extension.md:33",
+          "quote": "`p.Ter327ArgextTer?` (alternatively `p.*327Argext*?`)"
+        }
+      ],
+      "note": "Second positive control, with an unknown extension length. Same expectation as `protein-extension-stop-glyph-110`."
+    },
+    {
+      "id": "protein-insertion-xaa-run-vs-repeat-count-582-583",
+      "members": [
+        "NP_003997.1:p.(Val582_Asn583insXaa[5])",
+        "NP_003997.1:p.(Val582_Asn583insXaaXaaXaaXaaXaa)"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/protein/insertion.md:60",
+          "quote": "`NP_003997.1:p.(Val582_Asn583insXaa[5])` (alternatively `NP_003997.1:p.(Val582_Asn583insXaaXaaXaaXaaXaa)`)"
+        }
+      ],
+      "note": "The protein-level twin of the two `insN[5]` classes: an unspecified run written out or as a count. Both members carry their accession, so no anchor is needed."
+    },
+    {
+      "id": "protein-position-less-repeat-shorthand-gln21",
+      "members": [
+        "p.Gln[21]",
+        "p.Q[21]"
+      ],
+      "citations": [
+        {
+          "clause": "docs/recommendations/RNA/repeated.md:52",
+          "quote": "described as `p.Gln[21]` (alternatively `p.Q[21]`)"
+        }
+      ],
+      "note": "Both members are prose shorthand the spec does not treat as describable variants — a position-less protein repeat — and both are pinned `spec_expected: null` in `by_input`, so ferro rejects both and the class is skipped as not-evaluable. Kept deliberately: it records the equivalence, and if either spelling ever starts parsing the class stops being a no-op and begins asserting."
+    }
+  ],
+  "rulings": [
+    {
+      "id": "delins-merge-vs-individual-gap-two-or-more",
+      "question": "When two variants are separated by two or more nucleotides and part of an inserted sequence aligns with the reference, does the spec's SHOULD NOT against merging govern, or its RECOMMENDED for the delins format?",
+      "status": "undecided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/DNA/delins.md:17",
+          "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/DNA/delins.md:47",
+          "quote": "**The \"delins\" format is recommended**"
+        },
+        {
+          "clause": "docs/recommendations/style.md:9",
+          "quote": "are to be interpreted as described in [RFC 2119]"
+        }
+      ],
+      "rationale": "The two clauses are the same RFC 2119 strength and point opposite ways at the same description. `style.md:9` binds the spec to RFC 2119; item 3 there makes \"RECOMMENDED\" equal to SHOULD and item 4 covers SHOULD NOT. The `:44-47` example's own alternative splits at gaps of 4, 5 and 3 nucleotides — every one at least 2 — so `:17` read literally demands exactly the individual description that `:47` rejects three lines later, and neither carries the greater weight. RFC 2119 does not break the tie; it licenses deviating from a SHOULD once the implications are weighed, which is a judgement the spec text leaves to the implementer. THE PROJECT HAS NOT MADE THAT JUDGEMENT. Nothing here should be read as one. What is established is only the cost: this reading governs roughly 138 of 208 adjudicated corpus rows, so whichever way it is settled is a representation change for a stored library, not a local fix. An operator ruling is what closes this record.",
+      "applies_to": [
+        "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG",
+        "c.[850_869del;874_881del;887_897del;901_902insG]"
+      ],
+      "equivalence_classes": [
+        "dna-delins-vs-aligned-split-850-901"
+      ]
+    },
+    {
+      "id": "inversion-vs-two-substitutions-76-83",
+      "question": "For `c.76_83inv`, where the reverse complement coincides with the reference at half its columns, does the SHOULD NOT against merging separated variants govern, or does prioritisation make it one inversion?",
+      "status": "undecided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/general.md:34",
+          "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
+        },
+        {
+          "clause": "docs/recommendations/general.md:56",
+          "quote": "the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion"
+        },
+        {
+          "clause": "docs/recommendations/style.md:9",
+          "quote": "are to be interpreted as described in [RFC 2119]"
+        }
+      ],
+      "rationale": "`NM_004006.2:c.76_83` is `AATGCACA`; its reverse complement `TGTGCATT` agrees with the reference at 4 of the 8 columns, so the same edit is describable either as one inversion spanning 76_83 or as two changed runs separated by unchanged bases. `:56` ranks inversion above the alternatives once an inversion is admitted as a possible type; `:34` says separated variants are described individually. Both are SHOULD-strength under `style.md:9`. Which applies depends on whether the coinciding columns are read as part of the inversion or as gaps between two variants, and the spec does not say. THIS IS UNDER ACTIVE ADJUDICATION AND NO RULING HAS BEEN MADE. Recorded here so the question is visible rather than re-derived; the adjudication outcome, not this record, will decide it.",
+      "applies_to": [
+        "c.76_83inv"
+      ]
+    },
+    {
+      "id": "delins-codon-carve-out-gap-one",
+      "question": "Do two variants separated by exactly one nucleotide, together affecting one amino acid, merge into a delins?",
+      "status": "decided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/DNA/delins.md:18",
+          "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
+        }
+      ],
+      "governing": "docs/recommendations/DNA/delins.md:18",
+      "rationale": "Unlike the two records above, the spec settles this one: `:18` is an explicit exception to the SHOULD NOT at `:17`, stated at the same place and with the same scope, so there is no conflict to weigh and no deviation to record. Merging is what the spec asks for, and the reason it gives at `:19` is exactly the confluence argument — leaving the two substitutions separate lets tools predict two conflicting consequences at one position. Note the carve-out is scoped to the coding sequence and to one amino acid; `general.md:36-39` records that the SVD-WG intends to replace it with a purely positional rule (\"separated by less than two nucleotides\"), which would widen it. Decided against the current text, to be revisited if that proposal is adopted.",
+      "applies_to": [
+        "c.235_237delinsTAT",
+        "c.[235A>T;237G>T]",
+        "LRG_199t1:c.145_147delinsTGG",
+        "c.[145C>T;147C>G]",
+        "r.142_144delinsugg",
+        "r.[142c>u;144a>g]"
+      ],
+      "equivalence_classes": [
+        "dna-delins-vs-two-substitutions-235-237",
+        "dna-delins-vs-two-substitutions-145-147",
+        "rna-delins-vs-two-substitutions-142-144"
+      ]
+    }
+  ]
 }

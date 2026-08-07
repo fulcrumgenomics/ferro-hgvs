@@ -21,6 +21,14 @@
 //!   committed overrides, with [`KNOWN_DIVERGENT_INPUTS`] as the pinned
 //!   exception list.
 //! - [`status_census_is_unchanged`] — per-status row counts.
+//! - [`spec_equivalence_classes_converge`] — the question the statuses never
+//!   ask. `preserved` means only that ferro did not *change* a string; it says
+//!   nothing about whether two rows are the same variant, so the spec's own
+//!   non-confluent pair (`DNA/delins.md:44-47`) sat here as two `preserved`
+//!   rows and passed. Equivalence classes assert one output per variant.
+//! - [`ruling_records_are_intact`] — the curated record of how the project
+//!   reads the spec where the spec conflicts with itself, and of what it has
+//!   deliberately *not* decided.
 
 use ferro_hgvs::reference::mock::MockProvider;
 use ferro_hgvs::{parse_hgvs, Normalizer};
@@ -30,6 +38,51 @@ use std::path::PathBuf;
 #[derive(Debug, Deserialize)]
 struct Fixture {
     rows: Vec<Row>,
+    /// Curated "these spellings denote one variant" declarations, resolved by
+    /// the generator. Read by [`spec_equivalence_classes_converge`].
+    #[serde(default)]
+    equivalence_classes: Vec<EquivalenceClass>,
+    /// Curated records of contested spec readings. Read by
+    /// [`ruling_records_are_intact`].
+    #[serde(default)]
+    rulings: Vec<Ruling>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EquivalenceClass {
+    id: String,
+    members: Vec<ClassMember>,
+}
+
+#[allow(dead_code)] // `input` is used only in failure messages
+#[derive(Debug, Deserialize)]
+struct ClassMember {
+    input: String,
+    /// The string ferro is run against — the member's row target, re-anchored
+    /// onto the class's declared reference when it has one. Taken from the
+    /// fixture for the same reason `input_prefixed` is: it is an *input* to the
+    /// comparison, not a claim about ferro's behaviour. What this test refuses
+    /// to take from the fixture is the output.
+    target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Ruling {
+    id: String,
+    status: String,
+    clauses: Vec<Citation>,
+    #[serde(default)]
+    governing: Option<String>,
+    #[serde(default)]
+    deviates_from: Vec<String>,
+    rationale: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Citation {
+    clause: String,
+    #[allow(dead_code)] // verified in the generator, carried here for readers
+    quote: String,
 }
 
 #[allow(dead_code)] // many fields are present for downstream tooling, not the assertion
@@ -491,4 +544,313 @@ fn ferro_produces_the_form_the_spec_states() {
         unexpected_pass.len(),
         unexpected_pass
     );
+}
+
+/// Pinned verdict for every curated equivalence class, keyed by id.
+///
+/// **Why a verdict table and not a failure list.** Every transition matters in
+/// both directions: a class that starts disagreeing is a new non-confluence, one
+/// that stops disagreeing is an improvement whose pin must be released, and one
+/// that quietly becomes `not-evaluable` — because ferro started refusing a
+/// member — has disarmed itself while still looking present. A one-sided list
+/// catches only the first.
+///
+/// `non-confluent` entries are **expected and not defects to fix here**.
+/// Converging them is #1235's problem, and each is a representation change for a
+/// downstream consumer that keys on the normalized string, so it belongs in a
+/// deliberate migration rather than in a test-infrastructure PR. What this pin
+/// buys is that the *set* cannot grow silently.
+///
+/// The verdicts:
+///
+/// - `confluent` — every evaluable member normalizes to one string.
+/// - `non-confluent` — two or more distinct strings for one variant.
+/// - `not-evaluable` — fewer than two members can be evaluated hermetically
+///   (they need real reference bases, or ferro refuses them), so the class is
+///   evidence of nothing either way.
+const EQUIVALENCE_CLASS_VERDICTS: &[(&str, &str)] = &[
+    // The spec's own worked non-confluent pair: it calls the bracketed split an
+    // "alternative description" of the delins, and ferro keeps both. Which form
+    // should win is the undecided ruling `delins-merge-vs-individual-gap-two-or-more`.
+    ("dna-delins-vs-aligned-split-850-901", "non-confluent"),
+    // Codon carve-out, gap of one. The spec settles the *rule*
+    // (`delins-codon-carve-out-gap-one`) but ferro does not apply it: both
+    // spellings survive normalization.
+    ("dna-delins-vs-two-substitutions-235-237", "non-confluent"),
+    // Same carve-out, and here the spec marks the split spelling invalid — so
+    // this class overlaps the `false-acceptance` census, which counts the
+    // acceptance but cannot see that it is also a second fixed point.
+    ("dna-delins-vs-two-substitutions-145-147", "non-confluent"),
+    ("rna-delins-vs-two-substitutions-142-144", "non-confluent"),
+    // Spelled-out run vs repeat count for an unspecified insertion. Nothing in
+    // the spec ranks the two, so no rule is being broken — but a single variant
+    // still has two stable outputs.
+    (
+        "dna-insertion-n-run-vs-repeat-count-761-762",
+        "non-confluent",
+    ),
+    (
+        "rna-insertion-n-run-vs-repeat-count-761-762",
+        "non-confluent",
+    ),
+    // Repeat spelled by first-unit span vs by unit sequence; again co-equal in
+    // the spec and non-confluent in ferro.
+    ("rna-repeat-range-vs-unit-124", "non-confluent"),
+    ("rna-repeat-range-vs-unit-124-two-alleles", "non-confluent"),
+    (
+        "protein-insertion-xaa-run-vs-repeat-count-582-583",
+        "non-confluent",
+    ),
+    // Positive controls: co-equal stop glyphs, which ferro *does* converge.
+    // They are what shows this assertion can pass, so a change that made every
+    // class disagree could not hide in a wall of expected failures.
+    ("protein-extension-stop-glyph-110", "confluent"),
+    ("protein-extension-stop-glyph-327", "confluent"),
+    // Both members are prose shorthand the spec does not admit as a variant;
+    // ferro rejects both, so nothing is compared. Pinned so that a parser change
+    // which starts accepting them turns this into a live class rather than
+    // passing unnoticed.
+    (
+        "protein-position-less-repeat-shorthand-gln21",
+        "not-evaluable",
+    ),
+];
+
+/// Every curated equivalence class must reach **one** normalized string.
+///
+/// **The defect this closes.** Every other guard in this file asks whether ferro
+/// *changed* a string. None asks whether two rows are the same variant, so the
+/// spec's own non-confluent pair — `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` and
+/// the `c.[850_869del;…]` split the spec names as its "alternative description"
+/// — sat in the fixture as two `preserved` rows and passed. Two stable fixed
+/// points for one variant is exactly #1235's defect, and the row-level status
+/// bucket reported it as full conformance.
+///
+/// **Why the classes are curated.** Deciding that two descriptions denote one
+/// variant means applying both to a reference sequence, which 50 `needs-reference`
+/// rows cannot do. So the declarations live beside the other hand-curated spec
+/// judgements, in `hgvs_spec_normalization_overrides.json`, and the generator
+/// fails the build if a class names a row that no longer exists or cites spec
+/// text that has moved.
+///
+/// **Why this is not circular.** The class membership comes from the spec text,
+/// not from ferro, and the outputs are re-derived live here rather than read off
+/// the fixture — the same shape as [`ferro_produces_the_form_the_spec_states`].
+/// The fixture supplies only the *inputs* (which rows, under which accession).
+#[test]
+fn spec_equivalence_classes_converge() {
+    crate::common::spec_fixture::ensure_spec_fixture();
+    let text = std::fs::read_to_string(fixture_path()).expect("read fixture");
+    let fx: Fixture = serde_json::from_str(&text).expect("parse fixture");
+
+    let by_input: std::collections::HashMap<&str, &Row> =
+        fx.rows.iter().map(|r| (r.input.as_str(), r)).collect();
+    let normalizer = Normalizer::new(MockProvider::new());
+
+    // Verdict per class, plus the detail a failure needs to be actionable.
+    let mut observed: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+    let mut detail: std::collections::BTreeMap<&str, String> = std::collections::BTreeMap::new();
+
+    for class in &fx.equivalence_classes {
+        let mut outputs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut evaluable = 0usize;
+        let mut lines = Vec::new();
+        for member in &class.members {
+            let row = by_input.get(member.input.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "class {:?} names {:?}, which is not a fixture row",
+                    class.id, member.input
+                )
+            });
+            let (normalized, _) = observe(&normalizer, &member.target);
+            // A member contributes only when it can be evaluated hermetically.
+            // Reference-dependent rows and rows ferro refuses are neither
+            // evidence of confluence nor of its absence, so they are dropped
+            // rather than compared — otherwise an error string would count as a
+            // distinct "representation" and every such class would fail for the
+            // wrong reason.
+            let skip = row.status == "needs-reference"
+                || row.requires_reference == Some(true)
+                || normalized.starts_with("parse error")
+                || normalized.starts_with("normalize error");
+            if skip {
+                lines.push(format!("      {} -> (skipped) {normalized}", member.target));
+                continue;
+            }
+            evaluable += 1;
+            outputs.insert(normalized.clone());
+            lines.push(format!("      {} -> {normalized}", member.target));
+        }
+
+        let verdict = if evaluable < 2 {
+            "not-evaluable"
+        } else if outputs.len() == 1 {
+            "confluent"
+        } else {
+            "non-confluent"
+        };
+        observed.insert(class.id.as_str(), verdict);
+        detail.insert(class.id.as_str(), lines.join("\n"));
+    }
+
+    let pinned: std::collections::BTreeMap<&str, &str> =
+        EQUIVALENCE_CLASS_VERDICTS.iter().copied().collect();
+    assert_eq!(
+        pinned.len(),
+        EQUIVALENCE_CLASS_VERDICTS.len(),
+        "EQUIVALENCE_CLASS_VERDICTS has a duplicate id"
+    );
+
+    let mut mismatches = Vec::new();
+    for (id, verdict) in &observed {
+        match pinned.get(id) {
+            None => mismatches.push(format!(
+                "  {id}: new class, verdict {verdict} — add it to EQUIVALENCE_CLASS_VERDICTS\n{}",
+                detail[id]
+            )),
+            Some(expected) if expected != verdict => mismatches.push(format!(
+                "  {id}: pinned {expected}, observed {verdict}\n{}",
+                detail[id]
+            )),
+            Some(_) => {}
+        }
+    }
+    for id in pinned.keys() {
+        if !observed.contains_key(id) {
+            mismatches.push(format!(
+                "  {id}: pinned but absent from the fixture — a curated class was deleted"
+            ));
+        }
+    }
+
+    eprintln!(
+        "spec equivalence classes: {} checked, {} non-confluent",
+        observed.len(),
+        observed.values().filter(|v| **v == "non-confluent").count()
+    );
+    assert!(
+        !observed.is_empty(),
+        "spec_equivalence_classes_converge exercised no classes — the fixture carries none, \
+         which means the curated declarations were lost, not that they all pass"
+    );
+    assert!(
+        mismatches.is_empty(),
+        "{} equivalence-class verdict(s) moved.\n\n{}\n\n\
+         A class is a curated statement that its members are the SAME VARIANT, so more than one \
+         distinct output is non-confluence — two stable fixed points for one variant (#1235).\n\n\
+         `pinned confluent, observed non-confluent` or a new non-confluent class is a REGRESSION: \
+         a variant that used to have one representation now has two.\n\
+         `pinned non-confluent, observed confluent` is an IMPROVEMENT — but it is also a \
+         representation change for anyone storing the losing form, so release the pin in the same \
+         PR that says which form moved and how many corpus rows it touches.\n\
+         `observed not-evaluable` means ferro stopped evaluating a member; the class has disarmed \
+         itself and the reason is the thing to look at.",
+        mismatches.len(),
+        mismatches.join("\n"),
+    );
+}
+
+/// Pinned id and status for every ruling record.
+///
+/// A ruling records how the project reads the spec where the spec conflicts with
+/// itself. `undecided` means the project has **not** ruled — pinning the status
+/// is what stops one being upgraded to `decided` without a reviewable diff, and
+/// stops an inconvenient record being deleted.
+const RULING_STATUSES: &[(&str, &str)] = &[
+    // `delins.md:17` (SHOULD NOT merge separated variants) against `delins.md:47`
+    // ("the delins format is recommended"), both SHOULD-strength under
+    // `style.md:9`, both reaching the `:44-47` example. Undecided: it governs
+    // ~138 of 208 adjudicated corpus rows, so settling it either way is a
+    // migration, and no operator ruling has been made.
+    ("delins-merge-vs-individual-gap-two-or-more", "undecided"),
+    // `general.md:34` against `general.md:56` on `c.76_83inv`, whose reverse
+    // complement coincides with the reference at 4 of 8 columns. Undecided and
+    // under active adjudication.
+    ("inversion-vs-two-substitutions-76-83", "undecided"),
+    // The one the spec does settle: `delins.md:18`'s explicit exception for two
+    // variants one nucleotide apart affecting one amino acid.
+    ("delins-codon-carve-out-gap-one", "decided"),
+];
+
+/// Ruling records must stay well-formed, and `undecided` must stay undecided.
+///
+/// The generator enforces the same shape at build time (and additionally checks
+/// that every citation still quotes the spec checkout). This is the committed
+/// half: the generated fixture is gitignored and regenerated from the tree, so
+/// without a pin here a record could be softened, re-statused or dropped and
+/// nothing would notice.
+#[test]
+fn ruling_records_are_intact() {
+    crate::common::spec_fixture::ensure_spec_fixture();
+    let text = std::fs::read_to_string(fixture_path()).expect("read fixture");
+    let fx: Fixture = serde_json::from_str(&text).expect("parse fixture");
+
+    let observed: std::collections::BTreeMap<&str, &str> = fx
+        .rulings
+        .iter()
+        .map(|r| (r.id.as_str(), r.status.as_str()))
+        .collect();
+    let pinned: std::collections::BTreeMap<&str, &str> = RULING_STATUSES.iter().copied().collect();
+    assert_eq!(
+        observed, pinned,
+        "the ruling records changed. Adding one is fine — pin it here. Changing an `undecided` \
+         to `decided` means the project took a position, which must be a deliberate, reviewable \
+         edit, not a side effect."
+    );
+
+    for ruling in &fx.rulings {
+        assert!(
+            !ruling.clauses.is_empty(),
+            "ruling {:?} cites no clause",
+            ruling.id
+        );
+        assert!(
+            !ruling.rationale.trim().is_empty(),
+            "ruling {:?} has no rationale",
+            ruling.id
+        );
+        let cited: std::collections::BTreeSet<&str> =
+            ruling.clauses.iter().map(|c| c.clause.as_str()).collect();
+        match ruling.status.as_str() {
+            "decided" => {
+                let governing = ruling.governing.as_deref().unwrap_or_else(|| {
+                    panic!(
+                        "ruling {:?} is decided but names no governing clause",
+                        ruling.id
+                    )
+                });
+                assert!(
+                    cited.contains(governing),
+                    "ruling {:?} holds {governing:?} to govern, but does not cite it",
+                    ruling.id
+                );
+                for deviated in &ruling.deviates_from {
+                    assert!(
+                        cited.contains(deviated.as_str()),
+                        "ruling {:?} deviates from {deviated:?}, but does not cite it",
+                        ruling.id
+                    );
+                }
+            }
+            // The load-bearing half. An undecided record states a conflict and
+            // stops; if it names a governing clause it has smuggled in a ruling
+            // nobody made, which is precisely what these records exist to
+            // prevent being invented.
+            "undecided" => {
+                assert!(
+                    ruling.governing.is_none() && ruling.deviates_from.is_empty(),
+                    "ruling {:?} is undecided but names a governing or deviated-from clause — \
+                     an undecided record must not imply a ruling",
+                    ruling.id
+                );
+                assert!(
+                    ruling.clauses.len() >= 2,
+                    "ruling {:?} is undecided but names only one clause; an unsettled question \
+                     needs both sides on the record",
+                    ruling.id
+                );
+            }
+            other => panic!("ruling {:?} has unknown status {other:?}", ruling.id),
+        }
+    }
 }
