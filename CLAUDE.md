@@ -277,11 +277,13 @@ same description**. (This used to say "conflict at equal RFC 2119 strength", cit
 That framing is withdrawn — uppercase RFC 2119 keywords appear exactly once outside `style.md`
 itself, so essentially every clause in play is lowercase prose and keyword strength cannot rank
 them. See [Reading the spec](#reading-the-spec).) Each record names the clauses in tension, which
-one governs, which is deviated from, and why. `undecided` is a first-class state and the generator **refuses** to build a record
-that is `undecided` yet names a governing clause — an unsettled question must not be able to
-smuggle in a ruling nobody made. Every citation carries a verbatim quote that the generator checks
-against the spec checkout, so a submodule bump that moves a clause fails the build instead of
-leaving the citation pointing at unrelated prose.
+one governs, which is deviated from, and why. `undecided` is a first-class state and the generator
+**refuses** to build a record that is `undecided` yet names a governing *or* a deviated-from clause
+— either implies a side was chosen, and an unsettled question must not be able to smuggle in a
+ruling nobody made. It equally refuses an `undecided` record citing fewer than two clauses: such a
+record states no conflict, only a position it declines to name as one. Every citation carries a
+verbatim quote that the generator checks against the spec checkout, so a submodule bump that moves
+a clause fails the build instead of leaving the citation pointing at unrelated prose.
 
 Requires the `assets/hgvs-nomenclature` submodule (`git submodule update --init assets/hgvs-nomenclature`); without it the generator fails with `no HGVS strings harvested from …`, naming that command.
 

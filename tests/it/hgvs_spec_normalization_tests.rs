@@ -54,9 +54,10 @@ struct EquivalenceClass {
     members: Vec<ClassMember>,
 }
 
-#[allow(dead_code)] // `input` is used only in failure messages
 #[derive(Debug, Deserialize)]
 struct ClassMember {
+    /// The harvested spelling. Read by the `by_input` lookup, and named in
+    /// every failure message so a mismatch identifies its member.
     input: String,
     /// The string ferro is run against — the member's row target, re-anchored
     /// onto the class's declared reference when it has one. Taken from the
@@ -819,6 +820,16 @@ fn ruling_records_are_intact() {
         .map(|r| (r.id.as_str(), r.status.as_str()))
         .collect();
     let pinned: std::collections::BTreeMap<&str, &str> = RULING_STATUSES.iter().copied().collect();
+    // Collecting into a map is last-wins, so a duplicated id silently drops one
+    // pin and `observed == pinned` can still hold on a malformed table — the id
+    // that survived is checked, the one it shadowed is not (#1530). Its sibling
+    // `EQUIVALENCE_CLASS_VERDICTS` already carries this; the generator checks
+    // duplicates on both of its own tables.
+    assert_eq!(
+        pinned.len(),
+        RULING_STATUSES.len(),
+        "RULING_STATUSES has a duplicate id"
+    );
     assert_eq!(
         observed, pinned,
         "the ruling records changed. Adding one is fine — pin it here. Changing an `undecided` \
