@@ -329,6 +329,10 @@ required-features = ["dev"]
 test = true
 
 [[example]]
+name = "extract_split_member_separation_windows"
+required-features = ["dev"]
+
+[[example]]
 name = "generate_conformance_summary"
 required-features = ["dev"]
 

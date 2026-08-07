@@ -1,0 +1,18 @@
+# Regression inputs for issue #1539.
+#
+# Five real ClinVar/CMRG rows, three distinct variants (two pairs are the same
+# variant spelled on two transcripts). Each is a lone `delins` that ferro
+# returns unchanged and conformant, and that a splitting pass has been observed
+# to cut into an allele whose FIRST member itself holds a reference base that is
+# unchanged in every minimal alignment and separates two changed ones, across a
+# codon boundary -- the shape `general.md:34` says to describe individually and
+# which `general.md:35`'s one-amino-acid exception cannot rescue.
+#
+# Blank lines and `#` comments are ignored. Consumed by:
+#   * tests/it/issue_1539_split_member_separation.rs        (the per-PR gate)
+#   * examples/extract_split_member_separation_windows.rs   (window generator)
+NM_000089.3:c.2148_2156delinsACGTGG
+NM_000089.4:c.2148_2156delinsACGTGG
+NM_001277115.2:c.3545_3551delinsAGATGATGAACTGTAGCTGTAAGA
+NM_000296.4:c.10317_10334delinsATGGCC
+NM_001009944.3:c.10320_10337delinsATGGCC
