@@ -3120,6 +3120,153 @@ fn stated_reference_bases_match(
     true
 }
 
+/// Every reference mismatch the **authored** members of a cis allele carry.
+///
+/// # Why this exists at all
+///
+/// The per-member pipeline validates a member's stated reference bases in
+/// `normalize_na_edit`, and that is where `RefSeqMismatch` (W5001) — and so
+/// strict mode's rejection and lenient mode's warning — comes from. But
+/// `normalize_allele` runs [`collapse_overlapping_cis_edits`] and
+/// [`merge_consecutive_edits`] over the raw members **before** any member
+/// reaches that validator, and a merge keeps only each member's *alt* bases:
+/// [`Anchor`] has no channel for the reference the submitter asserted. So a
+/// member consumed by a merge has its assertions dropped, unexamined, and the
+/// merged anchor is then rebuilt from the **real** bases — turning a
+/// description whose reference claims are false into a well-formed one, with
+/// `status=ok`, in the mode whose purpose is to reject exactly that (#1543).
+///
+/// Measured on `main` at `5616cdb9`, reference bases `c.1 = A`, `c.3 = G`:
+///
+/// ```text
+/// NM_000143.3:c.1G>T          -> rejected  (no sibling to merge with)
+/// NM_000143.3:c.[1G>T;500G>C] -> rejected  (sibling too far to merge)
+/// NM_000143.3:c.[1G>T;3T>A]   -> c.1_3delinsTTA, status=ok   <- the defect
+/// ```
+///
+/// The discriminator was merge distance and nothing else.
+///
+/// # Why here, and not at the merge sites
+///
+/// This is the sixth defect in one family — #1052 (substitutions), #1068 (the
+/// `m.` axis), #1092 (the parser discarded the bases), #1097 (multi-base range
+/// substitutions), #1352 ([`NaEdit::Identity`] omitted) — and each of the first
+/// five was fixed one shape at a time. A per-shape guard inside each merge pass
+/// would be the sixth such patch and would leave the same ordering hazard for
+/// the seventh: any future pass that consumes a member before the validator
+/// runs re-opens the hole.
+///
+/// So the question is asked **on the authored input**, once, before any pass
+/// has had the chance to strip anything. That is ordering-immune by
+/// construction: no rearrangement of the pipeline below can make this check
+/// vacuous, which is precisely what happened to [`stated_reference_bases_match`]
+/// — whose own doc comment predicted it.
+///
+/// Nothing about the merge itself changes, deliberately: the warnings this
+/// returns are *added* to the member-local ones, so no correctly-spelled input
+/// moves and the only behavioural change is that a false reference assertion is
+/// now reported wherever it was authored.
+///
+/// # Contract
+///
+/// Cis only — merging is cis-only, so that is the whole exposure, and a
+/// trans/unknown-phase allele already has every member normalized in isolation.
+/// The verdict itself comes from [`crate::normalize::validate::validate_reference`],
+/// the same function the per-member pipeline uses, so the channel list cannot
+/// drift between the two sites the way #1352's could.
+///
+/// Members this cannot answer for — an offset (intronic) position, a region
+/// with no served bases, an unreadable or short provider window — are skipped
+/// rather than guessed at, exactly as every other refusal in this module does.
+pub(crate) fn authored_member_reference_mismatches<P: ReferenceProvider>(
+    variants: &[HgvsVariant],
+    phase: AllelePhase,
+    provider: &P,
+) -> Vec<crate::normalize::NormalizationWarning> {
+    if phase != AllelePhase::Cis {
+        return Vec::new();
+    }
+    variants
+        .iter()
+        .filter_map(|v| authored_reference_mismatch(v, provider))
+        .collect()
+}
+
+/// One member's authored reference mismatch, if it has one.
+///
+/// The returned warning is built to be **indistinguishable** from the one the
+/// per-member pipeline raises for the same member: same `position` (the
+/// sequence-axis span, via [`region_sequence_delta`]), same `corrected` flag,
+/// same `details` text. That is what lets the caller drop it when the member
+/// also reached the per-member validator, rather than reporting one finding
+/// twice.
+fn authored_reference_mismatch<P: ReferenceProvider>(
+    v: &HgvsVariant,
+    provider: &P,
+) -> Option<crate::normalize::NormalizationWarning> {
+    let kind = cis_kind_of(v)?;
+    let (accession, region, s, e, edit) = cis_axis_parts(v, kind)?;
+    // `r.` spells its bases in the RNA alphabet while the transcript is served
+    // as DNA, so a truthful `r.2u>a` over a `T` would otherwise read as a
+    // mismatch. `normalize_rna` makes the same rewrite before it validates
+    // (#736); making it here too is what keeps the two verdicts identical.
+    let rewritten = matches!(kind, CisKind::Rna)
+        .then(|| crate::normalize::rules::rna_uracil_to_thymine(edit))
+        .flatten();
+    let edit = rewritten.as_ref().unwrap_or(edit);
+
+    let provider_key = accession.transcript_accession();
+    let delta = region_sequence_delta(region, &provider_key, provider)?;
+    // Checked, like every other coordinate conversion in this file: `s`/`e`
+    // come off a parsed description and `delta` off the record's CDS bounds, so
+    // an adversarial span could otherwise overflow and panic in a debug build
+    // where declining is the answer.
+    let start = s.checked_add(delta)?;
+    let end = e.checked_add(delta)?;
+    if start < 1 || end < start {
+        return None;
+    }
+    let span = usize::try_from(end.checked_sub(start)?.checked_add(1)?).ok()?;
+    let bases = provider
+        .get_sequence(
+            &provider_key,
+            u64::try_from(start - 1).ok()?,
+            u64::try_from(end).ok()?,
+        )
+        .ok()?;
+    // A short read means the member runs off the end of the sequence. That is
+    // W4004 `PositionPastEnd`'s finding, not this one, so decline rather than
+    // compare against a truncated window.
+    if bases.len() != span {
+        return None;
+    }
+
+    // `1`/`span` rather than the member's own coordinates: `validate_reference`
+    // indexes `ref_seq` from `start`, and the window fetched above starts *at*
+    // the member. Every arm it dispatches to reads only `[start - 1, end)` or
+    // the span width, so re-basing the pair is equivalent to handing it the
+    // whole sequence and costs one small read instead of the entire transcript.
+    let result =
+        crate::normalize::validate::validate_reference(edit, bases.as_bytes(), 1, span as u64);
+    if result.valid {
+        return None;
+    }
+    // Mirrors the `corrected` reasoning in `normalize_na_edit`: the canonical
+    // `Display` keeps a substitution's stated base and a repeat's unit, so
+    // claiming those were corrected would be dishonest.
+    let corrected = !matches!(
+        edit,
+        NaEdit::Repeat { .. } | NaEdit::MultiRepeat { .. } | NaEdit::Substitution { .. }
+    );
+    Some(crate::normalize::NormalizationWarning::RefSeqMismatch {
+        stated_ref: result.stated_ref.unwrap_or_default(),
+        actual_ref: result.actual_ref.unwrap_or_default(),
+        position: format!("{start}-{end}"),
+        corrected,
+        details: result.warning,
+    })
+}
+
 /// Inclusive 1-based span covering every edit's reference footprint.
 fn edit_span_union(edits: &[GEdit]) -> Option<(i64, i64)> {
     let mut lo = i64::MAX;

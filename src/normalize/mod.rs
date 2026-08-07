@@ -2780,6 +2780,43 @@ impl<P: ReferenceProvider> Normalizer<P> {
             warnings.push(w);
         }
 
+        // A cis allele's members are merged *before* any of them reaches the
+        // per-member reference validator, and a merge keeps only their alt
+        // bases — so a member consumed by one has its reference assertions
+        // dropped without ever being checked (#1543). Ask the question here, on
+        // the authored input, where the assertions still exist.
+        //
+        // Deliberately outside `normalize_allele` rather than inside it: that
+        // function has several early returns, and the point of this guard is
+        // that no rearrangement of the pipeline below can make it vacuous. It
+        // adds warnings and changes nothing else, so the merged form a
+        // correctly-spelled allele produces is untouched.
+        if let HV::Allele(allele) = variant {
+            for warning in merge::authored_member_reference_mismatches(
+                &allele.variants,
+                allele.phase,
+                &self.provider,
+            ) {
+                // The per-member pipeline reports the same finding for any
+                // member a merge did *not* consume, and it gets there first.
+                // Position is the whole key: two `RefSeqMismatch` warnings over
+                // one sequence-axis span are one mismatch reported twice.
+                let NormalizationWarning::RefSeqMismatch { position, .. } = &warning else {
+                    continue;
+                };
+                let already = warnings.iter().any(|w| {
+                    matches!(
+                        w,
+                        NormalizationWarning::RefSeqMismatch { position: seen, .. }
+                            if seen == position
+                    )
+                });
+                if !already {
+                    warnings.push(warning);
+                }
+            }
+        }
+
         Ok((result, warnings))
     }
 
