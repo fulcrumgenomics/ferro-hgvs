@@ -140,12 +140,44 @@ const CDS_END: u64 = 63;
 ///
 /// `converged` was 6 632 before #1454; see the module docs for which single
 /// class moved and why the other #1454 class could not.
+///
+/// # `converged` went **down** by 4 in #1524, deliberately
+///
+/// 6 633 -> 6 629, `split 2` 4 505 -> 4 509. This is the direction this pin
+/// exists to catch, so it is stated rather than absorbed. The four classes are
+/// `s00-c-m3-sep0-p8-rot4`, `s00-c-m4-sep0-p8-rot4`, `s02-c-m4-sep1-p4-rot1`
+/// and `s03-c-m3-sep1-p8-rot2` (5' loses two of the same family).
+///
+/// In each, one multi-member spelling used to reach the lone-`delins` form only
+/// **via** the defect #1524 removes: `Normalizer::build_split_variants` re-split
+/// an intermediate member into two *touching* members, the legacy per-member
+/// merge then re-merged them into a wider `delins`, and that wider form is what
+/// the other spellings had settled on. Take the illegal intermediate away and
+/// the chain stops one step earlier. Traced end to end on
+/// `s00-c-m3-sep0-p8-rot4`: `c.[7_8insTTAATATA;17_24del;24_25insCCAACCCC]` now
+/// gives `c.[18_20delinsAAT;24_25insCCAACCCC]` where the other three spellings
+/// give `c.18_24delinsAATATATCCAACCCC`.
+///
+/// Two things make this an acceptable price rather than a hidden regression.
+/// `sequence_changed` is still 0, so no class converged on the wrong sequence;
+/// and the newly-divergent output is the *better* of the two forms — the
+/// single `delins` spans three unchanged nucleotides (`c.21_23`) that
+/// `general.md:34` says to describe individually, while the two-member form
+/// does not. What is lost is agreement, not correctness, and the disagreement
+/// is between a lone `delins` and a multi-member allele — the exact pair
+/// #1235's axis-gate widening is about, since `is_splittable_single_member`
+/// still refuses to re-derive a lone `c.` delins from its sequence.
+///
+/// Measured against 58 corpus rows fixed. The alternative shape of the fix —
+/// joining the codon triplet to a touching run on both edges instead of
+/// declining the exception on the left — cost **44** classes here rather than
+/// 4, and was rejected for it.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_633,
-    split_two: 4_505,
+    converged: 6_629,
+    split_two: 4_509,
     split_three: 115,
     split_more: 19,
     underdetermined: 0,
@@ -161,12 +193,18 @@ const THREE_PRIME: Census = Census {
 /// partitioner splits a block, not of which end of an ambiguous run the shuffle
 /// walks to. A fix that moved only one of these two numbers would be treating a
 /// symptom.
+///
+/// Lowered by **two** in #1524 (6 628 -> 6 626, `split 2` 4 530 -> 4 532), for
+/// the reason `THREE_PRIME` records at length. That the two directions move by
+/// different amounts is itself the expected reading of the note above: the
+/// affected classes are ones whose chain to a common form ran through an
+/// intermediate that only some shuffle directions produce.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 6_628,
-    split_two: 4_530,
+    converged: 6_626,
+    split_two: 4_532,
     split_three: 105,
     split_more: 9,
     underdetermined: 0,

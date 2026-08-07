@@ -71,6 +71,21 @@
 //! already produced rather than inventing a third one; it is nonetheless a moved
 //! string for a consumer that normalizes once and stores the result.
 
+//! # What #1524 changed here
+//!
+//! The reproducer above no longer reproduces: `c.[10_12delinsTAA;13_15inv]`
+//! puts members on the consecutive nucleotides 12 and 13, which
+//! `delins.md:16` forbids, so `c.10_15delinsTAATAT` is now one member and its
+//! own normal form. Four expectations in this file moved with it and each says
+//! so at its assertion.
+//!
+//! The fix this file exists for is intact and still exercised. Only the set of
+//! groupings that can *create* a span narrowed: a substitution-run member is
+//! exactly one maximal mismatch run, which `decompose_delins` has already
+//! typed, so the codon-frame triplet is now the sole producer — and
+//! `codon_triplet_over_an_ambiguous_centre_is_an_inversion`, retargeted onto a
+//! separated trailing run, is its guard.
+
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
 
@@ -147,13 +162,27 @@ fn normalized_fixed_point(provider: &MockProvider, descriptor: &str) -> String {
     once
 }
 
-/// The defect. The `inv` must be there on the **first** output.
+/// The original reproducer, **retired as such by #1524** and kept as the row
+/// that records why.
+///
+/// The shape it pinned — a span the codon exception *leaves behind*, typed
+/// `inv` — is no longer reachable from a substitution run. `c.13` touches
+/// `c.12`, so `delins.md:16` puts them in one member and there is no leftover
+/// span to type. `c.10_15delinsTAATAT` is therefore its own normal form.
+///
+/// This is not a coverage loss for #1454's actual fix: a member the split
+/// *creates* must still be typed when it is created, and
+/// `codon_triplet_over_an_ambiguous_centre_is_an_inversion` below is the guard
+/// for it. What changed is which grouping can create such a member. Since
+/// #1524, only the codon-frame triplet can — a substitution run member is
+/// exactly one maximal mismatch run, and `decompose_delins` has already typed
+/// those.
 #[test]
-fn a_span_the_codon_exception_leaves_behind_is_typed_inv_on_the_first_pass() {
+fn a_span_the_codon_exception_used_to_leave_behind_is_now_one_member() {
     let provider = provider("NM_TEST.1", CORE, true);
     assert_eq!(
         normalized_fixed_point(&provider, "NM_TEST.1:c.10_15delinsTAATAT"),
-        "NM_TEST.1:c.[10_12delinsTAA;13_15inv]",
+        "NM_TEST.1:c.10_15delinsTAATAT",
     );
 }
 
@@ -173,7 +202,7 @@ fn the_other_spellings_of_the_variant_converge_on_the_same_form() {
     ] {
         assert_eq!(
             normalized_fixed_point(&provider, input),
-            "NM_TEST.1:c.[10_12delinsTAA;13_15inv]",
+            "NM_TEST.1:c.10_15delinsTAATAT",
             "spelling `{input}` did not converge",
         );
     }
@@ -191,7 +220,7 @@ fn the_rna_axis_reaches_the_same_inversion() {
     let provider = provider("NM_TEST.1", CORE, true);
     assert_eq!(
         normalized_fixed_point(&provider, "NM_TEST.1:r.10_15delinsuaauau"),
-        "NM_TEST.1:r.[10_12delinsuaa;13_15inv]",
+        "NM_TEST.1:r.10_15delinsuaauau",
     );
 }
 
@@ -248,20 +277,29 @@ fn a_reverse_complement_sub_run_of_one_contiguous_change_stays_a_delins() {
 /// reverse complement is typed `inv` by `normalize_na_edit`'s Delins arm before
 /// any split happens, so it exercises the direct path and says nothing about the
 /// codon branch. Instrumenting that branch against the three-base spelling logs
-/// zero hits. Extending the input to `10_15` puts a second mismatch run after
-/// the triplet, which is what makes the split fire — and only then does the
-/// codon exception consume `[Sub@10; IdentityAt@11; Sub@12]` and hand `ANC ->
-/// GNT` to [`push_typed_replacement`] as a span the split created.
+/// zero hits. Extending the input puts a second mismatch run after the triplet,
+/// which is what makes the split fire — and only then does the codon exception
+/// consume `[Sub@10; IdentityAt@11; Sub@12]` and hand `ANC -> GNT` to
+/// [`push_typed_replacement`] as a span the split created.
+///
+/// **And the second run has to be separated from the triplet, not touching it
+/// (#1524).** The input was `c.10_15delinsGNTAAA`, whose trailing run starts at
+/// `c.13` — consecutive with the triplet's `c.12`, which `delins.md:16` says is
+/// one member. That spelling now yields a single `c.10_15delinsGNTAAA` and
+/// exercises nothing. Leaving `c.13` unchanged puts one nucleotide between the
+/// two, `general.md:34` keeps them apart, and the triplet reaches
+/// [`push_typed_replacement`] exactly as before. Without this retarget #1454's
+/// only live guard on that call site would have been silently deleted.
 #[test]
 fn codon_triplet_over_an_ambiguous_centre_is_an_inversion() {
     let provider = provider("NM_TEST.1", AMBIGUOUS_CORE, true);
     // `10_12` is `ANC` -> `GNT`, an exact reverse complement, and it is the
-    // codon-frame triplet the exception merges. `13_15` is `GGG` -> `AAA`,
-    // which is not one, so it stays a `delins` — the two outcomes of the same
-    // call site in one row.
+    // codon-frame triplet the exception merges. `14_15` is `GG` -> `AA`, which
+    // is not one, so it stays a `delins` — the two outcomes of the same call
+    // site in one row.
     assert_eq!(
-        normalized_fixed_point(&provider, "NM_TEST.1:c.10_15delinsGNTAAA"),
-        "NM_TEST.1:c.[10_12inv;13_15delinsAAA]",
+        normalized_fixed_point(&provider, "NM_TEST.1:c.10_15delinsGNTGAA"),
+        "NM_TEST.1:c.[10_12inv;14_15delinsAA]",
     );
     // The three-base spelling is the same variant reached by the direct path,
     // and must agree. Kept as the control that the two routes to `inv` do not
