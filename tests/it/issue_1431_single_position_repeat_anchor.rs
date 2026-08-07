@@ -191,8 +191,16 @@ fn an_anchored_repeat_and_its_range_agree_on_overlap() {
 }
 
 /// An anchor with no tract under it is untouched: the unit does not match the
-/// reference there, and the existing "does not match repeat unit" diagnostic is
-/// what must report it — not a second error introduced by the tract search.
+/// reference there, and **one** diagnostic must report it — not a second error
+/// introduced by the tract search.
+///
+/// The contract here is "one condition, one decline", and that is unchanged.
+/// The *wording* moved in #1492: this decline used to quote the unit-wide
+/// fallback span the search returns when it finds nothing (`repeat span
+/// TEMPLATE:257-257 does not match repeat unit C`), which is a coordinate the
+/// caller never wrote. It now names the anchor they did write. Asserted on the
+/// anchor rather than on the phrase so the test pins the contract instead of
+/// the sentence.
 #[test]
 fn an_anchor_with_no_matching_tract_still_reports_the_mismatch() {
     let sequence = padded("GATCATAAATTCAGC");
@@ -202,8 +210,8 @@ fn an_anchor_with_no_matching_tract_still_reports_the_mismatch() {
         .expect_err("a unit that does not match the reference must be refused");
     let message = error.to_string();
     assert!(
-        message.contains("does not match repeat unit"),
-        "the mismatch must be reported by the existing diagnostic; got: {message}"
+        message.contains("no C repeat is anchored at TEMPLATE:257"),
+        "the mismatch must be reported against the caller's own anchor; got: {message}"
     );
 }
 

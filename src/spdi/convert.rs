@@ -1575,7 +1575,7 @@ where
             // start and means 'the whole run becomes N', so it absorbs
             // nothing" — so widening here makes the two sites agree rather
             // than introducing a third answer.
-            let (del_start, del_end) = match provider {
+            let (del_start, del_end, span_origin) = match provider {
                 Some(p) if start_one_based == end_one_based => resolve_repeat_tract_span(
                     p,
                     &sequence,
@@ -1583,7 +1583,9 @@ where
                     unit_str.as_bytes(),
                     alphabet,
                 )?,
-                _ => (start_one_based, end_one_based),
+                // An explicit range is the caller's own span, so a decline may
+                // quote it verbatim.
+                _ => (start_one_based, end_one_based, RepeatSpanOrigin::Tract),
             };
             let spdi_pos = del_start - 1;
             let del_str = match provider {
@@ -1598,31 +1600,54 @@ where
                     ));
                 }
             };
-            // The HGVS recommendations require the interval to span an
-            // integer number of repeat units. Reject non-divisible spans
-            // with a clear message rather than silently emitting nonsense.
-            if unit_str.is_empty() || !del_str.len().is_multiple_of(unit_str.len()) {
+            // Two things must hold for the span to be the declared repeat: the
+            // HGVS recommendations require an integer number of units
+            // (`inversion`-style nonsense otherwise), and a divisible length is
+            // necessary but not sufficient — `ATGCAT` is length 6 and is not
+            // `AT[3]`.
+            //
+            // **Both are judged before either is reported**, because the two
+            // failures share one diagnostic decision. After a failed tract
+            // search `del_start`/`del_end` are this module's unit-wide fallback
+            // rather than anything the caller wrote, and *either* check can be
+            // the one that trips on it: near the 3' end the fallback is clamped
+            // inside the contig, so a multi-base unit leaves a short span that
+            // fails divisibility first. Reporting that span names coordinates
+            // nobody supplied — the exact defect #1492 is about — so the origin
+            // decides the message and the checks only decide *whether* there is
+            // one.
+            let divisible = !unit_str.is_empty() && del_str.len().is_multiple_of(unit_str.len());
+            let matches_unit =
+                divisible && del_str == unit_str.repeat(del_str.len() / unit_str.len());
+            if !matches_unit {
                 return Err(ConversionError::InvalidPosition {
-                    description: format!(
-                        "repeat span {}:{}-{} length {} is not a multiple of unit length {}",
-                        sequence,
-                        del_start,
-                        del_end,
-                        del_str.len(),
-                        unit_str.len()
-                    ),
-                });
-            }
-            // Verify the reference tract actually consists of repeated copies
-            // of the declared unit. A divisible length is necessary but not
-            // sufficient (e.g. `ATGCAT` has length 6 but is not `AT[3]`).
-            let pre_count = del_str.len() / unit_str.len();
-            if del_str != unit_str.repeat(pre_count) {
-                return Err(ConversionError::InvalidPosition {
-                    description: format!(
-                        "repeat span {}:{}-{} does not match repeat unit {}",
-                        sequence, del_start, del_end, unit_str
-                    ),
+                    description: match span_origin {
+                        // The span is the fallback, not the caller's. Name the
+                        // anchor and the real fault: no run begins there.
+                        RepeatSpanOrigin::NoRunAtAnchor => format!(
+                            "no {unit} repeat is anchored at {seq}:{anchor}: the reference \
+                             there is not a run of {unit}. A single-position anchor names the \
+                             *first base* of the tract, so check the run's start, or spell the \
+                             whole range explicitly (`g.<start>_<end>{unit}[n]`).",
+                            unit = unit_str,
+                            seq = sequence,
+                            anchor = start_one_based,
+                        ),
+                        // The span is one the caller wrote or the search chose,
+                        // so quoting it is honest.
+                        _ if !divisible => format!(
+                            "repeat span {}:{}-{} length {} is not a multiple of unit length {}",
+                            sequence,
+                            del_start,
+                            del_end,
+                            del_str.len(),
+                            unit_str.len()
+                        ),
+                        _ => format!(
+                            "repeat span {}:{}-{} does not match repeat unit {}",
+                            sequence, del_start, del_end, unit_str
+                        ),
+                    },
                 });
             }
             let ins_str = unit_str.repeat(n_post);
@@ -1728,18 +1753,31 @@ fn unspelled_bases_error(
     }
 }
 
-/// Fetch reference bases for a 1-based inclusive interval `[start, end]` on
-/// `accession`. Tries [`ReferenceProvider::get_genomic_sequence`] first
-/// (correct for `g.`/`m.` and natural for genomic accessions) and falls
-/// back to [`ReferenceProvider::get_sequence`] for transcript accessions
-/// (`n.`/`r.`/`c.` SPDI emits on the transcript accession per #116).
+/// Why the span [`resolve_repeat_tract_span`] returned is the span it returned.
 ///
-/// The provider takes 0-based half-open coordinates, so the conversion is
-/// `[start - 1, end)`.
-///
-/// Returns [`ConversionError::MissingReferenceData`] when neither call
-/// returns data, or when the returned string length does not match the
-/// requested interval length (insufficient ref data near a boundary).
+/// Exists so a decline can name the caller's own coordinates (#1492). When the
+/// search finds no run, the function falls back to the unit-wide span *at* the
+/// anchor — which is not something the caller wrote. Reporting that span in an
+/// error told the reader to go look at a window they never named: `g.260CAG[5]`
+/// declined with "repeat span 260-262 does not match repeat unit CAG", where
+/// `260-262` is this function's invention and the caller's actual mistake — that
+/// the run begins at 259, not 260 — went unmentioned. 336 of the 560 rows in
+/// #1452's census took that path, so it is the common decline, not a corner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepeatSpanOrigin {
+    /// A run was found; the span is its full extent. A unit-match failure here
+    /// is a real mismatch over coordinates the search itself chose.
+    Tract,
+    /// The search ran and found no run at the anchor, so the span is the
+    /// unit-wide fallback. This is the case that must not quote its span.
+    NoRunAtAnchor,
+    /// The search never ran — an empty unit, or a provider that serves bases
+    /// but not `get_sequence_length`. The span is a placeholder rather than a
+    /// judgement, so the generic diagnostic remains the honest one: nothing was
+    /// measured that would justify saying "no run begins here".
+    NotSearched,
+}
+
 /// The physical repeat run a single-position repeat anchor names, as a 1-based
 /// inclusive span (#1431).
 ///
@@ -1786,7 +1824,7 @@ fn resolve_repeat_tract_span<P>(
     anchor_one_based: u64,
     unit: &[u8],
     alphabet: AlphabetMode,
-) -> Result<(u64, u64), ConversionError>
+) -> Result<(u64, u64, RepeatSpanOrigin), ConversionError>
 where
     P: ReferenceProvider + ?Sized,
 {
@@ -1796,7 +1834,11 @@ where
     const INITIAL_HALF_WIDTH: u64 = 128;
 
     if unit.is_empty() {
-        return Ok((anchor_one_based, anchor_one_based));
+        return Ok((
+            anchor_one_based,
+            anchor_one_based,
+            RepeatSpanOrigin::NotSearched,
+        ));
     }
     let unit_len = unit.len() as u64;
     let fallback = (
@@ -1817,10 +1859,10 @@ where
     // the corrected one, which is a known and stated limit, not a silent wrong
     // span — the caller's divisibility and unit-match checks still judge it.
     let Ok(sequence_length) = provider.get_sequence_length(accession) else {
-        return Ok(fallback);
+        return Ok((fallback.0, fallback.1, RepeatSpanOrigin::NotSearched));
     };
     if sequence_length == 0 || anchor_one_based > sequence_length {
-        return Ok(fallback);
+        return Ok((fallback.0, fallback.1, RepeatSpanOrigin::NotSearched));
     }
     // Now that the length is known, keep the fallback inside the contig: a
     // multi-base unit anchored within `unit_len` of the 3' end would otherwise
@@ -1847,7 +1889,7 @@ where
         let Some((_, tract_start, tract_end)) =
             crate::normalize::rules::count_tandem_repeats(bytes, anchor_offset, unit)
         else {
-            return Ok(fallback);
+            return Ok((fallback.0, fallback.1, RepeatSpanOrigin::NoRunAtAnchor));
         };
 
         // Only grow while the run is still touching an edge the contig has not
@@ -1868,6 +1910,7 @@ where
             return Ok((
                 window_start + tract_start as u64,
                 window_start + tract_end as u64 - 1,
+                RepeatSpanOrigin::Tract,
             ));
         }
         // Judged on the whole window, not the half-width, so the figure the
@@ -1936,6 +1979,18 @@ where
     Ok(normalized)
 }
 
+/// Fetch reference bases for a 1-based inclusive interval `[start, end]` on
+/// `accession`. Tries [`ReferenceProvider::get_genomic_sequence`] first
+/// (correct for `g.`/`m.` and natural for genomic accessions) and falls
+/// back to [`ReferenceProvider::get_sequence`] for transcript accessions
+/// (`n.`/`r.`/`c.` SPDI emits on the transcript accession per #116).
+///
+/// The provider takes 0-based half-open coordinates, so the conversion is
+/// `[start - 1, end)`.
+///
+/// Returns [`ConversionError::MissingReferenceData`] when neither call
+/// returns data, or when the returned string length does not match the
+/// requested interval length (insufficient ref data near a boundary).
 fn fetch_reference_bases<P>(
     provider: &P,
     accession: &str,
@@ -2687,12 +2742,12 @@ mod tests {
 
         assert_eq!(
             resolve_repeat_tract_span(&provider, "NR_TEST.1", 3, b"T", AlphabetMode::Rna).unwrap(),
-            (3, 6),
+            (3, 6, RepeatSpanOrigin::Tract),
             "the `r.` axis must see the tract its unit was rewritten to match"
         );
         assert_eq!(
             resolve_repeat_tract_span(&provider, "NR_TEST.1", 3, b"T", AlphabetMode::Dna).unwrap(),
-            (3, 3),
+            (3, 3, RepeatSpanOrigin::NoRunAtAnchor),
             "on the DNA axis `U` is not `T`, so no tract exists and the \
              unit-wide fallback stands"
         );
