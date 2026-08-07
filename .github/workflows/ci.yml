@@ -518,6 +518,13 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           lfs: true
+          # The spec worked-examples gate resolves each row's `file:line`
+          # citation against the vendored checkout at RUN time and asserts the
+          # quote verbatim, so this job needs the submodule (4.4 MB). Without
+          # it that test fails rather than skips, which is deliberate: a
+          # citation check that quietly no-ops is the failure mode it exists to
+          # prevent.
+          submodules: true
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
@@ -570,6 +577,13 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           lfs: true
+          # The spec worked-examples gate resolves each row's `file:line`
+          # citation against the vendored checkout at RUN time and asserts the
+          # quote verbatim, so this job needs the submodule (4.4 MB). Without
+          # it that test fails rather than skips, which is deliberate: a
+          # citation check that quietly no-ops is the failure mode it exists to
+          # prevent.
+          submodules: true
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
