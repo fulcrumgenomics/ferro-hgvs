@@ -27,6 +27,24 @@
 //! accident. The census reports the current answer per row when it moves, so a
 //! change is visible in review without being asserted as correct.
 //!
+//! # The per-spelling answers are pinned next door, in both directions
+//!
+//! Declining to pin a *winner* is not the same as declining to pin an *answer*,
+//! and the two were conflated while this was the only module in the family.
+//! `reported_partition_verdicts` now pins what each of the eighteen spellings
+//! prints — under 3' *and* under 5' — together with the form its issue asks for
+//! and what backs that form under the project's precedence policy
+//! (**spec-explicit > Mutalyzer > our judgement**). Twelve of the eighteen rows
+//! have a spec line that answers them outright; #1419's six do not, because
+//! `delins.md:44-47` recommends the merged delins for the very alignment
+//! coincidence `general.md:56` is being used to split — so those stay recorded
+//! rather than targeted.
+//!
+//! So this module keeps exactly one job: the **ratchet**. [`CONVERGING_PAIRS`]
+//! is the number that must only ever go up, and it is deliberately a count and
+//! not nine strings, because the goal is total convergence and partial progress
+//! should read as one number moving.
+//!
 //! # Current status
 //!
 //! [`CONVERGING_PAIRS`] records how many converge today. Both spellings of every

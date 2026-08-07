@@ -53,10 +53,108 @@
 //! [`reference_bases_are_what_the_reports_state`] asserts that premise before
 //! anything else; without it every row below could be measuring a different
 //! locus and still look green.
+//!
+//! # Where the wanted form's authority comes from
+//!
+//! Every row carries a [`Row::wanted`] string — the output *its issue asks for*,
+//! as the issue states it — and an [`Authority`] recording what backs it. The
+//! project's precedence policy is **spec-explicit > Mutalyzer > our judgement**,
+//! and applying it row by row does not give one answer for the whole family:
+//!
+//! * **#1420 is [`Authority::SpecExplicit`].** `delins.md:16` (two or more
+//!   *consecutive* changed nucleotides are one delins) settles v4;
+//!   `delins.md:17` (variants separated by one or more nucleotides are described
+//!   individually) settles v2 and v3. `delins.md:44-47` does not reach those two:
+//!   they replace a span with a payload of the **same length**, so reference and
+//!   payload correspond column for column and no alignment is ever chosen. Their
+//!   one unchanged interior column is simply unchanged — not a "part of the
+//!   inserted sequence" that had to be *found* to align.
+//! * **#1421 is [`Authority::SpecSelfConflicting`], for the same reason #1419
+//!   is.** An earlier revision labelled it `SpecExplicit`, on the grounds that
+//!   `delins.md:44-47` "is conditioned on the span losing length". It is not.
+//!   `:47` states its condition as *"parts of the inserted sequence `align` with
+//!   the reference sequence"* and says nothing whatever about length; the
+//!   `c.850_901` example happens to be a net deletion, and that incidental
+//!   arithmetic was mistaken for the rule.
+//!
+//!   Length does bear on it, but the other way round. Every #1421 row replaces
+//!   **5** reference bases with an **11**-base payload (net +6), so there is no
+//!   column-for-column correspondence to read off, and the wanted split exists
+//!   *only* because the two-base unchanged interior reappears in the payload —
+//!   `AC` at 30-31 for n1, `TG` at 33-34 for n2, `CA` at 35-36 for n3 — with zero
+//!   end-column identity on either side of any of them. Recovering that split
+//!   requires choosing an alignment, which is precisely the shape `:44-47` says
+//!   to describe as one delins, against `:17` which says to split. The spec
+//!   therefore answers both ways, the policy falls through to Mutalyzer, and
+//!   Mutalyzer picks the merged delins — so it does not pick the issue's form
+//!   either. #1421's wanted forms are recorded, not asserted as targets.
+//! * **#1419 is [`Authority::SpecSelfConflicting`], so its wanted form is
+//!   recorded and not asserted as the target.** The issue rests on
+//!   `general.md:56` (prioritisation: substitution over deletion) and
+//!   `delins.md:17`. But `delins.md:44-47` addresses this exact shape — a payload
+//!   whose bases align with the reference, giving "an alternative description
+//!   like `c.[850_869del;874_881del;887_897del;901_902insG]`" — and says outright
+//!   that **the delins format is recommended**. #1419's own `[19_30del;33T>G]` is
+//!   a del-plus-sub arising from precisely that alignment coincidence, so the
+//!   spec points both ways and the policy falls through to Mutalyzer.
+//!
+//! # What Mutalyzer answers, measured rather than assumed
+//!
+//! Mutalyzer cannot resolve the synthetic `TEMPLATE` accession, so its answer was
+//! not transcribed for these rows. It was established by reproducing each *shape*
+//! on a public accession whose bases were read back out of Mutalyzer's own
+//! `ESEQUENCEMISMATCH` detail (`NG_012337.1:g.5001_5120`), then normalizing both
+//! spellings through `https://mutalyzer.nl/api/normalize/`. Measured 2026-08-06:
+//!
+//! | shape reproduced | both spellings converge on |
+//! |---|---|
+//! | #1419's `[del;del]` vs spanning delins | the **spanning delins** |
+//! | #1420 v2/v3's unchanged interior column | the **merged delins** |
+//! | #1421's net insertion across an unchanged interior | the **merged delins** |
+//!
+//! Two things follow, and they point in opposite directions. Mutalyzer is
+//! **confluent** on every one of these shapes, which is the property #1430 asks
+//! ferro to adopt. And Mutalyzer's chosen representative is the **merged** one in
+//! all three, which is what `delins.md:17` forbids for #1420 — so there the spec
+//! wins outright and Mutalyzer is not consulted, exactly as the policy orders it.
+//! For #1419 and #1421, where the spec conflicts with itself, Mutalyzer is the
+//! tie-break the policy names, and it does **not** pick either issue's form.
+//!
+//! Mutalyzer's merge is also not a rule one could adopt even if the policy
+//! allowed it. Two substitutions two nucleotides apart on that accession merge
+//! for `T>A`/`C>A` and for `T>G`/`C>T`, and stay individual for `T>C`/`C>G` — the
+//! decision follows its aligner's view of the alternate bases, not a separation
+//! rule.
+//!
+//! # The collision this module does not resolve
+//!
+//! #1430 names Mutalyzer's behaviour as *"not guaranteed to be spec compliant
+//! (they take some shortcuts that merge deletion-insertions)"*. That is the same
+//! delins-merging the paragraph above uses to adjudicate #1419 — so where this
+//! module follows Mutalyzer onto a merged delins, **the issue author's stated view
+//! points the other way**. #1430's own three-stage proposal reconciles them
+//! (confluence from the Mutalyzer-like derivation in stage 2, spec compliance
+//! applied on top in stage 3), and `merge::coalesce`'s doc comment already cites
+//! #1430 for that split. But the reconciliation is a design, not a decision that
+//! has been taken, and taking it is not this module's to make. #1419's rows are
+//! therefore left as characterization pins with the disagreement written down.
+//!
+//! # Both shuffle directions are pinned
+//!
+//! [`every_reported_spelling_still_normalizes_as_the_reports_recorded`] pins the
+//! 3' answer the reports observed; [`Row::five_prime`] and
+//! [`every_reported_spelling_normalizes_as_recorded_under_five_prime`] pin the 5'
+//! answer, which nothing pinned before. Sixteen of the eighteen agree across
+//! directions; the two that do not are named in
+//! [`FIVE_PRIME_MOVERS`], and both are `Gap` rows that the 3' pass returns
+//! verbatim and the 5' pass does not — see
+//! [`every_gap_row_is_returned_exactly_as_authored`] for why that distinction
+//! carries weight.
 
-use crate::common::cis_apply_oracle::{normalize, provider};
+use crate::common::cis_apply_oracle::{normalize, normalize_in, provider};
 use ferro_hgvs::equivalence::{EquivalenceChecker, EquivalenceLevel};
 use ferro_hgvs::parse_hgvs;
+use ferro_hgvs::ShuffleDirection;
 
 /// The 125 nt contig every row runs against. Position 1 is index 0.
 ///
@@ -76,6 +174,21 @@ enum Verdict {
     Gap,
 }
 
+/// What backs the [`Row::wanted`] form, under the project's precedence policy
+/// (**spec-explicit > Mutalyzer > our judgement**). See the module docs for the
+/// per-issue reasoning and for the Mutalyzer measurement it rests on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Authority {
+    /// The spec answers this shape outright at the line the issue cites, and
+    /// nothing else in the spec answers it the other way. Mutalyzer is not
+    /// consulted, and the wanted form is the target a fix should reach.
+    SpecExplicit,
+    /// The spec answers this shape *both* ways, so the policy falls through to
+    /// Mutalyzer — which does not pick the issue's form either. The wanted form
+    /// is recorded as what the issue asked for, not asserted as the target.
+    SpecSelfConflicting,
+}
+
 /// One spelling of one reported variant.
 struct Row {
     /// `<issue>-<row>`, matching the label used in `reported_confluence_pairs`
@@ -83,9 +196,24 @@ struct Row {
     label: &'static str,
     /// The spelling as authored in the issue.
     input: &'static str,
-    /// What ferro prints for it today. Measured, never transcribed.
+    /// What ferro prints for it today under the shipped 3' direction. Measured,
+    /// never transcribed.
     output: &'static str,
+    /// What ferro prints for it under `ShuffleDirection::FivePrime`. Measured.
+    /// Equal to [`Row::output`] for sixteen of the eighteen rows; the two that
+    /// differ are listed in [`FIVE_PRIME_MOVERS`].
+    five_prime: &'static str,
     verdict: Verdict,
+    /// The output **the issue asks for**, in the issue's own terms — the string
+    /// its "canonical"/"expected" column names for this spelling. For a
+    /// [`Verdict::Canonical`] row this equals [`Row::output`]; for a
+    /// [`Verdict::Gap`] row it is the sibling spelling's output, which is the
+    /// family's defining shape and is asserted rather than assumed by
+    /// [`the_wanted_form_of_every_gap_row_is_its_siblings_output`].
+    wanted: &'static str,
+    /// What backs [`Row::wanted`]. Both spellings of a pair share one value:
+    /// the authority is a property of the shape, not of how it was written.
+    authority: Authority,
     /// Why that is or is not the canonical form, citing the line of the pinned
     /// spec checkout the issue cites.
     argument: &'static str,
@@ -109,54 +237,90 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1419-r1/cis",
         input: "TEMPLATE:g.[19_23del;27_33del]",
         output: "TEMPLATE:g.[19_23del;27_33del]",
+        five_prime: "TEMPLATE:g.[19_23del;27_33del]",
         verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.[19_30del;33T>G]",
+        authority: Authority::SpecSelfConflicting,
         argument: "Wanted `[19_30del;33T>G]`. general.md:56 prioritises \
                    (1) substitution over (2) deletion, so the change at 33 \
                    should be exposed as a substitution rather than absorbed \
                    into a deletion. The cis spelling hides it; the equivalent \
                    span reaches it (see `1419-r1/span`), so the partition is \
-                   reachable and simply is not reached from here.",
+                   reachable and simply is not reached from here. \
+                   BUT the spec also answers this shape the other way: the \
+                   wanted form is a deletion plus a substitution arising from \
+                   payload bases that align with the reference, which is the \
+                   case delins.md:44-47 covers and calls out — `The \"delins\" \
+                   format is recommended`. So the spec conflicts with itself \
+                   and this row is recorded, not targeted.",
     },
     Row {
         label: "1419-r1/span",
         input: "TEMPLATE:g.19_33delinsCGG",
         output: "TEMPLATE:g.[19_30del;33T>G]",
+        five_prime: "TEMPLATE:g.[19_30del;33T>G]",
         verdict: Verdict::Canonical,
+        wanted: "TEMPLATE:g.[19_30del;33T>G]",
+        authority: Authority::SpecSelfConflicting,
         argument: "The form #1419 names canonical: re-derived from the \
                    resulting sequence, exposing the substitution at 33 per \
                    general.md:56, with the retained bases placed as 3' as \
-                   possible per general.md:41.",
+                   possible per general.md:41. Note ferro is *leaving* the \
+                   spanning delins to reach it, and delins.md:44-47 recommends \
+                   the spanning delins for exactly this alignment coincidence \
+                   — a tension ferro's own coalesce pass encodes (see \
+                   `merge::the_coalesce_pass_reaches_the_spec_worked_example`, \
+                   which restores the single delins on the spec's own example).",
     },
     Row {
         label: "1419-r2/cis",
         input: "TEMPLATE:g.[19_22del;26_36del]",
         output: "TEMPLATE:g.[19_22del;26_36del]",
+        five_prime: "TEMPLATE:g.[19_22del;26_36del]",
         verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.[19_33del;36A>G]",
+        authority: Authority::SpecSelfConflicting,
         argument: "Wanted `[19_33del;36A>G]`, for the same general.md:56 \
-                   reason as `1419-r1/cis`, one locus over.",
+                   reason as `1419-r1/cis`, one locus over — and subject to \
+                   the same delins.md:44-47 counter-reading.",
     },
     Row {
         label: "1419-r2/span",
         input: "TEMPLATE:g.19_36delinsGCG",
         output: "TEMPLATE:g.[19_33del;36A>G]",
+        five_prime: "TEMPLATE:g.[19_33del;36A>G]",
         verdict: Verdict::Canonical,
+        wanted: "TEMPLATE:g.[19_33del;36A>G]",
+        authority: Authority::SpecSelfConflicting,
         argument: "The form #1419 names canonical for row 2.",
     },
     Row {
         label: "1419-r3/cis",
         input: "TEMPLATE:g.[19_24del;28_33del]",
         output: "TEMPLATE:g.[19_24del;28_33del]",
+        // The 5' pass shifts the leading deletion one base left: 19-24 and
+        // 18-23 delete the same content out of the run `C T G A T G C` at
+        // 18-24, so the denoted sequence is unchanged (asserted by
+        // `reported_confluence_pairs::no_reported_pair_normalizes_to_a_\
+        // different_sequence`, which sweeps both directions).
+        five_prime: "TEMPLATE:g.[18_23del;28_33del]",
         verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.[19T>G;22_33del]",
+        authority: Authority::SpecSelfConflicting,
         argument: "Wanted `[19T>G;22_33del]`. Same general.md:56 reason, but \
                    note the exposed substitution lands at the 5' end here \
                    rather than the 3' end — which is why #1419 argues no \
-                   per-end rule fixes the family.",
+                   per-end rule fixes the family. Same delins.md:44-47 \
+                   counter-reading as the other two rows.",
     },
     Row {
         label: "1419-r3/span",
         input: "TEMPLATE:g.19_33delinsGGA",
         output: "TEMPLATE:g.[19T>G;22_33del]",
+        five_prime: "TEMPLATE:g.[19T>G;22_33del]",
         verdict: Verdict::Canonical,
+        wanted: "TEMPLATE:g.[19T>G;22_33del]",
+        authority: Authority::SpecSelfConflicting,
         argument: "The form #1419 names canonical for row 3.",
     },
     // -- #1420 -- one row per member type. v2/v3 must reduce, v4 must coalesce:
@@ -166,19 +330,32 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1420-v2/cis",
         input: "TEMPLATE:g.[37dup;41del]",
         output: "TEMPLATE:g.[37dup;41del]",
+        // The 5' pass moves the duplication's anchor one base left, into the
+        // `AA` at 36-37. `dup` is 3'-anchored by general.md:41 in the shipped
+        // direction, so this is the one row where the reported spelling is not
+        // even a fixed point once the direction is flipped.
+        five_prime: "TEMPLATE:g.[36dup;41del]",
         verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.[38T>A;40_41delinsTG]",
+        authority: Authority::SpecExplicit,
         argument: "Wanted `[38T>A;40_41delinsTG]`. Reference 38-41 is `TTGC` \
                    and the result is `ATTG`, so 38 and 40-41 change and 39 \
                    does not (asserted in `reported_spans_change_the_columns_\
                    the_reports_state`). general.md:56 prioritises \
                    (1) substitution over (4) duplication, so the change at 38 \
-                   must not be spelled as a `dup`.",
+                   must not be spelled as a `dup`; delins.md:17 keeps the two \
+                   runs individual across the unchanged 39. Mutalyzer merges \
+                   this shape instead, but the spec is explicit, so under \
+                   spec-explicit > Mutalyzer it does not get a vote.",
     },
     Row {
         label: "1420-v2/span",
         input: "TEMPLATE:g.38_41delinsATTG",
         output: "TEMPLATE:g.[38T>A;40_41delinsTG]",
+        five_prime: "TEMPLATE:g.[38T>A;40_41delinsTG]",
         verdict: Verdict::Canonical,
+        wanted: "TEMPLATE:g.[38T>A;40_41delinsTG]",
+        authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v2: substitution exposed \
                    at 38, and the span separated at the unchanged 39 per \
                    delins.md:17.",
@@ -187,7 +364,10 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1420-v3/cis",
         input: "TEMPLATE:g.[36_37insC;40del]",
         output: "TEMPLATE:g.[36_37insC;40del]",
+        five_prime: "TEMPLATE:g.[36_37insC;40del]",
         verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.[37_38delinsCA;40G>T]",
+        authority: Authority::SpecExplicit,
         argument: "Wanted `[37_38delinsCA;40G>T]`. general.md:56 prioritises \
                    (1) substitution over (5) insertion, so the substitution at \
                    40 must be exposed rather than left inside an `ins`+`del` \
@@ -197,7 +377,10 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1420-v3/span",
         input: "TEMPLATE:g.37_40delinsCATT",
         output: "TEMPLATE:g.[37_38delinsCA;40G>T]",
+        five_prime: "TEMPLATE:g.[37_38delinsCA;40G>T]",
         verdict: Verdict::Canonical,
+        wanted: "TEMPLATE:g.[37_38delinsCA;40G>T]",
+        authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v3: reference 37-40 is \
                    `ATTG` against `CATT`, so 37-38 change consecutively \
                    (delins.md:16), 39 does not, and 40 is a substitution \
@@ -207,7 +390,10 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1420-v4/cis",
         input: "TEMPLATE:g.[21delinsGC;24del]",
         output: "TEMPLATE:g.[21delinsGC;24del]",
+        five_prime: "TEMPLATE:g.[21delinsGC;24del]",
         verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.21_24delinsGCTG",
+        authority: Authority::SpecExplicit,
         argument: "Wanted `21_24delinsGCTG` — the opposite direction to v2/v3. \
                    Reference 21-24 is `ATGC` against `GCTG`, so all four \
                    positions change, and delins.md:16 says changes involving \
@@ -218,7 +404,10 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1420-v4/span",
         input: "TEMPLATE:g.21_24delinsGCTG",
         output: "TEMPLATE:g.21_24delinsGCTG",
+        five_prime: "TEMPLATE:g.21_24delinsGCTG",
         verdict: Verdict::Canonical,
+        wanted: "TEMPLATE:g.21_24delinsGCTG",
+        authority: Authority::SpecExplicit,
         argument: "The form #1420 names canonical for v4: one delins over four \
                    consecutive changed positions, per delins.md:16.",
     },
@@ -229,57 +418,104 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1421-n1/split",
         input: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         output: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
+        five_prime: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
         verdict: Verdict::Canonical,
+        wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
+        authority: Authority::SpecSelfConflicting,
         argument: "The form #1421 names canonical: the substitution at 29 and \
                    the delins at 32-33 are separated by two unchanged \
                    nucleotides, and delins.md:17 says variants separated by one \
                    or more nucleotides are described individually and not as a \
-                   delins.",
+                   delins. Recorded, not targeted: delins.md:44-47 answers the \
+                   other way on this shape (see the sibling span row).",
     },
     Row {
         label: "1421-n1/span",
         input: "TEMPLATE:g.29_33delinsAACACATACTG",
         output: "TEMPLATE:g.29_33delinsAACACATACTG",
+        five_prime: "TEMPLATE:g.29_33delinsAACACATACTG",
         verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
+        authority: Authority::SpecSelfConflicting,
         argument: "Wanted `[29C>A;32_33delinsACATACTG]`. This span merges \
                    across the unchanged 30-31, which delins.md:17 forbids. The \
                    delins.md:18 exception (two variants separated by ONE \
                    nucleotide together affecting one amino acid) does not \
                    reach it: the separation is two nucleotides, and a `g.` \
                    description has no amino acid. See \
-                   `the_1421_spans_separate_by_two_nucleotides_not_one`.",
+                   `the_1421_spans_separate_by_two_nucleotides_not_one`. \
+                   delins.md:44-47 DOES reach it, though, which is why this row \
+                   is SpecSelfConflicting: 5 reference bases (CACGT) become an \
+                   11-base payload, so there is no column-for-column reading and \
+                   the split is recoverable only because the unchanged 30-31 \
+                   `AC` reappears in the payload — with neither end column \
+                   matching. That is the alignment `:47` says to write as one \
+                   delins. The spec answers both ways, so the policy falls \
+                   through to Mutalyzer, which merges and so does not pick this \
+                   wanted form either.",
     },
     Row {
         label: "1421-n2/split",
         input: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
         output: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
+        five_prime: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
         verdict: Verdict::Canonical,
+        wanted: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
+        authority: Authority::SpecSelfConflicting,
         argument: "The form #1421 names canonical for row 2; unchanged \
-                   interior 33-34.",
+                   interior 33-34. Recorded, not targeted — delins.md:44-47 \
+                   answers the other way (see the sibling span row).",
     },
     Row {
         label: "1421-n2/span",
         input: "TEMPLATE:g.32_36delinsTTGGAATCGAC",
         output: "TEMPLATE:g.32_36delinsTTGGAATCGAC",
+        five_prime: "TEMPLATE:g.32_36delinsTTGGAATCGAC",
         verdict: Verdict::Gap,
-        argument: "Wanted `[32G>T;35_36delinsGAATCGAC]`, per delins.md:17.",
+        wanted: "TEMPLATE:g.[32G>T;35_36delinsGAATCGAC]",
+        authority: Authority::SpecSelfConflicting,
+        argument: "Wanted `[32G>T;35_36delinsGAATCGAC]` per delins.md:17, but \
+                   delins.md:44-47 answers the other way: ref 32-36 (GTGCA) \
+                   becomes an 11-base payload, and the split survives only \
+                   because the unchanged 33-34 `TG` reappears in it, neither end \
+                   column matching. SpecSelfConflicting for that reason.",
     },
     Row {
         label: "1421-n3/split",
         input: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
         output: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
+        five_prime: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
         verdict: Verdict::Canonical,
+        wanted: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
+        authority: Authority::SpecSelfConflicting,
         argument: "The form #1421 names canonical for row 3; unchanged \
-                   interior 35-36.",
+                   interior 35-36. Recorded, not targeted — delins.md:44-47 \
+                   answers the other way (see the sibling span row).",
     },
     Row {
         label: "1421-n3/span",
         input: "TEMPLATE:g.34_38delinsTCACCTTTACG",
         output: "TEMPLATE:g.34_38delinsTCACCTTTACG",
+        five_prime: "TEMPLATE:g.34_38delinsTCACCTTTACG",
         verdict: Verdict::Gap,
-        argument: "Wanted `[34G>T;37_38delinsCCTTTACG]`, per delins.md:17.",
+        wanted: "TEMPLATE:g.[34G>T;37_38delinsCCTTTACG]",
+        authority: Authority::SpecSelfConflicting,
+        argument: "Wanted `[34G>T;37_38delinsCCTTTACG]` per delins.md:17, but \
+                   delins.md:44-47 answers the other way: ref 34-38 (GCAAT) \
+                   becomes an 11-base payload, and the split survives only \
+                   because the unchanged 35-36 `CA` reappears in it, neither end \
+                   column matching. SpecSelfConflicting for that reason.",
     },
 ];
+
+/// The two rows whose 5' answer differs from their 3' answer.
+///
+/// Named rather than left implicit because both are `Gap` rows, and
+/// [`every_gap_row_is_returned_exactly_as_authored`] rests on a gap row being
+/// returned *untouched* — which is what makes it a second canonical form rather
+/// than an under-applied pass. That argument is a 3'-direction argument, and
+/// these two are where it stops holding.
+const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1420-v2/cis"];
 
 /// How many of [`REPORTED_ROWS`] print something their issue argues against.
 ///
@@ -389,6 +625,166 @@ fn every_reported_spelling_still_normalizes_as_the_reports_recorded() {
     }
 }
 
+/// Every spelling's 5' answer, pinned as hard as its 3' one.
+///
+/// Nothing pinned this before: `reported_confluence_pairs` sweeps both
+/// directions but only *counts* convergence, and this module pinned 3' alone.
+/// A count cannot tell a reader that flipping the direction moves two of the
+/// eighteen rows, and moving a normalized string is a migration for whoever
+/// stored it whichever direction produced it.
+#[test]
+fn every_reported_spelling_normalizes_as_recorded_under_five_prime() {
+    for row in REPORTED_ROWS {
+        assert_eq!(
+            normalize_in(TEMPLATE, row.input, ShuffleDirection::FivePrime),
+            row.five_prime,
+            "{} moved under FivePrime.\n  input:   {}\n  pinned:  {}\n  \
+             (its ThreePrime answer is {})",
+            row.label,
+            row.input,
+            row.five_prime,
+            row.output
+        );
+    }
+}
+
+/// Exactly two rows answer differently in the two directions, and they are the
+/// two [`FIVE_PRIME_MOVERS`] names.
+///
+/// Asserted separately from the pins above so the *set* cannot drift silently:
+/// with only the per-row pins, editing a `five_prime` string to match a new
+/// behaviour would keep the suite green while quietly changing which rows are
+/// direction-sensitive — and direction-sensitivity is the property
+/// [`every_gap_row_is_returned_exactly_as_authored`]'s argument depends on.
+#[test]
+fn only_the_named_rows_answer_differently_in_the_two_directions() {
+    let movers: Vec<&str> = REPORTED_ROWS
+        .iter()
+        .filter(|row| row.output != row.five_prime)
+        .map(|row| row.label)
+        .collect();
+    assert_eq!(
+        movers, FIVE_PRIME_MOVERS,
+        "the set of direction-sensitive rows changed; if a row joined it, the \
+         5' pass now moves a spelling the 3' pass returns verbatim, which is a \
+         representation change under a supported option"
+    );
+}
+
+/// Every gap row's `wanted` form is the one its sibling spelling already prints.
+///
+/// This is the family's defining shape stated as a checked fact rather than as
+/// prose in an `argument` field. Each issue names an expected output; that
+/// output is, in every one of the nine pairs, exactly what ferro produces from
+/// the *other* spelling of the same variant. That is what makes the defect
+/// spelling-dependence rather than a missing rule — the canonical form is
+/// already reachable, just not from here.
+///
+/// Written as a comparison against the sibling's pinned `output` rather than
+/// against a recomputed value, so a change that moved *both* spellings onto some
+/// third string would fail here instead of quietly redefining "wanted".
+#[test]
+fn the_wanted_form_of_every_gap_row_is_its_siblings_output() {
+    for (a, b) in reported_pairs() {
+        let (canonical, gap) = match a.verdict {
+            Verdict::Canonical => (a, b),
+            Verdict::Gap => (b, a),
+        };
+        assert_eq!(
+            gap.wanted, canonical.output,
+            "{}: the issue asks for `{}`, but the sibling spelling {} prints \
+             `{}`. Either the wanted form was transcribed wrong or the family \
+             has stopped being a pure partition disagreement.",
+            gap.label, gap.wanted, canonical.label, canonical.output
+        );
+        assert_ne!(
+            gap.output, gap.wanted,
+            "{}: this row is marked Gap but already prints the wanted form; \
+             flip its verdict to Canonical and lower OPEN_GAPS",
+            gap.label
+        );
+    }
+}
+
+/// Every canonical row already prints the form its issue asks for.
+///
+/// The other half of the same claim, and the one that makes `wanted` load-bearing
+/// rather than decorative: for nine of the eighteen spellings ferro and the
+/// reporter agree outright, and that agreement is what a fix must not disturb.
+#[test]
+fn every_canonical_row_already_prints_its_wanted_form() {
+    for row in REPORTED_ROWS {
+        if row.verdict != Verdict::Canonical {
+            continue;
+        }
+        assert_eq!(
+            row.output, row.wanted,
+            "{}: marked Canonical but prints something other than the form its \
+             issue names",
+            row.label
+        );
+    }
+}
+
+/// Both spellings of a pair carry the same [`Authority`], and the split across
+/// the family is the one the module docs argue for.
+///
+/// Pinned because the authority is what decides whether a row's `wanted` is a
+/// *target* or merely a *record*, and that is the single most consequential
+/// judgement in this file. Six pairs rest on a spec line nothing contradicts;
+/// three (#1419's) rest on a spec that answers both ways, where the precedence
+/// policy hands the tie-break to Mutalyzer and Mutalyzer picks neither ferro's
+/// answer nor the issue's.
+#[test]
+fn the_spec_authority_census_holds() {
+    for (a, b) in reported_pairs() {
+        assert_eq!(
+            a.authority, b.authority,
+            "{} and {} are two spellings of one shape, so they cannot have \
+             different authorities",
+            a.label, b.label
+        );
+    }
+
+    let explicit = REPORTED_ROWS
+        .iter()
+        .filter(|row| row.authority == Authority::SpecExplicit)
+        .count();
+    let conflicting = REPORTED_ROWS
+        .iter()
+        .filter(|row| row.authority == Authority::SpecSelfConflicting)
+        .count();
+    assert_eq!(
+        (explicit, conflicting),
+        (6, 12),
+        "the authority split moved. Six rows (#1420's) rest on delins.md:16/17 \
+         with nothing in the spec against them — they are length-neutral, so \
+         reference and payload correspond column for column and delins.md:44-47 \
+         never engages. Twelve (#1419's six and #1421's six) replace a span with \
+         a payload of a different length, so their wanted split is recoverable \
+         only by choosing an alignment, which is what :44-47 says to write as one \
+         delins while :17 says to split. Moving a row between the two is a \
+         decision about what a fix is allowed to target, so it belongs in a PR \
+         description."
+    );
+
+    // Every self-conflicting row belongs to #1419 or #1421, and no other row
+    // does. Stated as a set rather than left to the counts above, which two
+    // compensating edits could satisfy while relabelling the wrong rows.
+    let conflicting_labels: Vec<&str> = REPORTED_ROWS
+        .iter()
+        .filter(|row| row.authority == Authority::SpecSelfConflicting)
+        .map(|row| row.label)
+        .collect();
+    assert!(
+        conflicting_labels
+            .iter()
+            .all(|l| l.starts_with("1419-") || l.starts_with("1421-")),
+        "only #1419's and #1421's rows have a spec that answers both ways; got \
+         {conflicting_labels:?}"
+    );
+}
+
 /// Each reported pair reaches its canonical form from exactly one spelling.
 ///
 /// This is the defect in one assertion, and it is sharper than "the two
@@ -448,6 +844,12 @@ fn each_pair_reaches_its_canonical_form_from_exactly_one_spelling() {
 /// moved, even to some third string, would be an under-applied pass. One that is
 /// returned untouched is a second canonical form, and a second canonical form is
 /// what splits a consumer's counts across two keys.
+///
+/// **This is a 3'-direction claim and does not generalize.** Two of the nine gap
+/// rows do move under 5' ([`FIVE_PRIME_MOVERS`]), so under that option the
+/// argument above holds for seven of nine, not nine of nine — which is exactly
+/// why the 5' answers are now pinned per row rather than left to a convergence
+/// count.
 #[test]
 fn every_gap_row_is_returned_exactly_as_authored() {
     for row in REPORTED_ROWS {
