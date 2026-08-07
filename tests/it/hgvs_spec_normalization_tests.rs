@@ -800,13 +800,20 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // absent from its list, which is what separates this from #1230 — whose
     // competing members really are substitutions, and whose guard stays green.
     ("inversion-vs-two-delins-76-83", "decided"),
-    // Which authority ranks after the spec — the reference implementation, the
-    // shipped representation, or the filer's issues. Two orders are on record
-    // and neither was chosen; it decides both records above.
-    ("adjudication-precedence-order", "undecided"),
-    // Which of two legal descriptions of one variant ships. An open product
-    // decision, recorded as one so a measurement is not read as a mandate.
-    ("canonical-form-choice-when-both-legal", "undecided"),
+    // Which authority ranks after the spec. Decided 2026-08-07: spec, then
+    // confluence, then re-derivation from the sequence, then disclosure, with
+    // stability only as a last-resort tiebreaker. Mutalyzer does not appear —
+    // the filer himself calls it not spec-compliant, and its answers are
+    // predicted better by a 2014 description-length weight model than by any
+    // separation rule.
+    ("adjudication-precedence-order", "decided"),
+    // Which of two legal descriptions of one variant ships. Decided 2026-08-07:
+    // re-derive from the resulting sequence, subject to the spec's explicit
+    // tie-breaks. The spec's own model (`general.md:157-160`), and the method
+    // the filer asked for — though the spec contradicts itself, conditioning
+    // some preferences on provenance and allele frequency, which ferro cannot
+    // see. See the record.
+    ("canonical-form-choice-when-both-legal", "decided"),
     // `delins.md:18` names no edit type; ferro applies it only to
     // sub/unchanged/sub. Measured inert over 5.76M rows, never adjudicated.
     ("codon-carve-out-shape-restriction", "undecided"),
