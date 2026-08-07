@@ -772,13 +772,20 @@ fn spec_equivalence_classes_converge() {
 const RULING_STATUSES: &[(&str, &str)] = &[
     // `delins.md:17` ("described individually … not as a delins") against
     // `delins.md:47` ("the delins format is recommended"), both reaching the
-    // `:44-47` example. Undecided: it governs ~138 of 208 adjudicated corpus
-    // rows, so settling it either way is a migration, and no operator ruling
-    // has been made. Note both clauses are *lowercase* prose — the record's
-    // former "equal RFC 2119 strength" argument was withdrawn, because a census
-    // of `docs/recommendations/` finds an uppercase keyword in exactly one
-    // place outside `style.md` (`RNA/adjoined_transcript.md:21`).
-    ("delins-merge-vs-individual-gap-two-or-more", "undecided"),
+    // `:44-47` example. **Decided for `:47` by operator ruling (2026-08-07),
+    // and SCOPED** — the scope is part of the ruling. It settles only the shape
+    // `:44-47` describes: a *minimal* single `delins` split because payload
+    // bases coincide with reference bases. It is not a licence to merge across
+    // separation ≥2 generally; where the separation comes from anything else,
+    // `general.md:34` still governs. Unscoped it would have reached ~2,112 of
+    // 4,732 violations measured by a later corpus-wide audit — fifteen times
+    // the 208 rows the argument was made on. Ratifies shipped behaviour
+    // (v0.12.0 emits the unsplit form on 208/208), so it moves no row. Note
+    // both clauses are *lowercase* prose — the record's former "equal RFC 2119
+    // strength" argument was withdrawn, because a census of
+    // `docs/recommendations/` finds an uppercase keyword in exactly one place
+    // outside `style.md` (`RNA/adjoined_transcript.md:21`).
+    ("delins-merge-vs-individual-gap-two-or-more", "decided"),
     // `general.md:34` against `general.md:56` on `c.76_83inv`, whose reverse
     // complement coincides with the reference at its 4 interior columns.
     // Renamed from `inversion-vs-two-substitutions-76-83`: the competing
