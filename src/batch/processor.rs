@@ -838,6 +838,7 @@ mod tests {
     /// The streaming batch methods must agree item-for-item with the `Vec`-based
     /// ones (#975), across the thread settings that select different engines
     /// (serial, global pool, dedicated pool).
+    #[cfg(feature = "parallel")]
     #[test]
     fn streaming_batch_matches_the_vec_api_exactly() {
         let processor = processor();
