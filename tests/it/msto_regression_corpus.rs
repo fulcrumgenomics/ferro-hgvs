@@ -43,6 +43,76 @@
 //! guard may still have an unlisted Python one; that understates coverage
 //! without misreporting the issue as unguarded.
 //!
+//! ## Table-driven guards count, and used not to
+//!
+//! The same false negative, in a second shape. `tests/it/reported_confluence_pairs.rs`
+//! and `tests/it/reported_partition_verdicts.rs` guard **#1419, #1420 and
+//! #1421** — every row in both is one of those issues' reported spellings — but
+//! the issue numbers live in the tables' *data rows* (`"1419-r1/cis"`,
+//! `"1421-n3/span"`) and in the module docs, never in a function name or in the
+//! comment above one. So the per-function rule could not see them, and all three
+//! were listed as unguarded while eighteen pinned expectations and four
+//! whole-corpus properties covered them.
+//!
+//! The accommodation is the Python one generalized rather than a new exception:
+//! **where a module is one issue family end to end and says so in its module
+//! doc, the module doc is the attribution.** That is sound for the same reason it
+//! was sound for pytest — the unit of authorship is the module, not the function
+//! — and it is *only* claimed for modules where it is true. A grab-bag suite
+//! that happens to mention an issue in its header still needs the per-function
+//! reference, because there the module doc says nothing about any individual
+//! test.
+//!
+//! Note what this does not do: it does not lower the bar for **#200**, which
+//! stays in [`no_high_priority_issue_is_unguarded_without_being_named`]. No
+//! module anywhere is about #200, so there is nothing for a module-doc rule to
+//! find. The rule widened to admit guards that exist; it did not widen until the
+//! finding disappeared.
+//!
+//! ## An issue whose satisfaction is a property, not an output
+//!
+//! **#1430** is the one entry here that could never have a conventional
+//! regression test, and its slice is populated on a different basis from every
+//! other row. It is a design proposal — coerce a description to its denoted
+//! sequence, derive a representative variant from that sequence, then optionally
+//! apply the normalizer for spec compliance — and it states no input/expected
+//! pair at all. There is no string to pin.
+//!
+//! What it can be measured by is whether each of its three stages holds as a
+//! property, so its slice names one guard per stage rather than a reproduction.
+//! See [`issue_1430_is_measured_by_a_property_not_by_an_expected_output`], which
+//! pins that reading so it cannot quietly be replaced by an ordinary
+//! input/expected row.
+//!
+//! ## A citation is not a guarantee that the test guards the issue
+//!
+//! The attribution rule is mechanical — `#<N>` in the function's name or in the
+//! comment above it — and that is deliberate, because a judgement-based rule
+//! rots faster than the thing it describes. But mechanical means it also catches
+//! *cross-references*: a test whose comment names an issue to explain why the
+//! fixture was built a certain way, or as a historical aside, reads identically
+//! to a test that reproduces it.
+//!
+//! An audit of every cataloged pair found two such rows, and they are recorded
+//! here rather than removed, because both satisfy the rule as written and
+//! deleting them would leave the table no longer a faithful application of its
+//! own stated rule:
+//!
+//! * **#1034** lists
+//!   `tests/it/issue_291_rna_axis_convention.rs::rna_canonical_split_fetch_is_cds_relative`.
+//!   That test pins that the r. reference window is fetched CDS-relative
+//!   (a #469 claim). #1034 appears only as the reason a *full-run* inversion was
+//!   used to build the case rather than a sub-run.
+//! * **#310** lists
+//!   `src/reference/transcript.rs::test_transcript_default_is_minimal_and_non_coding`.
+//!   That test pins `Transcript::default()`. #310 appears only as an anecdote
+//!   about a past field addition.
+//!
+//! So read a populated `tests` slice as *"a test names this issue"*, which is
+//! what it measures, and not as *"this issue is covered"*. The empty slices are
+//! the load-bearing half and they are unaffected: a cross-reference can inflate
+//! coverage, never hide a gap.
+//!
 //! ## What this module does NOT claim
 //!
 //! It does not re-run the shadow/live comparison, so it makes no claim about
@@ -185,13 +255,86 @@ static MSTO_ISSUES: &[MstoIssue] = &[
     // Filed 2026-08-05. #1419–#1421 are the surviving non-confluence follow-ups
     // to the #1229–#1234 family; #1430 proposes coercing a description to its
     // denoted sequence before normalizing, which is the same seam the
-    // sequence-first splitter sits on. None is referenced by number from any
-    // test yet, which is why all four appear in
-    // `no_high_priority_issue_is_unguarded_without_being_named`.
-    MstoIssue { number: 1419, high: true, state: State::Open, tests: &[], note: None },
-    MstoIssue { number: 1420, high: true, state: State::Open, tests: &[], note: None },
-    MstoIssue { number: 1421, high: true, state: State::Open, tests: &[], note: None },
-    MstoIssue { number: 1430, high: true, state: State::Open, tests: &[], note: None },
+    // sequence-first splitter sits on.
+    //
+    // All four were listed as unguarded on the per-function attribution rule.
+    // Three of them were not: `reported_confluence_pairs` and
+    // `reported_partition_verdicts` are table-driven and carry the issue numbers
+    // in their rows and module docs, which is the accommodation the module doc
+    // above sets out. The shared guards are listed against each of the three
+    // because each module's assertions sweep every row; the two per-issue
+    // extras (`reported_spans_change_the_columns_the_reports_state` for #1420,
+    // `the_1421_spans_separate_by_two_nucleotides_not_one` for #1421) test only
+    // that issue's rows and are listed only there.
+    MstoIssue { number: 1419, high: true, state: State::Open, tests: &[("tests/it/reported_confluence_pairs.rs", "every_reported_output_is_a_fixed_point"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged"), ("tests/it/reported_partition_verdicts.rs", "each_pair_reaches_its_canonical_form_from_exactly_one_spelling"), ("tests/it/reported_partition_verdicts.rs", "every_canonical_row_already_prints_its_wanted_form"), ("tests/it/reported_partition_verdicts.rs", "every_gap_row_is_returned_exactly_as_authored"), ("tests/it/reported_partition_verdicts.rs", "every_reported_pair_is_still_one_variant_by_equivalence"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_normalizes_as_recorded_under_five_prime"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_still_normalizes_as_the_reports_recorded"), ("tests/it/reported_partition_verdicts.rs", "only_the_named_rows_answer_differently_in_the_two_directions"), ("tests/it/reported_partition_verdicts.rs", "reference_bases_are_what_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "the_open_gap_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_spec_authority_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_two_reported_modules_describe_the_same_pairs"), ("tests/it/reported_partition_verdicts.rs", "the_wanted_form_of_every_gap_row_is_its_siblings_output")], note: None },
+    MstoIssue { number: 1420, high: true, state: State::Open, tests: &[("tests/it/reported_confluence_pairs.rs", "every_reported_output_is_a_fixed_point"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged"), ("tests/it/reported_partition_verdicts.rs", "each_pair_reaches_its_canonical_form_from_exactly_one_spelling"), ("tests/it/reported_partition_verdicts.rs", "every_canonical_row_already_prints_its_wanted_form"), ("tests/it/reported_partition_verdicts.rs", "every_gap_row_is_returned_exactly_as_authored"), ("tests/it/reported_partition_verdicts.rs", "every_reported_pair_is_still_one_variant_by_equivalence"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_normalizes_as_recorded_under_five_prime"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_still_normalizes_as_the_reports_recorded"), ("tests/it/reported_partition_verdicts.rs", "only_the_named_rows_answer_differently_in_the_two_directions"), ("tests/it/reported_partition_verdicts.rs", "reference_bases_are_what_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "reported_spans_change_the_columns_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "the_open_gap_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_spec_authority_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_two_reported_modules_describe_the_same_pairs"), ("tests/it/reported_partition_verdicts.rs", "the_wanted_form_of_every_gap_row_is_its_siblings_output")], note: None },
+    MstoIssue { number: 1421, high: true, state: State::Open, tests: &[("tests/it/reported_confluence_pairs.rs", "every_reported_output_is_a_fixed_point"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged"), ("tests/it/reported_partition_verdicts.rs", "each_pair_reaches_its_canonical_form_from_exactly_one_spelling"), ("tests/it/reported_partition_verdicts.rs", "every_canonical_row_already_prints_its_wanted_form"), ("tests/it/reported_partition_verdicts.rs", "every_gap_row_is_returned_exactly_as_authored"), ("tests/it/reported_partition_verdicts.rs", "every_reported_pair_is_still_one_variant_by_equivalence"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_normalizes_as_recorded_under_five_prime"), ("tests/it/reported_partition_verdicts.rs", "every_reported_spelling_still_normalizes_as_the_reports_recorded"), ("tests/it/reported_partition_verdicts.rs", "only_the_named_rows_answer_differently_in_the_two_directions"), ("tests/it/reported_partition_verdicts.rs", "reference_bases_are_what_the_reports_state"), ("tests/it/reported_partition_verdicts.rs", "the_1421_spans_separate_by_two_nucleotides_not_one"), ("tests/it/reported_partition_verdicts.rs", "the_open_gap_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_spec_authority_census_holds"), ("tests/it/reported_partition_verdicts.rs", "the_two_reported_modules_describe_the_same_pairs"), ("tests/it/reported_partition_verdicts.rs", "the_wanted_form_of_every_gap_row_is_its_siblings_output")], note: None },
+    // #1430's slice is one guard per proposed stage, not a reproduction — see
+    // `issue_1430_is_measured_by_a_property_not_by_an_expected_output`.
+    MstoIssue { number: 1430, high: true, state: State::Open, tests: &[("src/normalize/merge.rs", "the_coalesce_pass_merges_a_payload_alignment_split"), ("src/normalize/merge.rs", "the_coalesce_pass_reaches_the_spec_worked_example"), ("src/normalize/seqfirst/partition.rs", "canonical_members_claim_exactly_the_blocks_edit_distance"), ("src/normalize/seqfirst/partition.rs", "canonical_members_rebuild_the_alternate_block"), ("src/normalize/seqfirst/partition.rs", "round_trips_exhaustively_over_a_small_alphabet"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged")], note: None },
+];
+
+/// #1430's slice, split by the stage of its proposal each guard measures.
+///
+/// Pinned so the entry cannot be quietly converted into an ordinary
+/// input/expected row: #1430 states no expected output, so anything that looked
+/// like one would be somebody's invention attributed to the issue.
+const ISSUE_1430_STAGE_GUARDS: &[(u8, &str, &str)] = &[
+    // Stage 1 — coerce the description to its denoted sequence, deterministically
+    // and confluently. The applier in `common::cis_apply_oracle` *is* that
+    // coercion, and it is independent of the normalizer, so these two say the
+    // sequence a description denotes is well defined and survives normalization.
+    (
+        1,
+        "tests/it/reported_confluence_pairs.rs",
+        "every_reported_pair_denotes_one_sequence",
+    ),
+    (
+        1,
+        "tests/it/reported_confluence_pairs.rs",
+        "no_reported_pair_normalizes_to_a_different_sequence",
+    ),
+    // Stage 2 — derive a representative variant from that sequence,
+    // deterministically. `seqfirst::partition` is the implementation of stage 2;
+    // these pin that its output rebuilds the alternate block, costs exactly the
+    // block's edit distance, and round-trips exhaustively over a small alphabet.
+    (
+        2,
+        "src/normalize/seqfirst/partition.rs",
+        "canonical_members_rebuild_the_alternate_block",
+    ),
+    (
+        2,
+        "src/normalize/seqfirst/partition.rs",
+        "canonical_members_claim_exactly_the_blocks_edit_distance",
+    ),
+    (
+        2,
+        "src/normalize/seqfirst/partition.rs",
+        "round_trips_exhaustively_over_a_small_alphabet",
+    ),
+    // Stage 3 — apply spec compliance on top of the derived variant. The
+    // coalesce pass is the step-3 pass `merge::coalesce` cites #1430 for, and
+    // `the_coalesce_pass_reaches_the_spec_worked_example` runs it against
+    // `delins.md:44-47`'s own worked example.
+    (
+        3,
+        "src/normalize/merge.rs",
+        "the_coalesce_pass_reaches_the_spec_worked_example",
+    ),
+    (
+        3,
+        "src/normalize/merge.rs",
+        "the_coalesce_pass_merges_a_payload_alignment_split",
+    ),
+    // The measure of the whole proposal: does the reported family converge? A
+    // census rather than a pin, because #1430's success criterion is confluence
+    // and not any particular string.
+    (
+        0,
+        "tests/it/reported_confluence_pairs.rs",
+        "the_reported_pair_census_is_unchanged",
+    ),
 ];
 
 /// The eleven issues the sequence-first migration review flagged as at risk,
@@ -208,7 +351,11 @@ const PINNED_AT_RISK_ISSUES: &[u32] = &[
 /// should reflect), not to silence a failing assertion.
 const PINNED_ISSUE_COUNT: usize = 73;
 const PINNED_HIGH_ISSUE_COUNT: usize = 27;
-const PINNED_UNIQUE_TEST_COUNT: usize = 265;
+/// Raised from 265 when #1419/#1420/#1421/#1430 gained their slices: the guards
+/// already existed, the catalog could not see them (see the module doc's
+/// "Table-driven guards count" and "An issue whose satisfaction is a property"
+/// sections). No test was written to move this number.
+const PINNED_UNIQUE_TEST_COUNT: usize = 288;
 
 /// Reads `relative_path` (relative to the crate root) and returns whether it
 /// contains a function definition named `fn_name` — i.e. a line containing
@@ -380,8 +527,66 @@ fn no_high_priority_issue_is_unguarded_without_being_named() {
         .collect();
     assert_eq!(
         unguarded,
-        vec![200, 1419, 1420, 1421, 1430],
+        vec![200],
         "the set of unguarded high-priority msto issues changed; if this is a newly-found gap, \
          leave it here as a finding rather than silently dropping it"
+    );
+}
+
+/// #1430 is satisfied by a property holding, not by an output matching, and its
+/// slice records that rather than pretending otherwise.
+///
+/// Every other entry in [`MSTO_ISSUES`] points at tests that reproduce a
+/// reported input and check what comes out. #1430 has no reported input: it
+/// proposes a three-stage pipeline (coerce to sequence, derive a representative
+/// variant, apply spec compliance) and argues for it on determinism and
+/// confluence. So the slice names one or more guards **per stage**, and this
+/// test pins that structure — that all three stages are covered, that the two
+/// tables agree, and that the whole-proposal measure is a confluence census
+/// rather than a string.
+///
+/// Without this, the natural next edit is for somebody to "fix" the odd-looking
+/// entry by writing an input/expected row for #1430. That row would be an
+/// invention attributed to an issue that states no expected output, which is a
+/// worse failure than the empty slice this replaced.
+#[test]
+fn issue_1430_is_measured_by_a_property_not_by_an_expected_output() {
+    let issue = MSTO_ISSUES
+        .iter()
+        .find(|i| i.number == 1430)
+        .expect("#1430 is in MSTO_ISSUES");
+
+    let from_stages: HashSet<(&str, &str)> = ISSUE_1430_STAGE_GUARDS
+        .iter()
+        .map(|&(_, file, fn_name)| (file, fn_name))
+        .collect();
+    let from_slice: HashSet<(&str, &str)> = issue.tests.iter().copied().collect();
+    assert_eq!(
+        from_slice, from_stages,
+        "#1430's cataloged tests and ISSUE_1430_STAGE_GUARDS disagree; every guard \
+         claimed for #1430 must be attributable to a stage of its proposal"
+    );
+
+    for stage in [1u8, 2, 3] {
+        assert!(
+            ISSUE_1430_STAGE_GUARDS.iter().any(|&(s, _, _)| s == stage),
+            "no guard is claimed for stage {stage} of #1430's proposal; an \
+             uncovered stage is a finding to leave visible, not one to absorb"
+        );
+    }
+
+    // Stage 0 is the whole-proposal measure, and it must be the confluence
+    // census — the only assertion in the family that reports whether two
+    // spellings reach one string, which is #1430's actual success criterion.
+    let overall: Vec<&str> = ISSUE_1430_STAGE_GUARDS
+        .iter()
+        .filter(|&&(stage, _, _)| stage == 0)
+        .map(|&(_, _, fn_name)| fn_name)
+        .collect();
+    assert_eq!(
+        overall,
+        vec!["the_reported_pair_census_is_unchanged"],
+        "#1430's overall measure must stay the confluence census; it has no \
+         expected output to pin instead"
     );
 }
