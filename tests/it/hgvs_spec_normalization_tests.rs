@@ -792,7 +792,14 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // members are two `delins` (`c.[76_77delinsTG;82_83delinsTT]`), and `:56`
     // ranks substitution above inversion while not listing `delins` at all, so
     // the old name carried #1230's answer onto a case `:56` does not reach.
-    ("inversion-vs-two-delins-76-83", "undecided"),
+    // **Decided for the inversion by operator ruling (2026-08-07)**, governing
+    // `inversion.md:5` — an inversion is a whole-span property, and the spec's
+    // own worked example (`inversion.md:33-34`, `NM_004006.2:c.4145_4160inv`)
+    // has two three-base unchanged interior runs, so `general.md:34` does not
+    // decompose one. `:56` cannot rank the alternative because `delins` is
+    // absent from its list, which is what separates this from #1230 — whose
+    // competing members really are substitutions, and whose guard stays green.
+    ("inversion-vs-two-delins-76-83", "decided"),
     // Which authority ranks after the spec — the reference implementation, the
     // shipped representation, or the filer's issues. Two orders are on record
     // and neither was chosen; it decides both records above.

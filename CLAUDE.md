@@ -573,22 +573,23 @@ individually" — which is **provenance**, recoverable only from the input's spe
 
 The `rulings` section of `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json` is the
 decision log, pinned by `ruling_records_are_intact` (ids **and** statuses; keep `RULING_STATUSES`
-in sync). **Four of its six records are `undecided`**, and the first two below are operator
-decisions that block other work — read them before re-deriving the same argument:
+in sync). **Three of its six records are `undecided`**, and the first below is an operator
+decision that blocks other work — read them before re-deriving the same argument:
 
 | record | what is open |
 |---|---|
-| `inversion-vs-two-delins-76-83` | `c.76_83inv` as one `inv` or two `delins` (#1517). Three costed options, none chosen |
-| `adjudication-precedence-order` | **Two competing precedence orders are on record and neither is chosen.** It decides the row above, and the reading behind `delins-merge-vs-individual-gap-two-or-more`'s scope limit |
+| `adjudication-precedence-order` | **Two competing precedence orders are on record and neither is chosen.** It does not reopen the two records decided below, but it governs how the next such conflict is ranked |
 | `canonical-form-choice-when-both-legal` | Which of two legal forms ships. An open *product* decision |
 | `codon-carve-out-shape-restriction` | `delins.md:18` names no edit type; ferro applies it only to sub/unchanged/sub |
 
-The two `decided` records are `delins-codon-carve-out-gap-one` and — as of this change —
-`delins-merge-vs-individual-gap-two-or-more`, which holds `DNA/delins.md:44-47` to govern `:17`
-**scoped to the alignment-coincidence shape `:44-47` describes**. The scope is part of the ruling:
-where a separation of two or more arises from anything else, `general.md:34` still governs. Read
-the record before citing it, because unscoped it reaches roughly fifteen times the row set the
-argument was made on.
+The three `decided` records, and the scope each was decided **at** — read the record before
+citing it, because both of the 2026-08-07 rulings are narrower than their one-line summary:
+
+| record | ruling |
+|---|---|
+| `delins-codon-carve-out-gap-one` | `delins.md:18` governs |
+| `delins-merge-vs-individual-gap-two-or-more` | `DNA/delins.md:44-47` governs `:17`, **scoped** to the alignment-coincidence shape `:44-47` describes. Where a separation of two or more arises from anything else, `general.md:34` still governs; unscoped the reading reaches roughly fifteen times the row set the argument was made on |
+| `inversion-vs-two-delins-76-83` | `inversion.md:5` governs: a whole-block reverse complement is one `inv` when the members it competes with are `delins`, since `general.md:56` ranks substitution but not `delins`. #1230's substitution case is untouched and still splits |
 
 Two things follow for representation-stability work specifically. The repository's doctrine reads
 as "do not move a normalized output", while the downstream filer has said instability is
