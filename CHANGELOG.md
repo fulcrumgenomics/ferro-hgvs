@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.13.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.12.0...v0.13.0) - 2026-08-07
 
+### <!-- 0 -->Representation changes
+
+Normalization output is a shipped key: a downstream consumer stores read counts
+against the normalized HGVS string, so a form that moves between releases
+re-buckets what they have already stored.
+
+No commit this cycle carried a `Representation-Change:` trailer, so this section
+was reconstructed after the fact by normalizing three real corpora through
+v0.12.0 and v0.13.0 against the same prepared reference and diffing row by row —
+5,761,302 expressions (ClinVar 500k, Paraphase, CMRG).
+
+| outcome | rows | what it means for a consumer |
+|---|---|---|
+| identical on both releases | 4,490,581 | nothing to do |
+| **moved** | **577** (0.0100%) | **re-map these keys** |
+| newly normalizes | 326,404 | free — no key existed before |
+| now rejected | 2 | key disappears; the input was malformed |
+| failed on both releases | 943,738 | no key on either release |
+
+**577 stored strings move — about 1 in 10,000.** The direction is mixed: 360
+collapse to fewer allele members, 205 expand into more, and 12 are respelled at
+the same arity. Two opposing mechanisms are responsible — the `delins.md:44-47`
+payload-alignment merge ([#1470]) pulls toward one delins, and the sequence-first
+cis derivation ([#1392]) pulls toward split members. Per corpus: ClinVar 23,
+Paraphase 36, CMRG 518.
+
+**326,404 inputs newly normalize, and every one is an LRG accession** — [#1501]
+(LRG accessions are versionless, so W3001 is no longer demanded) and [#1490]
+(LRG genomic bases are served from the LRG record). These previously returned a
+parse error, so no consumer holds a stored string for them and adopting them
+costs nothing.
+
+**2 inputs are now rejected rather than echoed back**, both the same class: two
+coincident cis-allele edits, for which the spec defines no canonical form
+(`OverlapConflictingEdits` / W5002). `NM_033028.4:r.[118_261del;118_373del]` and
+`NM_003803.3:c.[64_66delGTGinsCTC;65T>G]`. v0.12.0 accepted both silently and
+returned a string that denoted nothing.
+
+**The 943,738 that fail on both releases are unchanged in kind**, and are a
+property of the corpora rather than of this release:
+
+| reason | rows | share |
+|---|---|---|
+| intronic variant — declined by design | 860,832 | 91.2% |
+| parse error (spelling ferro rejects) | 49,162 | 5.2% |
+| reference mismatch (stated base differs from the reference) | 32,302 | 3.4% |
+| invalid coordinates / spec-undefined | 1,442 | 0.2% |
+
+The intronic decline is longstanding — the same error variant exists at
+`src/error.rs:429` in v0.12.0 and v0.13.0 — and is not new here.
+
+For contrast, the synthetic shape-family corpus (`dump_normalized_corpus`,
+78,028 rows) moves 12,530 rows, 2,201 of them previously stable. That corpus is
+deliberately enriched for the shapes that churn and its rate is not a
+library-wide figure; the real-corpus numbers above are the ones that describe
+consumer impact.
+
+[#1392]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1392
+[#1470]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1470
+[#1490]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1490
+[#1501]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1501
+
 ### <!-- 1 -->Added
 
 - *(dev)* add --verify-spdi to the normalized-corpus harness ([#1515](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1515))
