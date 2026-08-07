@@ -252,11 +252,17 @@ impl ReferenceProvider for WindowProvider {
         // A request inside the contig but outside every captured window means
         // the fixture is missing bases the normalizer needs — a clear
         // extraction defect, not a missing-data skip.
+        //
+        // The message names no specific generator on purpose: several fixtures
+        // share this provider (`extract_biocommons_windows`,
+        // `extract_mutalyzer_genomic_windows`, `extract_spec_enumeration_windows`,
+        // `extract_split_member_separation_windows`), and naming only the first
+        // sent readers of the others to regenerate the wrong file.
         Err(FerroError::InvalidCoordinates {
             msg: format!(
                 "genomic request {contig}:{start}-{end} is not covered by any committed window \
-                 (regenerate reference-windows.json via \
-                 `cargo run --features dev --example extract_biocommons_windows`)"
+                 (regenerate this fixture's reference-windows.json with its \
+                 `examples/extract_*_windows.rs` generator)"
             ),
         })
     }
