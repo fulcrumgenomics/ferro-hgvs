@@ -227,6 +227,7 @@ mod issue_1492_anchor_decline_names_the_caller_span;
 mod issue_1508_overlap_across_region_boundary;
 mod issue_1513_adjacent_junction_insertions;
 mod issue_1517_inv_priority_over_delins;
+mod issue_1543_allele_member_reference_validation;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;
