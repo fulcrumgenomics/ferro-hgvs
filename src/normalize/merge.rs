@@ -3952,7 +3952,9 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
 /// [`partition_block`].**
 fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
     if pieces.len() < 2
-        || !(every_separation_is_a_single_base(pieces) || changed_columns_dominate_the_span(pieces))
+        || !(every_separation_is_a_single_base(pieces)
+            || changed_columns_dominate_the_span(pieces)
+            || no_piece_is_a_lone_substitution(pieces))
     {
         return;
     }
@@ -4116,6 +4118,56 @@ fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
     pieces
         .windows(2)
         .all(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) <= 1)
+}
+
+/// No piece spells a lone substitution — every one covers two or more columns.
+///
+/// The third alternative admitting [`coalesce_whole_block_inversion`], and the
+/// one that closes #1517. It exists because the other two are geometric — they
+/// ask how far apart the pieces are, or what fraction of the span they cover —
+/// and geometry cannot separate #1517 from the case that must stay split. The
+/// two blocks are the same shape:
+///
+/// ```text
+/// #1230   GATG     -> CATC       changes at 2 of 4 columns, interior `AT` coincides
+/// #1517   AATGCACA -> TGTGCATT   changes at 4 of 8 columns, interior `TGCA` coincides
+/// ```
+///
+/// Both are whole-span reverse complements whose interior columns coincide, so
+/// `delins.md:44-47`'s carve-out — prefer the spanning description when the
+/// alternative exists only because parts of the payload align with the reference
+/// — reaches both. What differs is the **type of the members the spanning form
+/// competes with**, and that is the one axis `general.md:56` speaks to:
+///
+/// | | competing members | rank vs inversion (3) |
+/// |---|---|---|
+/// | #1230 | two substitutions | substitution is (1) — **above** |
+/// | #1517 | two `delins` | `delins` is absent from the list — **not above** |
+///
+/// So `:44-47` licenses the widening for both, and `:56` withdraws it for #1230
+/// only. A run of one column is a substitution by `delins.md:15`; a run of two or
+/// more is a `delins` by `:16`. This predicate is that distinction, expressed on
+/// the pieces.
+///
+/// # This reading is contested, and the contest is recorded rather than hidden
+///
+/// [`coalesce_whole_block_inversion`]'s own comment argues `general.md:56` must
+/// **not** reach this comparison — that it "ranks single-variant type labels for
+/// one span" and "never ranks a multi-member allele against a spanning
+/// description". That objection is real and is not answered here. Two things
+/// weigh against it: the 208-row net-insertion arbitration used `:56` in exactly
+/// this way to conclude that a split into `delins`/insertion members is
+/// unsupported, and the alternative — applying `:44-47` with no type test at all
+/// — merges #1230 too, contradicting a guard filed against that very behaviour.
+///
+/// The honest statement is that ranking descriptions of differing **arity** by
+/// member type is an implementer's reading of `:56`, not something its text
+/// compels. `tests/it/issue_1517_inv_priority_over_delins.rs` records the
+/// question, both readings, and the choice.
+fn no_piece_is_a_lone_substitution(pieces: &[Piece]) -> bool {
+    pieces
+        .iter()
+        .all(|piece| piece.ref_end.saturating_sub(piece.ref_start) >= 2)
 }
 
 /// Partition a changed block by deriving member boundaries from the **denoted
