@@ -10883,8 +10883,8 @@ fn build_split_variants(
             if let (
                 DelinsSubedit::Substitution {
                     position: p1,
+                    reference: r1,
                     alternative: a1,
-                    ..
                 },
                 DelinsSubedit::IdentityAt {
                     position: pm,
@@ -10892,8 +10892,8 @@ fn build_split_variants(
                 },
                 DelinsSubedit::Substitution {
                     position: p3,
+                    reference: r3,
                     alternative: a3,
-                    ..
                 },
             ) = (&subedits[i], &subedits[i + 1], &subedits[i + 2])
             {
@@ -10917,18 +10917,17 @@ fn build_split_variants(
                         flush_substitution_run(&mut output, template, hgvs_start, &mut run);
                         let s = abs(*p1);
                         let e = abs(*p3);
+                        // Typed rather than assumed to be a `delins`, for the
+                        // reason `push_typed_replacement` gives. This branch
+                        // reaches an inversion only when the untouched middle
+                        // base is its own complement (`W`, `S`, `N`) — every
+                        // other base makes `alt[1] == bm != complement(bm)` and
+                        // rules the whole span out — which is why the reference
+                        // in `codon_triplet_over_an_ambiguous_centre_is_an_inversion`
+                        // carries an `N`.
+                        let ref_bases = [*r1, *bm, *r3];
                         let alt_bases = vec![*a1, *bm, *a3];
-                        output.push(build_variant_at(
-                            template,
-                            s,
-                            e,
-                            NaEdit::Delins {
-                                sequence: InsertedSequence::Literal(Sequence::new(alt_bases)),
-                                deleted: None,
-                                deleted_length: None,
-                                substitution_reference: None,
-                            },
-                        ));
+                        push_typed_replacement(&mut output, template, s, e, &ref_bases, alt_bases);
                         i += 3;
                         continue;
                     }
@@ -10982,11 +10981,117 @@ fn build_split_variants(
     output
 }
 
+/// Emit one split member spanning `[start_1based, end_1based]`, typed under the
+/// spec's edit priority instead of assumed to be a `delins` (#1454).
+///
+/// `build_split_variants` re-groups the sub-edits `decompose_delins` reports,
+/// and both of its multi-base groupings — the codon-frame triplet and the
+/// adjacent-substitution run — **form spans that did not exist when
+/// `decompose_delins` typed the input**. The inversion test it ran was against
+/// the input's own maximal contiguous mismatch runs, and it deliberately does
+/// not carve a reverse-complement *sub*-run out of a longer contiguous change
+/// (#1034, #1040). But once a re-grouping has made such a sub-run a member in
+/// its own right, `general.md:56` applies to it directly: inversion outranks
+/// deletion-insertion, and `delins.md:5` defines a delins as a replacement
+/// "which is not a substitution or inversion", so `delins` over a
+/// reverse-complement span is not a description the spec admits at all. The
+/// same argument `merge::coalesce_whole_block_inversion` makes for the
+/// derivation's pieces, made here for the split's members.
+///
+/// Before this, that typing arrived one normalization pass late. The member was
+/// emitted as a `delins`, and the *next* pass's per-member pipeline re-typed it
+/// through `normalize_na_edit`'s Delins arm — the same
+/// [`rules::canonicalize_delins`] called here — so the first output was not a
+/// fixed point:
+///
+/// ```text
+/// NM_TEST.1:c.10_15delinsTAATAT
+///   pass 1 -> NM_TEST.1:c.[10_12delinsTAA;13_15delinsTAT]
+///   pass 2 -> NM_TEST.1:c.[10_12delinsTAA;13_15inv]
+/// ```
+///
+/// The typing authority is [`rules::canonicalize_delins`] rather than an
+/// open-coded reverse-complement test, precisely so this pass and the next one
+/// cannot disagree: reaching the fixed point in one pass means answering the
+/// question the second pass would ask, with the function it would ask it of.
+///
+/// Only `Inversion` can come back for these inputs, which is what makes the
+/// narrow match sound rather than lossy. Both groupings hand over equal-length
+/// slices whose first and last positions are mismatches, so `Identity`
+/// (needs every position equal), `Duplication` (needs `alt.len() == 2 *
+/// ref.len()`), `Insertion`/`Deletion` (need an empty side) and `Substitution`
+/// (needs a length-1 post-trim range, but greedy shared-affix trimming cannot
+/// consume a mismatched end) are all unreachable. Anything else is therefore a
+/// change in that function's contract, and falling through to `delins` — the
+/// form this code emitted unconditionally before — is the safe reading of it.
+fn push_typed_replacement(
+    output: &mut Vec<HgvsVariant>,
+    template: &HgvsVariant,
+    start_1based: u64,
+    end_1based: u64,
+    ref_bases: &[Base],
+    alt_bases: Vec<Base>,
+) {
+    debug_assert_eq!(
+        ref_bases.len(),
+        alt_bases.len(),
+        "a split member replaces its span base for base"
+    );
+    let edit = if spans_a_whole_inversion(ref_bases, &alt_bases) {
+        // Canonical form states neither the inverted bases nor the length
+        // (`inversion.md`, #352), matching `canonicalize_edit`'s own arm.
+        NaEdit::Inversion {
+            sequence: None,
+            length: None,
+        }
+    } else {
+        NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(alt_bases)),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        }
+    };
+    output.push(build_variant_at(template, start_1based, end_1based, edit));
+}
+
+/// Whether replacing `ref_bases` with `alt_bases` inverts the **whole** span.
+///
+/// `U` is folded to `T` on both sides before the comparison, exactly as
+/// `apply_canonical_split` does before calling `decompose_delins`: on the `r.`
+/// axis the alt bases come from the author's literal (so they may be `U`) while
+/// the transcript reference is `T`, and [`rules::is_revcomp`]'s complement table
+/// maps `A` to `T`, never to `U`. Without the fold an `r.` inversion reads as an
+/// ordinary delins and the axis silently keeps the defect this closes.
+///
+/// A partial match is rejected rather than emitted narrower: a shortened range
+/// would leave the peeled outer bases undescribed, and this function's callers
+/// have no way to emit them. It cannot arise for their inputs — a peelable
+/// outer pair means `alt[first] == ref[first]`, i.e. an identity where both
+/// callers guarantee a mismatch — so the guard costs nothing and is the
+/// conservative reading if that ever stops holding.
+fn spans_a_whole_inversion(ref_bases: &[Base], alt_bases: &[Base]) -> bool {
+    // `inversion.md` requires more than one nucleotide; a one-base complement is
+    // a substitution, which `flush_substitution_run` already emits directly.
+    if ref_bases.len() < 2 || ref_bases.len() != alt_bases.len() {
+        return false;
+    }
+    let to_bytes =
+        |bases: &[Base]| normalize_t_u(&bases.iter().map(|base| *base as u8).collect::<Vec<u8>>());
+    let ref_bytes = to_bytes(ref_bases);
+    let alt_bytes = to_bytes(alt_bases);
+    matches!(
+        rules::canonicalize_delins(&ref_bytes, 0, ref_bytes.len(), &alt_bytes),
+        rules::DelinsCanonical::Inversion { start, end } if start == 0 && end == ref_bytes.len()
+    )
+}
+
 /// Flush a pending run of consecutive substitution sub-edits into `output`.
 /// A length-1 run emits a `Substitution`; a length-2+ run emits a single
 /// `Delins` over `[run.first.position, run.last.position]` with `sequence`
-/// = concatenated `alternative` bases. See `build_split_variants` for the
-/// spec rationale (issue #182).
+/// = concatenated `alternative` bases — or an `Inversion` when that span is a
+/// whole reverse complement, see [`push_typed_replacement`]. See
+/// `build_split_variants` for the spec rationale (issue #182).
 fn flush_substitution_run(
     output: &mut Vec<HgvsVariant>,
     template: &HgvsVariant,
@@ -11013,18 +11118,9 @@ fn flush_substitution_run(
     }
     let s = abs(run.first().unwrap().0);
     let e = abs(run.last().unwrap().0);
-    let alt_bases: Vec<Base> = run.drain(..).map(|(_, _, a)| a).collect();
-    output.push(build_variant_at(
-        template,
-        s,
-        e,
-        NaEdit::Delins {
-            sequence: InsertedSequence::Literal(Sequence::new(alt_bases)),
-            deleted: None,
-            deleted_length: None,
-            substitution_reference: None,
-        },
-    ));
+    let (ref_bases, alt_bases): (Vec<Base>, Vec<Base>) =
+        run.drain(..).map(|(_, r, a)| (r, a)).unzip();
+    push_typed_replacement(output, template, s, e, &ref_bases, alt_bases);
 }
 
 /// Normalize DNA `T` and RNA `U` to a single byte (`T`) so byte-wise
