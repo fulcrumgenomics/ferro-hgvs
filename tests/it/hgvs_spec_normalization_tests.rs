@@ -573,9 +573,21 @@ const EQUIVALENCE_CLASS_VERDICTS: &[(&str, &str)] = &[
     // "alternative description" of the delins, and ferro keeps both. Which form
     // should win is the undecided ruling `delins-merge-vs-individual-gap-two-or-more`.
     ("dna-delins-vs-aligned-split-850-901", "non-confluent"),
-    // Codon carve-out, gap of one. The spec settles the *rule*
-    // (`delins-codon-carve-out-gap-one`) but ferro does not apply it: both
-    // spellings survive normalization.
+    // Codon carve-out, gap of one. Both spellings survive normalization here —
+    // but READ THAT AS A HARNESS LIMIT, NOT AS A VIOLATED RULING. The rule is
+    // settled (`delins-codon-carve-out-gap-one`, status `decided`) and ferro
+    // does implement it, in `apply_coding_codon_exception`. The exception is
+    // frame-dependent, and this harness runs every row against
+    // `MockProvider::new()` — the *empty* constructor, no transcript and so no
+    // `cds_start`. `merge::axis_frame` therefore returns `None` on the `c.`
+    // axis and the codon path cannot execute at all.
+    //
+    // Measured rather than argued, on the identical shape (two substitutions
+    // one base apart inside codon 1): against a CDS-bearing provider both
+    // `c.[1G>T;3T>A]` and `c.1_3delinsTTA` normalize to `c.1_3delinsTTA` — the
+    // class is confluent — while against the empty provider `c.[1G>T;3T>A]`
+    // comes back byte-identical. So these three verdicts pin the hermetic
+    // harness's reach, and converging them needs a provider, not a rule change.
     ("dna-delins-vs-two-substitutions-235-237", "non-confluent"),
     // Same carve-out, and here the spec marks the split spelling invalid — so
     // this class overlaps the `false-acceptance` census, which counts the
