@@ -1,0 +1,150 @@
+{
+  "description": "The HGVS recommendations' own worked normalization examples — rows where the spec names an input and prints, in the same sentence, what the description must be instead. Two rules are covered: the coding-sequence restriction on repeat notation (repeat units must be a multiple of 3, with the UTRs carved out) and the 3'rule's exon/exon-junction exception. Both are sequence-dependent, so neither can fire in the harvested spec fixture, which normalizes through an empty MockProvider. Here they run against real reference bases served from the committed hermetic slice beside this file. Each row is pinned under all three shipped input-hygiene modes, because they do not agree and which mode produces which answer is itself the finding.",
+  "spec_commit": "6f85311989e76ead95d3547828f97ebaa3802e35",
+  "cases": [
+    {
+      "input": "NM_024312.4:c.2686A[10]",
+      "spec_expected": "NM_024312.4:c.2692_2693dup",
+      "default_output": "NM_024312.4:c.2692_2693dup",
+      "lenient_output": "NM_024312.4:c.2692_2693dup",
+      "strict_output": "NM_024312.4:c.2692_2693dup",
+      "citation": {
+        "clause": "docs/recommendations/DNA/repeated.md:22",
+        "quote": "use `NM_024312.4:c.2692_2693dup` and **not** <code class=\"invalid\">NM_024312.4:c.2686A[10]</code>"
+      },
+      "note": "A 1-nt repeat unit on a coding reference: not a multiple of 3, so the repeat spelling is unavailable and the spec prints the dup form to use instead. Ferro converts it, in every mode."
+    },
+    {
+      "input": "NM_024312.4:c.1738TA[6]",
+      "spec_expected": "NM_024312.4:c.1741_1742insTATATATA",
+      "default_output": "NM_024312.4:c.1741_1742insTATATATA",
+      "lenient_output": "NM_024312.4:c.1741_1742insTATATATA",
+      "strict_output": null,
+      "citation": {
+        "clause": "docs/recommendations/DNA/repeated.md:22",
+        "quote": "use `NM_024312.4:c.1741_1742insTATATATA` and **not** <code class=\"invalid\">NM_024312.4:c.1738TA[6]</code>"
+      },
+      "note": "A 2-nt repeat unit on a coding reference: same restriction, and the spec prints the insertion form to use instead. STRICT MODE REJECTS THE SPEC'S OWN INPUT: the reference tract at c.1738 is not a whole number of TA copies ('expected TA[k] (k whole copies), found T (1 bp; unit_len 2 does not divide span)'), so a mode that refuses to repair a reference mismatch cannot reach the prescribed answer. Recorded as observed behaviour, not endorsed — nobody has adjudicated whether strict mode should accept an input the spec publishes."
+    },
+    {
+      "input": "NM_024312.4:c.2692_2693dup",
+      "spec_expected": "NM_024312.4:c.2692_2693dup",
+      "default_output": "NM_024312.4:c.2692_2693dup",
+      "lenient_output": "NM_024312.4:c.2692_2693dup",
+      "strict_output": "NM_024312.4:c.2692_2693dup",
+      "citation": {
+        "clause": "docs/recommendations/DNA/repeated.md:22",
+        "quote": "use `NM_024312.4:c.2692_2693dup` and **not** <code class=\"invalid\">NM_024312.4:c.2686A[10]</code>"
+      },
+      "note": "The other half of the same sentence: the prescribed form is itself a fixed point. Without this row a normalizer that rewrote the answer into some third spelling would still satisfy the row above."
+    },
+    {
+      "input": "NM_024312.4:c.1741_1742insTATATATA",
+      "spec_expected": "NM_024312.4:c.1741_1742insTATATATA",
+      "default_output": "NM_024312.4:c.1741_1742insTATATATA",
+      "lenient_output": "NM_024312.4:c.1741_1742insTATATATA",
+      "strict_output": "NM_024312.4:c.1741_1742insTATATATA",
+      "citation": {
+        "clause": "docs/recommendations/DNA/repeated.md:22",
+        "quote": "use `NM_024312.4:c.1741_1742insTATATATA` and **not** <code class=\"invalid\">NM_024312.4:c.1738TA[6]</code>"
+      },
+      "note": "Fixed-point half of the insertion row — and note it is accepted in strict mode, unlike the repeat spelling of the same variant."
+    },
+    {
+      "input": "NM_024312.4:c.-6_-3G[6]",
+      "spec_expected": "NM_024312.4:c.-6_-3G[6]",
+      "default_output": "NM_024312.4:c.-6_-3G[6]",
+      "lenient_output": "NM_024312.4:c.-6_-3G[6]",
+      "strict_output": "NM_024312.4:c.-6_-3G[6]",
+      "citation": {
+        "clause": "docs/recommendations/DNA/repeated.md:24",
+        "quote": "As such, `NM_024312.4:c.-6_-3G[6]` is valid as the reading frame is not affected."
+      },
+      "note": "The carve-out, and the row that makes the two above meaningful: the restriction is scoped to the coding sequence, so a 1-nt repeat unit in the 5'UTR keeps its repeat spelling. A normalizer that simply refused all short repeat units on a `c.` reference would pass the CDS rows and fail here."
+    },
+    {
+      "input": "NM_024312.4:r.2686a[10]",
+      "spec_expected": "NM_024312.4:r.2692_2693dup",
+      "default_output": "NM_024312.4:r.2692_2693dup",
+      "lenient_output": "NM_024312.4:r.2692_2693dup",
+      "strict_output": "NM_024312.4:r.2692_2693dup",
+      "citation": {
+        "clause": "docs/recommendations/RNA/repeated.md:25",
+        "quote": "use `NM_024312.4:r.2692_2693dup` and **not** <code class=\"invalid\">NM_024312.4:r.2686a[10]</code>"
+      },
+      "note": "The RNA axis carries the same restriction, stated separately in RNA/repeated.md."
+    },
+    {
+      "input": "NM_024312.4:r.1738ua[6]",
+      "spec_expected": "NM_024312.4:r.1741_1742insuauauaua",
+      "default_output": "NM_024312.4:r.1741_1742insuauauaua",
+      "lenient_output": "NM_024312.4:r.1741_1742insuauauaua",
+      "strict_output": null,
+      "citation": {
+        "clause": "docs/recommendations/RNA/repeated.md:25",
+        "quote": "use `NM_024312.4:r.1741_1742insuauauaua` and **not** <code class=\"invalid\">NM_024312.4:r.1738ua[6]</code>"
+      },
+      "note": "RNA counterpart of the 2-nt unit row, and it inherits the same strict-mode rejection — the tract it names is the same one."
+    },
+    {
+      "input": "NM_024312.4:r.2692_2693dup",
+      "spec_expected": "NM_024312.4:r.2692_2693dup",
+      "default_output": "NM_024312.4:r.2692_2693dup",
+      "lenient_output": "NM_024312.4:r.2692_2693dup",
+      "strict_output": "NM_024312.4:r.2692_2693dup",
+      "citation": {
+        "clause": "docs/recommendations/RNA/repeated.md:25",
+        "quote": "use `NM_024312.4:r.2692_2693dup` and **not** <code class=\"invalid\">NM_024312.4:r.2686a[10]</code>"
+      },
+      "note": "Fixed-point half of the RNA dup row."
+    },
+    {
+      "input": "NM_024312.4:r.1741_1742insuauauaua",
+      "spec_expected": "NM_024312.4:r.1741_1742insuauauaua",
+      "default_output": "NM_024312.4:r.1741_1742insuauauaua",
+      "lenient_output": "NM_024312.4:r.1741_1742insuauauaua",
+      "strict_output": "NM_024312.4:r.1741_1742insuauauaua",
+      "citation": {
+        "clause": "docs/recommendations/RNA/repeated.md:25",
+        "quote": "use `NM_024312.4:r.1741_1742insuauauaua` and **not** <code class=\"invalid\">NM_024312.4:r.1738ua[6]</code>"
+      },
+      "note": "Fixed-point half of the RNA insertion row."
+    },
+    {
+      "input": "NM_024312.4:r.-6_-3g[6]",
+      "spec_expected": "NM_024312.4:r.-6_-3g[6]",
+      "default_output": "NM_024312.4:r.-6_-3g[6]",
+      "lenient_output": "NM_024312.4:r.-6_-3[6]",
+      "strict_output": null,
+      "citation": {
+        "clause": "docs/recommendations/RNA/repeated.md:22",
+        "quote": "the format <code class=\"invalid\">r.-125_-123cug[4]</code> should not be used; it contains redundant information"
+      },
+      "note": "THE ONE DIVERGENCE, and it is a spec self-conflict rather than a ferro defect. `RNA/repeated.md:22` marks range-plus-unit invalid as redundant — the range `-125_-123` already fixes the unit — while `:27` publishes `NM_024312.4:r.-6_-3g[6]`, exactly that shape, as valid. The two cannot both hold, and ferro answers BOTH WAYS depending on input-hygiene mode: the plain library path leaves the published form alone, lenient strips the redundant label (W3013) and emits `r.-6_-3[6]`, strict rejects the input outright. So the divergence lives in the preprocessor's repair, not in the normalizer. All three answers are pinned rather than reconciled: this is the spec's conflict to settle, not ferro's. Recorded as the undecided ruling `rna-repeat-range-plus-unit-redundancy` in tests/fixtures/grammar/hgvs_spec_normalization_overrides.json, and owed upstream via #466."
+    },
+    {
+      "input": "LRG_199t1:c.3921dup",
+      "spec_expected": "LRG_199t1:c.3921dup",
+      "default_output": "LRG_199t1:c.3921dup",
+      "lenient_output": "LRG_199t1:c.3921dup",
+      "strict_output": "LRG_199t1:c.3921dup",
+      "citation": {
+        "clause": "docs/recommendations/DNA/duplication.md:26",
+        "quote": "the variant is described as `LRG_199t1:c.3921dup` (`NC_000023.10:g.32459297dup`) and not as `c.3922dup`"
+      },
+      "note": "The flagship worked example of the 3'rule's exon-junction exception (`general.md:44`), and the direction the exception is normally tested: c.3920=A, c.3921=T, c.3922=T, so the unrestricted 3'rule would shift this dup across the junction into the next exon. It must not, and does not. See the sibling row for the direction that is NOT asserted."
+    },
+    {
+      "input": "LRG_199t1:c.3922dup",
+      "spec_expected": null,
+      "default_output": "LRG_199t1:c.3922dup",
+      "lenient_output": "LRG_199t1:c.3922dup",
+      "strict_output": "LRG_199t1:c.3922dup",
+      "citation": {
+        "clause": "docs/recommendations/general.md:44",
+        "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences"
+      },
+      "note": "`spec_expected` IS NULL ON PURPOSE, and NOT ASSERTED EQUAL TO ITS SIBLING. c.3921 and c.3922 are both T, so at the transcript level `c.3921dup` and `c.3922dup` denote one sequence — yet they are two fixed points, and they project 2,790 bp apart (`LRG_199:g.903430dup` vs `g.906220dup`, matching the spec's own `g.32459297dup` vs `g.32456507dup`). Whether they should converge is an open interpretive question: `duplication.md:26` names c.3921dup as THE description of that genomic change, but `general.md:44` only suspends the 3'rule around the junction — it does not say to shift 5' back, and c.3922dup may legitimately describe a different genomic event yielding the same transcript. Writing `LRG_199t1:c.3921dup` here would answer that question by fixture edit, so the field is null and only ferro's current behaviour is pinned. Recorded as the undecided ruling `exon-junction-dup-converge-from-the-far-side`."
+    }
+  ]
+}

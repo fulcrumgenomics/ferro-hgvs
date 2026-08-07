@@ -427,6 +427,7 @@ mod spec_enumeration_tests;
 // target rather than merely skipping these tests.
 #[cfg(feature = "dev")]
 mod spec_generator_preconditions;
+mod spec_worked_examples;
 mod strict_del_size_suffix_mode;
 mod strict_explicit_seq_size_modes;
 mod strict_rejection_survives_normalization;
