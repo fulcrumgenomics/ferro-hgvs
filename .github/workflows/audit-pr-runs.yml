@@ -24,12 +24,22 @@
 # workflow addresses the class rather than a cause: whatever the reason, a PR
 # whose head has never been built should be visible as a problem.
 #
-# Why a scheduled audit and not a required status check: a required check is
-# the stronger fix, since it blocks the merge rather than reporting after the
-# fact — but `main` is not a protected branch, so adopting one is a repository
-# policy decision rather than a workflow change. This is the part that can be
-# fixed in-repo, and it stays useful afterwards as the thing that tells you
-# *why* a merge is blocked.
+# Why a scheduled audit *as well as* required status checks. `main` does carry
+# required checks, and they already block this failure mode: the required
+# contexts never report for a head with no run, so the PR sits on "Expected —
+# waiting for status to be reported" and cannot be merged. That is the stronger
+# fix and it is in place. What it does not do is *explain* — a PR blocked that
+# way is indistinguishable from one whose CI is merely slow, and nothing names
+# the head SHA that never got a run. This audit is what turns the block into a
+# report.
+#
+# An earlier version of this comment claimed `main` was not a protected branch
+# and that adopting a required check was therefore a policy decision rather than
+# a workflow change. That was wrong, and the way it was wrong is worth recording:
+# protection here is a repository *ruleset*, and the classic endpoint
+# `gh api /repos/{owner}/{repo}/branches/main/protection` does not see rulesets —
+# it answers `404 Branch not protected` on a fully protected branch. Ask
+# `gh api /repos/{owner}/{repo}/rulesets` instead.
 #
 # The recovery, once this audit flags a PR: confirm the head SHA on the PR still
 # matches what you pushed and that no run exists for it, then close and reopen.
