@@ -7,6 +7,160 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.12.0...v0.13.0) - 2026-08-07
+
+### <!-- 0 -->Representation changes
+
+Normalization output is a shipped key: a downstream consumer stores read counts
+against the normalized HGVS string, so a form that moves between releases
+re-buckets what they have already stored.
+
+No commit this cycle carried a `Representation-Change:` trailer, so this section
+was reconstructed after the fact by normalizing three real corpora through
+v0.12.0 and v0.13.0 against the same prepared reference and diffing row by row —
+5,761,302 expressions (ClinVar 500k, Paraphase, CMRG).
+
+| outcome | rows | what it means for a consumer |
+|---|---|---|
+| identical on both releases | 4,490,581 | nothing to do |
+| **moved** | **577** (0.0100%) | **re-map these keys** |
+| newly normalizes | 326,404 | free — no key existed before |
+| now rejected | 2 | key disappears; the input was malformed |
+| failed on both releases | 943,738 | no key on either release |
+
+**577 stored strings move — about 1 in 10,000.** The direction is mixed: 360
+collapse to fewer allele members, 205 expand into more, and 12 are respelled at
+the same arity. Two opposing mechanisms are responsible — the `delins.md:44-47`
+payload-alignment merge ([#1470]) pulls toward one delins, and the sequence-first
+cis derivation ([#1392]) pulls toward split members. Per corpus: ClinVar 23,
+Paraphase 36, CMRG 518.
+
+**326,404 inputs newly normalize, and every one is an LRG accession** — [#1501]
+(LRG accessions are versionless, so W3001 is no longer demanded) and [#1490]
+(LRG genomic bases are served from the LRG record). These previously returned a
+parse error, so no consumer holds a stored string for them and adopting them
+costs nothing.
+
+**2 inputs are now rejected rather than echoed back**, both the same class: two
+coincident cis-allele edits, for which the spec defines no canonical form
+(`OverlapConflictingEdits` / W5002). `NM_033028.4:r.[118_261del;118_373del]` and
+`NM_003803.3:c.[64_66delGTGinsCTC;65T>G]`. v0.12.0 accepted both silently and
+returned a string that denoted nothing.
+
+**The 943,738 that fail on both releases are unchanged in kind**, and are a
+property of the corpora rather than of this release:
+
+| reason | rows | share |
+|---|---|---|
+| intronic variant — declined by design | 860,832 | 91.2% |
+| parse error (spelling ferro rejects) | 49,162 | 5.2% |
+| reference mismatch (stated base differs from the reference) | 32,302 | 3.4% |
+| invalid coordinates / spec-undefined | 1,442 | 0.2% |
+
+The intronic decline is longstanding — the same error variant exists at
+`src/error.rs:429` in v0.12.0 and v0.13.0 — and is not new here.
+
+For contrast, the synthetic shape-family corpus (`dump_normalized_corpus`,
+78,028 rows) moves 12,530 rows, 2,201 of them previously stable. That corpus is
+deliberately enriched for the shapes that churn and its rate is not a
+library-wide figure; the real-corpus numbers above are the ones that describe
+consumer impact.
+
+[#1392]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1392
+[#1470]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1470
+[#1490]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1490
+[#1501]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1501
+
+### <!-- 1 -->Added
+
+- *(dev)* add --verify-spdi to the normalized-corpus harness ([#1515](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1515))
+- *(normalize)* record provenance when reported members are coalesced ([#1486](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1486))
+- *(normalize)* coalesce payload-alignment splits back into one delins ([#1470](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1470))
+- *(normalize)* add the member-count-minimal partitioner behind a flag ([#1464](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1464))
+- *(spdi)* reference-aware SPDI and apply-to-reference for an encoding-invariant key ([#1374](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1374))
+- *(normalize)* make the sequence-first derivation authoritative for cis alleles ([#1392](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1392))
+- *(effect)* [**breaking**] drop the dead inversion validator that contradicted the live one ([#1359](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1359))
+
+### <!-- 5 -->Fixed
+
+- *(normalize)* apply a junction barrier the translate cannot express ([#1516](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1516))
+- *(spdi)* name the caller's anchor when a repeat names no tract ([#1496](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1496))
+- *(normalize)* type a split-created span inv on the first pass ([#1493](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1493))
+- *(normalize)* see cis members that span a region boundary ([#1506](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1506))
+- *(reference)* length a record-less placed parent from coordinate one ([#1502](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1502))
+- *(normalize)* report cis overlaps across a region boundary ([#1511](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1511))
+- *(spdi)* normalise the reference window before searching a repeat tract ([#1489](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1489))
+- *(reference)* serve LRG genomic bases from the LRG record, not the placement ([#1490](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1490))
+- *(errors)* LRG accessions are versionless, so stop demanding W3001 ([#1501](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1501))
+- *(normalize)* fold case when counting a tandem repeat tract ([#1495](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1495))
+- *(normalize)* recognise a dense inversion across multi-base separations ([#1485](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1485))
+- *(normalize)* keep the sequence-first derivation inside one exon ([#1480](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1480))
+- *(normalize)* repair non-coding `r.` members instead of reverting them ([#1465](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1465))
+- *(reference)* a zero-length sequence read is empty, not out of bounds ([#1479](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1479))
+- *(normalize)* report span edits whose spans intersect without coinciding ([#1451](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1451))
+- *(normalize)* key a dup on what it writes in the interior-junction branch ([#1446](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1446))
+- *(normalize)* order a conflicting cis allele whose members were rewritten ([#1438](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1438))
+- *(normalize)* keep a real overlap conflict visible in the output ([#1445](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1445))
+- *(spdi)* read a single-position repeat anchor as the whole tract ([#1439](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1439))
+- *(normalize)* cap the split only where there is a gap to place ([#1403](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1403))
+- *(normalize)* demote a repeat that outgrew its tract, on both branches of the guard ([#1399](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1399))
+- *(normalize)* shift derived pieces in the direction that was requested ([#1432](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1432))
+- *(normalize)* let a 5'-shifting junction insertion finish in one pass ([#1428](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1428))
+- *(normalize)* bound a sibling-crossing shift across a region boundary ([#1425](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1425))
+- *(normalize)* let a junction insertion finish its shift in one pass ([#1427](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1427))
+- *(normalize)* drop a cancelled identity member a sibling partly covers ([#1423](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1423))
+- *(normalize)* clamp a derived insertion at the CDS/3'UTR junction ([#1417](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1417))
+- *(normalize)* take the overlap verdict from the input, not the repair ([#1411](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1411))
+- *(normalize)* refuse to lower a repeat past a sibling inside its tract ([#1407](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1407))
+- *(normalize)* drop a cancelled cis member where the merge creates it ([#1380](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1380))
+- *(normalize)* ask the codon gate about the window the repeat is emitted over ([#1393](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1393))
+- *(normalize)* apply the strict-mode ladder on both public exits ([#1385](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1385))
+- *(parse)* let a UTR-marker ins payload reach the message written for it ([#1377](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1377))
+- *(spdi)* name the span and the way out when bases are unspelled ([#1390](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1390))
+- *(normalize)* guard a net deletion's split by rule, not by a length bound ([#1373](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1373))
+- *(normalize)* stop an out-of-phase rotation from killing a valid repeat ([#1368](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1368))
+- *(normalize)* validate the reference base an identity member states ([#1367](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1367))
+- *(spdi)* [**breaking**] give an identity edit the span it claims ([#1363](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1363))
+- *(normalize)* stop a terminal duplication respelling past the contig end ([#1365](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1365))
+
+### <!-- 7 -->Other
+
+- *(msto)* pin the reported family's expected outputs and link its guards ([#1520](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1520))
+- *(normalize)* correct the coincidence statistics behind the density gate ([#1521](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1521))
+- *(spec)* assert equivalence classes converge and record contested spec readings ([#1519](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1519))
+- compile the default-feature unit tests so a gated call cannot ship ([#1510](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1510))
+- retire the `parallel` feature gate ([#1509](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1509))
+- Repairs 'cargo test' ([#1504](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1504))
+- document FERRO_PARTITION as an unstable evaluation switch ([#1483](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1483))
+- *(repr)* add a multi-exon coding axis to the representation corpus ([#1481](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1481))
+- *(python)* release the GIL across reference reads, and stop deep-copying the reference per call ([#1475](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1475))
+- *(sweep)* exercise the non-coding `r.` axis in the transcript cis sweep ([#1476](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1476))
+- pin the reported partition family's per-spelling verdicts and spec arguments ([#1474](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1474))
+- *(cis)* measure confluence over designed multi-member cis alleles ([#1458](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1458))
+- *(repr)* reach #1454's shape, and close the corpus over its output vocabulary ([#1468](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1468))
+- *(repr)* draw a block past the split cap in the representation corpus ([#1467](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1467))
+- *(corpus)* re-enumerate the msto issue catalog and let it see Python guards ([#1466](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1466))
+- harvest authored spec cases from the issue tracker into runnable code ([#1457](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1457))
+- *(repr)* build conflicting cis alleles in the representation corpus ([#1459](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1459))
+- correct two normalizer comments that name the wrong mechanism ([#1447](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1447))
+- *(repr)* commit the normalized-output dump/diff harness ([#1442](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1442))
+- surface representation changes on the release PR and changelog ([#1433](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1433))
+- describe batch workloads generically in binding and test comments ([#1434](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1434))
+- *(cis)* sweep three-member alleles, with the causes counted apart ([#1402](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1402))
+- *(cis)* sweep the transcript axes, and find a CDS-boundary defect ([#1400](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1400))
+- *(ci)* pin every sweep_seeds consumer to SWEEP_FILTER ([#1410](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1410))
+- *(reference)* cache decoded sequence blocks under a byte budget ([#1371](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1371))
+- *(cis)* draw a corpus prefix by default, the full sweep in CI ([#1395](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1395))
+- *(spdi)* count the UnspelledBases arms as six, not five ([#1412](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1412))
+- *(spec)* accept either spec-legal stop spelling as conformant ([#1381](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1381))
+- *(review)* stop implying three suites cover both normalization exits ([#1387](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1387))
+- lint the release profile so the oracles' debug-only gating is enforced ([#1386](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1386))
+- *(normalize)* repoint the circular-normalizer deferral at its live tracker ([#1375](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1375))
+- stream the library and Python batch APIs in bounded chunks ([#1372](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1372))
+- *(normalize)* assert at the seam that no coordinate runs off its sequence ([#1366](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1366))
+- record that cargo build --features python cannot link ([#1364](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1364))
+- *(normalize)* record the 5' shuffle confluence gap ([#1361](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1361))
+
 ## [0.12.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.11.0...v0.12.0) - 2026-08-03
 
 ### Added
