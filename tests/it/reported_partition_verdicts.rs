@@ -28,9 +28,49 @@
 //! `reported_confluence_pairs` is the *future-tense* half, ratcheting the fix.
 //! Neither subsumes the other and they assert disjoint things.
 //!
+//! # What the partition model moved here: three rows, all #1419's spans
+//!
+//! `FERRO_PARTITION` now defaults to `preserve`, under which a description
+//! **asserts** a partition of the reference into changed blocks and the
+//! unchanged runs between them, and ferro keeps that assertion instead of
+//! re-deriving one by minimising edit distance over the resulting sequence.
+//! Exactly three of the eighteen rows move, in both shuffle directions:
+//!
+//! ```text
+//! 1419-r1/span  g.19_33delinsCGG  was [19_30del;33T>G]  now g.19_33delinsCGG
+//! 1419-r2/span  g.19_36delinsGCG  was [19_33del;36A>G]  now g.19_36delinsGCG
+//! 1419-r3/span  g.19_33delinsGGA  was [19T>G;22_33del]  now g.19_33delinsGGA
+//! ```
+//!
+//! The reading that matters is *what those old strings were*. Each is a *third*
+//! partition — one the cis spelling did not assert and the span spelling did not
+//! assert either. Ferro was answering a question neither author asked, and it
+//! reached #1419's stated form by doing so. Under the partition model each
+//! spelling now comes back as written, which for the span is the form
+//! `delins.md:44-47` recommends for precisely this alignment coincidence.
+//!
+//! Two consequences run through the rest of this file, and both are pinned:
+//!
+//! * #1419's three pairs now have **no** `Canonical` spelling at all
+//!   ([`PAIRS_WITH_NO_CANONICAL_SPELLING`]), where every pair used to have
+//!   exactly one. `each_pair_reaches_its_issues_form_from_the_recorded_number_of_spellings`
+//!   replaces the old `each_pair_reaches_its_canonical_form_from_exactly_one_spelling`,
+//!   which asserted a "one" that is no longer true of three of the nine pairs.
+//! * [`OPEN_GAPS`] rises 9 -> 12, and the old "may only go down" reading of it
+//!   is withdrawn. The ratchet is now [`OPEN_GAPS_SPEC_EXPLICIT`], which counts
+//!   only rows contradicting a spec line nothing answers back, and which did
+//!   **not** move. #1420's shapes are length-neutral, so the partition rule's
+//!   equal-length split move separates them exactly where `delins.md:17` says
+//!   to and all three of its spans still reach the form the issue names.
+//!
+//! Nothing here settles which form *should* ship — that is
+//! `canonical-form-choice-when-both-legal`, still `undecided`. What is settled
+//! is that "reachable from one spelling and not the other" was, for #1419,
+//! reachability of a form neither spelling asserted.
+//!
 //! # Convention: characterization, not `#[ignore]`
 //!
-//! Nine of the eighteen rows below print something the cited recommendation
+//! Twelve of the eighteen rows below print something the cited recommendation
 //! argues against. They are pinned **as they behave today**, with the wanted
 //! answer written into the row, rather than being expressed as an `#[ignore]`d
 //! test of the wanted answer.
@@ -43,8 +83,9 @@
 //! surfaces in a diff and has to be argued for in review. Ignored, it happens
 //! silently and is discovered downstream.
 //!
-//! [`OPEN_GAPS`] counts the disagreeing rows so the count cannot drift away from
-//! the table: closing one means editing a row *and* the census, deliberately.
+//! [`OPEN_GAPS`] and its two components count the disagreeing rows so the counts
+//! cannot drift away from the table: closing one means editing a row *and* the
+//! census, deliberately.
 //!
 //! # The reference
 //!
@@ -206,10 +247,12 @@ struct Row {
     verdict: Verdict,
     /// The output **the issue asks for**, in the issue's own terms — the string
     /// its "canonical"/"expected" column names for this spelling. For a
-    /// [`Verdict::Canonical`] row this equals [`Row::output`]; for a
-    /// [`Verdict::Gap`] row it is the sibling spelling's output, which is the
-    /// family's defining shape and is asserted rather than assumed by
-    /// [`the_wanted_form_of_every_gap_row_is_its_siblings_output`].
+    /// [`Verdict::Canonical`] row this equals [`Row::output`]. For a
+    /// [`Verdict::Gap`] row it is the sibling spelling's output *where the pair
+    /// has a canonical spelling* — the family's defining shape, asserted rather
+    /// than assumed by [`the_wanted_form_of_every_gap_row_is_its_siblings_output`].
+    /// For the three pairs in [`PAIRS_WITH_NO_CANONICAL_SPELLING`] it is a form
+    /// neither spelling reaches, which that same test pins just as exactly.
     wanted: &'static str,
     /// What backs [`Row::wanted`]. Both spellings of a pair share one value:
     /// the authority is a property of the shape, not of how it was written.
@@ -226,7 +269,7 @@ struct Row {
 /// both denote the same sequence. The defect is that the canonical form is
 /// reachable from one spelling and not from the other, and you cannot state that
 /// without both halves. See
-/// [`each_pair_reaches_its_canonical_form_from_exactly_one_spelling`].
+/// [`each_pair_reaches_its_issues_form_from_the_recorded_number_of_spellings`].
 const REPORTED_ROWS: &[Row] = &[
     // -- #1419 -- a net deletion spelled as two deletions, versus as one span.
     //
@@ -257,20 +300,28 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1419-r1/span",
         input: "TEMPLATE:g.19_33delinsCGG",
-        output: "TEMPLATE:g.[19_30del;33T>G]",
-        five_prime: "TEMPLATE:g.[19_30del;33T>G]",
-        verdict: Verdict::Canonical,
+        output: "TEMPLATE:g.19_33delinsCGG",
+        five_prime: "TEMPLATE:g.19_33delinsCGG",
+        verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[19_30del;33T>G]",
         authority: Authority::SpecSelfConflicting,
-        argument: "The form #1419 names canonical: re-derived from the \
+        argument: "MOVED BY THE PARTITION RULE, and this row used to be the \
+                   pair's Canonical one. It printed `[19_30del;33T>G]` — a \
+                   THIRD partition, asserted by neither authored spelling — \
+                   because the old partitioner re-derived one from the \
                    resulting sequence, exposing the substitution at 33 per \
-                   general.md:56, with the retained bases placed as 3' as \
-                   possible per general.md:41. Note ferro is *leaving* the \
-                   spanning delins to reach it, and delins.md:44-47 recommends \
-                   the spanning delins for exactly this alignment coincidence \
-                   — a tension ferro's own coalesce pass encodes (see \
-                   `merge::the_coalesce_pass_reaches_the_spec_worked_example`, \
-                   which restores the single delins on the spec's own example).",
+                   general.md:56. Under FERRO_PARTITION=preserve this input \
+                   asserts ONE changed block; 15 reference bases become a \
+                   3-base payload, so there is no column-for-column reading, \
+                   the equal-length split move does not reach it, and the \
+                   authored span stands. That lands on the form \
+                   delins.md:44-47 recommends for exactly this alignment \
+                   coincidence — the same form ferro's coalesce pass already \
+                   restores on the spec's own worked example (see \
+                   `merge::the_coalesce_pass_reaches_the_spec_worked_example`). \
+                   So the row moves AWAY from #1419's ask and TOWARDS :44-47; \
+                   the authority was already SpecSelfConflicting, which is why \
+                   the ask was recorded and never targeted.",
     },
     Row {
         label: "1419-r2/cis",
@@ -287,23 +338,31 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1419-r2/span",
         input: "TEMPLATE:g.19_36delinsGCG",
-        output: "TEMPLATE:g.[19_33del;36A>G]",
-        five_prime: "TEMPLATE:g.[19_33del;36A>G]",
-        verdict: Verdict::Canonical,
+        output: "TEMPLATE:g.19_36delinsGCG",
+        five_prime: "TEMPLATE:g.19_36delinsGCG",
+        verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[19_33del;36A>G]",
         authority: Authority::SpecSelfConflicting,
-        argument: "The form #1419 names canonical for row 2.",
+        argument: "MOVED BY THE PARTITION RULE, as `1419-r1/span`. Was \
+                   `[19_33del;36A>G]`, a re-derived third partition; now the \
+                   authored span, which is what delins.md:44-47 recommends. \
+                   18 reference bases against a 3-base payload, so no \
+                   column-for-column reading exists.",
     },
     Row {
         label: "1419-r3/cis",
         input: "TEMPLATE:g.[19_24del;28_33del]",
         output: "TEMPLATE:g.[19_24del;28_33del]",
-        // The 5' pass shifts the leading deletion one base left: 19-24 and
-        // 18-23 delete the same content out of the run `C T G A T G C` at
-        // 18-24, so the denoted sequence is unchanged (asserted by
-        // `reported_confluence_pairs::no_reported_pair_normalizes_to_a_\
-        // different_sequence`, which sweeps both directions).
-        five_prime: "TEMPLATE:g.[18_23del;28_33del]",
+        // Under 5' this row does NOT come back as authored: it reaches
+        // `[19T>G;22_33del]`, which is #1419's own wanted form and its
+        // sibling's 3' answer. The partition-preserving arm cannot place
+        // every 5'-shifted member inside the trimmed block here, declines,
+        // and the caller falls back to `partition_block` — so the 5' answer
+        // is a re-derived partition while the 3' answer is the authored one.
+        // Pinned rather than smoothed over: it is the clearest evidence in
+        // this file that `preserve` has a fallback path, and that which
+        // partition ships can depend on the shuffle direction.
+        five_prime: "TEMPLATE:g.[19T>G;22_33del]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[19T>G;22_33del]",
         authority: Authority::SpecSelfConflicting,
@@ -316,12 +375,17 @@ const REPORTED_ROWS: &[Row] = &[
     Row {
         label: "1419-r3/span",
         input: "TEMPLATE:g.19_33delinsGGA",
-        output: "TEMPLATE:g.[19T>G;22_33del]",
-        five_prime: "TEMPLATE:g.[19T>G;22_33del]",
-        verdict: Verdict::Canonical,
+        output: "TEMPLATE:g.19_33delinsGGA",
+        five_prime: "TEMPLATE:g.19_33delinsGGA",
+        verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[19T>G;22_33del]",
         authority: Authority::SpecSelfConflicting,
-        argument: "The form #1419 names canonical for row 3.",
+        argument: "MOVED BY THE PARTITION RULE, as `1419-r1/span`. Was \
+                   `[19T>G;22_33del]`, a re-derived third partition; now the \
+                   authored span. Row 3 is the one whose re-derived \
+                   substitution landed at the 5' end rather than the 3', which \
+                   #1419 used to argue no per-end rule fixes the family — \
+                   under the partition rule no end rule is consulted at all.",
     },
     // -- #1420 -- one row per member type. v2/v3 must reduce, v4 must coalesce:
     // the corrections point in opposite directions, which is the issue's
@@ -330,11 +394,13 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1420-v2/cis",
         input: "TEMPLATE:g.[37dup;41del]",
         output: "TEMPLATE:g.[37dup;41del]",
-        // The 5' pass moves the duplication's anchor one base left, into the
-        // `AA` at 36-37. `dup` is 3'-anchored by general.md:41 in the shipped
-        // direction, so this is the one row where the reported spelling is not
-        // even a fixed point once the direction is flipped.
-        five_prime: "TEMPLATE:g.[36dup;41del]",
+        // Same shape as `1419-r3/cis`: under 5' the preserving arm declines
+        // and the fallback re-derives, landing on `[38T>A;40_41delinsTG]` —
+        // which is #1420 v2's wanted form and its sibling's 3' answer. So
+        // this pair DOES converge on the issue's form under `--direction
+        // 5prime`, and does not under the shipped 3'. That asymmetry is a
+        // representation fact worth pinning, not a detail.
+        five_prime: "TEMPLATE:g.[38T>A;40_41delinsTG]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[38T>A;40_41delinsTG]",
         authority: Authority::SpecExplicit,
@@ -517,15 +583,60 @@ const REPORTED_ROWS: &[Row] = &[
 /// these two are where it stops holding.
 const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1420-v2/cis"];
 
+/// The three pairs where **neither** spelling prints the form its issue asks
+/// for, so the pair has no `Canonical` row at all.
+///
+/// All three are #1419's, and they became so together when `FERRO_PARTITION`
+/// defaulted to `preserve`. Before that, each pair's spanning spelling was
+/// re-derived into the issue's form; that re-derivation produced a **third**
+/// partition, asserted by neither authored spelling, and it is the step the
+/// partition model removes. Now each spelling is returned as its author wrote
+/// it, and #1419's `[19_30del;33T>G]` family is reachable from nowhere.
+///
+/// Named as a set rather than left to fall out of the verdicts, because a pair
+/// losing its canonical spelling is the single most consequential thing that
+/// can happen to this table and it must not be reachable by editing one row.
+const PAIRS_WITH_NO_CANONICAL_SPELLING: &[&str] = &["1419-r1", "1419-r2", "1419-r3"];
+
 /// How many of [`REPORTED_ROWS`] print something their issue argues against.
 ///
-/// Nine of eighteen — exactly one per reported pair, which is the family's
-/// shape rather than a coincidence; see
-/// [`each_pair_reaches_its_canonical_form_from_exactly_one_spelling`].
+/// **Twelve** of eighteen, up from nine, and the rise is the whole
+/// [`PAIRS_WITH_NO_CANONICAL_SPELLING`] story: #1419's three spanning spellings
+/// stopped reaching that issue's form. Under the old reading — "this may only
+/// go down; up means a change has moved a row away from the cited
+/// recommendation" — that would be a three-row regression, and it is worth
+/// saying plainly why it is not.
 ///
-/// **This may only go down.** Up means a change has moved a row *away* from the
-/// cited recommendation.
-const OPEN_GAPS: usize = 9;
+/// The recommendation those three rows moved away from is #1419's *ask*, and
+/// #1419's [`Authority`] is [`Authority::SpecSelfConflicting`]: the spec answers
+/// its shape both ways, so the ask was recorded and explicitly **not** targeted.
+/// What the rows moved *towards* is `delins.md:44-47`, which recommends the
+/// spanning delins for precisely this alignment coincidence. So the total is
+/// not a ratchet and never should have been read as one across authorities.
+///
+/// [`OPEN_GAPS_SPEC_EXPLICIT`] is the figure that *is* a ratchet, and it did
+/// not move.
+const OPEN_GAPS: usize = 12;
+
+/// Gap rows whose `wanted` form rests on a spec line nothing in the spec
+/// contradicts — [`Authority::SpecExplicit`], all three of them #1420's.
+///
+/// **This may only go down.** Up means a change has moved a row away from a
+/// recommendation that has no counter-reading, which is a regression with no
+/// available defence. Unchanged at three across the partition-model switch:
+/// #1420's shapes are length-neutral, so the equal-length split move handles
+/// them exactly as the re-derivation did, and all three spans still reach the
+/// form `delins.md:16`/`:17` name.
+const OPEN_GAPS_SPEC_EXPLICIT: usize = 3;
+
+/// Gap rows whose `wanted` form the spec answers both ways
+/// ([`Authority::SpecSelfConflicting`]) — #1419's six and #1421's three.
+///
+/// A record, not a ratchet: movement in either direction is a representation
+/// change that has to be argued from which clause the row moved towards, since
+/// by construction there is a clause pointing each way. Rose from six to nine
+/// with the partition-model switch.
+const OPEN_GAPS_SPEC_SELF_CONFLICTING: usize = 9;
 
 /// The `<issue>-<row>` half of an `<issue>-<row>/<spelling>` label.
 fn pair_of(label: &'static str) -> &'static str {
@@ -540,8 +651,8 @@ fn pair_of(label: &'static str) -> &'static str {
 /// `chunks(2)` on its own trusts the table's row order, and that trust is not
 /// free. Reorder [`REPORTED_ROWS`] so a spelling sits beside a *different*
 /// pair's spelling and
-/// [`each_pair_reaches_its_canonical_form_from_exactly_one_spelling`] still
-/// passes — measured, not assumed: every assertion in it compares a row against
+/// [`each_pair_reaches_its_issues_form_from_the_recorded_number_of_spellings`]
+/// still passes — measured, not assumed: every assertion in it compares a row against
 /// its own pinned output, so a mispaired neighbour changes nothing it looks at.
 /// Only [`every_reported_pair_is_still_one_variant_by_equivalence`] notices, and
 /// it reports the mispairing as `NotEquivalent` — that is, as a regression in
@@ -611,18 +722,24 @@ fn reference_bases_are_what_the_reports_state() {
 /// issue.
 #[test]
 fn every_reported_spelling_still_normalizes_as_the_reports_recorded() {
+    let mut moved = Vec::new();
     for row in REPORTED_ROWS {
-        assert_eq!(
-            normalized(row.input),
-            row.output,
-            "{} moved.\n  input:   {}\n  pinned:  {}\n  verdict: {:?}\n  {}",
-            row.label,
-            row.input,
-            row.output,
-            row.verdict,
-            row.argument
-        );
+        let actual = normalized(row.input);
+        if actual != row.output {
+            moved.push(format!(
+                "  {} moved.\n    input:   {}\n    pinned:  {}\n    actual:  {actual}\n    \
+                 verdict: {:?}\n    {}",
+                row.label, row.input, row.output, row.verdict, row.argument
+            ));
+        }
     }
+    assert!(
+        moved.is_empty(),
+        "{} of {} pinned 3' answers moved:\n{}",
+        moved.len(),
+        REPORTED_ROWS.len(),
+        moved.join("\n")
+    );
 }
 
 /// Every spelling's 5' answer, pinned as hard as its 3' one.
@@ -634,18 +751,24 @@ fn every_reported_spelling_still_normalizes_as_the_reports_recorded() {
 /// stored it whichever direction produced it.
 #[test]
 fn every_reported_spelling_normalizes_as_recorded_under_five_prime() {
+    let mut moved = Vec::new();
     for row in REPORTED_ROWS {
-        assert_eq!(
-            normalize_in(TEMPLATE, row.input, ShuffleDirection::FivePrime),
-            row.five_prime,
-            "{} moved under FivePrime.\n  input:   {}\n  pinned:  {}\n  \
-             (its ThreePrime answer is {})",
-            row.label,
-            row.input,
-            row.five_prime,
-            row.output
-        );
+        let actual = normalize_in(TEMPLATE, row.input, ShuffleDirection::FivePrime);
+        if actual != row.five_prime {
+            moved.push(format!(
+                "  {} moved under FivePrime.\n    input:   {}\n    pinned:  {}\n    \
+                 actual:  {actual}\n    (its ThreePrime answer is {})",
+                row.label, row.input, row.five_prime, row.output
+            ));
+        }
     }
+    assert!(
+        moved.is_empty(),
+        "{} of {} pinned 5' answers moved:\n{}",
+        moved.len(),
+        REPORTED_ROWS.len(),
+        moved.join("\n")
+    );
 }
 
 /// Exactly two rows answer differently in the two directions, and they are the
@@ -675,10 +798,16 @@ fn only_the_named_rows_answer_differently_in_the_two_directions() {
 ///
 /// This is the family's defining shape stated as a checked fact rather than as
 /// prose in an `argument` field. Each issue names an expected output; that
-/// output is, in every one of the nine pairs, exactly what ferro produces from
-/// the *other* spelling of the same variant. That is what makes the defect
-/// spelling-dependence rather than a missing rule — the canonical form is
-/// already reachable, just not from here.
+/// output is, in six of the nine pairs, exactly what ferro produces from the
+/// *other* spelling of the same variant. That is what makes those six a
+/// spelling-dependence rather than a missing rule — the form is already
+/// reachable, just not from here.
+///
+/// In #1419's three it is reachable from neither, since the spelling that used
+/// to reach it did so through a re-derived third partition the partition model
+/// no longer builds. Those pairs are handled by the second branch below and are
+/// pinned exactly as hard: both spellings returned as authored, and the wanted
+/// form printed by nobody.
 ///
 /// Written as a comparison against the sibling's pinned `output` rather than
 /// against a recomputed value, so a change that moved *both* spellings onto some
@@ -686,22 +815,62 @@ fn only_the_named_rows_answer_differently_in_the_two_directions() {
 #[test]
 fn the_wanted_form_of_every_gap_row_is_its_siblings_output() {
     for (a, b) in reported_pairs() {
-        let (canonical, gap) = match a.verdict {
-            Verdict::Canonical => (a, b),
-            Verdict::Gap => (b, a),
+        let pair = pair_of(a.label);
+        let canonical = [a, b].into_iter().find(|r| r.verdict == Verdict::Canonical);
+
+        // Whichever branch runs, no gap row may already print what it wants.
+        for row in [a, b] {
+            if row.verdict == Verdict::Gap {
+                assert_ne!(
+                    row.output, row.wanted,
+                    "{}: this row is marked Gap but already prints the wanted \
+                     form; flip its verdict to Canonical and lower OPEN_GAPS",
+                    row.label
+                );
+            }
+        }
+
+        let Some(canonical) = canonical else {
+            // The pair has no canonical spelling. Asserted just as exactly as
+            // the reachable case, so "nobody prints it" cannot quietly become
+            // "somebody prints something else".
+            assert!(
+                PAIRS_WITH_NO_CANONICAL_SPELLING.contains(&pair),
+                "{pair}: neither spelling reaches the issue's form, and this \
+                 pair is not one of the three where that is recorded. A pair \
+                 losing its canonical spelling is a representation change and \
+                 belongs in PAIRS_WITH_NO_CANONICAL_SPELLING with an argument"
+            );
+            assert_eq!(
+                a.wanted, b.wanted,
+                "{pair}: the two spellings of one pair must ask for one form"
+            );
+            for row in [a, b] {
+                assert_eq!(
+                    row.output, row.input,
+                    "{}: with no canonical spelling in the pair, the claim is \
+                     that ferro returns BOTH spellings as authored. This one \
+                     moved somewhere else, which is a third representation \
+                     nobody asked for.",
+                    row.label
+                );
+            }
+            continue;
         };
+
+        assert!(
+            !PAIRS_WITH_NO_CANONICAL_SPELLING.contains(&pair),
+            "{pair}: listed as having no canonical spelling, but {} reaches \
+             the issue's form. Remove it from the list and say so.",
+            canonical.label
+        );
+        let gap = if std::ptr::eq(canonical, a) { b } else { a };
         assert_eq!(
             gap.wanted, canonical.output,
             "{}: the issue asks for `{}`, but the sibling spelling {} prints \
              `{}`. Either the wanted form was transcribed wrong or the family \
              has stopped being a pure partition disagreement.",
             gap.label, gap.wanted, canonical.label, canonical.output
-        );
-        assert_ne!(
-            gap.output, gap.wanted,
-            "{}: this row is marked Gap but already prints the wanted form; \
-             flip its verdict to Canonical and lower OPEN_GAPS",
-            gap.label
         );
     }
 }
@@ -785,49 +954,105 @@ fn the_spec_authority_census_holds() {
     );
 }
 
-/// Each reported pair reaches its canonical form from exactly one spelling.
+/// How many of a pair's two spellings reach the form its issue asks for.
 ///
-/// This is the defect in one assertion, and it is sharper than "the two
-/// spellings disagree". Both spellings denote one variant; the canonical form
-/// is a property of the variant, so it should be reachable from either. It is
-/// reachable from exactly one, which makes reachability a function of how the
-/// variant was *written* — the spelling-dependence root-caused on #1419 to a
-/// weight bound whose threshold is the input's own spelling.
+/// Pinned per pair rather than asserted as a rule, because the rule changed
+/// under it. The module used to state — as
+/// `each_pair_reaches_its_canonical_form_from_exactly_one_spelling` — that the
+/// answer was **1** for every pair, and read that as the defect: the canonical
+/// form is a property of the variant, so it should be reachable from either
+/// spelling, and reachability being a function of how the variant was *written*
+/// was the whole complaint.
 ///
-/// While this test passes, the family is unfixed. It is written to fail the day
-/// any pair reaches its canonical form from both spellings, so that progress is
-/// as loud as regression.
+/// Under `FERRO_PARTITION=preserve` that is no longer one number. For #1420 and
+/// #1421 it is still 1. For #1419 it is **0**: the spelling that used to reach
+/// the issue's form did so only by re-deriving a third partition, and the
+/// partition model does not re-derive.
+///
+/// The name changed with the meaning. A test called "…from exactly one
+/// spelling" that tolerated zero would be exactly the trap this file exists to
+/// avoid.
+const CANONICAL_REACH: &[(&str, usize)] = &[
+    ("1419-r1", 0),
+    ("1419-r2", 0),
+    ("1419-r3", 0),
+    ("1420-v2", 1),
+    ("1420-v3", 1),
+    ("1420-v4", 1),
+    ("1421-n1", 1),
+    ("1421-n2", 1),
+    ("1421-n3", 1),
+];
+
+/// Each reported pair reaches its issue's form from the recorded number of its
+/// two spellings — and never from both.
+///
+/// Two claims, and the second is the ratchet. **Never from both** is the
+/// unfixed-family statement: while it holds, no pair has converged on the form
+/// its issue argues for, and the test is written to fail the day one does, so
+/// progress is as loud as regression. **The recorded number** is the
+/// characterization: it catches a pair silently losing (or gaining) a spelling
+/// that reaches the form, which is what happened to all three of #1419's when
+/// the partition rule landed and is not something a "never from both" check can
+/// see.
+///
+/// Reachability is recomputed here rather than read off [`Row::verdict`], so
+/// this test and the pinned table are independent statements about the same
+/// fact.
 #[test]
-fn each_pair_reaches_its_canonical_form_from_exactly_one_spelling() {
-    for (a, b) in reported_pairs() {
-        assert_ne!(
-            a.verdict, b.verdict,
-            "{} and {} have the same verdict; a pair is one canonical spelling \
-             and one gap",
-            a.label, b.label
-        );
+fn each_pair_reaches_its_issues_form_from_the_recorded_number_of_spellings() {
+    assert_eq!(
+        CANONICAL_REACH.len(),
+        REPORTED_ROWS.len() / 2,
+        "every pair needs a recorded reach"
+    );
 
-        let (canonical, gap) = match a.verdict {
-            Verdict::Canonical => (a, b),
-            Verdict::Gap => (b, a),
-        };
-
+    for ((pair, recorded), (a, b)) in CANONICAL_REACH.iter().zip(reported_pairs()) {
+        assert_eq!(*pair, pair_of(a.label), "CANONICAL_REACH fell out of order");
         assert_eq!(
-            normalized(canonical.input),
-            canonical.output,
-            "{}: the canonical spelling stopped reaching the canonical form",
-            canonical.label
+            a.wanted, b.wanted,
+            "{pair}: two spellings of one variant must ask for one form"
         );
-        assert_ne!(
-            normalized(gap.input),
-            canonical.output,
-            "{} now reaches `{}` too, so the pair has converged on the form \
-             its issue argues for. That is the fix: flip this row's verdict to \
-             Canonical, lower OPEN_GAPS, and say in the PR which stored \
-             spelling moved.",
-            gap.label,
-            canonical.output
+        let wanted = a.wanted;
+
+        let reached: Vec<&str> = [a, b]
+            .into_iter()
+            .filter(|row| normalized(row.input) == wanted)
+            .map(|row| row.label)
+            .collect();
+
+        assert!(
+            reached.len() < 2,
+            "{pair}: both spellings now reach `{wanted}`, so the pair has \
+             converged on the form its issue argues for. That is the fix: set \
+             both verdicts to Canonical, lower OPEN_GAPS, drop the pair from \
+             CANONICAL_REACH's non-1 entries if it is there, and say in the PR \
+             which stored spelling moved."
         );
+        assert_eq!(
+            reached.len(),
+            *recorded,
+            "{pair}: {} of its two spellings reach `{wanted}` ({reached:?}), \
+             not the recorded {recorded}. Both directions are representation \
+             changes: gaining one means a spelling started reaching the \
+             issue's form, losing one means it stopped. Argue it from which \
+             clause the row moved towards — see this pair's Authority.",
+            reached.len()
+        );
+
+        // Where a spelling does reach it, that is also the pinned `output` of a
+        // row marked Canonical. Cross-checked so the table and the measurement
+        // cannot drift apart.
+        for row in [a, b] {
+            let reaches = reached.contains(&row.label);
+            assert_eq!(
+                reaches,
+                row.verdict == Verdict::Canonical,
+                "{}: verdict {:?} disagrees with whether it reaches `{wanted}`",
+                row.label,
+                row.verdict
+            );
+        }
     }
 }
 
@@ -845,11 +1070,12 @@ fn each_pair_reaches_its_canonical_form_from_exactly_one_spelling() {
 /// returned untouched is a second canonical form, and a second canonical form is
 /// what splits a consumer's counts across two keys.
 ///
-/// **This is a 3'-direction claim and does not generalize.** Two of the nine gap
-/// rows do move under 5' ([`FIVE_PRIME_MOVERS`]), so under that option the
-/// argument above holds for seven of nine, not nine of nine — which is exactly
-/// why the 5' answers are now pinned per row rather than left to a convergence
-/// count.
+/// **This is a 3'-direction claim and does not generalize.** Two of the twelve
+/// gap rows do move under 5' ([`FIVE_PRIME_MOVERS`]), so under that option the
+/// argument above holds for ten of twelve — which is exactly why the 5' answers
+/// are pinned per row rather than left to a convergence count. Both movers
+/// reach their pair's wanted form under 5', by way of the preserving arm
+/// declining and the caller re-deriving; see their rows.
 #[test]
 fn every_gap_row_is_returned_exactly_as_authored() {
     for row in REPORTED_ROWS {
@@ -1091,11 +1317,41 @@ fn the_open_gap_census_holds() {
         .count();
     assert_eq!(
         gaps, OPEN_GAPS,
-        "the number of rows disagreeing with their cited recommendation moved \
-         (now {gaps}). Down is progress: lower OPEN_GAPS and name the moved \
-         representation in the PR. Up means a change pushed a row away from \
-         the spec."
+        "the number of rows disagreeing with their issue's ask moved (now \
+         {gaps}). This total is NOT a ratchet — read OPEN_GAPS's own docs. It \
+         mixes rows backed by an uncontradicted spec line with rows whose spec \
+         answers both ways, and a change that moves the second kind towards \
+         the counter-reading raises it while improving the answer."
     );
+
+    let explicit_gaps = REPORTED_ROWS
+        .iter()
+        .filter(|row| row.verdict == Verdict::Gap && row.authority == Authority::SpecExplicit)
+        .count();
+    let conflicting_gaps = REPORTED_ROWS
+        .iter()
+        .filter(|row| {
+            row.verdict == Verdict::Gap && row.authority == Authority::SpecSelfConflicting
+        })
+        .count();
+    assert_eq!(
+        explicit_gaps, OPEN_GAPS_SPEC_EXPLICIT,
+        "the number of rows disagreeing with an UNCONTRADICTED spec line moved \
+         (now {explicit_gaps}). This one is the ratchet: down is progress, up \
+         is a regression with no available defence."
+    );
+    assert_eq!(
+        conflicting_gaps, OPEN_GAPS_SPEC_SELF_CONFLICTING,
+        "the number of rows disagreeing with an issue whose spec answers both \
+         ways moved (now {conflicting_gaps}). Say which clause the rows moved \
+         towards."
+    );
+    assert_eq!(
+        explicit_gaps + conflicting_gaps,
+        OPEN_GAPS,
+        "every gap row must carry one of the two authorities"
+    );
+
     assert_eq!(
         REPORTED_ROWS.len(),
         18,

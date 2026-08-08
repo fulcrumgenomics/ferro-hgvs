@@ -74,9 +74,15 @@
 //!
 //! # Status
 //!
-//! Green: 29 of 34 rows produce their recorded answer, the two green confluence
-//! classes converge, every answer is a fixed point, and no emitted output puts
-//! two members on consecutive nucleotides.
+//! Green: all 29 pinned rows produce their expected answer, the two green
+//! confluence classes converge, every answer is a fixed point, and no emitted
+//! output puts two members on consecutive nucleotides — now measured in **both**
+//! shuffle directions.
+//!
+//! Three of those 29 answers are the partition rule's rather than `cases.json`'s.
+//! They are adjudicated one at a time in [`PARTITION_MOVES`], which pins the old
+//! string beside the new one and states the argument; see that table before
+//! reading any of the three as a re-bless.
 //!
 //! Red, `#[ignore]`d, and expected to stay red until fixed:
 //!
@@ -93,14 +99,23 @@
 //!   gate; **un-ignore [`the_four_mer_inversion_pair_converges`] in the change
 //!   that merges it.** The control for the other direction is
 //!   [`the_inversion_preference_control_still_holds`], which is green.
-//! - **#1542** — `NC_000017.11:g.80110044_80110047delinsGTTGG` emits members at
-//!   separation 0 in a `dup`-shaped split, surviving #1537. The separation
-//!   reading is itself part of the open question: the adjacency depends on
-//!   treating a `dup` as occupying the position it duplicates, and under a
-//!   zero-width (interbase) reading the pair is not adjacent at all.
 //!
-//! Neither red test may be weakened to green. A green re-classification is what
-//! [`the_corpus_census_is_unchanged`] exists to catch.
+//!   The partition rule does **not** reach this one, and it is worth saying why,
+//!   because it looks as though it should: `c.710_713inv` is equal-length with a
+//!   self-complementary two-base interior, exactly the shape the split move is
+//!   for. The gate stops it before the partitioner is consulted at all, so the
+//!   lone `c.` member is returned untouched. #1484 remains the fix.
+//!
+//! **#1542 is now green** and its guard is un-ignored — see
+//! [`the_dup_shaped_split_does_not_touch`] and [`PARTITION_MOVES`]. It was a
+//! re-derived three-member split at separation 0; the partition rule does not
+//! re-derive, and cannot produce a sub-floor boundary by construction.
+//! `cases.json` still lists that row in the red set, so
+//! [`the_corpus_census_is_unchanged`] still expects it there; retiring it is
+//! part of the fixture regeneration [`PARTITION_MOVES`] describes.
+//!
+//! The remaining red test may not be weakened to green. A green
+//! re-classification is what [`the_corpus_census_is_unchanged`] exists to catch.
 //!
 //! # One measurement in the brief did not reproduce
 //!
@@ -160,10 +175,24 @@ fn audited_provider() -> AuditedProvider<WindowProvider> {
 /// the normalizer (#1181/#1197). This is the mode every recorded answer in
 /// `cases.json` was measured under.
 fn run<P: ReferenceProvider + Clone>(provider: &P, input: &str) -> Result<String, String> {
+    run_in(provider, input, ShuffleDirection::ThreePrime)
+}
+
+/// The same pass in a nominated shuffle direction.
+///
+/// Every recorded answer in `cases.json` is a 3' answer and is compared as one;
+/// the 5' direction is a supported public option and is swept only by the
+/// structural checks, which assert properties of *any* emitted description
+/// rather than of one canonical string.
+fn run_in<P: ReferenceProvider + Clone>(
+    provider: &P,
+    input: &str,
+    direction: ShuffleDirection,
+) -> Result<String, String> {
     let config = ErrorConfig::lenient();
     let parsed = parse_hgvs_with_config(input, config.clone())
         .map_err(|e| format!("preprocess error: {e}"))?;
-    let normalize_config = NormalizeConfig::for_entry_point(ShuffleDirection::ThreePrime, config);
+    let normalize_config = NormalizeConfig::for_entry_point(direction, config);
     Normalizer::with_config(provider.clone(), normalize_config)
         .normalize(&parsed.result)
         .map(|n| n.to_string())
@@ -306,6 +335,197 @@ fn reverse_complement(bases: &str) -> String {
 /// green — which is correct: a red row's answer moving is a representation
 /// change, and it should require re-blessing the fixture rather than passing
 /// unnoticed.
+// ---------------------------------------------------------------------------
+// The partition rule's moves, adjudicated row by row
+// ---------------------------------------------------------------------------
+
+/// One row whose answer moved when the partition rule became the default.
+struct PartitionMove {
+    input: &'static str,
+    /// What `cases.json` still records — the **re-derivation** partitioner's
+    /// answer. Kept pinned rather than overwritten: an override that erased the
+    /// old string would make the move unreviewable a release later.
+    recorded: &'static str,
+    /// What the partition rule produces. Pinned exactly, like every other answer
+    /// in this file.
+    now: &'static str,
+    /// The filed defect this move closes, if any.
+    closes: Option<&'static str>,
+    argument: &'static str,
+}
+
+/// Every row of the harvested corpus whose answer the partition rule moves.
+///
+/// # Why an override table and not a re-blessed fixture
+///
+/// `cases.json` is the record of what each row produced under the partitioner
+/// that **re-derived** a partition from the resulting sequence. Silently
+/// rewriting those strings would lose the one thing a reviewer needs: what the
+/// answer was, what it became, and the argument for calling the difference an
+/// improvement. So both strings are pinned here, side by side, and
+/// [`every_row_produces_its_recorded_answer`] consults this table before it
+/// consults the fixture. Folding the new answers back into `cases.json` — and
+/// deleting this table — is a fixture regeneration, and it should happen in a
+/// change whose only content is that.
+///
+/// # The shape every entry has
+///
+/// All three moves are the same event: the recorded answer split a member the
+/// **input asserted as one**, having chosen an alignment to find the split by;
+/// the partition rule returns the partition its author wrote. In each case the
+/// recorded split is one the spec does not require and, for the two
+/// unequal-length rows, one `DNA/delins.md:44-47` positively recommends against
+/// — it is the alignment-coincidence shape that passage says to spell as a
+/// single spanning `delins` (the decided ruling
+/// `delins-merge-vs-individual-gap-two-or-more`).
+///
+/// None of the three changes what the description denotes: each new answer is
+/// the input verbatim, and the input's denotation is what the row was harvested
+/// against. The three premise tests further down read the bases out of the
+/// committed slice and check exactly that.
+const PARTITION_MOVES: &[PartitionMove] = &[
+    PartitionMove {
+        input: "NC_000002.11:g.47639670_47639673delinsTT",
+        recorded: "NC_000002.11:g.[47639670_47639671del;47639673G>T]",
+        now: "NC_000002.11:g.47639670_47639673delinsTT",
+        closes: None,
+        argument: "IMPROVEMENT. The input asserts one changed block; 4 reference bases (AGTG) \
+                   become a 2-base payload, so there is no column-for-column correspondence and \
+                   the recorded `[del;sub]` split exists only because `T` reappears in the \
+                   payload — an alignment had to be chosen to find it. DNA/delins.md:44-47 \
+                   describes that exact shape and recommends the spanning delins. The row's own \
+                   note calls itself a STABILITY PIN and disclaims any spec-correctness claim, so \
+                   nothing here is being overruled. Its premise test \
+                   `the_grch37_split_denotes_the_same_bases_as_its_input` still holds: the \
+                   recorded split was sequence-equivalent, it was simply not the partition the \
+                   input asserted.",
+    },
+    PartitionMove {
+        input: "NM_006420.3:c.[242C>A;247_249delinsTT]",
+        recorded: "NM_006420.3:c.[242del;245G>A;249A>T]",
+        now: "NM_006420.3:c.[242C>A;247_249delinsTT]",
+        closes: None,
+        argument: "IMPROVEMENT, and the clearest of the three. The input asserts TWO changed \
+                   blocks and the recorded answer returned THREE, at coordinates the input names \
+                   nowhere (245, 249) — a partition manufactured by re-alignment across a \
+                   frame-shifting deletion. The row's note already recorded that the recorded \
+                   form was NOT adjudicated and that the row pinned stability only; the partition \
+                   rule replaces an unadjudicated invented partition with the authored one. \
+                   `the_arfgef2_pair_denotes_one_sequence` pins that both spellings denote \
+                   AAAGGTT, so this remains a representation question and the two forms remain \
+                   sequence-equivalent.",
+    },
+    PartitionMove {
+        input: "NC_000017.11:g.80110044_80110047delinsGTTGG",
+        recorded: "NC_000017.11:g.[80110044C>G;80110045dup;80110047A>G]",
+        now: "NC_000017.11:g.80110044_80110047delinsGTTGG",
+        closes: Some("#1542"),
+        argument: "IMPROVEMENT that closes a filed defect. The recorded answer is #1542 itself: a \
+                   re-derived three-member split whose first two members sit at separation 0, \
+                   which DNA/delins.md:16 forbids. The partition rule cannot emit that shape at \
+                   all — `partition_block_preserving` merges anything below the axis floor and \
+                   cuts only at unchanged runs that reach it — so the members are not \
+                   re-separated and the input's own one-block partition stands. This is a removed \
+                   mechanism, not a masked symptom, which is why \
+                   `the_dup_shaped_split_does_not_touch` is un-ignored rather than deleted. Note \
+                   the corpus census still lists this input in the red set, because that set is \
+                   read out of `cases.json`; retiring it there belongs with the fixture \
+                   regeneration.",
+    },
+];
+
+/// The answer this file expects for `input` — the partition rule's, where
+/// [`PARTITION_MOVES`] records one, and the fixture's otherwise.
+fn expected_answer(input: &str, recorded: &str) -> &'static str {
+    for moved in PARTITION_MOVES {
+        if moved.input == input {
+            assert_eq!(
+                moved.recorded, recorded,
+                "{input}: PARTITION_MOVES records a different pre-move answer than cases.json \
+                 does, so the table has drifted from the fixture it overrides"
+            );
+            return moved.now;
+        }
+    }
+    // Not a moved row: the fixture's own string, borrowed for the caller's
+    // lifetime by looking it up again is not possible here, so the caller
+    // compares against `recorded` directly.
+    unreachable!("expected_answer is only called for rows PARTITION_MOVES names")
+}
+
+/// Every row named in [`PARTITION_MOVES`] is a row of the corpus, and its
+/// recorded answer is the one `cases.json` still holds.
+///
+/// Without this the override table could name an input the corpus does not
+/// carry, or claim a pre-move answer the fixture never recorded, and the gate
+/// would still be green — the table would have quietly become fiction.
+#[test]
+fn every_partition_move_overrides_a_real_recorded_answer() {
+    let cases = cases();
+    for moved in PARTITION_MOVES {
+        let case = cases
+            .cases
+            .iter()
+            .find(|case| case.input == moved.input)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: PARTITION_MOVES names a row the corpus does not carry",
+                    moved.input
+                )
+            });
+        assert_eq!(
+            case.expected.as_deref(),
+            Some(moved.recorded),
+            "{}: PARTITION_MOVES records a pre-move answer cases.json does not",
+            moved.input
+        );
+        assert_ne!(
+            moved.recorded, moved.now,
+            "{}: this row is listed as moved but the two strings are equal",
+            moved.input
+        );
+        assert!(
+            !moved.argument.trim().is_empty(),
+            "{}: a move with no argument is a silent re-bless",
+            moved.input
+        );
+    }
+    assert_eq!(
+        PARTITION_MOVES.len(),
+        3,
+        "the set of rows the partition rule moves changed. Adding one is a representation change \
+         and needs its own adjudication; removing one means the rule stopped moving it, which is \
+         also a representation change"
+    );
+
+    // A move that closes a filed defect has to say which, and the argument has
+    // to name it — otherwise "this fixes #N" lives only in a commit message.
+    let closing: Vec<&str> = PARTITION_MOVES.iter().filter_map(|m| m.closes).collect();
+    assert_eq!(
+        closing,
+        ["#1542"],
+        "the set of filed defects these moves close changed"
+    );
+    for moved in PARTITION_MOVES {
+        if let Some(issue) = moved.closes {
+            assert!(
+                moved.argument.contains(issue),
+                "{}: closes {issue} but the argument never mentions it",
+                moved.input
+            );
+            assert!(
+                cases
+                    .cases
+                    .iter()
+                    .any(|case| case.input == moved.input && case.is_red()),
+                "{}: recorded as closing {issue}, but the corpus no longer marks it red — the \
+                 fixture regeneration has happened and this entry should go with it",
+                moved.input
+            );
+        }
+    }
+}
+
 #[test]
 fn every_row_produces_its_recorded_answer() {
     let cases = cases();
@@ -317,11 +537,17 @@ fn every_row_produces_its_recorded_answer() {
     }
     assert_the_slice_answered_everything(&provider, cases.cases.len());
 
+    let moved_inputs: BTreeSet<&str> = PARTITION_MOVES.iter().map(|m| m.input).collect();
     let mut failures = Vec::new();
     let mut compared = 0usize;
     for (case, actual) in cases.cases.iter().zip(&observed) {
-        let Some(expected) = case.expected.as_deref() else {
+        let Some(recorded) = case.expected.as_deref() else {
             continue;
+        };
+        let expected = if moved_inputs.contains(case.input.as_str()) {
+            expected_answer(&case.input, recorded)
+        } else {
+            recorded
         };
         compared += 1;
         if actual.as_deref() != Ok(expected) {
@@ -423,15 +649,21 @@ fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
     let cases = cases();
     let provider = audited_provider();
 
+    let directions = [
+        ("3'", ShuffleDirection::ThreePrime),
+        ("5'", ShuffleDirection::FivePrime),
+    ];
     let mut observed = Vec::new();
-    for case in &cases.cases {
-        observed.push(run(&provider, &case.input));
+    for (label, direction) in directions {
+        for case in &cases.cases {
+            observed.push((label, case, run_in(&provider, &case.input, direction)));
+        }
     }
-    assert_the_slice_answered_everything(&provider, cases.cases.len());
+    assert_the_slice_answered_everything(&provider, cases.cases.len() * directions.len());
 
     let mut violations = Vec::new();
     let mut multi_member_outputs = 0usize;
-    for (case, actual) in cases.cases.iter().zip(&observed) {
+    for (label, case, actual) in &observed {
         let Ok(output) = actual else { continue };
         let Some(bounds) = member_bounds(output) else {
             continue;
@@ -445,17 +677,35 @@ fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
         multi_member_outputs += 1;
         for (previous_end, next_start) in adjacent_members(output) {
             violations.push(format!(
-                "  {} -> {output}\n    members touch at {previous_end}/{next_start} — {}",
+                "  [{label}] {} -> {output}\n    members touch at {previous_end}/{next_start} — {}",
                 case.input, case.citation.clause
             ));
         }
     }
 
+    println!(
+        "separation check: {multi_member_outputs} multi-member output(s) examined across {} \
+         direction(s) over {} rows",
+        directions.len(),
+        cases.cases.len()
+    );
+
     // A zero is only meaningful if multi-member outputs were actually examined.
+    //
+    // The floor was **8** and is measured, not chosen. It nearly went blind once
+    // already: under the re-derivation partitioner five 3' outputs were
+    // multi-member, and the partition rule — which returns a lone `delins` as
+    // the one-member partition its author wrote — took that to four, one below
+    // the then-floor of five. The repair is the denominator, never the floor:
+    // both supported shuffle directions are now swept, because `delins.md:16`
+    // constrains *any* emitted description and not merely the 3' one, and
+    // sweeping 5' is coverage this file did not have at all before.
     assert!(
-        multi_member_outputs >= 5,
-        "only {multi_member_outputs} multi-member output(s) were examined, so the separation check \
-         cannot have measured what it claims to"
+        multi_member_outputs >= 8,
+        "only {multi_member_outputs} multi-member output(s) were examined across {} direction(s), \
+         so the separation check cannot have measured what it claims to. Widen what is examined — \
+         never lower this floor",
+        directions.len()
     );
     assert!(
         violations.is_empty(),
@@ -1005,27 +1255,36 @@ fn the_inversion_preference_control_still_holds() {
     }
 }
 
-/// #1542 — a `dup`-shaped split still emits members at separation 0.
+/// #1542 — **green, and un-ignored**: the `dup`-shaped split is gone.
 ///
-/// `NC_000017.11:g.80110044_80110047delinsGTTGG` becomes
-/// `g.[80110044C>G;80110045dup;80110047A>G]`; under
-/// `sep = next.start - prev.end - 1` the first two members are at separation 0,
-/// which `DNA/delins.md:16` forbids. #1537 fixed three sibling rows of this
-/// family and did not reach this one because of the `dup` shape.
+/// The defect was that `NC_000017.11:g.80110044_80110047delinsGTTGG` became
+/// `g.[80110044C>G;80110045dup;80110047A>G]`, whose first two members sit at
+/// separation 0 under `sep = next.start - prev.end - 1`, which
+/// `DNA/delins.md:16` forbids. #1537 fixed three sibling rows of that family
+/// and did not reach this one because of the `dup` shape.
 ///
-/// The separation reading is itself part of the open question: the adjacency
-/// depends on treating a `dup` as occupying the position it duplicates, and
-/// under a zero-width (interbase) reading the pair is not adjacent at all. So
-/// the fix may well be a ruling on how a `dup`'s extent is read rather than a
-/// change to the splitter — but either way the row cannot stay as it is while
-/// [`no_emitted_output_puts_two_members_on_consecutive_nucleotides`] enforces
-/// the rule on every other row.
+/// The partition rule closes it by removing the producer rather than the
+/// symptom. That distinction is the one this repo has been caught on before
+/// (see `rewrite_target_corpus`'s note on #1282 masking), so it is stated
+/// rather than assumed: the offending members were *manufactured* by
+/// re-deriving a partition from the resulting sequence, and
+/// `partition_block_preserving` never re-derives one. Its two licensed moves
+/// cannot produce the shape either — the merge absorbs any pair below the axis
+/// floor, and the split cuts only at unchanged runs that *reach* the floor, so
+/// every emitted boundary is at or above it by construction.
+///
+/// What is **not** established is that no input can ever reach a touching pair:
+/// a caller that authors two adjacent members gets them back, by design, and
+/// how a `dup`'s extent should be read — occupying the base it duplicates, or
+/// zero-width between bases — is still unruled. This test guards the
+/// reproducer, which is what it was written to do; it is not a proof about the
+/// whole shape.
 ///
 /// The premise is [`the_dup_shaped_split_denotes_the_same_bases_as_its_input`],
-/// which passes: this is a representation defect, not a denotation one.
+/// which pins that the *recorded* three-member form was sequence-equivalent —
+/// so this was always a representation defect and never a denotation one.
+/// [`PARTITION_MOVES`] carries the before/after strings and the argument.
 #[test]
-#[ignore = "#1542: a dup-shaped split still emits members at separation 0 (delins.md:16), \
-            surviving #1537. Red until the dup's extent is ruled on."]
 fn the_dup_shaped_split_does_not_touch() {
     let cases = cases();
     let provider = audited_provider();

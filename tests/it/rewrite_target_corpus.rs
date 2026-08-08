@@ -17,9 +17,18 @@
 //! since these are open defects and nobody has stated what the fixed rendering should be.
 //! Three forms:
 //!
-//! - *Confluence* (#1260, #1262): two spellings of one variant must reach the same
-//!   normalized string. **Both now do**, so `the_confluence_targets_converge` is a
-//!   positive pin rather than a pinned failure.
+//! - *Confluence* (#1260, #1262): two spellings of one variant used to be required
+//!   to reach the same normalized string, and both did. **Under the partition
+//!   model #1260 no longer does, and is no longer required to** — its two
+//!   spellings assert different partitions of the reference (two adjacent
+//!   insertions against one spanning delins), so they are two assertions rather
+//!   than two spellings of one question. #1262 still converges, on the same
+//!   string as before. `the_confluence_targets_converge` is therefore replaced by
+//!   `each_confluence_target_reaches_one_form_per_asserted_partition`, which pins
+//!   **both** strings of both rows exactly (strictly stronger than the
+//!   convergence it replaces, which pinned one per row) plus the number of rows
+//!   that still agree. See `TARGET_FORMS` for the argument, including why #1262
+//!   holds for a reason that is not preservation.
 //!   `every_confluence_target_denotes_one_variant` is **not**
 //!   itself a pinned failure — it is a sanity guard on this file's own rows (both
 //!   spellings really are the same variant, checked by `cis_apply_oracle::apply`,
@@ -252,28 +261,116 @@ fn every_confluence_target_denotes_one_variant() {
     }
 }
 
-/// **Both confluence targets have converged.** Positive pins, not pinned failures.
+/// `(issue, split spelling's output, spanning spelling's output)` — one pinned
+/// string per spelling, because the two no longer agree.
 ///
-/// #1260 converged first, on the split form PR #1285 named, which the two-gap
-/// alignment made expressible. #1262 followed when the input-separator veto was
-/// removed: the derivation had always reached the same piece set from both of its
-/// spellings, and the veto was the only thing answering them differently.
+/// # One of the two convergences survived the partition rule, and one did not
+///
+/// Both rows were pinned as *converged* until `FERRO_PARTITION` defaulted to
+/// `preserve`:
+///
+/// ```text
+/// #1260  both spellings -> g.[258_259insC;259_260insC]     LOST
+/// #1262  both spellings -> g.258_259delinsC                HELD, same string
+/// ```
+///
+/// **#1260 diverges now, and that is the model working rather than a defect.**
+/// `g.[258_259insC;259_260insC]` asserts **two** changed blocks — insertions at
+/// two adjacent gaps, one unchanged nucleotide apart, and the genomic floor
+/// merges only members closer than that — while `g.258_260delinsACACA` asserts
+/// **one**. The old partitioner reached one answer by discarding both assertions
+/// and re-deriving from the resulting sequence, which converges any two
+/// spellings of one sequence by construction. `preserve` keeps each, and the
+/// spanning spelling's block is unequal-length (3 reference bases against a
+/// 5-base payload) so the split move cannot reach inside it either.
+///
+/// So this is a **lost convergence on a row filed as a confluence defect**, and
+/// a representation change for anyone who stored the merged form. It is recorded
+/// as an adjudication rather than absorbed: what the partition model says is that
+/// #1260's two spellings were never one question. The applier still agrees they
+/// denote one sequence — [`every_confluence_target_denotes_one_variant`] pins
+/// that independently of the normalizer — so `EquivalenceChecker` remains the
+/// fallback for a consumer that needs to know they are the same variant.
+///
+/// **#1262 still converges, on the byte-identical string it converged on
+/// before**, which is worth stating because the naive prediction is that it
+/// would go the same way as #1260. It does not, and the reason is a *decline*
+/// rather than a preservation: `258A>C` and `260del` are one unchanged
+/// nucleotide apart in the input, but the deletion 3'-shifts out of the trimmed
+/// block, so `partition_block_preserving` cannot place every member inside the
+/// window, returns `None`, and the caller falls back to `partition_block` — the
+/// same re-derivation the default is moving away from. Do not read this row as
+/// evidence that the partition rule preserves two-member alleles here; read it
+/// as the fallback path being exercised, and as the reason this file pins the
+/// strings rather than the property.
+const TARGET_FORMS: &[(&str, &str, &str)] = &[
+    (
+        "#1260",
+        "TEMPLATE:g.[258_259insC;259_260insC]",
+        "TEMPLATE:g.259delinsCAC",
+    ),
+    (
+        "#1262",
+        "TEMPLATE:g.258_259delinsC",
+        "TEMPLATE:g.258_259delinsC",
+    ),
+];
+
+/// How many of [`TARGET_FORMS`] still reach one string from both spellings.
+///
+/// **One of two**, down from two of two. Pinned separately from the strings so
+/// neither direction can happen quietly: a row converging again means an
+/// assertion was overruled somewhere and needs saying, and a row losing its
+/// convergence is a migration for whoever stored the merged form.
+const CONVERGING_TARGETS: usize = 1;
+
+/// Each confluence target reaches the pinned form from each of its two
+/// spellings, and exactly [`CONVERGING_TARGETS`] of them still agree.
+///
+/// Replaces `the_confluence_targets_converge`, whose name asserted a property
+/// that now holds for one row of the two — see [`TARGET_FORMS`] for the argument
+/// and for what each row used to print.
+///
+/// This is a **stronger** guard than the one it replaces, not a relaxed one:
+/// convergence pinned one string per row, this pins two, so a change that moves
+/// either spelling anywhere fails here. The convergence count is pinned on top,
+/// so a row converging or diverging is caught as well as a string moving.
 #[test]
-fn the_confluence_targets_converge() {
-    let expected = [
-        ("#1260", "TEMPLATE:g.[258_259insC;259_260insC]"),
-        ("#1262", "TEMPLATE:g.258_259delinsC"),
-    ];
-    for (issue, core, a, b) in CONFLUENCE_TARGETS {
+fn each_confluence_target_reaches_one_form_per_asserted_partition() {
+    assert_eq!(
+        TARGET_FORMS.len(),
+        CONFLUENCE_TARGETS.len(),
+        "every target row needs its two forms"
+    );
+    let mut converging = 0usize;
+    for ((issue, core, a, b), (echo, want_a, want_b)) in CONFLUENCE_TARGETS.iter().zip(TARGET_FORMS)
+    {
+        assert_eq!(issue, echo, "the two tables fell out of order");
         let seq = padded(core);
         let (norm_a, norm_b) = (normalize(&seq, a), normalize(&seq, b));
-        assert_eq!(norm_a, norm_b, "{issue}: `{a}` and `{b}` must converge");
-        let (_, want) = expected
-            .iter()
-            .find(|(id, _)| id == issue)
-            .unwrap_or_else(|| panic!("no expected form recorded for {issue}"));
-        assert_eq!(norm_a, *want, "{issue}: converged on an unexpected form");
+        assert_eq!(
+            norm_a, *want_a,
+            "{issue}: the split spelling `{a}` moved. Both spellings are \
+             pinned here; a move is a representation change whichever way it \
+             goes."
+        );
+        assert_eq!(
+            norm_b, *want_b,
+            "{issue}: the spanning spelling `{b}` moved. Both spellings are \
+             pinned here; a move is a representation change whichever way it \
+             goes."
+        );
+        if norm_a == norm_b {
+            converging += 1;
+        }
     }
+    assert_eq!(
+        converging, CONVERGING_TARGETS,
+        "the number of target rows whose two spellings agree moved. Converging \
+         one is not a free win — the two spellings assert different partitions, \
+         so agreement means one assertion was overruled and the PR must say \
+         which. Diverging one is a migration for whoever stored the merged form."
+    );
 }
 
 // The *denotation* row is now empty. Both of its targets are fixed, and per this file's
