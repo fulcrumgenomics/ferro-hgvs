@@ -141,6 +141,58 @@ def test_decline_spellings_all_pass(value: str) -> None:
     assert ok
 
 
+# ---------------------------------------------------------------------------
+# A decline may give its reason (#1555)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "none. Tests only; no file under a watched directory is touched.",
+        "none: comments only",
+        "none; the diff is one fixture JSON and one new test module",
+        "none — 0 of 950 real cis-allele rows move their normalized string",
+        "None. Ruling records and their status pins only.",
+        "no. Nothing here can reach a normalizer.",
+        "n/a: docs",
+        "na. generated artifact only",
+        "none.\n  A reason spanning two lines.",
+    ],
+)
+def test_a_decline_may_give_its_reason(value: str) -> None:
+    """The verdict is the first word; what follows a terminator explains it.
+
+    Requiring a bare `none` punished exactly the contributors who explained themselves:
+    8 commits in the v0.13.1 cycle declined with a reason and all 8 were then listed as
+    representation changes.
+    """
+    assert check_representation_change.declines(value), f"{value!r} declines a move"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "577 rows move, 360 merge / 205 split / 12 respell",
+        "3 rows of 500,004 move (0.0006%) — 2 respell, 1 merge",
+        "0 rows move over 5,761,302 real expressions",
+        "no rows move",
+        "nothing moves under src/normalize/",
+        "not measured yet",
+        "none, except two rows that merge",
+    ],
+)
+def test_a_description_of_a_move_is_not_a_decline(value: str) -> None:
+    """The failure that matters here is the silent one: a real disclosure read as a decline
+    disappears from the changelog, and nobody is told.
+
+    `no rows move` and `none, except …` are the near misses. Both begin with a decline word,
+    and neither is one — the first has no terminator, and `,` is not a terminator precisely
+    because it usually introduces a qualification that changes the verdict.
+    """
+    assert not check_representation_change.declines(value), f"{value!r} describes a move"
+
+
 def test_an_empty_trailer_does_not_scavenge_the_next_line() -> None:
     """`\\s` spans newlines, so a permissive class would read `none` off the line below and
     call an empty trailer a declaration."""
@@ -185,6 +237,75 @@ def test_decline_vocabulary_matches_the_changelog_config() -> None:
         f"release-plz.toml excludes {sorted(configured)} but the checker treats "
         f"{sorted(check_representation_change.NONE_VALUES)} as declines; a word in one and "
         "not the other either leaks a non-change into the changelog or hides a real one"
+    )
+
+
+def test_the_two_decline_rules_agree_value_by_value() -> None:
+    """The vocabulary test above compares word lists; this one compares *verdicts*.
+
+    #1555 is the reason both are needed. The two rules named the same four words and still
+    disagreed, because the changelog rule anchored the value (`none$`) while the checker
+    lowercased and compared it — so `none. Tests only.` passed CI as a decline and then
+    rendered as a representation change. A word-list comparison cannot see that; only
+    running both rules over the same values can.
+    """
+    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
+    # Anchored on the trailer name, not on `{ footer = "`: the first such literal in the file
+    # is git-cliff's `^changelog: ?ignore` example, quoted in a comment.
+    rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
+    assert rules, "no Representation-Change exclusion rule found in release-plz.toml"
+    # The rule is a TOML basic string, so its backslashes are escaped in the file.
+    changelog_rule = re.compile(rules[0].replace("\\\\", "\\"), re.MULTILINE)
+
+    values = [
+        "none",
+        "NONE",
+        "none.",
+        "none. Tests only; nothing under a watched directory.",
+        "none: comments only",
+        "none; one fixture JSON",
+        "none — 0 of 950 rows move",
+        "no. Nothing reaches a normalizer.",
+        "n/a: docs",
+        "na. generated artifact only",
+        "577 rows move, 360 merge / 205 split",
+        "0 rows move over 5,761,302 real expressions",
+        "no rows move",
+        "none, except two rows that merge",
+        "nothing moves",
+    ]
+    for value in values:
+        by_changelog = changelog_rule.search(f"Representation-Change: {value}") is not None
+        by_checker = check_representation_change.declines(value)
+        assert by_changelog == by_checker, (
+            f"{value!r}: release-plz.toml calls it "
+            f"{'a decline' if by_changelog else 'a real change'} and the checker calls it "
+            f"{'a decline' if by_checker else 'a real change'}; the changelog and CI must "
+            "agree, or a PR passes the check and is then filed as its opposite"
+        )
+
+
+def test_the_ordering_prefix_is_stripped_from_rendered_headings() -> None:
+    """`<!-- N -->` orders the groups; it must not survive into the changelog text.
+
+    Without the postprocessor every released section carries `### <!-- 0 -->Representation
+    changes` in the file. It is an HTML comment, so GitHub renders it invisibly — which is
+    how it survived two releases unnoticed.
+    """
+    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
+    match = re.search(
+        r'postprocessors = \[\{ pattern = "((?:[^"\\]|\\.)*)", replace = "([^"]*)"', config
+    )
+    assert match is not None, "no postprocessor found; the ordering prefix would be rendered"
+    pattern = re.compile(match.group(1).replace("\\\\", "\\"), re.MULTILINE)
+    replacement = match.group(2).replace("${1}", r"\1")
+
+    rendered = "### <!-- 0 -->Representation changes\n### <!-- 7 -->Other\n"
+    assert pattern.sub(replacement, rendered) == "### Representation changes\n### Other\n"
+
+    subject = "- *(docs)* explain the <!-- 0 --> marker\n"
+    assert pattern.sub(replacement, subject) == subject, (
+        "the rule must be anchored to a heading; a marker quoted in a commit subject is text"
     )
 
 

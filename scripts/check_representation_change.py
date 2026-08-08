@@ -64,6 +64,39 @@ TRAILER_RE = re.compile(
 #: what moved, which is what lands in the changelog.
 NONE_VALUES = frozenset({"none", "no", "n/a", "na"})
 
+#: Punctuation that may separate a decline from the reason for it, so that
+#: `none. Tests only; no src/ file is touched` still reads as a decline (#1555).
+#:
+#: Requiring a bare verdict punished the contributors who explained themselves: in the
+#: v0.13.1 cycle 8 commits declined *with a reason* and every one of them was grouped as a
+#: real representation change. Explaining a decline is the habit to encourage.
+#:
+#: `,` is deliberately absent. A comma usually introduces a qualification that changes the
+#: verdict -- "none, except two rows" -- where a full stop, semicolon, colon or dash closes
+#: it. This set is mirrored in `release-plz.toml`'s exclusion rule and pinned by
+#: `test_the_two_decline_rules_agree_value_by_value`.
+DECLINE_TERMINATORS = ".;:—–"
+
+#: A declination: one of `NONE_VALUES`, alone or followed by a reason. Built from the two
+#: constants above so the vocabulary has one definition rather than a regex restating it.
+#: `DOTALL` so a reason spanning lines does not defeat the trailing `.*`.
+DECLINE_RE = re.compile(
+    r"^(?:"
+    + "|".join(re.escape(value) for value in sorted(NONE_VALUES))
+    + r")[ \t]*(?:["
+    + re.escape(DECLINE_TERMINATORS)
+    + r"].*)?$",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def declines(declaration: str) -> bool:
+    """Return whether `declaration` is a decline rather than a description of a move.
+
+    The verdict is the first word; anything after a terminator is the reason for it.
+    """
+    return DECLINE_RE.match(declaration.strip()) is not None
+
 
 def watched_files(changed: list[str]) -> list[str]:
     """Return the changed paths that sit under a watched directory."""
@@ -106,7 +139,7 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
             "Measure with: cargo run --release --features dev --example dump_normalized_corpus"
         )
 
-    if declaration.strip().lower() in NONE_VALUES:
+    if declines(declaration):
         return (
             True,
             f"Declared `Representation-Change: {declaration}` over {len(watched)} watched file(s).",

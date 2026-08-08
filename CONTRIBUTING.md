@@ -87,7 +87,24 @@ ci: pin the workflow's action hashes
 Representation-Change: none
 ```
 
-`none`, `no`, `n/a` and `na` all count, in any casing. A declining trailer is
+`none`, `no`, `n/a` and `na` all count, in any casing. **Say why, if it is not
+obvious** — the verdict is the first word, and a full stop, semicolon, colon or
+dash may introduce a reason:
+
+```
+test(conformance): gate the harvested unguarded cases on every PR
+
+Representation-Change: none. Test-only plus two new `src/conformance/`
+  modules; nothing under `src/normalize/`, `src/hgvs/`, `src/spdi/` or
+  `src/project/` is touched, and no existing expectation was re-blessed.
+```
+
+A comma is *not* a terminator, because it usually introduces a qualification
+that changes the verdict ("none, except two rows") — that reads as a description
+of a move, and is filed as one. Same for `no rows move`: no terminator, so the
+verdict is not `no`. Both err toward listing a change rather than hiding one.
+
+A declining trailer is
 excluded from the changelog's **Representation changes** section, so declaring it
 costs the reader nothing while leaving the judgement on the record. CI enforces
 the distinction: a change touching `src/normalize/`, `src/hgvs/`, `src/spdi/` or
@@ -127,9 +144,19 @@ Two related habits, from `CLAUDE.md`:
 
 Commits carrying the trailer are collected into a **Representation changes**
 section at the top of the changelog, and that section is surfaced on the release
-PR — see [Changelog](#changelog) below. Nothing enforces the trailer today: a
-change that moves output without one is simply invisible, which is why the
-release PR states the section even when it is empty.
+PR — see [Changelog](#changelog) below. The release PR states the section even
+when it is empty, so that a cycle in which nothing was declared is visible rather
+than silent.
+
+Two limits of that section are worth knowing before you rely on it. It carries
+the commit **subject** only — the trailer's own text does not reach the changelog
+([#1556]), so the four facts above live in your PR description and a reader has
+to follow the link for them. And a declining commit is filed under **Other**
+whatever its type, so a `fix:` that correctly declined is not listed under
+**Fixed** ([#1557]).
+
+[#1556]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1556
+[#1557]: https://github.com/fulcrumgenomics/ferro-hgvs/issues/1557
 
 ### Changelog
 

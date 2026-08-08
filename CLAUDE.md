@@ -310,6 +310,19 @@ those directories move no output at all (a comment, a doc, a new unit test), and
 expected case. What the check rejects is *silence*, because an absent trailer is
 indistinguishable from an unconsidered one.
 
+**The verdict is the first word, and a reason may follow it** — `none. Tests only; no watched
+file is touched.` A full stop, semicolon, colon or dash introduces the reason; a comma does not,
+because it usually introduces a qualification that changes the answer ("none, except two rows"),
+which is filed as a real change. This was the #1555 defect: the value used to be anchored, so
+declining *with a reason* was read as a disclosure. It is not a corner case — in the v0.13.1
+cycle 8 of the 14 declines gave a reason, and the section listed 10 entries of which 2 were real.
+
+**Two limits of the section itself.** It carries the commit subject only — the trailer's text is
+unreachable from the changelog template (#1556), so the rejected-vs-accepted fact lives in the PR
+description. And a declining commit is filed under **Other** whatever its type, so a declining
+`fix:` is missing from **Fixed** (#1557); git-cliff evaluates a parser's fields as OR, not AND, so
+this cannot be repaired by adding `message` to the exclusion rule.
+
 **It must be in the PR description, not only in a commit message.** GitHub builds the squash
 commit body from the description, and `release-plz.toml`'s parsers match the commit *footer*; a
 trailer on an intermediate commit is discarded by the squash and never reaches the changelog.
