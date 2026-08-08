@@ -308,76 +308,100 @@ fn a_derived_whole_block_inversion_outranks_the_codon_exception() {
     // codon exception merges into a `delins`. So both rules are live on the same
     // bases, which is what this row is for.
     //
-    // **Under the partition model the four spellings no longer give one answer,
-    // and they should not: they assert two different partitions.** The loop was
-    // one list; it is now two, with the split itself asserted.
+    // **All four spellings give one answer, `c.1_5inv`.** A revision inside the
+    // partition-model branch asserted two answers here — the loop was split in
+    // two, with the divergence itself pinned — on the reasoning that the
+    // one-member and three-member spellings assert different partitions. That is
+    // true of the *partition* and false of the *type*: see the second half of
+    // this test for why `coalesce_whole_block_inversion` re-types the hull, and
+    // for the `2fa5bec0` evidence that `c.1_5inv` is the shipped baseline.
 
-    // ---- One-member partitions: `general.md:34` has nothing to say about a
-    // lone member, so the whole span stays one piece, and a piece whose change
-    // is a whole reverse complement must be typed `inv` — `delins.md:5` defines
-    // a delins as a replacement "which is not a substitution or inversion", so
-    // over this span `delins` is not a description the spec admits.
+    // ---- The two rules, and which one wins.
     //
-    // The equal-length split move cannot cut them either: it cuts an
-    // equal-length member only at an interior unchanged run reaching the axis
-    // floor, and the unchanged columns here (c.2, c.4) are single bases against
-    // a floor of 2 on a reading-frame axis (`general.md:35`).
+    // `general.md:34` has nothing to say about a LONE member, so the one-member
+    // spellings keep the whole span as one piece; the equal-length split move
+    // cannot cut them either, because it cuts only at an interior unchanged run
+    // reaching the axis floor and the unchanged columns here (c.2, c.4) are
+    // single bases against a floor of 2 on a reading-frame axis
+    // (`general.md:35`).
     //
-    // `coalesce_whole_block_inversion` is what types them, and it still outranks
-    // the codon exception — the property this test is named for and the one
-    // `merge::canonicalize_from_sequence` cites this test to pin. Stubbing
-    // `apply_coding_codon_exception` instead leaves these two rows green (while
-    // reddening `issue_165_delins_sub_only_decompose`'s codon tests, so the stub
-    // is doing something).
-    for input in [format!("{C}:c.1_5inv"), format!("{C}:c.1_5delinsTTAAC")] {
-        assert_eq!(
-            c("GTTAA", &input),
-            format!("{C}:c.1_5inv"),
-            "one-member spelling `{input}` did not stay the inv",
-        );
-    }
-
-    // ---- Multi-member partitions: the members are what the input said they
-    // are, and `general.md:35` merges only the pair that "together affect one
-    // amino acid". c.1 and c.3 are both in codon 1, so they merge to
-    // `1_3delinsTTA` (`GTT -> TTA`, which is *not* a reverse complement —
-    // revcomp(GTT) is AAC — so `delins` is the right type for it). c.3 and c.5
-    // are also one nucleotide apart but sit in codons 1 and 2, so the exception
-    // does not reach them and `general.md:34` keeps them individual: "two
-    // variants separated by one or more nucleotides should be described
-    // individually and **not** as a "delins"".
+    // The MULTI-member spellings do get their members merged by the codon half of
+    // `general.md:35`: c.1 and c.3 are both in codon 1, so they become
+    // `1_3delinsTTA`, while c.3 and c.5 sit in codons 1 and 2 and so stay
+    // individual — "two variants separated by one or more nucleotides should be
+    // described individually and **not** as a \"delins\"".
     //
-    // No `inv` is reachable from here, because no piece spans the reverse
-    // complement: `coalesce_whole_block_inversion` reads the hull of the pieces,
-    // and these pieces never form one. That is the change from the derived
-    // model, where the block was re-cut from `(GTTAA, TTAAC)` position-wise and
-    // the three resulting single-column pieces did span the hull.
+    // `coalesce_whole_block_inversion` then runs over whichever pieces resulted
+    // and outranks the codon exception — the property this test is named for and
+    // the one `merge::canonicalize_from_sequence` cites this test to pin.
+    // Stubbing `apply_coding_codon_exception` instead leaves these rows green
+    // (while reddening `issue_165_delins_sub_only_decompose`'s codon tests, so
+    // the stub is doing something).
     //
-    // The second spelling is the first one's own output, so this also pins the
-    // fixed point.
+    // **RE-ADJUDICATED 2026-08-08: all four spellings reach the `inv`, and the
+    // split this row briefly asserted is withdrawn.** The paragraph above stops
+    // one step short. The codon exception does merge c.1 with c.3 into
+    // `1_3delinsTTA`, and c.3/c.5 do stay individual — but
+    // `coalesce_whole_block_inversion` then runs, reads the hull of those two
+    // pieces (they are one unchanged base apart, so its
+    // `every_separation_is_a_single_base` arm admits them), finds `GTTAA` against
+    // `TTAAC` to be a whole-span reverse complement, and types the hull `inv`.
+    //
+    // That ordering is not incidental, it is the ruling. `inversion-vs-two-delins-76-83`
+    // is `decided` and governs `DNA/inversion.md:5` — "a sequence change where,
+    // compared to a reference sequence, **more than one nucleotide** replacing the
+    // original sequence is the reverse complement of the original sequence" —
+    // which is a property of the *whole span* and not of any decomposition of it.
+    // `DNA/delins.md:5` then forces the type: a delins is a replacement "**and
+    // which is not** a substitution or inversion", so over this span `delins` is
+    // not a description the spec admits at all. And the spec does not decompose
+    // its own inversions: `DNA/inversion.md:33-34` publishes
+    // `NM_004006.2:c.4145_4160inv` — on a CODING axis, with two three-base
+    // unchanged interior runs — as one `inv`.
+    //
+    // **This restores the shipped baseline exactly.** `git show
+    // 2fa5bec0:tests/it/issue_1040_inv_overrecognition_probes.rs` (the v0.13.1
+    // release) asserted one loop over all four spellings, all expecting
+    // `c.1_5inv`. The two-group split was introduced inside the partition-model
+    // branch and measured against an intermediate tree in which the changed-column
+    // weight bound was still vetoing every reading-frame merge, so the `inv` was
+    // unreachable and the codon-merged form looked final. So this row is not a
+    // representation change against the release — it is the reversal of one that
+    // never shipped, and it restores four-way confluence.
+    //
+    // #1230's split is untouched and is asserted next door by
+    // `a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation`:
+    // that case has a MULTI-base separation, so the same arm refuses it.
     for input in [
+        format!("{C}:c.1_5inv"),
+        format!("{C}:c.1_5delinsTTAAC"),
         format!("{C}:c.[1G>T;3T>A;5A>C]"),
         format!("{C}:c.[1_3delinsTTA;5A>C]"),
     ] {
         assert_eq!(
             c("GTTAA", &input),
-            format!("{C}:c.[1_3delinsTTA;5A>C]"),
-            "multi-member spelling `{input}` did not reach the codon-merged form",
+            format!("{C}:c.1_5inv"),
+            "spelling `{input}` did not converge on the inv",
         );
     }
 
-    // Asserted rather than left implicit: the two groups are *different*
-    // strings. This row's whole subject is the overlap between the two rules,
-    // and a future change that quietly re-converged them — in either direction —
-    // would otherwise pass both loops above only if it also moved one of the
-    // pinned strings, which is not a property either loop states.
-    assert_ne!(
-        c("GTTAA", &format!("{C}:c.1_5inv")),
-        c("GTTAA", &format!("{C}:c.[1G>T;3T>A;5A>C]")),
-        "the one-member and three-member partitions of these bases are \
-         deliberately distinct canonical forms; re-converging them is a \
-         representation change and needs its own adjudication",
-    );
+    // The negative half, replacing the `assert_ne!` that used to assert the two
+    // groups were deliberately distinct — that assertion pinned a divergence the
+    // released version never had, so inverting it would keep the same mistake.
+    // What needs guarding instead is the codon-merged form: it is what a
+    // regression in `coalesce_whole_block_inversion`'s ranking would emit, it is a
+    // legitimate `delins` on its own sub-span (`GTT -> TTA` is not a reverse
+    // complement — revcomp(GTT) is AAC), so nothing downstream would reject it,
+    // and this is the only assertion that would notice.
+    for input in [format!("{C}:c.1_5inv"), format!("{C}:c.[1G>T;3T>A;5A>C]")] {
+        assert_ne!(
+            c("GTTAA", &input),
+            format!("{C}:c.[1_3delinsTTA;5A>C]"),
+            "`{input}` reached the codon-merged form; `coalesce_whole_block_inversion` \
+             must outrank `apply_coding_codon_exception` on these bases \
+             (`DNA/inversion.md:5`, ruling `inversion-vs-two-delins-76-83`)",
+        );
+    }
 
     // `revcomp_runs_in_distinct_codons_are_individual_on_cds_axis` above pins the
     // other side of the same axis — the case where neither rule may fire.

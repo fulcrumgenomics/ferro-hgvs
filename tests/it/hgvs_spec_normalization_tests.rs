@@ -797,6 +797,23 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // `EquivalenceLevel::SequenceMatch`, whose own doc has said since #1158 that
     // ferro "deliberately keeps [them] in distinct canonical forms".
     ("partition-is-the-unit-of-normalization", "decided"),
+    // The corollary the ruling above needed and did not have: `general.md:35` is
+    // implemented TWICE — once inside `partition_block_preserving`'s merge loop,
+    // with the per-pair codon shape gate `codon-carve-out-shape-restriction`
+    // requires, and once as the separate `coalesce_coding_frame_separation` pass
+    // (#1484), with no shape gate at all. The second runs after the first and so
+    // re-merged exactly the pairs the first had refused. Measured on the spec's
+    // own W58: `LRG_199t1:c.[992_1002del;1004T>C]` came back as
+    // `c.992_1004delinsAC`, which is the answer `consultation/SVD-WG010.md:51`
+    // proposed and the committee rejected in 2021. Decided for `general.md:34`:
+    // the shape-blind pass belongs to the arms that re-derive the partition, and
+    // its own intended population — a lone `delins` split at a coincidentally
+    // matching interior base — cannot arise under a preserved partition at all,
+    // because the split move is scoped to equal-length members.
+    (
+        "coding-frame-merge-belongs-to-the-arm-that-carries-the-codon-shape-gate",
+        "decided",
+    ),
     // `delins.md:17` ("described individually … not as a delins") against
     // `delins.md:47` ("the delins format is recommended"), both reaching the
     // `:44-47` example. **Decided for `:47` by operator ruling (2026-08-07),

@@ -353,16 +353,27 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1419-r3/cis",
         input: "TEMPLATE:g.[19_24del;28_33del]",
         output: "TEMPLATE:g.[19_24del;28_33del]",
-        // Under 5' this row does NOT come back as authored: it reaches
-        // `[19T>G;22_33del]`, which is #1419's own wanted form and its
-        // sibling's 3' answer. The partition-preserving arm cannot place
-        // every 5'-shifted member inside the trimmed block here, declines,
-        // and the caller falls back to `partition_block` — so the 5' answer
-        // is a re-derived partition while the 3' answer is the authored one.
-        // Pinned rather than smoothed over: it is the clearest evidence in
-        // this file that `preserve` has a fallback path, and that which
-        // partition ships can depend on the shuffle direction.
-        five_prime: "TEMPLATE:g.[19T>G;22_33del]",
+        // RE-BLESSED 2026-08-08, and the reason the old value existed is now
+        // gone. This used to pin `[19T>G;22_33del]` under 5' — #1419's own
+        // wanted form and its sibling's 3' answer — because the
+        // partition-preserving arm could not place every 5'-shifted member
+        // inside the trimmed block, declined, and the caller fell back to
+        // `partition_block`. It was pinned as "the clearest evidence in this
+        // file that `preserve` has a fallback path". IMPL 1 removed that
+        // fallback's reach by having the arm work in window rather than block
+        // coordinates (decline rate 0.0% in both directions), so the 5' answer
+        // is now the authored partition with each member at its 5'-most
+        // position: `general.md:41` read the other way moves `19_24del` up the
+        // run to `18_23del`, and `28_33del` is already there.
+        //
+        // Note what this costs and where the cost is recorded: the pair no
+        // longer converges on #1419's wanted form under 5', so the direction
+        // asymmetry this row documented is gone in the direction of LESS
+        // convergence. That is `partition-is-the-unit-of-normalization`
+        // applying — #1419 is recorded `SpecSelfConflicting`, i.e. its wanted
+        // form is deliberately not targeted — and the row is still a `Gap`, so
+        // `OPEN_GAPS_SPEC_SELF_CONFLICTING` does not move.
+        five_prime: "TEMPLATE:g.[18_23del;28_33del]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[19T>G;22_33del]",
         authority: Authority::SpecSelfConflicting,
@@ -394,13 +405,24 @@ const REPORTED_ROWS: &[Row] = &[
         label: "1420-v2/cis",
         input: "TEMPLATE:g.[37dup;41del]",
         output: "TEMPLATE:g.[37dup;41del]",
-        // Same shape as `1419-r3/cis`: under 5' the preserving arm declines
-        // and the fallback re-derives, landing on `[38T>A;40_41delinsTG]` —
-        // which is #1420 v2's wanted form and its sibling's 3' answer. So
-        // this pair DOES converge on the issue's form under `--direction
-        // 5prime`, and does not under the shipped 3'. That asymmetry is a
-        // representation fact worth pinning, not a detail.
-        five_prime: "TEMPLATE:g.[38T>A;40_41delinsTG]",
+        // RE-BLESSED 2026-08-08, same cause as `1419-r3/cis` above. This used
+        // to pin `[38T>A;40_41delinsTG]` under 5' — #1420 v2's wanted form —
+        // reached through the preserving arm's decline and `partition_block`'s
+        // re-derivation, and the row read as "this pair DOES converge on the
+        // issue's form under `--direction 5prime`". With the decline rate at
+        // zero the 5' answer is the authored partition, 5'-shifted: the `dup`
+        // walks up the `T` run from 37 to 36 and `41del` stays.
+        //
+        // **This is the row the sweep dossier flagged as a trap, and it is
+        // worth being explicit about which way the trap ran.** Reading the
+        // convergence as progress would have banked a defect: `g.[37dup;41del]`
+        // has three unchanged nucleotides between its members (38, 39, 40), so
+        // `general.md:34` requires them to stay individual and no clause
+        // licensed the merged form. The convergence was the fallback
+        // re-deriving, and it happened to land on the issue's ask. It is gone,
+        // and `reported_confluence_pairs::CONVERGING_PAIRS` is back to 0 in
+        // both directions (that test is green).
+        five_prime: "TEMPLATE:g.[36dup;41del]",
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[38T>A;40_41delinsTG]",
         authority: Authority::SpecExplicit,

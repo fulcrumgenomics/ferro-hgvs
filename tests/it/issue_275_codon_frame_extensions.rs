@@ -292,23 +292,51 @@ fn no_codon_frame_sub_then_del_pair_straddles_codon_boundary() {
     // and the *codon-frame merge* declines. That is what this test is named for
     // and it still holds — no codon-straddling merge is performed here.
     //
-    // The rendered form moved when the input-separator veto was removed: the
-    // sequence-first derivation answers `c.12_13delinsG`. That is not the codon
-    // merge firing; it is the derivation the block itself yields. The block is
-    // `CC -> G`, which every alignment of the pair answers identically — one
-    // member — because the deleted `C` is ambiguous anywhere in the `CCCCC` run
-    // at c.10-14. Only the input spelling knows the surviving `C` was c.13
-    // rather than c.14, and reading the spelling is exactly what made two
-    // encodings of one variant normalize differently (#1235).
+    // **RE-ADJUDICATED 2026-08-08, and the previous value's own comment named the
+    // reason it had to move.** This row used to pin `c.12_13delinsG` — the
+    // sequence-first derivation's answer, reached because the block is `CC -> G`
+    // and the deleted `C` is ambiguous anywhere in the `CCCCC` run at c.10-14, so
+    // only the input's spelling knows the surviving `C` was c.13. That comment
+    // recorded the pin as a **"policy choice"**: *"Confluence was chosen over
+    // preserving the two-member spelling."*
     //
-    // **Policy choice, recorded as one.** Verified equivalent on both levels the
-    // spec cares about: the two forms denote the same sequence, and both
-    // translate to `MQKPRGFLKTPGGF*` — the same frameshift, so no protein
-    // consequence is lost by preferring the derived form. Confluence was chosen
-    // over preserving the two-member spelling.
+    // The operator ruling `partition-is-the-unit-of-normalization` (2026-08-08)
+    // reverses that policy outright. The unit of normalization is the partition
+    // the input asserts, so the spelling is not a thing to be read past — it is
+    // the input. With the partition preserved, `general.md:34` applies as this
+    // test's own name says it should: *"two variants separated by one or more
+    // nucleotides should be described individually and **not** as a 'delins'"*.
+    // c.12 is in codon 4 and c.14 in codon 5, so `general.md:35`'s exception —
+    // *"two variants separated by one nucleotide, together affecting one amino
+    // acid"* — does not reach them, and the ruling
+    // `codon-carve-out-shape-restriction` independently keeps ferro to the
+    // substitution / unchanged / substitution shape, which a `del` is not.
+    //
+    // So the value below is now what the test is *named* for, rather than an
+    // exception to it, and the surrounding suite's codon-frame merges (three
+    // tests directly above) are untouched: they are same-codon pairs.
+    //
+    // The immediate cause of the move is the ruling
+    // `coding-frame-merge-belongs-to-the-arm-that-carries-the-codon-shape-gate`:
+    // `coalesce_coding_frame_separation` was re-merging pairs the preserving arm
+    // had refused, because it carries no codon or shape gate. Same defect, same
+    // fix, as W58 in `spec_worked_example_rules`.
     assert_eq!(
         normalize_with(provider_simple(), "NM_TEST.1:c.[12C>G;14del]"),
+        "NM_TEST.1:c.[12C>G;14del]",
+    );
+    // The negative half, named explicitly because the forbidden string is the
+    // one this row used to assert and a reader finding the row red will reach for
+    // it. `c.12_13delinsG` merges a substitution with a deletion across one
+    // unchanged base on a coding axis, which is the shape
+    // `consultation/SVD-WG010.md:51` proposed and the committee rejected in 2021
+    // — the same string class W58 names by that clause.
+    assert_ne!(
+        normalize_with(provider_simple(), "NM_TEST.1:c.[12C>G;14del]"),
         "NM_TEST.1:c.12_13delinsG",
+        "the sub/del pair merged across a codon boundary; `general.md:35` excepts \
+         only two variants together affecting ONE amino acid, and c.12 and c.14 \
+         are in codons 4 and 5",
     );
 }
 

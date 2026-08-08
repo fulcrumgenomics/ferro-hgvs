@@ -2619,12 +2619,54 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // `general.md:35`'s coding exception, applied here — before the 3'-shift and
     // before the weight bound — for two independent reasons, each of which was
     // measured by getting it wrong. See `coalesce_coding_frame_separation`.
-    let unwidened = coalesce_coding_frame_separation(
-        &mut pieces,
-        frame.reading_frame,
-        hi_ref != hi_alt,
-        &ref_bytes,
-    );
+    //
+    // `!preserved`, for the same reason the weight bound and the codon split are
+    // keyed on the partitioner rather than on the requested rule, and it is the
+    // third instance of that same mistake. This pass and
+    // `partition_block_preserving`'s own merge loop are TWO implementations of
+    // `general.md:35`, and only one of them carries the codon half. The
+    // preserving arm computes a per-pair floor — the reading-frame floor of two
+    // applies only when both members are single-base substitutions, which is the
+    // shape `general.md:35` works and the decided ruling
+    // `codon-carve-out-shape-restriction` restricts ferro to — and then
+    // `split_codon_incompatible_triplets` cuts back apart any pair that crossed a
+    // codon boundary. This pass has neither gate: it merges *any* two pieces one
+    // unchanged base apart on a length-changing reading-frame block. Running it
+    // over the preserving arm's output therefore re-merges exactly the pairs that
+    // arm had just refused, and the shape-blind implementation wins because it
+    // runs second.
+    //
+    // Measured, W58, the spec's own worked example and the input this pass's
+    // sibling guard names: `LRG_199t1:c.[992_1002del;1004T>C]` came back as
+    // `LRG_199t1:c.992_1004delinsAC`. That is the answer `consultation/SVD-WG010.md:51`
+    // proposed and the committee REJECTED in 2021, and
+    // `spec_worked_example_rules::the_forbidden_description_is_never_what_ferro_emits`
+    // names it by that clause. An 11-nt deletion is not a single-base
+    // substitution, so the preserving arm had correctly left the pair split at
+    // `general.md:34`'s floor of one; this pass merged it back.
+    // `cis_confluence_adjudication::the_separation_two_members_present_is_not_a_property_of_the_variant`
+    // is the same shape on three single-base deletions
+    // (`c.[9del;11del;13del]` -> `c.9_13delinsAT`).
+    //
+    // Nothing is lost on the arms it still runs on, and nothing is lost under
+    // `preserve` either: this pass was written for a *lone* `delins` that the
+    // re-derivation split at a coincidentally-matching interior base
+    // (`NM_000143.3:c.44_47delinsATC` -> `[44_45delinsAT]` + `[47del]`). The
+    // preserving arm never produces that population — its split move is scoped to
+    // EQUAL-LENGTH members, so an unequal-length lone `delins` is one piece and
+    // there is nothing to rejoin. The population this pass sees under `preserve`
+    // is therefore entirely members the input asserted separately, which is
+    // precisely what `general.md:34` says must stay individual.
+    let unwidened = (!preserved)
+        .then(|| {
+            coalesce_coding_frame_separation(
+                &mut pieces,
+                frame.reading_frame,
+                hi_ref != hi_alt,
+                &ref_bytes,
+            )
+        })
+        .flatten();
     // `general.md:34` binds the members a split emits, not only the block it
     // cut, and `best_alignment`'s single-gap search can carve out a member that
     // needs two gaps of its own. Cut those apart here — after the coding merge

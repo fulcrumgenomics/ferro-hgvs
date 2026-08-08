@@ -35,6 +35,58 @@
 //! these were left. Both are fixed here: the demotion covers `dup`/`ins`-grown
 //! repeats too, and the junction is then bounded at the sibling's 5' edge —
 //! still flush against it, so the #999 collapse keeps firing.
+//!
+//! # OPEN DEFECT, 2026-08-08 — the second example above has come back, and the
+//! # three exhaustive sweeps in this file are RED because of it. Do not re-bless.
+//!
+//! ```text
+//! TTTTTTTTTAATATATTTTA
+//!   g.[2_3dup;5_6insA]   ->  g.[1_9T[11];5_6insA]   junction 5|6 inside 1_9
+//!   g.[2dup;4dup;6T>A]   ->  g.[1_9T[11];6T>A]      base 6 inside 1_9
+//! ```
+//!
+//! **Measured extent**, on this tree, all three sweeps:
+//!
+//! | sweep | cases |
+//! |---|---|
+//! | `no_two_member_allele_normalizes_to_a_different_sequence` | 46 080 |
+//! | `no_three_member_allele_normalizes_to_a_different_sequence` | 38 016 |
+//! | `no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence` | 103 680 |
+//!
+//! **Measured attribution, and this is the load-bearing part.** Re-running the
+//! affected suites with `FERRO_PARTITION=live` — the re-derivation partitioner,
+//! still selectable and A/B'd for exactly this — turns **97 of 99** rows green,
+//! including all three sweeps above and every one of
+//! `issue_1261`, `issue_1287`, `issue_1292`, `issue_1296`, `issue_1301`,
+//! `issue_1304`, `issue_1320`, `issue_1327`, `issue_1398`, `issue_1437`,
+//! `issue_1453`, `issue_1135`, `issue_1281` and `cis_spelling_confluence_gap`.
+//! The two that stay red under `live` are the two rows whose pins were
+//! deliberately moved to the `preserve` values. So the cluster is a property of
+//! the partition-preserving arm, not a pre-existing defect this branch merely
+//! exposed.
+//!
+//! **The mechanism is `cause-unverified` and is deliberately not asserted here.**
+//! Two candidate gates were read and neither was measured on a concrete triple:
+//! the five sibling-repair passes in `normalize/mod.rs` all return early when
+//! `before.len() != after.len()`, which a licensed merge now makes common; and
+//! `demote_repeats_spanning_siblings` keys on the *pre-normalization member's
+//! edit type* (`NaEdit::Duplication` / `Deletion` / `Insertion`), while under
+//! `preserve` the snapshot it is handed is the canonicalizer's output rather
+//! than the authored member. Either would silence the demotion without a
+//! warning. Naming a cause without the triple is the error this branch's design
+//! document records three times, so it is left named-as-hypothesis.
+//!
+//! **Why these rows must stay red rather than being re-blessed.** They are not
+//! value pins. Each asserts, through the SPDI applier in
+//! `crate::common::cis_apply_oracle` — independent of the normalizer by
+//! construction — that the output denotes the sequence the input denoted. An
+//! overlapping allele denotes *no* sequence, so there is no clause to weigh and
+//! nothing to adjudicate: it is a defect, not a reading (see the repository
+//! `CLAUDE.md`, "There is no competing clause, so it is a defect"). The
+//! designed cis corpus in `cis_confluence_axis.rs` reports `sequence_changed: 0`
+//! on the same tree, which is a claim about that corpus and not about the tree —
+//! it cannot build a junction-only member sitting strictly inside a homopolymer
+//! tract another member grows.
 
 use crate::common::cis_apply_oracle::{
     apply, assert_normalizes_preserving, assert_normalizes_preserving_in, normalize, normalize_in,

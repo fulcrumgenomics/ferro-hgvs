@@ -133,15 +133,50 @@ fn issue_1230_inv_with_unchanged_interior_becomes_substitutions() {
     );
 }
 
-/// #1231 — `[dup;del]` reduces to the substitutions it actually describes.
+/// #1231 — `[dup;del]` and the substitution pair are **two fixed points**, and
+/// the old convergence was the re-derivation this project no longer performs.
 ///
-/// Positions 36 and 38 change, separated by unchanged 37. Prioritisation puts
-/// substitution above duplication (`general.md:56`).
+/// **Re-adjudicated 2026-08-08 under `partition-is-the-unit-of-normalization`.**
+/// This row used to assert that `g.[35dup;38del]` converged on
+/// `g.[36A>C;38T>A]`, citing `general.md:56` — "prioritisation: when a
+/// description is possible according to several types, the preferred description
+/// is: (1) substitution, …". That citation is sound and is **not** withdrawn; the
+/// ruling narrows what it reaches. `:56` decides how ONE member is spelled. It
+/// does not license replacing the member *boundaries* the input asserted, and
+/// reaching `[36A>C;38T>A]` from `[35dup;38del]` requires exactly that: the dup
+/// occupies the junction 35|36 and consumes no reference at all, so re-spelling
+/// it as a substitution at 36 is a different partition, not a different type.
+///
+/// So both spellings are now fixed points, and this row pins both. That is a
+/// **representation change** for anyone storing the substitution form, and it is
+/// the change the ruling declares — not a regression. The consumer question
+/// ("are these one variant?") is `EquivalenceLevel::SequenceMatch`, and
+/// `normalization_preserves_the_resulting_sequence` in this file still asserts
+/// both spellings denote one sequence.
 #[test]
-fn issue_1231_dup_del_reduces_to_substitutions() {
-    converges_to(
+fn issue_1231_dup_del_and_its_substitution_pair_are_two_fixed_points() {
+    // The authored partition survives; only `general.md:41`'s 3' rule moves the
+    // deletion, from 38 down the `T` run to 39.
+    assert_eq!(
+        normalize_to_string("TEMPLATE:g.[35dup;38del]"),
+        "TEMPLATE:g.[35dup;39del]",
+    );
+    assert_eq!(
+        normalize_to_string("TEMPLATE:g.[35dup;39del]"),
+        "TEMPLATE:g.[35dup;39del]",
+        "and it is a fixed point",
+    );
+    // The other spelling is unmoved, which is what makes this a divergence
+    // rather than a shift of both.
+    converges_to("TEMPLATE:g.[36A>C;38T>A]", &["TEMPLATE:g.[36A>C;38T>A]"]);
+    // Named, because it is the string this row used to assert and the one a
+    // reader will reach for on a future red.
+    assert_ne!(
+        normalize_to_string("TEMPLATE:g.[35dup;38del]"),
         "TEMPLATE:g.[36A>C;38T>A]",
-        &["TEMPLATE:g.[35dup;38del]", "TEMPLATE:g.[36A>C;38T>A]"],
+        "the dup/del partition was re-derived into a substitution pair; \
+         `general.md:56` ranks the type of one member and does not move its \
+         boundaries (`partition-is-the-unit-of-normalization`)",
     );
 }
 
@@ -295,13 +330,40 @@ fn soft_masked_reference_yields_the_same_canonical_form() {
     assert_eq!(masked, "TEMPLATE:g.35_39delinsTA");
 }
 
-/// #1233 — `[ins;del]` reduces to substitutions. Highest-frequency shape in the
-/// reporter's variant-counting run.
+/// #1233 — `[ins;del]` and its substitution pair are **two fixed points**. The
+/// highest-frequency shape in the reporter's variant-counting run, so this is the
+/// costliest single row of the representation change and is worth naming as such.
+///
+/// **Re-adjudicated 2026-08-08 under `partition-is-the-unit-of-normalization`**,
+/// for the same reason as `issue_1231_…` directly above: the insertion occupies
+/// the junction 35|36 and consumes no reference, so `g.[36A>T;38T>A]` is a
+/// different *partition* of the same bases rather than a re-typing of the same
+/// members, and `general.md:56` decides types, not boundaries.
+///
+/// **This is the row to quote when costing the change.** The reporter's pipeline
+/// stores whichever spelling it received; if it stored the substitution pair,
+/// nothing moves for it, and if it stored the `[ins;del]` form, only
+/// `general.md:41`'s 3' shift of the deletion moves (38 -> 39). What it loses is
+/// the *convergence* — the two forms no longer key alike — which is #1235's
+/// subject and is answered by `EquivalenceLevel::SequenceMatch` rather than by
+/// the canonical string. That trade is the ruling's explicit content, not a side
+/// effect of it.
 #[test]
-fn issue_1233_ins_del_reduces_to_substitutions() {
-    converges_to(
+fn issue_1233_ins_del_and_its_substitution_pair_are_two_fixed_points() {
+    assert_eq!(
+        normalize_to_string("TEMPLATE:g.[35_36insT;38del]"),
+        "TEMPLATE:g.[35_36insT;39del]",
+    );
+    assert_eq!(
+        normalize_to_string("TEMPLATE:g.[35_36insT;39del]"),
+        "TEMPLATE:g.[35_36insT;39del]",
+        "and it is a fixed point",
+    );
+    converges_to("TEMPLATE:g.[36A>T;38T>A]", &["TEMPLATE:g.[36A>T;38T>A]"]);
+    assert_ne!(
+        normalize_to_string("TEMPLATE:g.[35_36insT;38del]"),
         "TEMPLATE:g.[36A>T;38T>A]",
-        &["TEMPLATE:g.[35_36insT;38del]", "TEMPLATE:g.[36A>T;38T>A]"],
+        "the ins/del partition was re-derived into a substitution pair",
     );
 }
 

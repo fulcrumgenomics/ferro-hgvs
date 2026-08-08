@@ -155,56 +155,79 @@ fn coding_rna_axis_keeps_its_reading_frame() {
     );
 }
 
-/// The pass genuinely *fires* on `c.` — a mixed-type allele reduces to the
-/// substitutions it actually describes, which the per-member pipeline cannot do.
+/// The mixed-type allele keeps its own partition on `c.`, and the substitution
+/// spelling keeps its — **two fixed points, by ruling**.
 ///
-/// This is #1233's shape on the coding axis. It is the discriminating test for
-/// this PR: every other case in this file is one the per-member pipeline already
-/// answered, so they pass with the axis gate in place and prove nothing about it.
-/// Here the gate is decisive — with it, the two spellings of this one variant
-/// settle on *different* stable strings:
+/// This is #1233's shape on the coding axis, and the sibling of
+/// `issue_1235_cis_allele_confluence::issue_1233_…`. It used to assert the two
+/// spellings converge on `c.[5A>T;7T>A]`; the table it carried is worth keeping
+/// because it records all three states this row has been in:
 ///
 /// ```text
-///                        gated (before)        this PR
-///   c.[4_5insT;7del]  ->  c.[4_5insT;8del]      c.[5A>T;7T>A]
-///   c.[5A>T;7T>A]     ->  c.[5A>T;7T>A]         c.[5A>T;7T>A]
+///                        gated               #1235               2026-08-08
+///   c.[4_5insT;7del]  ->  c.[4_5insT;8del]   c.[5A>T;7T>A]       c.[4_5insT;8del]
+///   c.[5A>T;7T>A]     ->  c.[5A>T;7T>A]      c.[5A>T;7T>A]       c.[5A>T;7T>A]
 /// ```
 ///
+/// The current column is the *gated* one again, and the reason is not that the
+/// axis gate came back — it is `partition-is-the-unit-of-normalization`. The
+/// insertion sits at the junction 4|5 and consumes no reference, so
+/// `c.[5A>T;7T>A]` re-partitions the block rather than re-typing its members.
+///
+/// **The axis is still asserted, and by a stronger row than this one.** This
+/// test's old claim to be "the discriminating test for the axis gate" no longer
+/// holds — an input whose partition is preserved says nothing about the axis. The
+/// axis assertions that do hold are `cds_axis_splits_across_a_codon_boundary` and
+/// `coding_rna_axis_keeps_its_reading_frame` directly above (both green), where
+/// `general.md:35`'s floor is what decides. Recorded here so the next reader does
+/// not restore the convergence in order to "get the axis coverage back".
+///
 /// c.5 and c.7 sit in different codons (codon 2 is c.4-6), so the one-amino-acid
-/// exception does not apply and the separation rule stands.
+/// exception does not apply and `general.md:34`'s separation rule stands either
+/// way — which is why the deletion merely 3'-shifts from c.7 to c.8.
 #[test]
-fn cds_axis_reduces_a_mixed_type_allele_to_substitutions() {
+fn cds_axis_keeps_a_mixed_type_alleles_partition() {
     let provider = || SyntheticBuilder::cds(CORE, 1, 21, Strand::Plus).build();
     let mixed = normalize_to_string(provider(), "NM_TEST.1:c.[4_5insT;7del]");
     let subs = normalize_to_string(provider(), "NM_TEST.1:c.[5A>T;7T>A]");
-    assert_eq!(
+    assert_eq!(mixed, "NM_TEST.1:c.[4_5insT;8del]");
+    assert_eq!(subs, "NM_TEST.1:c.[5A>T;7T>A]");
+    assert_ne!(
         mixed, subs,
-        "the ins/del and substitution spellings of one c. variant must converge"
+        "these two spellings assert different partitions of the same bases and \
+         are two canonical forms by ruling; converging them again is a \
+         representation change that must be declared"
     );
-    assert_eq!(mixed, "NM_TEST.1:c.[5A>T;7T>A]");
 }
 
-/// The same discriminator on `r.`, which additionally pins the alphabet.
+/// The same row on `r.`, which additionally pins the alphabet — and the alphabet
+/// half is why this row keeps its value even though the convergence half moved.
 ///
-/// The re-derivation reads a DNA reference and writes `Base::to_u8()`, so a
-/// canonicalization that reached the output without the `U`/`T` folding would
-/// either mis-compare every uracil or emit `T` on an `r.` description. The
-/// expected string is fully lower-case with `u`, so both failures are visible.
+/// The canonicalization reads a DNA reference and writes `Base::to_u8()`, so a
+/// pass that reached the output without the `U`/`T` folding would either
+/// mis-compare every uracil or emit `T` on an `r.` description. That check does
+/// not depend on which partition wins, so it is asserted on the preserved
+/// partition exactly as it was on the derived one — and the preserved form
+/// `r.[4_5insu;8del]` carries a lower-case `u` in its insertion payload, so it
+/// still exercises the folding on the write side.
+///
+/// Re-adjudicated 2026-08-08 with `cds_axis_keeps_a_mixed_type_alleles_partition`
+/// above; see that doc for the clause argument.
 #[test]
-fn rna_axis_reduces_a_mixed_type_allele_and_keeps_the_u_alphabet() {
+fn rna_axis_keeps_a_mixed_type_alleles_partition_and_the_u_alphabet() {
     let provider = || SyntheticBuilder::cds(CORE, 1, 21, Strand::Plus).build();
     let mixed = normalize_to_string(provider(), "NM_TEST.1:r.[4_5insu;7del]");
     let subs = normalize_to_string(provider(), "NM_TEST.1:r.[5a>u;7u>a]");
-    assert_eq!(
-        mixed, subs,
-        "the ins/del and substitution spellings of one r. variant must converge"
-    );
-    assert_eq!(mixed, "NM_TEST.1:r.[5a>u;7u>a]");
-    let edit = edit_of(&mixed);
-    assert!(
-        !edit.contains('T') && !edit.contains('A'),
-        "an r. description must carry no DNA bases; got `{mixed}`"
-    );
+    assert_eq!(mixed, "NM_TEST.1:r.[4_5insu;8del]");
+    assert_eq!(subs, "NM_TEST.1:r.[5a>u;7u>a]");
+    assert_ne!(mixed, subs, "two asserted partitions, two canonical forms");
+    for form in [&mixed, &subs] {
+        let edit = edit_of(form);
+        assert!(
+            !edit.contains('T') && !edit.contains('A'),
+            "an r. description must carry no DNA bases; got `{form}`"
+        );
+    }
 }
 
 /// An allele whose members overlap must not be canonicalized on any axis.

@@ -285,6 +285,29 @@ fn two_adjacent_members_that_both_consume_reference_are_one_delins() {
 /// The case is corpus class `s00-c-m4-sep3-p8-rot3`, taken verbatim rather than
 /// invented, and it is one of the 33 classes that still leave a zero interior
 /// gap after #1537. `c.16_23dup` and `c.24_31del` are flush and stay flush.
+///
+/// # RED as of 2026-08-08, and DELIBERATELY not re-blessed
+///
+/// Ferro emits `c.[9T>A;25_26inv;28_30delinsAAT;34_35insCACCAAAA]`. That is four
+/// members, as authored, but on *different territory*: the `16_23dup` and the
+/// `24_31del` have been replaced by an `inv` at 25_26 and a `delins` at 28_30,
+/// which is a re-derived partition and not a re-spelling of the asserted one. So
+/// it is not this record's carve-out working, and it is not
+/// `partition-is-the-unit-of-normalization` applying either — it contradicts the
+/// ruling it was supposed to demonstrate.
+///
+/// Measured attribution: the row is **green under `FERRO_PARTITION=live`**, so it
+/// belongs to the same partition-preserving-arm defect cluster documented at
+/// length in `tests/it/cis_junction_crossing_shift.rs`'s module doc (31 rows on
+/// this tree, 187,776 sweep cases, all flipping under the same A/B). Adjudicating
+/// the *value* would be adjudicating a defect, so the expectation is left as it
+/// is and the row stays red until the arm is fixed.
+///
+/// Note also what the competing forms here are: a `dup` against a flush `del`,
+/// with `DNA/duplication.md:18` on one side. `general.md:56` cannot rank them —
+/// it ranks type labels for ONE span and says nothing about a four-member allele
+/// — so even once the defect is fixed this row's residue is
+/// `canonical-form-choice-when-both-legal`, which is `undecided`.
 #[test]
 fn a_dup_flush_against_a_del_is_left_alone() {
     let provider = provider();

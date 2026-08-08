@@ -989,62 +989,96 @@ fn test_no_overlap_warning_for_adjacency() {
 // The axis is the whole discriminator, so both halves are asserted on
 // the same block and the same reference. `NM_TEST.1` has `cds_start = 1`,
 // so `c.N` and `n.N` address the identical base.
+//
+// **Amended 2026-08-08.** Under the operator ruling
+// `partition-is-the-unit-of-normalization` a LONE unequal-length `delins`
+// is never split, on any axis, so the single-member block below can no
+// longer express the axis difference — both axes return the input. The
+// discriminator therefore moved to a multi-member block
+// (`coding_and_noncoding_axes_differ_on_a_multi_member_block`), where the
+// axis floor is what decides. The single-member row is kept, with a
+// negative guard, because "a lone delins keeps its partition" is itself
+// the thing that changed and is worth pinning on both axes.
 // =====================================================================
 
-/// `c.2_5` is `TGCA` and the payload `AAC` aligns only at its last column
-/// (`C`), leaving a one-base gap between the two derived runs. On a reading
-/// frame that gap is `general.md:35`'s, so the block stays one `delins`.
+/// A LONE `delins` keeps its one-member partition on every axis, so this block
+/// is no longer where the axis is observable — and the guard is widened rather
+/// than narrowed to keep it observable somewhere.
 ///
-/// Note the two runs are in *different* codons — `c.2` is in codon 1 and
-/// `c.5` in codon 2 — which is deliberate. `apply_coding_codon_exception`
-/// and `split_codon_incompatible_triplets` both apply the codon half of the
-/// exception, and both scope it to the three-column substitution triplet the
-/// spec's own wording describes. A wider merge is not "two variants" in that
-/// sense, so it is governed by the distance rule alone — the reading the
-/// SVD-WG states it is moving to outright (`general.md:39`).
-/// The assertion is `input == output`, which a *decline* satisfies as readily as
-/// the merge: if the sequence-first derivation refuses this block for some
-/// unrelated reason — a window clamp, the weight bound, the round-trip guard, a
-/// future `enclosing_exon` change — the coding answer is still its own input and
-/// the pass under test never ran (#1235 review). Two things stop that here:
+/// **Re-adjudicated 2026-08-08.** This row used to assert that `n.2_5delinsAAC`
+/// split into `n.[2_3delinsAA;9del]` (the `n.` control) while `c.2_5delinsAAC`
+/// stayed whole (the coding answer). Both halves now return the input unchanged,
+/// and that is the operator ruling `partition-is-the-unit-of-normalization`
+/// applying rather than a decline:
 ///
-/// * the `n.` control below, on the same reference and the same block, whose
-///   expected string *differs* from its input, so a derivation that declined for
-///   any axis-blind reason would fail it; and
-/// * `merge::tests::coalesce_coding_frame_separation_merges_one_base_gap_only_in_frame`,
-///   which asserts the merge against the pass directly and is the airtight half.
+/// * The input is ONE member. `general.md:34` speaks of "two variants separated
+///   by", so it has nothing to say about a lone member, and the split move is
+///   scoped to EQUAL-LENGTH members — `c.2_5` is four reference bases against a
+///   three-base payload, so there is no column-wise correspondence to read an
+///   interior unchanged run out of. Locating the gap means choosing an
+///   alignment, which is the re-derivation the ruling removes.
+/// * `DNA/delins.md:47` is the clause that agrees: on exactly this shape — a
+///   payload part of which "aligns" with the reference — it answers **"The
+///   'delins' format is recommended"**, and calls the decomposition the
+///   *alternative* description (`:46`).
+///
+/// So on both axes the answer is the authored `delins`, and the old `n.` control
+/// went blind: its expected string is now identical to its input, which is what
+/// the old comment warned about in the other direction ("a *decline* satisfies
+/// it as readily as the merge"). The replacement discriminator is
+/// [`coding_and_noncoding_axes_differ_on_a_multi_member_block`] below, on a
+/// MULTI-member input where the axis floor is what decides — and
+/// `merge::tests::coalesce_coding_frame_separation_merges_one_base_gap_only_in_frame`
+/// still asserts the pass directly, which remains the airtight half.
 #[test]
 fn coding_length_changing_block_merges_across_one_unchanged_base() {
-    assert_eq!(
-        normalize_with_provider(
-            provider_with_simple_transcript(),
-            "NM_TEST.1:n.2_5delinsAAC"
-        ),
-        "NM_TEST.1:n.[2_3delinsAA;9del]",
-        "the derivation must reach this block at all, else the coding assertion \
-         below is satisfied by a decline and proves nothing",
-    );
-    assert_eq!(
-        normalize_with_provider(
-            provider_with_simple_transcript(),
-            "NM_TEST.1:c.2_5delinsAAC"
-        ),
-        "NM_TEST.1:c.2_5delinsAAC",
-    );
+    for axis in ["c", "n"] {
+        let input = format!("NM_TEST.1:{axis}.2_5delinsAAC");
+        assert_eq!(
+            normalize_with_provider(provider_with_simple_transcript(), &input),
+            input,
+            "a lone unequal-length `delins` has no interior correspondence to cut \
+             on, and `DNA/delins.md:47` recommends the spanning form",
+        );
+        // The negative half. The forbidden string is the split this row used to
+        // assert; naming it stops the old value being restored as "drift".
+        assert_ne!(
+            normalize_with_provider(provider_with_simple_transcript(), &input),
+            format!("NM_TEST.1:{axis}.[2_3delinsAA;9del]"),
+            "the lone `delins` was re-derived into two members by choosing an \
+             alignment through it — see `partition-is-the-unit-of-normalization`",
+        );
+    }
 }
 
-/// The same block on `n.`, which has no reading frame, splits — and the
-/// deletion 3'-shifts down the `A` run at `n.5-9`, which is also why the
-/// merge above has to run *before* the shift: afterwards the two runs are
-/// four bases apart and no one-base rule can rejoin them.
+/// The axis discriminator, moved to a MULTI-member input so it still
+/// discriminates.
+///
+/// `general.md:34` sets the floor at one unchanged nucleotide on every axis;
+/// `general.md:35` excepts "two variants separated by one nucleotide, together
+/// affecting one amino acid", which is a coding rule and reaches no `n.`
+/// description. `c.4` and `c.6` are both single-base substitutions inside codon 2
+/// (`c.4_6`), so they are exactly the shape the exception works and exactly the
+/// shape `codon-carve-out-shape-restriction` restricts ferro to — they merge on
+/// `c.` and must not merge on `n.`.
+///
+/// This is the pair the previous single-member row could no longer express, and
+/// it is strictly stronger than that row was: **both** expected strings differ
+/// from their inputs on one axis and from each other, so neither half can be
+/// satisfied by a decline. `NM_TEST.1` has `cds_start = 1`, so `c.N` and `n.N`
+/// address the identical base and the axis is the only difference between them.
 #[test]
-fn non_coding_length_changing_block_keeps_the_split() {
-    let result = normalize_with_provider(
-        provider_with_simple_transcript(),
-        "NM_TEST.1:n.2_5delinsAAC",
+fn coding_and_noncoding_axes_differ_on_a_multi_member_block() {
+    assert_eq!(
+        normalize_with_provider(provider_with_simple_transcript(), "NM_TEST.1:c.[4C>G;6A>G]"),
+        "NM_TEST.1:c.4_6delinsGAG",
+        "same-codon substitution pair one base apart: `general.md:35`'s exception",
     );
     assert_eq!(
-        result, "NM_TEST.1:n.[2_3delinsAA;9del]",
-        "an axis with no reading frame gets `general.md:34`'s plain rule",
+        normalize_with_provider(provider_with_simple_transcript(), "NM_TEST.1:n.[4C>G;6A>G]"),
+        "NM_TEST.1:n.[4C>G;6A>G]",
+        "an axis with no reading frame gets `general.md:34`'s plain rule, so the \
+         pair stays individual — and this half is what makes the `c.` half above \
+         a statement about the axis rather than about the block",
     );
 }

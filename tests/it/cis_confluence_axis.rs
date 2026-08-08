@@ -249,20 +249,67 @@ const CDS_END: u64 = 63;
 /// multi-member form "the *better* of the two forms" on `general.md:34`
 /// grounds; the partition rule reaches the same conclusion structurally instead
 /// of by cost.
+/// # RE-MEASURED 2026-08-08, after the partition rule was made to govern every
+/// block. Read this block before reading anything above as current.
+///
+/// Everything above describes a **blend**: `partition_block_preserving` used to
+/// decline on 33.4% of invocations and fall back to `partition_block`, so a third
+/// of the figures were the re-derivation partitioner's. The decline rate is now
+/// 0.0% in both directions, and the census moved again as a result. Measured on
+/// this tree, both arms, same corpus and same instrument:
+///
+/// ```text
+///                                  live (re-derive)   preserve (this pin)
+///   converged                                 8 026                3 416
+///   split 2                                   3 112                7 552
+///   split 3                                     115                  283
+///   split 4+                                     19                   21
+///   same-partition converged                 11 116               10 459
+///   cross-partition divergence                3 090                7 043
+///   same-partition divergence                   156                  813
+///   sequence changed                              0                    0
+///   not a fixed point                             0                    0
+/// ```
+///
+/// So the representation change to declare is **4 610 classes losing
+/// sequence-confluence at 3'** (8 026 -> 3 416) and 4 518 at 5' (8 021 ->
+/// 3 503). The previous pins (5 611 / 5 684) were neither arm — they were the
+/// blend, so the branch-to-branch delta of 2 195 understates the change against
+/// the release by half.
+///
+/// **The three correctness figures are still hard zeros**, over 47 392 spellings:
+/// `declined` 0, `sequence_changed` 0, `not_fixed_point` 0. That is what makes
+/// the fall above a representation change rather than a defect: every one of the
+/// 7 856 divergences is a pair of well-formed, sequence-preserving, self-stable
+/// descriptions.
+///
+/// ## AND A ZERO HERE IS A CLAIM ABOUT THIS CORPUS, NOT ABOUT THE TREE
+///
+/// This must be said next to the zeros, because it was nearly missed.
+/// `sequence_changed: 0` and `not_fixed_point: 0` hold on the designed cis corpus
+/// while `cis_junction_crossing_shift`'s exhaustive sweeps — on the same tree, on
+/// the same day — report **187 776** two- and three-member cases whose output
+/// overlaps or denotes no single sequence, every one of them a repeat or `dup`
+/// grown over a sibling's junction (`g.[2_3dup;5_6insA]` -> `g.[1_9T[11];5_6insA]`).
+/// The corpus cannot build that shape: `generate_cis_confluence_corpus` draws its
+/// members from a fixed rotation set over a 63-nt core and never places a
+/// junction-only member strictly inside a homopolymer tract that another member
+/// grows. So these two zeros are real and narrow. They are not evidence that the
+/// tree preserves sequence.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 5_611,
-    split_two: 5_524,
-    split_three: 135,
-    split_more: 2,
+    converged: 3_416,
+    split_two: 7_552,
+    split_three: 283,
+    split_more: 21,
     underdetermined: 0,
     sequence_changed: 0,
     same_partition_groups: 11_272,
-    same_partition_converged: 10_892,
-    cross_partition_divergence: 5_281,
-    same_partition_divergence: 380,
+    same_partition_converged: 10_459,
+    cross_partition_divergence: 7_043,
+    same_partition_divergence: 813,
     not_fixed_point: 0,
 };
 
@@ -287,20 +334,29 @@ const THREE_PRIME: Census = Census {
 /// [`THREE_PRIME`] sets out — which anchor a member shuffles to decides whether
 /// two same-arity spellings land on the same territory — so neither is a
 /// direction-specific defect.
+/// RE-MEASURED 2026-08-08 with [`THREE_PRIME`]; the A/B table and the
+/// corpus-blindness caveat there apply verbatim. The `live` baseline for this
+/// direction is `converged` 8 021, `split 2` 3 137, `split 3` 105, `split 4+` 9,
+/// `same_partition_converged` 11 132, `cross_partition_divergence` 3 111,
+/// `same_partition_divergence` 140.
+///
+/// It still tracks 3' closely (3 503 against 3 416), which remains the reading to
+/// keep: what the partition rule changed is which *question* the axis answers,
+/// not which end of an ambiguous run the shuffle walks to.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 5_684,
-    split_two: 5_455,
-    split_three: 130,
-    split_more: 3,
+    converged: 3_503,
+    split_two: 7_562,
+    split_three: 194,
+    split_more: 13,
     underdetermined: 0,
     sequence_changed: 0,
     same_partition_groups: 11_272,
-    same_partition_converged: 10_883,
-    cross_partition_divergence: 5_199,
-    same_partition_divergence: 389,
+    same_partition_converged: 10_540,
+    cross_partition_divergence: 7_037,
+    same_partition_divergence: 732,
     not_fixed_point: 0,
 };
 
