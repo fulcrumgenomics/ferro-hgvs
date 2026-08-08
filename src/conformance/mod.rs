@@ -14,6 +14,7 @@ pub mod accession_inventory;
 pub mod audited_provider;
 pub mod biocommons;
 pub mod case_harvest;
+pub mod completeness;
 pub mod hgvs_rs_projection;
 pub mod mutalyzer;
 pub mod reference_snapshot;
