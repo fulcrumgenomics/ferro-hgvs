@@ -46,28 +46,40 @@
 //! What the indel model can assert today is narrower than what it should:
 //!
 //! - The **spanning-delins comparison is still held back in the indel model**,
-//!   and the two issues that justified holding it back are now both fixed. A
-//!   length-changing haplotype and its spanning `delins` reached two fixed points
-//!   in general, not in two edge cases — the derivation reaches the *same* piece
-//!   set from both spellings, and only the input-relative gates in
-//!   `canonicalize_from_sequence` decided differently, because they were measured
-//!   against how the input happened to be written. #1260 went with the two-gap
-//!   alignment (which can express *insertion, retained base, insertion*, the
-//!   separation threshold admitting the split across the retained base) and #1262
-//!   with the removal of the input-separator veto, the last of those gates.
-//!   Convergence is pinned by
-//!   `adjacent_gap_insertions_and_the_delins_spelling_converge`.
+//!   and under the partition model it must stay held back — for a reason that is
+//!   now structural rather than a pair of open defects.
 //!
-//!   So the restriction has outlived its reason. Restoring it is deliberately
-//!   **not** done here: the test that holds it back,
-//!   `an_indel_haplotype_normalizes_to_its_own_sequence`, failed on a live defect
-//!   at the time, so a comparison added to it could not be validated — a pass
-//!   would be unobservable and a failure unattributable between that defect and
-//!   the new assertion. That property now passes and is no longer `#[ignore]`d,
-//!   so the restriction can be revisited; it is left in place here rather than
-//!   changed in the same commit that enabled the property. The substitution model
-//!   already compares the delins encoding (`encodings()` includes
-//!   `as_spanning_delins`), so the gap is specific to the indel model.
+//!   A length-changing haplotype and its spanning `delins` are **two different
+//!   partitions of the reference**, not two encodings of one variant. The
+//!   multi-member spelling asserts n changed blocks with unchanged runs between
+//!   them; the `delins` asserts one. Ferro no longer re-derives a partition from
+//!   `(reference, resulting sequence)`, so the two are preserved as written and
+//!   legitimately reach different canonical strings whenever the members are one
+//!   or more unchanged nucleotides apart (`general.md:34`) — which is most of
+//!   this model's corpus, since the events are drawn at distinct indices.
+//!   Comparing them here would assert non-confluence as a bug.
+//!
+//!   The historical framing, kept because it explains the shape of the code: the
+//!   derivation used to reach the *same* piece set from both spellings, and only
+//!   the input-relative gates in `canonicalize_from_sequence` decided differently.
+//!   #1260 went with the two-gap alignment (which can express *insertion,
+//!   retained base, insertion*) and #1262 with the removal of the input-separator
+//!   veto. Both are now moot for this comparison.
+//!
+//!   What replaces the convergence claim is
+//!   `adjacent_gap_insertions_and_the_delins_spelling_are_distinct_partitions`,
+//!   which pins **both** exact strings, pins that they differ, and pins that
+//!   `EquivalenceChecker` still rates them `SequenceMatch` — the property a
+//!   consumer actually needs. `as_spanning_delins` therefore stays out of
+//!   `an_indel_haplotype_normalizes_to_its_own_sequence`'s comparison set, and
+//!   this is no longer a deferral. The substitution model does compare its delins
+//!   encoding (`encodings()` includes `as_spanning_delins`) and is unaffected,
+//!   and the asymmetry is exactly the equal-length one the model turns on: a
+//!   length-preserving haplotype's spanning delins covers the same reference span
+//!   as its members' hull *column for column*, so the split move can cut it back
+//!   at its interior unchanged runs and recover the members. A length-changing
+//!   delins has no such correspondence, which is why the split move declines it
+//!   and why the indel model's two spellings stay apart.
 //!
 //!   This is the **only** restriction those two issues justify. The generator
 //!   used to carry a second one citing them — a filter excluding two insertions
@@ -90,6 +102,7 @@
 //! that work.
 
 use crate::common::synthetic::{padded, SyntheticBuilder, PAD_OFFSET};
+use ferro_hgvs::equivalence::{EquivalenceChecker, EquivalenceLevel};
 use ferro_hgvs::spdi::hgvs_to_spdi;
 use ferro_hgvs::{parse_hgvs, HgvsVariant, MockProvider, Normalizer};
 use proptest::prelude::*;
@@ -798,7 +811,7 @@ impl IndelHaplotype {
     /// Whether two insertions sit at **adjacent gaps**.
     ///
     /// The strategy no longer filters this shape out (#1294). It is kept because
-    /// `adjacent_gap_insertions_and_the_delins_spelling_converge` uses it to assert that the
+    /// `adjacent_gap_insertions_and_the_delins_spelling_are_distinct_partitions` uses it to assert that the
     /// haplotype it pins really is one, so that test cannot drift onto a
     /// different shape than the one it claims to pin.
     fn has_adjacent_gap_insertions(&self) -> bool {
@@ -1005,21 +1018,37 @@ proptest! {
 /// Pins the shapes the indel model holds back, so the missing spanning-delins
 /// comparison does not become permanent by inattention.
 ///
-/// **#1260 and #1262 are both now fixed**, and this test pins the forms they
-/// converged on. It used to assert that #1262 still diverged, with its failure
-/// message naming the restoration of the delins encoding to
-/// `an_indel_haplotype_normalizes_to_its_own_sequence`'s comparison set as the
-/// follow-through. That restoration is still outstanding — see the module doc for
-/// why it was deferred rather than done here.
+/// **The two rows now answer differently, and the difference is the point.**
+/// Both are "length-changing members versus the spanning delins", but they sit on
+/// opposite sides of `general.md:34`'s threshold, so under the partition model
+/// one merges and one does not. Which is what the model is for: the merge is
+/// decided by the input's own separation, not by re-reading the resulting
+/// sequence.
 ///
-/// The two rows are not two edge cases. They are the general behaviour of
-/// "length-changing members versus the spanning delins": the derivation reaches
-/// the *same* piece set from both spellings, and only the input-relative gates in
-/// `canonicalize_from_sequence` — the `changed_columns_of_edits` bound and the
-/// input-separator veto — decided differently, because both were measured against
-/// how the input happened to be written. The veto is gone as of this change.
+/// - **#1260** — two one-base insertions at gaps `258|259` and `259|260`. The
+///   reference base at 259 lies between them, so their separation is **one**
+///   unchanged nucleotide, and `general.md:34` says "two variants separated by
+///   one or more nucleotides should be described individually and **not** as a
+///   "delins"". No merge. The competing spelling `g.259delinsCAC` is a *one*-member
+///   partition and stays one member — it is length-changing (1 reference base
+///   against a 3-base payload), so there is no column-wise correspondence in
+///   which an interior unchanged run could be found without inventing an
+///   alignment. Two partitions, two canonical strings, one resulting sequence.
+/// - **#1262** — a substitution at 258 and a deletion at 260. These *do*
+///   converge, on the form the block derives, and always did.
+///
+/// **This is a deliberate narrowing of what "converge" means here, not a
+/// regression, and it is worth stating plainly because the test used to be
+/// called `…_converge`.** Between #1260/#1285 and the partition model, ferro
+/// re-derived a partition from `(reference, resulting sequence)`; on that footing
+/// the two #1260 spellings were two encodings of one variant and had to agree.
+/// On the partition model an HGVS descriptor *asserts* how many variants there
+/// are, so they are two different assertions that happen to denote the same
+/// bases. The property #1260 actually cares about — that a consumer can tell the
+/// two describe the same sequence — is still available and is asserted below, as
+/// `EquivalenceLevel::SequenceMatch`.
 #[test]
-fn adjacent_gap_insertions_and_the_delins_spelling_converge() {
+fn adjacent_gap_insertions_and_the_delins_spelling_are_distinct_partitions() {
     let provider = SyntheticBuilder::genomic("AAAAAA").build();
     let normalizer = Normalizer::new(provider);
     let normalize_str = |input: &str| normalize(&normalizer, input).to_string();
@@ -1051,17 +1080,53 @@ fn adjacent_gap_insertions_and_the_delins_spelling_converge() {
         "the pinned haplotype must have two distinct encodings, got {encodings:?}"
     );
     let normalized: Vec<String> = encodings.iter().map(|e| normalize_str(e)).collect();
-    // #1260 is FIXED. Both spellings converge, on the split form PR #1285 named:
-    // the two-gap alignment `best_alignment` gained can express *insertion,
-    // retained base, insertion*, and the separation threshold admits the split
-    // across the one retained base.
-    assert_eq!(
-        normalized[0], normalized[1],
-        "#1260's two spellings must converge"
-    );
+    // Both exact strings are pinned, so neither side can drift unobserved.
+    //
+    // `encodings()` is `[as_separate_members(), as_spanning_delins()]`, in that
+    // order.
+    //
+    // The two-member spelling keeps its two members: separation is one unchanged
+    // nucleotide (the reference `A` at 259), and `general.md:34` describes such a
+    // pair individually. Neither `C` can 3'-shift — 259 and 260 are both `A` in
+    // the poly-A core — so each stays where the input put it.
     assert_eq!(
         normalized[0], "NC_TEST.1:g.[258_259insC;259_260insC]",
-        "and they converge on the split form, not the spanning delins"
+        "the two-member spelling must keep both members (separation 1, general.md:34)"
+    );
+    // The one-member spelling keeps its one member. `general.md:34` governs "two
+    // variants" and so has no purchase here, and the member is length-changing,
+    // which is exactly the shape the split move declines: cutting it would mean
+    // choosing an alignment of `A` against `CAC`, i.e. re-deriving the partition
+    // the description already stated.
+    assert_eq!(
+        normalized[1], "NC_TEST.1:g.259delinsCAC",
+        "the spanning-delins spelling must keep its single member"
+    );
+    // Stated as its own assertion rather than left as a consequence of the two
+    // above: the pair is *deliberately* non-confluent, and re-converging it in
+    // either direction is a representation change that needs adjudicating, not a
+    // silent improvement.
+    assert_ne!(
+        normalized[0], normalized[1],
+        "the two spellings assert different partitions and must stay distinct"
+    );
+    // …and the property #1260 is really about still holds, on the rung built for
+    // it: different canonical strings, provably the same resulting sequence.
+    // `EquivalenceChecker` reaches `SequenceMatch` only after `Identical` and
+    // `NormalizedMatch` have both declined, so this simultaneously re-states the
+    // divergence and shows it is harmless to a consumer that asks the right
+    // question.
+    let checker = EquivalenceChecker::new(SyntheticBuilder::genomic("AAAAAA").build());
+    let verdict = checker
+        .check(
+            &parse_hgvs(&encodings[0]).expect("parse the two-member spelling"),
+            &parse_hgvs(&encodings[1]).expect("parse the spanning-delins spelling"),
+        )
+        .expect("the two spellings must be comparable");
+    assert_eq!(
+        verdict.level,
+        EquivalenceLevel::SequenceMatch,
+        "the two partitions must still be recognised as denoting one sequence"
     );
 
     // #1262: a substitution and a deletion against the spanning delins. Spelled

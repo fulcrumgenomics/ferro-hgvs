@@ -13564,9 +13564,20 @@ mod tests {
     /// insertion-anchor collapse in the combined build. `!is_frameshift`, and a
     /// single bounded in-frame consequence.
     ///
-    /// The protein expectation moved with #1235's `dup` typing — see the
-    /// comments at the assertions. The `!is_frameshift` half, which is what
-    /// #1070 is about, did not.
+    /// **Both expectations are back to their pre-#1235 values under the
+    /// partition model** (`FERRO_PARTITION=preserve`), and the reason is that
+    /// nothing here needs deriving. The allele asserts a two-member partition —
+    /// `c.4del` and an insertion at the `6|7` junction — separated by two
+    /// unchanged nucleotides (`c.5`, `c.6`), so `general.md:34` ("two variants
+    /// separated by one or more nucleotides should be described individually and
+    /// **not** as a "delins"") keeps them individual and each member is already
+    /// at its 3'-most position (`general.md:41`). The output is therefore the
+    /// input, and no `dup` at `c.1_3` is manufactured, so `affects_init` is false
+    /// and the protein is the computed in-frame consequence rather than
+    /// `p.(Met1?)`. See the comments at the assertions.
+    ///
+    /// The `!is_frameshift` half, which is what #1070 is actually about, has
+    /// never moved through any of this.
     #[test]
     fn project_cis_insertion_member_nets_in_frame() {
         use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
@@ -13597,43 +13608,58 @@ mod tests {
         // frame however the allele is spelled.
         assert!(!proj.is_frameshift, "net +3 restores the frame");
         // Asserted so the protein expectation below cannot be read without the
-        // nucleotide form that produces it. `ATGGATTATTGCTAA` →
-        // `ATGATGGGGTATTGCTAA` has a *single-gap* explanation of the same weight
-        // as the input's two-gap one (five changed columns either way), and the
-        // sequence-first pass takes it. It partitions the trimmed block
-        // `GAT -> ATGGGG` into an insertion and a two-base replacement one
-        // unchanged base apart, and `general.md:35` then merges them: `c.4`,
-        // `c.5` and `c.6` are one codon, so this is exactly "two variants
-        // separated by one nucleotide, together affecting one amino acid".
+        // nucleotide form that produces it — and here that form is the input's
+        // own partition, unchanged.
         //
-        // It used to read `c.[1_3dup;5_6delinsGG]`, before
-        // `coalesce_coding_frame_separation` applied that exception on the live
-        // path. That split is the reason the protein expectation below moved
-        // twice: it reached the initiation codon, which forced `p.(Met1?)` for a
-        // variant whose 5'-most changed base is `c.4`.
+        // SUPERSEDES #1484's expectation for this row, deliberately, and the two
+        // disagree on a fact rather than on a preference. #1484 asserted
+        // `c.4_6delinsATGGGG`, reasoning that the derived block `GAT -> ATGGGG`
+        // splits into an insertion and a two-base replacement "one unchanged base
+        // apart", which `general.md:35`'s codon exception then merges. That
+        // separation is a property of the *derived* partition, not of this
+        // description: as written, `c.4del` and the `6|7` insertion are separated
+        // by TWO unchanged nucleotides, `c.5` and `c.6`. The reading-frame floor
+        // is 2, and a gap of 2 is not below it, so no merge is licensed and
+        // `general.md:34` keeps the members individual. Under the partition model
+        // the input's separation is the one that counts, so this row moves back to
+        // the input's own form. Recorded here because a value that moves with a
+        // rebase and no note is indistinguishable from a botched conflict.
+        //
+        // `ATGGATTATTGCTAA` → `ATGATGGGGTATTGCTAA` does also admit a *single-gap*
+        // explanation of the same weight as the input's two-gap one (five changed
+        // columns either way), which is how #1235's sequence-first pass came to
+        // report `c.[1_3dup;5_6delinsGG]` — it derived a partition from the two
+        // sequences and typed the derived tandem insertion as a `dup`. Deriving
+        // is what no longer happens: the description already said where its
+        // members are, and `c.4del` (last `G` of the `GG` at `c.3_4`) and the
+        // `6|7` insertion are each already 3'-most (`general.md:41`). So the
+        // members survive as written.
         assert_eq!(
             format!("{}", proj.coding.as_ref().expect("coding expected")),
-            "NM_SEP.1:c.4_6delinsATGGGG"
+            "NM_SEP.1:c.[4del;6_7insGGGG]"
         );
-        // The 5'-most base this variant changes is `c.4`, so the initiation
-        // codon is untouched and the consequence is the bounded in-frame one:
-        // codon 2 (`Asp`) replaced by `Met` and `Gly`.
+        // Nothing in the output reaches `c.1_3`, so the initiation codon is
+        // untouched and the start-codon rule never fires. The `p.(Met1?)` this
+        // test asserted between #1235 and the partition model was a *consequence
+        // of the derived `c.1_3dup`*, not of the variant: duplicating `ATG` does
+        // leave the choice of initiation site unpredictable
+        // (`protein/substitution.md:52`), but this allele duplicates nothing.
+        // #1484's own note makes the same point from the other side — a partition
+        // that walks a change onto the initiation codon and then calls the start
+        // unpredictable is `delins.md:47`'s harm exactly. Both forms avoid it;
+        // they differ only in how many members they spell.
         //
-        // This assertion has moved twice, and the second move undoes the first.
-        // While the derivation split the block into `c.[1_3dup;5_6delinsGG]` the
-        // `dup` reached `c.1_3`, `affects_init` was true, and the report was
-        // `p.(Met1?)` — an honest answer *about that description*, since a
-        // duplicated `ATG` leaves two in-frame start codons and nothing says
-        // which the ribosome uses. But the description was the problem: nothing
-        // in `c.[4del;6_7insGGGG]` touches `c.1_3`, and a partition that walks a
-        // change onto the initiation codon and then reports the start as
-        // unpredictable is `delins.md:47`'s harm exactly — "software tools
-        // making incorrect predictions for the consequences on protein level".
-        // With `general.md:35` applied on the live path the block stays one
-        // member and the consequence is computable again.
+        // The computed answer is exact. Reference `ATGGATTATTGCTAA` translates
+        // `Met-Asp-Tyr-Cys-*`; the result `ATGATGGGGTATTGCTAA` translates
+        // `Met-Met-Gly-Tyr-Cys-*`. `Asp2` is replaced by `Met-Gly` with the frame
+        // and the termination codon intact, which is a delins of one residue by
+        // two — `protein/delins.md:5` ("one or more amino acids are replaced by
+        // one or more other amino acids **and which is not** a substitution or
+        // frameshift"). It is parenthesised because no protein was analysed
+        // (`protein/delins.md:16`).
         assert!(
             !proj.affects_init,
-            "c.4_6delinsATGGGG does not reach the initiation codon"
+            "no member reaches c.1_3, so initiation is untouched"
         );
         assert_eq!(
             format!("{}", proj.protein.expect("protein expected")),

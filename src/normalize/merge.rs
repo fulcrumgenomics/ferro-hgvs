@@ -2610,6 +2610,30 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // 8,007 -> 7,675) when the bound saw the widened pieces. The un-widened
     // partition is put through the same 3'-shift, coalesce and shrink so the two
     // weights are comparable.
+    //
+    // NOT APPLIED UNDER `Preserve`, and the exemption is the bound's own logic
+    // rather than a carve-out for it. Every sentence above argues against a
+    // partition that was **re-derived** — "the derived form then marks more
+    // columns changed than the input did … and merges across ten bases the input
+    // left unchanged". Under `Preserve` the partition IS the input's, so there is
+    // no re-derivation to be suspicious of, and the only thing that can raise the
+    // column count is a merge `general.md:34-39` explicitly licenses: merging two
+    // members separated by one unchanged nucleotide necessarily absorbs that
+    // nucleotide, adding a column the input did not mark.
+    //
+    // Left in place, the bound therefore vetoes exactly the merges the spec
+    // mandates, and only on the reading-frame axes — where `axis_min_separation`
+    // is 2, so a separation-1 pair is merged, whereas on a frameless axis the
+    // floor is 1 and only separation-0 merges happen, which absorb nothing. The
+    // measured effect is that `c.[1G>T;3T>A;5A>C]` (3 input columns, one merged
+    // piece of 5) is refused, and with it EVERY coding-axis allele carrying a
+    // separation-1 pair — a silent hole in the rule that ships, not a bake-off
+    // artifact. Refusal here does not even fall back to `partition_block`; it
+    // abandons canonicalization to the per-member pipeline.
+    //
+    // The two are independent and both apply: `unwidened` decides *which*
+    // partition's columns are counted, the exemption decides *whether* to count
+    // at all.
     let derived_columns = match unwidened {
         None => changed_columns_of_pieces(&pieces),
         Some(mut raw) => {
@@ -2619,8 +2643,26 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
             changed_columns_of_pieces(&raw)
         }
     };
-    if derived_columns > changed_columns_of_edits(&edits) {
+    if partition_rule() != PartitionRule::Preserve
+        && derived_columns > changed_columns_of_edits(&edits)
+    {
         return None;
+    }
+
+    // `general.md:35`'s coding exception has two halves, and `axis_min_separation`
+    // supplies only the distance one. Without the codon check a reading-frame axis
+    // merges `c.3` with `c.5` — different codons, so the exception does not reach
+    // them — as readily as `c.1` with `c.3`. The `Shadow` arm already calls this
+    // immediately after its splitter; `Preserve` needs it for the same reason, and
+    // the need was masked until the weight bound above stopped vetoing every
+    // reading-frame merge.
+    if partition_rule() == PartitionRule::Preserve {
+        split_codon_incompatible_triplets(
+            &mut pieces,
+            frame.reading_frame,
+            w_lo + lo as i64,
+            &ref_bytes[lo..hi_ref],
+        );
     }
 
     // `delins.md:44-47`, applied AFTER the weight bound, for exactly the reason
@@ -4293,16 +4335,43 @@ fn partition_block_preserving(
     }
     let placed = split;
 
-    // The one licensed boundary move. Merging absorbs the unchanged run between
-    // the two members into the merged one, on both axes at once.
+    // The second licensed boundary move. Merging absorbs the unchanged run
+    // between the two members into the merged one, on both axes at once.
+    //
+    // A single-base substitution: one reference column, one payload base.
+    let is_substitution = |p: &(usize, usize, usize, usize)| p.1 == p.0 + 1 && p.3 == p.2 + 1;
+
     let mut merged: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(placed.len());
     for piece in placed {
-        match merged.last_mut() {
-            Some(prev) if piece.0.saturating_sub(prev.1) < min_separation as usize => {
-                prev.1 = piece.1;
-                prev.3 = piece.3;
-            }
-            _ => merged.push(piece),
+        let Some(prev) = merged.last_mut() else {
+            merged.push(piece);
+            continue;
+        };
+        let gap = piece.0.saturating_sub(prev.1);
+        // `general.md:34`'s floor is ONE unchanged nucleotide on every axis. The
+        // reading-frame floor of two is not a different general rule — it is
+        // `general.md:35`'s narrow exception for "two variants ... together
+        // affecting one amino acid", and the decided ruling
+        // `codon-carve-out-shape-restriction` limits ferro to the shape the spec
+        // actually works: substitution / one unchanged base / substitution.
+        //
+        // Applying the floor of two unconditionally merges a deletion with a
+        // substitution one nucleotide apart, which is precisely the answer
+        // SVD-WG010:51 proposed and which was REJECTED: `LRG_199t1:c.[992_1002del;1004T>C]`
+        // came out as `c.992_1004delinsAC`. The worked-example suite's
+        // forbidden-description guard catches it by name.
+        let floor = if min_separation > MIN_SEPARATION_NO_FRAME
+            && !(is_substitution(prev) && is_substitution(&piece))
+        {
+            MIN_SEPARATION_NO_FRAME
+        } else {
+            min_separation
+        };
+        if gap < floor as usize {
+            prev.1 = piece.1;
+            prev.3 = piece.3;
+        } else {
+            merged.push(piece);
         }
     }
 
@@ -11770,19 +11839,25 @@ mod tests {
             );
         }
 
-        /// Unset means `live`, and so does anything the knob does not recognise.
+        /// Unset means `preserve` — the shipped rule — and so does anything the
+        /// knob does not recognise.
         ///
-        /// This is the property the default path depends on. A knob that fell
-        /// through to a different rule on an empty string, or that treated a
-        /// typo (`FERRO_PARTITION=cannonical`) as an instruction rather than as
-        /// noise, would silently re-partition every block for whoever set it —
-        /// which for this repo is a representation change, not a configuration.
+        /// This is the property the default path depends on, and the direction it
+        /// points changed when the default flipped: an unrecognised value must
+        /// fall through to whatever ferro actually ships, so that a typo
+        /// (`FERRO_PARTITION=preserv`) is noise rather than an instruction. Were
+        /// it to fall through to `live` instead, a typo would silently select the
+        /// retired re-derivation partitioner and re-partition every block for
+        /// whoever set it — a representation change, not a configuration.
+        ///
+        /// `live` is still reachable by name, deliberately: it is what a
+        /// release-to-release representation diff measures against.
         #[test]
-        fn unset_and_unrecognised_values_select_the_live_rule() {
-            for value in [None, Some(""), Some("live")] {
+        fn unset_and_unrecognised_values_select_the_shipped_rule() {
+            for value in [None, Some(""), Some("preserve")] {
                 assert_eq!(
                     partition_rule_from_env(value),
-                    PartitionRule::Live,
+                    PartitionRule::Preserve,
                     "{value:?}"
                 );
             }
@@ -11817,22 +11892,27 @@ mod tests {
             );
         }
 
-        /// This suite's expectations are the live rule's, and the cached read
+        /// This suite's expectations are the shipped rule's, and the cached read
         /// agrees with the pure mapping above.
         ///
         /// Every other test in this file asserts a *shipped* representation, and
-        /// switching the rule moves dozens of them at once (measured: 36 under
-        /// `shadow`, 33 under `canonical`). This is the one that names the cause.
-        /// It therefore **fails by design** during a deliberate
-        /// `FERRO_PARTITION=…` bake-off run — that failure is the message
-        /// "you are not measuring the shipped rule", not a defect.
+        /// switching the rule moves dozens of them at once (measured against the
+        /// partition rule: 36 under `shadow`, 33 under `canonical`, 29 under
+        /// `live`). This is the one that names the cause. It therefore **fails by
+        /// design** during a deliberate `FERRO_PARTITION=…` bake-off run — that
+        /// failure is the message "you are not measuring the shipped rule", not a
+        /// defect.
+        ///
+        /// The assertion is on `Preserve` rather than on `Live` because the
+        /// default flipped: the partition the input asserts is now what ferro
+        /// keeps, and `live` names the retired re-derivation partitioner.
         #[test]
-        fn the_suite_runs_on_the_live_rule() {
+        fn the_suite_runs_on_the_shipped_rule() {
             assert!(
                 std::env::var_os("FERRO_PARTITION").is_none(),
-                "this suite's expectations are the live rule's; FERRO_PARTITION must be unset"
+                "this suite's expectations are the shipped rule's; FERRO_PARTITION must be unset"
             );
-            assert_eq!(partition_rule(), PartitionRule::Live);
+            assert_eq!(partition_rule(), PartitionRule::Preserve);
         }
 
         /// The canonical arm produces pieces that denote the block, so the arm is

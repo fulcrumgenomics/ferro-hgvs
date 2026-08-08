@@ -145,24 +145,105 @@ fn issue_1231_dup_del_reduces_to_substitutions() {
     );
 }
 
-/// #1232 — a spanning delins must not be retained across an unchanged interior
-/// base (`delins.md:17`).
+/// #1232's minimal spanning `delins` is RETAINED. Adjudicated 2026-08-08.
 ///
-/// All four encodings below are stable fixed points on v0.11.0 — the issue
-/// reported two of them. The tie-break between `[35_37del;39T>A]` and
-/// `[35C>T;37_39del]` (equally minimal, equally stable) is an implementer's
-/// choice: the partition is taken 5'-most, then each member is 3'-shifted.
+/// `g.35_39delinsTA` asserts one changed block: reference `CAATT` at 35–39
+/// replaced by `TA`. Splitting it into `[35_37del;39T>A]` requires aligning 5
+/// reference nt against a 2-nt payload and then reading the one column that
+/// happens to agree (the `T` at 38) as an unchanged run.
+///
+/// That is the construction `DNA/delins.md:46` performs on its own worked
+/// example — "parts of the inserted sequence "align" with the reference
+/// sequence, giving an alternative description like
+/// `c.[850_869del;874_881del;887_897del;901_902insG]`" — and `DNA/delins.md:47`
+/// rejects it one line later: "**The "delins" format is recommended**: it is
+/// simpler and prevents software tools making incorrect predictions for the
+/// consequences on protein level." The ruling record
+/// `delins-merge-vs-individual-gap-two-or-more` (DECIDED 2026-08-07) settles it
+/// for `:47` and scopes the ruling to exactly this class: "a MINIMAL single
+/// `delins` that would be split because payload bases coincide with reference
+/// bases".
+///
+/// The strongest evidence is in the old doc comment for this very case, which
+/// conceded that the tie-break between `[35_37del;39T>A]` and
+/// `[35C>T;37_39del]` was "an implementer's choice". Non-uniqueness of the
+/// split is ground (4) of the ruling: adopting one trades a unique canonical
+/// form for an arbitrary pick out of a family.
+///
+/// DISCLOSURE: this moves the output for `g.35_39delinsTA` from
+/// `[35_37del;39T>A]` back to itself.
+#[test]
+fn issue_1232_minimal_spanning_delins_is_retained() {
+    converges_to("TEMPLATE:g.35_39delinsTA", &["TEMPLATE:g.35_39delinsTA"]);
+}
+
+/// NOTE ON THE NAME: it says "splits" and the assertions say nothing splits.
+/// The name is pinned by `msto_regression_corpus::MSTO_ISSUES` (#1232, #1235)
+/// and `every_cataloged_test_exists_in_its_source_file` fails if it moves, so it
+/// is left alone; renaming it and the catalog entry together is a follow-up.
+///
+/// #1232's THREE SPLIT spellings each keep their own partition. RE-BLESSED
+/// 2026-08-08.
+///
+/// ```text
+/// TEMPLATE:g.[35_37del;39T>A]        -> TEMPLATE:g.[35_37del;39T>A]
+/// TEMPLATE:g.[35C>T;37_39del]        -> TEMPLATE:g.[35C>T;37_39del]
+/// TEMPLATE:g.[35_36delinsT;38_39del] -> TEMPLATE:g.[35_36delinsT;38_39del]
+/// ```
+///
+/// All three previously converged on `[35_37del;39T>A]`, picked by an
+/// edit-distance minimiser out of a family the old doc comment for this case
+/// already admitted was an "implementer's choice". They now each stay put.
+///
+/// `general.md:34` governs each independently — "two variants separated by one
+/// or more nucleotides should be described individually and **not** as a
+/// "delins"" — and each spelling asserts exactly two blocks one unchanged
+/// nucleotide apart, so each is already in the form `:34` asks for.
+/// `general.md:35`'s codon exception cannot reach a `g.` description. What no
+/// clause does is rank one *partition* against another: `general.md:56`'s
+/// ladder ("(1) substitution, (2) deletion, (3) inversion, (4) duplication, (5)
+/// insertion") ranks edit types within a member, not whole partitions, and
+/// `delins` is not even on it.
+///
+/// The ruling record `canonical-form-choice-when-both-legal` (OPERATOR RULING
+/// 2026-08-08, which REVERSES the 2026-08-07 ruling on that record) answers the
+/// remaining question directly: "Two descriptors asserting different partitions
+/// are different variants under this ruling and legitimately reach different
+/// canonical forms." These three assert different partitions — they disagree
+/// about which nucleotides changed, not merely how to spell one agreed change.
+///
+/// DISCLOSURE: this is a representation change and it is the costly direction.
+/// Sequence-level confluence across these three spellings is gone. The ruling
+/// names that cost and assigns it elsewhere: "Sequence-level equivalence still
+/// needs an answer for consumers who dedupe; that is
+/// `EquivalenceLevel::SequenceMatch` and a groupable SPDI key, not the
+/// canonical string."
+///
+/// Each is pinned as an exact string AND as a fixed point, and their mutual
+/// distinctness is pinned too — so a future change that re-converges them fails
+/// on a named string rather than silently restoring the minimiser.
 #[test]
 fn issue_1232_spanning_delins_splits_at_unchanged_base() {
-    converges_to(
+    let spellings = [
         "TEMPLATE:g.[35_37del;39T>A]",
-        &[
-            "TEMPLATE:g.35_39delinsTA",
-            "TEMPLATE:g.[35_37del;39T>A]",
-            "TEMPLATE:g.[35C>T;37_39del]",
-            "TEMPLATE:g.[35_36delinsT;38_39del]",
-        ],
-    );
+        "TEMPLATE:g.[35C>T;37_39del]",
+        "TEMPLATE:g.[35_36delinsT;38_39del]",
+    ];
+    for spelling in spellings {
+        converges_to(spelling, &[spelling]);
+    }
+    // Not merely "each is a fixed point" — they must remain three, so this
+    // cannot pass by two of them collapsing together.
+    for (i, a) in spellings.iter().enumerate() {
+        for b in &spellings[i + 1..] {
+            assert_ne!(
+                normalize_to_string(a),
+                normalize_to_string(b),
+                "`{a}` and `{b}` assert different partitions and must stay \
+                 distinct canonical forms"
+            );
+        }
+    }
 }
 
 /// Soft-masking must not change the canonical form.
@@ -180,6 +261,19 @@ fn issue_1232_spanning_delins_splits_at_unchanged_base() {
 ///
 /// Pinned against the #1232 shape specifically, because that is the case whose
 /// answer depends on an interior base surviving unchanged.
+///
+/// RE-BLESSED 2026-08-08. The masking-invariance property is untouched and is
+/// still the point of this test; only the shared answer moved, from the split
+/// `[35_37del;39T>A]` to the retained `g.35_39delinsTA` — see
+/// [`issue_1232_minimal_spanning_delins_is_retained`] for the adjudication
+/// (`DNA/delins.md:47`, ruling `delins-merge-vs-individual-gap-two-or-more`).
+///
+/// The pin is *strengthened* rather than merely updated: both the masked and
+/// the upper-case answer are now pinned to the exact string, so neither side
+/// can drift while the equality still holds. The failure mode the pin exists
+/// for is the reverse of the original one — case comparison could now make the
+/// masked window split where the upper-case one does not, which the equality
+/// catches and the exact pins name.
 #[test]
 fn soft_masked_reference_yields_the_same_canonical_form() {
     let input = "TEMPLATE:g.35_39delinsTA";
@@ -191,12 +285,14 @@ fn soft_masked_reference_yields_the_same_canonical_form() {
         "a soft-masked reference must give the same canonical form as an \
          upper-case one for `{input}`"
     );
-    // Pin the shared answer too, so this cannot pass by both sides regressing
-    // to the same spanning delins.
+    // Pin the shared answer on BOTH sides, so this cannot pass by both
+    // regressing together.
     assert_eq!(
-        upper, "TEMPLATE:g.[35_37del;39T>A]",
-        "the #1232 split is the expected canonical form"
+        upper, "TEMPLATE:g.35_39delinsTA",
+        "the retained minimal delins is the expected canonical form \
+         (DNA/delins.md:47)"
     );
+    assert_eq!(masked, "TEMPLATE:g.35_39delinsTA");
 }
 
 /// #1233 — `[ins;del]` reduces to substitutions. Highest-frequency shape in the
@@ -224,14 +320,69 @@ fn issue_1233_ins_del_reduces_to_substitutions() {
 /// commute across the `G` at 75. The substitution at 90 is not decoration — it
 /// is what keeps the derivation at two pieces, so this exercises the `dup`
 /// typing rather than the lone-insertion path.
+///
+/// # RE-BLESSED 2026-08-08 — the `dup` typing survives, the merge does not.
+///
+/// ```text
+/// TEMPLATE:g.[74_75insC;75_76insG;90A>T]  ->  TEMPLATE:g.[74_75insC;75dup;90A>T]
+/// TEMPLATE:g.[73_74dup;90A>T]             ->  TEMPLATE:g.[73_74dup;90A>T]
+/// ```
+///
+/// The test's own claim — that a derived tandem insertion must be **typed** as a
+/// duplication — still holds, and is what the first row shows: the member
+/// `g.75_76insG` inserts a `G` directly 3' of the `G` at 75 and is emitted as
+/// `g.75dup`, at the 3'-most position of the `GG` tract (`general.md:42`, "the
+/// 3'rule also applies for changes in single residue stretches"). So
+/// `DNA/duplication.md:18` — "when a variant can be described as a duplication,
+/// it **must** be described as a duplication and not as, e.g., an insertion" —
+/// is honoured on the member it reaches. What no longer happens is the *merge*
+/// of the two asserted insertion members into one `g.73_74dup`.
+///
+/// WHY THE MERGE IS NOT REQUIRED, since `:18` is one of only two
+/// lowercase-**must** clauses in the recommendations and this is the reading
+/// that changed. `:18`'s antecedent is "when a variant **can** be described as
+/// a duplication", and the very next line tells you that is not a question
+/// about sequence identity: `DNA/duplication.md:19` — "when there is **no
+/// evidence** that the extra copy of a sequence detected is in tandem (directly
+/// 3'-flanking the original copy), the change can not be described as a
+/// duplication; it should be described as **an insertion**". Tandemness is
+/// evidence, and it is not recoverable from a reference plus a resulting
+/// sequence. The evidence available here is the input, which asserts two
+/// separate insertions straddling an unchanged `G` — not one tandem copy at
+/// 73_74. `general.md:34` then keeps those two blocks individual, since one
+/// unchanged nucleotide separates them and `general.md:35`'s codon exception
+/// cannot reach a `g.` description.
+///
+/// The governing record is `canonical-form-choice-when-both-legal` (OPERATOR
+/// RULING 2026-08-08, REVERSING the 2026-08-07 ruling on that record), which
+/// cites `duplication.md:19` for exactly this point and concludes: "Two
+/// descriptors asserting different partitions are different variants under this
+/// ruling and legitimately reach different canonical forms."
+///
+/// DISCLOSURE: `g.[74_75insC;75_76insG;90A>T]` moves from
+/// `g.[73_74dup;90A>T]` to `g.[74_75insC;75dup;90A>T]`, and the two spellings no
+/// longer converge. Both are pinned exactly, and their distinctness is pinned,
+/// so a change that re-merges them names the string it moved.
 #[test]
 fn a_derived_tandem_insertion_renders_as_a_duplication() {
+    // The derived piece is still TYPED as a duplication: `75_76insG` -> `75dup`.
     converges_to(
-        "TEMPLATE:g.[73_74dup;90A>T]",
+        "TEMPLATE:g.[74_75insC;75dup;90A>T]",
         &[
             "TEMPLATE:g.[74_75insC;75_76insG;90A>T]",
-            "TEMPLATE:g.[73_74dup;90A>T]",
+            "TEMPLATE:g.[74_75insC;75dup;90A>T]",
         ],
+    );
+    // The one-member spelling of the same resulting sequence is its own
+    // canonical form, and stays a `dup` rather than being split.
+    converges_to(
+        "TEMPLATE:g.[73_74dup;90A>T]",
+        &["TEMPLATE:g.[73_74dup;90A>T]"],
+    );
+    assert_ne!(
+        normalize_to_string("TEMPLATE:g.[74_75insC;75_76insG;90A>T]"),
+        normalize_to_string("TEMPLATE:g.[73_74dup;90A>T]"),
+        "the two-block and one-block spellings assert different partitions"
     );
 }
 
@@ -278,6 +429,14 @@ fn normalized_cis_members_are_disjoint_and_ordered() {
         "TEMPLATE:g.[4C>A;5_6inv]",
         "TEMPLATE:g.[35_37del;39T>A]",
         "TEMPLATE:g.[20G>C;23G>C]",
+        // The insertion-beside-duplication row, restored. It normalizes to
+        // `g.[74_75insC;75dup;90A>T]`, where the insertion's 3' anchor and the
+        // duplication's base are both 75. That is flush, not overlapping — see
+        // `member_span`, which now returns an empty range for an insertion. The
+        // row was excluded while the helper still read the location interval
+        // verbatim; excluding it cost the coverage this test exists for, so the
+        // helper was fixed instead.
+        "TEMPLATE:g.[74_75insC;75_76insG;90A>T]",
     ];
     let normalizer = Normalizer::new(provider());
     for input in inputs {
@@ -295,10 +454,12 @@ fn normalized_cis_members_are_disjoint_and_ordered() {
                 "`{normalized}`: member span {start}..{end} is inverted"
             );
             if let Some(prev) = prev_end {
+                // Half-open, so `start == prev` is adjacency and is allowed;
+                // `start < prev` is a genuine overlap of claimed bases.
                 assert!(
-                    start > prev,
-                    "`{input}` -> `{normalized}`: member starting at {start} overlaps or \
-                     precedes the previous member ending at {prev}"
+                    start >= prev,
+                    "`{input}` -> `{normalized}`: member claiming [{start}, {end}) overlaps the \
+                     previous member, which claimed up to {prev}"
                 );
             }
             prev_end = Some(end);
@@ -307,7 +468,23 @@ fn normalized_cis_members_are_disjoint_and_ordered() {
 }
 
 /// Span of a simple genomic member, as `(start, end)` inclusive.
+/// The reference territory a member CLAIMS, as a HALF-OPEN range `[start, end)`.
+///
+/// Reading the location interval verbatim is wrong for an insertion, and that is
+/// not a detail: `A_B ins` names its two flanking bases as **anchors it reads**,
+/// not as bases it changes. It occupies the *junction* between them, so the next
+/// member may legitimately begin at `B` — which is exactly what
+/// `g.[74_75insC;75dup;…]` does. Reading the interval verbatim reported that pair
+/// as overlapping and made this test fail on a representation question rather
+/// than on the disjointness property it guards.
+///
+/// So a pure insertion returns the EMPTY range `[B, B)`, positioned at its 3'
+/// anchor, and every base-claiming edit returns `[A, B + 1)`. This is the same
+/// interbase-versus-HGVS-coordinate distinction #1307 records: an insertion is
+/// flush with a neighbour that starts where it ends, and only a genuine
+/// base-claiming overlap is a violation.
 fn member_span(variant: &ferro_hgvs::hgvs::variant::HgvsVariant) -> Option<(i64, i64)> {
+    use ferro_hgvs::hgvs::edit::NaEdit;
     use ferro_hgvs::hgvs::variant::HgvsVariant;
     let HgvsVariant::Genome(g) = variant else {
         return None;
@@ -315,7 +492,11 @@ fn member_span(variant: &ferro_hgvs::hgvs::variant::HgvsVariant) -> Option<(i64,
     let interval = &g.loc_edit.location;
     let start = interval.start.inner()?.base as i64;
     let end = interval.end.inner()?.base as i64;
-    Some((start, end))
+    // A pure insertion consumes no reference base.
+    if matches!(g.loc_edit.edit.inner(), Some(NaEdit::Insertion { .. })) {
+        return Some((end, end));
+    }
+    Some((start, end + 1))
 }
 
 /// #1235 — `normalize` is idempotent for every case in this file.

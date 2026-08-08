@@ -69,34 +69,58 @@ const TEMPLATE: &str = concat!(
 
 /// #1421's "Diagnostic note" table, reproduced exactly.
 ///
-/// Every row is the **same locus** (29–33, interior `AC` at 30–31 unchanged)
-/// with only the inserted block varied. `delins.md:17` asks for the separated
-/// form in all five — the separation is two nucleotides, and `delins.md:18`'s
-/// one-nucleotide exception cannot apply to a `g.` description. ferro splits
-/// three and retains two.
+/// Every row is the **same locus** (29–33, interior `AC` at 30–31 unchanged
+/// under one alignment) with only the inserted block varied. All five are now
+/// RETAINED as the single spanning `delins` they were written as.
+///
+/// RE-BLESSED 2026-08-08. The table used to read "`delins.md:17` asks for the
+/// separated form in all five" and record three splits and two retentions.
+/// Both halves of that are corrected:
+///
+/// * `delins.md:17` does not reach this class. `DNA/delins.md:46` performs the
+///   alignment-driven split on the spec's own worked example — "parts of the
+///   inserted sequence "align" with the reference sequence, giving an
+///   alternative description like
+///   `c.[850_869del;874_881del;887_897del;901_902insG]`" — whose gaps are 4, 5
+///   and 3, every one of them "one or more"; `DNA/delins.md:47` then answers
+///   "**The "delins" format is recommended**: it is simpler and prevents
+///   software tools making incorrect predictions for the consequences on
+///   protein level." So `:17` read as reaching an alignment-driven split
+///   demands the description `:47` rejects, three lines later, in the spec's
+///   own example. The ruling `delins-merge-vs-individual-gap-two-or-more`
+///   (DECIDED 2026-08-07) settles that for `:47`, scoped to "a MINIMAL single
+///   `delins` that would be split because payload bases coincide with
+///   reference bases", at a separation of two or more. These five rows are
+///   that class at that separation, exactly.
+///
+/// * The three that split were therefore the non-conformant rows, not the two
+///   that were retained. The ruling records that v0.12.0 already emitted the
+///   unsplit form on 208 of 208 genomic-axis rows; these three were the
+///   exception, and they are why #1421 exists at all.
 ///
 /// `(label, input, current output, splits)`
 const ISSUE_1421_INSERT_BLOCKS: &[(&str, &str, &str, bool)] = &[
     (
         "net+2",
         "TEMPLATE:g.29_33delinsAACTGTG",
-        "TEMPLATE:g.[29C>A;32_33delinsTGTG]",
-        true,
+        "TEMPLATE:g.29_33delinsAACTGTG",
+        false,
     ),
     (
         "net+3",
         "TEMPLATE:g.29_33delinsAACTGCTG",
-        "TEMPLATE:g.[29C>A;32_33delinsTGCTG]",
-        true,
+        "TEMPLATE:g.29_33delinsAACTGCTG",
+        false,
     ),
     (
         "net+6-split",
         "TEMPLATE:g.29_33delinsAACTGCATGTG",
-        "TEMPLATE:g.[29C>A;32_33delinsTGCATGTG]",
-        true,
+        "TEMPLATE:g.29_33delinsAACTGCATGTG",
+        false,
     ),
-    // The headline case of #1421. Same locus, same net length as the row above,
-    // opposite verdict — which is the whole point of the table.
+    // The headline case of #1421. Same locus, same net length as the row above.
+    // It used to be the opposite verdict — which was the whole point of the
+    // table — and now agrees with it, which is the point being fixed.
     (
         "net+6-retained",
         "TEMPLATE:g.29_33delinsAACACATACTG",
@@ -111,11 +135,16 @@ const ISSUE_1421_INSERT_BLOCKS: &[(&str, &str, &str, bool)] = &[
     ),
 ];
 
-/// How many of the five split today. `delins.md:17` wants all five.
+/// How many of the five split today.
 ///
-/// **This may only ever go up.** A drop means a spelling that once obeyed the
-/// separated-description rule stopped.
-const ISSUE_1421_ROWS_THAT_SPLIT: usize = 3;
+/// **This must stay at zero, and a rise is a regression** — the opposite of
+/// what this constant used to say. It used to read "this may only ever go up",
+/// on the reading that `delins.md:17` demanded all five be separated; that
+/// reading is withdrawn (see [`ISSUE_1421_INSERT_BLOCKS`] and the ruling
+/// `delins-merge-vs-individual-gap-two-or-more`, DECIDED for
+/// `DNA/delins.md:47`). A row that splits again is a row whose canonical form
+/// is being chosen by which bases its payload happens to carry.
+const ISSUE_1421_ROWS_THAT_SPLIT: usize = 0;
 
 fn provider_for(sequence: &str, accession: &str) -> JsonProvider {
     let n = sequence.len() as u64;
@@ -171,29 +200,47 @@ fn issue_1421_insert_block_table_is_unchanged() {
     }
 }
 
-/// The defect itself, stated as an assertion rather than as prose: two rows at
-/// one locus, identical net length, opposite split verdicts.
+/// #1421's defect is CLOSED. Adjudicated 2026-08-08.
 ///
-/// Whether a spanning `delins` is separated must be a function of which
-/// positions changed — not of which bases the payload happens to carry. While
-/// this test passes, it is not.
+/// This test was named `issue_1421_split_decision_still_depends_on_the_
+/// inserted_block` and was written to PASS while the bug existed: two rows at
+/// one locus, identical net length, opposite split verdicts, with the doc
+/// comment "While this test passes, it is not [a function of which positions
+/// changed]". It now asserts the property #1421 asked for.
+///
+/// The two rows differ only in payload — `AACTGCATGTG` against
+/// `AACACATACTG`, both net +6 at 29–33 — so `DNA/delins.md:47`'s recommendation
+/// of the spanning form must land the same way on both. It does: they are both
+/// retained, and the strings are pinned exactly rather than probed for a `;`,
+/// so a future change that retains them for a different reason (or that
+/// respells one of them) fails here.
+///
+/// Guarded from the vacuous direction as well: "same verdict" would also be
+/// satisfied by both rows splitting, so the retained form is pinned outright.
 #[test]
-fn issue_1421_split_decision_still_depends_on_the_inserted_block() {
+fn issue_1421_split_decision_no_longer_depends_on_the_inserted_block() {
     let normalizer = Normalizer::new(provider_for(TEMPLATE, "TEMPLATE"));
-    let split = normalize_with(&normalizer, "TEMPLATE:g.29_33delinsAACTGCATGTG");
-    let retained = normalize_with(&normalizer, "TEMPLATE:g.29_33delinsAACACATACTG");
+    let a = normalize_with(&normalizer, "TEMPLATE:g.29_33delinsAACTGCATGTG");
+    let b = normalize_with(&normalizer, "TEMPLATE:g.29_33delinsAACACATACTG");
 
-    assert!(
-        split.contains(';'),
-        "expected the net+6 split row to still separate, got `{split}`"
+    assert_eq!(
+        a, "TEMPLATE:g.29_33delinsAACTGCATGTG",
+        "the net+6 row that used to split must now be retained (DNA/delins.md:47)"
     );
-    assert!(
-        !retained.contains(';'),
-        "expected the net+6 retained row to still span, got `{retained}`"
+    assert_eq!(
+        b, "TEMPLATE:g.29_33delinsAACACATACTG",
+        "the net+6 row that was always retained must stay retained"
+    );
+    assert_eq!(
+        a.contains(';'),
+        b.contains(';'),
+        "two payloads at one locus with one net length must reach the same \
+         verdict: `{a}` vs `{b}`"
     );
 }
 
-/// Census. Free to rise, never to fall silently.
+/// Census. Pinned at zero; see [`ISSUE_1421_ROWS_THAT_SPLIT`] for why the
+/// direction of this constant was inverted on 2026-08-08.
 #[test]
 fn issue_1421_split_census_holds() {
     let normalizer = Normalizer::new(provider_for(TEMPLATE, "TEMPLATE"));
@@ -203,8 +250,9 @@ fn issue_1421_split_census_holds() {
         .count();
     assert_eq!(
         splits, ISSUE_1421_ROWS_THAT_SPLIT,
-        "the number of #1421 rows obeying delins.md:17 moved; if it rose, raise \
-         ISSUE_1421_ROWS_THAT_SPLIT and update the affected rows"
+        "the number of #1421 rows separated on payload coincidence moved; it is \
+         pinned at 0 by the ruling delins-merge-vs-individual-gap-two-or-more \
+         (DECIDED for DNA/delins.md:47), so a rise is a regression, not progress"
     );
 }
 
@@ -656,12 +704,24 @@ const ISSUE_179_CASES: &[(&str, &str, &str, Verdict, &str)] = &[
     (
         "ex3",
         "REF:g.[1003del;1004del;1005del;1008_1009insCCT]",
-        "REF:g.1005_1008delinsGCCT",
+        "REF:g.[1005_1007del;1008_1009insCCT]",
         Verdict::Gap,
         "REF:g.[1005A>G;1006_1008inv] — a net inversion assembled from deletions plus \
-         an insertion. NOTE: behaviour has MOVED since #179 was filed, which reported \
-         `[1004_1005del;1006del;1008_1009insCCT]`. It is now a single spanning delins \
-         — a different answer, still not the inversion.",
+         an insertion. Still not the inversion, so this stays a Gap. RE-BLESSED \
+         2026-08-08: the three abutting single-base deletions merge (separation zero, \
+         `DNA/substitution.md:32` — \"changes involving two or more consecutive \
+         nucleotides are described as deletion-insertion\") and 3'-shift as one block \
+         from 1003_1005 to 1005_1007 over `AGA|AGG` (`general.md:41`); the insertion \
+         the input asserts at 1008_1009 is left alone. It used to read \
+         `REF:g.1005_1008delinsGCCT`, which merged the deletion and the insertion \
+         across the unchanged `G` at 1008 — a separation of one on a `g.` axis, where \
+         `general.md:35`'s codon exception cannot apply, so `general.md:34` (\"two \
+         variants separated by one or more nucleotides should be described \
+         individually and **not** as a \\\"delins\\\"\") governs and the merge was the \
+         violation. `DNA/complex.md:50` (\"the general HGVS rule of maintaining the \
+         longest unchanged sequence\") breaks the alignment tie the same way: the new \
+         form keeps 1008 unchanged, the old one rewrote it. Behaviour has now MOVED \
+         twice — #179 reported `[1004_1005del;1006del;1008_1009insCCT]`.",
     ),
 ];
 

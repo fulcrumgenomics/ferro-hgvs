@@ -5607,52 +5607,61 @@ mod ins_bracketed_expansion {
     // -------------------------------------------------------------------
     // 10. The same canonicalization applies to a `delins` payload.
     //
-    //     Re-blessed with the two-gap insertion alignment (#1260, PR #1285).
-    //     This test is about the *payload expansion* — `[GCG;100_110]` becoming
+    //     **Re-blessed to the spanning `delins` under the partition model**, and
+    //     this row is the one whose previous comment had already written down why.
+    //     The test is about the *payload expansion* — `[GCG;100_110]` becoming
     //     `GCGTTTGGGAAACC` — which is unchanged, and is asserted below against
     //     the normalizer's own output rather than against the fixture literal.
-    //     What moved is how the expanded payload is then divided.
+    //     What moved is how the expanded payload is then divided: it now is not.
     //
-    //     The reference here is A-padded, so the two replaced bases `AA` occur
-    //     inside the expanded payload; keeping them means the whole reference
-    //     survives between two insertions. That is more minimal (9 + 3 = 12
-    //     changed columns against the spanning `delins`'s 14) and two `ins`
-    //     members are preferred to one spanning `delins` — `delins.md:17` plus
-    //     ferro policy, not `general.md:56`, whose prioritisation list is
-    //     `sub > del > inv > dup > ins` and does not contain `delins` at all.
+    //     The input asserts a **one-member** partition, a `delins` over
+    //     `g.5207_5208`. `general.md:34` governs members "separated by one or
+    //     more nucleotides" and so says nothing about a lone member, and this
+    //     member is length-changing — 2 reference nucleotides against a 14-base
+    //     payload — so no column-wise correspondence exists in which an interior
+    //     unchanged run could be found. Cutting it requires choosing an
+    //     alignment, which is the re-derivation this model removes.
     //
-    //     Worth knowing: a short reference block inside a long payload is
-    //     exactly where "the whole reference survives" is most likely to be
-    //     coincidence. The separation here is 2 reference bases, so the existing
-    //     `MIN_PIECE_SEPARATION` gate admits it. Whether that gate should scale
-    //     with payload length is a live question, not settled by this test.
+    //     The old `[5206_5207insGCGTTTGGG;5209_5210insCCA]` was that choice: the
+    //     reference here is A-padded, so the two replaced bases `AA` also occur
+    //     inside the expanded payload, and an alignment that keeps them lets the
+    //     whole reference "survive" between two insertions at 12 changed columns
+    //     against the spanning form's 14. The previous comment flagged the
+    //     hazard itself — "a short reference block inside a long payload is
+    //     exactly where 'the whole reference survives' is most likely to be
+    //     coincidence" — and it is: nothing in the input claimed those two `A`s
+    //     were unchanged. `DNA/delins.md:47` recommends the spanning form for
+    //     exactly this shape ("**The "delins" format is recommended**: it is
+    //     simpler and prevents software tools making incorrect predictions for
+    //     the consequences on protein level"), and `DNA/delins.md:44-47` works
+    //     one through against a four-member split of the same bases.
     // -------------------------------------------------------------------
     #[test]
     fn delins_bracketed_payload_expands() {
         let bases = "TTTGGGAAACC";
         let provider = provider_with_genomic("NC_000001.11", 100, bases);
         let result = normalize_ok(provider, "NC_000001.11:g.5207_5208delins[GCG;100_110]");
-        // The payload expanded: `GCG` + the 100..=110 span, split across the two
-        // retained reference bases and 3'-shifted.
-        assert_eq!(
-            result,
-            "NC_000001.11:g.[5206_5207insGCGTTTGGG;5209_5210insCCA]"
-        );
+        // The payload expanded: `GCG` + the 100..=110 span, carried into the
+        // single member the input asserted.
+        assert_eq!(result, "NC_000001.11:g.5207_5208delinsGCGTTTGGGAAACC");
         // Checked against the normalizer's output, not against itself. `expanded`
         // is built from the same `bases` literal three lines up, so comparing the
         // two was a tautology that could not fail if the expansion regressed —
         // and the comment above claimed this assertion covered exactly that.
         //
-        // The expanded payload survives in the output split across the two
-        // retained `AA` and rotated by the 3'-shift, so it is recoverable as its
-        // leading 9 bases plus the rotated tail rather than as one contiguous run.
+        // The expanded payload survives in the output **contiguously and
+        // unrotated**, which is the strongest form this check has been able to
+        // take: with the member kept whole there is no split to reassemble across
+        // and no 3'-shift rotation to allow for. It was previously the weaker
+        // "leading 9 bases, plus `CCA` somewhere" because the payload arrived
+        // divided between two insertions.
         let expanded = format!("GCG{bases}");
         assert_eq!(
             expanded, "GCGTTTGGGAAACC",
             "fixture drift, not a behaviour claim"
         );
         assert!(
-            result.contains(&expanded[..9]) && result.contains("CCA"),
+            result.ends_with(&format!("delins{expanded}")),
             "the expanded payload `{expanded}` is no longer recoverable from `{result}`"
         );
     }
