@@ -2909,12 +2909,19 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // which `crate::normalize::rules`' single-span typing renders as `inv` —
     // so there is nothing left for a veto to protect.
 
-    // There was a veto here, and it was the last gate in this pass that read the
-    // *input spelling* rather than the sequence: when the derivation produced
-    // fewer pieces than there were members, and any piece covered a base the
-    // input had left between two of them, the pass refused and returned the
-    // input verbatim. It cited `general.md:34` — two variants separated by one
-    // or more unchanged nucleotides are described individually.
+    // There was a veto here. It used to be described as "the last gate in this
+    // pass that read the *input spelling* rather than the sequence", and that
+    // description is now false in a way worth stating rather than deleting: under
+    // the partition rule the pass reads the input's spelling *by design*, because
+    // `partition_block_preserving` keeps the members the description asserted
+    // instead of re-deriving them. Reading the spelling is no longer the
+    // suspicious thing a lone remaining gate did; it is the model.
+    //
+    // What the veto did: when the derivation produced fewer pieces than there
+    // were members, and any piece covered a base the input had left between two
+    // of them, the pass refused and returned the input verbatim. It cited
+    // `general.md:34` — two variants separated by one or more unchanged
+    // nucleotides are described individually.
     //
     // The citation is sound and the mechanism was not. `general.md:34` is about
     // what the *sequence* separates; the veto measured what the *input's
