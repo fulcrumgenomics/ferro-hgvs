@@ -194,12 +194,29 @@ const CDS_END: u64 = 63;
 /// a `main` predating #1537, and re-running after the rebase gives 8 003 in
 /// **both** directions. That the two directions land on the same number, as
 /// they did before the rebase, is the reading to trust.
+///
+/// # Raised again by the #1539 member audit: 8 003 -> 8 026
+///
+/// `split_two` falls by the same 23 and `split_three` (115) and `split_more`
+/// (19) are unchanged, so every class that moved moved from two outputs to one.
+/// `split_concealed_separations` cuts a member that conceals a separation
+/// `general.md:34` requires, and the classes this converges are ones where the
+/// lone-`delins` spelling and the multi-member spelling previously reached the
+/// concealed form and the individual form respectively.
+///
+/// `declined`, `underdetermined` and `sequence_changed` are all still 0, and
+/// that is the load-bearing part rather than a formality: an earlier revision of
+/// that pass dropped payload bases when it cut a run of two matched columns with
+/// an insertion between them, and this census is what reported it — 45 declined
+/// and 10 underdetermined, with `converged` *rising* at the same time. A pass
+/// that corrupts a sequence can raise the convergence figure, so the three zeros
+/// have to be read before the headline.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_003,
-    split_two: 3_135,
+    converged: 8_026,
+    split_two: 3_112,
     split_three: 115,
     split_more: 19,
     underdetermined: 0,
@@ -229,12 +246,19 @@ const THREE_PRIME: Census = Census {
 /// a 5'-only symptom, since the 3' walk moves away from the exon start. Both
 /// directions ending on the same number is the reading to trust: the residual
 /// is a property of the partitioner, not of a shuffle direction.
+///
+/// **Raised again by the #1539 member audit: 8 003 -> 8 021**, with `split_two`
+/// falling by the same 18 and `split_three`/`split_more` unchanged. The 3'
+/// direction gains 23 rather than 18, which is the expected asymmetry: the audit
+/// runs before the shift, so a member it cuts is then 3'- or 5'-shifted on its
+/// own, and only some of those landings coincide with the other spelling's.
+/// See `THREE_PRIME` for why the three zeros are read first.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_003,
-    split_two: 3_155,
+    converged: 8_021,
+    split_two: 3_137,
     split_three: 105,
     split_more: 9,
     underdetermined: 0,
