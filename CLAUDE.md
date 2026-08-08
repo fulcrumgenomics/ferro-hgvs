@@ -613,7 +613,7 @@ It also downloads genomic-parent placement data used to project transcript-coord
 Four findings that change how a clause argument should be framed. Each is checkable from the
 pinned `assets/hgvs-nomenclature` checkout; re-check rather than trust this list.
 
-### Almost nothing in the recommendations is normative
+### Keyword strength is unavailable — but that is not the same as nothing being required
 
 `style.md:9` binds the spec to RFC 2119, which invites the habit of arguing that clause A is a
 SHOULD and clause B a MUST. That argument almost never works here, because **uppercase RFC 2119
@@ -626,12 +626,35 @@ grep -rnoE '\b(MUST|SHOULD|RECOMMENDED|MAY|SHALL|REQUIRED|OPTIONAL)( NOT)?\b' \
 ```
 
 Every clause this project has litigated — `general.md:34`, `:35`, `:56`, `:58`,
-`DNA/delins.md:17`, `:18`, `:47`, `DNA/inversion.md:20` — is lowercase prose. Read strictly,
-none of them is normative. That does not make them ignorable: it makes most of these questions
-house-style choices the spec leaves open, which ferro still has to answer. Argue them on the
-spec's worked examples and on downstream cost, not on keyword strength. (`general.md:58` and
-`DNA/duplication.md:18` are read as strong because of their wording — "are not allowed",
-"**must**" — not because RFC 2119 makes them so; say which you mean.)
+`DNA/delins.md:17`, `:18`, `:47`, `DNA/inversion.md:20` — is lowercase prose, so a
+keyword-strength argument between any two of them is unavailable. Argue them on the spec's
+worked examples and on downstream cost.
+
+**But do not read the keyword count as "nothing is required".** This section used to conclude
+that "read strictly, none of them is normative" and that these are therefore "house-style
+choices the spec leaves open". That conclusion is **retired** by the operator ruling of
+2026-08-08 (`adjudication-precedence-order`), because it conflates *no uppercase keyword* with
+*no requirement*, and licenses trading away things the spec genuinely does require.
+
+`style.md`'s own item 6, quoting RFC 2119, explains the scarcity: imperatives "must be used with
+care and sparingly", and "MUST only be used where it is actually required for interoperation or
+to limit behavior which has potential for causing harm". The near-absence is deliberate
+editorial restraint. **Requirement level is read from the force of the prose — validity versus
+preference — not from keyword casing.**
+
+Two things are REQUIRED, and only these:
+
+- **The grammar** — `docs/syntax.yaml`, rendered into every recommendation page's syntax block
+  (`style.md:54`). A description either conforms or it is not HGVS.
+- **The absolute prohibitions** — "not correct" / "is not allowed" / "is invalid". The spec
+  enumerates the most-offended itself in `recommendations/checklist.md`, framed as descriptions
+  that "**do not correctly follow HGVS nomenclature**" (`checklist.md:5`).
+
+Everything else — 3' shifting, separation, type ranking — is a **preference among valid forms**,
+and ferro implements it as a written deterministic rule. `general.md` spans both tiers inside one
+bullet list, which is the clearest illustration available: `:56` states a preference (the
+five-type prioritisation) while `:58`, nested directly under it, states a prohibition ("are not
+allowed", with a worked counter-example).
 
 The `rulings[delins-merge-vs-individual-gap-two-or-more]` record used to argue from "the two
 clauses are the same RFC 2119 strength". It does not any more, for this reason.
@@ -667,22 +690,23 @@ individually" — which is **provenance**, recoverable only from the input's spe
 
 The `rulings` section of `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json` is the
 decision log, pinned by `ruling_records_are_intact` (ids **and** statuses; keep `RULING_STATUSES`
-in sync). **Five of its eight records are `undecided`**, and the first below is an operator
+in sync). **Four of its eight records are `undecided`**, and the first below is an operator
 decision that blocks other work — read them before re-deriving the same argument:
 
 | record | what is open |
 |---|---|
-| `adjudication-precedence-order` | **Two competing precedence orders are on record and neither is chosen.** It does not reopen the two records decided below, but it governs how the next such conflict is ranked |
+
 | `canonical-form-choice-when-both-legal` | Which of two legal forms ships. An open *product* decision |
 | `codon-carve-out-shape-restriction` | `delins.md:18` names no edit type; ferro applies it only to sub/unchanged/sub |
 | `exon-junction-dup-converge-from-the-far-side` | `LRG_199t1:c.3921dup` and `c.3922dup` denote one transcript sequence but are two fixed points, projecting 2,790 bp apart. `duplication.md:26` argues for converging them, `general.md:44` does not prescribe the 5' shift that would |
 | `rna-repeat-range-plus-unit-redundancy` | `RNA/repeated.md:22` calls range-plus-unit invalid, `:27` publishes exactly that shape as valid. Upstream's conflict (#466); ferro answers both ways depending on input-hygiene mode |
 
-The three `decided` records, and the scope each was decided **at** — read the record before
+The four `decided` records, and the scope each was decided **at** — read the record before
 citing it, because both of the 2026-08-07 rulings are narrower than their one-line summary:
 
 | record | ruling |
 |---|---|
+| `adjudication-precedence-order` | **The ranking of authorities, amended 2026-08-08.** (1) validity — the `syntax.yaml` grammar and the absolute prohibitions `checklist.md` enumerates; (2) the recommended form, delivered by a documented deterministic rule; (3) disclosure; (4) stability as last-resort tiebreaker. Confluence does **not** outrank the recommended form — it is a property of the rule. Where no rule can be derived, that is an **escalation to the operator**, censused by `PRECEDENCE_ESCALATIONS`, currently 1 (`delins` is unranked by `general.md:56`). The former rank "re-derivation from the resulting sequence" is **removed**: the partition is the unit of normalization, full stop |
 | `delins-codon-carve-out-gap-one` | `delins.md:18` governs |
 | `delins-merge-vs-individual-gap-two-or-more` | `DNA/delins.md:44-47` governs `:17`, **scoped** to the alignment-coincidence shape `:44-47` describes. Where a separation of two or more arises from anything else, `general.md:34` still governs; unscoped the reading reaches roughly fifteen times the row set the argument was made on |
 | `inversion-vs-two-delins-76-83` | `inversion.md:5` governs: a whole-block reverse complement is one `inv` when the members it competes with are `delins`, since `general.md:56` ranks substitution but not `delins`. #1230's substitution case is untouched and still splits |

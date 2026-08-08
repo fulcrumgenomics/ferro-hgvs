@@ -867,6 +867,69 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     ),
 ];
 
+/// Every case where confluence and determinism were allowed to override the form
+/// the spec recommends, because no deterministic rule could be derived from it.
+///
+/// **This is a census, and its whole job is to make growth loud.** The precedence
+/// ruling (`adjudication-precedence-order`) does *not* rank confluence above the
+/// recommended form. It requires the recommended form to be delivered by a
+/// written, deterministic rule, and treats "no such rule can be designed" as an
+/// escalation to the operator — expected to be vanishingly rare. Left uncounted,
+/// escalations would accumulate into a second, undeclared precedence order, which
+/// is precisely the failure the ruling exists to prevent.
+///
+/// Adding an entry therefore fails [`precedence_escalations_are_censused`] until
+/// the count below is updated deliberately. That friction is the point; it is the
+/// same reason `KNOWN_DIVERGENT_INPUTS` is pinned rather than appended to freely.
+///
+/// Each entry must additionally carry, per the ruling: the clause that expresses
+/// the preference, the reason no rule follows from it, and a unit test locking the
+/// choice with an exact `file.md:line` citation.
+const PRECEDENCE_ESCALATIONS: &[(&str, &str)] = &[
+    // E1. `general.md:56` ranks substitution, deletion, inversion, duplication
+    // and insertion — and `delins` appears nowhere in it. So where the competing
+    // forms are all `delins`, `:56` ranks nothing, while `general.md:34` gives a
+    // separation test but no preference between two forms that both satisfy it.
+    // No rule follows from the spec and one must still be chosen.
+    //
+    // Recorded rather than decided: the open product decision is
+    // `canonical-form-choice-when-both-legal`, which is `undecided` on purpose.
+    // With the partition fixed by the input (`partition-is-the-unit-of-normalization`)
+    // this is narrower than that record reads — there is no partition left to
+    // choose, so what remains is a *typing* question, which is exactly `:56`'s
+    // domain and exactly where its `delins` gap bites.
+    (
+        "delins-is-unranked-by-general-56",
+        "canonical-form-choice-when-both-legal",
+    ),
+];
+
+/// The escalation register is exactly as long as the ruling says it is.
+///
+/// A bare length check on purpose. Asserting the *contents* would duplicate the
+/// per-entry tests the ruling already requires; what is not otherwise guarded is
+/// the count, because an entry can be appended without any existing test failing.
+#[test]
+fn precedence_escalations_are_censused() {
+    const EXPECTED: usize = 1;
+    assert_eq!(
+        PRECEDENCE_ESCALATIONS.len(),
+        EXPECTED,
+        "the precedence escalation register changed. Adding one is a decision for the \
+         operator, not a contributor: `adjudication-precedence-order` requires every \
+         escalation to be surfaced, documented in the register, and locked by a unit \
+         test citing the clause. Update this count only alongside those three."
+    );
+    let ids: std::collections::BTreeSet<&str> =
+        PRECEDENCE_ESCALATIONS.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        ids.len(),
+        PRECEDENCE_ESCALATIONS.len(),
+        "duplicate escalation id: a duplicate would let one entry shadow another \
+         while the count still matched"
+    );
+}
+
 /// Ruling records must stay well-formed, and `undecided` must stay undecided.
 ///
 /// The generator enforces the same shape at build time (and additionally checks
