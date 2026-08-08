@@ -2150,9 +2150,9 @@ enum PartitionRule {
 
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
 ///
-/// Unset, empty, or unrecognised all yield [`PartitionRule::Live`], so no
-/// environment can make ferro emit something other than its shipped
-/// representation by accident. An unrecognised value is warned about rather than
+/// Unset, empty, or unrecognised all yield [`PartitionRule::Preserve`], the
+/// shipped rule. `live` selects the former re-derivation partitioner, kept so a
+/// release-to-release representation diff can be measured against it. An unrecognised value is warned about rather than
 /// rejected: this is a measurement knob, and a typo that silently selected a
 /// different partitioner would poison a bake-off far more quietly than one that
 /// silently ran the default and said so.
@@ -2162,11 +2162,16 @@ enum PartitionRule {
 /// per process.
 fn partition_rule_from_env(value: Option<&str>) -> PartitionRule {
     match value {
-        None | Some("") | Some("live") => PartitionRule::Live,
+        // The DEFAULT is now the partition-preserving rule. An HGVS descriptor
+        // asserts a partition, and the spec's clauses are stated over that
+        // structure rather than over a `(reference, sequence)` pair; re-derivation
+        // is an extra-spec step that manufactures the separations `general.md:34`
+        // then reads as real. `live` remains selectable for A/B measurement.
+        None | Some("") | Some("preserve") => PartitionRule::Preserve,
+        Some("live") => PartitionRule::Live,
         Some("shadow") => PartitionRule::Shadow,
         Some("canonical") => PartitionRule::Canonical,
         Some("canonical-coalesced") => PartitionRule::CanonicalCoalesced,
-        Some("preserve") => PartitionRule::Preserve,
         Some(other) => {
             log::warn!(
                 "FERRO_PARTITION={other} is not one of \
@@ -4228,6 +4233,65 @@ fn partition_block_preserving(
     if alt_pos + (ref_bytes.len() - ref_pos) != result.len() {
         return None;
     }
+
+    // The SECOND licensed boundary move, and it is the dual of the merge below.
+    //
+    // `general.md:34` — "two variants separated by one or more nucleotides should
+    // be described individually and **not** as a 'delins'" — constrains a single
+    // member just as much as it constrains a pair: a member that internally spans
+    // two changes with an unchanged run between them is exactly the shape it
+    // forbids. Implementing only the merge half leaves `g.20_23inv` (unchanged
+    // interior) and `g.11_14inv` standing, which is a spec violation, not
+    // preservation.
+    //
+    // Scoped to EQUAL-LENGTH members, and the scope is the whole point. A member
+    // whose reference and payload are the same length has exactly one column-wise
+    // correspondence, so its interior unchanged runs are a fact about the input
+    // rather than something a search had to invent. An unequal-length member has
+    // no such correspondence — finding a run inside it means choosing an
+    // alignment, which is the re-derivation this arm exists to avoid, and it is
+    // also precisely the alignment-coincidence shape `DNA/delins.md:44-47`
+    // recommends be spelled as one spanning `delins` (see the decided ruling
+    // `delins-merge-vs-individual-gap-two-or-more`).
+    let mut split: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(placed.len());
+    for (rs, re, as_, ae) in placed {
+        let ref_slice = &ref_bytes[rs..re];
+        let alt_slice = &result[as_..ae];
+        if ref_slice.len() != alt_slice.len() || ref_slice.is_empty() {
+            split.push((rs, re, as_, ae));
+            continue;
+        }
+        // Walk the columns, cutting wherever an unchanged run reaches the axis
+        // floor. `run` counts the unchanged columns seen since the last change.
+        let mut pieces_here: Vec<(usize, usize)> = Vec::new();
+        let (mut open, mut run) = (None::<(usize, usize)>, 0usize);
+        for (i, (r, a)) in ref_slice.iter().zip(alt_slice).enumerate() {
+            if r == a {
+                run += 1;
+                continue;
+            }
+            match open {
+                Some((start, _)) if run >= min_separation as usize => {
+                    pieces_here.push((start, i - run));
+                    open = Some((i, i));
+                }
+                Some((start, _)) => open = Some((start, i)),
+                None => open = Some((i, i)),
+            }
+            run = 0;
+        }
+        if let Some((start, _)) = open {
+            pieces_here.push((start, ref_slice.len() - run));
+        }
+        if pieces_here.len() < 2 {
+            split.push((rs, re, as_, ae));
+            continue;
+        }
+        for (a, b) in pieces_here {
+            split.push((rs + a, rs + b, as_ + a, as_ + b));
+        }
+    }
+    let placed = split;
 
     // The one licensed boundary move. Merging absorbs the unchanged run between
     // the two members into the merged one, on both axes at once.
