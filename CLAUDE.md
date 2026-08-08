@@ -413,6 +413,87 @@ is **spec-explicit > Mutalyzer > our judgement**. Where the spec is explicit and
 that is a deliberate divergence and it gets a record saying so — otherwise the next person
 measures Mutalyzer, finds a mismatch, and "fixes" a conformance decision.
 
+### A generator must account for what it dropped
+
+This is the mechanized half of **"a corpus zero is a claim about the corpus, not about the
+change"** — the doctrine that a generator's `0` reads as *"this is safe"* when it usually means
+*"the corpus could not build the thing you changed"*. That doctrine covers a zero the generator
+*reports*. The same trap one level down is a population the generator **silently drops**: a
+fallible step whose failure is representable as a legitimate value —
+`spans_of(..).unwrap_or_default()` classifying as "no gaps", `else { continue }` skipping exactly
+the record that had a problem, a discarded `Result`. Nothing counts it, so a partial run and a
+clean run write indistinguishable artifacts and the only thing separating them is whether a
+reviewer read the right five lines.
+
+**Route the population through `CaptureLedger`** (`src/conformance/completeness.rs`, #1550):
+
+```rust
+use ferro_hgvs::conformance::completeness::{Allowance, CaptureLedger};
+
+let mut ledger = CaptureLedger::new("transcript windows");
+for accession in &accessions {
+    // Replaces `let Ok(t) = resolve(a) else { continue };` — same control flow,
+    // but the drop is now accounted for.
+    // `record`'s subject is `impl Into<String>`, which `&String` does not
+    // satisfy and does not auto-deref to — hence `as_str()`.
+    let Some(transcript) = ledger.record(accession.as_str(), resolve(accession)) else {
+        continue;
+    };
+    capture(transcript);
+}
+// `finish` refuses on any shortfall, and on a pass that attempted nothing.
+// Waiving one means naming it: `finish_with(Allowance::at_most(1, "why"))`.
+let counts = ledger.finish()?;
+```
+
+Three things follow. **Only one of them is enforced by a test; the other two are conventions, and
+saying otherwise here would be the exact defect this section is about** — a claim that reads as
+coverage while providing none:
+
+- **A generator carrying `#[cfg(test)]` must set `test = true` on its cargo target.** Enforced by
+  `it::generator_completeness::examples_with_unit_tests_opt_into_running_them`, whose two halves
+  are not equally strong: the manifest is *parsed* as TOML, so `test = true` is read rather than
+  guessed, but `#[cfg(test)]` is found by scanning the compiled sources for that literal token —
+  which matches it inside a doc comment and misses `#[cfg(all(test, feature = "dev"))]`. Say
+  "parsed manifest, token scan", not "exact". Cargo does not build a target's tests unless it
+  opts in, so without the flag they never run — and a committed test that has never executed is
+  worse than none, because it reads as coverage. `report_conformance_reference_gaps` shipped one
+  for months.
+- **Refuse, do not report.** A convention, backed by the *type* rather than by a guard over your
+  code. `finish()` returns a `Result` you must handle before reaching your `fs::write`, and
+  `CaptureCounts` has no `Default`, so `finish().unwrap_or_default()` does not compile. Nothing
+  stops `let _ = ledger.finish();`.
+- **Stamp the counts into the artifact.** A convention, enforced by **nothing**. `CaptureCounts`
+  is serde-serializable so a fixture *can* carry its own completeness claim and a consuming test
+  *can* assert on it — no test anywhere checks that any artifact does.
+
+`tests/it/generator_completeness.rs` holds the `test = true` invariant above and a second guard:
+a generator that looks like it writes an artifact must look like it routes its population through
+the ledger, or name itself in `LEDGER_EXEMPT`. **Read that second one as a floor, not a proof.**
+Both of its sides are substring scans over source text — `fs::write(`, `File::create(`,
+`OpenOptions::new(`, `from_path(` on one side; on the other, a `use` line naming
+`conformance::completeness`, the word `CaptureLedger`, and a `finish` call, all three in the
+generator's own entry point. A writer using an idiom outside that list is invisible to it, and
+"routes its population through" is a semantic question a grep cannot answer. What it does buy: a
+generator written the way every generator in this repo is currently written cannot be added in
+silence, and the question gets asked. The semantic guarantee is carried by the ledger and by
+review.
+
+The allowlist is **shrink-only** — a row whose generator has been deleted, stopped matching the
+write idioms, or now imports the ledger and calls `finish` fails the test — so it cannot rot into
+a blanket exemption. The "now uses the ledger" direction is deliberately hard to trip by accident,
+because acting on it *deletes* a row: an earlier revision keyed on the bare word `CaptureLedger`
+anywhere in the compiled sources, and one comment appended to the shared
+`examples/common/recording.rs` marked three unrelated generators as migrated and demanded their
+rows be removed. Adding a row is a legitimate answer, in the same way
+`Representation-Change: none` is; what neither check tolerates is silence.
+
+**And note what the ledger itself does not claim.** It accounts for the step you route through
+it, not for the artifact: `succeeded` is never compared against the rows that reach the file, so a
+pass with a second unaccounted fallible step can stamp
+`{"attempted":10,"succeeded":10,"dropped":0}` onto an artifact holding five rows. Route the
+*last* fallible step before the write, not the first.
+
 ### Python Tests
 ```bash
 pytest tests/python/ -v              # Run all Python tests

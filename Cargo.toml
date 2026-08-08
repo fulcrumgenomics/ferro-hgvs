@@ -237,6 +237,15 @@ tempfile = "3.14"
 rstest = "0.23"
 serde_yaml = "0.9"
 anyhow = "1"
+# Used by tests/it/generator_completeness.rs to read this manifest's own
+# `[[example]]`/`[[bin]]` tables. The invariant it enforces is a property OF
+# Cargo.toml (`test = true` on every generator carrying `#[cfg(test)]`), so it
+# has to parse the manifest rather than substring-match it — a `test = true`
+# inside a comment, or under a `[[bench]]`, must not count. `toml` is already an
+# optional runtime dependency (`web-service`); it is repeated here because
+# `tests/it` compiles without `--features dev`, so the optional copy is not
+# guaranteed to be enabled. Cargo unifies the two for test targets.
+toml = "0.8"
 # Used by examples/build_conformance_snapshot.rs to record a per-entry SHA-256 of
 # the harvested bases (snapshot provenance). Examples have access to
 # dev-dependencies, so this stays out of the runtime dependency tree.
@@ -311,6 +320,12 @@ test = true
 [[example]]
 name = "extract_spec_worked_example_windows"
 required-features = ["dev"]
+# `#[path]`-includes `examples/common/recording.rs`, which carries `#[cfg(test)]`
+# units; `test = true` is a per-target flag, so without it those units are dead
+# in *this* target however many siblings enable them. Caught by
+# `it::generator_completeness::examples_with_unit_tests_opt_into_running_them`
+# (#1550), which is why the invariant resolves `#[path]` includes transitively.
+test = true
 
 [[example]]
 name = "derive_tx_placements"
@@ -332,9 +347,13 @@ name = "extract_case_harvest_windows"
 required-features = ["dev"]
 test = true
 
+# `test = true` because the target `#[path]`-includes `examples/common/recording.rs`,
+# whose `#[cfg(test)]` units are dead in any target that does not opt in — `test = true`
+# is a per-target flag, not a per-file one.
 [[example]]
 name = "extract_split_member_separation_windows"
 required-features = ["dev"]
+test = true
 
 [[example]]
 name = "generate_conformance_summary"
@@ -347,6 +366,11 @@ required-features = ["dev"]
 [[example]]
 name = "report_conformance_reference_gaps"
 required-features = ["dev"]
+# Carries `#[cfg(test)]` unit tests; without this cargo never builds them.
+# Pinned by `it::generator_completeness::examples_with_unit_tests_opt_into_running_them`
+# (#1550), which is what finally caught this one after it shipped a `#[test]`
+# that had never executed.
+test = true
 
 [[example]]
 name = "dump_partitions"

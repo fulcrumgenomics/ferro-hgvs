@@ -198,6 +198,64 @@ test count the script prints is a weaker signal than the manifest check.
 FERRO_MANIFEST=/path/to/manifest.json scripts/run_conformance_axis.sh
 ```
 
+### Adding or changing a generator under `examples/`
+
+Generators build the corpora, fixtures and tables the rest of the suite adjudicates
+against, and they share one failure mode: a fallible step whose failure is
+representable as a legitimate value — `unwrap_or_default()`, `else { continue }`, a
+discarded `Result`. The dropped population is never counted, so a partial run and a
+clean run write indistinguishable artifacts. This is the same trap as the
+"a corpus zero is a claim about the corpus, not about the change" rule in `CLAUDE.md`,
+one level down: there the misleading number is *reported*, here it is never computed.
+
+Two rules, with two very different amounts of machinery behind them —
+`tests/it/generator_completeness.rs` (#1550) has a guard for each, and **neither guard is
+exact end to end**. Rule 2 parses the manifest but only token-scans the source; rule 1 is a
+substring heuristic on both sides. It matters that you know which half you are leaning on:
+
+1. **A generator that writes an artifact routes its population through
+   `CaptureLedger`** (`src/conformance/completeness.rs`). Record a success or a drop
+   for every record — `ledger.record(id, fallible())` is a drop-in for
+   `let Ok(v) = fallible() else { continue };` — and call `finish()` before writing.
+   It returns a `Result` and refuses on any shortfall, including a pass that attempted
+   nothing. An expected shortfall is waived by naming it:
+   `finish_with(Allowance::at_most(2, "bare LRG_ ids have no versioned index entry"))`.
+   The counts are serializable, so stamp them into the artifact and let the consuming
+   test assert on them.
+
+   Route the **last** fallible step before the write, not the first. The ledger accounts
+   for the step you hand it and nothing else — it never sees the artifact, so a second
+   unaccounted `else { continue }` downstream will happily let you stamp
+   `{"attempted":10,"succeeded":10,"dropped":0}` onto a file holding five rows.
+
+   If you are not adopting the ledger, add your generator to `LEDGER_EXEMPT` in that
+   test with a reason. That is a legitimate answer — what the check rejects is silence.
+   The list is shrink-only: a row that is no longer needed fails the test.
+
+   **The guard behind this rule is a heuristic floor.** It asks whether your source
+   contains one of a few write idioms (`fs::write(`, `File::create(`,
+   `OpenOptions::new(`, `from_path(`) and, if so, whether your entry point carries a
+   `use` line naming `conformance::completeness`, the word `CaptureLedger`, and a
+   `finish` call — all three in that one file. Both sides are substring scans: write a
+   file some other way and the ratchet never notices, import the ledger through a
+   fully-qualified path or a rustfmt-wrapped `use` group and it reads as un-adopted,
+   and "routes its population through" is not something a grep can check. So treat a green test as "the
+   question got asked", not as "this generator is accounted for" — the accounting is
+   yours and your reviewer's to get right. Nothing checks that any artifact actually
+   carries its `CaptureCounts`, either; stamping them is a convention.
+
+2. **A generator carrying `#[cfg(test)]` sets `test = true` on its `[[example]]` or
+   `[[bin]]` entry in `Cargo.toml`.** Cargo does not build a target's tests unless it
+   opts in, so without it they silently never run — which reads as coverage while
+   providing none. **The manifest side is exact and the source side is a token
+   scan**: `test = true` is read out of parsed TOML, but `#[cfg(test)]` is
+   detected by looking for that literal token, so gating your tests as
+   `#[cfg(all(test, feature = "dev"))]` slips past it. `#[path]` includes are
+   followed transitively (`test = true` is a per-target flag, so a `#[cfg(test)]`
+   in a shared `examples/common/` module is dead in every target that does not opt
+   in). A plain `mod helper;` include is the one boundary — the repo uses `#[path]`
+   throughout.
+
 ## Code Style
 
 - Format with `cargo fmt`
