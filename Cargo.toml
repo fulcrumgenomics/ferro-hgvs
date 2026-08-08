@@ -336,6 +336,13 @@ test = true
 name = "extract_split_member_separation_windows"
 required-features = ["dev"]
 
+# `test = true` so the unit tests guarding `serve_transcripts_whole` — the
+# widening the authored-inversion gate depends on for fidelity — actually run.
+[[example]]
+name = "extract_inversion_sweep_windows"
+required-features = ["dev"]
+test = true
+
 [[example]]
 name = "generate_conformance_summary"
 required-features = ["dev"]
