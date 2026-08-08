@@ -40,9 +40,14 @@ Reviewer checklist:
 
 - [ ] Either that section lists every output-moving change in this cycle, or
       there were none and it is absent.
-- [ ] Each entry says whether the affected inputs were previously **rejected**
-      (no stored string, so free) or previously **accepted** (a real migration
-      for the consumer).
+- [ ] Nothing in it merely *declined*. A decline reads `Representation-Change:
+      none`, optionally followed by a reason, and belongs under its own type —
+      not here. Spot-check two entries against their PR descriptions.
+- [ ] For each entry, that PR's description says whether the affected inputs
+      were previously **rejected** (no stored string, so free) or previously
+      **accepted** (a real migration for the consumer). The bullet below carries
+      only the commit subject: the trailer's own text cannot reach the changelog
+      (fulcrumgenomics/ferro-hgvs#1556), so this one has to be read from the PRs.
 
 A commit under `src/normalize/`, `src/hgvs/`, `src/spdi/` or `src/project/` that
 moved output without declaring it means the trailer is missing. Fix that before
@@ -115,9 +120,31 @@ commit_parsers = [
   # case-insensitive); without the flag an uppercase decline is grouped as a real change,
   # which is this bug in miniature. Verified against git-cliff 2.13.1.
   #
-  # The decline vocabulary is kept in step with `NONE_VALUES` in
-  # `scripts/check_representation_change.py` by `test_decline_vocabulary_matches_the_changelog_config`.
-  { footer = "(?i)^Representation-Change:[^\\S\\r\\n]*(none|no|n/a|na)[^\\S\\r\\n]*$", group = "<!-- 7 -->Other" },
+  # **The verdict is the first word; a reason may follow it** (#1555). The value used to be
+  # anchored -- `(none|no|n/a|na)$` -- so `none. No file under src/ is touched` was not a
+  # decline and rendered as a real change. That is not a corner case: in the v0.13.1 cycle
+  # 14 of 16 commits declined, 8 of them gave a reason on the same line, and all 8 landed
+  # under "Representation changes". The section listed 10 entries of which 2 were real.
+  #
+  # Explaining a decline is the behaviour to encourage, so the punctuation that introduces
+  # the explanation must not silently invert the verdict. `,` is deliberately NOT a
+  # terminator: a comma most often introduces a qualification that changes the answer
+  # ("none, except two rows"), where a full stop or a dash closes it.
+  #
+  # The decline vocabulary and this terminator set are kept in step with `NONE_VALUES` and
+  # `DECLINE_TERMINATORS` in `scripts/check_representation_change.py` by
+  # `test_decline_vocabulary_matches_the_changelog_config` and
+  # `test_the_two_decline_rules_agree_value_by_value`.
+  { footer = "(?i)^Representation-Change:[^\\S\\r\\n]*(none|no|n/a|na)[^\\S\\r\\n]*(?:[.;:—–][\\s\\S]*)?$", group = "<!-- 7 -->Other" },
+  # A declining commit lands in `Other` whatever its type, so a `fix:` that correctly
+  # declined is not listed under `Fixed` (#1557). That is a known cost of the ordering
+  # above, not an oversight, and the obvious repair does not work: **git-cliff evaluates a
+  # parser's fields as OR, not AND** (measured against 2.13.1). Adding `message = "^fix"`
+  # to this rule matches every `fix:` commit regardless of its trailer -- including the
+  # ones declaring a real move -- which empties the section below. Omitting `group` does
+  # not fall through to a later parser either; the commit keeps `group = None` and
+  # git-cliff falls back to the raw conventional type, rendering headings as `fix`/`test`.
+  #
   # `(?i)` here too, and not only on the exclusion above: the checker accepts any casing,
   # so a lowercase `representation-change: 577 rows move` is a REAL disclosure that a
   # case-sensitive rule drops silently into `Other`. Verified against git-cliff 2.13.1.
@@ -130,3 +157,18 @@ commit_parsers = [
   { message = "^security", group = "<!-- 6 -->Security" },
   { message = "^.*", group = "<!-- 7 -->Other" },
 ]
+
+# Strip the group-ordering prefix out of the rendered headings.
+#
+# The `<!-- N -->` prefixes above exist only to order the groups, and the comment on them
+# used to claim git-cliff strips them from the heading. It does not: release-plz's default
+# body renders `### {{ group | upper_first }}`, with no `striptags`, so every released
+# section since v0.13.0 carries `### <!-- 0 -->Representation changes` in the file. It is
+# an HTML comment, so GitHub renders it invisibly -- which is why it survived two releases.
+#
+# A postprocessor is used rather than a `body` override because `body` would replace
+# release-plz's default wholesale, and that default supplies the compare link, the
+# `[**breaking**]` marker and the PR links. Restating all of it to change one filter is a
+# large surface to get subtly wrong for a cosmetic fix; this is one line that cannot touch
+# anything else. Anchored to the heading so a `<!-- ... -->` in a commit subject survives.
+postprocessors = [{ pattern = "(?m)^(#+) <!-- [0-9]+ -->", replace = "${1} " }]

@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.13.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.12.0...v0.13.0) - 2026-08-07
 
-### <!-- 0 -->Representation changes
+### Representation changes
 
 Normalization output is a shipped key: a downstream consumer stores read counts
 against the normalized HGVS string, so a form that moves between releases
@@ -71,7 +71,7 @@ consumer impact.
 [#1490]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1490
 [#1501]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1501
 
-### <!-- 1 -->Added
+### Added
 
 - *(dev)* add --verify-spdi to the normalized-corpus harness ([#1515](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1515))
 - *(normalize)* record provenance when reported members are coalesced ([#1486](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1486))
@@ -81,7 +81,7 @@ consumer impact.
 - *(normalize)* make the sequence-first derivation authoritative for cis alleles ([#1392](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1392))
 - *(effect)* [**breaking**] drop the dead inversion validator that contradicted the live one ([#1359](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1359))
 
-### <!-- 5 -->Fixed
+### Fixed
 
 - *(normalize)* apply a junction barrier the translate cannot express ([#1516](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1516))
 - *(spdi)* name the caller's anchor when a repeat names no tract ([#1496](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1496))
@@ -123,7 +123,7 @@ consumer impact.
 - *(spdi)* [**breaking**] give an identity edit the span it claims ([#1363](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1363))
 - *(normalize)* stop a terminal duplication respelling past the contig end ([#1365](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1365))
 
-### <!-- 7 -->Other
+### Other
 
 - *(msto)* pin the reported family's expected outputs and link its guards ([#1520](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1520))
 - *(normalize)* correct the coincidence statistics behind the density gate ([#1521](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1521))
