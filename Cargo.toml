@@ -309,6 +309,10 @@ required-features = ["dev"]
 test = true
 
 [[example]]
+name = "extract_spec_worked_example_windows"
+required-features = ["dev"]
+
+[[example]]
 name = "derive_tx_placements"
 required-features = ["dev"]
 

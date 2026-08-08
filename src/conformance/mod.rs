@@ -21,6 +21,7 @@ pub mod reference_window;
 pub mod schema;
 pub mod spec_enumeration;
 pub mod spec_projection;
+pub mod spec_worked_examples;
 pub mod summary;
 
 pub use schema::{validate_cluster_refs, Cluster};
