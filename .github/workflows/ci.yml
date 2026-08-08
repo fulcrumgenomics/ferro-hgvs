@@ -215,6 +215,35 @@ jobs:
             --changed-files changed-files.txt \
             --declaration-file pr-body.txt
 
+  # Audit what the changelog's **Representation changes** section actually contains, by
+  # rendering it with the real `release-plz.toml` and checking the result against the
+  # trailers on the commits.
+  #
+  # The job above asks each PR to declare; this one asks whether the declarations end up
+  # where they claim. Both halves of that have shipped broken -- #1526 listed one decline
+  # as a change, #1555 listed eight -- and neither was caught, because the test written to
+  # catch exactly this compares the two halves against *each other* and they were wrong
+  # together. So this audit derives its own answer and shares no code with the checker.
+  #
+  # Runs on every PR rather than only at release time: the section is rebuilt from the
+  # whole range since the last tag, so a mis-filed trailer is visible the day it lands
+  # rather than in the release PR, when the fix is a rebase of somebody else's merged work.
+  changelog-grouping:
+    name: Changelog grouping audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Full history and tags: the audited range is `<latest tag>..HEAD`.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: taiki-e/install-action@a8fb21b85430c7a58551cf7ea87b03f355b826d9  # git-cliff
+      - name: Audit the Representation changes section
+        run: python scripts/check_changelog_grouping.py
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

@@ -104,6 +104,13 @@ that changes the verdict ("none, except two rows") — that reads as a descripti
 of a move, and is filed as one. Same for `no rows move`: no terminator, so the
 verdict is not `no`. Both err toward listing a change rather than hiding one.
 
+**Do not decline and then describe a move.** `no. 3 rows move` is filed as a
+decline, because the verdict is the first word — so the disclosure never reaches
+the changelog and nobody is told. CI rejects that combination: a declining
+trailer that also claims `<n> rows move` (or merge/split/respell, for any `n`
+other than zero) fails the check, and the message asks you to say which it is.
+Quantifying a zero is fine and encouraged — `none. 0 of 950 rows move` passes.
+
 A declining trailer is
 excluded from the changelog's **Representation changes** section, so declaring it
 costs the reader nothing while leaving the judgement on the record. CI enforces

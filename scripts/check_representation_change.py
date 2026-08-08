@@ -98,6 +98,37 @@ def declines(declaration: str) -> bool:
     return DECLINE_RE.match(declaration.strip()) is not None
 
 
+#: A quantified movement claim -- "3 rows move", "577 rows merge", "2 rows respell",
+#: "3 rows of 500,004 move". Reading the verdict from the first word means a trailer can
+#: contradict itself in its own reason (`no. 3 rows move`), and that failure is silent and
+#: in the dangerous direction: the disclosure disappears from the changelog and nobody is
+#: told. This is the tripwire for it.
+#:
+#: Two deliberate limits, because a looser rule fails honest PRs. **Zero is excluded**: a
+#: good decline often quantifies its zero, and `0 rows move over 5,761,302 real
+#: expressions` (#1535) must not trip. **The count must sit immediately before `rows`**,
+#: which is what keeps `0 of 950 real cis-allele rows move their normalized string`
+#: (#1547) from tripping on the 950 -- a looser pattern fires on that exemplary decline,
+#: measured.
+#:
+#: It catches the phrasing this repository actually uses -- every quantified disclosure in
+#: the corpus takes this shape -- and it is not a general contradiction detector. Spelled
+#: out numbers and unquantified claims pass. It is a tripwire, not a proof.
+MOVEMENT_CLAIM_RE = re.compile(
+    r"\b(?!0\b)\d[\d,]*\s+rows?(?:\s+of\s+[\d,]+)?\s+"
+    r"(?:move|moves|moved|merge|merges|split|splits|respell|respells)\b",
+    re.IGNORECASE,
+)
+
+
+def contradicted_decline(declaration: str) -> str | None:
+    """Return the movement claim a declining `declaration` makes, if it makes one."""
+    if not declines(declaration):
+        return None
+    match = MOVEMENT_CLAIM_RE.search(declaration)
+    return match.group(0) if match else None
+
+
 def watched_files(changed: list[str]) -> list[str]:
     """Return the changed paths that sit under a watched directory."""
     return [p for p in changed if any(p.startswith(prefix) for prefix in WATCHED_PREFIXES)]
@@ -113,9 +144,9 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
     """
     Decide whether `changed` is adequately declared by `declaration_text`.
 
-    Returns `(ok, message)`. `ok` is False only when a watched file changed and no
-    trailer is present at all — a trailer whose value is `none` passes, because
-    declining is a declaration.
+    Returns `(ok, message)`. `ok` is False in two cases: no trailer is present at all, and
+    a trailer that declines while describing a move. A trailer whose value is `none`
+    otherwise passes, because declining is a declaration.
     """
     watched = watched_files(changed)
     if not watched:
@@ -140,6 +171,20 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
         )
 
     if declines(declaration):
+        claim = contradicted_decline(declaration)
+        if claim is not None:
+            return False, (
+                f"This trailer declines and then describes a move:\n\n  {declaration}\n\n"
+                f"The verdict is the first word, so this is filed as `none` and the "
+                f"disclosure -- {claim!r} -- never reaches the changelog. Nobody is told, "
+                "which is the failure this whole mechanism exists to prevent.\n\n"
+                "Say which it is. If the change moves output, lead with what moved:\n\n"
+                "  Representation-Change: 3 rows of 500,004 move, 2 respell / 1 merge.\n"
+                "    Previously-accepted inputs, so a real migration.\n\n"
+                "If it moves nothing and the number describes something else -- a corpus "
+                "that grew, a measurement quoted from another change -- say so without the "
+                "`N rows move` phrasing, which reads as this change's own disclosure."
+            )
         return (
             True,
             f"Declared `Representation-Change: {declaration}` over {len(watched)} watched file(s).",
