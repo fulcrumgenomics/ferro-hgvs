@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
+
+### Representation changes
+
+- *(normalize)* never split a delins into members on consecutive nucleotides ([#1537](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1537))
+- *(normalize)* type the whole-block inversion by what it competes with ([#1535](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1535))
+
+### Other
+
+- *(changelog)* read a decline that gives a reason as a decline ([#1558](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1558))
+- *(confluence)* record two adjudications from the divergent cis classes ([#1549](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1549))
+- *(normalize)* guard that emitted members obey general.md:34 ([#1539](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1539)) ([#1540](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1540))
+- *(spec)* run the spec's own worked examples against real bases, and record #1536 ([#1544](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1544))
+- *(conformance)* gate the harvested unguarded cases on every PR ([#1545](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1545))
+- *(normalize)* validate a cis-allele member's stated reference bases before a merge can consume them ([#1547](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1547))
+- *(rulings)* decide the precedence order and the canonical-form choice ([#1548](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1548))
+- *(corpus)* add a separated reverse-complement family and three real oracles ([#1546](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1546))
+- *(rulings)* restore the delins.md:47 decision dropped by #1532's squash ([#1538](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1538))
+- *(spec-fixture)* close the review-sweep follow-ups from #1519/#1520/#1521 ([#1533](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1533))
+- record every adjudication as a test in the same change ([#1531](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1531))
+- record the unrecorded adjudications and correct two ruling rationales ([#1532](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1532))
+- *(claude)* document the required Representation-Change trailer ([#1534](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1534))
+- *(changelog)* stop grouping a declined change as a representation change ([#1527](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1527))
+- require a Representation-Change declaration on output-bearing changes ([#1523](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1523))
+
 ## [0.13.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.12.0...v0.13.0) - 2026-08-07
 
 ### Representation changes
