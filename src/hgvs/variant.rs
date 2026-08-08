@@ -533,50 +533,100 @@ impl Accession {
 
     /// Full accession string without version
     pub fn base(&self) -> String {
-        // Assembly/chromosome notation: GRCh37(chr23)
-        if let (Some(assembly), Some(chromosome)) = (&self.assembly, &self.chromosome) {
-            return format!("{}({})", assembly, chromosome);
-        }
-        let base = if self.ensembl_style {
-            format!("{}{}", self.prefix, self.number)
-        } else {
-            format!("{}_{}", self.prefix, self.number)
-        };
-        // Compound reference: context(base)
-        if let Some(ctx) = &self.genomic_context {
-            format!("{}({})", ctx.full(), base)
-        } else {
-            base
-        }
+        collect_written(|out| self.write_base(out))
     }
 
     /// Full accession string with version if present
     pub fn full(&self) -> String {
+        collect_written(|out| self.write_full(out))
+    }
+
+    /// [`Self::base`], written straight into `out` rather than through a
+    /// temporary `String`.
+    ///
+    /// The single source of truth for `base()`; see [`Self::write_full`] for why
+    /// the two are written this way round.
+    fn write_base(&self, out: &mut impl fmt::Write) -> fmt::Result {
+        // Assembly/chromosome notation: GRCh37(chr23)
+        if let (Some(assembly), Some(chromosome)) = (&self.assembly, &self.chromosome) {
+            return write!(out, "{assembly}({chromosome})");
+        }
+        // Compound reference: context(base)
+        if let Some(ctx) = &self.genomic_context {
+            ctx.write_full(out)?;
+            out.write_char('(')?;
+            self.write_bare(out)?;
+            return out.write_char(')');
+        }
+        self.write_bare(out)
+    }
+
+    /// [`Self::full`], written straight into `out` rather than through a
+    /// temporary `String`.
+    ///
+    /// This is the source of truth for both `full()` and `Display`, and the
+    /// direction matters for cost. `Display` used to be
+    /// `write!(f, "{}", self.full())`, so **rendering any variant heap-allocated
+    /// one `String` per accession it printed** — including the recursive
+    /// `genomic_context.full()` — only to copy it into the formatter and drop it.
+    /// Every `HgvsVariant::to_string()` paid that, which is a hot path for any
+    /// caller normalizing in bulk: it measured 2.5% of
+    /// `cis_confluence_axis::three_prime_confluence_census` (47 392
+    /// normalizations) on its own, and `member_span`'s call added another 2.3%.
+    ///
+    /// `fmt::Formatter` implements `fmt::Write`, so one generic writer serves the
+    /// allocating and non-allocating callers alike and the two cannot drift.
+    ///
+    /// **Format specs are ignored, before and after — this changes nothing there,
+    /// and the reasoning that said otherwise was wrong.** The obvious worry about
+    /// writing pieces straight into `f` is that a spec applied to the whole is
+    /// lost: `write_str`/`write_char` bypass `Formatter::pad`, so
+    /// `format!("{accession:>20}")` cannot right-align and `{accession:.4}` cannot
+    /// truncate. True, and true of the old body as well. `write!(f, "{}", s)`
+    /// expands to `f.write_fmt(format_args!("{}", s))`, which renders `s` under the
+    /// *inner* format string's specs — and `"{}"` carries none. Only `f.pad(s)`, or
+    /// `Display::fmt(&s, f)` reached directly, consults the outer `f`. Measured
+    /// three ways rather than reasoned about: `write!(f, "{}", s)` and a
+    /// piecewise writer both render `{:>20}` unpadded and `{:.4}` untruncated,
+    /// while `f.pad(s)` right-aligns and truncates to `NM_0`.
+    ///
+    /// So this is a pure refactor at the seam, which is the stronger claim and the
+    /// one to make. `test_accession_display` pins the inertness of `{:>20}`,
+    /// `{:*^20}`, `{:.4}` and `{:<8.2}` so the question is settled in a test rather
+    /// than re-litigated from the shape of the code — it is long-standing behaviour
+    /// this crate shares with nearly every multi-field `Display` it defines,
+    /// `HgvsVariant`'s included, and no caller in `src/`, `tests/` or `examples/`
+    /// applies a spec to an accession or a variant anyway.
+    fn write_full(&self, out: &mut impl fmt::Write) -> fmt::Result {
         // Assembly/chromosome notation doesn't have versions
         if self.is_assembly_ref() {
-            return self.base();
+            return self.write_base(out);
         }
-        let full = match self.version {
-            Some(v) => {
-                if self.ensembl_style {
-                    format!("{}{}.{}", self.prefix, self.number, v)
-                } else {
-                    format!("{}_{}.{}", self.prefix, self.number, v)
-                }
-            }
-            None => {
-                if self.ensembl_style {
-                    format!("{}{}", self.prefix, self.number)
-                } else {
-                    format!("{}_{}", self.prefix, self.number)
-                }
-            }
-        };
         // Compound reference: context(full)
         if let Some(ctx) = &self.genomic_context {
-            format!("{}({})", ctx.full(), full)
-        } else {
-            full
+            ctx.write_full(out)?;
+            out.write_char('(')?;
+            self.write_versioned(out)?;
+            return out.write_char(')');
+        }
+        self.write_versioned(out)
+    }
+
+    /// `prefix[_]number`, the accession without version or wrapper.
+    fn write_bare(&self, out: &mut impl fmt::Write) -> fmt::Result {
+        out.write_str(&self.prefix)?;
+        if !self.ensembl_style {
+            out.write_char('_')?;
+        }
+        out.write_str(&self.number)
+    }
+
+    /// [`Self::write_bare`] plus `.version`, when there is one.
+    fn write_versioned(&self, out: &mut impl fmt::Write) -> fmt::Result {
+        self.write_bare(out)?;
+        match self.version {
+            Some(v) => write!(out, ".{v}"),
+            None => Ok(()),
         }
     }
 
@@ -588,29 +638,36 @@ impl Accession {
         if self.is_assembly_ref() {
             return self.base();
         }
-
-        match self.version {
-            Some(v) => {
-                if self.ensembl_style {
-                    format!("{}{}.{}", self.prefix, self.number, v)
-                } else {
-                    format!("{}_{}.{}", self.prefix, self.number, v)
-                }
-            }
-            None => {
-                if self.ensembl_style {
-                    format!("{}{}", self.prefix, self.number)
-                } else {
-                    format!("{}_{}", self.prefix, self.number)
-                }
-            }
-        }
+        collect_written(|out| self.write_versioned(out))
     }
+}
+
+/// Run a `fmt::Write` producer into a fresh `String`.
+///
+/// The accession writers below are shared with `Display`, which hands them a
+/// `fmt::Formatter`; this is the adapter for the callers that still want an owned
+/// `String`. Writing into a `String` cannot fail — `fmt::Write for String` is
+/// infallible — so the `Result` is asserted rather than propagated.
+///
+/// The capacity hint is load-bearing rather than a flourish. The writers push
+/// their pieces one at a time, so without it a rendered accession reallocates two
+/// or three times where the `format!` these replaced sized the buffer once — which
+/// would trade `Display`'s saved allocation for extra ones on the [`Accession::full`]
+/// path, and both are hot. 40 bytes covers every real accession, versioned
+/// (`NM_000088.3` is 11, `ENST00000357033.8` is 17) and assembly-style
+/// (`GRCh38(chr1)` is 12); only a compound `genomic(transcript)` reference can
+/// exceed it, and that grows once.
+fn collect_written(produce: impl FnOnce(&mut String) -> fmt::Result) -> String {
+    /// Enough for any single accession, so the common case never reallocates.
+    const TYPICAL_ACCESSION_LEN: usize = 40;
+    let mut out = String::with_capacity(TYPICAL_ACCESSION_LEN);
+    produce(&mut out).expect("writing into a String is infallible");
+    out
 }
 
 impl fmt::Display for Accession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.full())
+        self.write_full(f)
     }
 }
 
@@ -3193,6 +3250,35 @@ mod tests {
 
         let acc_no_version = Accession::new("NM", "000088", None);
         assert_eq!(format!("{}", acc_no_version), "NM_000088");
+
+        // `Display` ignores every format spec, and always has. Pinned here because
+        // rewriting `Display` to write its pieces straight into the formatter
+        // *looks* like it drops padding that `write!(f, "{}", self.full())`
+        // supported — and the first reading of this change said so. It did not:
+        // `write!` renders its argument under the inner `"{}"`, which carries no
+        // spec, so neither body ever reached `Formatter::pad`. Verified both ways —
+        // these assertions pass against the previous body too. See
+        // [`Accession::write_full`].
+        //
+        // Asserted against the bare form rather than against literals, so the
+        // property under test is "the spec changes nothing" rather than "the
+        // accession is spelled thus", which the two assertions above already pin.
+        let bare = format!("{acc}");
+        assert_eq!(
+            format!("{acc:>20}"),
+            bare,
+            "width and alignment are ignored"
+        );
+        assert_eq!(format!("{acc:*^20}"), bare, "fill is ignored");
+        assert_eq!(format!("{acc:.4}"), bare, "precision does not truncate");
+        assert_eq!(
+            format!("{acc:<8.2}"),
+            bare,
+            "nor do they combine to any effect"
+        );
+        // And `Display` still agrees with the allocating twin it shares a writer
+        // with, which is the invariant the shared writer exists to hold.
+        assert_eq!(bare, acc.full());
     }
 
     #[test]

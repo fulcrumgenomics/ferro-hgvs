@@ -6816,11 +6816,40 @@ fn member_span<P: ReferenceProvider>(
     let (accession, (start_region, axis_start), (end_region, axis_end), edit) =
         member_axis_endpoints(v, kind)?;
     let provider_key = accession.transcript_accession();
-    let to_sequence = |region: Region, coord: i64| -> Option<i64> {
-        region_span_delta(region, &provider_key, provider)?.checked_add(coord)
+    // One delta per *distinct* region, not one per endpoint. `region_span_delta`
+    // resolves the transcript through the provider, so asking twice for the
+    // region both endpoints almost always share is a duplicated hash lookup on
+    // every member of every pass that reads a span — and there are a dozen such
+    // passes per `normalize`.
+    //
+    // Sizing, stated as what was actually measured: the transcript lookups
+    // reached from *this function* are 5.2% of
+    // `cis_confluence_axis::three_prime_confluence_census` (sampled inclusive
+    // time, `region_sequence_delta`'s bounds closure with `member_span` as its
+    // caller). This removes the duplicate, so roughly half of that — not the
+    // whole 5.2%, and only on the axes that have a transcript at all, since
+    // `Region::Genome` answers without touching the provider. What it does not
+    // touch is the *cross-pass* repetition: a dozen passes each re-derive every
+    // member's span, so one memo shared across `normalize_allele` would collapse
+    // the rest. That is a wider refactor of all fourteen call sites and is left
+    // alone here.
+    //
+    // Both sides of the branch are already pinned, which is why this adds no test:
+    // `a_member_spanning_a_region_boundary_has_a_span` asserts exact coordinates
+    // for two members whose ends lie in *different* regions (`c.12_*1del`,
+    // `c.-1_1del`) and for one wholly inside a single region (`c.11_12del`), and it
+    // is deliberately written as the control for exactly this kind of arithmetic
+    // change. The reuse is sound because `region_span_delta` is a pure function of
+    // `(region, provider_key, provider)`, so the second call it replaces could only
+    // ever have returned `start_delta` again.
+    let start_delta = region_span_delta(start_region, &provider_key, provider)?;
+    let end_delta = if end_region == start_region {
+        start_delta
+    } else {
+        region_span_delta(end_region, &provider_key, provider)?
     };
-    let start = to_sequence(start_region, axis_start)?;
-    let end = to_sequence(end_region, axis_end)?;
+    let start = start_delta.checked_add(axis_start)?;
+    let end = end_delta.checked_add(axis_end)?;
     Some(MemberSpan {
         accession: accession.full(),
         provider_key,
