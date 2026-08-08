@@ -50,7 +50,7 @@ jobs:
     name: Build soak archive (optimized)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # Neither `lfs: true` nor `submodules: true`, matching `test-build`
           # and `test-build-soak` in ci.yml. This job only compiles: the 149 MB
@@ -122,7 +122,7 @@ jobs:
       # Still checked out, for two reasons the archive does not cover: proptest
       # writes its shrunk case under `tests/proptest-regressions/`, and the
       # capture step below reads that tree.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # No `lfs: true`, matching the `soak` job in ci.yml, which selects
           # the same `test(proptest)` set. The 149 MB of LFS fixtures
@@ -182,7 +182,7 @@ jobs:
       contents: read
       issues: write
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
       - name: Open or update the tracking issue
