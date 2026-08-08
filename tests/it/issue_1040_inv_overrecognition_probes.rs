@@ -299,40 +299,88 @@ fn a_dense_inversion_is_recognised_across_multi_base_separations() {
 fn a_derived_whole_block_inversion_outranks_the_codon_exception() {
     // The `c.`-axis half of the two tests above. It matters because every other
     // case in this section is genomic, where `general.md:35`'s codon exception
-    // cannot fire at all — so this is the only coverage of what the derivation
-    // does when the codon rule is also reaching for the same pieces.
+    // cannot fire at all — so this is the only coverage of what happens when the
+    // whole-block inversion rule and the codon rule reach for the same pieces.
     //
-    // `GTTAA -> TTAAC` changes c.1, c.3 and c.5. c.1 and c.3 are two variants
-    // separated by one nucleotide inside codon 1: precisely the
-    // `[Sub@p; Identity@p+1; Sub@p+2]` triplet the codon exception merges into a
-    // `delins`. Stub `coalesce_whole_block_inversion` and it does, and this test
-    // reports `c.[1_3delinsTTA;5A>C]` — so the overlap is real, not notional.
+    // `GTTAA -> TTAAC` is a whole-span reverse complement, and it changes c.1,
+    // c.3 and c.5. c.1 and c.3 are two variants separated by one nucleotide
+    // inside codon 1: precisely the `[Sub@p; Identity@p+1; Sub@p+2]` triplet the
+    // codon exception merges into a `delins`. So both rules are live on the same
+    // bases, which is what this row is for.
     //
-    // The `inv` is the coalesce's answer and not the codon rule's: stubbing
-    // `apply_coding_codon_exception` instead leaves this test green (while
+    // **Under the partition model the four spellings no longer give one answer,
+    // and they should not: they assert two different partitions.** The loop was
+    // one list; it is now two, with the split itself asserted.
+
+    // ---- One-member partitions: `general.md:34` has nothing to say about a
+    // lone member, so the whole span stays one piece, and a piece whose change
+    // is a whole reverse complement must be typed `inv` — `delins.md:5` defines
+    // a delins as a replacement "which is not a substitution or inversion", so
+    // over this span `delins` is not a description the spec admits.
+    //
+    // The equal-length split move cannot cut them either: it cuts an
+    // equal-length member only at an interior unchanged run reaching the axis
+    // floor, and the unchanged columns here (c.2, c.4) are single bases against
+    // a floor of 2 on a reading-frame axis (`general.md:35`).
+    //
+    // `coalesce_whole_block_inversion` is what types them, and it still outranks
+    // the codon exception — the property this test is named for and the one
+    // `merge::canonicalize_from_sequence` cites this test to pin. Stubbing
+    // `apply_coding_codon_exception` instead leaves these two rows green (while
     // reddening `issue_165_delins_sub_only_decompose`'s codon tests, so the stub
     // is doing something).
+    for input in [format!("{C}:c.1_5inv"), format!("{C}:c.1_5delinsTTAAC")] {
+        assert_eq!(
+            c("GTTAA", &input),
+            format!("{C}:c.1_5inv"),
+            "one-member spelling `{input}` did not stay the inv",
+        );
+    }
+
+    // ---- Multi-member partitions: the members are what the input said they
+    // are, and `general.md:35` merges only the pair that "together affect one
+    // amino acid". c.1 and c.3 are both in codon 1, so they merge to
+    // `1_3delinsTTA` (`GTT -> TTA`, which is *not* a reverse complement —
+    // revcomp(GTT) is AAC — so `delins` is the right type for it). c.3 and c.5
+    // are also one nucleotide apart but sit in codons 1 and 2, so the exception
+    // does not reach them and `general.md:34` keeps them individual: "two
+    // variants separated by one or more nucleotides should be described
+    // individually and **not** as a "delins"".
     //
-    // The *order* of the two is a separate question, and it turns out not to be
-    // observable — see the call sites in `merge::canonicalize_from_sequence`,
-    // which record why. Whichever runs first, the answer here is `c.1_5inv`,
-    // which is also the only one the spec admits: `delins.md:5` defines a delins
-    // as a replacement "which is not a substitution or inversion".
+    // No `inv` is reachable from here, because no piece spans the reverse
+    // complement: `coalesce_whole_block_inversion` reads the hull of the pieces,
+    // and these pieces never form one. That is the change from the derived
+    // model, where the block was re-cut from `(GTTAA, TTAAC)` position-wise and
+    // the three resulting single-column pieces did span the hull.
     //
-    // `revcomp_runs_in_distinct_codons_are_individual_on_cds_axis` above pins the
-    // other side of the same axis — the case where neither rule may fire.
+    // The second spelling is the first one's own output, so this also pins the
+    // fixed point.
     for input in [
-        format!("{C}:c.1_5inv"),
-        format!("{C}:c.1_5delinsTTAAC"),
         format!("{C}:c.[1G>T;3T>A;5A>C]"),
         format!("{C}:c.[1_3delinsTTA;5A>C]"),
     ] {
         assert_eq!(
             c("GTTAA", &input),
-            format!("{C}:c.1_5inv"),
-            "spelling `{input}` did not converge on the inv",
+            format!("{C}:c.[1_3delinsTTA;5A>C]"),
+            "multi-member spelling `{input}` did not reach the codon-merged form",
         );
     }
+
+    // Asserted rather than left implicit: the two groups are *different*
+    // strings. This row's whole subject is the overlap between the two rules,
+    // and a future change that quietly re-converged them — in either direction —
+    // would otherwise pass both loops above only if it also moved one of the
+    // pinned strings, which is not a property either loop states.
+    assert_ne!(
+        c("GTTAA", &format!("{C}:c.1_5inv")),
+        c("GTTAA", &format!("{C}:c.[1G>T;3T>A;5A>C]")),
+        "the one-member and three-member partitions of these bases are \
+         deliberately distinct canonical forms; re-converging them is a \
+         representation change and needs its own adjudication",
+    );
+
+    // `revcomp_runs_in_distinct_codons_are_individual_on_cds_axis` above pins the
+    // other side of the same axis — the case where neither rule may fire.
 }
 
 // ---------------------------------------------------------------------------

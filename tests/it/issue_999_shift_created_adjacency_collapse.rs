@@ -64,24 +64,36 @@ fn cis_shift_created_adjacency_reaches_fixed_point_in_one_pass() {
     // 612_613 (ref[612]=C lets the dinucleotide roll one position; 613
     // blocks a second roll), landing adjacent to `613C>A`.
     //
-    // Re-blessed with the two-gap alignment (#1260, PR #1285). The trimmed
-    // block is `C -> GCA`, which reads two ways: as *ins `GC`* plus *sub
-    // `C>A`* — adjacent, one member, 3 changed columns — or as *ins `G`*,
-    // retained `C`, *ins `A`* — separated by one unchanged base, two members,
-    // 2 changed columns. The second is more minimal and is what
-    // `general.md:34` licenses; the first is the reading that mirrors how the
-    // *input* happened to be spelled, which is the asymmetry this campaign is
-    // removing. It is also, base for base, #1260's `A -> CAC`.
+    // **Re-blessed back to `g.613delinsGCA` under the partition model**, which is
+    // the form #1000 itself named as the fixed point ("pass 2 gave
+    // `g.613delinsGCA`"; see the module header). The intervening
+    // `g.[612_613insG;613_614insA]` came from the two-gap alignment #1260 chose
+    // when the partition was re-derived from `C -> GCA`; that re-derivation is
+    // what the partition model removes, so the question is decided by the input's
+    // own members again.
     //
-    // What #1000 asks for is a **fixed point in one pass**, not a particular
-    // form — and that still holds, which is why this is a re-bless and not a
-    // regression. `cis_shift_created_adjacency_is_idempotent` below asserts the
-    // invariant directly and is unchanged.
+    // And they merge, unavoidably. The allele asserts two members. After the 3'
+    // shift the insertion occupies the `612|613` junction and `613C>A` claims base
+    // 613, so **their separation is zero** — no unchanged nucleotide lies between
+    // them. `general.md:34` is a rule about members "separated by one or more
+    // nucleotides" and does not reach separation 0; the clause that does is
+    // `DNA/substitution.md:32`, "changes involving two or more consecutive
+    // nucleotides are described as deletion-insertion (delins)", stated there as a
+    // prohibition on the two-member spelling. `DNA/delins.md:86-89` is the worked
+    // case: `NM_007294.3:c.[2077G>A;2077_2078insTA]` has "The correct
+    // description" `c.2077delinsATA`, and `:89` records that the sentence
+    // permitting the two-member form was removed by the committee. So an abutting
+    // pair merges unconditionally, whatever the input spelled.
+    //
+    // What #1000 asks for is a **fixed point in one pass**, and that has held
+    // through every form this row has carried.
+    // `cis_shift_created_adjacency_is_idempotent` below asserts the invariant
+    // directly and is unchanged.
     let out = normalize(
         provider_with(600, "TGACTTCAGTCACCTGACTGACTG"),
         "NC_000001.11:g.[611_612insCG;613C>A]",
     );
-    assert_eq!(out, "NC_000001.11:g.[612_613insG;613_614insA]");
+    assert_eq!(out, "NC_000001.11:g.613delinsGCA");
 }
 
 #[test]

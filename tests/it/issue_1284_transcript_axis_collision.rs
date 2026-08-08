@@ -102,13 +102,50 @@ fn the_repair_preserves_the_sequence_the_allele_denotes() {
     }
 }
 
+/// The shorter route to the same collision, without the middle insertion.
+///
+/// **Re-blessed from `n.[8C>G;10del]` under the partition model.** The old form
+/// was *derived*: the two sequences differ over `n.8_10` (`CAG` -> `GA`), and
+/// minimising edit distance over that block reads it position-wise as a
+/// substitution at 8 and a deletion at 10, separated by the unchanged `A` at 9.
+/// Nothing in the input said that. The input asserts a **two-member partition** —
+/// a deletion at `n.7_8` and a delins at `n.11` — separated by the two unchanged
+/// nucleotides `n.9`/`n.10`, so `general.md:34` ("two variants separated by one or
+/// more nucleotides should be described individually and **not** as a "delins"")
+/// licenses no merge and both members survive.
+///
+/// Each is then placed and re-spelled, which is where the new string comes from
+/// and neither step is new:
+///
+/// - `n.7_8del` deletes `AC`; `n.7` and `n.9` are both `A`, so the 3' rule
+///   (`general.md:41`, "the most 3' position possible of the reference sequence is
+///   arbitrarily assigned to have been changed") moves it one base to
+///   **`n.8_9del`**, which deletes `CA` for the same resulting sequence.
+/// - `n.11delinsAC` replaces `C` with `AC`; the payload's `C` is the reference
+///   base itself, so trimming the shared suffix respells the member as the
+///   insertion it is — **`n.10_11insA`** — and the `A` cannot shift 3' because
+///   `n.11` is `C`.
+///
+/// The two then sit one unchanged nucleotide apart (`n.10`), which `general.md:34`
+/// again keeps individual — the `n.` axis is non-coding, so `general.md:35`'s
+/// one-amino-acid exception cannot reach it.
+///
+/// **What this row no longer exercises is the del+dup collision itself, and nor
+/// does its sibling above.** The #1263 shape came out of a *derived* `dup` — the
+/// module header's `out n.[8_9del;9dup;10_11insA]` — and no partition is derived
+/// any more, so both `n.` rows now reach a disjoint, re-parseable output without
+/// `respell_colliding_duplications` having to fire. What they still assert is the
+/// invariant #1284 was filed for and the one `assert_repairs_to` checks: that the
+/// `n.` axis emits a description ferro's own parser accepts, that it is a fixed
+/// point, and (in [`the_repair_preserves_the_sequence_the_allele_denotes`]) that
+/// it denotes the bases the input did. The repair's own coverage is the genomic
+/// #1263 suite, not this file.
 #[test]
 fn the_simple_two_member_collision_is_repaired_too() {
-    // The shorter route to the same collision, without the middle insertion.
     let provider = SyntheticBuilder::noncoding(TX, Strand::Plus).build();
     assert_repairs_to(
         &provider,
         "NR_TEST.1:n.[7_8del;11delinsAC]",
-        "NR_TEST.1:n.[8C>G;10del]",
+        "NR_TEST.1:n.[8_9del;10_11insA]",
     );
 }

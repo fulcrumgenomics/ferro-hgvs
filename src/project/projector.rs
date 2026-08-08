@@ -13564,9 +13564,20 @@ mod tests {
     /// insertion-anchor collapse in the combined build. `!is_frameshift`, and a
     /// single bounded in-frame consequence.
     ///
-    /// The protein expectation moved with #1235's `dup` typing — see the
-    /// comments at the assertions. The `!is_frameshift` half, which is what
-    /// #1070 is about, did not.
+    /// **Both expectations are back to their pre-#1235 values under the
+    /// partition model** (`FERRO_PARTITION=preserve`), and the reason is that
+    /// nothing here needs deriving. The allele asserts a two-member partition —
+    /// `c.4del` and an insertion at the `6|7` junction — separated by two
+    /// unchanged nucleotides (`c.5`, `c.6`), so `general.md:34` ("two variants
+    /// separated by one or more nucleotides should be described individually and
+    /// **not** as a "delins"") keeps them individual and each member is already
+    /// at its 3'-most position (`general.md:41`). The output is therefore the
+    /// input, and no `dup` at `c.1_3` is manufactured, so `affects_init` is false
+    /// and the protein is the computed in-frame consequence rather than
+    /// `p.(Met1?)`. See the comments at the assertions.
+    ///
+    /// The `!is_frameshift` half, which is what #1070 is actually about, has
+    /// never moved through any of this.
     #[test]
     fn project_cis_insertion_member_nets_in_frame() {
         use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
@@ -13597,44 +13608,45 @@ mod tests {
         // frame however the allele is spelled.
         assert!(!proj.is_frameshift, "net +3 restores the frame");
         // Asserted so the protein expectation below cannot be read without the
-        // nucleotide form that produces it. `ATGGATTATTGCTAA` →
-        // `ATGATGGGGTATTGCTAA` has a *single-gap* explanation of the same weight
-        // as the input's two-gap one (five changed columns either way), and
-        // since #1235's sequence-first pass learned to type a derived tandem
-        // insertion as a `dup` it takes it: the inserted `ATG` repeats `c.1_3`.
+        // nucleotide form that produces it — and here that form is the input's
+        // own partition, unchanged.
+        //
+        // `ATGGATTATTGCTAA` → `ATGATGGGGTATTGCTAA` does also admit a *single-gap*
+        // explanation of the same weight as the input's two-gap one (five changed
+        // columns either way), which is how #1235's sequence-first pass came to
+        // report `c.[1_3dup;5_6delinsGG]` — it derived a partition from the two
+        // sequences and typed the derived tandem insertion as a `dup`. Deriving
+        // is what no longer happens: the description already said where its
+        // members are, `general.md:34` licenses no merge across the two unchanged
+        // nucleotides at `c.5`/`c.6`, and `c.4del` (last `G` of the `GG` at
+        // `c.3_4`) and the `6|7` insertion are each already 3'-most
+        // (`general.md:41`). So the members survive as written.
         assert_eq!(
             format!("{}", proj.coding.as_ref().expect("coding expected")),
-            "NM_SEP.1:c.[1_3dup;5_6delinsGG]"
+            "NM_SEP.1:c.[4del;6_7insGGGG]"
         );
-        // `c.1_3dup` reaches the initiation codon, so the start-codon rule wins
-        // and the report is `p.(Met1?)` — not the `Asp2delinsMetGly` this test
-        // used to expect.
+        // Nothing in the output reaches `c.1_3`, so the initiation codon is
+        // untouched and the start-codon rule never fires. The `p.(Met1?)` this
+        // test asserted between #1235 and the partition model was a *consequence
+        // of the derived `c.1_3dup`*, not of the variant: duplicating `ATG` does
+        // leave the choice of initiation site unpredictable
+        // (`protein/substitution.md:52`), but this allele duplicates nothing.
         //
-        // That is right, and not merely conservative. Duplicating `ATG` leaves a
-        // start codon at c.1_3 *and* puts a second, in-frame one immediately
-        // after it: the product carries one N-terminal Met or two depending on
-        // which the ribosome uses, and nothing in the description says which. So
-        // "the consequence, on the protein level … can not be predicted"
-        // (`protein/substitution.md:52`, the sentence that defines `p.(Met1?)`)
-        // is an accurate statement about this variant. The old expectation
-        // asserted initiation at the *first* `ATG`, which is an assumption the
-        // description does not carry.
-        //
-        // The spec would force a computed answer only where a variant "activates
-        // an upstream/downstream translation initiation site"
-        // (`protein/extension.md:17`, normative) — a duplication activates no new
-        // site, it copies the existing one. It is otherwise silent on a start
-        // codon that is duplicated rather than disrupted: `substitution.md:45-65`
-        // offers `p.0`, `p.0?`, `p.(Met1?)` and the computed del/ins/ext forms as
-        // a menu with no rule for choosing, and its only prohibitions are the
-        // plain-substitution spellings (`substitution.md:49`,
-        // `checklist.md:65`). Choosing for the author is what
-        // `tests/it/issue_1079_start_loss_substitution.rs` and W3022
-        // (`error_handling/types.rs`) already decline to do.
-        assert!(proj.affects_init, "c.1_3dup reaches the initiation codon");
+        // The computed answer is exact. Reference `ATGGATTATTGCTAA` translates
+        // `Met-Asp-Tyr-Cys-*`; the result `ATGATGGGGTATTGCTAA` translates
+        // `Met-Met-Gly-Tyr-Cys-*`. `Asp2` is replaced by `Met-Gly` with the frame
+        // and the termination codon intact, which is a delins of one residue by
+        // two — `protein/delins.md:5` ("one or more amino acids are replaced by
+        // one or more other amino acids **and which is not** a substitution or
+        // frameshift"). It is parenthesised because no protein was analysed
+        // (`protein/delins.md:16`).
+        assert!(
+            !proj.affects_init,
+            "no member reaches c.1_3, so initiation is untouched"
+        );
         assert_eq!(
             format!("{}", proj.protein.expect("protein expected")),
-            "NP_SEP.1:p.(Met1?)"
+            "NP_SEP.1:p.(Asp2delinsMetGly)"
         );
     }
 

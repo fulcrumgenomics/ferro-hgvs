@@ -782,6 +782,21 @@ fn spec_equivalence_classes_converge() {
 /// is what stops one being upgraded to `decided` without a reviewable diff, and
 /// stops an inconvenient record being deleted.
 const RULING_STATUSES: &[(&str, &str)] = &[
+    // **The architecture ruling (operator, 2026-08-08).** Normalization operates
+    // on the PARTITION the input asserts, not on the pair of sequences it
+    // denotes. Two moves are licensed and only two — merge members closer than
+    // the axis floor, and split a member whose interior holds an unchanged run
+    // reaching it — and the split is scoped to equal-length members because only
+    // those have a column-wise correspondence the input already fixed. Governing
+    // clause is `general.md:34`, which is stated over a decomposition ("two
+    // variants separated by") and licenses both moves.
+    //
+    // It does NOT claim confluence with respect to sequence equivalence, and is
+    // not meant to: two spellings asserting different partitions of the same
+    // bases reach different canonical forms by design. That consumer question is
+    // `EquivalenceLevel::SequenceMatch`, whose own doc has said since #1158 that
+    // ferro "deliberately keeps [them] in distinct canonical forms".
+    ("partition-is-the-unit-of-normalization", "decided"),
     // `delins.md:17` ("described individually … not as a delins") against
     // `delins.md:47` ("the delins format is recommended"), both reaching the
     // `:44-47` example. **Decided for `:47` by operator ruling (2026-08-07),

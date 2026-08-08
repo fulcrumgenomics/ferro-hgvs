@@ -209,31 +209,44 @@ fn issue_181_example_3_mixed_dels_and_ins_no_duplicate_position() {
     // Before the fix, ferro emitted `g.[1006del;1008del;1008del;1010C[4]]`
     // — `1008del` twice. What this pins is the validity invariant — no
     // duplicate or overlapping positions — which is what #181 was actually
-    // filed about, and it still holds.
+    // filed about, and it has held through every form below.
     //
-    // The form moved once, and it is the improvement this comment used to
-    // name as separate: "fully collapsing del+ins chains into a single
-    // delins". Removing the input-separator veto did it. The block trims to
-    // the equal-length `AGGT -> TCCC`, whose derivation is one member at 4
-    // changed columns against the two-member form's 6, so the collapse is
-    // the more minimal description of the same sequence.
+    // **Re-blessed from `g.1006_1009delinsTCCC` under the partition model, and
+    // this is the row where that model settles an argument the comment here
+    // used to have with itself.** The previous text pinned the spanning delins
+    // while saying in as many words that it was "a policy choice, not spec
+    // compliance", because `general.md:34` — "two variants separated by one or
+    // more nucleotides should be described individually and **not** as a
+    // "delins"" — plainly wanted the split, and the only thing arguing for the
+    // merge was that a re-derivation over `AGGT -> TCCC` reads the block
+    // position-wise as four substitutions at 4 changed columns.
     //
-    // **This is a policy choice, not spec compliance.** `general.md:34` says
-    // two variants separated by one or more unchanged nucleotides are
-    // described individually, and the input spelling does leave 1009's `T`
-    // untouched. But nothing in the *sequence* says so — position-wise the
-    // block reads as four substitutions — so the split form is only
-    // recoverable from how the variant happened to be written. The veto read
-    // the spelling to keep it, and reading the spelling is what made two
-    // encodings of one variant normalize differently (#1235). Confluence was
-    // chosen over preserving this form; the sequence is unchanged either way.
+    // The re-derivation is gone, so the input's own partition decides. It
+    // asserts four members: `1006delA`, `1007delG`, `1008delG` — mutually
+    // abutting, separation 0, merged into one because `DNA/substitution.md:32`
+    // makes consecutive changes a single edit unconditionally — and
+    // `1009_1010insCCC` at the `1009|1010` junction, one unchanged nucleotide
+    // (`1009`'s `T`) clear of the merged deletion. `general.md:34` keeps those
+    // two individual, and `DNA/delins.md:79-84` supplies the reason the input's
+    // spelling is the right authority for it: "the two variants may have been
+    // reported (or might occur) individually" — provenance no comparison of two
+    // sequences can recover.
+    //
+    // Placement is unmoved by any of this: deleting `AGG` at 1006_1008 cannot
+    // shift 3' (`1006` is `A`, `1009` is `T`) and the inserted `CCC` cannot
+    // either (`1010` is `A`), so both members are already 3'-most
+    // (`general.md:41`). The resulting sequence is identical to the spanning
+    // delins's, as it was to every earlier form.
     let core = core_with_snippet_at(1006, "AGGTACGT", 100);
     let p = SyntheticBuilder::genomic(&core).build();
     let result = normalize_to_string(
         p,
         &format!("{}:g.[1006delA;1007delG;1008delG;1009_1010insCCC]", SEQID),
     );
-    assert_eq!(result, format!("{}:g.1006_1009delinsTCCC", SEQID));
+    assert_eq!(
+        result,
+        format!("{}:g.[1006_1008del;1009_1010insCCC]", SEQID)
+    );
     assert_no_duplicate_or_overlap(&result);
 }
 

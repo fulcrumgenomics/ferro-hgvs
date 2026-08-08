@@ -270,14 +270,33 @@ fn rna_cross_reference_coding_expands_cds_relative() {
         !out.contains("AAA"),
         "transcript-relative AAA must not appear in output; got {out}",
     );
-    // The normalizer suffix-trims "ATG" to "AT" (trailing G matches ref), then
-    // (#1235) splits the result at the unchanged base at 13, since changes
-    // separated by unchanged nucleotides are described individually
-    // (`delins.md:17`). The span still ends at 14, which is what confirms
-    // CDS-relative expansion succeeded — transcript-relative "AAA" would reach
-    // 15.
+    // **Re-blessed from `g.[10_12del;14C>T]` under the partition model.**
+    //
+    // The expansion and the suffix trim are unchanged — "ATG" loses the trailing
+    // `G` that matches `g.15`, so the member becomes `g.10_14delinsAT` over the
+    // reference run `CGTAC`. What moved is what happens next, and the answer is
+    // now "nothing". The input asserts a **one-member** partition: a single
+    // `delins` spanning `g.10_15`. `general.md:34` speaks of "two variants", so
+    // it has nothing to say about a lone member, and the member is
+    // length-changing (5 reference nucleotides against a 2-base payload), so
+    // there is no column-wise correspondence in which an interior unchanged run
+    // could be identified without inventing an alignment.
+    //
+    // The old `[10_12del;14C>T]` was exactly such an invention: one of several
+    // minimal readings of `CGTAC -> AT`, picked by maximising matched bases,
+    // which manufactured the unchanged `A` at `g.13` that `general.md:34` then
+    // read as a real separation. `DNA/delins.md:47` points the other way for a
+    // span like this — "**The "delins" format is recommended**: it is simpler and
+    // prevents software tools making incorrect predictions for the consequences
+    // on protein level" — and `DNA/delins.md:44-47` is a worked example of the
+    // spanning form winning over a multi-member split of the same bases.
+    //
+    // The property #773 filed is untouched and is still what the assertion turns
+    // on: the span ends at **14**, which only CDS-relative resolution of `r.1_3`
+    // can produce. Transcript-relative "AAA" shares no suffix with `CGTACG` and
+    // would reach 15.
     assert_eq!(
-        out, "NC_000022.10:g.[10_12del;14C>T]",
+        out, "NC_000022.10:g.10_14delinsAT",
         "CDS-relative r.1_3 (ATG) must normalize within the 10_14 range; got {out}",
     );
 }

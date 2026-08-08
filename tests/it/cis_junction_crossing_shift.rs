@@ -201,9 +201,12 @@ const DUP_RUN: &str = "TTAATATATAATAATATTAT";
 /// sequence-first derivation answers the whole allele from the bases it denotes
 /// and emits a single insertion.
 ///
-/// **Re-blessed from `TEMPLATE:g.[4_5insC;4_5dup]`.** The merged form is derived
-/// from the sequence rather than assembled per member; `[4_5insC;4_5dup]` was
-/// only ever the per-member repair's spelling of the same bases. Verified
+/// **Re-blessed from `TEMPLATE:g.[4_5insC;4_5dup]`.** `[4_5insC;4_5dup]` was only
+/// ever the per-member repair's spelling of the same bases; the merged form
+/// replaced it. (It was originally derived from the sequence. Under the partition
+/// model it arrives the other way round — both members 5'-shuffle to the same
+/// junction, and `DNA/substitution.md:32` merges an abutting pair
+/// unconditionally — but the answer is the same string.) Verified
 /// sequence-preserving: `assert_normalizes_preserving_in` asserts the string
 /// *before* it applies both descriptions, so the failing string assertion left
 /// the preservation check unrun — with the string re-blessed it executes, and
@@ -243,31 +246,68 @@ fn a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence() {
 /// only oracle is `apply`, and their second member is always a single-base `dup`,
 /// exactly the length at which `len - 1` is zero and the over-clamp disappears.
 ///
-/// The third member is what keeps the property visible. `15del` stops the
-/// *merge* without touching the shift: the block is no longer one run of change,
-/// so the derivation declines to collapse the allele and the per-member pipeline
-/// decides the output again, which is where the barrier lives. The `dup` then
-/// reaches `4_5dup` and the spelling is observable.
+/// The third member is what keeps the property visible: `15del` sits 4 nt clear
+/// of the tract, so it neither joins the pair nor shifts itself, and whatever the
+/// pair does is reported without a third edit muddying it.
 ///
 /// **Distance measured, not assumed.** Sweeping every third-member position on
 /// `DUP_RUN`: at `10del` and `11del` the member joins the block and the allele
-/// merges again (to `g.[4_5insC;10_11insT]`) — a test written there would be
-/// vacuous in a new way, pinning a merged form while claiming to pin a barrier.
-/// `12del` and `13del` are clear but only 1-2 nt past the tract; at `14del` and
-/// `18del` the third member itself 5'-shifts, which muddies the row. `15del` is
-/// 4 nt clear, stays exactly where it is written, and reaches the tie.
+/// merges with it as well (to `g.[4_5insC;10_11insT]`) — a test written there
+/// would be vacuous in a new way, pinning a three-way merge while claiming to pin
+/// a barrier. `12del` and `13del` are clear but only 1-2 nt past the tract; at
+/// `14del` and `18del` the third member itself 5'-shifts, which muddies the row.
+/// `15del` is 4 nt clear, stays exactly where it is written, and reaches the tie.
 ///
-/// **Fails both ways.** Deleting `.filter(|_| a.junction.is_none())` from the 5'
-/// branch of `clamp_sibling_crossing_shifts` turns this output into
-/// `g.[4_5insC;5_6dup;15del]`; restoring it turns it back. (Removing the whole
+/// **Re-blessed from `TEMPLATE:g.[4_5insC;4_5dup;15del]` under the partition
+/// model, and the row still discriminates — read the new string carefully,
+/// because that is where the property now lives.**
+///
+/// The old comment said the third member "stops the *merge* without touching the
+/// shift", which was true of the sequence-first derivation: `15del` broke the
+/// block into two runs of change and the derivation declined to collapse. That is
+/// not how the pair is decided any more. The input asserts three members; the
+/// `4|5` insertion and the `5_6` duplication are two unchanged nucleotides apart
+/// as written, so `general.md:34` keeps them individual through the partition
+/// step, and the 5' shuffle then runs per member exactly as before. The
+/// duplication travels the `AT` tract and is stopped by the barrier at `4_5dup`,
+/// one interbase short of the illegal `3_4dup` that would share interbase 4 with
+/// the insertion — which is the property this row exists for and is unchanged.
+///
+/// What is new is what happens *after* the shift: the two members now sit at the
+/// **same junction**, separation 0, and `DNA/substitution.md:32` ("changes
+/// involving two or more consecutive nucleotides are described as
+/// deletion-insertion (delins)") together with `DNA/delins.md:86-89` — whose
+/// worked answer to `c.[2077G>A;2077_2078insTA]` is the single `c.2077delinsATA`,
+/// with `:89` recording that the permissive two-member sentence was removed —
+/// makes that merge unconditional. The merged edit inserts `CTA` at `4|5`, and
+/// since its last base `A` equals the reference base at `g.4` the 5' shuffle rolls
+/// it one further to `g.3_4insACT`, where `g.3`'s `A` no longer matches the
+/// rotated payload's final `T`. `15del` is untouched throughout.
+///
+/// **Fails both ways, and the failing form is the same one as before.** Deleting
+/// `.filter(|_| a.junction.is_none())` from the 5' branch of
+/// `clamp_sibling_crossing_shifts` over-clamps the duplication by `len - 1` and
+/// strands it at its input position `5_6dup`; two unchanged nucleotides then
+/// remain between the members, nothing merges, and the output is
+/// `g.[4_5insC;5_6dup;15del]` — the same failing form the row reported before,
+/// re-derived here rather than re-measured, since `src/normalize/` was out of
+/// scope for the change that moved this string. So `g.[3_4insACT;15del]` is
+/// reachable **only** if
+/// the duplication got all the way to the `4|5` junction: the merged spelling is
+/// evidence of the shift, not a substitute for observing it. (Removing the whole
 /// 5' `across_junctions` barrier instead leaves this row green — that half is
 /// guarded by `an_insertion_merging_with_a_deletion_keeps_its_base_in_place`.)
+///
+/// The merged answer is also, base for base,
+/// [`a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence`]'s —
+/// the same pair without the third member — so the two rows now agree, where
+/// before they disagreed on whether the `dup` survived.
 #[test]
 fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position() {
     assert_normalizes_preserving_in(
         DUP_RUN,
         "TEMPLATE:g.[4_5insC;5_6dup;15del]",
-        "TEMPLATE:g.[4_5insC;4_5dup;15del]",
+        "TEMPLATE:g.[3_4insACT;15del]",
         ShuffleDirection::FivePrime,
     );
 }
