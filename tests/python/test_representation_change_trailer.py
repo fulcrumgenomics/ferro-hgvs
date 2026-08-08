@@ -355,6 +355,82 @@ def test_decline_vocabulary_matches_the_changelog_config() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# A decline that describes a move contradicts itself
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "no. 3 rows move",
+        "none. 577 rows move, 360 merge / 205 split",
+        "none. 3 rows of 500,004 move",
+        "na — but 2 rows respell",
+        "none. 12,530 rows move in the synthetic corpus",
+        # The past tense of every verb, not only of `move`. `moved` was covered and
+        # `merged`/`respelled` were not, so a trailer could contradict itself in the
+        # tense a retrospective disclosure is most naturally written in.
+        "none. 3 rows merged",
+        "no. 12 rows respelled",
+        "none. 205 rows moved",
+    ],
+)
+def test_a_decline_that_describes_a_move_fails(value: str) -> None:
+    """Reading the verdict from the first word lets a trailer contradict its own reason.
+
+    The failure is silent and in the dangerous direction — filed as `none`, so the
+    disclosure never reaches the changelog and nobody is told.
+    """
+    ok, message = check(["src/normalize/merge.rs"], f"Representation-Change: {value}")
+    assert not ok, f"{value!r} declines and then describes a move"
+    assert "declines and then describes a move" in message
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # #1535, verbatim: a decline is entitled to quantify its zero.
+        "0 rows move over 5,761,302 real expressions",
+        # #1547, verbatim: the count that sits next to `rows` is 950, and it is not the
+        # moving set. A looser pattern fires here — measured — and this is an exemplary
+        # decline, so failing it would punish the phrasing worth encouraging.
+        "none. 0 of 950 real cis-allele rows move their normalized string; 1 of 950 "
+        "changes strict verdict from accept to reject, which is the defect being fixed.",
+        # #1546, verbatim in shape: the corpus grew; no shipped string moved.
+        "none. This change does grow the corpus, 78,028 -> 78,298 rows, which changes the "
+        "denominator of every future compare run against it.",
+        # #1538, verbatim in shape: a count of adjudicated rows, not of moved ones.
+        "none. The ruling ratifies shipped behaviour — v0.12.0 already emits the unsplit "
+        "form on 208 of 208 adjudicated rows.",
+        # A zero is a zero however it is spelled. The rule excludes zero by requiring a
+        # nonzero digit in the count; an anchored `(?!0\\b)` excluded only the bare `0`,
+        # so these read as nonzero and failed a decline that moves nothing.
+        "none. 0,000 rows move",
+        "none. 000 rows merged",
+    ],
+)
+def test_a_numerate_decline_is_not_a_contradiction(value: str) -> None:
+    """The guard must not fire on the declines this repository actually writes.
+
+    Every one of these is real, and they are numerate on purpose. Verified against the 15
+    declines of the v0.13.1 cycle: this rule fires on none of them.
+    """
+    assert check_representation_change.contradicted_decline(value) is None, (
+        f"{value!r} declines legitimately; failing it would punish a good disclosure"
+    )
+
+
+def test_a_real_disclosure_is_not_a_contradiction() -> None:
+    """The guard applies only to declines — a trailer that leads with the move is fine."""
+    assert (
+        check_representation_change.contradicted_decline(
+            "3 rows of 500,004 move (0.0006%) — 2 respell, 1 merge"
+        )
+        is None
+    )
+
+
 def test_the_two_decline_rules_agree_value_by_value() -> None:
     """The vocabulary test above compares word lists; this one compares *verdicts*.
 

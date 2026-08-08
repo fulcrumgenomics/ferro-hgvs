@@ -215,6 +215,77 @@ jobs:
             --changed-files changed-files.txt \
             --declaration-file pr-body.txt
 
+  # Audit what the changelog's **Representation changes** section actually contains, by
+  # rendering it with the real `release-plz.toml` and checking the result against the
+  # trailers on the commits.
+  #
+  # The job above asks each PR to declare; this one asks whether the declarations end up
+  # where they claim. Both halves of that have shipped broken -- #1526 listed one decline
+  # as a change, #1555 listed eight -- and neither was caught, because the test written to
+  # catch exactly this compares the two halves against *each other* and they were wrong
+  # together. So this audit derives its own answer and shares no code with the checker.
+  #
+  # Runs on every PR rather than only at release time: the section is rebuilt from the
+  # whole range since the last tag, so a mis-filed trailer is visible the day it lands
+  # rather than in the release PR, when the fix is a rebase of somebody else's merged work.
+  changelog-grouping:
+    name: Changelog grouping audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Full history and tags: the audited range is `<latest tag>..HEAD`.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: taiki-e/install-action@a8fb21b85430c7a58551cf7ea87b03f355b826d9  # git-cliff
+      - name: Synthesize the squash commit this PR will become
+        # Without this the audit cannot see the commit it exists to judge. GitHub builds
+        # the squash subject from the PR title and the body from the PR description, and
+        # the `Representation-Change:` trailer lives in the description — so on a PR
+        # branch no commit in `<latest tag>..HEAD` carries it, and a PR whose merged form
+        # files a decline under **Representation changes** passes here and is caught only
+        # after it lands. The sibling `representation-change` job already reads the
+        # description for the same reason; this is the same fact, one step further on.
+        #
+        # `reset --soft` to the PR's base first, so the *history* is the preview and not
+        # just the message. On a `pull_request` event `actions/checkout` gives the MERGE
+        # ref, so `<latest tag>..HEAD` otherwise contains the branch's intermediate
+        # commits and the merge commit itself — none of which survive a squash. Measured
+        # on a simulated merge ref: 5 audited commits that way against 2 this way, where
+        # 2 is exactly post-merge `main`. Soft-resetting keeps the index and worktree, so
+        # the commit carries the PR's real tree and the audit still reads the PR's own
+        # `release-plz.toml` — this is the squash commit, not an approximation of it.
+        #
+        # `--allow-empty` is still needed: a PR that changes no files (a description-only
+        # edit re-running CI) would otherwise have nothing to commit.
+        if: github.event_name == 'pull_request'
+        # Through `env`, never interpolated into the script body: a PR title and
+        # description are attacker-controlled text and `${{ }}` inside `run` would splice
+        # them into the shell.
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          printf '%s (#%s)\n\n%s\n' "$PR_TITLE" "$PR_NUMBER" "$PR_BODY" > squash-message.txt
+          git reset --soft "$PR_BASE_SHA"
+          git -c user.name='github-actions' -c user.email='github-actions@github.com' \
+            commit --allow-empty --no-verify --quiet --file squash-message.txt
+          echo "auditing this squash-equivalent commit:"
+          git --no-pager log -1 --format='%H%n%s'
+          # Guarded: `describe` exits non-zero on a tagless history, and this echo is a
+          # debugging aid — it must not be what fails the job under `set -e`.
+          if tag=$(git describe --tags --abbrev=0 2>/dev/null); then
+            echo "audited range ($tag..HEAD) now contains:"
+            git --no-pager log --format='  %h %s' "$tag..HEAD"
+          fi
+      - name: Audit the Representation changes section
+        run: python scripts/check_changelog_grouping.py
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
