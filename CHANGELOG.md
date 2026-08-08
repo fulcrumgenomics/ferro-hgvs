@@ -11,6 +11,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Representation changes
 
+**3 stored strings move — 3 of 500,004 ClinVar rows (0.0006%).** Two are respelled
+and one merges back to the form the submitter wrote. These inputs were **previously
+accepted**, so a consumer who normalized them under v0.13.0 holds the old string:
+a real migration, if a very small one. The merge, end to end:
+
+```
+NM_000083.3:c.2461_2464delinsCTCC
+  v0.13.0 ->  c.[2461_2463delinsCTC;2464G>C]
+  v0.13.1 ->  NM_000083.3:c.2461_2464delinsCTCC   (unchanged — the submitted spelling)
+```
+
+Both entries below are the same fix in different directions, and only the first
+moves anything. [#1535] moves **0 rows over 5,761,302 real expressions** (ClinVar
+500,004 / Paraphase 435,235 / CMRG 4,826,063), and that zero is *structural* rather
+than reassuring: those corpora contain no instance of the shape it converts, so the
+measurement could not have found a move. Where the shape does occur the split
+spelling moves onto `inv`.
+
+One deliberate cost, recorded because it is the property this project ranks above
+stability: **confluence drops by 6 classes of 11,272** in [#1537], by operator
+ruling. Those classes agreed only by way of a spec-illegal intermediate the fix
+removes; `sequence_changed` stays 0, so nothing converged on a wrong sequence, and
+the surviving form is the better-formed one. What was lost is agreement, not
+correctness. The same change fixes 58 of 59 known `delins.md:16` separation
+violations.
+
+[#1535]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1535
+[#1537]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1537
+
 - *(normalize)* never split a delins into members on consecutive nucleotides ([#1537](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1537))
 - *(normalize)* type the whole-block inversion by what it competes with ([#1535](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1535))
 
