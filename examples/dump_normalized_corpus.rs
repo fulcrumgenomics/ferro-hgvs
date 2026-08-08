@@ -861,8 +861,9 @@ fn dump(seeds: u32) -> Vec<Row> {
             if axis == "cx" {
                 continue;
             }
+            let normalizer = normalizer_for(axis, &core, direction);
             for input in long_inputs_for(axis, &core) {
-                let output = normalize_one(axis, &core, &input, direction);
+                let output = normalize_through(&normalizer, &input);
                 rows.push(Row {
                     reference: label.clone(),
                     axis,
@@ -881,8 +882,9 @@ fn dump(seeds: u32) -> Vec<Row> {
     // the sequence, so it cannot be crossed with the random cores below.
     for design in revcomp_designs() {
         for (axis, direction, dir_label) in axes_and_directions() {
+            let normalizer = normalizer_for(axis, &design.core, direction);
             for input in revcomp_inputs_for(axis, &design) {
-                let output = normalize_one(axis, &design.core, &input, direction);
+                let output = normalize_through(&normalizer, &input);
                 rows.push(Row {
                     reference: design.label.clone(),
                     axis,
@@ -897,9 +899,12 @@ fn dump(seeds: u32) -> Vec<Row> {
     }
     for core in corpus_sequences(seeds) {
         for (axis, direction, dir_label) in axes_and_directions() {
+            // One normalizer per (axis, core, direction) cell, reused across every
+            // family and every input in it — see `normalizer_for`.
+            let normalizer = normalizer_for(axis, &core, direction);
             for (family, _) in FAMILIES {
                 for input in inputs_for(family, axis, &core) {
-                    let output = normalize_one(axis, &core, &input, direction);
+                    let output = normalize_through(&normalizer, &input);
                     rows.push(Row {
                         reference: core.clone(),
                         axis,
@@ -1257,15 +1262,30 @@ fn provider_for(axis: &str, core: &str) -> MockProvider {
     }
 }
 
-fn normalize_one(axis: &str, core: &str, input: &str, direction: ShuffleDirection) -> String {
+/// The normalizer one `(axis, core, direction)` cell of the matrix is dumped
+/// through.
+///
+/// Split out of [`normalize_one`] so [`dump`] can build it **once per cell**
+/// instead of once per row. `provider_for` is not cheap: every call re-pads the
+/// core with 512 bases (`padded`), and the coding and multi-exon axes also build a
+/// `Transcript` — on the 1024-base long cores that is a ~1.5 kB copy per input, and
+/// the corpus has tens of thousands of rows. Nothing about it varies with the row.
+fn normalizer_for(axis: &str, core: &str, direction: ShuffleDirection) -> Normalizer<MockProvider> {
+    Normalizer::with_config(
+        provider_for(axis, core),
+        NormalizeConfig::default().with_direction(direction),
+    )
+}
+
+/// One row's output, through a normalizer the caller already holds.
+///
+/// The sentinel vocabulary (`<parse-error>` / `<declined>` / `<panic>`) is what
+/// `the_corpus_emits_a_block_past_the_split_cap` reads, so it lives here rather
+/// than at each call site.
+fn normalize_through(normalizer: &Normalizer<MockProvider>, input: &str) -> String {
     let Ok(variant) = parse_hgvs(input) else {
         return "<parse-error>".to_string();
     };
-    let provider = provider_for(axis, core);
-    let normalizer = Normalizer::with_config(
-        provider,
-        NormalizeConfig::default().with_direction(direction),
-    );
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         normalizer.normalize(&variant)
     })) {
@@ -1273,6 +1293,17 @@ fn normalize_one(axis: &str, core: &str, input: &str, direction: ShuffleDirectio
         Ok(Err(_)) => "<declined>".to_string(),
         Err(_) => "<panic>".to_string(),
     }
+}
+
+/// [`normalize_through`], building the normalizer for one row.
+///
+/// `#[cfg(test)]` because that is now the whole of its use: the callers that
+/// genuinely normalize a *single* description are the unit tests below and the
+/// idempotency re-check, where there is no matrix cell to amortise a normalizer
+/// over. [`dump`] holds one per cell via [`normalizer_for`].
+#[cfg(test)]
+fn normalize_one(axis: &str, core: &str, input: &str, direction: ShuffleDirection) -> String {
+    normalize_through(&normalizer_for(axis, core, direction), input)
 }
 
 fn padded(core: &str) -> String {
