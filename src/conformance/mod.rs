@@ -16,6 +16,7 @@ pub mod biocommons;
 pub mod case_harvest;
 pub mod completeness;
 pub mod hgvs_rs_projection;
+pub mod inversion_sweep;
 pub mod mutalyzer;
 pub mod reference_snapshot;
 pub mod reference_window;
