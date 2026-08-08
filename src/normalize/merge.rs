@@ -2132,6 +2132,20 @@ enum PartitionRule {
     /// after the downstream passes — see
     /// [`coalesce_payload_alignment_split`].
     CanonicalCoalesced,
+    /// [`partition_block_preserving`]: do not re-derive a partition at all.
+    ///
+    /// Take the partition the **input** asserted, apply only the separation
+    /// merge the spec licenses, and let the existing downstream passes do the
+    /// 3' shift and the re-spelling. Unlike the other three arms this one does
+    /// not choose a different *objective* — it declines to have one.
+    ///
+    /// The model behind it: an HGVS descriptor is not a `(reference, sequence)`
+    /// pair, it is a *partition* of the reference into changed blocks and the
+    /// unchanged runs between them. Every clause the spec states about
+    /// separation, placement and spelling is stated over that structure
+    /// (`general.md:34`, `:41`, `:56`, `:58`, `DNA/delins.md:44-47`), and none
+    /// of them asks for a minimal re-derivation from the resulting sequence.
+    Preserve,
 }
 
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
@@ -2152,10 +2166,11 @@ fn partition_rule_from_env(value: Option<&str>) -> PartitionRule {
         Some("shadow") => PartitionRule::Shadow,
         Some("canonical") => PartitionRule::Canonical,
         Some("canonical-coalesced") => PartitionRule::CanonicalCoalesced,
+        Some("preserve") => PartitionRule::Preserve,
         Some(other) => {
             log::warn!(
                 "FERRO_PARTITION={other} is not one of \
-                 live|shadow|canonical|canonical-coalesced; using live"
+                 live|shadow|canonical|canonical-coalesced|preserve; using live"
             );
             PartitionRule::Live
         }
@@ -2418,6 +2433,18 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
             partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
                 .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
         }
+        PartitionRule::Preserve => partition_block_preserving(
+            &edits,
+            &ref_bytes,
+            &result,
+            w_lo,
+            lo,
+            hi_ref,
+            hi_alt,
+            axis_min_separation(frame.reading_frame),
+        )
+        .filter(|pieces| pieces_rebuild_block(pieces, &ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
+        .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
     };
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
@@ -4075,6 +4102,169 @@ fn trim_common_flanks(reference: &[u8], result: &[u8]) -> (usize, usize, usize) 
         hi_alt -= 1;
     }
     (lo, hi_ref, hi_alt)
+}
+
+/// Do these pieces, applied to the reference block, rebuild the alt block exactly?
+///
+/// The guard on [`partition_block_preserving`]. A partition that denotes different
+/// bases than the input did is the one failure mode worth being paranoid about
+/// here, and it is cheap to rule out directly rather than by reasoning.
+fn pieces_rebuild_block(pieces: &[Piece], reference: &[u8], result: &[u8]) -> bool {
+    let mut rebuilt: Vec<u8> = Vec::with_capacity(result.len());
+    let mut cursor = 0usize;
+    for piece in pieces {
+        if piece.ref_start < cursor || piece.ref_end > reference.len() {
+            return false;
+        }
+        rebuilt.extend_from_slice(&reference[cursor..piece.ref_start]);
+        rebuilt.extend_from_slice(&piece.alt);
+        cursor = piece.ref_end;
+    }
+    rebuilt.extend_from_slice(&reference[cursor..]);
+    rebuilt == result
+}
+
+/// Partition the block the way the **input** did, rather than re-deriving one.
+///
+/// Every other arm of [`PartitionRule`] answers "given these two sequences, where
+/// are the members?". This one answers "the description already said where the
+/// members are; keep them". The only boundary it moves is the one
+/// `general.md:34-39` / `DNA/delins.md:44-47` authorise: two members separated by
+/// fewer than `min_separation` unchanged nucleotides become one.
+///
+/// # Window coordinates, not block coordinates — and that is load-bearing
+///
+/// [`trim_common_flanks`] derives the block from the two *sequences* and knows
+/// nothing about the members, so a member sitting in a trimmed-away flank — which
+/// is routine for a `dup` or `ins` whose payload matches adjacent reference — has
+/// no block coordinate at all. Mapping into the block directly refused **32.8%**
+/// of all invocations on the designed cis corpus (17,268 of 17,782 declines were
+/// exactly this), and because every refusal falls back to [`partition_block`], the
+/// arm silently re-derived a third of its blocks while reporting itself as
+/// preserving. Walking the window and subtracting `lo` at the end is what makes
+/// the block follow the members rather than the other way round.
+///
+/// # Why the alt payloads are read out of `result` rather than off the edits
+///
+/// Taking them from the applied window makes sequence preservation structural: a
+/// member's payload is *by construction* the bases the edits produced there, so no
+/// `GEdit` variant can contribute a payload that disagrees with the sequence. It
+/// also means only each edit's *length* is needed, which is why `Dup` and `Inv`
+/// need no reference read here.
+///
+/// # Declines rather than guesses
+///
+/// Returns `None` — and the caller falls back to [`partition_block`] — when the
+/// members overlap, when one falls outside the window, when a `Repeat` survived
+/// [`lower_repeat_edits`], or when the walk does not land both cursors on the
+/// window's ends. The caller additionally checks [`pieces_rebuild_block`].
+#[allow(clippy::too_many_arguments)]
+fn partition_block_preserving(
+    edits: &[GEdit],
+    ref_bytes: &[u8],
+    result: &[u8],
+    w_lo: i64,
+    lo: usize,
+    hi_ref: usize,
+    hi_alt: usize,
+    min_separation: u32,
+) -> Option<Vec<Piece>> {
+    let at = |pos: i64| -> Option<usize> { usize::try_from(pos - w_lo).ok() };
+
+    // (ref_start, ref_end_exclusive, alt_len) per member, in window coordinates.
+    let mut spans: Vec<(usize, usize, usize)> = Vec::with_capacity(edits.len());
+    for edit in edits {
+        spans.push(match edit {
+            // An insertion consumes no reference: an empty interval immediately
+            // before position `gap + 1`.
+            GEdit::Ins { gap, alt } => {
+                let p = at(*gap + 1)?;
+                (p, p, alt.len())
+            }
+            GEdit::Del { s, e } => (at(*s)?, at(*e)? + 1, 0),
+            GEdit::Sub { pos, .. } => {
+                let p = at(*pos)?;
+                (p, p + 1, 1)
+            }
+            GEdit::Delins { s, e, alt } => (at(*s)?, at(*e)? + 1, alt.len()),
+            // Semantically an insertion of `ref[s..=e]` at gap `e`.
+            GEdit::Dup { s, e } => {
+                let p = at(*e + 1)?;
+                (p, p, usize::try_from(*e - *s + 1).ok()?)
+            }
+            GEdit::Inv { s, e } => {
+                let (a, b) = (at(*s)?, at(*e)? + 1);
+                (a, b, b.checked_sub(a)?)
+            }
+            // `lower_repeat_edits` runs before this point; a survivor means the
+            // window could not resolve the tract. Refuse rather than guess.
+            GEdit::Repeat { .. } => return None,
+        });
+    }
+    if spans.is_empty() {
+        return None;
+    }
+    spans.sort_by_key(|(s, e, _)| (*s, *e));
+
+    // Walk the window assigning each member its slice of `result`. The runs
+    // *between* members are unchanged by the input's own assertion, so they
+    // advance both cursors equally — that identity is what makes the alt offsets
+    // computable without a second alignment.
+    let mut placed: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(spans.len());
+    let (mut ref_pos, mut alt_pos) = (0usize, 0usize);
+    for (s, e, len) in spans {
+        if s < ref_pos || e > ref_bytes.len() {
+            return None; // overlapping members, or one outside the window
+        }
+        alt_pos += s - ref_pos;
+        let alt_start = alt_pos;
+        alt_pos += len;
+        if alt_pos > result.len() {
+            return None;
+        }
+        placed.push((s, e, alt_start, alt_pos));
+        ref_pos = e;
+    }
+    if alt_pos + (ref_bytes.len() - ref_pos) != result.len() {
+        return None;
+    }
+
+    // The one licensed boundary move. Merging absorbs the unchanged run between
+    // the two members into the merged one, on both axes at once.
+    let mut merged: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(placed.len());
+    for piece in placed {
+        match merged.last_mut() {
+            Some(prev) if piece.0.saturating_sub(prev.1) < min_separation as usize => {
+                prev.1 = piece.1;
+                prev.3 = piece.3;
+            }
+            _ => merged.push(piece),
+        }
+    }
+
+    // Into block coordinates. A member that trimming pushed outside the block
+    // spells no change there — dropped when its payload really does equal the
+    // reference it covers, refused otherwise, so a genuine edit can never be
+    // silently discarded.
+    let mut pieces = Vec::with_capacity(merged.len());
+    for (rs, re, as_, ae) in merged {
+        let alt = &result[as_..ae];
+        if rs < lo || re > hi_ref || as_ < lo || ae > hi_alt {
+            if ref_bytes.get(rs..re) == Some(alt) {
+                continue;
+            }
+            return None;
+        }
+        pieces.push(Piece {
+            ref_start: rs - lo,
+            ref_end: re - lo,
+            alt: alt.to_vec(),
+        });
+    }
+    if pieces.is_empty() {
+        return None;
+    }
+    Some(pieces)
 }
 
 /// Partition a changed block into maximal runs of change separated by at least
