@@ -13,30 +13,83 @@
 //! `examples/generate_cis_confluence_corpus.rs` fills it. Each class it emits is
 //! one synthetic reference, one denoted sequence, and N ≥ 2 distinct spellings
 //! verified — by an applier independent of the normalizer — to denote that
-//! sequence. This module normalizes every spelling in every class and asks the
-//! confluence question: **does a class reach exactly one output?**
+//! sequence.
 //!
-//! # This is a census, not a pass/fail gate
+//! # READ THIS FIRST: what these numbers measure changed, and the target did too
 //!
-//! It does not converge today, and a permanently red suite would be worth
-//! nothing. So the numbers below are **pinned baselines**: the target is total
-//! convergence, and each pinned figure must only ever move in the direction of
-//! it. A change that raises a divergence count is a regression and must be
-//! explained; a change that lowers one should re-bless the number in the same
-//! commit.
+//! This module used to ask one question — **does a class reach exactly one
+//! output?** — and treat the answer as a defect count with a target of 100%.
+//! That framing belonged to the re-derivation partitioner, under which a
+//! description's members were only a hint: `canonicalize_from_sequence` threw
+//! the input's own partition away, minimised edit distance over the resulting
+//! *sequence*, and so answered every spelling of one sequence identically by
+//! construction. Sequence-confluence was the right target because the model
+//! made the description's own assertion irrelevant.
+//!
+//! `FERRO_PARTITION` now defaults to `preserve`, and under it **a description
+//! asserts a partition of the reference into changed blocks and unchanged runs**.
+//! `g.19_33delinsCGG` asserts one changed block; `g.[19_23del;27_33del]` asserts
+//! two. Those are different assertions about the same resulting sequence, and
+//! `partition_block_preserving` keeps each, moving a boundary only where
+//! `general.md:34-39` / `DNA/delins.md:44-47` license it (merge two members
+//! closer than the axis floor) or where `general.md:34` requires it (split an
+//! **equal-length** member whose interior holds an unchanged run reaching that
+//! floor).
+//!
+//! So **two spellings asserting different partitions are no longer required to
+//! converge, and a fall in sequence-confluence is not by itself a defect.** The
+//! `converged` figures below fell when the default flipped — 3': 6 629 ->
+//! 5 611; 5': 6 626 -> 5 684, A/B-measured against `FERRO_PARTITION=live`, which
+//! reproduces the old numbers exactly — and essentially all of that fall is the
+//! lone-`delins` spelling of each class no longer being re-derived into the
+//! multi-member form (see the corpus's shape, below).
+//!
+//! ## The three questions, and which of them is a gate
+//!
+//! | figure | what it measures | is it a target? |
+//! |---|---|---|
+//! | `sequence_changed`, `not_fixed_point` | correctness: an output denotes its class's sequence, and re-reading it re-asserts the same partition | **yes, absolute zero** |
+//! | `same_partition_*` | confluence *within* one asserted partition — an upper bound, see [`input_arity`] | a watched residual, not a ratchet |
+//! | `converged`, `split_*`, `cross_partition_divergence` | sequence-confluence across *different* assertions | **no.** A change detector whose movement must be argued, in either direction |
+//!
+//! Only the first row is a property the partition model promises. The second is
+//! the property that *replaces* the old target, but the grouping key available
+//! to a test is a proxy, so it bounds the residual rather than counting it. The
+//! third is retained because it is what a downstream consumer experiences —
+//! a re-normalization — and it must never move silently.
+//!
+//! ## Why the corpus makes the fall almost arithmetic
+//!
+//! Every one of the 11 272 classes is exactly **one single-member spelling plus
+//! a set of spellings that all carry the same member count** (2, 3 or 4);
+//! measured, and pinned by
+//! [`the_corpus_is_a_dense_set_of_real_confluence_classes`]. So each class poses
+//! exactly one cross-partition question (lone `delins` against the multi-member
+//! group) and at most one same-partition question (the multi-member group
+//! against itself). `cross_partition_divergence` is 5 281 of 5 661 diverging
+//! classes at 3': the lone spelling disagreeing with the group it never asserted
+//! the same partition as.
 //!
 //! Read the pins together with `CLAUDE.md`'s note on representation stability.
-//! Confluence and stability are different properties, and a fix for the first
-//! moves shipped strings — so a commit that lowers a divergence count here still
-//! owes the release its `dump_normalized_corpus` measurement.
+//! The bar there is **confluence plus disclosure, not stability** — but note
+//! which confluence: the confluence that blocks the downstream consumer is
+//! between two spellings *of one variant as they store it*, and where those two
+//! spellings assert different partitions this model answers them differently on
+//! purpose. That is a representation change and it owes the release a
+//! `dump_normalized_corpus` measurement and a `Representation-Change:` trailer,
+//! whichever direction the strings moved.
 //!
-//! # Sequence preservation is the harder half
+//! # Sequence preservation is the harder half, and it survived the model change
 //!
 //! A class that converged on the *wrong* sequence would be worse than one that
 //! diverged, so every output is also applied back to the reference — through
 //! `hgvs_to_spdi`, the same way `tests/it/common/synthetic.rs`'s
 //! `assert_padded_preserving` does it — and compared with the class's denoted
-//! sequence. That count is asserted at zero.
+//! sequence. That count is asserted at zero, and is still zero under
+//! `preserve`. Its sibling `not_fixed_point` — added with the partition model,
+//! and also zero — asks the dual question: re-reading ferro's own answer must
+//! re-assert the same partition. Those two zeros are what make the fall in
+//! `converged` a change of representation rather than of meaning.
 //!
 //! # Corpus
 //!
@@ -44,6 +97,13 @@
 //! is regenerated on demand through `common::fixture_gen`, so a fresh checkout
 //! just works. Its parameters are what the pins are measured over: regenerating
 //! with different `--seeds` re-rolls every number here.
+//!
+//! # HISTORY — the notes below describe `FERRO_PARTITION=live`
+//!
+//! Everything from here down was written under the re-derivation partitioner
+//! and is kept because `live` is still selectable and still A/B'd against. Do
+//! not read these numbers as the current pins; the constants above are the
+//! current pins, and each carries its own `live` baseline for the comparison.
 //!
 //! # The pins were once per oracle configuration, and no longer are (#1454)
 //!
@@ -92,7 +152,7 @@
 //! scores as `converged`. The oracle was crediting the defect with a convergence
 //! that was really a suppressed output.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -122,147 +182,126 @@ const CDS_END: u64 = 63;
 // The pinned baseline
 // ---------------------------------------------------------------------------
 
-/// The 3'-direction census, pinned. See the module docs: every divergence
-/// figure is a baseline that must only ever go down, and `converged` a floor
-/// that must only ever go up.
+/// The 3'-direction census, pinned.
 ///
-/// **58.8% of designed classes converge** (6 633 of 11 272). The 4 639 that do
-/// not are the measurement this module exists to make: nothing in the repo
-/// could state that number before, because only 650 real rows reach the
-/// partitioner at all — and `multi_member_cis_axis` measures 82% convergence
-/// over the respellable ones of those, which is what a corpus of far-apart
-/// members looks like.
+/// # Sequence-confluence: **49.8%** (5 611 of 11 272), down from 58.8%
 ///
-/// Note what the remainder is *not*: `declined` and `sequence_changed` are both
-/// zero, so every divergence is two well-formed, sequence-preserving outputs
-/// for one variant. That is the confluence defect itself, not a parse failure
-/// or a corrupted sequence wearing its clothes.
+/// Read the module docs before reading this as a regression. Under
+/// `FERRO_PARTITION=live` — the re-derivation partitioner, still selectable and
+/// A/B'd for exactly this — the same corpus gives `converged` 6 629, `split 2`
+/// 4 509, `split 3` 115, `split 4+` 19. Flipping the default to `preserve`
+/// moves it to 5 611 / 5 524 / 135 / 2, a fall of **1 018 classes**.
 ///
-/// `converged` was 6 632 before #1454; see the module docs for which single
-/// class moved and why the other #1454 class could not.
+/// Of the 5 661 classes that now diverge, **5 281 diverge only across different
+/// asserted partitions** (`cross_partition_divergence`) — the lone `delins`
+/// spelling answers one question and the multi-member group answers another.
+/// `live` converged those by discarding the lone spelling's assertion and
+/// re-deriving the group's; `preserve` cannot, and is not meant to. This is the
+/// single largest representation change the partition rule makes and it is the
+/// one to declare in the changelog.
 ///
-/// # `converged` went **down** by 4 in #1524, deliberately
+/// # The three correctness figures are still hard zeros
 ///
-/// 6 633 -> 6 629, `split 2` 4 505 -> 4 509. This is the direction this pin
-/// exists to catch, so it is stated rather than absorbed. The four classes are
-/// `s00-c-m3-sep0-p8-rot4`, `s00-c-m4-sep0-p8-rot4`, `s02-c-m4-sep1-p4-rot1`
-/// and `s03-c-m3-sep1-p8-rot2` (5' loses two of the same family).
+/// `declined` 0, `sequence_changed` 0 and `not_fixed_point` 0, over 47 392
+/// spellings. So every one of the 5 661 divergences is a pair of well-formed,
+/// sequence-preserving, self-stable descriptions — nothing here is a parse
+/// failure, a corrupted sequence, or an unstable answer wearing a divergence's
+/// clothes. `not_fixed_point` is new and is the strongest single result in this
+/// file: the partition rule's central claim is that reading ferro's own answer
+/// back re-asserts the same partition, and at corpus scale it does, exactly.
 ///
-/// In each, one multi-member spelling used to reach the lone-`delins` form only
-/// **via** the defect #1524 removes: `Normalizer::build_split_variants` re-split
-/// an intermediate member into two *touching* members, the legacy per-member
-/// merge then re-merged them into a wider `delins`, and that wider form is what
-/// the other spellings had settled on. Take the illegal intermediate away and
-/// the chain stops one step earlier. Traced end to end on
-/// `s00-c-m3-sep0-p8-rot4`: `c.[7_8insTTAATATA;17_24del;24_25insCCAACCCC]` now
-/// gives `c.[18_20delinsAAT;24_25insCCAACCCC]` where the other three spellings
-/// give `c.18_24delinsAATATATCCAACCCC`.
+/// # The same-partition residual went UP, and "210 new defects" is the wrong reading
 ///
-/// Two things make this an acceptable price rather than a hidden regression.
-/// `sequence_changed` is still 0, so no class converged on the wrong sequence;
-/// and the newly-divergent output is the *better* of the two forms — the
-/// single `delins` spans three unchanged nucleotides (`c.21_23`) that
-/// `general.md:34` says to describe individually, while the two-member form
-/// does not. What is lost is agreement, not correctness, and the disagreement
-/// is between a lone `delins` and a multi-member allele — the exact pair
-/// #1235's axis-gate widening is about, since `is_splittable_single_member`
-/// still refuses to re-derive a lone `c.` delins from its sequence.
+/// `same_partition_divergence` 205 -> 380 (`same_partition_converged` 11 067 ->
+/// 10 892). That direction deserves suspicion and got it: the classes this test
+/// prints were read end to end, and they are the **proxy** rather than defects.
+/// The grouping key is the input's member count ([`input_arity`]), and under
+/// `live` that proxy was tight for a reason unrelated to correctness —
+/// re-derivation collapsed *every* same-arity spelling onto one string, so a
+/// group could hardly split. Under `preserve` two spellings can carry the same
+/// member count while asserting members on different territory, and then they
+/// legitimately answer differently. Worked instance, straight out of this test's
+/// own failure report:
 ///
-/// Measured against 58 corpus rows fixed. The alternative shape of the fix —
-/// joining the codon triplet to a touching run on both edges instead of
-/// declining the exception on the left — cost **44** classes here rather than
-/// 4, and was rejected for it.
-/// **Re-blessed when the axis gate opened to `c.`/`n.`/`r.`.** Widening
-/// `is_splittable_single_member` lets a lone transcript-axis member reach
-/// `sequence_first_pass`, which is the entire point of that change: converged
-/// rises **6 633 -> 8 006** and `split_two` falls by the same **1 373**, while
-/// `split_three` (115) and `split_more` (19) are **unchanged**. Every
-/// divergence figure moved down or stayed flat, which is the direction this pin
-/// demands.
+/// ```text
+/// s00-c-m2-sep0-p4-rot3      both inputs are two-member
+///   c.[9T>A;10_13dup]     -> c.[8_9insAAA;11dup]    members at 9 and gap 13: separated, kept
+///   c.[9T>A;9_10insAATA]  -> c.9delinsAAATA         members at 9 and gap 9: touching, merged
+/// ```
 ///
-/// The figure is now identical with and without `FERRO_ASSERT_IDEMPOTENT`
-/// (measured in both, `declined: 0` in both). That is #1493's doing rather than
-/// this branch's — it closed #1454, so the two classes that used to panic the
-/// oracle no longer do, and the per-configuration pins this file once carried
-/// were already collapsed on `main` before this change landed.
+/// Same arity, different territory, therefore different partitions, therefore
+/// two answers — the merge in the second row is the licensed move firing, not a
+/// disagreement. So this figure bounds the residual from above and must be read
+/// as a bound. Sharpening it needs a shift-invariant territory signature, which
+/// a test at this level cannot compute without re-implementing the shuffle.
 ///
-/// **The pinned figure is 8 003, not 8 006.** Both numbers above are true of
-/// the change that produced them, and neither is the number to pin: the axis
-/// gate raises converged by 1 373 against a `main` that already carries
-/// #1537's deliberate reduction of 4 (3') and 2 (5'). The composition was
-/// measured rather than arithmetic — 8 006 is what this branch scored against
-/// a `main` predating #1537, and re-running after the rebase gives 8 003 in
-/// **both** directions. That the two directions land on the same number, as
-/// they did before the rebase, is the reading to trust.
+/// # What the pre-`preserve` history of this constant recorded
 ///
-/// # Raised again by the #1539 member audit: 8 003 -> 8 026
-///
-/// `split_two` falls by the same 23 and `split_three` (115) and `split_more`
-/// (19) are unchanged, so every class that moved moved from two outputs to one.
-/// `split_concealed_separations` cuts a member that conceals a separation
-/// `general.md:34` requires, and the classes this converges are ones where the
-/// lone-`delins` spelling and the multi-member spelling previously reached the
-/// concealed form and the individual form respectively.
-///
-/// `declined`, `underdetermined` and `sequence_changed` are all still 0, and
-/// that is the load-bearing part rather than a formality: an earlier revision of
-/// that pass dropped payload bases when it cut a run of two matched columns with
-/// an insertion between them, and this census is what reported it — 45 declined
-/// and 10 underdetermined, with `converged` *rising* at the same time. A pass
-/// that corrupts a sequence can raise the convergence figure, so the three zeros
-/// have to be read before the headline.
+/// Kept because the reasoning is still sound about `live`, which is still
+/// selectable: `converged` was 6 632 before #1454 and 6 633 after, then #1524
+/// took it to 6 629 deliberately (`s00-c-m3-sep0-p8-rot4`,
+/// `s00-c-m4-sep0-p8-rot4`, `s02-c-m4-sep1-p4-rot1`, `s03-c-m3-sep1-p8-rot2`)
+/// by removing a `build_split_variants` step that re-split a member into two
+/// *touching* members which the legacy per-member merge then re-merged wider.
+/// Note where that argument now lands: the four classes it cost were exactly
+/// lone-`delins`-against-multi-member disagreements, which is the whole
+/// `cross_partition_divergence` bucket above. The #1524 note called the
+/// multi-member form "the *better* of the two forms" on `general.md:34`
+/// grounds; the partition rule reaches the same conclusion structurally instead
+/// of by cost.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_026,
-    split_two: 3_112,
-    split_three: 115,
-    split_more: 19,
+    converged: 5_611,
+    split_two: 5_524,
+    split_three: 135,
+    split_more: 2,
     underdetermined: 0,
     sequence_changed: 0,
+    same_partition_groups: 11_272,
+    same_partition_converged: 10_892,
+    cross_partition_divergence: 5_281,
+    same_partition_divergence: 380,
+    not_fixed_point: 0,
 };
 
 /// The 5'-direction census, pinned. `--direction 5prime` is a supported public
-/// option, and confluence is a property of the normalizer rather than of one
-/// shuffle direction, so it is measured in full rather than spot-checked.
+/// option, and both confluence and partition preservation are properties of the
+/// normalizer rather than of one shuffle direction, so it is measured in full
+/// rather than spot-checked.
 ///
-/// It landed within five classes of the 3' figure (6 628 against 6 633), which
-/// is worth reading as evidence: the divergence is a property of how the
-/// partitioner splits a block, not of which end of an ambiguous run the shuffle
-/// walks to. A fix that moved only one of these two numbers would be treating a
-/// symptom.
+/// It tracks the 3' figure closely under `preserve` (5 684 against 5 611) as it
+/// did under `live` (6 626 against 6 629), which is the reading to keep: what
+/// changed is which *question* the axis answers, not which end of an ambiguous
+/// run the shuffle walks to. A rule change that moved only one of the two
+/// numbers would be treating a symptom.
 ///
-/// Lowered by **two** in #1524 (6 628 -> 6 626, `split 2` 4 530 -> 4 532), for
-/// the reason `THREE_PRIME` records at length. That the two directions move by
-/// different amounts is itself the expected reading of the note above: the
-/// affected classes are ones whose chain to a common form ran through an
-/// intermediate that only some shuffle directions produce.
-/// **Re-blessed with the axis gate**, and the two directions now agree exactly
-/// (both 8 006) rather than within five. The 5' figure moves by **1 378**
-/// against the 3' direction's 1 373 — five more, because the same change fixes
-/// an off-by-one in `enclosing_exon` that let a member sitting on an exon's
-/// first base escape the window clamp and shuffle across the junction. That is
-/// a 5'-only symptom, since the 3' walk moves away from the exon start. Both
-/// directions ending on the same number is the reading to trust: the residual
-/// is a property of the partitioner, not of a shuffle direction.
+/// The `live` baseline for the A/B is `converged` 6 626, `split 2` 4 532,
+/// `split 3` 105, `split 4+` 9, `same_partition_converged` 11 079,
+/// `same_partition_divergence` 193.
 ///
-/// **Raised again by the #1539 member audit: 8 003 -> 8 021**, with `split_two`
-/// falling by the same 18 and `split_three`/`split_more` unchanged. The 3'
-/// direction gains 23 rather than 18, which is the expected asymmetry: the audit
-/// runs before the shift, so a member it cuts is then 3'- or 5'-shifted on its
-/// own, and only some of those landings coincide with the other spelling's.
-/// See `THREE_PRIME` for why the three zeros are read first.
+/// Two differences from 3' worth naming: 5' converges slightly *more* here
+/// (5 684 against 5 611), and `same_partition_divergence` is slightly *higher*
+/// (389 against 380). Both follow from the cause the residual note on
+/// [`THREE_PRIME`] sets out — which anchor a member shuffles to decides whether
+/// two same-arity spellings land on the same territory — so neither is a
+/// direction-specific defect.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_021,
-    split_two: 3_137,
-    split_three: 105,
-    split_more: 9,
+    converged: 5_684,
+    split_two: 5_455,
+    split_three: 130,
+    split_more: 3,
     underdetermined: 0,
     sequence_changed: 0,
+    same_partition_groups: 11_272,
+    same_partition_converged: 10_883,
+    cross_partition_divergence: 5_199,
+    same_partition_divergence: 389,
+    not_fixed_point: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -396,12 +435,85 @@ struct Census {
     /// zero — a class that converges on the wrong sequence is worse than one
     /// that diverges.
     sequence_changed: usize,
+    /// Same-partition groups with at least two spellings that normalized: the
+    /// denominator of the measurement this module now leads with. See
+    /// [`input_arity`] for why the input's member count is the grouping key.
+    same_partition_groups: usize,
+    /// … of those, the groups that reached **one** output. Under the partition
+    /// model this is the figure that must go up, because every spelling in a
+    /// group asserts the same number of changed blocks over the same variant.
+    same_partition_converged: usize,
+    /// Diverging classes where every same-partition group nevertheless
+    /// converged — so the class's two outputs are two *different assertions*
+    /// about where the changed blocks are, not two answers to one question.
+    /// Expected to be large under `preserve` and **not** a defect count.
+    cross_partition_divergence: usize,
+    /// Diverging classes where some same-partition group itself split — an
+    /// **upper bound** on same-partition non-confluence, not a defect count.
+    /// See [`input_arity`] for why the bound is loose and the constants for
+    /// what the bound measured before and after.
+    same_partition_divergence: usize,
+    /// Outputs that are not fixed points: `norm(norm(x)) != norm(x)`. Asserted
+    /// at zero, absolutely rather than as a baseline. This is the one property
+    /// the partition model makes a *hard* prediction about at corpus scale — a
+    /// description asserts a partition, and re-reading ferro's own answer must
+    /// re-assert the same one — so unlike every figure above it there is no
+    /// legitimate non-zero value. #1454 was an instance and is the reason the
+    /// pins were once per oracle configuration.
+    not_fixed_point: usize,
 }
 
 /// A worst-offender line, for the failure message when a pin moves.
+///
+/// Same-partition divergences are listed first and are what a reader should
+/// look at: a cross-partition split is two answers to two different questions
+/// and tells nobody anything, while a same-partition split is the residual this
+/// axis is now for.
 struct Divergence {
     id: String,
+    same_partition: bool,
     outputs: Vec<String>,
+    /// `spelling -> output`, one line per spelling. Only worth printing for a
+    /// same-partition divergence, where the question is which two spellings
+    /// that asserted the same number of blocks disagreed.
+    detail: Vec<String>,
+}
+
+/// How many changed blocks a description **asserts** — its member count.
+///
+/// This is the grouping key for the same-partition census, and it is a proxy
+/// rather than the partition itself, deliberately stated as such. Two
+/// descriptions with different member counts *cannot* assert the same partition
+/// (a partition with `k` changed blocks is not one with `j != k`), so grouping
+/// by arity never puts two different partitions' answers into one group's
+/// numerator by mistake in the direction that matters — it can only be too
+/// *coarse*, folding two same-arity-but-different-territory assertions together
+/// and so **over**-reporting `same_partition_divergence`. That bias is the safe
+/// one: the residual it reports is an upper bound on the defects, never a floor
+/// that hides one.
+///
+/// The generated corpus makes the grouping exact in practice: every class is one
+/// single-member spelling plus a set of spellings that all carry the same
+/// member count (measured — `the_corpus_is_a_dense_set_of_real_confluence_classes`
+/// pins it), so each class contributes at most one decidable group.
+///
+/// Read off the string rather than the parsed variant: what a partition model
+/// preserves is the *description's* assertion, and re-deriving it from the code
+/// under test would check that code against itself. No corpus spelling nests a
+/// bracket (a repeat unit) inside the allele brackets, which the same corpus
+/// contract pins, so counting separators is exact here.
+fn input_arity(spelling: &str) -> usize {
+    let Some((_, body)) = spelling.split_once(':') else {
+        return 1;
+    };
+    let Some(coordinates) = body.get(2..) else {
+        return 1;
+    };
+    if coordinates.starts_with('[') {
+        coordinates.matches(';').count() + 1
+    } else {
+        1
+    }
 }
 
 fn measure(direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
@@ -432,6 +544,13 @@ fn measure(direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
             census.classes += 1;
             let expected = expected_sequence(class);
             let mut outputs: BTreeSet<String> = BTreeSet::new();
+            // Outputs bucketed by the member count the *input* asserted, so a
+            // class's spellings can be asked the partition-model question as
+            // well as the sequence-confluence one. The `usize` counts the
+            // spellings that reached the bucket, which a `BTreeSet` of outputs
+            // cannot: two agreeing spellings collapse to one output.
+            let mut by_partition: BTreeMap<usize, (usize, BTreeSet<String>)> = BTreeMap::new();
+            let mut detail: Vec<String> = Vec::new();
             let mut normalized_spellings = 0usize;
             for spelling in &class.spellings {
                 census.spellings += 1;
@@ -454,7 +573,39 @@ fn measure(direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
                 {
                     census.sequence_changed += 1;
                 }
+                // Re-normalizing ferro's own answer must be a no-op. Measured
+                // here rather than left to `FERRO_ASSERT_IDEMPOTENT`, which is
+                // compiled out in release builds — and this axis runs in
+                // release.
+                let again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    parse_hgvs(&output).ok().map(|v| normalizer.normalize(&v))
+                }));
+                match again {
+                    Ok(Some(Ok(second))) if second.to_string() == output => {}
+                    _ => census.not_fixed_point += 1,
+                }
+                let arity = input_arity(spelling);
+                detail.push(format!("m{arity} {spelling} -> {output}"));
+                let bucket = by_partition.entry(arity).or_default();
+                bucket.0 += 1;
+                bucket.1.insert(output.clone());
                 outputs.insert(output);
+            }
+
+            // The same-partition census. A group of one spelling decides
+            // nothing and is not counted either way, exactly as a class of one
+            // is `underdetermined` above.
+            let mut every_group_converged = true;
+            for (spellings_in_group, group) in by_partition.values() {
+                if *spellings_in_group < 2 {
+                    continue;
+                }
+                census.same_partition_groups += 1;
+                if group.len() == 1 {
+                    census.same_partition_converged += 1;
+                } else {
+                    every_group_converged = false;
+                }
             }
 
             if normalized_spellings < 2 {
@@ -467,10 +618,17 @@ fn measure(direction: ShuffleDirection) -> (Census, Vec<Divergence>) {
                 3 => census.split_three += 1,
                 _ => census.split_more += 1,
             }
-            if outputs.len() > 1 && worst.len() < 10 {
+            if outputs.len() > 1 {
+                if every_group_converged {
+                    census.cross_partition_divergence += 1;
+                } else {
+                    census.same_partition_divergence += 1;
+                }
                 worst.push(Divergence {
                     id: class.id.clone(),
+                    same_partition: !every_group_converged,
                     outputs: outputs.into_iter().collect(),
+                    detail,
                 });
             }
         }
@@ -484,7 +642,10 @@ fn report(direction: &str, census: &Census, worst: &[Divergence]) -> String {
     let mut out = format!(
         "cis confluence ({direction}): {} classes, {} spellings, {} declined\n  \
          converged: {}\n  split 2: {}\n  split 3: {}\n  split 4+: {}\n  \
-         underdetermined: {}\n  sequence changed: {}\n",
+         underdetermined: {}\n  sequence changed: {}\n  \
+         same-partition groups: {}\n  same-partition converged: {}\n  \
+         cross-partition divergence: {}\n  same-partition divergence: {}\n  \
+         not a fixed point: {}\n",
         census.classes,
         census.spellings,
         census.declined,
@@ -494,18 +655,45 @@ fn report(direction: &str, census: &Census, worst: &[Divergence]) -> String {
         census.split_more,
         census.underdetermined,
         census.sequence_changed,
+        census.same_partition_groups,
+        census.same_partition_converged,
+        census.cross_partition_divergence,
+        census.same_partition_divergence,
+        census.not_fixed_point,
     );
-    for divergence in worst {
-        out.push_str(&format!(
-            "  {} -> {:?}\n",
-            divergence.id, divergence.outputs
-        ));
+    // Same-partition first, and capped: the whole list is thousands of classes,
+    // almost all of them cross-partition and so uninformative.
+    let mut listed = 0usize;
+    for same_partition in [true, false] {
+        for divergence in worst.iter().filter(|d| d.same_partition == same_partition) {
+            if listed >= 10 {
+                break;
+            }
+            listed += 1;
+            out.push_str(&format!(
+                "  [{}] {} -> {:?}\n",
+                if same_partition { "same" } else { "cross" },
+                divergence.id,
+                divergence.outputs
+            ));
+            if same_partition {
+                for line in &divergence.detail {
+                    out.push_str(&format!("      {line}\n"));
+                }
+            }
+        }
     }
     out
 }
 
 /// Assert one direction's census against its pin, printing the measured numbers
 /// either way so a moved pin can be re-blessed from the test output.
+///
+/// The two zeros are asserted first and separately, because they are the only
+/// figures here with a *correct* value rather than a measured one: a class that
+/// converges on the wrong sequence, or an answer that will not survive being
+/// read back, is a defect whatever the confluence figures say, and reporting it
+/// as "the census moved" would bury it.
 fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
     let (measured, worst) = measure(direction);
     println!("{}", report(label, &measured, &worst));
@@ -516,11 +704,28 @@ fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
         measured.sequence_changed
     );
     assert_eq!(
+        measured.not_fixed_point, 0,
+        "{label}: {} normalized outputs are not fixed points — reading ferro's own answer back \
+         re-asserts a different partition, which is the one thing the partition model promises \
+         outright",
+        measured.not_fixed_point
+    );
+    assert_eq!(
         &measured,
         pinned,
-        "{label}: the confluence census moved. Every divergence figure must only ever go DOWN \
-         and `converged` only ever UP; if this change lowers one, re-bless the pin in the same \
-         commit and say so in the PR. Measured:\n{}",
+        "{label}: the census moved. Read the module docs before re-blessing: these figures do \
+         NOT all have a good direction any more.\n  \
+         * `sequence_changed` and `not_fixed_point` are absolute zeros — non-zero is a defect, \
+         never a re-bless.\n  \
+         * `same_partition_converged` up / `same_partition_divergence` down is progress, but the \
+         grouping key is a proxy (see `input_arity`), so movement needs classes read, not just \
+         counted.\n  \
+         * `converged` and the `split_*` figures measure sequence-confluence ACROSS different \
+         asserted partitions. Under `FERRO_PARTITION=preserve` two such spellings are two \
+         different assertions and are not required to agree, so a fall here is a representation \
+         change to declare, not automatically a regression. A/B it with `FERRO_PARTITION=live` \
+         and say in the PR which forms moved and how many.\n\
+         Measured:\n{}",
         report(label, &measured, &worst)
     );
 }
@@ -571,6 +776,51 @@ fn the_corpus_is_a_dense_set_of_real_confluence_classes() {
     for separation in [0, 1, 2, 3, 5, 8] {
         assert!(corpus.classes.iter().any(|c| c.separation == separation));
     }
+
+    // The shape the same-partition census rests on: every class is one
+    // single-member spelling plus a set that all carry one member count. Pinned
+    // rather than assumed, because it is what makes each class pose exactly one
+    // cross-partition question and at most one same-partition question — and a
+    // generator change that emitted, say, both two- and three-member spellings
+    // per class would silently re-mean `same_partition_groups` while every
+    // other number here still looked plausible.
+    let mut single_member_spellings = 0usize;
+    for class in &corpus.classes {
+        let arities: BTreeSet<usize> = class.spellings.iter().map(|s| input_arity(s)).collect();
+        assert_eq!(
+            arities.len(),
+            2,
+            "{} carries member counts {arities:?}; a class is meant to be one single-member \
+             spelling against one multi-member arity",
+            class.id
+        );
+        assert!(
+            arities.contains(&1),
+            "{} has no single-member spelling, so it poses no cross-partition question",
+            class.id
+        );
+        single_member_spellings += class
+            .spellings
+            .iter()
+            .filter(|s| input_arity(s) == 1)
+            .count();
+        assert!(
+            class
+                .spellings
+                .iter()
+                .filter(|s| input_arity(s) > 1)
+                .count()
+                >= 2,
+            "{} has fewer than two multi-member spellings, so its same-partition group decides \
+             nothing",
+            class.id
+        );
+    }
+    assert_eq!(
+        single_member_spellings,
+        corpus.classes.len(),
+        "exactly one single-member spelling per class"
+    );
 }
 
 #[test]
