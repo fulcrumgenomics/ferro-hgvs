@@ -595,6 +595,18 @@ const EQUIVALENCE_CLASS_VERDICTS: &[(&str, &str)] = &[
     // acceptance but cannot see that it is also a second fixed point.
     ("dna-delins-vs-two-substitutions-145-147", "non-confluent"),
     ("rna-delins-vs-two-substitutions-142-144", "non-confluent"),
+    // Separation ZERO, and the only class here at that separation — the three
+    // above are all separation one. `substitution.md:32` marks the split
+    // spelling `class="invalid"`, and ferro merges it: both members reach
+    // `LRG_199t1:c.79_80delinsTT`. So this is the positive control for ruling
+    // `delins-adjacent-members-when-both-consume-reference`, which is `decided`
+    // and which ferro conforms to as of #1537.
+    //
+    // Note it is `confluent` where its separation-one siblings are not, and the
+    // reason is not that the ruling is stronger: this merge needs no reading
+    // frame, so the empty-provider limit documented above does not bite. Do not
+    // read the contrast as evidence about the carve-out.
+    ("dna-delins-vs-two-substitutions-79-80", "confluent"),
     // Spelled-out run vs repeat count for an unspecified insertion. Nothing in
     // the spec ranks the two, so no rule is being broken — but a single variant
     // still has two stable outputs.
@@ -832,6 +844,27 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // answers both ways depending on input-hygiene mode. Upstream's conflict to
     // settle (#466), not ferro's.
     ("rna-repeat-range-plus-unit-redundancy", "undecided"),
+    // A normalized allele must not leave two members flush against each other
+    // when both consume reference bases. `substitution.md:32` marks exactly that
+    // spelling `class="invalid"` for `LRG_199t1:c.79_80delinsTT`, and
+    // `general.md:34` does not compete — it governs members separated by one or
+    // more nucleotides, not by none. Ferro CONFORMS as of #1537, which closed
+    // #1524; `cis_confluence_adjudication.rs` pins the spec's form as a
+    // regression guard, not the deviation the record was first written against.
+    (
+        "delins-adjacent-members-when-both-consume-reference",
+        "decided",
+    ),
+    // The separation `general.md:34` keys on is read off a decomposition, and
+    // two spellings of one variant can present different ones — demonstrated,
+    // not argued, in `cis_confluence_adjudication.rs`. #1537 settled the
+    // separation-ZERO half and left this untouched: both pinned spellings still
+    // reach two outputs. Undecided as to which partition should then be
+    // canonical; that is `canonical-form-choice-when-both-legal`.
+    (
+        "separation-is-a-property-of-the-spelling-not-of-the-variant",
+        "undecided",
+    ),
 ];
 
 /// Ruling records must stay well-formed, and `undecided` must stay undecided.

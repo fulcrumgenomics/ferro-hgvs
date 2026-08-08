@@ -351,6 +351,16 @@ required-features = ["dev"]
 [[example]]
 name = "dump_partitions"
 required-features = ["dev"]
+
+# `test = true` because the target carries `#[cfg(test)]` unit tests pinning the
+# separation arithmetic — the one thing here that has already published numbers
+# that were wrong. Cargo does not build a target's tests unless it opts in, so
+# without this they silently never run.
+[[example]]
+name = "dump_confluence_divergences"
+required-features = ["dev"]
+test = true
+
 [[bin]]
 name = "ferro"
 path = "src/bin/ferro.rs"
