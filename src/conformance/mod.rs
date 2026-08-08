@@ -11,7 +11,9 @@
 //! `examples/` generator can share them; they are not part of the runtime API.
 
 pub mod accession_inventory;
+pub mod audited_provider;
 pub mod biocommons;
+pub mod case_harvest;
 pub mod hgvs_rs_projection;
 pub mod mutalyzer;
 pub mod reference_snapshot;

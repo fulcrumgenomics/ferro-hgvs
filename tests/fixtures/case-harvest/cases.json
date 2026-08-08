@@ -1,0 +1,340 @@
+{
+  "description": "Harvested reproducers: concrete HGVS rows that carry a behavioural claim from an issue, a PR description or a campaign note, and that until now nothing running in CI could fail on. Every row was re-measured against the prepared reference and is served here from the committed slice beside this file, so the gate blocks a PR rather than skipping for want of FERRO_MANIFEST. Rows are of three kinds: pinned (expected is a string ferro must still produce), confluent (rows sharing confluence_class must produce one string, and where the governing ruling is open no string is pinned), and red (defect is set — the row reproduces a live defect, its expected records today's wrong answer, and the #[ignore]d guard naming the issue fails until it is fixed).",
+  "spec_commit": "6f85311989e76ead95d3547828f97ebaa3802e35",
+  "cases": [
+    {
+      "input": "NM_004006.2:c.76_83inv",
+      "expected": "NM_004006.2:c.76_83inv",
+      "confluence_class": "dmd-76-83-whole-block-inversion",
+      "citation": {
+        "clause": "docs/recommendations/DNA/inversion.md:5",
+        "quote": "**more than one nucleotide** replacing the original sequence is the reverse complement of the original sequence"
+      },
+      "note": "The flagship row of this corpus. c.76_83 reads AATGCACA and its reverse complement is TGTGCATT, so the whole block IS an inversion by definition. The two spellings that compete with it coincide at the four interior columns 78-81 (both read TGCA), which is why the block can also be spelled as two delins. This is the one row where the exact string is pinned: the ruling inversion-vs-two-delins-76-83 is DECIDED, and #1535 implemented it. Pinning it here is the only instrument that can catch a regression -- #1535 itself reported `Representation-Change: 0 rows move over 5,761,302 real expressions`, not because the fix was inert but because no generator in the tree can build a block whose reverse complement coincides with its reference at the interior columns. IT IS ALSO THE CONTROL FOR #1541: this class competes with delins and must prefer inv, while the NM_000500.9:c.710_713 class competes with substitutions and must prefer the split. Holding both is what stops the rule being written as 'always prefer the split' -- or 'always prefer inv'."
+    },
+    {
+      "input": "NM_004006.2:c.[76_77delinsTG;82_83delinsTT]",
+      "expected": "NM_004006.2:c.76_83inv",
+      "confluence_class": "dmd-76-83-whole-block-inversion",
+      "citation": {
+        "clause": "docs/recommendations/DNA/delins.md:5",
+        "quote": "**and which is not** a substitution or inversion"
+      },
+      "note": "The two-member delins spelling of the same block, converging on the inv. inversion.md:5 and delins.md:5 are a definitional-exclusion pair, not a ranking: a change that IS the reverse complement of its reference is an inversion, and delins is defined as what is left over once substitution and inversion are excluded. So no prioritisation argument is needed to decide this row. Sequence equivalence was verified from raw FASTA, transcript against genome-via-cdot with reverse complement for this minus-strand transcript."
+    },
+    {
+      "input": "NM_004006.2:c.76_83delinsTGTGCATT",
+      "expected": "NM_004006.2:c.76_83inv",
+      "confluence_class": "dmd-76-83-whole-block-inversion",
+      "citation": {
+        "clause": "docs/recommendations/DNA/inversion.md:5",
+        "quote": "**more than one nucleotide** replacing the original sequence is the reverse complement of the original sequence"
+      },
+      "note": "The spanning-delins spelling: the payload TGTGCATT is exactly revcomp(AATGCACA), so inversion.md:5 applies verbatim and the row must be re-typed as an inv rather than preserved as a delins."
+    },
+    {
+      "input": "NM_000143.3:c.[1A>T;3G>A]",
+      "expected": null,
+      "confluence_class": "fh-start-codon-triplet",
+      "citation": {
+        "clause": "docs/recommendations/general.md:35",
+        "quote": "two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
+      },
+      "note": "c.1_3 reads ATG -- the initiation codon -- and both changes land in it, separated by the unchanged c.2. general.md:35 is exactly on point, so the pair must converge. No string is pinned: which of the two legal spellings ships is a representation choice (canonical-form-choice-when-both-legal is undecided), and asserting agreement is the correctness claim the spec supports. NOTE ON THE INPUT: the widely-quoted spelling of this row is `c.[1G>T;3T>A]`, which carries WRONG reference bases on BOTH members -- c.1 is A and c.3 is G. It must never be used as an input here; #1543 records that ferro currently accepts it in strict mode because reference validation is bypassed for cis members close enough to be merged."
+    },
+    {
+      "input": "NM_000143.3:c.1_3delinsTTA",
+      "expected": null,
+      "confluence_class": "fh-start-codon-triplet",
+      "citation": {
+        "clause": "docs/recommendations/general.md:35",
+        "quote": "two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
+      },
+      "note": "The delins spelling of the same start-codon triplet: ATG becomes TTA. Paired with the two-member spelling above under one confluence class; neither is pinned as the winner."
+    },
+    {
+      "input": "NM_004006.2:c.5690del",
+      "expected": "NM_004006.2:c.5697del",
+      "citation": {
+        "clause": "docs/recommendations/general.md:41",
+        "quote": "the most 3' position possible of the reference sequence is arbitrarily assigned to have been changed"
+      },
+      "note": "A plain 3'rule shift over a homopolymer, and nothing running per-PR asserted its repair target. In the enumeration fixture the row is `requires-reference` and in the normalization fixture it is `false-acceptance`, and BOTH committed guards skip those statuses -- so the spec's own rule had a repair target that no test compared against. That is the single clearest gap this corpus closes."
+    },
+    {
+      "input": "NM_024312.4:c.2686A[10]",
+      "expected": "NM_024312.4:c.2692_2693dup",
+      "citation": {
+        "clause": "docs/recommendations/DNA/repeated.md:21-22",
+        "quote": "use `NM_024312.4:c.2692_2693dup` and **not**"
+      },
+      "note": "A 1-nt repeat unit on a coding reference: not a multiple of 3, so repeat notation is unavailable (:21) and the spec prints the description to use instead (:22). Sequence-dependent -- the tract has to be read -- so it cannot fire in the MockProvider-backed spec fixture, where it sits as a skipped status."
+    },
+    {
+      "input": "NM_024312.4:c.1738TA[6]",
+      "expected": "NM_024312.4:c.1741_1742insTATATATA",
+      "citation": {
+        "clause": "docs/recommendations/DNA/repeated.md:21-22",
+        "quote": "use `NM_024312.4:c.1741_1742insTATATATA` and **not**"
+      },
+      "note": "The 2-nt sibling of the row above, same restriction, same skipped status, and the same published repair target that nothing asserted."
+    },
+    {
+      "input": "NM_024312.4:c.-6_-3G[6]",
+      "expected": "NM_024312.4:c.-6_-3G[6]",
+      "citation": {
+        "clause": "docs/recommendations/DNA/repeated.md:24",
+        "quote": "`NM_024312.4:c.-6_-3G[6]` is valid as the reading frame is not affected"
+      },
+      "note": "The UTR carve-out: the multiple-of-3 restriction exists to protect the reading frame, so a repeat in the 5'UTR keeps its repeat spelling and the row is a fixed point. Cited at :24 and NOT at :22 -- the mis-citation to :22 (which is the coding worked example) has already shipped once."
+    },
+    {
+      "input": "NM_024312.4:r.2686a[10]",
+      "expected": "NM_024312.4:r.2692_2693dup",
+      "citation": {
+        "clause": "docs/recommendations/RNA/repeated.md:24-25",
+        "quote": "use `NM_024312.4:r.2692_2693dup` and **not**"
+      },
+      "note": "The RNA axis restates the coding restriction (:24) and publishes its own worked answer (:25). Carried here because the r. rows are skipped by the same two guards as their c. siblings, so the RNA half was equally unasserted."
+    },
+    {
+      "input": "NM_024312.4:r.1738ua[6]",
+      "expected": "NM_024312.4:r.1741_1742insuauauaua",
+      "citation": {
+        "clause": "docs/recommendations/RNA/repeated.md:24-25",
+        "quote": "use `NM_024312.4:r.1741_1742insuauauaua` and **not**"
+      },
+      "note": "The 2-nt RNA sibling. Note the payload is rendered in lowercase RNA alphabet, which is part of what is pinned: a t/u policy regression would move this string without moving its DNA counterpart."
+    },
+    {
+      "input": "NM_007294.3:r.[2077g>a;2077_2078insua]",
+      "expected": "NM_007294.3:r.2077delinsaua",
+      "citation": {
+        "clause": "docs/recommendations/RNA/delins.md:70",
+        "quote": "The correct description of this variant is `NM_007294.3:r.2077delinsaua`."
+      },
+      "note": "The spec prints the answer outright in a Q&A block (:68-71), and :71 records that the committee REMOVED the permission for the two-member spelling -- so this is an adjudicated repair, not a preference. Classified `false-acceptance` in the normalization fixture, which the spec-form guard skips entirely, so the published answer was asserted by nothing."
+    },
+    {
+      "input": "NM_000038.6:c.5265_5268delinsTGCG",
+      "expected": "NM_000038.6:c.[5265_5266delinsTG;5268T>G]",
+      "citation": {
+        "clause": "docs/recommendations/DNA/delins.md:16",
+        "quote": "changes involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants"
+      },
+      "note": "A real-accession guard for #1537's left-edge ruling. #1537 added nine test functions and #1535 three, and every one of the twelve runs against the synthetic NM_TEST.1 / TEMPLATE geometry -- no real accession was guarded at all. The shape here is the one the issue names: the run touching the codon triplet on the left declines the general.md:35 exception, and the result does NOT come back as the input's own spelling. Adjudicated by tests/it/issue_1524_adjacent_split_members.rs; not re-argued here."
+    },
+    {
+      "input": "NM_000083.3:c.2461_2464delinsCTCC",
+      "expected": "NM_000083.3:c.2461_2464delinsCTCC",
+      "citation": {
+        "clause": "docs/recommendations/DNA/delins.md:16",
+        "quote": "changes involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants"
+      },
+      "note": "The right-edge shape, and a fixed point post-#1537: the trailing changed nucleotide touches the merged triplet, so delins.md:16 puts it in the same member and the output is the input's own spelling. Before #1537 this row split as c.[2461_2463delinsCTC;2464G>C], which put two members on consecutive nucleotides."
+    },
+    {
+      "input": "NM_000392.5:c.4465_4473delinsGGCCCACAG",
+      "expected": "NM_000392.5:c.[4465_4466delinsGG;4468_4473delinsCCACAG]",
+      "citation": {
+        "clause": "docs/recommendations/DNA/delins.md:16",
+        "quote": "changes involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants"
+      },
+      "note": "Two codon triplets back to back -- the shape whose merged members used to touch at 4470/4471. The real-accession counterpart of issue_1524's synthetic `back_to_back_codon_triplets_do_not_touch`."
+    },
+    {
+      "input": "NC_000020.11:g.45891619_45891622delinsC",
+      "expected": "NC_000020.11:g.45891619_45891622delinsC",
+      "citation": {
+        "clause": "docs/background/basics.md:38",
+        "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+      },
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. The governing ruling (delins-merge-vs-individual-gap-two-or-more) is open, so what is asserted is only that this shipped form does not move. Verified a fixed point on both a pre-#1535 binary and the main tip, so the pin records a form that has already survived a normalizer change. Stability is the value the spec itself leads with, which is the authority cited; it is not authority for this particular spelling."
+    },
+    {
+      "input": "NG_008660.1:g.58604_58617delinsC",
+      "expected": "NG_008660.1:g.58604_58617delinsC",
+      "citation": {
+        "clause": "docs/background/basics.md:38",
+        "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+      },
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. Same open ruling as the row above. Carried additionally because it exercises an NG_ genomic parent, so it keeps the committed slice honest about the placement path as well as the base path."
+    },
+    {
+      "input": "NC_000019.10:g.45553632_45553643delinsG",
+      "expected": "NC_000019.10:g.45553632_45553643delinsG",
+      "citation": {
+        "clause": "docs/background/basics.md:38",
+        "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+      },
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 12 bp span collapsing to one base; fixed point on both binaries."
+    },
+    {
+      "input": "NC_000009.12:g.106927023_106927043delinsA",
+      "expected": "NC_000009.12:g.106927023_106927043delinsA",
+      "citation": {
+        "clause": "docs/background/basics.md:38",
+        "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+      },
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 21 bp span, the longest of the collapsing group; fixed point on both binaries."
+    },
+    {
+      "input": "NG_005905.2:g.172248_172253delinsGTCCTGCTGTCCTGGCACTG",
+      "expected": "NG_005905.2:g.172248_172253delinsGTCCTGCTGTCCTGGCACTG",
+      "citation": {
+        "clause": "docs/background/basics.md:38",
+        "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+      },
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. The expanding direction -- a 6 bp reference span replaced by 20 bp -- so the pin covers both directions of length change, not just collapses. Second NG_ parent in the corpus."
+    },
+    {
+      "input": "NC_000002.12:g.166052896_166052909delinsTGTG",
+      "expected": "NC_000002.12:g.166052896_166052909delinsTGTG",
+      "citation": {
+        "clause": "docs/background/basics.md:38",
+        "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+      },
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. 14 bp replaced by 4; fixed point on both binaries."
+    },
+    {
+      "input": "NC_000012.12:g.4517618_4518810delinsTCATAA",
+      "expected": "NC_000012.12:g.4517618_4518810delinsTCATAA",
+      "citation": {
+        "clause": "docs/background/basics.md:38",
+        "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+      },
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 1,193 bp reference span -- by far the largest in the corpus, and the row that makes the committed slice carry a kilobase-scale genomic window. Worth having precisely because a length-gated change (see #1460's MAX_SPLIT_BLOCK blindness) is structurally invisible to a corpus of 20-mers."
+    },
+    {
+      "input": "NC_000002.11:g.47639670_47639673delinsTT",
+      "expected": "NC_000002.11:g.[47639670_47639671del;47639673G>T]",
+      "citation": {
+        "clause": "docs/background/basics.md:38",
+        "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+      },
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. CORRECTION TO A PRIOR AUDIT: that audit recorded this row as returning itself. It does not, and never did -- it splits, identically on a pre-#1535 binary and on the main tip. The reference span reads AGTG and the split is sequence-equivalent to the input. Also the only GRCh37 primary contig in the corpus, so it keeps the build-selection path covered."
+    },
+    {
+      "input": "NC_000013.10:g.100809575_100810031inv",
+      "expected": "NC_000013.10:g.100809575_100810031inv",
+      "citation": {
+        "clause": "docs/recommendations/DNA/inversion.md:5",
+        "quote": "**more than one nucleotide** replacing the original sequence is the reverse complement of the original sequence"
+      },
+      "note": "A 457 bp inversion, held as a fixed point. It is the scale counterweight to the c.76_83inv rows: the same edit type at two orders of magnitude more span, so a change that special-cases short blocks cannot pass both."
+    },
+    {
+      "input": "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG",
+      "expected": "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG",
+      "citation": {
+        "clause": "docs/recommendations/DNA/delins.md:47",
+        "quote": "**The \"delins\" format is recommended**: it is simpler and prevents software tools making incorrect predictions"
+      },
+      "note": "The spec's own worked non-confluent pair, held on the spanning-delins side. Note carefully what :47 does and does not say: it RECOMMENDS the delins format, it does not prohibit the split that :46 calls the alternative description. So this is a stability pin backed by a recommendation, not a rule -- and the pair itself is the subject of the open ruling delins-merge-vs-individual-gap-two-or-more."
+    },
+    {
+      "input": "LRG_199t1:c.145_147delinsTGG",
+      "expected": "LRG_199t1:c.145_147delinsTGG",
+      "citation": {
+        "clause": "docs/recommendations/DNA/delins.md:42",
+        "quote": "so the description <code class=\"invalid\">c.[145C>T;147C>G]</code> is not correct"
+      },
+      "note": "Mutalyzer splits this row; ferro does not, and ferro is right -- :42 names the split spelling as not correct. Ferro's agreement with the spec against the reference implementation is exactly the kind of behaviour that needs a committed guard, since a later conformance pass measured against Mutalyzer would otherwise read it as a divergence to fix. CITATION HYGIENE: the spec misfiles this NOTE. It hangs off the c.9002_9009delinsTTT bullet at :42 while the c.145_147delinsTGG example itself is at :37-38, so the two must NOT be cited as one contiguous range."
+    },
+    {
+      "input": "LRG_199t1:c.235_237delinsTAT",
+      "expected": "LRG_199t1:c.235_237delinsTAT",
+      "citation": {
+        "clause": "docs/recommendations/DNA/delins.md:42",
+        "quote": "so the description <code class=\"invalid\">c.[145C>T;147C>G]</code> is not correct"
+      },
+      "note": "The sibling of the row above and the same ruling: Mutalyzer splits, ferro preserves, the spec backs ferro. Held separately because the two rows sit in different codons and a codon-frame change could move one without the other."
+    },
+    {
+      "input": "LRG_199t1:c.3921dup",
+      "expected": "LRG_199t1:c.3921dup",
+      "citation": {
+        "clause": "docs/recommendations/DNA/duplication.md:25-26",
+        "quote": "the variant is described as `LRG_199t1:c.3921dup`"
+      },
+      "note": "PRESERVATION ONLY. The exon/exon-junction carve-out from the 3'rule (the rule itself is background/numbering.md:22-24). What is pinned is that this row does not move -- NOT that it converges with c.3922dup. Whether the pair should converge is explicitly undecided (ruling exon-junction-dup-converge-from-the-far-side), and converging them is a representation change that needs a decision behind it rather than arriving as a side effect. Cited at :25-26 because that is where the LRG_199t1 spelling of the worked example lives; :58 states the same example as NC_000023.11(NM_004006.2) and is the wrong citation for this row."
+    },
+    {
+      "input": "LRG_199t1:c.3922dup",
+      "expected": "LRG_199t1:c.3922dup",
+      "citation": {
+        "clause": "docs/recommendations/DNA/duplication.md:25-26",
+        "quote": "the variant is described as `LRG_199t1:c.3921dup`"
+      },
+      "note": "PRESERVATION ONLY, as for c.3921dup. Both positions carry the same base, so the two spellings denote one transcript sequence and are nonetheless two fixed points, projecting 2,790 bp apart. This row pins only that it stays where it is."
+    },
+    {
+      "input": "NM_006420.3:c.[242C>A;247_249delinsTT]",
+      "expected": "NM_006420.3:c.[242del;245G>A;249A>T]",
+      "citation": {
+        "clause": "docs/recommendations/protein/frameshift.md:24",
+        "quote": "downstream of the frameshift are not described unless they change the amino acid sequence or length of the shifted reading frame"
+      },
+      "note": "STABILITY PIN PLUS A CORRECTED DIAGNOSIS. A prior audit suspected a denotation bug here and cited delins.md:19. It is not a denotation bug: c.242..249 reads CAAGGGTA, and both the input and ferro's output yield AAAGGTT -- verified sequence-equivalent. So this is a representation question, not a correctness one. The clause that actually bears on it is protein/frameshift.md:24, since the input's first member is a frame-shifting deletion and what follows it downstream is what the two spellings disagree about. Whether ferro's form is the right representation has NOT been adjudicated, so this row asserts stability only and must not be read as endorsement."
+    },
+    {
+      "input": "NM_000500.9:c.[710T>A;713T>A]",
+      "expected": null,
+      "confluence_class": "cyp21a2-710-713-four-mer-inversion",
+      "citation": {
+        "clause": "docs/recommendations/general.md:56",
+        "quote": "the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion"
+      },
+      "defect": {
+        "issue": "#1541",
+        "kind": "confluence",
+        "summary": "c.[710T>A;713T>A], c.710_713inv and c.710_713delinsACGA do not converge -- one variant, two normal forms"
+      },
+      "note": "LIVE DEFECT #1541, and this spelling is the DECIDED TARGET the class must converge on. c.710_713 reads TCGT and its reverse complement is ACGA; the interior CG is self-complementary, so the inversion changes only the flanks -- which is exactly what these two substitutions write. VERIFIED EQUIVALENT, and the reference bases at 710 and 713 genuinely are T. THE TARGET IS NOT AN OPEN QUESTION: #1517/#1535 already adjudicated this geometry, and tests/it/issue_1517_inv_priority_over_delins.rs pins both directions -- a whole-block reverse complement competing with SUBSTITUTIONS prefers the split, because general.md:56 ranks substitution (1) above inversion (3); one competing with DELINS prefers inv, because delins is absent from the ranking and so ranks below everything. This row's competitors are two substitutions, so the preferred form is c.[710T>A;713T>A], the same answer as #1230. The opposite direction is the NM_004006.2:c.76_83 class in this same corpus, which is the control preventing the rule from being written as 'always prefer the split'. WHY IT IS STILL RED ON MAIN: not the typing rule but the AXIS GATE -- Normalizer::is_splittable_single_member (src/normalize/mod.rs:2005) matches only HV::Genome/HV::Mt, so a lone c. member never reaches the sequence-first pass; the existing #1230 control passes only because it is written on the g. axis. PR #1484 widens that gate to c./n./r. and all three spellings converge on c.[710T>A;713T>A] under it. Un-ignore the guard in the change that merges #1484."
+    },
+    {
+      "input": "NM_000500.9:c.710_713inv",
+      "expected": null,
+      "confluence_class": "cyp21a2-710-713-four-mer-inversion",
+      "citation": {
+        "clause": "docs/recommendations/DNA/inversion.md:5",
+        "quote": "**more than one nucleotide** replacing the original sequence is the reverse complement of the original sequence"
+      },
+      "defect": {
+        "issue": "#1541",
+        "kind": "confluence",
+        "summary": "c.[710T>A;713T>A], c.710_713inv and c.710_713delinsACGA do not converge -- one variant, two normal forms"
+      },
+      "note": "LIVE DEFECT #1541, the inversion spelling. Held under inversion.md:5, the clause that makes this block an inversion by definition -- but that is the clause the class must move AWAY from here, because the members it competes with are substitutions and general.md:56 ranks those first. A fixed point on main; converges on c.[710T>A;713T>A] under PR #1484. See the two-substitution row for the full ruling and for why the blocker is the axis gate rather than the typing rule."
+    },
+    {
+      "input": "NM_000500.9:c.710_713delinsACGA",
+      "expected": null,
+      "confluence_class": "cyp21a2-710-713-four-mer-inversion",
+      "citation": {
+        "clause": "docs/recommendations/DNA/delins.md:5",
+        "quote": "**and which is not** a substitution or inversion"
+      },
+      "defect": {
+        "issue": "#1541",
+        "kind": "confluence",
+        "summary": "c.[710T>A;713T>A], c.710_713inv and c.710_713delinsACGA do not converge -- one variant, two normal forms"
+      },
+      "note": "LIVE DEFECT #1541, the delins spelling -- the third member of the class, and the one that makes it as strong as the NM_004006.2 class. The payload ACGA is exactly revcomp(TCGT), so delins.md:5 excludes the delins typing outright and the row must be re-typed. CORRECTION TO A MEASUREMENT: this row was reported as a fixed point on main. It is not -- on main it normalizes to NM_000500.9:c.710_713inv, i.e. it converges with the inversion spelling and against the substitution spelling. That does not change the verdict (the class still yields two normal forms, so #1541 is red) but it does change the picture: the class splits 2-versus-1, not 1-versus-1-versus-1. Under PR #1484 all three converge on c.[710T>A;713T>A]. No output is pinned here for the same reason as its siblings -- the form the class currently agrees on is the one the ruling says is wrong."
+    },
+    {
+      "input": "NC_000017.11:g.80110044_80110047delinsGTTGG",
+      "expected": "NC_000017.11:g.[80110044C>G;80110045dup;80110047A>G]",
+      "citation": {
+        "clause": "docs/recommendations/DNA/delins.md:16",
+        "quote": "changes involving two or more consecutive nucleotides are described as deletion/insertion (delins) variants"
+      },
+      "defect": {
+        "issue": "#1542",
+        "kind": "adjacent-members",
+        "summary": "a dup-shaped split still emits members at separation 0 (delins.md:16), surviving #1537"
+      },
+      "note": "LIVE DEFECT #1542. The reference span reads CTGA and the output is sequence-equivalent to the input. Under sep = next.start - prev.end - 1 the members at 80110044 and 80110045 are at separation 0, which delins.md:16 forbids. #1537 fixed three sibling rows of this family and did not reach this one because of the dup shape. THE SEPARATION READING IS ITSELF PART OF THE OPEN QUESTION: the adjacency depends on treating a dup as occupying the position it duplicates. Read as zero-width -- an interbase reading -- the pair is not adjacent and this row is not a violation at all. The expected string above records today's output so movement is still detected; it is not an endorsement. This is the ONLY row exempted from the corpus-wide separation-0 check, and it is exempt because it is the reproducer for it."
+    }
+  ]
+}
