@@ -64,7 +64,7 @@
 //!
 //! # Where ferro does not produce the spec's answer
 //!
-//! Three dispositions, kept apart on purpose:
+//! Two dispositions, kept apart on purpose:
 //!
 //! - [`DIVERGENT`] — pinned divergences. Each records ferro's actual output, the
 //!   spec's, and *why* the difference is not a defect (a spec self-conflict, or
@@ -73,10 +73,17 @@
 //!   makes one of these conform **fails**, rather than rotting unnoticed.
 //! - [`PARSE_GAPS`] — a form the spec publishes as *correct* that ferro's parser
 //!   refuses. A defect, pinned so that closing it fails loudly.
-//! - [`FERRO_IS_WRONG`] — the spec is explicit, ferro disagrees, and there is no
-//!   conflicting clause. **[`the_protein_axis_must_split_a_separation_one_delins`]
-//!   is red on purpose.** See its doc comment; it is not a regression, and it
-//!   must not be "fixed" by pinning ferro's answer.
+//!
+//! There was a third, `FERRO_IS_WRONG` — the spec explicit, ferro disagreeing,
+//! no clause competing — and it held exactly two rows: the protein halves of
+//! W48 and W59, an equal-length `delins` whose middle residue is unchanged
+//! (`protein/delins.md:21`, `:64`). Ferro now emits the spec's answer for both,
+//! so they are ordinary [`WORKED`] rows, each with a [`NEGATIVE`] row naming the
+//! unsplit `delins` it must not fall back to and a [`PARTITIONS`] row pinning
+//! the two members, and [`the_protein_axis_splits_a_separation_one_delins`] pins
+//! both spellings converging. The table is gone rather than left empty: a test
+//! iterating an empty table passes vacuously, which the policy above forbids.
+//! Re-create it only for a row that is genuinely wrong.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -293,8 +300,10 @@ const WORKED: &[Worked] = &[
         rebase: Rebase::Accession,
         fixture: Fixture::Protein,
         why: "and so does the protein axis, for adjacent residues \
-              (protein/substitution.md:23). Its separation-1 sibling is the red \
-              row below — the two together locate the gap exactly",
+              (protein/substitution.md:23). Its separation-1 sibling is W48 — the \
+              two together locate the merge/split boundary exactly, and \
+              [`the_protein_axis_splits_a_separation_one_delins`] asserts both \
+              sides of it at once",
     },
     // -- type choice: preferred spellings ------------------------------------
     Worked {
@@ -547,7 +556,35 @@ const WORKED: &[Worked] = &[
         rebase: Rebase::Same,
         fixture: Fixture::Slice,
         why: "the DNA half of the rejected SVD-WG010:53 example: separation 7 \
-              stays split. Its protein half is the red row below",
+              stays split. Its protein half is the row two below",
+    },
+    Worked {
+        id: "W48",
+        clause: "recommendations/protein/delins.md:64",
+        quote: "the variant is not described as `p.Ser44_Trp46delinsArgLeuArg`.",
+        input: "NP_SPECW48.1:p.Ser44_Trp46delinsArgLeuArg",
+        published: "p.[Ser44Arg;Trp46Arg]",
+        answer: "NP_SPECW48.1:p.[Ser44Arg;Trp46Arg]",
+        rebase: Rebase::Accession,
+        fixture: Fixture::Protein,
+        why: "the spec's single clearest split-side worked example, and the protein \
+              analogue of W56/W58/W59 on `general.md:34`. The protein axis has no \
+              codon exception to carry the merge, and the span and the payload are \
+              the same length — so `Leu45` being unchanged is a fact about the \
+              input, not an alignment ferro picked",
+    },
+    Worked {
+        id: "W59",
+        clause: "recommendations/protein/delins.md:21",
+        quote: "two variants separated by one or more amino acids should be described individually and not as a \"delins\".",
+        input: "NP_SPECW48.1:p.Ser988_Gln990delinsAlaLeuHis",
+        published: "p.[Ser988Ala;Gln990His]",
+        answer: "NP_SPECW48.1:p.[Ser988Ala;Gln990His]",
+        rebase: Rebase::Accession,
+        fixture: Fixture::Protein,
+        why: "the protein half of the rejected SVD-WG010:53-54 example — the same \
+              shape at a second locus, which is what makes it systematic rather \
+              than a one-off",
     },
     // -- placement: the 3' rule and its exception ---------------------------
     Worked {
@@ -736,6 +773,28 @@ const NEGATIVE: &[Negative] = &[
               under an unrelated example, `c.9002_9009delinsTTT` — catalog \
               conflict C8, a spec editing slip; the rule it states is the one \
               `substitution.md:37` attaches to the right example)",
+    },
+    Negative {
+        id: "W48",
+        clause: "recommendations/protein/delins.md:64",
+        quote: "the variant is not described as `p.Ser44_Trp46delinsArgLeuArg`.",
+        input: "NP_SPECW48.1:p.Ser44_Trp46delinsArgLeuArg",
+        forbidden: "NP_SPECW48.1:p.Ser44_Trp46delinsArgLeuArg",
+        fixture: Fixture::Protein,
+        why: "the spec names the forbidden string in its own words, so the negative \
+              half is quotable verbatim: the separation-1 protein delins must not \
+              survive as itself",
+    },
+    Negative {
+        id: "W59",
+        clause: "recommendations/protein/delins.md:21",
+        quote: "two variants separated by one or more amino acids should be described individually and not as a \"delins\".",
+        input: "NP_SPECW48.1:p.Ser988_Gln990delinsAlaLeuHis",
+        forbidden: "NP_SPECW48.1:p.Ser988_Gln990delinsAlaLeuHis",
+        fixture: Fixture::Protein,
+        why: "and the same at the second locus. A positive-only assertion would go \
+              green again the moment the split stopped firing and the input became \
+              its own answer",
     },
     Negative {
         id: "W56",
@@ -1012,6 +1071,26 @@ const PARTITIONS: &[Partition] = &[
         why: "separation 7 on the DNA axis",
     },
     Partition {
+        id: "W48",
+        clause: "recommendations/protein/delins.md:21",
+        quote: "should be described individually and not as a \"delins\"",
+        input: "NP_SPECW48.1:p.Ser44_Trp46delinsArgLeuArg",
+        members: &[(44, 44), (46, 46)],
+        fixture: Fixture::Protein,
+        why: "two single-residue members with `Leu45` between them and in neither. \
+              Read off the parsed output, because a two-member render over a \
+              44_46 span would be the wrong partition wearing the right string",
+    },
+    Partition {
+        id: "W59",
+        clause: "recommendations/protein/delins.md:21",
+        quote: "should be described individually and not as a \"delins\"",
+        input: "NP_SPECW48.1:p.Ser988_Gln990delinsAlaLeuHis",
+        members: &[(988, 988), (990, 990)],
+        fixture: Fixture::Protein,
+        why: "the same partition at the second locus",
+    },
+    Partition {
         id: "W60",
         clause: "background/glossary.md:10",
         quote: "a change of the `T` at position 4",
@@ -1105,36 +1184,6 @@ const PARSE_GAPS: &[ParseGap] = &[ParseGap {
           rejects the residue-range payload (`Unexpected trailing characters: \
           '4_Ser6'`), so the row cannot be executed as a normalization at all",
 }];
-
-/// Rows where the spec is explicit, ferro disagrees, and no clause competes.
-///
-/// Executed by [`the_protein_axis_must_split_a_separation_one_delins`], which is
-/// **red on purpose**.
-const FERRO_IS_WRONG: &[Worked] = &[
-    Worked {
-        id: "W48",
-        clause: "recommendations/protein/delins.md:64",
-        quote: "the variant is not described as `p.Ser44_Trp46delinsArgLeuArg`.",
-        input: "NP_SPECW48.1:p.Ser44_Trp46delinsArgLeuArg",
-        published: "p.[Ser44Arg;Trp46Arg]",
-        answer: "NP_SPECW48.1:p.[Ser44Arg;Trp46Arg]",
-        rebase: Rebase::Accession,
-        fixture: Fixture::Protein,
-        why: "the spec's single clearest split-side worked example",
-    },
-    Worked {
-        id: "W59",
-        clause: "recommendations/protein/delins.md:21",
-        quote: "two variants separated by one or more amino acids should be described individually and not as a \"delins\".",
-        input: "NP_SPECW48.1:p.Ser988_Gln990delinsAlaLeuHis",
-        published: "p.[Ser988Ala;Gln990His]",
-        answer: "NP_SPECW48.1:p.[Ser988Ala;Gln990His]",
-        rebase: Rebase::Accession,
-        fixture: Fixture::Protein,
-        why: "the same shape at a second locus, which is what makes it systematic \
-              rather than a one-off",
-    },
-];
 
 // ---------------------------------------------------------------------------
 // The rows this file does not execute
@@ -1495,7 +1544,7 @@ fn every_row_quotes_the_spec_verbatim() {
     );
 
     let mut citations: Vec<(&str, &str, &str)> = Vec::new();
-    for row in WORKED.iter().chain(FERRO_IS_WRONG) {
+    for row in WORKED.iter() {
         citations.push((row.id, row.clause, row.quote));
     }
     for row in NEGATIVE {
@@ -1555,7 +1604,7 @@ fn every_row_quotes_the_spec_verbatim() {
 /// Every row explains itself.
 #[test]
 fn every_row_records_why_it_is_here() {
-    for row in WORKED.iter().chain(FERRO_IS_WRONG) {
+    for row in WORKED.iter() {
         assert!(!row.why.trim().is_empty(), "{} records no reason", row.id);
     }
     for row in UNEXECUTABLE {
@@ -1686,7 +1735,7 @@ fn every_worked_example_produces_the_spec_published_answer() {
 /// the position pinned separately by [`PARTITIONS`].
 #[test]
 fn every_rebased_answer_differs_from_the_published_string_only_in_its_accession() {
-    for row in WORKED.iter().chain(FERRO_IS_WRONG) {
+    for row in WORKED.iter() {
         match row.rebase {
             Rebase::Same => assert_eq!(
                 row.answer, row.published,
@@ -2028,10 +2077,10 @@ fn the_two_svd_wg010_spellings_of_one_variant_are_two_fixed_points() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — the defect
+// Tests — the protein-axis split move
 // ---------------------------------------------------------------------------
 
-/// **RED ON PURPOSE.** The protein axis does not split a separation-1 delins.
+/// Both spellings of the separation-1 protein change settle on the split form.
 ///
 /// `protein/delins.md:21` — "two variants separated by one or more amino acids
 /// should be described individually and not as a 'delins'" — and its worked
@@ -2039,50 +2088,62 @@ fn the_two_svd_wg010_spellings_of_one_variant_are_two_fixed_points() {
 /// breath, that "the variant is not described as
 /// `p.Ser44_Trp46delinsArgLeuArg`". The protein axis has **no codon exception**:
 /// unlike `general.md:35` on the DNA/RNA axes, nothing licenses merging across
-/// one unchanged residue. So the merged spelling is not a legal description and
-/// must be split.
+/// one unchanged residue.
 ///
-/// Ferro preserves it. Both directions were measured on a hermetic protein whose
-/// residue 45 is `Leu`, so the two spellings denote one protein sequence:
+/// This was red until the split move landed. It is kept as a *convergence*
+/// guard rather than folded into the [`WORKED`] loop, because the row-by-row
+/// tests read one direction each: the [`WORKED`] row proves the delins spelling
+/// reaches the spec's answer and the [`NEGATIVE`] row proves it does not stay
+/// itself, but neither says the *split* spelling is still a fixed point. A split
+/// move that also re-merged, or one that shifted the split spelling somewhere
+/// else, would satisfy both and leave the two spellings non-confluent.
+///
+/// Measured on a hermetic protein whose residue 45 is `Leu`, so the two
+/// spellings denote one protein sequence:
 ///
 /// ```text
-///   p.[Ser44Arg;Trp46Arg]           -> p.[Ser44Arg;Trp46Arg]           (right)
-///   p.Ser44_Trp46delinsArgLeuArg    -> p.Ser44_Trp46delinsArgLeuArg    (wrong)
+///   p.[Ser44Arg;Trp46Arg]           -> p.[Ser44Arg;Trp46Arg]
+///   p.Ser44_Trp46delinsArgLeuArg    -> p.[Ser44Arg;Trp46Arg]
 /// ```
 ///
-/// It is not a rendering quirk and not a one-off: the same shape at
-/// `p.Ser988_Gln990delinsAlaLeuHis` (SVD-WG010.md:53-54, whose merge was
-/// *rejected*) behaves identically. The adjacent case is handled correctly —
-/// `p.[Trp24Cys;Val25Arg]` merges to `p.Trp24_Val25delinsCysArg` (W5) — so the
-/// merge direction works on this axis and only the split direction is missing.
-/// Under the partition model that split is one of the two licensed moves:
-/// an equal-length member whose interior holds an unchanged run reaching it
-/// (`general.md:34`, read backwards). The DNA axis performs it; the protein axis
-/// does not.
-///
-/// **Do not make this test pass by pinning ferro's answer.** There is no
-/// competing clause to cite, so this is not a `DIVERGENT` row. It is either
-/// fixed in `src/` or it stays red.
+/// The adjacent case still merges the other way — `p.[Trp24Cys;Val25Arg]` to
+/// `p.Trp24_Val25delinsCysArg` (W5) — so the two moves meet at separation 0/1
+/// and neither has swallowed the other.
 #[test]
-fn the_protein_axis_must_split_a_separation_one_delins() {
-    let mut failures = Vec::new();
-    for row in FERRO_IS_WRONG {
-        match run(row.fixture, row.input) {
-            Ok(actual) if actual == row.answer => {}
-            Ok(actual) => failures.push(format!(
-                "  [{}] {}\n    spec ({}): {}\n    ferro:   {}\n    {}",
-                row.id, row.input, row.clause, row.answer, actual, row.why
-            )),
-            Err(e) => failures.push(format!("  [{}] {} errored: {e}", row.id, row.input)),
-        }
+fn the_protein_axis_splits_a_separation_one_delins() {
+    // (the split spelling, the delins spelling the spec forbids, the answer)
+    let cases = [
+        (
+            "NP_SPECW48.1:p.[Ser44Arg;Trp46Arg]",
+            "NP_SPECW48.1:p.Ser44_Trp46delinsArgLeuArg",
+            "NP_SPECW48.1:p.[Ser44Arg;Trp46Arg]",
+        ),
+        (
+            "NP_SPECW48.1:p.[Ser988Ala;Gln990His]",
+            "NP_SPECW48.1:p.Ser988_Gln990delinsAlaLeuHis",
+            "NP_SPECW48.1:p.[Ser988Ala;Gln990His]",
+        ),
+    ];
+    for (split, delins, answer) in cases {
+        assert_eq!(
+            run(Fixture::Protein, split).expect("the split spelling normalizes"),
+            answer,
+            "`protein/delins.md:21`: the split spelling of {split} must be a fixed point"
+        );
+        assert_eq!(
+            run(Fixture::Protein, delins).expect("the delins spelling normalizes"),
+            answer,
+            "`protein/delins.md:21`: {delins} must be split, not preserved"
+        );
     }
-    assert!(
-        failures.is_empty(),
-        "{} protein worked example(s) are not what the spec publishes. This is a \
-         known, unfixed defect — see this test's doc comment — not a regression, \
-         and not something to pin:\n{}",
-        failures.len(),
-        failures.join("\n")
+
+    // The merge direction is untouched: separation 0 still coalesces, so the
+    // split move has not been widened into the adjacent case.
+    assert_eq!(
+        run(Fixture::Protein, "NP_SPECW05.1:p.[Trp24Cys;Val25Arg]")
+            .expect("the adjacent pair normalizes"),
+        "NP_SPECW05.1:p.Trp24_Val25delinsCysArg",
+        "`protein/substitution.md:23`: two *consecutive* residue changes are still one delins"
     );
 }
 
@@ -2093,7 +2154,7 @@ fn the_protein_axis_must_split_a_separation_one_delins() {
 /// Every id named anywhere in this file, in one set.
 fn covered_ids() -> BTreeSet<&'static str> {
     let mut ids = BTreeSet::new();
-    for row in WORKED.iter().chain(FERRO_IS_WRONG) {
+    for row in WORKED.iter() {
         ids.insert(row.id);
     }
     for row in NEGATIVE {
@@ -2186,10 +2247,12 @@ fn the_unexecutable_census_is_pinned() {
         "the executed / unexecutable / delegated counts no longer partition the 95 rows"
     );
     assert_eq!(
-        (DIVERGENT.len(), PARSE_GAPS.len(), FERRO_IS_WRONG.len()),
-        (2, 1, 2),
-        "the set of rows ferro does not satisfy changed. Each of these three tables \
-         is an adjudication — a divergence with a competing clause, a parser defect, \
-         or a plain defect — so a change here is a ruling, not a fixture edit."
+        (DIVERGENT.len(), PARSE_GAPS.len()),
+        (2, 1),
+        "the set of rows ferro does not satisfy changed. Each of these two tables \
+         is an adjudication — a divergence with a competing clause, or a parser \
+         defect — so a change here is a ruling, not a fixture edit. The third \
+         disposition, `FERRO_IS_WRONG`, was emptied by the protein-axis split move \
+         and removed; re-creating it is also a ruling."
     );
 }
