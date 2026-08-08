@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.1...v0.14.0) - 2026-08-08
+
+### Representation changes
+
+- *(normalize)* widen the axis gate to c./n./r. ([#1484](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1484))
+- *(conformance)* refuse to write an artifact built from a partial generator pass ([#1551](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1551))
+
+### Other
+
+- *(changelog)* state what v0.13.1 moved, in the released section ([#1561](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1561))
+
 ## [0.13.1](https://github.com/fulcrumgenomics/ferro-hgvs/compare/v0.13.0...v0.13.1) - 2026-08-08
 
 ### Representation changes
