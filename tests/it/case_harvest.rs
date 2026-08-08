@@ -315,27 +315,6 @@ fn reverse_complement(bases: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// The gate
-// ---------------------------------------------------------------------------
-
-/// Every row produces its recorded answer.
-///
-/// Reported as one batch rather than row-by-row: when a normalizer change moves
-/// these, *which* rows moved together is the diagnosis, and one assert per row
-/// would surface only the first.
-///
-/// Rows whose `expected` is `null` are not compared here. That is not an
-/// omission — see [`the_confluence_classes_converge`]: where the governing
-/// ruling is open, asserting that two spellings agree is a correctness claim the
-/// spec supports, while asserting *which* form they agree on would freeze a
-/// representation nobody has adjudicated.
-///
-/// The two red rows' answers are pinned too, at today's **wrong** output. So
-/// fixing #1542 turns this test red as well as turning its `#[ignore]`d guard
-/// green — which is correct: a red row's answer moving is a representation
-/// change, and it should require re-blessing the fixture rather than passing
-/// unnoticed.
-// ---------------------------------------------------------------------------
 // The partition rule's moves, adjudicated row by row
 // ---------------------------------------------------------------------------
 
@@ -526,6 +505,27 @@ fn every_partition_move_overrides_a_real_recorded_answer() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The gate
+// ---------------------------------------------------------------------------
+
+/// Every row produces its recorded answer.
+///
+/// Reported as one batch rather than row-by-row: when a normalizer change moves
+/// these, *which* rows moved together is the diagnosis, and one assert per row
+/// would surface only the first.
+///
+/// Rows whose `expected` is `null` are not compared here. That is not an
+/// omission — see [`the_confluence_classes_converge`]: where the governing
+/// ruling is open, asserting that two spellings agree is a correctness claim the
+/// spec supports, while asserting *which* form they agree on would freeze a
+/// representation nobody has adjudicated.
+///
+/// The two red rows' answers are pinned too, at today's **wrong** output. So
+/// fixing #1542 turns this test red as well as turning its `#[ignore]`d guard
+/// green — which is correct: a red row's answer moving is a representation
+/// change, and it should require re-blessing the fixture rather than passing
+/// unnoticed.
 #[test]
 fn every_row_produces_its_recorded_answer() {
     let cases = cases();

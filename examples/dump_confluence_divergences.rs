@@ -480,11 +480,39 @@ fn main() -> ExitCode {
         }
     };
 
+    // Zeroed immediately before `collect`, so the ratio below describes this
+    // corpus rather than whatever normalization the set-up above happened to do.
+    ferro_hgvs::normalize::dev_partitioners::reset_preserve_census();
     let (records, cross, drops) = collect(&corpus, direction);
     print!(
         "{}",
         render_census(&corpus, &records, &cross, &drops, cli.top, cli.examples)
     );
+
+    // The partition-preserving arm's own hit rate, printed unconditionally
+    // because it is the denominator for every confluence figure above: each
+    // decline falls back to `partition_block`, i.e. to a re-derived partition,
+    // so a non-zero decline rate means the numbers describe a BLEND of two
+    // partitioners rather than the partition model. That distinction was
+    // reported wrong once, from an uninstrumented run, at 0% when it was 33.4%.
+    //
+    // `kept + declined` is the number of blocks that reached the arm, which is
+    // not the class count — one class has many spellings and some never reach
+    // canonicalization at all.
+    let (kept, declined) = ferro_hgvs::normalize::dev_partitioners::preserve_census();
+    let total = kept + declined;
+    if total == 0 {
+        println!(
+            "\npartition-preserving arm: NOT REACHED (0 invocations) — \
+             this corpus measures nothing about the partition rule"
+        );
+    } else {
+        println!(
+            "\npartition-preserving arm: {kept} kept, {declined} declined of {total} \
+             ({:.1}% declined, each falling back to a re-derived partition)",
+            100.0 * declined as f64 / total as f64,
+        );
+    }
 
     if cli.stats {
         return ExitCode::SUCCESS;

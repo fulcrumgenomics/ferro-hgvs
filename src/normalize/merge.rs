@@ -2419,37 +2419,79 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // else. The other two arms fall back to it when their splitter declines,
     // rather than abandoning the canonicalization, so a bake-off run measures the
     // partitioners and not their decline rates.
-    let mut pieces = match partition_rule() {
-        PartitionRule::Live => partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
-        PartitionRule::Shadow => partition_block_sequence_first(
-            &ref_bytes[lo..hi_ref],
-            &result[lo..hi_alt],
-            axis_min_separation(frame.reading_frame),
-        )
-        .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
-        PartitionRule::Canonical => {
+    // `piece_origin` is the window offset the returned pieces are relative to:
+    // `lo` for every arm that partitions the *trimmed block*, and 0 for a
+    // successful `Preserve`, whose pieces are already in window coordinates.
+    // That difference is the whole of IMPL 1. `Preserve` keeps the members the
+    // input asserted, and those members need not lie inside the block at all —
+    // forcing them into it is what made this arm decline a third of the time.
+    let (mut pieces, piece_origin, preserved) = match partition_rule() {
+        PartitionRule::Live => (
+            partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
+            lo,
+            false,
+        ),
+        PartitionRule::Shadow => (
+            partition_block_sequence_first(
+                &ref_bytes[lo..hi_ref],
+                &result[lo..hi_alt],
+                axis_min_separation(frame.reading_frame),
+            )
+            .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
+            lo,
+            false,
+        ),
+        PartitionRule::Canonical => (
             partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
-                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
-        }
-        PartitionRule::CanonicalCoalesced => {
+                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
+            lo,
+            false,
+        ),
+        PartitionRule::CanonicalCoalesced => (
             // Identical to `Canonical` here on purpose. The `delins.md:44-47`
             // merge is applied *after* the downstream passes below, not as part
             // of partitioning — see `coalesce_payload_alignment_split`.
             partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
-                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
-        }
-        PartitionRule::Preserve => partition_block_preserving(
-            &edits,
-            &ref_bytes,
-            &result,
-            w_lo,
+                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
             lo,
-            hi_ref,
-            hi_alt,
-            axis_min_separation(frame.reading_frame),
-        )
-        .filter(|pieces| pieces_rebuild_block(pieces, &ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
-        .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
+            false,
+        ),
+        PartitionRule::Preserve => {
+            match partition_block_preserving(
+                &edits,
+                &ref_bytes,
+                &result,
+                w_lo,
+                axis_min_separation(frame.reading_frame),
+            )
+            // The rebuild guard spans the WHOLE window rather than the trimmed
+            // block, which is strictly stronger: the members must reproduce
+            // every base the edits produced, not merely those inside the
+            // minimal changed block.
+            .filter(|pieces| pieces_rebuild_block(pieces, &ref_bytes, &result))
+            {
+                // Counted, because "the arm preserves the partition" was
+                // reported once from an uninstrumented run and was wrong by a
+                // third. See `dev_partitioners::preserve_census` for why this is
+                // a counter and emphatically NOT a `log::debug!`.
+                Some(pieces) => {
+                    record_preserve_outcome(true);
+                    (pieces, 0, true)
+                }
+                None => {
+                    record_preserve_outcome(false);
+                    (
+                        partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
+                        lo,
+                        // NOT `true`. These pieces came from `partition_block`,
+                        // i.e. from a re-derivation, whatever rule was asked
+                        // for — so every gate below that exists to be
+                        // suspicious of a re-derived partition must still apply.
+                        false,
+                    )
+                }
+            }
+        }
     };
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
@@ -2536,8 +2578,8 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         }
     }
     for piece in &mut pieces {
-        piece.ref_start += lo;
-        piece.ref_end += lo;
+        piece.ref_start += piece_origin;
+        piece.ref_end += piece_origin;
     }
     // `general.md:35`'s coding exception, applied here — before the 3'-shift and
     // before the weight bound — for two independent reasons, each of which was
@@ -2631,9 +2673,27 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // artifact. Refusal here does not even fall back to `partition_block`; it
     // abandons canonicalization to the per-member pipeline.
     //
-    // The two are independent and both apply: `unwidened` decides *which*
-    // partition's columns are counted, the exemption decides *whether* to count
-    // at all.
+    // KEYED ON THE PARTITIONER, NOT ON THE REQUESTED RULE, and the distinction is
+    // not pedantic — it was a measured hole. The gate read
+    // `partition_rule() != PartitionRule::Preserve`, which exempts the bound
+    // whenever `preserve` was *asked for*, including on the invocations where
+    // `partition_block_preserving` declined and `partition_block` re-derived. On
+    // those blocks the exemption's own premise — "the partition IS the input's" —
+    // is false, so `preserve` switched the guard off over a re-derived partition:
+    // it re-derived MORE than the rule it replaced, on precisely the class the
+    // rule exists to protect. Before the arm became the default, a decline fell
+    // through to the per-member pipeline, which preserves the members by
+    // construction, so the hole opened with the flip rather than with the arm.
+    //
+    // Measured 4-for-4 by column count on the four blocks the affected rows
+    // reach; it accounted for 8 of the branch's 14 committed-red tests. IMPL 1
+    // separately drives the decline rate to 0, so today `preserved` is true
+    // wherever `preserve` is requested — this keeps the two facts independent, so
+    // that a future decline cannot silently re-open the hole.
+    //
+    // The two conditions are independent and both apply: `unwidened` (#1484)
+    // decides *which* partition's columns are counted, `preserved` decides
+    // *whether* to count at all.
     let derived_columns = match unwidened {
         None => changed_columns_of_pieces(&pieces),
         Some(mut raw) => {
@@ -2643,9 +2703,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
             changed_columns_of_pieces(&raw)
         }
     };
-    if partition_rule() != PartitionRule::Preserve
-        && derived_columns > changed_columns_of_edits(&edits)
-    {
+    if !preserved && derived_columns > changed_columns_of_edits(&edits) {
         return None;
     }
 
@@ -2656,13 +2714,22 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // immediately after its splitter; `Preserve` needs it for the same reason, and
     // the need was masked until the weight bound above stopped vetoing every
     // reading-frame merge.
-    if partition_rule() == PartitionRule::Preserve {
-        split_codon_incompatible_triplets(
-            &mut pieces,
-            frame.reading_frame,
-            w_lo + lo as i64,
-            &ref_bytes[lo..hi_ref],
-        );
+    //
+    // WINDOW coordinates, because `pieces` were offset into the window at the
+    // top of this block. Until IMPL 1 this call passed the trimmed block and
+    // `w_lo + lo`, so a window offset was indexed into a slice starting at `lo`
+    // and both the triplet's bases and its codon arithmetic were read `lo`
+    // positions too far along — silently, since a piece past the short block
+    // slice simply fails the `is_merged_triplet` test and is skipped. The
+    // `Shadow` arm's call above is block-relative and correct, because its
+    // pieces have not been offset yet.
+    // `preserved`, not `partition_rule()`, for the mirror of the reason given on
+    // the bound above: this pass splits back apart a merge *the preserving arm's
+    // own floor* made, so it belongs to that arm's pieces and to no others. On a
+    // decline the pieces came from `partition_block`, which never applied that
+    // floor, and `Shadow` already calls this itself right after its splitter.
+    if preserved {
+        split_codon_incompatible_triplets(&mut pieces, frame.reading_frame, w_lo, &ref_bytes);
     }
 
     // `delins.md:44-47`, applied AFTER the weight bound, for exactly the reason
@@ -2853,6 +2920,15 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // cannot serve. Collapsing all three into one boolean would hide that case
     // among the other two, so it gets a `debug_assert` of its own — loud in
     // tests and development, with the runtime refusal still carrying release.
+    // Sequence preservation is necessary but not sufficient: two members can
+    // denote the right bases and still claim the same territory, which denotes no
+    // single allele. Refused here, beside the round-trip check, because both
+    // answer the same question — is this form emittable at all — and a caller
+    // that falls back to the per-member pipeline gets an already
+    // sibling-corrected answer either way.
+    if members_claim_the_same_territory(&rebuilt, kind, provider) {
+        return None;
+    }
     let rebuilt_edits = collect_canonical_edits(&rebuilt, kind, body, &template_accession)?;
     let reapplied = apply_edits_to_window(&rebuilt_edits, &ref_bytes, w_lo)?;
     debug_assert_eq!(
@@ -4134,6 +4210,84 @@ fn canonical_base_byte(base: u8) -> u8 {
     }
 }
 
+/// Do two of these members claim the same territory?
+///
+/// The output-side counterpart to `detect_overlap_conflicts`, and **not** a
+/// duplicate of it: that one groups members by *coincident* endpoints, so it sees
+/// `g.[24dup;24C>G]` but is blind to *containment*. This one is the containment
+/// test, reusing `demote_repeats_spanning_siblings`' own two predicates verbatim:
+///
+/// * a base-claiming sibling whose span overlaps this member's, and
+/// * a junction-only sibling (an `ins` or `dup`, which claims no base) whose
+///   junction falls **strictly** inside this member's span.
+///
+/// The 3' end is exclusive on purpose, in both tests: a junction at `end` is
+/// *flush* against the member rather than inside it, which is legal adjacency and
+/// must not be flagged (#999, #1135, #1276).
+///
+/// # Why the canonicalizer needs its own copy of this
+///
+/// `demote_repeats_spanning_siblings` *repairs* this shape, but it runs in the
+/// per-member pipeline **before** this pass and so never sees what this pass
+/// builds. It also refuses a `before`/`after` pair of differing length, which a
+/// re-partition routinely produces. So the repair is structurally unavailable
+/// here and the honest move is to refuse.
+///
+/// Reachable only since the partition-preserving arm stopped forcing members into
+/// the trimmed block: keeping a member where the submitter wrote it lets the
+/// spelling rules re-spell it over a whole tandem tract, and
+/// `g.[2_3dup;5_6insA]` on a nine-T run came back as `g.[1_9T[11];5_6insA]` —
+/// a copy count over `1_9` cannot express another member adding sequence in the
+/// middle of those nine bases (#1287).
+fn members_claim_the_same_territory<P: ReferenceProvider>(
+    members: &[HgvsVariant],
+    kind: CisKind,
+    provider: &P,
+) -> bool {
+    if members.len() < 2 {
+        return false;
+    }
+    let spans: Vec<Option<MemberSpan>> = members
+        .iter()
+        .map(|v| member_span(v, kind, provider))
+        .collect();
+    (0..spans.len()).any(|i| {
+        let Some(a) = spans[i].as_ref() else {
+            // A member whose span cannot be resolved is not evidence of a
+            // conflict. `pieces_rebuild_block` and the round-trip check below
+            // already hold the sequence-level line for those.
+            return false;
+        };
+        let siblings = || {
+            (0..spans.len())
+                .filter(|&j| j != i)
+                .filter_map(|j| spans[j].as_ref())
+                .filter(|s| s.region == a.region && s.accession == a.accession)
+        };
+        let claims_overlap = siblings()
+            .filter(|s| s.claims_bases)
+            .any(|s| a.claims_bases && s.start <= a.end && s.end >= a.start);
+        let junction_inside = siblings()
+            .filter(|s| !s.claims_bases)
+            .filter_map(|s| s.junction)
+            .any(|junction| a.claims_bases && junction >= a.start && junction < a.end);
+        claims_overlap || junction_inside
+    })
+}
+
+/// Record which way [`partition_block_preserving`] went, for
+/// [`dev_partitioners::preserve_census`].
+///
+/// A no-op without the `dev` feature, so a production build pays nothing and the
+/// counter cannot drift away from the branch it measures.
+#[inline]
+fn record_preserve_outcome(kept: bool) {
+    #[cfg(feature = "dev")]
+    dev_partitioners::record_preserve(kept);
+    #[cfg(not(feature = "dev"))]
+    let _ = kept;
+}
+
 /// Trim the common prefix and suffix of the reference and result blocks.
 ///
 /// Returns `(prefix_len, ref_end, alt_end)` as offsets into the two slices.
@@ -4179,17 +4333,29 @@ fn pieces_rebuild_block(pieces: &[Piece], reference: &[u8], result: &[u8]) -> bo
 /// `general.md:34-39` / `DNA/delins.md:44-47` authorise: two members separated by
 /// fewer than `min_separation` unchanged nucleotides become one.
 ///
-/// # Window coordinates, not block coordinates — and that is load-bearing
+/// # Window coordinates end to end, and that is load-bearing
 ///
 /// [`trim_common_flanks`] derives the block from the two *sequences* and knows
 /// nothing about the members, so a member sitting in a trimmed-away flank — which
 /// is routine for a `dup` or `ins` whose payload matches adjacent reference — has
-/// no block coordinate at all. Mapping into the block directly refused **32.8%**
-/// of all invocations on the designed cis corpus (17,268 of 17,782 declines were
-/// exactly this), and because every refusal falls back to [`partition_block`], the
-/// arm silently re-derived a third of its blocks while reporting itself as
-/// preserving. Walking the window and subtracting `lo` at the end is what makes
-/// the block follow the members rather than the other way round.
+/// no block coordinate at all. Every earlier version of this function ended by
+/// mapping its members into `[lo, hi_ref)` and refusing any that fell outside,
+/// and that single step accounted for **100%** of its declines: **33.4%** of all
+/// invocations on the designed cis corpus (17,841 of 53,464). Because every
+/// refusal falls back to [`partition_block`], the arm silently re-derived a third
+/// of its blocks while reporting itself as preserving.
+///
+/// The cause is structural rather than a coding error. The block sits at the
+/// 3'-most position; the input's members sit where the submitter wrote them. So
+/// the arm declined on essentially any input that was not *already* 3'-shifted —
+/// a very large and entirely ordinary class. Walking the window was necessary but
+/// not sufficient while the pieces were still forced back into a block computed
+/// without reference to them.
+///
+/// So this function now returns **window** coordinates and the block is never
+/// consulted. Nothing downstream needs it: from `shift_pieces` onwards every pass
+/// works in window coordinates against the whole of `ref_bytes`, and placing each
+/// member at its 3'-most position is that pass's job, not this one's.
 ///
 /// # Why the alt payloads are read out of `result` rather than off the edits
 ///
@@ -4204,16 +4370,14 @@ fn pieces_rebuild_block(pieces: &[Piece], reference: &[u8], result: &[u8]) -> bo
 /// Returns `None` — and the caller falls back to [`partition_block`] — when the
 /// members overlap, when one falls outside the window, when a `Repeat` survived
 /// [`lower_repeat_edits`], or when the walk does not land both cursors on the
-/// window's ends. The caller additionally checks [`pieces_rebuild_block`].
-#[allow(clippy::too_many_arguments)]
+/// window's ends. The caller additionally checks [`pieces_rebuild_block`] over the
+/// whole window. Notably absent from that list since IMPL 1: "a member outside the
+/// trimmed block", which used to be every decline there was.
 fn partition_block_preserving(
     edits: &[GEdit],
     ref_bytes: &[u8],
     result: &[u8],
     w_lo: i64,
-    lo: usize,
-    hi_ref: usize,
-    hi_alt: usize,
     min_separation: u32,
 ) -> Option<Vec<Piece>> {
     let at = |pos: i64| -> Option<usize> { usize::try_from(pos - w_lo).ok() };
@@ -4375,22 +4539,19 @@ fn partition_block_preserving(
         }
     }
 
-    // Into block coordinates. A member that trimming pushed outside the block
-    // spells no change there — dropped when its payload really does equal the
-    // reference it covers, refused otherwise, so a genuine edit can never be
-    // silently discarded.
+    // Out in window coordinates. A member asserting no change at all is dropped
+    // rather than carried as an identity piece — that is the only filtering left,
+    // and it cannot discard a genuine edit because it compares the payload
+    // against the very reference bases the member covers.
     let mut pieces = Vec::with_capacity(merged.len());
     for (rs, re, as_, ae) in merged {
         let alt = &result[as_..ae];
-        if rs < lo || re > hi_ref || as_ < lo || ae > hi_alt {
-            if ref_bytes.get(rs..re) == Some(alt) {
-                continue;
-            }
-            return None;
+        if ref_bytes.get(rs..re) == Some(alt) {
+            continue;
         }
         pieces.push(Piece {
-            ref_start: rs - lo,
-            ref_end: re - lo,
+            ref_start: rs,
+            ref_end: re,
             alt: alt.to_vec(),
         });
     }
@@ -5560,7 +5721,54 @@ fn coalesce_payload_alignment_split(pieces: &mut Vec<Piece>, reference: &[u8]) {
 /// functions are private to this module and should stay that way.
 #[cfg(feature = "dev")]
 pub mod dev_partitioners {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
     use super::Piece;
+
+    static PRESERVE_KEPT: AtomicU64 = AtomicU64::new(0);
+    static PRESERVE_DECLINED: AtomicU64 = AtomicU64::new(0);
+
+    /// Called from `record_preserve_outcome` on every `Preserve` invocation.
+    pub(super) fn record_preserve(kept: bool) {
+        let counter = if kept {
+            &PRESERVE_KEPT
+        } else {
+            &PRESERVE_DECLINED
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// `(kept, declined)` for `partition_block_preserving` since process start,
+    /// or since the last [`reset_preserve_census`].
+    ///
+    /// # Why this is a counter and NOT a `log::debug!`
+    ///
+    /// The obvious implementation is a debug log grepped out of a corpus run,
+    /// which is what `SEQFIRST_AGREE` / `SEQFIRST_SHADOW` above do. **Those emit
+    /// nothing.** `log` is a dependency and there are 19 macro call sites across
+    /// `src/`, but no logger is ever installed — not in `main`, not in the
+    /// examples, not in the test harness — so every one of them is a no-op and
+    /// `grep -c` over any normal run returns 0. A zero from an instrument that
+    /// never ran is indistinguishable from a zero that is the answer, and this
+    /// arm has already been reported as preserving 100% of blocks when it was
+    /// preserving 66.6%. So the census is a value a caller reads back, and it is
+    /// wrong by construction only if the branch itself is wrong.
+    ///
+    /// Process-global and never reset between tests, so a *ratio* is meaningful
+    /// but an absolute count is only meaningful in a single-purpose binary such
+    /// as `examples/dump_confluence_divergences`.
+    pub fn preserve_census() -> (u64, u64) {
+        (
+            PRESERVE_KEPT.load(Ordering::Relaxed),
+            PRESERVE_DECLINED.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Zero the census, so a measurement can exclude corpus set-up.
+    pub fn reset_preserve_census() {
+        PRESERVE_KEPT.store(0, Ordering::Relaxed);
+        PRESERVE_DECLINED.store(0, Ordering::Relaxed);
+    }
 
     /// The default unchanged-base separation threshold for the `shadow` rule:
     /// the coding one-amino-acid exception (`general.md:35`).
@@ -10190,6 +10398,119 @@ mod tests {
     // ------------------------------------------------------------------
 
     /// A 24-base genomic contig, matching #1307's fixture length.
+    /// Isolation probe for the sibling-swallowing repeat that IMPL 1 exposed.
+    ///
+    /// `g.[2_3dup;5_6insA]` on a nine-T run normalizes to
+    /// `g.[1_9T[11];5_6insA]`, whose tract contains the sibling's junction. The
+    /// canonicalizer is NOT the producer — it returns `None` at its
+    /// `rebuilt == variants` check before the territory guard is reached — so the
+    /// form is assembled per member, and `demote_repeats_spanning_siblings` is
+    /// the pass that should have re-spelled it. This calls that pass directly
+    /// with the exact snapshots it would receive, to separate "the pass declines"
+    /// from "the pass never sees this".
+    #[test]
+    fn the_demotion_pass_respells_a_tract_repeat_that_swallows_a_junction() {
+        let provider = bounds_genomic_provider();
+        let before = [
+            crate::parse_hgvs("NC_TEST.1:g.2_3dup").expect("parses"),
+            crate::parse_hgvs("NC_TEST.1:g.5_6insA").expect("parses"),
+        ];
+        let mut after = [
+            crate::parse_hgvs("NC_TEST.1:g.1_9T[11]").expect("parses"),
+            crate::parse_hgvs("NC_TEST.1:g.5_6insA").expect("parses"),
+        ];
+        demote_repeats_spanning_siblings(&before, &mut after, AllelePhase::Cis, false, &provider);
+        let rendered: Vec<String> = after.iter().map(|v| v.to_string()).collect();
+        assert!(
+            !members_claim_the_same_territory(&after, CisKind::Genome, &provider),
+            "the demotion left a tract repeat containing its sibling's junction: {rendered:?}"
+        );
+
+        // THE DEFECT, characterised. The pass is *differential*: it compares a
+        // `before` snapshot against an `after` one and re-spells a repeat back to
+        // the edit it *grew from*. So it can only undo a respelling it has just
+        // observed. Hand it the swallowing form as BOTH snapshots — which is what
+        // a re-normalization does, since the form is a fixed point — and there is
+        // no growth to read, so it declines and the overlap stands.
+        //
+        // That is why the repair is structurally unavailable for this shape, and
+        // why `members_claim_the_same_territory` (a state predicate, not a
+        // differential one) is the right shape of check. What is NOT yet decided
+        // is where to apply it on this path: refusing the repeat spelling at
+        // source, or demoting unconditionally when territory is claimed. Both are
+        // output-moving and need their own measurement, so this test pins the
+        // mechanism rather than pre-judging the fix.
+        let fixed_point = [
+            crate::parse_hgvs("NC_TEST.1:g.1_9T[11]").expect("parses"),
+            crate::parse_hgvs("NC_TEST.1:g.5_6insA").expect("parses"),
+        ];
+        let mut after = fixed_point.clone();
+        demote_repeats_spanning_siblings(
+            &fixed_point,
+            &mut after,
+            AllelePhase::Cis,
+            false,
+            &provider,
+        );
+        assert!(
+            members_claim_the_same_territory(&after, CisKind::Genome, &provider),
+            "if this now repairs, the differential blindness is fixed — delete this \
+             half of the test and close the defect rather than re-blessing it"
+        );
+    }
+
+    /// Does the containment guard see the shape it was written for?
+    ///
+    /// This test exists because a *previous* attempt at this guard used
+    /// `detect_overlap_conflicts`, which groups members by coincident endpoints
+    /// and is therefore blind to containment — it was inert, and the inertness
+    /// was invisible because the suite result did not move by a single test.
+    /// Asserting the predicate directly is what tells a silent guard from a
+    /// guard whose subject never reaches it.
+    ///
+    /// `g.[1_9T[11];5_6insA]` is the real output that motivated it: a copy count
+    /// over `1_9` cannot express another member adding sequence in the middle of
+    /// those nine bases (#1287).
+    #[test]
+    fn the_territory_guard_sees_a_repeat_containing_a_siblings_junction() {
+        let provider = bounds_genomic_provider();
+        let repeat = crate::parse_hgvs("NC_TEST.1:g.1_9T[11]").expect("repeat parses");
+        let insertion = crate::parse_hgvs("NC_TEST.1:g.5_6insA").expect("insertion parses");
+        assert!(
+            members_claim_the_same_territory(
+                &[repeat.clone(), insertion.clone()],
+                CisKind::Genome,
+                &provider
+            ),
+            "a junction strictly inside a repeat's tract must be reported"
+        );
+
+        // Order must not matter, or the guard depends on how the allele was
+        // authored — the exact defect `issue_1304`'s
+        // `does_not_depend_on_authored_order` pins elsewhere.
+        assert!(
+            members_claim_the_same_territory(&[insertion, repeat], CisKind::Genome, &provider),
+            "the guard must be order-independent"
+        );
+
+        // The negative half, and it is the one that matters: legal adjacency
+        // must NOT be flagged. A junction at the tract's 3' end is flush against
+        // it rather than inside it (#999, #1135, #1276), and two disjoint
+        // members are simply two members.
+        let flush = crate::parse_hgvs("NC_TEST.1:g.9_10insA").expect("flush insertion parses");
+        let repeat = crate::parse_hgvs("NC_TEST.1:g.1_9T[11]").expect("repeat parses");
+        assert!(
+            !members_claim_the_same_territory(&[repeat, flush], CisKind::Genome, &provider),
+            "a junction flush against the 3' end is adjacency, not containment"
+        );
+        let a = crate::parse_hgvs("NC_TEST.1:g.2del").expect("parses");
+        let b = crate::parse_hgvs("NC_TEST.1:g.20del").expect("parses");
+        assert!(
+            !members_claim_the_same_territory(&[a, b], CisKind::Genome, &provider),
+            "two disjoint deletions must not be flagged"
+        );
+    }
+
     fn bounds_genomic_provider() -> MockProvider {
         let mut provider = MockProvider::new();
         provider.add_genomic_sequence("NC_TEST.1", "TTTTTTTTTAATATATTTTAATAC");
@@ -11481,6 +11802,54 @@ mod tests {
         assert_eq!(merged.len(), 1, "same codon must stay merged: {merged:?}");
         assert_eq!((merged[0].ref_start, merged[0].ref_end), (0, 3));
         assert_eq!(merged[0].alt, b"GCA");
+    }
+
+    /// IMPL 1's acceptance case, and the shape that accounted for **100%** of
+    /// this arm's declines — 33.4% of all its invocations.
+    ///
+    /// `g.2_4del` on `TAAAAAAG` denotes the same sequence as `g.5_7del`, so
+    /// [`trim_common_flanks`] puts the minimal changed block at `[4, 7)` while
+    /// the member sits at `[1, 4)`: entirely outside it, with a payload (empty)
+    /// that differs from the `AAA` it covers. Mapping into block coordinates
+    /// therefore refused, the caller fell back to [`partition_block`], and the
+    /// arm re-derived a partition while reporting itself as preserving. In
+    /// window coordinates there is nothing to refuse — the member is kept where
+    /// the submitter wrote it, and the downstream sibling-aware 3' shift is what
+    /// moves it, which is that pass's job.
+    #[test]
+    fn preserving_keeps_a_member_asserted_five_prime_of_the_trimmed_block() {
+        let ref_bytes = b"TAAAAAAG";
+        let result = b"TAAAG";
+        let edits = [GEdit::Del { s: 2, e: 4 }];
+
+        // The block really is 3' of the member, or this test proves nothing.
+        let (lo, hi_ref, hi_alt) = trim_common_flanks(ref_bytes, result);
+        assert_eq!((lo, hi_ref, hi_alt), (4, 7, 4));
+
+        let pieces =
+            partition_block_preserving(&edits, ref_bytes, result, 1, MIN_SEPARATION_NO_FRAME)
+                .expect("a member outside the trimmed block must no longer decline");
+        assert_eq!(pieces.len(), 1);
+        assert_eq!((pieces[0].ref_start, pieces[0].ref_end), (1, 4));
+        assert!(pieces[0].alt.is_empty());
+
+        // The partition denotes exactly the bases the edits produced, checked
+        // over the whole window — the guard the caller applies.
+        assert!(pieces_rebuild_block(&pieces, ref_bytes, result));
+
+        // The negative half: the old block-relative reading is what has been
+        // removed. Had the member been forced into `[lo, hi_ref)` it would have
+        // been dropped or refused, and `partition_block`'s re-derived answer —
+        // one piece covering the whole trimmed block — is what shipped instead.
+        // Naming it here means a regression to that behaviour is legible rather
+        // than just a changed number.
+        let rederived = partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
+        assert_eq!(rederived.len(), 1);
+        assert_ne!(
+            (rederived[0].ref_start + lo, rederived[0].ref_end + lo),
+            (pieces[0].ref_start, pieces[0].ref_end),
+            "the re-derived partition must be the thing we are NOT shipping"
+        );
     }
 
     /// The calibration this task must not break: `LRG_199t1:c.850_901`
