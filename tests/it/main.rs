@@ -92,6 +92,7 @@ mod fast_path_drift_scope;
 mod fast_path_flip_bench;
 mod gene_selector_display_preserve;
 mod gene_selector_roundtrip;
+mod generator_completeness;
 mod genome_ring_join;
 mod gnomad_validation;
 mod grammar_conformance;
