@@ -348,9 +348,35 @@ jobs:
           # `rust-cache` block in this file.
           save-if: ${{ github.ref == 'refs/heads/main' }}
           key: spec-fixtures
+      # The cheapest of the three per-commit caches by a wide margin: this job
+      # spends ~120s producing roughly 0.5 MB of JSON, against 25.8 MB for the soak
+      # archive and 106.6 MB for the test archive. It is also the one that gates the
+      # `test` and `test-oracle` paths — `max(test-build, spec-fixtures) + slowest
+      # shard` — so on a re-run of an unchanged tree it is the difference between
+      # those paths costing ~120s before a single test starts and costing ~15s.
+      #
+      # The `--check` steps below are gates rather than artifact producers, and they
+      # are skipped on a hit too. That is sound only because the save is explicit
+      # and carries an implicit `success()`: an entry exists for this commit only if
+      # every check passed on it, and the tree is byte-identical, so re-running them
+      # can only reach the same verdict. With the combined `actions/cache` action
+      # this would be a false-green generator — its post-step saves even when the
+      # job failed, so a failing `--check` would publish an entry that every re-run
+      # then skipped past.
+      - name: Restore fixtures generated from this exact commit
+        id: generated-fixtures
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: |
+            tests/fixtures/grammar/hgvs_spec_normalization.json
+            tests/fixtures/grammar/hgvs_spec_enumeration.json
+            tests/fixtures/cis/cis_confluence_corpus.json
+          key: generated-fixtures-${{ runner.os }}-${{ github.sha }}
       - name: Generate HGVS v21.0 spec fixture
+        if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --bin generate_spec_fixture
       - name: Generate HGVS spec test enumeration
+        if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --bin generate_spec_enumeration
       # The cis confluence corpus, generated here for the same reason and at far
       # greater saving. `tests/it/cis_confluence_axis.rs` regenerates it on demand
@@ -379,6 +405,7 @@ jobs:
       # Here it reuses this job's already-warm dev-profile tree, and it is not on
       # the critical path: that runs through `test-build-soak` + `sweeps`.
       - name: Generate the cis confluence corpus
+        if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_cis_confluence_corpus
       # Merged in from the former `generated-docs` job. Those three generators are
       # `cargo run --features dev --example …` — the SAME profile and feature set as
@@ -396,11 +423,22 @@ jobs:
       # carried over: it configures the *test* profile and every step here is a
       # `cargo run` in the dev profile, so it never applied to these generators.
       - name: Verify conformance summary docs are up to date
+        if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_conformance_summary -- --check
       - name: Tool-support tables up to date
+        if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_tool_support_tables -- --check
       - name: Perf tables up to date
+        if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_perf_tables -- --check
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        if: steps.generated-fixtures.outputs.cache-hit != 'true'
+        with:
+          path: |
+            tests/fixtures/grammar/hgvs_spec_normalization.json
+            tests/fixtures/grammar/hgvs_spec_enumeration.json
+            tests/fixtures/cis/cis_confluence_corpus.json
+          key: generated-fixtures-${{ runner.os }}-${{ github.sha }}
       # Only the fixtures are published from here. The two generator binaries
       # `spec_generator_preconditions` executes need no staging: they are
       # `[[bin]]` targets, so `test-build`'s archive already carries them and
@@ -508,9 +546,29 @@ jobs:
           # assumed — see the PR body.
           cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      # Same per-commit archive cache as `test-build-soak`. This one is 106.6 MB
+      # against that one's 25.8 MB and was left uncached at first for exactly that
+      # reason — it is not on the critical path while `test-build-soak` takes 170s.
+      # It becomes the gate the moment the other two caches hit, though: the
+      # `test-oracle` path is `max(test-build, spec-fixtures) + slowest oracle
+      # shard`, so with `spec-fixtures` cached this 87s job is what remains.
+      # `prune-ci-caches.yml` is what keeps the three families from re-creating the
+      # over-cap problem this branch fixed.
+      - name: Restore a test archive built from this exact commit
+        id: test-archive
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: nextest.tar.zst
+          key: nextest-archive-${{ runner.os }}-${{ github.sha }}
       - name: Build test archive
+        if: steps.test-archive.outputs.cache-hit != 'true'
         # Compiles every test binary and packs them with their run metadata.
         run: cargo nextest archive --features dev --archive-file nextest.tar.zst
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        if: steps.test-archive.outputs.cache-hit != 'true'
+        with:
+          path: nextest.tar.zst
+          key: nextest-archive-${{ runner.os }}-${{ github.sha }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: nextest-archive
@@ -591,9 +649,15 @@ jobs:
       # critical path and is 25.8 MB; the other is not on it and is 106.6 MB, so
       # caching it would cost 4x the space against a cap this PR just brought the
       # repository back under, to save runner-seconds rather than wall-clock.
+      # `restore` + an explicit `save`, never the combined `actions/cache`. The
+      # combined action saves in a post-step that runs even when the job FAILED, so
+      # a broken or partial archive could be published under this commit's key and
+      # every re-run would then skip the build and test whatever it contained. An
+      # explicit save carries an implicit `success()`, so only a completed build is
+      # ever cached. Same pattern on the two caches below.
       - name: Restore a soak archive built from this exact commit
         id: soak-archive
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         with:
           path: nextest-soak.tar.zst
           key: nextest-soak-archive-${{ runner.os }}-${{ github.sha }}
@@ -610,6 +674,11 @@ jobs:
         run: |
           cargo nextest archive --cargo-profile soak --test it \
             --archive-file nextest-soak.tar.zst
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        if: steps.soak-archive.outputs.cache-hit != 'true'
+        with:
+          path: nextest-soak.tar.zst
+          key: nextest-soak-archive-${{ runner.os }}-${{ github.sha }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: nextest-archive-soak
