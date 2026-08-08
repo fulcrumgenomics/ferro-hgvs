@@ -300,6 +300,59 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // time (2184 rows) was unchanged — nothing left the enumeration, one row
     // moved from a divergence to a pass. The total is 2172 as of #1498, which
     // did drop rows; see `ModeDivergencePinned` below.
+    //
+    // **#1235's axis widening leaves this constant where it was.** Do not read
+    // the note below as a re-bless: the branch measured the four rows *in*
+    // (9 -> 13) at the widening commit and measured them back *out* (13 -> 9)
+    // once the rest of the branch landed, so this value and its mirror in
+    // `PASSING_CENSUS` (`ProjectionPinned`, 1168) are byte-identical to `main`.
+    // The analysis is kept because the four rows are the class this status
+    // exists for and the shape will recur.
+    //
+    // All four are one input, `NM_004006.2:c.76_83inv` (`general.md:110`),
+    // reaching `project-c`, `project-n`, `project-r` and `project-p`:
+    //
+    //   c.76_83inv -> c.[76_77delinsTG;82_83delinsTT]
+    //   p.(Asn26_Gln28delinsCysAlaLeu) -> p.[(Asn26Cys);(Gln28Leu)]
+    //
+    // Read the status name and not only its headline citation: these enter by
+    // *shape* (a single member projecting to an allele), not by the divergence
+    // `delins.md:42` names — that passage is about two variants **one** base
+    // apart, and these are four apart, where `general.md:34` plainly asks for
+    // individual descriptions.
+    //
+    // What the four rows really record is that the transcript axes now answer as
+    // the genomic axis already did. `c.76_83` is `AATGCACA`, whose reverse
+    // complement `TGTGCATT` coincides at four of its eight columns, so the
+    // partition finds two runs 4 bases apart and `coalesce_whole_block_inversion`
+    // declines to rejoin them: 50% unchanged is above the ~25% a random reverse
+    // complement leaves, so `changed_columns_dominate_the_span` reads it as a
+    // near-palindrome carrying two independent changes rather than one inversion.
+    // None of that reads the axis — the block is equal-length, so neither
+    // `separations_are_meaningful` nor `coalesce_coding_frame_separation` is even
+    // consulted — so `g.` has always produced this split for this block. Widening
+    // the gate did not create the behaviour; it let the transcript axes see it.
+    //
+    // Had the four rows stayed, they would have been kept rather than chased:
+    // making them pass means loosening `coalesce_whole_block_inversion`, which
+    // is axis-neutral and shipped, so it would move genomic representations for
+    // a class this PR measures nowhere. That is its own change with its own
+    // blast radius, not a tail of this one.
+    //
+    // **Read the pair, never either constant alone.** The two deltas are equal
+    // and opposite by construction (`ProjectionSplitsSingleMember` down four,
+    // `ProjectionPinned` up four), so a row that vanished from one without
+    // appearing in the other would mean something left the enumeration rather
+    // than moved between statuses — and the 2172-row total would be the only
+    // thing that showed it.
+    //
+    // **And measure against a regenerated artifact.** All of the above was
+    // invisible until this branch was rebased onto a `main` carrying #1535 and
+    // #1537: the enumeration artifact is gitignored, so a local file generated
+    // against the pre-rebase tree had these two committed guards comparing
+    // against a stale recording, and the movement in both directions went
+    // unseen. That is exactly why these are the guards that judge behaviour and
+    // `enumeration_replays_recorded_behavior` is not.
     (Status::ProjectionSplitsSingleMember, 9),
 ];
 
@@ -369,6 +422,12 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // 1167 -> 1168 in #1271: the LRG_199 `delins.md:44` row that used to land in
     // `ProjectionSplitsSingleMember` now projects as the single member the spec
     // states. See that status's note in `DIVERGENCE_BUDGET`.
+    // #1235's axis widening leaves this at 1168. The four `c.76_83inv` rows went
+    // out to `ProjectionSplitsSingleMember` at the widening commit (1168 -> 1164)
+    // and came back once the rest of that branch landed (1164 -> 1168), so the
+    // net is zero and the total is again unchanged. The analysis of those rows,
+    // and the reason the two constants must always be read as a pair, are with
+    // `ProjectionSplitsSingleMember` in `DIVERGENCE_BUDGET`.
     (Status::ProjectionPinned, 1168),
     (Status::ProjectionUnavailablePinned, 487),
     (Status::ProjectionErrorPinned, 210),
