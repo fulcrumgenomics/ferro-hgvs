@@ -127,6 +127,22 @@ jobs:
       # `gh api .../actions/caches` stays diagnosable.
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save a new cache generation ONLY from `main` (#1218 redux). `rust-cache`
+          # keys per job and appends a lockfile/env hash, so every PR run that
+          # differed in either minted a fresh ~0.2-0.7 GiB entry. Measured on
+          # 2026-08-08: 42 entries totalling 13.79 GiB against a 10 GiB cap — 3 to 5
+          # generations of every logical key, `coverage` alone holding 4 x ~0.69 GiB.
+          # Over cap means GitHub evicts by LRU continuously, which is the #1218
+          # failure (two generations reached 13.61 GiB and took the nightly's 3.25 GiB
+          # `ferro-manifest-v3` with them). Restoring on every run and saving only on
+          # `main` collapses it to one generation per key, ~4.2 GiB.
+          #
+          # The trade, stated: a PR that changes `Cargo.lock` no longer warms its own
+          # cache, so it restores `main`'s generation through the `restore-keys`
+          # prefix and recompiles what the lockfile moved. That is one slower job on
+          # dependency-bumping PRs, against every cache in the repo currently racing
+          # eviction.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: external-validation-api
 
       # These three steps are the point of the workflow, so they gate it.
@@ -242,6 +258,9 @@ jobs:
       # same key. Distinct name, so the two no longer overwrite each other (#1218).
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save only from `main` — see the note on the first
+          # `rust-cache` block in this file.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: external-validation-spec
 
       # The spec-normalization fixture is a generated artifact (gitignored);

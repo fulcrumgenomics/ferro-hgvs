@@ -959,8 +959,45 @@ fn no_tandem_tract_allele_normalizes_to_a_different_sequence() {
 ///   cargo nextest run --features dev \
 ///   -E 'test(no_two_member_transcript_axis_allele)'
 /// ```
-#[test]
-fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
+/// The three transcript axes this sweep covers, each with the accession it is
+/// drawn against and the name of the test that runs it.
+///
+/// One row per `#[test]` below, and [`every_transcript_axis_has_its_own_sweep`]
+/// checks the two stay in step. That guard replaces the `per_axis` key assertion
+/// this sweep used to carry: when all three axes ran inside one test, asserting
+/// the key set was what made a deleted arm fail loudly instead of silently
+/// shrinking a total that still cleared the floor. Split one test per axis, each
+/// axis now has its own floor — stronger — but deleting a whole `#[test]` would
+/// delete its own guard along with it, so the guard has to live outside all three.
+const TRANSCRIPT_AXIS_SWEEPS: [(&str, &str, &str); 3] = [
+    (
+        "NM_TEST.1",
+        "c",
+        "no_two_member_cds_axis_allele_normalizes_to_a_different_sequence",
+    ),
+    (
+        "NR_TEST.1",
+        "n",
+        "no_two_member_noncoding_axis_allele_normalizes_to_a_different_sequence",
+    ),
+    (
+        "NR_TEST.1",
+        "r",
+        "no_two_member_rna_axis_allele_normalizes_to_a_different_sequence",
+    ),
+];
+
+/// One axis of the transcript-axis sweep. See the module-level notes above the
+/// three `#[test]` wrappers for what it covers and why each axis is swept.
+///
+/// **Split one test per axis to shorten CI's critical path.** All three ran in one
+/// test, and that test alone set the `sweeps` job's duration — a job cannot finish
+/// faster than its longest single test, so sharding the job could not help while
+/// this was one 114s test. Three tests of a third the work run concurrently under
+/// nextest instead. Nothing about the enumeration changes: same accessions, same
+/// axes, same shapes, same positions, same directions, and each axis keeps the
+/// per-seed floor it already had to clear individually.
+fn sweep_one_transcript_axis(accession: &str, axis: &str) {
     use crate::common::cis_apply_oracle::{apply_parsed_with, apply_with};
     use crate::common::synthetic::SyntheticBuilder;
     use ferro_hgvs::reference::transcript::Strand;
@@ -973,13 +1010,6 @@ fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
     let mut skipped = 0usize;
     let mut overlapping: Vec<String> = Vec::new();
     let mut changed: Vec<String> = Vec::new();
-    // Per axis, not just in aggregate. `checked` sums all three, and the floor
-    // below is a *per-seed* constant, so dropping an entire axis would remove a
-    // third of the corpus and still clear it — the aggregate cannot detect its
-    // own coverage being deleted. That matters most for `r.`, which is the axis
-    // this sweep gained last and the cheapest one to remove if the runtime is
-    // ever trimmed.
-    let mut per_axis: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
 
     let seeds = sweep_seeds(48);
     for seq in sweep_sequences(seeds) {
@@ -1033,7 +1063,7 @@ fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
         // *measured* gap — 849 corrupt outputs — and coding `r.` buys an
         // unmeasured one. Worth adding if a defect ever turns up there, or if
         // this sweep is made cheaper.
-        for (accession, axis) in [("NM_TEST.1", "c"), ("NR_TEST.1", "n"), ("NR_TEST.1", "r")] {
+        {
             // Built once per (sequence, axis) and cloned per case. `SyntheticBuilder`
             // pads, maps to a genomic contig and reverse-complements on demand, so
             // constructing one inside the innermost loop dominated the test:
@@ -1163,44 +1193,90 @@ fn no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence() {
                     }
                 }
             }
-            *per_axis.entry(axis).or_insert(0) += checked - checked_before_axis;
+            let _ = checked_before_axis;
         }
     }
 
     // Per seed, for the reason recorded on the floor in the first sweep above.
+    // This is the SAME per-axis floor the combined test applied to each axis, so
+    // splitting the test did not weaken it — it removed the aggregate bound, which
+    // was the weaker of the two (three axes summed clear a per-axis floor even
+    // with one arm deleted, which is exactly why the combined test also asserted
+    // per-axis).
     const CASES_PER_SEED_FLOOR: usize = 1_000;
     let floor = CASES_PER_SEED_FLOOR * seeds as usize;
     assert!(
         checked > floor,
-        "transcript-axis sweep covered too little: {checked} over {seeds} seeds (floor {floor})"
+        "the `{axis}.` transcript-axis sweep covered too little: {checked} over \
+         {seeds} seeds (floor {floor})"
     );
-    // Each axis clears the floor on its own. Pinning the axis *set* as well as
-    // the counts, so that deleting an arm fails here with the axis named rather
-    // than silently shrinking a total that stays above the bar.
-    assert_eq!(
-        per_axis.keys().copied().collect::<Vec<_>>(),
-        vec!["c", "n", "r"],
-        "the transcript-axis sweep must run all three axes; got {per_axis:?}"
-    );
-    for (axis, axis_checked) in &per_axis {
-        assert!(
-            *axis_checked > floor,
-            "transcript-axis sweep covered too little on the `{axis}.` axis: \
-             {axis_checked} over {seeds} seeds (floor {floor}); the aggregate \
-             {checked} can hide this because the other axes make up the total"
-        );
-    }
+    // Now a per-axis share rather than an aggregate one, which is strictly
+    // stricter: an axis with a high skip rate can no longer hide behind two with
+    // low ones.
     assert!(
         skipped * 2 < checked,
-        "too many transcript-axis cases skipped: {skipped} of {checked}"
+        "too many `{axis}.` transcript-axis cases skipped: {skipped} of {checked}"
     );
     assert!(
         overlapping.is_empty(),
-        "overlapping or unconvertible output in {checked} transcript-axis cases: {overlapping:#?}"
+        "overlapping or unconvertible output in {checked} `{axis}.` transcript-axis \
+         cases: {overlapping:#?}"
     );
     assert!(
         changed.is_empty(),
-        "sequence-changing normalizations in {checked} transcript-axis cases: {changed:#?}"
+        "sequence-changing normalizations in {checked} `{axis}.` transcript-axis \
+         cases: {changed:#?}"
+    );
+}
+
+#[test]
+fn no_two_member_cds_axis_allele_normalizes_to_a_different_sequence() {
+    let (accession, axis, _) = TRANSCRIPT_AXIS_SWEEPS[0];
+    sweep_one_transcript_axis(accession, axis);
+}
+
+#[test]
+fn no_two_member_noncoding_axis_allele_normalizes_to_a_different_sequence() {
+    let (accession, axis, _) = TRANSCRIPT_AXIS_SWEEPS[1];
+    sweep_one_transcript_axis(accession, axis);
+}
+
+#[test]
+fn no_two_member_rna_axis_allele_normalizes_to_a_different_sequence() {
+    let (accession, axis, _) = TRANSCRIPT_AXIS_SWEEPS[2];
+    sweep_one_transcript_axis(accession, axis);
+}
+
+/// Every axis in [`TRANSCRIPT_AXIS_SWEEPS`] has a `#[test]` that runs it.
+///
+/// The guard the split owes the suite. When all three axes ran inside one test,
+/// `assert_eq!(per_axis.keys(), ["c","n","r"])` was what made deleting an arm fail
+/// loudly; per-axis tests cannot carry that, because deleting the test deletes the
+/// assertion with it. So this reads the module's own source — the same technique
+/// `msto_regression_corpus::every_cataloged_test_exists_in_its_source_file` uses —
+/// and fails when a row has no test, or a test has been renamed out from under its
+/// row.
+///
+/// It is deliberately a source scan and not a runtime registry: nextest gives each
+/// test its own process, so no test can observe whether its siblings ran.
+#[test]
+fn every_transcript_axis_has_its_own_sweep() {
+    let source = include_str!("cis_junction_crossing_shift.rs");
+    for (accession, axis, test_name) in TRANSCRIPT_AXIS_SWEEPS {
+        assert!(
+            source.contains(&format!("fn {test_name}()")),
+            "the `{axis}.` axis (drawn against {accession}) has no sweep: expected a \
+             test named `{test_name}`. Deleting an axis must fail here rather than \
+             quietly reducing what this module covers."
+        );
+    }
+    // And the rows are distinct, so three rows cannot name one test.
+    let names: std::collections::BTreeSet<&str> =
+        TRANSCRIPT_AXIS_SWEEPS.iter().map(|(_, _, n)| *n).collect();
+    assert_eq!(
+        names.len(),
+        TRANSCRIPT_AXIS_SWEEPS.len(),
+        "two axes name the same test, so one axis is unswept"
     );
 }
 
