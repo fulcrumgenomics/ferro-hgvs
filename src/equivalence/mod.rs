@@ -42,6 +42,19 @@
 //! - [HGVS Nomenclature](https://hgvs-nomenclature.org/)
 //! - [Variant Normalization](https://www.ncbi.nlm.nih.gov/variation/notation/)
 
+//! # Pairwise levels, or a groupable key
+//!
+//! [`EquivalenceChecker`] answers a rich question about **two** variants, and
+//! its answer is a level rather than a value — `AccessionVersionDifference` has
+//! no scalar a bucket could be keyed on. A consumer that wants to *count
+//! distinct changes* across a whole call set needs the other shape: one value
+//! per variant, equal exactly when the bases are. That is [`SpdiKey`], and it
+//! corresponds to the `SequenceMatch` rung — the one that fires precisely where
+//! ferro deliberately keeps two partitions of one edit in distinct canonical
+//! forms.
+
 mod checker;
+mod key;
 
 pub use checker::{EquivalenceChecker, EquivalenceLevel, EquivalenceResult};
+pub use key::{group_by_spdi_key, spdi_key, SpdiKey, SpdiKeyGrouping};
