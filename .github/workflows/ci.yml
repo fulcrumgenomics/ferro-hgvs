@@ -324,7 +324,7 @@ jobs:
   # against the spec checkout. That signal is now its own job rather than
   # buried in a build.
   spec-fixtures:
-    name: Spec fixtures
+    name: Spec fixtures and generated docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -380,6 +380,27 @@ jobs:
       # the critical path: that runs through `test-build-soak` + `sweeps`.
       - name: Generate the cis confluence corpus
         run: cargo run --features dev --example generate_cis_confluence_corpus
+      # Merged in from the former `generated-docs` job. Those three generators are
+      # `cargo run --features dev --example …` — the SAME profile and feature set as
+      # the four steps above — so they were compiling an identical dependency tree
+      # in a second job behind a second `rust-cache` key. Sharing this job's warm
+      # tree costs a few seconds here against the ~54s that job took, and retires a
+      # cache key (~0.36 GiB) from a repository that was over its cache cap.
+      #
+      # Gating is unchanged. `generated-docs` was a `needs:` of `test-required`;
+      # now a failure here fails `spec-fixtures`, which SKIPS `test` and
+      # `test-oracle`, and `test-required` demands `result == "success"` from both —
+      # a skip is not a success, so the required `Test` context still goes red.
+      #
+      # `generated-docs` also set `CARGO_PROFILE_TEST_DEBUG: "0"`, deliberately not
+      # carried over: it configures the *test* profile and every step here is a
+      # `cargo run` in the dev profile, so it never applied to these generators.
+      - name: Verify conformance summary docs are up to date
+        run: cargo run --features dev --example generate_conformance_summary -- --check
+      - name: Tool-support tables up to date
+        run: cargo run --features dev --example generate_tool_support_tables -- --check
+      - name: Perf tables up to date
+        run: cargo run --features dev --example generate_perf_tables -- --check
       # Only the fixtures are published from here. The two generator binaries
       # `spec_generator_preconditions` executes need no staging: they are
       # `[[bin]]` targets, so `test-build`'s archive already carries them and
@@ -546,7 +567,38 @@ jobs:
           # jobs rather than one (#1396).
           cache-bin: "false"
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
+      # Skip the rebuild entirely when this exact commit already produced an
+      # archive. `rust-cache` above caches DEPENDENCIES only — it deliberately
+      # deletes workspace artifacts — so `ferro_hgvs` and the `it` test crate are
+      # recompiled at `opt-level = 3` on every run even when not one byte of Rust
+      # changed. Measured on run 31275848682: 142s of this job's 170s is that
+      # rebuild, and this job plus `sweeps` IS the critical path.
+      #
+      # Keyed on the commit SHA, deliberately, rather than on `hashFiles` over the
+      # inputs. A content-hash key is easier to hit and one forgotten input serves a
+      # STALE archive — CI green against binaries built from other code, which is
+      # the worst failure this repository could buy itself. The SHA changes whenever
+      # anything does, so a hit means the tree is byte-identical and staleness is
+      # impossible by construction. (On `pull_request` this is the merge SHA, so it
+      # also busts correctly when `main` moves under the PR.)
+      #
+      # What it actually buys: re-runs of an unchanged tree. That is not a rare case
+      # here — `on: pull_request` includes `edited` (the representation-change check
+      # reads the PR description), so every description edit re-runs the whole
+      # workflow, today from scratch.
+      #
+      # Only the soak archive is cached, not `test-build`'s. This one is on the
+      # critical path and is 25.8 MB; the other is not on it and is 106.6 MB, so
+      # caching it would cost 4x the space against a cap this PR just brought the
+      # repository back under, to save runner-seconds rather than wall-clock.
+      - name: Restore a soak archive built from this exact commit
+        id: soak-archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
+        with:
+          path: nextest-soak.tar.zst
+          key: nextest-soak-archive-${{ runner.os }}-${{ github.sha }}
       - name: Build soak archive
+        if: steps.soak-archive.outputs.cache-hit != 'true'
         # No `--features dev`. That feature pulls in `web-service` (axum, tokio,
         # tower, tracing) and `benchmark` (reqwest, rusqlite, tokio-postgres,
         # futures) — an entire dependency tree compiled at `opt-level = 3` to
@@ -869,41 +921,6 @@ jobs:
 
   # The generated-doc `--check` gates. Split out of the old monolithic Test job
   # so they no longer sit behind the whole suite on the critical path.
-  generated-docs:
-    name: Generated docs up to date
-    runs-on: ubuntu-latest
-    env:
-      CARGO_PROFILE_TEST_DEBUG: "0"
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          # No `lfs: true`. The repo has exactly four LFS files
-          # (`git lfs ls-files`): two under `tests/fixtures/bulk/` and two
-          # under `tests/fixtures/validation/`, 149 MB in total. Every
-          # reference to them lives in `benches/benchmarks.rs` and five
-          # `tests/it/*` modules, and `cargo run --example` compiles neither
-          # `tests/` nor `benches/`. Nothing under `examples/` names them or
-          # has a compile-time include at all, and none of the eight paths
-          # the three generators actually read is LFS-tracked (checked with
-          # `git check-attr filter`).
-          submodules: true
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
-        with:
-          toolchain: stable
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
-        with:
-          # Save only from `main` — see the note on the first
-          # `rust-cache` block in this file.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          key: generated-docs
-      - name: Verify conformance summary docs are up to date
-        run: cargo run --features dev --example generate_conformance_summary -- --check
-      - name: Tool-support tables up to date
-        run: cargo run --features dev --example generate_tool_support_tables -- --check
-      - name: Perf tables up to date
-        run: cargo run --features dev --example generate_perf_tables -- --check
-
   # Aggregator that reports the `Test` status context.
   #
   # `main` has an ACTIVE RULESET (not legacy branch protection — it does not
@@ -919,7 +936,7 @@ jobs:
   test-required:
     name: Test
     runs-on: ubuntu-latest
-    needs: [test, test-oracle, soak, sweeps, generated-docs]
+    needs: [test, test-oracle, soak, sweeps]
     # `always()` so a failed or cancelled dependency still reports a conclusion
     # rather than leaving the required context pending forever.
     if: always()
@@ -930,12 +947,10 @@ jobs:
           echo "test-oracle     = ${{ needs.test-oracle.result }}"
           echo "soak            = ${{ needs.soak.result }}"
           echo "sweeps          = ${{ needs.sweeps.result }}"
-          echo "generated-docs  = ${{ needs.generated-docs.result }}"
           if [ "${{ needs.test.result }}" != "success" ] \
             || [ "${{ needs.test-oracle.result }}" != "success" ] \
             || [ "${{ needs.soak.result }}" != "success" ] \
-            || [ "${{ needs.sweeps.result }}" != "success" ] \
-            || [ "${{ needs.generated-docs.result }}" != "success" ]; then
+            || [ "${{ needs.sweeps.result }}" != "success" ]; then
             echo "::error::one or more test jobs did not succeed"
             exit 1
           fi
