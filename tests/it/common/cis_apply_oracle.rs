@@ -175,12 +175,38 @@ pub fn normalize(seq: &str, input: &str) -> String {
 
 /// Normalize `input` against `seq` in an explicit direction.
 pub fn normalize_in(seq: &str, input: &str, direction: ShuffleDirection) -> String {
-    let normalizer = Normalizer::with_config(
+    let variant = parse_hgvs(input).expect("parse");
+    format!(
+        "{}",
+        normalizer_for(seq, direction)
+            .normalize(&variant)
+            .expect("normalize")
+    )
+}
+
+/// A normalizer over `seq`'s `TEMPLATE` provider, shuffling in `direction`.
+///
+/// The pinned single-case tests reach it through [`normalize_in`], which builds
+/// one per call. The exhaustive sweeps build **one per (sequence, direction)**
+/// and reuse it across every case drawn on that sequence, because `Normalizer`
+/// owns its provider: going through `normalize_in` per case re-inserted the
+/// contig into a fresh `HashMap` hundreds of thousands of times, and gave the
+/// sweep no way to hold a normalizer at all.
+pub fn normalizer_for(seq: &str, direction: ShuffleDirection) -> Normalizer<MockProvider> {
+    Normalizer::with_config(
         provider(seq),
         NormalizeConfig::default().with_direction(direction),
-    );
-    let variant = parse_hgvs(input).expect("parse");
-    format!("{}", normalizer.normalize(&variant).expect("normalize"))
+    )
+}
+
+/// Both shuffle directions' normalizers for `seq`, paired with their direction.
+///
+/// The sweeps all enumerate `[ThreePrime, FivePrime]` as their innermost loop, so
+/// this is the shape they want: build once outside the loops, iterate by
+/// reference inside.
+pub fn normalizers_for(seq: &str) -> [(ShuffleDirection, Normalizer<MockProvider>); 2] {
+    [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime]
+        .map(|direction| (direction, normalizer_for(seq, direction)))
 }
 
 /// Apply `descriptor` to `seq` **independently of the normalizer**, against the
@@ -256,13 +282,54 @@ pub fn apply_reason<P: ReferenceProvider + ?Sized>(
     reference: &str,
     descriptor: &str,
 ) -> Result<String, ApplyFailure> {
-    let members: Vec<HgvsVariant> = match parse_hgvs(descriptor) {
-        Ok(HgvsVariant::Allele(allele)) => allele.variants.clone(),
-        Ok(single) => vec![single],
-        Err(_) => return Err(ApplyFailure::Unparseable),
+    let variant = parse_hgvs(descriptor).map_err(|_| ApplyFailure::Unparseable)?;
+    apply_parsed_reason(provider, reference, &variant)
+}
+
+/// [`apply_with`] for a description that is **already parsed**.
+///
+/// The string-taking entry points parse and then delegate here, so the
+/// `claimed_from` walk still lives in exactly one place — that is the property
+/// `apply_with`'s note is about, and it is unaffected by which door you come in
+/// through.
+///
+/// It exists because the exhaustive sweeps already hold the parsed input: they
+/// build the description, parse it to normalize it, and then handed the *string*
+/// back to the oracle, which parsed it a second time.
+///
+/// Sized on `no_two_member_transcript_axis_allele_normalizes_to_a_different_sequence`
+/// (sampled inclusive time): `parse_hgvs` is **41.7%** of that test and this oracle
+/// is the majority of it, since it is called twice per case and `apply_reason`'s
+/// own work past the parse — `hgvs_to_spdi` and the splice — is under a quarter of
+/// its 33.4%. What this door removes is the *input* half of that, so roughly an
+/// eighth of the test, and it removes it without dropping a case.
+///
+/// Note which side of a sweep may use it. The *input* is a description the test
+/// authored and has already parsed, so re-parsing it can only ever succeed and
+/// tells nobody anything. The *output* is the thing under test, and running it
+/// back through `parse_hgvs` is part of what the sweep asserts, so output-side
+/// callers keep using [`apply_with`].
+pub fn apply_parsed_with<P: ReferenceProvider + ?Sized>(
+    provider: &P,
+    reference: &str,
+    variant: &HgvsVariant,
+) -> Option<String> {
+    apply_parsed_reason(provider, reference, variant).ok()
+}
+
+/// [`apply_reason`] for a description that is already parsed. See
+/// [`apply_parsed_with`] for why this door exists.
+pub fn apply_parsed_reason<P: ReferenceProvider + ?Sized>(
+    provider: &P,
+    reference: &str,
+    variant: &HgvsVariant,
+) -> Result<String, ApplyFailure> {
+    let members: &[HgvsVariant] = match variant {
+        HgvsVariant::Allele(allele) => &allele.variants,
+        single => std::slice::from_ref(single),
     };
     let mut triples = Vec::with_capacity(members.len());
-    for member in &members {
+    for member in members {
         triples.push(hgvs_to_spdi(member, provider).map_err(|_| ApplyFailure::Unconvertible)?);
     }
     // 3'→5' so an applied splice never shifts a later one's coordinates.

@@ -261,6 +261,22 @@ jobs:
       #   is how #1218 was diagnosed in the first place.
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save a new cache generation ONLY from `main` (#1218 redux). `rust-cache`
+          # keys per job and appends a lockfile/env hash, so every PR run that
+          # differed in either minted a fresh ~0.2-0.7 GiB entry. Measured on
+          # 2026-08-08: 42 entries totalling 13.79 GiB against a 10 GiB cap — 3 to 5
+          # generations of every logical key, `coverage` alone holding 4 x ~0.69 GiB.
+          # Over cap means GitHub evicts by LRU continuously, which is the #1218
+          # failure (two generations reached 13.61 GiB and took the nightly's 3.25 GiB
+          # `ferro-manifest-v3` with them). Restoring on every run and saving only on
+          # `main` collapses it to one generation per key, ~4.2 GiB.
+          #
+          # The trade, stated: a PR that changes `Cargo.lock` no longer warms its own
+          # cache, so it restores `main`'s generation through the `restore-keys`
+          # prefix and recompiles what the lockfile moved. That is one slower job on
+          # dependency-bumping PRs, against every cache in the repo currently racing
+          # eviction.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: clippy
       - run: cargo clippy --features dev --all-targets -- -D warnings
 
@@ -288,6 +304,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save only from `main` — see the note on the first
+          # `rust-cache` block in this file.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: clippy-all-features
       - run: cargo clippy --all-features --all-targets -- -D warnings
 
@@ -325,11 +344,42 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save only from `main` — see the note on the first
+          # `rust-cache` block in this file.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: spec-fixtures
       - name: Generate HGVS v21.0 spec fixture
         run: cargo run --features dev --bin generate_spec_fixture
       - name: Generate HGVS spec test enumeration
         run: cargo run --features dev --bin generate_spec_enumeration
+      # The cis confluence corpus, generated here for the same reason and at far
+      # greater saving. `tests/it/cis_confluence_axis.rs` regenerates it on demand
+      # through `common::fixture_gen`, which shells out to a nested `cargo run
+      # --features dev --example generate_cis_confluence_corpus`. The `test` /
+      # `test-oracle` shards run from a nextest **archive** and so have no warm
+      # `target/`: that nested call compiles the crate from scratch *inside the
+      # test*, and the cost lands on whichever of the three `cis_confluence_axis`
+      # tests the shard happens to hold.
+      #
+      # Measured on run 31268888323: `the_corpus_is_a_dense_set_of_real_confluence_classes`
+      # took 117.6s in `Test (2/6)` and 127.3s in `Test oracle (2/3)` — a test that
+      # reads an 8 MB JSON and makes a handful of cheap assertions, and that takes
+      # 0.071s once the file exists. Six jobs paid it per run: the three tests are
+      # spread across the six `test` shards and again across the three
+      # `test-oracle` shards, so three shards of each hold one apiece.
+      #
+      # It lives in THIS job rather than one of its own, and that was measured both
+      # ways. Generation is ~3s but compiling the example is ~50s, so on run
+      # 31275077075 this job went 64s -> 117s. A job of its own looks tempting —
+      # `spec-fixtures` gates `test` and `test-oracle` — but a new job has no
+      # `rust-cache` entry and would compile the whole dependency tree cold, which
+      # is slower than the 53s it set out to save, while still gating both through
+      # `needs`. Giving it a cache instead means a new key, and the repository is
+      # only just under the 10 GiB cap (see the first `rust-cache` block above).
+      # Here it reuses this job's already-warm dev-profile tree, and it is not on
+      # the critical path: that runs through `test-build-soak` + `sweeps`.
+      - name: Generate the cis confluence corpus
+        run: cargo run --features dev --example generate_cis_confluence_corpus
       # Only the fixtures are published from here. The two generator binaries
       # `spec_generator_preconditions` executes need no staging: they are
       # `[[bin]]` targets, so `test-build`'s archive already carries them and
@@ -340,6 +390,14 @@ jobs:
           path: |
             tests/fixtures/grammar/hgvs_spec_normalization.json
             tests/fixtures/grammar/hgvs_spec_enumeration.json
+          retention-days: 1
+      # A second artifact rather than a second path on the one above, because the
+      # consumers download `spec-fixtures` with `path: tests/fixtures/grammar/` — a
+      # single artifact spanning two fixture directories cannot be unpacked that way.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: cis-corpus
+          path: tests/fixtures/cis/cis_confluence_corpus.json
           retention-days: 1
 
   # Build the test binaries ONCE, then fan out: `test` and `test-oracle` consume
@@ -407,6 +465,9 @@ jobs:
       # `shared-key` above.
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save only from `main` — see the note on the first
+          # `rust-cache` block in this file.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: test-archive
           # `rust-cache` caches `${CARGO_HOME}/bin` unless told not to, so a
           # restore could extract a previously-saved `cargo-nextest` over the one
@@ -475,6 +536,9 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save only from `main` — see the note on the first
+          # `rust-cache` block in this file.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: test-archive-soak
           # Same reason as `test-build` above, and it applies at least as
           # strongly here: this job writes the archive that `soak` and `sweeps`
@@ -534,6 +598,14 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
+      # Without this the three `cis_confluence_axis` tests regenerate the corpus
+      # themselves, via a nested `cargo run --example` that has to compile the
+      # crate from scratch inside the test — 117.6s on run 31268888323 for the
+      # one that only reads it. See the generating step in `spec-fixtures`.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: cis-corpus
+          path: tests/fixtures/cis/
       - name: "Note: reference-aware tests are skipped without a manifest"
         # `tests/mutalyzer_normalize_tests.rs` and the biocommons reference-aware
         # suite both silently no-op when `FERRO_MANIFEST` is unset (PR CI does
@@ -593,6 +665,14 @@ jobs:
         with:
           name: spec-fixtures
           path: tests/fixtures/grammar/
+      # Without this the three `cis_confluence_axis` tests regenerate the corpus
+      # themselves, via a nested `cargo run --example` that has to compile the
+      # crate from scratch inside the test — 117.6s on run 31268888323 for the
+      # one that only reads it. See the generating step in `spec-fixtures`.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: cis-corpus
+          path: tests/fixtures/cis/
       - name: Run Rust tests with the normalization self-checks
         # `FERRO_ASSERT_IDEMPOTENT` turns every reference-backed test into an
         # assertion that `norm(norm(x)) == norm(x)`. The gate is
@@ -813,6 +893,9 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save only from `main` — see the note on the first
+          # `rust-cache` block in this file.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: generated-docs
       - name: Verify conformance summary docs are up to date
         run: cargo run --features dev --example generate_conformance_summary -- --check
@@ -877,6 +960,9 @@ jobs:
           python-version: "3.12"
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save only from `main` — see the note on the first
+          # `rust-cache` block in this file.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: python-wheel
       - name: Build release wheel
         run: |
@@ -920,6 +1006,9 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
         with:
+          # Save only from `main` — see the note on the first
+          # `rust-cache` block in this file.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
           key: build-release
       # The release-profile lint (#1383). It lives in THIS job on purpose: the two
       # `clippy` jobs both lint the debug profile, so nothing checked the release
