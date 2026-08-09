@@ -183,7 +183,7 @@
     },
     {
       "clause": "docs/recommendations/general.md:79",
-      "quote": "which includes multiple inserted sequences at one position and insertions from a second reference sequence",
+      "quote": "multiple inserted sequences at one position",
       "classification": "generatable",
       "exercised_by": [
         "general.md:79-brackets-composite-insertion"
@@ -284,6 +284,20 @@
       "exercised_by": [
         "checklist.md:49-deletion-names-both-endpoints"
       ]
+    },
+    {
+      "clause": "docs/recommendations/uncertain.md:14",
+      "quote": "all IUPAC nucleotide codes can be used to describe uncertain nucleotides",
+      "classification": "generatable",
+      "exercised_by": [
+        "standards.md:15-iupac-nucleotide-symbols"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/uncertain.md:152",
+      "quote": "ins[NC_000022.10:g.35788169_35788352]",
+      "classification": "not-generatable",
+      "reason": "Cited out of `uncertain.md`'s blanket because it carries NO uncertainty marker: it is a fully-determined insertion whose donor is a span of a SECOND reference sequence. What stops the corpus is the donor, not the uncertainty — the frame is a single contig with a single transcript, so a second accession cannot be resolved and the applied sequence cannot be derived. The same limit `DNA/complex.md` records for `::`. The corpus's `CompositePayload` mechanism covers the other half of `general.md:79` (several literal fragments at one position) and deliberately does not reach this one."
     },
     {
       "clause": "docs/background/standards.md:15",
@@ -561,7 +575,7 @@
       "file": "docs/recommendations/uncertain.md",
       "clause_units": 63,
       "classification": "not-generatable",
-      "reason": "An uncertainty wrapper (`( )`, `?`) denotes a SET of sequences rather than one, so the corpus's ground-truth oracle \u2014 apply the edits and compare bases \u2014 has nothing to compare against. Confluence over a set-valued denotation is a different property and is not what this instrument measures."
+      "reason": "THREE distinct limits, not one. The reason this row used to give \u2014 'an uncertainty wrapper denotes a SET of sequences' \u2014 is true of about two thirds of the file and false of the rest, and one unit it absorbed carries no uncertainty at all. (1) THE SET-VALUED LIMIT, the original reason, covering `:9`-`:13`, `:15`, `:24`-`:30` and the assay-typed deletion/insertion/duplication extent formats at `:32`-`:175`: `( )`, `?` and `^` denote a SET of sequences rather than one, so the corpus's ground-truth oracle \u2014 apply the edits to the reference and compare bases \u2014 has nothing to compare against. Confluence over a set-valued denotation is a different property and is not what this instrument measures. Inside that block the assay headings themselves (`:34` PCR, `:53` MLPA, `:74` array, `:101` FISH, `:124` Southern, and the same set again under duplication) are PROVENANCE \u2014 they say which assay bounded the uncertainty, which no synthesised description can carry. (2) THE AXIS LIMITS, which are not the set-valued limit at all: `:181`-`:202` (`r.?`, `r.0?`, `r.(=)`, `r.spl`, `r.spl?`, `r.(76a>c)`, `r.(?)`) are the `r.` axis and `:206`-`:229` (`p.?`, `p.0?`, `p.(=)`, the three `p.(Ala123_Pro131)` forms and the two caret frameshift forms) are the protein axis \u2014 the gaps declared on the `RNA/` and `protein/` rows. `:16`'s `X[5]` is protein too. (3) THE SECOND-ACCESSION LIMIT: `:155`'s `g.?_?ins[NC_000022.10:g.\u2026]` names a donor on another reference sequence, which the corpus's single-contig, single-transcript frame cannot resolve \u2014 the same limit `DNA/complex.md` records for `::`. Its fully-certain sibling `:152` is cited individually above, because for that one the uncertainty reason is simply false. `:14` is likewise cited above, as GENERATABLE: the ambiguity stratum does emit IUPAC symbols in inserted payloads."
     }
   ]
 }
