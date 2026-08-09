@@ -263,6 +263,13 @@ fn a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence() {
 /// `g.[4_5insC;5_6dup;15del]`; restoring it turns it back. (Removing the whole
 /// 5' `across_junctions` barrier instead leaves this row green — that half is
 /// guarded by `an_insertion_merging_with_a_deletion_keeps_its_base_in_place`.)
+///
+/// **The pinned string is where the barrier puts the member, NOT an adjudicated
+/// canonical form.** Read only as a barrier assertion it is exactly right; read
+/// as "this is the canonical description of this variant" it is wrong, and it
+/// has already been argued both ways. The adjudication is
+/// [`the_three_member_spelling_and_its_one_member_form_are_two_fixed_points`]
+/// below, which is the row to read before re-blessing this one.
 #[test]
 fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position() {
     assert_normalizes_preserving_in(
@@ -271,6 +278,172 @@ fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_pri
         "TEMPLATE:g.[4_5insC;4_5dup;15del]",
         ShuffleDirection::FivePrime,
     );
+}
+
+/// ADJUDICATED 2026-08-09 — one variant, two stable normalized strings.
+///
+/// # What is measured
+///
+/// The row above and the row here denote the **same 22-mer**,
+/// `TTAACTATATATAATAAATTAT`, verified by applying each spelling to `DUP_RUN`
+/// through `hgvs_to_spdi` independently of the normalizer (the `apply`
+/// assertions below). Yet each is a fixed point:
+///
+/// ```text
+/// 5'  g.[4_5insC;5_6dup;15del] -> g.[4_5insC;4_5dup;15del]   (fixed point)
+/// 5'  g.[4_5insCTA;15del]      -> g.[3_4insACT;15del]
+/// 5'  g.[3_4insACT;15del]      -> g.[3_4insACT;15del]        (fixed point)
+/// 3'  g.[4_5insC;5_6dup;15del] -> g.[4_5insC;9_10dup;15del]  (fixed point)
+/// 3'  g.[3_4insACT;15del]      -> g.[4_5insCTA;15del]        (fixed point)
+/// ```
+///
+/// That is the #1235 shape — two stable fixed points for one variant — inside
+/// this module's own fixture, in **both** directions. It is not caused by the
+/// junction barrier: the barrier decides *where* the `dup` lands, not whether
+/// the allele stays three members.
+///
+/// # Why it is three members at all
+///
+/// Only because of the distant `15del`. Without it the pair merges:
+/// `g.[4_5insC;5_6dup]` -> `g.3_4insACT` at 5' and `g.4_5insCTA` at 3', which
+/// `a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence`
+/// already pins. The third member breaks the block into more than one run of
+/// change, the sequence-first derivation declines, and the per-member pipeline
+/// hands back the input's own partition.
+///
+/// # The ruling, and the clause it turns on
+///
+/// The locus carries **one** change: aligning `DUP_RUN` against the denoted
+/// 22-mer leaves a single contiguous 3 nt insertion (`CTA` at junction 4|5,
+/// which 5'-rolls to `ACT` at 3|4). `general.md:34` —
+///
+/// > two variants separated by one or more nucleotides should be described
+/// > individually and **not** as a "delins"
+///
+/// is stated over *two variants*, so it does not license splitting that one
+/// insertion into an `ins` at junction 4|5 and a `dup` inserting at 5|6. The
+/// separation of 1 that the three-member form presents is a property of the
+/// spelling, not of the variant — the case
+/// `separation-is-a-property-of-the-spelling-not-of-the-variant` records — and
+/// it exists here only because the `AT` tract lets the three inserted bases be
+/// dealt out on either side of an unchanged base.
+///
+/// `DNA/duplication.md:18` ("when a variant can be described as a duplication,
+/// it **must** be described as a duplication") does not rescue the `dup`
+/// either: the variant is the 3 nt insertion, and neither `ACT` nor `CTA` is a
+/// copy of the reference bases it abuts.
+///
+/// So the adjudicated-canonical form is the **re-derived one-member** insertion
+/// — `g.[3_4insACT;15del]` at 5', `g.[4_5insCTA;15del]` at 3' — which is what
+/// the operator ruling `canonical-form-choice-when-both-legal` (decided
+/// 2026-08-07: derive from the resulting sequence, do not preserve the input's
+/// spelling) selects, and which ferro already emits for the equal-denoting
+/// one-member spelling.
+///
+/// # Recorded as a gap, not asserted
+///
+/// Ferro does **not** do this today, so this row pins both fixed points and the
+/// fact that they are one variant. It is deliberately not written as
+/// `assert_eq!(three_member_output, one_member_output)`: that would be a red
+/// test, and closing it is a normalizer change with a representation-change
+/// declaration attached, not a test edit. What this row makes impossible is
+/// quietly re-blessing either string as *the* canonical one — see the ruling
+/// record `contiguous-insertion-split-by-a-blocked-derivation`.
+///
+/// A sweep document dated 2026-08-08 reached the opposite verdict, deriving
+/// `g.[4_5insC;4_5dup;15del]` as correct from the observation that the two
+/// members are separation 1 rather than separation 0. The arithmetic is right
+/// and the conclusion does not follow: it evaluates `general.md:34` on the
+/// spelling, which is the very thing the sibling record says cannot be done.
+#[test]
+fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
+    const THREE_MEMBER: &str = "TEMPLATE:g.[4_5insC;5_6dup;15del]";
+    const ONE_MEMBER_FIVE_PRIME: &str = "TEMPLATE:g.[3_4insACT;15del]";
+    const ONE_MEMBER_THREE_PRIME: &str = "TEMPLATE:g.[4_5insCTA;15del]";
+
+    // The premise. If these ever stopped denoting one sequence the rest of this
+    // row would be comparing two different variants, which are *supposed* to
+    // normalize apart.
+    let denoted = apply(DUP_RUN, THREE_MEMBER).expect("three-member spelling applies");
+    for spelling in [ONE_MEMBER_FIVE_PRIME, ONE_MEMBER_THREE_PRIME] {
+        assert_eq!(
+            apply(DUP_RUN, spelling).as_deref(),
+            Some(denoted.as_str()),
+            "`{spelling}` and `{THREE_MEMBER}` must denote one sequence",
+        );
+    }
+
+    // Both are fixed points, in the direction that is theirs.
+    //
+    // The two `ONE_MEMBER_*` rows assert that directly — the output IS the
+    // input. The two `THREE_MEMBER` rows cannot: their output is a different
+    // string from their input, so pinning it says only where the first pass
+    // landed. The claim this row is making is that the landing place is
+    // *stable*, so each pinned output is normalized a second time in the same
+    // direction and required to be byte-identical. Without that, a
+    // non-idempotent regression on either output keeps this row green while the
+    // "two stable normalized strings" headline above becomes false.
+    for (input, expected, direction) in [
+        (
+            THREE_MEMBER,
+            "TEMPLATE:g.[4_5insC;4_5dup;15del]",
+            ShuffleDirection::FivePrime,
+        ),
+        (
+            ONE_MEMBER_FIVE_PRIME,
+            ONE_MEMBER_FIVE_PRIME,
+            ShuffleDirection::FivePrime,
+        ),
+        (
+            THREE_MEMBER,
+            "TEMPLATE:g.[4_5insC;9_10dup;15del]",
+            ShuffleDirection::ThreePrime,
+        ),
+        (
+            ONE_MEMBER_THREE_PRIME,
+            ONE_MEMBER_THREE_PRIME,
+            ShuffleDirection::ThreePrime,
+        ),
+    ] {
+        let once = normalize_in(DUP_RUN, input, direction);
+        assert_eq!(
+            once, expected,
+            "{direction:?}: `{input}` no longer normalizes to `{expected}`",
+        );
+        let twice = normalize_in(DUP_RUN, &once, direction);
+        assert_eq!(
+            twice, once,
+            "{direction:?}: `{input}` -> `{once}` is not a fixed point (it \
+             normalizes on to `{twice}`), so this row's claim that the variant \
+             has two STABLE forms does not hold",
+        );
+    }
+
+    // And they are two, not one. Stated as its own assertion so the divergence
+    // is what fails if a fix lands, rather than four string pins failing for
+    // four reasons.
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        let from_three = normalize_in(DUP_RUN, THREE_MEMBER, direction);
+        let from_one = normalize_in(DUP_RUN, ONE_MEMBER_FIVE_PRIME, direction);
+        assert_ne!(
+            from_three, from_one,
+            "{direction:?}: the two spellings converged — this gap is closed, so \
+             re-bless the four pins above and say which form moved \
+             (`contiguous-insertion-split-by-a-blocked-derivation`)",
+        );
+    }
+
+    // The one thing that must never be true of either answer.
+    for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+        for spelling in [THREE_MEMBER, ONE_MEMBER_FIVE_PRIME, ONE_MEMBER_THREE_PRIME] {
+            let output = normalize_in(DUP_RUN, spelling, direction);
+            assert_eq!(
+                apply(DUP_RUN, &output).as_deref(),
+                Some(denoted.as_str()),
+                "{direction:?}: `{spelling}` -> `{output}` changed the sequence",
+            );
+        }
+    }
 }
 
 #[test]
