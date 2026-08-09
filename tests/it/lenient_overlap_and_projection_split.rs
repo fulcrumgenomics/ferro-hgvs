@@ -473,17 +473,28 @@ fn the_genomic_axis_alone_splits_the_specs_own_codon_delins() {
 ///                          c. c.[4C>A;6G>A]         n. r.  all TWO members
 /// ```
 ///
-/// Both spellings denote the same bases and the same `p.(Leu2Ile)`. The second
-/// is the shape `DNA/delins.md:42` marks invalid, reached on the **coding** axis
-/// — so the defect is not confined to `g.` outputs, it follows whichever axis
-/// the reading frame was unavailable on when the split was decided.
+/// Both spellings denote the same bases and the same `p.(Leu2Ile)`.
 ///
-/// **PINNED DEFECT.** Correct behaviour: both spellings project identically, to
-/// the single-member form, on every axis.
+/// **Be exact about which line is the defect here, because one of them is not.**
+/// `REF:g.[4C>A;6G>A]` as the answer to a *bare* `g.` input is #79's deliberate
+/// scope — that issue's own table lists "`g.[145G>A;147C>T]` (no codon frame in
+/// `g.`) | unchanged" — and a bare genomic description names no transcript, so
+/// there is no frame to consult. **PINNED, not a defect.**
 ///
-/// Kept beside the reference-backed test rather than replacing it: this one
-/// isolates the mechanism and runs everywhere, that one proves the spec's own
-/// published example is affected.
+/// The defect is the line below it. `REF(tx):c.[4C>A;6G>A]` is a **coding** axis,
+/// rendered against a named transcript whose frame is known and whose codon 2 is
+/// exactly what the pair affects — and it is the shape `DNA/delins.md:42` calls
+/// "not correct". The split was decided once, on the axis the caller happened to
+/// author on, and every derived axis inherited it.
+///
+/// So the two tests state one rule between them: **the exception is evaluated
+/// once per rendered axis, against the transcript the projection is against —
+/// never inherited from the authoring axis.** The reference-backed test above is
+/// that rule failing in the `c.` -> `g.` direction; this one is the same rule
+/// failing in the `g.` -> `c.` direction, and it runs everywhere.
+///
+/// **Correct output:** `REF(tx):c.4_6delinsATA` and `REF(tx):n.4_6delinsATA`,
+/// matching the transcript spelling. The `g.` line stays as it is.
 #[test]
 fn the_same_codon_delins_splits_when_authored_genomically_and_not_when_authored_on_the_transcript()
 {
@@ -509,8 +520,9 @@ fn the_same_codon_delins_splits_when_authored_genomically_and_not_when_authored_
         "the transcript spelling is the control and must stay merged"
     );
 
-    // The genomic spelling of the same variant: it splits, and takes the coding
-    // axis with it.
+    // The genomic spelling of the same variant. The `g.` line is #79's scope and
+    // is fine; the `c.`/`n.` lines below it are the defect, because those axes
+    // are rendered against a transcript whose frame is known.
     assert_eq!(
         genomic,
         vec![
@@ -520,27 +532,33 @@ fn the_same_codon_delins_splits_when_authored_genomically_and_not_when_authored_
             ('r', "tx:r.[(4c>a;6g>a)]".to_string()),
             ('p', "txp:p.(Leu2Ile)".to_string()),
         ],
-        "PINNED DEFECT — the same variant authored on `g.` splits into the form \
-         `DNA/delins.md:42` calls \"not correct\", on the coding axis as well as the \
-         genomic one. Correct output: `REF:g.4_6delinsATA` / `REF(tx):c.4_6delinsATA`, \
-         matching the transcript spelling above."
+        "PINNED DEFECT (the transcript axes only) — `REF(tx):c.[4C>A;6G>A]` is the \
+         form `DNA/delins.md:42` calls \"not correct\", emitted on an axis whose \
+         reading frame ferro has in hand. Correct output: `REF(tx):c.4_6delinsATA` \
+         and `REF(tx):n.4_6delinsATA`, matching the transcript spelling above; the \
+         bare `g.` line stays as it is."
     );
 
     // Stated as the property too, so a future fix that moves the strings but
     // keeps the disagreement cannot satisfy this test by re-blessing.
-    let coding_members = coding
-        .iter()
-        .filter(|(_, r)| splits_into_members(r))
-        .count();
-    let genomic_members = genomic
-        .iter()
-        .filter(|(_, r)| splits_into_members(r))
-        .count();
+    //
+    // Counted over the TRANSCRIPT axes only, which is what makes the two columns
+    // comparable: the `g.` axis has no frame to consult when the caller wrote a
+    // bare `g.` description, so including it would compare an axis that has the
+    // frame against one that does not and the difference would prove nothing.
+    let transcript_splits = |axes: &[(char, String)]| {
+        axes.iter()
+            .filter(|(code, rendered)| *code != 'g' && splits_into_members(rendered))
+            .count()
+    };
     assert!(
-        coding_members == 0 && genomic_members > 0,
-        "PINNED DEFECT — one variant, two spellings, different member counts \
-         ({coding_members} split axes from `c.`, {genomic_members} from `g.`). \
-         Correct behaviour: both zero."
+        transcript_splits(&coding) == 0 && transcript_splits(&genomic) > 0,
+        "PINNED DEFECT — one variant, two spellings, and its transcript axes disagree \
+         about member count ({} split from the `c.` spelling, {} from the `g.` one). \
+         Correct behaviour: both zero, because both are rendered against the same \
+         transcript and the same codon.",
+        transcript_splits(&coding),
+        transcript_splits(&genomic)
     );
 }
 
