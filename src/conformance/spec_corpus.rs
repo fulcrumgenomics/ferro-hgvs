@@ -866,7 +866,10 @@ pub fn padded(core: &str) -> String {
 ///
 /// Proportional rather than fixed so the scale stratum's long cores still get a
 /// junction in the middle of the design's reach.
-fn three_exon_layout(tx_len: usize) -> Vec<(usize, usize)> {
+///
+/// `pub(crate)` so [`crate::conformance::synthetic_protein`] draws its exon
+/// layout from the same function rather than a second copy of the arithmetic.
+pub(crate) fn three_exon_layout(tx_len: usize) -> Vec<(usize, usize)> {
     let first = (tx_len / 3).max(8);
     let second = (tx_len / 3).max(8);
     vec![
@@ -908,7 +911,12 @@ fn reverse_complement(sequence: &str) -> String {
 /// reverse exon order, so exon 1 occupies the highest genomic coordinates — the
 /// arrangement `tests/it/issue_214_repeat_unit_divides.rs` and
 /// `tests/it/coverage_gap_tests.rs` build by hand.
-fn transcript_provider(
+///
+/// `pub(crate)` so [`crate::conformance::synthetic_protein`] builds its
+/// transcript through this one function: a protein frame whose contig, exon
+/// records and strand handling came from a second implementation would not be
+/// the same molecule the corpus's `c.` rows are drawn against.
+pub(crate) fn transcript_provider(
     accession: &'static str,
     strand: Strand,
     tx: &str,
