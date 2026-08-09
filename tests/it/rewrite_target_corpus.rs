@@ -64,12 +64,14 @@
 //! contract as this file. Read the two files together — this one is not the sole record of
 //! confluence targets, only of the ones harvested separately from #1235's descendant chain.
 //!
-//! It started at eight diverging pairs and now has **none**: #1287, #1290, #1301, #1308,
-//! #1312 and #1320 converged once the sequence-first pass stopped refusing a derivation
-//! that collapses to a single pure insertion; #1304 followed once `main`'s removal of the
-//! input-separator veto (#1345) let its three-member spelling merge as well; and #1296 —
-//! the last — converged once the derivation was allowed to read a repeat member instead of
-//! refusing the group that carried it.
+//! It started at eight diverging pairs and its `DIVERGENT` *defect* table is still
+//! **empty** — but four of those convergences have since been given back on purpose.
+//! #1290, #1296, #1308 and #1312 still converge; #1287, #1301, #1320 and #1304 do not,
+//! and they sit in that file's `PARTITION_DIVERGENT` table rather than in `DIVERGENT`,
+//! for the same reason #1260 and #1262 sit here: under
+//! `partition-is-the-unit-of-normalization` their two spellings assert different
+//! partitions of one sequence, so two canonical strings is the model working rather
+//! than a defect awaiting a fix.
 //!
 //! ## #1235 itself: what's actually running
 //!
