@@ -78,8 +78,19 @@ env:
   # and more precisely than the oracle does (a count and a classification, versus
   # a panic). `tests/it/oracle_exclude_invariant.rs` keeps this list honest in
   # both directions.
+  #
+  # `corpus_prohibited_inputs` is here for a related but NOT identical reason,
+  # and the difference is worth stating rather than letting the comment above be
+  # read as covering it. That module measures REFUSAL over the corpus's
+  # prohibited and conflicting strata, and it does not wrap normalization in
+  # `catch_unwind` — so an armed oracle firing on one of its rows reddens the
+  # module rather than flattering it. What it would redden is a claim about
+  # whether ferro refuses a shape, decided by an assertion about idempotency at
+  # a seam the module is not measuring. Excluded so the two instruments stay
+  # separate, in the same spirit; it still runs in full in the plain `test` job.
   ORACLE_EXCLUDE: >-
     test(spec_conformance_axis) + test(spec_corpus_regressions)
+    + test(corpus_alphabet_and_intronic_validity) + test(corpus_prohibited_inputs)
 
 jobs:
   abi3-floor-consistency:
