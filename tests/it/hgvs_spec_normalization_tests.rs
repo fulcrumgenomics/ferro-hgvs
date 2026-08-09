@@ -1015,6 +1015,20 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "delins-payload-coincidence-carve-out-is-coding-dna-scoped",
         "decided",
     ),
+    // `delins.md:47` recommends the span; `:17`/`general.md:34` describe
+    // separated variants individually. The provenance half of this — "does
+    // `:47` reach an input that arrives already split?" — is NOT open; it is
+    // excluded by `canonical-form-choice-when-both-legal`, which holds that the
+    // input's spelling does not decide. What is open is which of the two
+    // clauses a re-derivation should land on when the minimal edit set really
+    // does have two members separated by unchanged bases:
+    // `delins-merge-vs-individual-gap-two-or-more` decided for `:47` but scoped
+    // itself to a single spanning member. #1420's two `SpecExplicit` gap rows
+    // turn on it.
+    (
+        "delins-recommendation-reach-when-the-input-arrives-split",
+        "undecided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the
