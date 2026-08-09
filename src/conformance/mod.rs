@@ -25,6 +25,7 @@ pub mod spec_enumeration;
 pub mod spec_projection;
 pub mod spec_worked_examples;
 pub mod summary;
+pub mod synthetic_protein;
 
 pub use schema::{validate_cluster_refs, Cluster};
 pub use spec_enumeration::{Expectation, NormativeLevel, Status};
