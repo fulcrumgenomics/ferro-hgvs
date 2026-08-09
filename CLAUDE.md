@@ -84,6 +84,13 @@ lines of that crate from scratch. Confirm with `du -sh target/debug/incremental`
 — `0B` means it is off, and rustc emitting 16 codegen units instead of 256 is
 the same tell.
 
+The premise the setting rests on does not hold for this crate anyway. **sccache
+never caches any `ferro-hgvs` unit**, incremental or not: a rebuild's 35 compile
+requests were classified `Non-cacheable calls`, reason **`crate-type`**, with
+zero hits and zero misses (`sccache --show-stats` diffed either side of one
+run). sccache is earning its keep on the ~400 dependency crates only, and those
+are unaffected by this knob. So there is no cache benefit being traded away.
+
 You cannot simply set it to `1`: sccache 0.16 **hard-errors**
 (`sccache: incremental compilation is prohibited: Unset CARGO_INCREMENTAL to
 continue.`) and the build dies on a dependency build script. **Unset** it
