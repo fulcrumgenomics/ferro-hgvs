@@ -447,6 +447,7 @@ mod strict_rejection_survives_normalization;
 mod strict_whitespace_mode;
 mod supernumerary;
 mod sweep_filter_invariant;
+mod synthetic_protein_provider;
 mod tool_support_matrix;
 mod trans_mosaic_mixed;
 mod typing_must_not_widen_a_member;
