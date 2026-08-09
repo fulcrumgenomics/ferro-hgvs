@@ -27,6 +27,7 @@
 //! the reference is rejected. The short form `p.Arg97fs` (no stated residue)
 //! and any genuine change (`p.Gln151ThrfsTer9`) are untouched.
 
+use ferro_hgvs::error::ErrorCode;
 use ferro_hgvs::parse_hgvs;
 
 #[test]
@@ -71,6 +72,25 @@ fn rejection_names_the_spec_rule() {
     assert!(
         msg.contains("frameshift.md:47-49"),
         "the diagnostic should cite the frameshift-anchor rule; got: {msg}"
+    );
+}
+
+#[test]
+fn rejects_unchanged_anchor_frameshift_inside_a_cis_allele() {
+    // Assert the frameshift-anchor rule still fires on a member
+    // written inside p.[…], which it can only reach through the
+    // validator's Allele recursion
+    let err = parse_hgvs("NP_003997.1:p.[Arg76Ser;His150HisfsTer10]")
+        .expect_err("a bracketed member is still bound by frameshift.md:47-49");
+    assert_eq!(
+        err.code(),
+        Some(ErrorCode::InvalidEdit),
+        "the allele member rejection must carry a structured InvalidEdit code"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("frameshift.md:47-49"),
+        "the allele member must earn the frameshift-anchor diagnostic; got: {msg}"
     );
 }
 

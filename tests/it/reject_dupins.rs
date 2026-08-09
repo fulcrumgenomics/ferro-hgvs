@@ -79,6 +79,21 @@ fn rejects_dupins_with_bracketed_payload() {
     assert_rejects("NC_000001.11:g.5207_5208dupins[ATC]");
 }
 
+#[test]
+fn rejects_tx_dupins() {
+    assert_rejects("NR_002196.2:n.20_21dupinsAT");
+}
+
+#[test]
+fn rejects_mito_dupins() {
+    assert_rejects("NC_012920.1:m.8993_8994dupinsAT");
+}
+
+#[test]
+fn rejects_circular_dupins() {
+    assert_rejects("NC_012920.1:o.3243_3244dupinsAT");
+}
+
 // ---- Inside allele brackets ----
 
 #[test]

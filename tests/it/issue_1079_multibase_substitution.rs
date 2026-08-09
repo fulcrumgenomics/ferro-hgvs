@@ -28,6 +28,7 @@
 //! two — a different variant from the `c.79_80delinsTT` the CLI produced for
 //! the same input. The two entry points must agree.
 
+use ferro_hgvs::error::ErrorCode;
 use ferro_hgvs::error_handling::ErrorConfig;
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
 use ferro_hgvs::reference::mock::MockProvider;
@@ -67,6 +68,25 @@ fn rejection_names_the_canonical_delins_form() {
             "the diagnostic for {input:?} should offer {edit:?}; got: {msg}"
         );
     }
+}
+
+#[test]
+fn rejects_multibase_substitution_inside_a_cis_allele() {
+    // Assert the multi-base-substitution rule still fires on a member written
+    // inside c.[…], which it can only reach through the validator's Allele
+    // recursion — and that it fires for that reason, not incidentally.
+    let err = parse_hgvs("NM_004006.2:c.[10A>G;79GC>TT]")
+        .expect_err("a bracketed member is still bound by DNA/substitution.md:30");
+    assert_eq!(
+        err.code(),
+        Some(ErrorCode::InvalidEdit),
+        "the allele member rejection must carry a structured InvalidEdit code"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("DNA/substitution.md:30"),
+        "the allele member must earn the multi-base-substitution diagnostic; got: {msg}"
+    );
 }
 
 // =====================================================================
