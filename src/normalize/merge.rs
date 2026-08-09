@@ -2756,12 +2756,13 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // which `crate::normalize::rules`' single-span typing renders as `inv` —
     // so there is nothing left for a veto to protect.
 
-    // There was a veto here, and it was the last gate in this pass that read the
-    // *input spelling* rather than the sequence: when the derivation produced
-    // fewer pieces than there were members, and any piece covered a base the
-    // input had left between two of them, the pass refused and returned the
-    // input verbatim. It cited `general.md:34` — two variants separated by one
-    // or more unchanged nucleotides are described individually.
+    // There was a veto here, and — at the time it was removed — it was the
+    // last gate in this pass that read the *input spelling* rather than the
+    // sequence: when the derivation produced fewer pieces than there were
+    // members, and any piece covered a base the input had left between two
+    // of them, the pass refused and returned the input verbatim. It cited
+    // `general.md:34` — two variants separated by one or more unchanged
+    // nucleotides are described individually.
     //
     // The citation is sound and the mechanism was not. `general.md:34` is about
     // what the *sequence* separates; the veto measured what the *input's
@@ -2784,6 +2785,17 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // it holds no live line and could not have been the net this argument leans
     // on. The two are twins by design (see its own doc comment); the live one is
     // the one worth naming here.
+    //
+    // "Last" no longer holds: #1480 added `crosses_exon_junction`, above, which
+    // declines on the members' own span (`c_lo`/`c_hi`, the union of the member
+    // edits as they arrive — already per-member clamped, as the note on that
+    // call site says) rather than on anything the derived sequence states —
+    // the same shape of dependence this veto was removed for. That one is
+    // deliberate rather than an oversight (`general.md:44`'s exon-junction
+    // exemption has no sequence-only substitute yet), and its own non-confluence
+    // is tracked rather than hidden: #1480 records it as "still owed to #1450" —
+    // two spellings of one cross-junction variant can still settle on different
+    // forms, because neither is re-derived.
 
     // A derivation collapsing to a single pure insertion used to be refused
     // here, on the grounds that the per-member pipeline owned two capabilities
