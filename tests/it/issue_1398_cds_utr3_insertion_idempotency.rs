@@ -88,11 +88,46 @@ const PINNED: &[(&str, ShuffleDirection, &str)] = &[
         ShuffleDirection::ThreePrime,
         "NM_TEST.1:c.18delinsTCAT",
     ),
-    (CORE, ShuffleDirection::FivePrime, "NM_TEST.1:c.16_17insATC"),
+    // RE-BLESSED (both 5' rows) under `partition-is-the-unit-of-normalization`
+    // (DECIDED, 2026-08-08,
+    // `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`).
+    //
+    //   was  NM_TEST.1:c.16_17insATC              one member, re-derived
+    //   now  NM_TEST.1:c.[11_12dup;16_17insC]     two members, as authored
+    //
+    // The input `c.[11_12dup;16_17insC]` asserts two changed blocks: a
+    // duplication writing at the junction `12|13` and an insertion writing at
+    // `16|17`, three unchanged coding bases apart. `general.md:34` describes
+    // such a pair individually, so the single-member `c.16_17insATC` was a
+    // re-derivation of the partition from the resulting sequence and the ruling
+    // removes it. Under 5' neither member shifts anywhere, so the answer is the
+    // input verbatim.
+    //
+    // The sequence is unchanged, measured with `spec_corpus::denotation_of`
+    // (via `hgvs_to_spdi`, not the normalizer) on both cores: input and output
+    // denote the same transcript sequence, and the output is a fixed point.
+    //
+    // **Both properties this file exists for still hold on the new strings, and
+    // both are asserted below rather than inferred here** — the answer is a
+    // fixed point (`a_cis_allele_across_the_cds_utr3_junction_is_a_fixed_point`)
+    // and it does not span the CDS/3'UTR junction
+    // (`a_cis_allele_does_not_re_axis_onto_the_utr3`); `c.[11_12dup;16_17insC]`
+    // names no `*` position at all, so the clamp's rule is satisfied trivially
+    // rather than by the clamp. The clamp's own coverage is now carried by the
+    // two 3' rows, which are unmoved.
+    //
+    // The four rows no longer differ from one another the way the doc above
+    // claims: the two 3' rows agree, and the two 5' rows agree. What still
+    // separates them is the direction, which is the axis this file measures.
+    (
+        CORE,
+        ShuffleDirection::FivePrime,
+        "NM_TEST.1:c.[11_12dup;16_17insC]",
+    ),
     (
         CORE_SIBLING,
         ShuffleDirection::FivePrime,
-        "NM_TEST.1:c.16_17insATC",
+        "NM_TEST.1:c.[11_12dup;16_17insC]",
     ),
 ];
 

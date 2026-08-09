@@ -28,6 +28,7 @@
 //! rejected shapes have no shipped normalized form, while the three accepted
 //! ones do, so resolving the other way would move output consumers already hold.
 
+use ferro_hgvs::conformance::spec_corpus::denotation_of;
 use ferro_hgvs::{parse_hgvs, MockProvider, NormalizeConfig, Normalizer};
 
 /// The 24 bp fixture shared with `strict_rejection_survives_normalization` and
@@ -79,19 +80,70 @@ fn every_sibling_interior_to_a_dups_read_span_is_accepted() {
     }
 }
 
-/// The three substitution answers are unchanged, pinned literally.
+/// The three substitution answers, pinned literally.
 ///
 /// This is the stability half. The argument for resolving #1437 by accepting
 /// rather than by rejecting is that these three are *shipped* output while the
 /// insertion's rejection is not, so a regression here is the expensive one.
+///
+/// **Two of the three moved under `partition-is-the-unit-of-normalization`**
+/// (DECIDED, 2026-08-08,
+/// `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`), and the
+/// third did not — which is the interesting part and the reason the rows are
+/// pinned individually rather than as a shape:
+///
+/// ```text
+/// g.[4_9dup;6T>C]   was g.5_6insCTTTTT   now g.[6T>C;9_10insTTTTTT]
+/// g.[4_9dup;8T>C]   was g.7_8insCTTTTT   now g.[8T>C;9_10insTTTTTT]
+/// g.[4_9dup;9T>C]   was g.8_9insCTTTTT   now g.8_9insCTTTTT          (unmoved)
+/// ```
+///
+/// The `dup` writes at the junction `9|10` and each substitution writes inside
+/// `4-9`, so for the first two rows the two writes are separated by unchanged
+/// reference bases and `general.md:34` describes them individually — the old
+/// single-member answer was a re-derivation of the partition from the resulting
+/// sequence. The third row's substitution is at position 9, flush against the
+/// `dup`'s junction: separation zero is below the genomic floor, so the ruling's
+/// MERGE move applies and the two really are one block. So the row that stayed
+/// put stayed put *for a reason the ruling states*, not by accident.
+///
+/// Sequence unchanged on all three, measured with `spec_corpus::denotation_of`
+/// (via `hgvs_to_spdi`, not the normalizer): each output denotes the bases its
+/// input does, and each is a fixed point. Both properties are **asserted in the
+/// loop below**, not merely recorded here — this paragraph described them as
+/// measured while the test pinned strings and nothing else, so a re-typing that
+/// changed the bases would have read as a representation change.
+///
+/// The file's subject is untouched: nothing here is a verdict, and
+/// `every_sibling_interior_to_a_dups_read_span_is_accepted` — which is the
+/// #1437 fix — is unmoved.
 #[test]
-fn the_substitution_answers_are_unchanged() {
+fn the_substitution_answers_are_pinned() {
     for (input, expected) in [
-        ("NC_TEST.1:g.[4_9dup;6T>C]", "NC_TEST.1:g.5_6insCTTTTT"),
-        ("NC_TEST.1:g.[4_9dup;8T>C]", "NC_TEST.1:g.7_8insCTTTTT"),
+        (
+            "NC_TEST.1:g.[4_9dup;6T>C]",
+            "NC_TEST.1:g.[6T>C;9_10insTTTTTT]",
+        ),
+        (
+            "NC_TEST.1:g.[4_9dup;8T>C]",
+            "NC_TEST.1:g.[8T>C;9_10insTTTTTT]",
+        ),
         ("NC_TEST.1:g.[4_9dup;9T>C]", "NC_TEST.1:g.8_9insCTTTTT"),
     ] {
-        assert_eq!(lenient(input), expected, "`{input}` must be unchanged");
+        let output = lenient(input);
+        assert_eq!(output, expected, "`{input}` moved");
+
+        let provider = provider();
+        assert_eq!(
+            denotation_of(&provider, SEQUENCE, &output),
+            denotation_of(&provider, SEQUENCE, input),
+            "`{input}` -> `{output}` changed the sequence"
+        );
+        let again = lenient(&output);
+        assert_eq!(
+            again, output,
+            "`{input}` -> `{output}` is not a fixed point: a second pass reaches `{again}`"
+        );
     }
 }
 

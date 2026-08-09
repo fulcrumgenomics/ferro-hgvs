@@ -77,14 +77,30 @@ fn non_cancelling_del_ins_allele_still_merges() {
     let variant = parse_hgvs(input).unwrap();
     let rendered = normalizer.normalize(&variant).unwrap().to_string();
 
-    // Re-blessed from `g.[1008del;1009G[3]]` (#1296): the per-member pipeline
-    // still produces that pair, but the sequence-first pass no longer refuses
-    // to read the promoted repeat, and what the pair denotes is one reference
-    // base replaced by two — `A` at 1008 -> `GG`. The guard is unchanged in
-    // substance: this is a real edit, not the identity the #1135 fix could
-    // wrongly collapse it to.
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`),
+    // back to the two-member form this row held before #1296.
+    //
+    //   was  NC_000001.11:g.1008delinsGG           one member, re-derived
+    //   now  NC_000001.11:g.[1008del;1009G[3]]     two members, as authored
+    //
+    // The input asserts a deletion inside the `A` run and an insertion of `GG`
+    // at the junction `1008|1009`, which is what `general.md:34` describes
+    // individually. The single-member `delins` was reached by re-deriving the
+    // partition from the resulting sequence — the note this replaces says so in
+    // as many words ("the sequence-first pass no longer refuses to read the
+    // promoted repeat, and what the pair denotes is one reference base replaced
+    // by two") — and that is the move the ruling removes.
+    //
+    // The sequence is unchanged. Measured with `spec_corpus::denotation_of`,
+    // whose applier goes through `hgvs_to_spdi` rather than the normalizer: both
+    // the input and this output denote `…G AAAA GGG CC…` across 1003-1011, and
+    // the output is a fixed point. The guard this test exists for is unchanged
+    // in substance and in strength — the answer is still a real edit and pinned
+    // exactly, not the identity the #1135 fix could wrongly collapse it to, and
+    // the identity cases above still pin `g.…=` for the pairs that do cancel.
     assert_eq!(
-        rendered, "NC_000001.11:g.1008delinsGG",
+        rendered, "NC_000001.11:g.[1008del;1009G[3]]",
         "{input} changes the sequence and must not collapse to an identity"
     );
     parse_hgvs(&rendered)

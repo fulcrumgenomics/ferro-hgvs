@@ -101,8 +101,41 @@ fn a_reducing_member_with_no_sibling_in_its_path_is_untouched() {
 }
 
 #[test]
-fn the_three_prime_direction_is_unchanged() {
-    // 3' already reached the correct answer through the repeat path; the
-    // relaxation must not disturb it.
-    assert_normalizes_preserving(TRACT, "TEMPLATE:g.[1del;9T>A;11del]", "TEMPLATE:g.1_9T[7]");
+fn the_three_prime_direction_keeps_the_substitution_and_the_far_deletion_apart() {
+    // The 3' half of #1281's three-member allele.
+    //
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`),
+    // and renamed: "is unchanged" stopped being true of the string, and the
+    // property the row actually owns is that the two far-apart blocks are not
+    // fused.
+    //
+    //   was  TEMPLATE:g.1_9T[7]              one member, re-derived
+    //   now  TEMPLATE:g.[8_9delinsA;11del]   two members
+    //
+    // The input is `g.[1del;9T>A;11del]` over a nine-`T` tract. `1del` and
+    // `9T>A` are adjacent once the deletion 3'-shifts through the tract, so they
+    // merge — separation zero, which is the MERGE move the ruling licenses — and
+    // become `8_9delinsA`. `11del` is one unchanged base away from that block —
+    // the block ends at 9 and `11del` takes 11, so base 10 alone sits between
+    // them — which `general.md:34` says to describe individually, so it stays its
+    // own member. Separation one already clears that floor, so the ruling is
+    // unchanged by the correction; only the count was wrong. The old `g.1_9T[7]` fused all three into one repeat spelling,
+    // which required re-deriving the partition from the resulting sequence.
+    //
+    // The sequence is unchanged: `assert_normalizes_preserving` applies both
+    // descriptions through the shared `cis_apply_oracle` walk — `hgvs_to_spdi`
+    // plus a `claimed_from` cursor, not the normalizer — and declines an
+    // overlapping output. Measured: both denote `TTTTTTTAATATATTTTAATAT`, and
+    // the output is a fixed point.
+    //
+    // The clamp this file is about is untouched. Its own rows are the 5' ones
+    // above, which are unmoved, and `the_clamped_member_still_coalesces_with_its_sibling`
+    // still pins `g.[1del;2del]` -> `g.1_9T[7]` — i.e. the repeat spelling is
+    // still reached where the input actually asserts one adjacent pair.
+    assert_normalizes_preserving(
+        TRACT,
+        "TEMPLATE:g.[1del;9T>A;11del]",
+        "TEMPLATE:g.[8_9delinsA;11del]",
+    );
 }
