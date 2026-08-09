@@ -270,6 +270,14 @@
       ]
     },
     {
+      "clause": "docs/recommendations/checklist.md:34",
+      "quote": "is the insertion reported indeed an insertion, or is it in fact a duplication?",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:57-dup-outranks-ins"
+      ]
+    },
+    {
       "clause": "docs/recommendations/checklist.md:45",
       "quote": "this describes a deletion of nucleotide -14 in the intron directly",
       "classification": "generatable",
@@ -491,7 +499,7 @@
       "file": "docs/recommendations/checklist.md",
       "clause_units": 33,
       "classification": "not-generatable",
-      "reason": "The residue is publication practice: which reference sequence a paper should cite, not mixing variant-type counts across DNA/RNA/protein, providing a tabular overview, and the terminology guidance on 'mutation'/'polymorphism'/'pathogenic'. None of it is a property a synthesised description can satisfy or violate. Every clause here that constrains a description's FORM is cited individually above and generated."
+      "reason": "Publication practice is only PART of the residue, and this reason used to claim all of it — 'every clause here that constrains a description's FORM is cited individually above and generated' was not true. Precisely. FOURTEEN of the units are the numbered section HEADINGS (`:11`, `:22`, `:28`, `:37`, `:42`, `:47`, `:51`, `:56`, `:60`, `:67`, `:71`, `:75`, `:82`, `:87`), which state no rule; the rules under them are cited above wherever the corpus generates them. GENUINE PUBLICATION PRACTICE, nothing a synthesised description can satisfy or violate: `:18` (legacy numbering — an external, undefined scheme), `:54` (how to quote several levels in prose), `:61` (which protein reference a paper should pick), and the four terminology/reporting items at `:71`, `:75`, `:82`, `:87`. The remainder are NOT practice and are DECLARED here rather than absorbed: (a) ACCESSION HYGIENE at `:14` and `:15` — an accession must carry its version and its underscore. Generatable in principle; each would be one more row in the prohibited stratum, and the corpus carries neither, because every frame mints one correctly-formed accession so the offending shape never arises. A declared gap, and the clearest candidate for the next prohibited row. (b) `:19`, the reference-must-contain-the-residue question, which restates `general.md:17` — see that entry for why the corpus cannot build it by construction. (c) `:25`, 'do you properly describe ranges in the introns?', whose answer is the clause cited above as `checklist.md:26`. (d) `:58`, the `,` separator for several transcripts of one allele: an `r.`-axis mechanism, and a different mechanism from the `;` co-occurrence the corpus enumerates — part of the declared RNA gap. (e) `:62`-`:65`, the protein-level form rules (three-letter code; `Ter`/`*` and not `X` for a stop; `p.(Leu54=)` for a silent change; `p.(Met1Val)` disallowed) — the declared protein-axis gap, not practice. (f) `:69`, that 'polymorphic' variants must not use the `/` mosaicism marker: a form prohibition the corpus cannot reach because it emits no mosaic or chimeric description at all. `:34` is cited above as generatable — it asks the dup-versus-ins question the corpus's dup-outranks-ins rows answer."
     },
     {
       "file": "docs/recommendations/general.md",
