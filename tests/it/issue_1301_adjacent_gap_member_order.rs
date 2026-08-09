@@ -92,13 +92,32 @@ fn assert_preserving(input: &str, output: &str) {
 fn an_insertion_sorts_before_a_duplication_sharing_its_span() {
     let input = "NC_TEST.1:g.[263_264insAC;264_265insAA]";
     let output = normalize(input);
-    // Since #1235 the pair reaches one member: the merged form is derived from
-    // the sequence rather than assembled per member, so the tie this file is
-    // about never has to be broken on *this* input. It is still broken, and
-    // still asserted, on the protein cases below — where both members tie on
-    // start and end — and the interbase-order check below is unchanged and
-    // trivially satisfied by a single member.
-    assert_eq!(output, "NC_TEST.1:g.264_265insCAAA");
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`).
+    //
+    //   was  NC_TEST.1:g.264_265insCAAA               one member, re-derived
+    //   now  NC_TEST.1:g.[264_265insCA;264_265dup]    two members, as authored
+    //
+    // The pair adds sequence at the junctions `263|264` and `264|265`, one
+    // unchanged reference base (264) apart — `general.md:34`'s "separated by one
+    // or more nucleotides … described individually". The merged answer was
+    // therefore a re-derivation of the partition from the resulting sequence,
+    // and the ruling removes it.
+    //
+    // The row is now the file's headline case again rather than a bystander: the
+    // two members are back, they share the span `264_265`, so start and end tie
+    // and only `junction_rank` orders them — `264_265insCA` fills the gap
+    // `264|265` and so adds at interbase 264, `264_265dup` places its copy after
+    // its last base at 265. The output is byte-identical to the three-member row
+    // below with its `270del` removed, which is what says the order comes from
+    // the key.
+    //
+    // Sequence unchanged, proved twice over independently of the normalizer:
+    // `assert_preserving` below applies both descriptions through `hgvs_to_spdi`
+    // and compares the resulting bases, and `member_starts` re-derives each
+    // member's interbase from the same path to check the rendered order. Measured:
+    // same denoted sequence, ascending members, output a fixed point.
+    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup]");
     assert_preserving(input, &output);
 
     let starts = member_starts(&output);

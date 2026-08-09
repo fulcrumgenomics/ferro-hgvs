@@ -32,6 +32,20 @@ use crate::common::synthetic::assert_padded_preserving;
 
 const CORE: &str = "GCATGAAAAT";
 
+/// # RED on this stack, and DELIBERATELY not re-blessed
+///
+/// Ferro emits `g.[261_262dup;265=]` here rather than the pinned
+/// `g.261_262dup` — an identity member appearing beside the real one, which is
+/// its own known class and not an answer worth pinning.
+///
+/// **Measured attribution.** The row is green under `FERRO_PARTITION=live`, so
+/// it belongs to the partition-preserving-arm defect cluster documented in
+/// `tests/it/cis_junction_crossing_shift.rs`'s module doc, and it fails
+/// identically on the base branch (#1571) — nothing on this corpus branch moved
+/// it. Note also that `g.[261_262dup;265=]` is precisely what the note below
+/// records for the barrier **stubbed out**, so re-blessing to it would pin the
+/// mechanism-off answer as the expectation and destroy this row's standing as a
+/// guard. Left as it is until the arm is fixed.
 #[test]
 fn a_moved_sibling_shape_now_merges_from_the_sequence() {
     // #1304's original shape. It no longer reaches the barrier at all: since
@@ -59,67 +73,107 @@ fn a_moved_sibling_shape_now_merges_from_the_sequence() {
 }
 
 #[test]
-fn the_pair_alone_merges_instead_of_staying_barred() {
+fn the_pair_alone_keeps_both_members_and_each_reaches_its_own_three_prime_form() {
     // Without the deletion, so the barrier is the only thing under test.
     //
-    // Since #1235 the two-member spelling merges: with nothing else in the
-    // allele the pair denotes one three-base insertion, and the merged form is
-    // derived from that sequence rather than assembled per member — so the
-    // barrier, which decides where a member may *shift* to, no longer decides
-    // this allele's output.
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`),
+    // and renamed: the old name asserted the merge the ruling removes.
     //
-    // Which means this row no longer guards the barrier: with
-    // `clamp_sibling_crossing_junctions` stubbed out it still passes. It is kept
-    // as a value pin on the merged form, not as barrier coverage — that lives in
-    // `a_moved_sibling_shape_now_merges_from_the_sequence` above, which is the
-    // one row here that still goes red when the mechanism is removed.
+    //   was  NC_TEST.1:g.262_263insGAA          one member, re-derived
+    //   now  NC_TEST.1:g.[261_262dup;265dup]    two members, as authored
     //
-    // (An earlier revision of this comment claimed the deletion case "stays
-    // three members and the barrier holds". That was true when it was written
-    // and stopped being true when `main` removed the input-separator veto
-    // (#1345); the deletion case now merges to a single `dup`.)
+    // The pair adds sequence at the junctions `260|261` and `261|262`, one
+    // unchanged reference base (261, the `G`) apart, so `general.md:34` says to
+    // describe them individually. The single-member answer was the
+    // re-derivation of the partition from the resulting sequence, which is the
+    // move the ruling removes; each member now 3'-shifts inside its own
+    // territory and types as a `dup` — the same two spellings
+    // `each_insertion_alone_still_shifts_to_its_own_most_three_prime_form`
+    // pins for the members in isolation.
+    //
+    // **This row DOES guard the barrier again, contrary to the note it
+    // replaces.** Measured on this branch by stubbing
+    // `clamp_sibling_crossing_junctions` to return immediately: the output
+    // becomes `g.[260_261insGA;261_262insA]` — the members do not move at all —
+    // so the row is red with the mechanism off and green with it on. The old
+    // note ("with the mechanism stubbed out it still passes") was measured
+    // before the pair stopped merging and is no longer true.
+    //
+    // Sequence unchanged: `assert_padded_preserving` applies input and output
+    // through `hgvs_to_spdi`, independently of the normalizer, and also requires
+    // the members to render disjoint and ascending. Measured: same denoted
+    // bases, output a fixed point.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[260_261insGA;261_262insA]");
-    assert_eq!(output, "NC_TEST.1:g.262_263insGAA");
+    assert_eq!(output, "NC_TEST.1:g.[261_262dup;265dup]");
 }
 
 #[test]
-fn a_third_member_clear_of_the_tract_keeps_the_pair_barred() {
-    // The discriminator `the_pair_alone_...` above used to be, restored on the
-    // nucleotide axis. That row stopped bounding the barrier once the pair began
-    // merging from the sequence: it now passes whether the barrier runs or not,
-    // so on its own it no longer says anything about crossing.
+fn a_third_member_clear_of_the_tract_leaves_the_pair_shifting_independently() {
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`),
+    // and renamed: the old name asserted that the pair stays put, and it does
+    // not.
     //
-    // A third member restores it by stopping the *merge* without touching the
-    // shift. `270del` is 4 nt clear of the `GCATGAAAAT` tract the two payloads
-    // shuffle through, so the derivation declines to collapse the allele — the
-    // block is no longer one run of change — and the per-member pipeline decides
-    // the output again, which is where the barrier lives. The pair then stays
-    // exactly where the barrier puts it: `insGA` may not sweep from 260 past the
-    // `insA` at 261, because `GA` and `A` do not commute and their order is
-    // observable.
+    //   was  NC_TEST.1:g.[260_261insGA;261_262insA;270del]   input, unmoved
+    //   now  NC_TEST.1:g.[261_262dup;265dup;270del]          three members, shifted
+    //
+    // `270del` is 4 nt clear of the `GCATGAAAAT` tract the two payloads shuffle
+    // through, so it does not move them; what it does is keep the allele at
+    // three members. All three survive — the members are two or more unchanged
+    // nucleotides apart, which `general.md:34` describes individually — so the
+    // partition is exactly what the input asserted, and each member then reaches
+    // its own most-3' spelling inside its own territory. That is why the pair's
+    // two spellings here are byte-identical to the ones
+    // `the_pair_alone_keeps_both_members_and_each_reaches_its_own_three_prime_form`
+    // and `each_insertion_alone_still_shifts_to_its_own_most_three_prime_form`
+    // pin, which is the cross-check that the third member is not deciding them.
     //
     // The distance matters in both directions, and the near end is a trap worth
     // naming: at `266del` and `267del` the third member is close enough to join
-    // the block, and the allele merges again (to `g.[261_262dup;266T>A]` and
-    // `g.[263A>G;266T>A;267_268insAT]` respectively) — a test written there would
-    // be vacuous in a new way, pinning a merged form while claiming to pin a
-    // barrier. `270del` and `272del` both sit clear; 270 is used here.
+    // the block. `270del` and `272del` both sit clear; 270 is used here.
     //
-    // Verified to fail both ways, which is the only thing that makes it a guard:
-    // stubbing `clamp_sibling_crossing_junctions` to return immediately turns
-    // this output into `g.[261_262dup;265dup;270del]` — the `insGA` swept past
-    // its sibling — and restoring the mechanism turns it back.
+    // **Still a guard on the barrier, and the direction of the old measurement
+    // is now inverted — re-measured on this branch rather than carried over.**
+    // Stubbing `clamp_sibling_crossing_junctions` to return immediately turns
+    // this output into `g.[260_261insGA;261_262insA;270del]`, the *old* pinned
+    // string: with the mechanism off the members do not move at all. So the row
+    // is red with the mechanism removed and green with it on, which is what
+    // makes it a guard. The comment this replaces recorded the opposite
+    // assignment of the two strings; it was measured before the ruling landed.
+    //
+    // The relative order of the two payloads is preserved by the shift — `GA`
+    // still lands 5' of `A` — and the sequence is unchanged, proved by
+    // `assert_padded_preserving`'s `hgvs_to_spdi` applier rather than by the
+    // normalizer. Measured: same denoted bases, members disjoint and ascending,
+    // output a fixed point.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[260_261insGA;261_262insA;270del]");
-    assert_eq!(output, "NC_TEST.1:g.[260_261insGA;261_262insA;270del]");
+    assert_eq!(output, "NC_TEST.1:g.[261_262dup;265dup;270del]");
 }
 
 #[test]
-fn the_barred_pair_does_not_depend_on_authored_order() {
+fn the_shifted_trio_does_not_depend_on_authored_order() {
     // The barrier reads both snapshots, so its answer must not depend on the
     // order the members were written in — the same independence the #1261/#1301
     // discriminators carry. Same allele as above, authored backwards.
+    //
+    // RE-BLESSED alongside its forward twin under
+    // `partition-is-the-unit-of-normalization` (DECIDED, 2026-08-08,
+    // `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`), and
+    // renamed with it.
+    //
+    //   was  NC_TEST.1:g.[260_261insGA;261_262insA;270del]
+    //   now  NC_TEST.1:g.[261_262dup;265dup;270del]
+    //
+    // The *property* this row owns — that the answer is a function of the
+    // members and not of the order they were typed in — is untouched by the
+    // ruling and still holds: the expectation here is byte-identical to the
+    // forward authoring's, which is the whole assertion. Only the string the two
+    // authorings agree on moved, for the reason given on the forward test.
+    //
+    // Sequence unchanged, via `assert_padded_preserving`'s independent applier.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[270del;261_262insA;260_261insGA]");
-    assert_eq!(output, "NC_TEST.1:g.[260_261insGA;261_262insA;270del]");
+    assert_eq!(output, "NC_TEST.1:g.[261_262dup;265dup;270del]");
 }
 
 #[test]

@@ -45,15 +45,35 @@ fn a_dup_does_not_swallow_a_siblings_junction() {
     // #1320. The seed's own case. The duplication the demotion produces spans
     // 263-266 and the sibling adds at interbase 264, inside it.
     //
-    // Since #1235 the three members reach one: the merged form is derived from
-    // the sequence rather than assembled per member, and this allele denotes a
-    // single six-base insertion. It is the `#1320` row of
-    // `cis_spelling_confluence_gap.rs`, now converged. The swallowing this file
-    // guards against cannot hide inside one member — with nothing to swallow,
-    // `assert_padded_preserving` still proves the sequence is the input's.
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`).
+    //
+    //   was  NC_TEST.1:g.264_265insCAAAAA               one member, re-derived
+    //   now  NC_TEST.1:g.[264_265insCA;266_267insAAAA]  two members
+    //
+    // The old expectation collapsed all three authored blocks into one by
+    // re-deriving the partition from the resulting sequence. Under the ruling
+    // the `263_264insAC` block survives on its own — the reference bases at 264
+    // and 265 sit unchanged between it and the next member, a separation
+    // `general.md:34` says to describe individually.
+    //
+    // The three-to-two collapse that *does* happen is the ruling's other
+    // licensed move, MERGE: `265_266insAA` and `266_267insAA` both 3'-shift into
+    // the same `A` tract and land on one junction, i.e. separation zero, which
+    // is below the genomic floor. Note this is the floor applied to the
+    // *canonically placed* members rather than to the written ones — the reading
+    // campaign issue #65 records as still open (D2). It is flagged here rather
+    // than settled: if that question is answered the other way this row moves to
+    // three members, and it should redden rather than pass quietly.
+    //
+    // The swallowing this file guards against cannot hide in either member:
+    // `assert_padded_preserving` applies input and output through `hgvs_to_spdi`
+    // — not through the normalizer — and a tract covering the sibling's junction
+    // denotes no sequence, which the applier declines. Measured: same denoted
+    // bases, members disjoint and ascending, output a fixed point.
     let output =
         assert_padded_preserving(CORE, "NC_TEST.1:g.[263_264insAC;265_266insAA;266_267insAA]");
-    assert_eq!(output, "NC_TEST.1:g.264_265insCAAAAA");
+    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;266_267insAAAA]");
 }
 
 #[test]
@@ -65,20 +85,35 @@ fn the_pair_without_the_swallowed_sibling_still_uses_the_repeat() {
 }
 
 #[test]
-fn a_junction_at_the_dups_five_prime_end_merges_instead_of_respelling() {
+fn a_junction_at_the_dups_five_prime_end_is_left_alone() {
     // The 5' boundary, and #1301's own reproduction over its own core.
     // `264_265dup` sorts to 264, the same position the insertion adds at, so
     // `junction_rank` already orders the pair — there is no sort/act
     // discrepancy to repair, and re-spelling here would undo #1301.
     //
-    // Since #1235 the pair merges before either spelling is chosen — the merged
-    // form is derived from the sequence, not assembled per member — so the
-    // re-spelling this test bars is not reached on this input. #1301's own file
-    // records the same movement, and the 5' boundary the predicate must not
-    // cross is still pinned by `the_pair_without_the_swallowed_sibling_still_uses_the_repeat`
-    // and `a_deletion_colliding_with_a_dups_bases_still_respells`.
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`),
+    // and renamed: the old name asserted the merge, and the merge is gone.
+    //
+    //   was  NC_TEST.1:g.264_265insCAAA               one member, re-derived
+    //   now  NC_TEST.1:g.[264_265insCA;264_265dup]    two members, as authored
+    //
+    // The pair's members occupy the junctions `263|264` and `264|265`, one
+    // unchanged reference base (264) apart, which `general.md:34` says to
+    // describe individually. So the previous single-member answer was the
+    // re-derivation the ruling removes, and the two members now survive — which
+    // restores exactly the shared-span tie this test is about: both span
+    // `264_265`, so start and end tie and only `junction_rank` separates them.
+    // This row is therefore *stronger* coverage than it was, not weaker: it went
+    // from pinning a merged form that never reached the sort to pinning the sort's
+    // own output.
+    //
+    // `assert_padded_preserving` proves the bases through `hgvs_to_spdi`,
+    // independently of the normalizer, and additionally requires the members to
+    // render disjoint and ascending — the property #1301 is about. Measured:
+    // same denoted sequence, output a fixed point.
     let output = assert_padded_preserving("GCATGAAAAT", "NC_TEST.1:g.[263_264insAC;264_265insAA]");
-    assert_eq!(output, "NC_TEST.1:g.264_265insCAAA");
+    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup]");
 }
 
 #[test]
@@ -97,18 +132,36 @@ fn a_junction_at_the_dups_five_prime_end_is_left_alone_beside_a_third_member() {
 }
 
 #[test]
-fn two_insertions_sharing_a_start_merge_into_one_member() {
+fn two_insertions_sharing_a_start_keep_both_dup_spellings() {
     // The same 5' boundary between two duplications, which is #1261's
     // reproduction: `258dup`'s junction is 258 and `258_259dup` starts there.
     // A `>=` test would re-spell the wider one and lose the pinned form.
     //
-    // Since #1235 both dup spellings are gone, because there is only one member
-    // left to spell: the merged form is derived from the sequence the pair
-    // denotes — one three-base insertion — rather than assembled per member.
-    // #1261's own file records the same movement.
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`),
+    // and renamed: the old name asserted the merge the ruling removes.
+    //
+    //   was  NC_TEST.1:g.258_259insAGA          one member, re-derived
+    //   now  NC_TEST.1:g.[258dup;258_259dup]    two members, as authored
+    //
+    // The input's two insertions sit at the junctions `258|259` and `259|260`
+    // with the reference base at 259 unchanged between them — separation one,
+    // which `general.md:34` describes individually. The single-member answer was
+    // the re-derivation from the resulting sequence that the ruling removes.
+    //
+    // Both `dup` spellings are back, which is what this test was written to
+    // guard, so this row now exercises the shared-start tie again rather than
+    // pinning a form that never reached it. The identical pair beside a third
+    // member (`two_duplications_sharing_a_start_keep_both_dup_spellings_beside_a_third_member`)
+    // pins the same two strings, and the two agreeing is itself evidence the
+    // answer comes from the key rather than from the third member.
+    //
+    // `assert_padded_preserving` proves the bases and the disjoint-ascending
+    // rendering through `hgvs_to_spdi`, not through the normalizer. Measured:
+    // same denoted sequence, output a fixed point.
     let output =
         assert_padded_preserving("CAGTATGCAGGCAA", "NC_TEST.1:g.[258_259insA;259_260insAG]");
-    assert_eq!(output, "NC_TEST.1:g.258_259insAGA");
+    assert_eq!(output, "NC_TEST.1:g.[258dup;258_259dup]");
 }
 
 #[test]

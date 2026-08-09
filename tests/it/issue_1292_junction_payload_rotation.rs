@@ -71,21 +71,39 @@ fn the_pulled_back_payload_does_not_pick_up_a_flanking_base() {
 }
 
 #[test]
-fn a_tandem_repeat_insertion_beside_a_deletion_merges_to_one_insertion() {
+fn a_tandem_repeat_insertion_beside_a_deletion_keeps_both_members() {
     // #1280's counterexample, and the reason the payload is *rotated* rather
     // than carried literally. A duplication is phase-correct by construction
     // where it already sits, so a member that does not have to move keeps it.
     //
-    // Since #1235 the pair does not survive to be spelled per member: the merged
-    // form is derived from the sequence, and a `-1` deletion with a `+6`
-    // insertion six bases away has a five-column single-gap explanation against
-    // the input's seven, so the derivation takes it. The payload lands 5' of the
-    // `CAG` tract with a `C` to its 3', so it cannot rotate onto the tract and is
-    // not a tandem duplication of what precedes it — the `dup` mandate is not in
-    // play on the merged form.
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`),
+    // and renamed, because the old name asserted the merge the ruling removes.
+    //
+    //   was  NC_TEST.1:g.261_262insAGCAG      one member, re-derived
+    //   now  NC_TEST.1:g.[262del;274_279dup]  two members, as authored
+    //
+    // The old expectation is the re-derivation stated explicitly in the comment
+    // it replaces: "a `-1` deletion with a `+6` insertion six bases away has a
+    // five-column single-gap explanation against the input's seven, so the
+    // derivation takes it." Choosing the cheaper alignment over the two blocks
+    // the submitter wrote is precisely what the ruling forbids — the input
+    // asserts a deletion at 262 and an insertion six unchanged bases away, which
+    // `general.md:34` says are described individually. Neither member is within
+    // the genomic floor of the other, so nothing merges; the insertion 3'-shifts
+    // through the `CAG` tract and types as a duplication.
+    //
+    // The `dup` mandate is back in play precisely because the member survived as
+    // its own block, and the rotation this file is about is what makes that
+    // duplication read the right bases: `274_279dup` copies `AGCAGC`… the six
+    // bases under its own span, in phase. `assert_padded_preserving` proves it —
+    // the applier converts each member through `hgvs_to_spdi` independently of
+    // the normalizer, and a mis-rotated payload denotes different bases and
+    // fails there rather than here. Measured: same denoted sequence, output is a
+    // fixed point.
     let output = assert_padded_preserving(
         "CTTTTCAGCAGCAGCAGCAGCAGTTTTG",
         "NC_TEST.1:g.[268_269insAGCAGC;262del]",
     );
-    assert_eq!(output, "NC_TEST.1:g.261_262insAGCAG");
+    assert_eq!(output, "NC_TEST.1:g.[262del;274_279dup]");
 }

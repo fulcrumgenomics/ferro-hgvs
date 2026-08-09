@@ -57,24 +57,52 @@ fn assert_ordered_and_preserving(core: &str, input: &str) -> String {
         from_output, from_input,
         "`{input}` -> `{output}` changed the sequence"
     );
+    // The output is a fixed point. The call site's comment states this as
+    // measured, and the three checks above cannot see it: they all read where
+    // the first pass landed. A second pass that re-orders or re-partitions the
+    // members the first pass settled is exactly the regression this file exists
+    // for, so it is asserted rather than described.
+    let again = normalize(&seq, &output);
+    assert_eq!(
+        again, output,
+        "`{input}` -> `{output}` is not a fixed point: a second pass reaches `{again}`"
+    );
     output
 }
 
 #[test]
-fn two_insertions_sharing_a_start_merge_into_one_member() {
+fn two_insertions_sharing_a_start_render_in_junction_order() {
     // The #1261 reproduction. `258dup` sits at interbase 258 and `258_259dup`
     // at 259, so the narrower one must come first.
     //
-    // Since #1235 the pair no longer reaches the sort at all: the merged form is
-    // derived from the sequence rather than assembled per member, and the two
-    // members denote one three-base insertion. Kept as a pin on *that* — a
-    // single member is the answer, and `assert_ordered_and_preserving` proves it
-    // denotes the input's sequence. The shared-start tie itself is exercised by
-    // the test below, which keeps the two duplications by adding a member the
-    // derivation cannot merge them with.
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`),
+    // and renamed: the old name asserted the merge, and the merge is gone.
+    //
+    //   was  TEMPLATE:g.258_259insAGA          one member, re-derived
+    //   now  TEMPLATE:g.[258dup;258_259dup]    two members, as authored
+    //
+    // The two insertions occupy the junctions `258|259` and `259|260`, one
+    // unchanged reference base apart, and `general.md:34` says two variants
+    // separated by one or more nucleotides are described individually. So the
+    // single-member answer was a re-derivation of the partition from the
+    // resulting sequence, which is the move the ruling removes.
+    //
+    // This restores the file's own subject rather than diluting it: the pair
+    // reaches the sort again, so the shared-start tie is decided here, and the
+    // answer is byte-identical to the three-member row below
+    // (`two_duplications_sharing_a_start_render_in_junction_order_beside_a_third_member`)
+    // once its `268del` is dropped — which is what says the order comes from
+    // `cis_member_order_key` and not from the third member.
+    //
+    // Sequence preservation is not taken on trust: `assert_ordered_and_preserving`
+    // runs `assert_members_ascending` and applies both input and output through
+    // `hgvs_to_spdi`, a path the normalizer does not consult, before the string
+    // comparison below. Measured: same denoted bases, members ascending, output a
+    // fixed point.
     let output =
         assert_ordered_and_preserving("CAGTATGCAGGCAA", "TEMPLATE:g.[258_259insA;259_260insAG]");
-    assert_eq!(output, "TEMPLATE:g.258_259insAGA");
+    assert_eq!(output, "TEMPLATE:g.[258dup;258_259dup]");
 }
 
 #[test]

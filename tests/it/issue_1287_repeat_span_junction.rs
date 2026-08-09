@@ -29,18 +29,37 @@ use crate::common::synthetic::assert_padded_preserving;
 fn a_repeat_does_not_swallow_a_siblings_junction() {
     // #1287. Demoted, the repeat becomes a duplication that clears the sibling.
     //
-    // Since #1235 the two members never reach the demotion: the merged form is
-    // derived from the sequence rather than assembled per member, and this pair
-    // denotes one four-base insertion. That is the `#1287` row of
-    // `cis_spelling_confluence_gap.rs`, which this convergence moved out of the
-    // divergent table. The swallowing this test guards against is still caught —
-    // `assert_padded_preserving` applies both spellings independently of the
-    // normalizer.
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`).
+    //
+    //   was  NC_TEST.1:g.263_264insGAAA          one member, re-derived
+    //   now  NC_TEST.1:g.[262_263dup;265_266dup] two members, as authored
+    //
+    // The old expectation was a *re-derivation*: it discarded the two changed
+    // blocks the input asserts and re-partitioned the resulting sequence into
+    // one. The input's members occupy the junctions `261|262` and `263|264`,
+    // leaving the reference bases at 262 and 263 unchanged between them — a
+    // separation of two, which `general.md:34` ("two variants separated by one
+    // or more nucleotides should be described individually and **not** as a
+    // \"delins\"") says must be described individually. So the merge that
+    // produced `g.263_264insGAAA` is exactly the move the ruling removes, and
+    // each member now 3'-shifts within its own territory to a `dup`.
+    //
+    // The sequence is unchanged, and that is not asserted on trust:
+    // `assert_padded_preserving` applies both the input and the output through
+    // `hgvs_to_spdi` — a code path the normalizer does not consult — and fails
+    // if they denote different bases, if the output denotes none, or if its
+    // members overlap or render out of order. Measured: both denote the same
+    // 532-base string, and the output is a fixed point.
+    //
+    // The swallowing this file guards against is therefore still caught: a
+    // repeat tract covering the sibling's junction would make the pair denote no
+    // sequence at all, which the applier declines.
     let output = assert_padded_preserving(
         "ATACAGAAAATCAGGGCATA",
         "NC_TEST.1:g.[261_262insGA;263_264insAA]",
     );
-    assert_eq!(output, "NC_TEST.1:g.263_264insGAAA");
+    assert_eq!(output, "NC_TEST.1:g.[262_263dup;265_266dup]");
 }
 
 #[test]

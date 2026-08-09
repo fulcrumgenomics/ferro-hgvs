@@ -415,6 +415,23 @@ pub fn assert_padded_preserving(core: &str, input: &str) -> String {
             pair[0].1
         );
     }
+
+    // The output is a fixed point. Several call sites' comments state this as
+    // something this helper measured, and until now it measured nothing of the
+    // kind: denotation equality and member disjointness both look only at where
+    // the *first* pass landed. Preservation that is not a fixed point means a
+    // second pass re-partitions the member the first pass kept, which is a
+    // rule change these tests are meant to catch and which would otherwise stay
+    // green while the comments claimed otherwise.
+    let again = normalizer
+        .normalize(&parse_hgvs(&output).expect("output parses"))
+        .expect("normalize")
+        .to_string();
+    assert_eq!(
+        again, output,
+        "`{input}` -> `{output}` is not a fixed point: a second pass reaches `{again}`"
+    );
+
     output
 }
 
