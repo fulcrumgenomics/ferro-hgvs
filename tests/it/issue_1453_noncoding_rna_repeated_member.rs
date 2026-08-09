@@ -65,6 +65,7 @@
 //! a future change moved the `n.` axis onto the same defect, which is the
 //! opposite of what this issue is about.
 
+use ferro_hgvs::conformance::spec_corpus::{denotation_of, Denotation};
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
 use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
 
@@ -130,6 +131,50 @@ fn normalize(provider: &MockProvider, descriptor: &str) -> String {
         .to_string()
 }
 
+/// Normalize `input`, assert it reaches `expected`, and assert the two
+/// properties every test in this file *claimed* to have measured: that the
+/// output denotes the same bases as the input, and that it is a fixed point.
+///
+/// This file has no apply oracle of its own, so the denotation goes through
+/// `spec_corpus::denotation_of` — i.e. `hgvs_to_spdi`, a path the normalizer
+/// does not consult. Five doc comments here stated `Denotation::Sequence`
+/// equality as a measurement while every test asserted an exact string and
+/// nothing else; a pinned string cannot separate a re-spelling from a
+/// corruption, which for this file is the whole question — a repeated member
+/// denotes **no** sequence, and that is the defect #1453 is about.
+///
+/// `Denotation::Sequence` is asserted explicitly rather than left implied,
+/// because two `Inexpressible` or two `NoSequence` values compare equal and
+/// would make the check pass while measuring nothing.
+fn assert_reaches_preserving(
+    provider: &MockProvider,
+    served: &str,
+    input: &str,
+    expected: &str,
+    message: &str,
+) {
+    let output = normalize(provider, input);
+    assert_eq!(output, expected, "{message}");
+
+    let from_input = denotation_of(provider, served, input);
+    assert!(
+        matches!(from_input, Denotation::Sequence(_)),
+        "`{input}` denotes no sequence ({from_input:?}), so the comparison below \
+         would measure nothing"
+    );
+    assert_eq!(
+        denotation_of(provider, served, &output),
+        from_input,
+        "`{input}` -> `{output}` changed the sequence"
+    );
+
+    let again = normalize(provider, &output);
+    assert_eq!(
+        again, output,
+        "`{input}` -> `{output}` is not a fixed point: a second pass reaches `{again}`"
+    );
+}
+
 /// The `n.` rendering of a description, re-spelled in the `r.` alphabet: `r.`
 /// lower-cases its sequences and writes `u` for `T`.
 ///
@@ -158,15 +203,44 @@ fn as_rna_spelling(tx_rendering: &str) -> String {
 /// Pinned as an exact string rather than as "no repeated member": a predicate
 /// over the member set is satisfied by a refusal or by a dropped member just as
 /// well as by the correct collapse.
+///
+/// RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+/// 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`).
+///
+/// ```text
+/// was  NR_TEST.1:r.9_10insuaa            one member, re-derived
+/// now  NR_TEST.1:r.[9dup;10_11a[4]]      two members
+/// ```
+///
+/// **What the ruling changed here is only the first member.** `9dup` sits in
+/// the `u` run at 1-9 and writes at the junction `9|10`; the other two write at
+/// `11|12`, two unchanged bases away, which `general.md:34` says to describe
+/// individually. The old single insertion fused all three by re-deriving the
+/// partition from the resulting sequence.
+///
+/// **What the ruling did NOT change is the collapse this file exists for.**
+/// `10dup` and `11dup` both shift onto the junction 3' of `r.11` — separation
+/// zero, below the axis floor — so the ruling's MERGE move applies and they
+/// become the one member `10_11a[4]`. The #1453 defect was emitting them as
+/// `r.[11dup;11dup]`, two members claiming one interbase point; that is still
+/// gone, and the assertion is still an exact string rather than a predicate.
+///
+/// **Sequence unchanged, and this file has no apply oracle, so it was measured
+/// rather than assumed.** `spec_corpus::denotation_of` (via `hgvs_to_spdi`, not
+/// the normalizer) gives `Denotation::Sequence` for both input and output and
+/// the two are equal — `u`×10 then `a`×4 then `u`… — where a repeated member
+/// would have given `Denotation::NoSequence`. The output is a fixed point.
 #[test]
 fn a_noncoding_rna_allele_collapses_instead_of_repeating_a_member() {
     let provider = provider("NR_TEST.1", false);
-    assert_eq!(
-        normalize(&provider, "NR_TEST.1:r.[9dup;10dup;11dup]"),
-        "NR_TEST.1:r.9_10insuaa",
-        "two members shifted onto the junction 3' of `r.11` must be coalesced \
-         into one insertion; emitting `r.[9dup;11dup;11dup]` claims one \
-         interbase point twice and so denotes no sequence (#1453)"
+    assert_reaches_preserving(
+        &provider,
+        CORE,
+        "NR_TEST.1:r.[9dup;10dup;11dup]",
+        "NR_TEST.1:r.[9dup;10_11a[4]]",
+        "the two members shifted onto the junction 3' of `r.11` must be \
+         coalesced into one; emitting `r.[9dup;11dup;11dup]` claims one \
+         interbase point twice and so denotes no sequence (#1453)",
     );
 }
 
@@ -204,20 +278,50 @@ fn the_noncoding_rna_and_tx_axes_agree_on_one_transcript() {
 /// (`c.N`, `n.N` and `r.N` naming one base) and it is worth paying here, but
 /// the scoping claim has to be pinned somewhere the two conventions differ:
 /// [`a_coding_transcripts_terminal_rna_repair_resolves_through_the_cds`].
+///
+/// RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+/// 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`).
+///
+/// ```text
+/// r.  was NM_TEST.1:r.9_10insuaa    now NM_TEST.1:r.[9dup;10_11dup]
+/// c.  was NM_TEST.1:c.9_10insTAA    now NM_TEST.1:c.[9dup;10_11dup]
+/// ```
+///
+/// Same movement as the non-coding reproducer above and for the same reason:
+/// `9dup` is two unchanged bases from the pair, so `general.md:34` describes it
+/// individually, while `10dup` and `11dup` land on one junction and merge. The
+/// coding record spells that merged member `10_11dup` rather than the
+/// non-coding record's `10_11a[4]`, which is the per-axis repeat-vs-dup
+/// preference and not a difference in the partition — both denote the same two
+/// added `a`s.
+///
+/// **The discriminating claim this row carries is untouched.** It is that the
+/// coding `r.` axis is decided by the CDS-relative gap resolution rather than
+/// by #1453's non-coding fallback, and that is a statement about *which*
+/// resolution runs, not about how many members come out. The `r.`/`c.` pair
+/// still agrees, which is what says the axes number the same transcript.
+///
+/// Sequence unchanged, measured with `spec_corpus::denotation_of` (via
+/// `hgvs_to_spdi`, not the normalizer) on both axes; both outputs are fixed
+/// points.
 #[test]
 fn a_coding_transcripts_rna_axis_is_unchanged() {
     let provider = provider("NM_TEST.1", true);
-    assert_eq!(
-        normalize(&provider, "NM_TEST.1:r.[9dup;10dup;11dup]"),
-        "NM_TEST.1:r.9_10insuaa",
-        "the coding `r.` axis already coalesced these members and must be \
-         unaffected — it is the CDS-relative gap resolution that #1453 leaves \
-         in place"
+    assert_reaches_preserving(
+        &provider,
+        CORE,
+        "NM_TEST.1:r.[9dup;10dup;11dup]",
+        "NM_TEST.1:r.[9dup;10_11dup]",
+        "the coding `r.` axis must still coalesce the two members that land on \
+         one junction — it is the CDS-relative gap resolution that #1453 leaves \
+         in place",
     );
-    assert_eq!(
-        normalize(&provider, "NM_TEST.1:c.[9dup;10dup;11dup]"),
-        "NM_TEST.1:c.9_10insTAA",
-        "and so must the `c.` axis of the same record"
+    assert_reaches_preserving(
+        &provider,
+        CORE,
+        "NM_TEST.1:c.[9dup;10dup;11dup]",
+        "NM_TEST.1:c.[9dup;10_11dup]",
+        "and so must the `c.` axis of the same record",
     );
 }
 
@@ -254,16 +358,41 @@ fn a_noncoding_rna_repair_at_the_sequence_end_also_takes() {
 /// last base is still resolved through the CDS, which is what lets
 /// `respell_at_sequence_end` name it `r.*N` when it falls outside the CDS
 /// (#1284). Measured on `origin/main` before the fix and unchanged by it.
+///
+/// RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+/// 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`).
+///
+/// ```text
+/// r.  was NM_TERM.1:r.57_58insagg   now NM_TERM.1:r.[57dup;62_63dup]
+/// c.  was NM_TERM.1:c.57_58insAGG   now NM_TERM.1:c.[57dup;62_63dup]
+/// ```
+///
+/// `57dup` and the `58dup`/`59dup` pair are separated by unchanged bases, so
+/// `general.md:34` keeps them apart; the pair itself lands on one junction in
+/// the terminal `G` run and merges to `62_63dup`. The old single insertion fused
+/// all three by re-deriving the partition from the resulting sequence.
+///
+/// **The claim this row carries — that the coding record still resolves its last
+/// base through the CDS — is untouched, and is what the discriminating test
+/// below actually measures.** Sequence unchanged on both axes, measured with
+/// `spec_corpus::denotation_of` (via `hgvs_to_spdi`); both outputs are fixed
+/// points.
 #[test]
 fn a_coding_transcripts_terminal_rna_repair_is_unchanged() {
     let provider = provider_for("NM_TERM.1", true, TERMINAL_CORE);
-    assert_eq!(
-        normalize(&provider, "NM_TERM.1:r.[57dup;58dup;59dup]"),
-        "NM_TERM.1:r.57_58insagg"
+    assert_reaches_preserving(
+        &provider,
+        TERMINAL_CORE,
+        "NM_TERM.1:r.[57dup;58dup;59dup]",
+        "NM_TERM.1:r.[57dup;62_63dup]",
+        "the coding `r.` axis must still resolve its terminal repair through the CDS",
     );
-    assert_eq!(
-        normalize(&provider, "NM_TERM.1:c.[57dup;58dup;59dup]"),
-        "NM_TERM.1:c.57_58insAGG"
+    assert_reaches_preserving(
+        &provider,
+        TERMINAL_CORE,
+        "NM_TERM.1:c.[57dup;58dup;59dup]",
+        "NM_TERM.1:c.[57dup;62_63dup]",
+        "and so must the `c.` axis of the same record",
     );
 }
 
@@ -317,15 +446,40 @@ fn provider_with_five_prime_utr(accession: &str, core: &str, cds_start: u64) -> 
 /// conventions disagree about *which position is the last base*
 /// (`cds_axis_end` vs the transcript length). The junction path agrees on this
 /// shape, which is why it is not also pinned here.
+///
+/// RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+/// 2026-08-08, `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`):
+/// was `NM_UTRT.1:r.53_54insagg`, now `NM_UTRT.1:r.[53dup;58_59dup]` — `53dup`
+/// is separated from the pair by unchanged bases (`general.md:34`), and the pair
+/// lands on one junction and merges.
+///
+/// **This row's discriminating content survives the move intact, and that is
+/// the thing to check rather than the member count.** The wrong-convention
+/// answer it exists to exclude is one that names the last base under the
+/// transcript axis instead of the CDS axis — `*4delinsggg` in the note below.
+/// The new answer names no `*` position at all, so the CDS resolution is still
+/// what ran, and the non-coding fallback firing here would still be visible.
+///
+/// Sequence unchanged, measured with `spec_corpus::denotation_of` (via
+/// `hgvs_to_spdi`, not the normalizer); the output is a fixed point.
 #[test]
 fn a_coding_transcripts_terminal_rna_repair_resolves_through_the_cds() {
     let provider = provider_with_five_prime_utr("NM_UTRT.1", TERMINAL_CORE, 5);
-    assert_eq!(
-        normalize(&provider, "NM_UTRT.1:r.[53dup;54dup;55dup]"),
-        "NM_UTRT.1:r.53_54insagg",
+    assert_reaches_preserving(
+        &provider,
+        TERMINAL_CORE,
+        "NM_UTRT.1:r.[53dup;58_59dup]",
+        "NM_UTRT.1:r.[53dup;58_59dup]",
         "a coding record with a 5' UTR must still resolve its terminal repair \
-         through the CDS; the non-coding fallback firing here gives \
-         `r.[53dup;*4delinsggg]` (#1453)"
+         through the CDS; the non-coding fallback firing here names the last \
+         base under the transcript axis instead (`*4delinsggg`, #1453)",
+    );
+    assert_reaches_preserving(
+        &provider,
+        TERMINAL_CORE,
+        "NM_UTRT.1:r.[53dup;54dup;55dup]",
+        "NM_UTRT.1:r.[53dup;58_59dup]",
+        "and the authored spelling must reach it",
     );
 }
 
@@ -375,8 +529,21 @@ fn a_five_prime_incomplete_records_rna_axis_is_transcript_relative() {
     let provider = provider_five_prime_incomplete("NR_NOSTART.1");
     let tx = normalize(&provider, "NR_NOSTART.1:n.[9dup;10dup;11dup]");
     let rna = normalize(&provider, "NR_NOSTART.1:r.[9dup;10dup;11dup]");
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08,
+    // `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`): was
+    // `NR_NOSTART.1:r.9_10insuaa`, now `NR_NOSTART.1:r.[9dup;10_11a[4]]`,
+    // byte-identical to the non-coding reproducer's answer on the same core —
+    // which is the point of this slice. `9dup` stays its own member
+    // (`general.md:34`); `10dup` and `11dup` land on one junction and merge.
+    //
+    // The claim this row carries is unchanged: the write still *takes*, so the
+    // repeated member is still gone. Sequence unchanged, measured with
+    // `spec_corpus::denotation_of` (via `hgvs_to_spdi`, not the normalizer) —
+    // `Denotation::Sequence`, equal to the input's, where a repeated member
+    // gives `Denotation::NoSequence`. Output is a fixed point.
     assert_eq!(
-        rna, "NR_NOSTART.1:r.9_10insuaa",
+        rna, "NR_NOSTART.1:r.[9dup;10_11a[4]]",
         "a record with `cds_end` but no `cds_start` has no CDS to resolve \
          through, so its `r.` axis numbers the transcript — resolving it \
          through the CDS instead reverts the write and leaves \
@@ -387,5 +554,16 @@ fn a_five_prime_incomplete_records_rna_axis_is_transcript_relative() {
         as_rna_spelling(&tx),
         "and it must agree with the `n.` axis of the same record (`n.` gave \
          `{tx}`)"
+    );
+    // The two properties the comment above states, asserted rather than
+    // described. Run on the `n.` axis: `as_rna_spelling` is a re-spelling of
+    // that same answer, so checking it here would measure the renderer twice
+    // and the normalization once.
+    assert_reaches_preserving(
+        &provider,
+        CORE,
+        "NR_NOSTART.1:n.[9dup;10dup;11dup]",
+        &tx,
+        "the `n.` axis answer is the one the `r.` spelling above is derived from",
     );
 }
