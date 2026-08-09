@@ -74,6 +74,7 @@ mod conformance_summary_generated;
 mod convert_gff_library_parity;
 mod convert_tests;
 mod coordinate_boundary_tests;
+mod corpus_alphabet_and_intronic_validity;
 mod coverage_gap_tests;
 mod cross_doc_adjacent_changes;
 mod cross_doc_compliance;
