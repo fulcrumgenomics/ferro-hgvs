@@ -79,6 +79,7 @@ mod coverage_gap_tests;
 mod cross_doc_adjacent_changes;
 mod cross_doc_compliance;
 mod dbsnp_tests;
+mod defect_371_transcript_exit;
 mod del_shift_matrix;
 mod dup_shift_matrix;
 mod edge_case_notation_tests;
