@@ -47,7 +47,7 @@
 //!
 //! | counter | 3' | 5' | what it is |
 //! |---|---|---|---|
-//! | `outputs_leaving_the_transcript` | **371** | 0 | a `c.`/`n.` output naming an INTRONIC position its input did not. `general.md:44` exempts junction-adjacent deletions/duplications from the 3' rule; `checklist.md:20` says a bare `NM_` cannot express an intronic position at all. **Entirely minus-strand**: the same design on a plus-strand transcript clamps at the exon end correctly |
+//! | `outputs_leaving_the_transcript` | **371** | 0 | a `c.`/`n.` output naming an INTRONIC position its input did not. `checklist.md:20` — a bare `NM_` cannot express an intronic position at all. See the correction below: the SHIFT is legal, the ACCESSION is not |
 //! | `outputs_denoting_no_sequence` | 10 | 18 | two members of the OUTPUT claim one territory, so it denotes nothing — rank-1 invalid |
 //! | `sequence_changed` | 4 | 0 | the output denotes different bases from the input; a member was dropped |
 //! | `non_idempotent_outputs` | 7 | 4 | the output is not its own fixed point |
@@ -62,6 +62,43 @@
 //!
 //! The 3'/5' asymmetry is itself a finding: the transcript-leaving class is
 //! **371 to 0**, and 3' is the default direction.
+//!
+//! # CORRECTED — what the transcript-leaving class actually violates
+//!
+//! An earlier form of the table above said `general.md:44` "exempts
+//! junction-adjacent deletions/duplications from the 3' rule", implying the shift
+//! into the intron is itself forbidden. **It is not, and citing it that way
+//! points at an exception the spec withholds.** `general.md:44` defers to
+//! `background/numbering.md`, and that file scopes the exception twice:
+//!
+//! - `:23` — "the 3' rule is not applied when there is a deletion/duplication
+//!   around **exon/exon** junctions with identical nucleotides flanking the
+//!   junction, **where shifting the variant 3' would place it in the next
+//!   exon**."
+//! - `:26` — "**NOTE**: this exception **does not apply** to a
+//!   deletion/duplication around **exon/intron and intron/exon** junctions with
+//!   identical nucleotides flanking the junction".
+//!
+//! The 371 rows are exactly the exon→intron case `:26` excludes, so the shift is
+//! legal and ferro already blocks the exon→exon case the exception does cover.
+//! What is invalid is the **accession**: `checklist.md:20` forbids a bare `NM_`
+//! from naming an intronic position. So converging these rows on the clamped
+//! in-exon answer would implement an exception the spec explicitly withholds —
+//! and would silently revert #670. The live candidates are re-parenting onto a
+//! genomic wrapper, or refusal.
+//!
+//! Two further corrections from the same investigation, both measured:
+//!
+//! - **The 3'/5' split is a claim about the CODE, not the corpus.** All three
+//!   copies of the #670 gate (`normalize_cds`, `normalize_tx`, `normalize_rna`)
+//!   are guarded on `ThreePrime` with no 5' mirror. Sweeping 16 placements with a
+//!   matching preceding intron, the 5' direction never leaves the exon.
+//! - **The strand is a confound, not a finding.** "Entirely minus-strand" is an
+//!   artifact of the fixture: the provider writes a literal `GATTACA` intron and
+//!   reverse-complements only the exon blocks, so against `AT` cores `G` never
+//!   continues a run and `AA` always does. Holding the transcript-direction
+//!   intron fixed makes both strands agree. See `defect_371_transcript_exit.rs`,
+//!   whose `junction_provider` takes the intron as a parameter for this reason.
 //!
 //! # The honest-zero discipline is enforced, not described
 //!
@@ -243,7 +280,21 @@ impl CorpusShape {
 /// accuses the implementation of a defect that is really a stale constant.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Census {
-    /// Spellings normalized, across every row.
+    /// Spellings **attempted**, across every row — incremented before
+    /// `parse_hgvs` runs, so it counts every spelling the sweep reached.
+    ///
+    /// Deliberately not "spellings normalized": a spelling that fails to parse,
+    /// or that normalization declines, is counted here **and** in
+    /// [`Census::declined`]. The two are therefore NOT disjoint buckets, and the
+    /// `report` line's `"{} outputs, {} declined"` must not be read as though
+    /// they were — subtracting one from the other is wrong the moment `declined`
+    /// leaves zero. Both pins hold `declined: 0` today, so the two readings
+    /// coincide and nothing is currently mis-stated; this doc is what stops a
+    /// future re-bless with a non-zero `declined` being read wrongly.
+    ///
+    /// Counting attempts rather than successes is the useful choice: it makes
+    /// `outputs == SHAPE.spellings` a cross-check between the shape pin and the
+    /// census pin, which a success-only counter could not provide.
     pub(crate) outputs: usize,
     /// Spellings normalization declined or panicked on, in a stratum where an
     /// output was expected. Counted apart from a divergence, so one cannot hide

@@ -70,42 +70,62 @@ fn normalize_3prime(frame: &Frame, input: &str) -> String {
 /// **Question.** May the 3' shift move a deletion out of an exon and into the
 /// following intron?
 ///
-/// **The clauses say no, twice.** `general.md:44` makes it an explicit exception:
-/// "**exception**: deletions/duplications around exon/exon junctions using
-/// **c.**, **r.** or **n.** reference sequences". And `checklist.md:20` says the
-/// output is not even expressible against the accession it carries — "NM
-/// reference sequences cover mature transcripts and **do not contain** intron and
-/// gene flanking sequences, and can only be used to describe variants in introns
-/// using a `c.` prefix when a genomic reference sequence is given".
+/// **Yes — the shift is legal. It is the ACCESSION that is not.** This doc
+/// comment previously said "the clauses say no, twice" and cited `general.md:44`
+/// as forbidding the shift. That was backwards, and it mattered: it named a
+/// target that would implement an exception the spec explicitly withholds.
 ///
-/// **Ferro clamps correctly on the plus strand and not on the minus strand.** The
-/// same design, the same transcript sequence, the same CDS and the same exon
-/// boundaries: `c.17del` gives `c.20del` on a plus-strand transcript (clamped at
-/// the exon's last base, which is `c.20`) and `c.20+2del` on a minus-strand one.
+/// `general.md:44` defers to `background/numbering.md`, which scopes its
+/// exception twice — `:23` applies it to **exon/exon** junctions "where shifting
+/// the variant 3' would place it in the **next exon**", and `:26` states that it
+/// "**does not apply** to a deletion/duplication around **exon/intron and
+/// intron/exon** junctions". This row is exactly the exon→intron case `:26`
+/// excludes, and ferro already blocks the exon→exon case the exception covers.
+///
+/// What IS violated is `checklist.md:20`: "NM reference sequences cover mature
+/// transcripts and **do not contain** intron and gene flanking sequences, and can
+/// only be used to describe variants in introns using a `c.` prefix when a
+/// genomic reference sequence is given". So the output names a position its own
+/// accession cannot express. Converging on the clamped `c.20del` would revert
+/// #670; the live candidates are re-parenting onto a genomic wrapper, or refusal.
+///
+/// **The strand is a confound, not a finding.** The plus/minus difference below
+/// is real but is a property of the fixture: the provider writes a literal
+/// `GATTACA` intron and reverse-complements only the exon blocks, so against an
+/// `AT` core `G` never continues a run and `AA` always does. Hold the
+/// transcript-direction intron fixed and both strands agree — see
+/// `defect_371_transcript_exit.rs`, whose `junction_provider` takes the intron as
+/// a parameter for precisely this reason.
 ///
 /// This is the largest single class the corpus found — **371 outputs on the 3'
 /// direction and 0 on the 5'** — and it is structurally invisible to a
-/// single-exon fixture, which is #1478 exactly.
+/// single-exon fixture, which is #1478 exactly. The 0 at 5' is a claim about the
+/// code, not the corpus: all three copies of the #670 gate are guarded on
+/// `ThreePrime` with no 5' mirror.
 #[test]
 fn a_minus_strand_junction_shift_leaves_the_transcript() {
     let core = at_core();
     let plus = Frame::build(RefShape::CodingMultiExon(Strand::Plus), &core);
     let minus = Frame::build(RefShape::CodingMultiExon(Strand::Minus), &core);
 
-    // The control: on the plus strand the shift stops at the exon's last base.
+    // The contrast, NOT the target: on the plus strand the shift stops inside
+    // the exon. That is a property of this fixture's intron, not a clamp the
+    // minus strand is failing to apply — see the doc comment.
     assert_eq!(
         normalize_3prime(&plus, "NM_TEST.1:c.17del"),
         "NM_TEST.1:c.20del",
-        "the plus-strand clamp is the behaviour the minus strand should match"
+        "the plus-strand contrast: same design, intron that does not continue the run"
     );
 
     // The defect: on the minus strand it walks two bases into the intron.
     assert_eq!(
         normalize_3prime(&minus, "NM_TEST.1:c.17del"),
         "NM_TEST.1:c.20+2del",
-        "PINNED DEFECT — general.md:44 exempts a junction-adjacent deletion from the 3' rule, \
-         and checklist.md:20 makes an intronic position inexpressible against a bare NM_. \
-         Correct output: NM_TEST.1:c.20del, as the plus-strand control gives."
+        "PINNED DEFECT — the SHIFT is legal (numbering.md:26 withholds general.md:44's \
+         exception from exon/intron junctions); what is invalid is the ACCESSION, since \
+         checklist.md:20 forbids a bare NM_ from naming an intronic position. The target is \
+         therefore a genomic wrapper or a refusal — NOT c.20del, which would implement an \
+         exception the spec explicitly excludes and would revert #670."
     );
 }
 
@@ -515,10 +535,20 @@ fn a_flush_deletion_and_insertion_preserves_the_sequence_in_every_run_but_one() 
     let frame = Frame::build(RefShape::CodingMultiExon(Strand::Plus), &core);
     let served = frame.served().to_string();
     let runs = homopolymer_run_starts(&served);
-    assert!(
-        runs.len() > 10,
-        "VACUOUS — the core must contain runs for this sweep to mean anything, found {}",
-        runs.len()
+    // The denominator is PINNED, not floored. `> 10` would let the core shrink
+    // to eleven runs and keep this sweep green over less than half its
+    // territory, while `pinned == vec![PINNED_DEFECT]` still held — which is the
+    // #1460 shrink-the-denominator failure this file's module doc names, applied
+    // to this test's own denominator. The doc comment above claims "all 23
+    // homopolymer runs in the `AT` core", so 23 is what it must be: a change to
+    // `DENSE_CORE_LEN` or the core alphabet has to move this number
+    // deliberately, in a reviewable diff.
+    assert_eq!(
+        runs.len(),
+        23,
+        "the sweep's denominator moved — the doc above claims all 23 homopolymer runs in the \
+         `AT` core. If the core legitimately changed, update both the count and the doc; do NOT \
+         relax this to an inequality, which is how a sweep silently narrows"
     );
 
     let mut changed: Vec<(String, String)> = Vec::new();
@@ -697,11 +727,20 @@ fn the_cds_end_flush_pair_can_also_emit_two_members_claiming_one_position() {
              sequence at all ({strand:?} strand)"
         );
 
-        // The defining property, asserted rather than described: the output is
-        // not a partition of the reference, because two members claim c.72.
-        assert!(
-            pair.matches("72del").count() >= 1 && pair.contains("72delinsCA"),
-            "the two members must both name c.72 for this to be the overlap class"
+        // The defining property, asserted through the INDEPENDENT oracle rather
+        // than by inspecting the string. The previous check —
+        // `pair.matches("72del").count() >= 1 && pair.contains("72delinsCA")` —
+        // was tautological: it re-read the two substrings the `assert_eq!` above
+        // had just pinned, so it could not fail while that one passed, and it
+        // asked nothing about denotation at all. This is the pattern
+        // `conflicting_member_geometries_are_normalized_instead_of_refused`
+        // already uses above: establish the premise with `denotation_of`, then
+        // pin the spelling.
+        assert_eq!(
+            denotation_of(frame.provider(), frame.served(), &pair),
+            Denotation::NoSequence,
+            "{strand:?}: the emitted allele must denote no sequence — that is what makes this \
+             the overlap class rather than a spelling preference"
         );
 
         // Member order in the input must not change the answer.
@@ -731,9 +770,20 @@ fn a_repeat_typing_at_the_cds_end_overlaps_its_sibling_deletion() {
     let core = acgt_core();
     for strand in [Strand::Plus, Strand::Minus] {
         let frame = Frame::build(RefShape::CodingMultiExon(strand), &core);
+        let output = normalize_3prime(&frame, "NM_TEST.1:c.[72_*1del;*2_*3insTT]");
+        // The premise the doc comment states, asserted rather than described:
+        // the emitted allele really does denote nothing. Pinning only the
+        // spelling would leave "denotes nothing" as a claim no assertion checks,
+        // and a fix that kept the string while repairing the overlap — or the
+        // reverse — would go unnoticed in both directions.
         assert_eq!(
-            normalize_3prime(&frame, "NM_TEST.1:c.[72_*1del;*2_*3insTT]"),
-            "NM_TEST.1:c.[72_*1del;*1_*2T[4]]",
+            denotation_of(frame.provider(), frame.served(), &output),
+            Denotation::NoSequence,
+            "{strand:?}: the repeat's tract must actually overlap its sibling, leaving the \
+             allele denoting no sequence"
+        );
+        assert_eq!(
+            output, "NM_TEST.1:c.[72_*1del;*1_*2T[4]]",
             "PINNED DEFECT — `72_*1del` already claims c.*1, so the `*1_*2T[4]` \
              tract overlaps it and the allele denotes no sequence ({strand:?})"
         );
