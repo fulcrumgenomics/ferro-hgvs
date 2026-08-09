@@ -461,3 +461,196 @@ fn a_frameless_irreducible_separation_of_one_is_not_merged() {
          says two variants separated by one or more nucleotides are described individually"
     );
 }
+
+// ---------------------------------------------------------------------------
+// A flush deletion + insertion pair is normalized per member, and the members
+// interfere
+// ---------------------------------------------------------------------------
+
+/// Every homopolymer-run start in the corpus's `AT` core, as `(index, run end)`.
+///
+/// A run is where a lone deletion is ambiguous under the 3'rule, so it is
+/// exactly where a sibling insertion can be transposed past. Derived from the
+/// served sequence rather than listed, so the cases track the core.
+fn homopolymer_run_starts(served: &str) -> Vec<usize> {
+    let bytes = served.as_bytes();
+    let mut starts = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let mut j = i;
+        while j + 1 < bytes.len() && bytes[j + 1] == bytes[i] {
+            j += 1;
+        }
+        if j > i {
+            starts.push(i);
+        }
+        i = j + 1;
+    }
+    starts
+}
+
+/// **Question.** `c.[Ndel;N_N+1insG]` deletes one base and inserts `G` at the
+/// interbase immediately 3' of it, which denotes exactly `c.NG>...` — a
+/// substitution. Does ferro preserve that sequence wherever the pair is placed?
+///
+/// **Everywhere but one place.** Sweeping the flush pair across all 23
+/// homopolymer runs in the `AT` core — the only positions where the deletion is
+/// ambiguous enough to move — 22 collapse to the substitution and one does not:
+/// `c.[72del;72_*1insG]`, at the CDS/3'UTR boundary, comes out as
+/// `c.[72delinsTG;*2del]`, which denotes the same bases in the wrong ORDER.
+///
+/// **The run length is not the variable, and neither is the boundary.** Runs of
+/// two through seven all pass, including three-base runs at indices 45, 65 and
+/// 70; both UTRs pass internally. The one failing row is pinned below rather
+/// than excluded, and this test **fails when it starts passing** — that is
+/// deliberate, in the `KNOWN_DIVERGENT_INPUTS` tradition: a fixed deviation must
+/// not rot in a list unnoticed. When it goes green, delete the pin.
+#[test]
+fn a_flush_deletion_and_insertion_preserves_the_sequence_in_every_run_but_one() {
+    /// The one row that does not preserve its sequence. See
+    /// `the_cds_end_flush_pair_is_its_two_members_normalized_separately` for why.
+    const PINNED_DEFECT: &str = "NM_TEST.1:c.[72del;72_*1insG]";
+
+    let core = at_core();
+    let frame = Frame::build(RefShape::CodingMultiExon(Strand::Plus), &core);
+    let served = frame.served().to_string();
+    let runs = homopolymer_run_starts(&served);
+    assert!(
+        runs.len() > 10,
+        "VACUOUS — the core must contain runs for this sweep to mean anything, found {}",
+        runs.len()
+    );
+
+    let mut changed: Vec<(String, String)> = Vec::new();
+    for start in &runs {
+        let (start, first, next) = (*start, frame.label(*start), frame.label(*start + 1));
+        let input = format!("NM_TEST.1:c.[{first}del;{first}_{next}insG]");
+        let output = normalize_3prime(&frame, &input);
+        // Deleting the run's first base and inserting `G` flush 3' of it leaves
+        // one `G` where that base was; every other base is untouched.
+        let expected = format!("{}G{}", &served[..start], &served[start + 1..]);
+        match denotation_of(frame.provider(), frame.served(), &output) {
+            Denotation::Sequence(applied) if applied == expected => {}
+            Denotation::Sequence(_) => changed.push((input, output)),
+            other => panic!("{input} -> {output} denotes nothing comparable: {other:?}"),
+        }
+    }
+
+    let pinned: Vec<&String> = changed.iter().map(|(input, _)| input).collect();
+    assert_eq!(
+        pinned,
+        vec![PINNED_DEFECT],
+        "the set of flush pairs that change their sequence moved. Swept {} runs; \
+         expected exactly the pinned CDS-end row to fail. If this row now PASSES, \
+         the defect is fixed — delete the pin rather than widening it.",
+        runs.len()
+    );
+}
+
+/// **Question.** Why does that one row change its sequence, when each of the two
+/// members is placed legally and the pair denotes an ordinary substitution?
+///
+/// **Because ferro normalizes the members separately and concatenates the
+/// answers.** Measured on a core carrying `CCC` across `c.72`/`c.*1`/`c.*2`, so
+/// the deletion is ambiguous across the CDS/3'UTR boundary:
+///
+/// ```text
+/// c.72del            -> c.*2del         correct alone: 3'-most in the CCC run
+/// c.72_*1insG        -> c.72delinsCG    correct alone: collapses the flush pair
+/// c.[72del;72_*1insG] -> c.[72delinsCG;*2del]   <- exactly the two, side by side
+/// ```
+///
+/// Each member's answer is right in isolation. Together they are wrong, because
+/// the deletion's 3' shift runs over a homopolymer that its sibling has already
+/// split: once `G` sits between `c.72` and `c.*1`, `CCC` is no longer a run in
+/// the derived sequence and the deletion is no longer ambiguous. The pair
+/// denotes `c.72C>G`; ferro's answer transposes the inserted base past the one
+/// it should have replaced.
+///
+/// **This is the sequence-preservation class**, the one property no
+/// representation argument can excuse — `background/basics.md:38` puts
+/// "unequivocal" among the spec's four stated values, and a description denoting
+/// bases the input did not is not a representation choice.
+#[test]
+fn the_cds_end_flush_pair_is_its_two_members_normalized_separately() {
+    let frame = boundary_run_frame(83);
+    let deletion_alone = normalize_3prime(&frame, "NM_TEST.1:c.72del");
+    let insertion_alone = normalize_3prime(&frame, "NM_TEST.1:c.72_*1insG");
+    let pair = normalize_3prime(&frame, "NM_TEST.1:c.[72del;72_*1insG]");
+
+    // Each member is correct on its own.
+    assert_eq!(deletion_alone, "NM_TEST.1:c.*2del");
+    assert_eq!(insertion_alone, "NM_TEST.1:c.72delinsCG");
+
+    // And the pair is precisely those two answers, side by side — which is the
+    // whole defect, stated as an equality rather than asserted in prose.
+    assert_eq!(
+        pair, "NM_TEST.1:c.[72delinsCG;*2del]",
+        "PINNED DEFECT — the pair denotes c.72C>G. Ferro reaches this by shifting \
+         the deletion 3' through a run its sibling insertion has already split."
+    );
+    let concatenated = format!(
+        "NM_TEST.1:c.[{};{}]",
+        insertion_alone
+            .strip_prefix("NM_TEST.1:c.")
+            .expect("a c. description"),
+        deletion_alone
+            .strip_prefix("NM_TEST.1:c.")
+            .expect("a c. description")
+    );
+    assert_eq!(
+        pair, concatenated,
+        "the pair's output IS the two members normalized independently"
+    );
+}
+
+/// **Question.** The mirror shape at the 5'UTR/CDS boundary preserves its
+/// sequence. Is that boundary handled correctly?
+///
+/// **No — it is masked.** With an identical `CCC` run straddling
+/// `c.-1`/`c.1`/`c.2` and the identical flush shape, the lone deletion does not
+/// shift **at all**: `c.-1del` normalizes to `c.-1del`, not to `c.2del`. With
+/// nothing to shift there is nothing to transpose, so the pair survives by
+/// accident rather than by handling.
+///
+/// **Why this matters for the fix.** It would be natural to read the failing
+/// class as "the CDS end is special" and key a fix on that boundary. This test
+/// is the counter-evidence: the two boundaries differ in whether the *shift*
+/// happens, not in whether the members interfere. A fix keyed on the CDS end
+/// would be keyed on the mask.
+#[test]
+fn the_five_prime_boundary_masks_the_same_per_member_defect() {
+    let frame = boundary_run_frame(11);
+    assert_eq!(
+        normalize_3prime(&frame, "NM_TEST.1:c.-1del"),
+        "NM_TEST.1:c.-1del",
+        "PINNED — the lone deletion does not shift 3' across the 5'UTR/CDS \
+         boundary, which is what masks the pair below"
+    );
+    assert_eq!(
+        normalize_3prime(&frame, "NM_TEST.1:c.[-1del;-1_1insG]"),
+        "NM_TEST.1:c.[-1del;-1_1insG]",
+        "the pair is left alone — sequence-preserving, but by the mask above \
+         rather than by collapsing to the substitution it denotes"
+    );
+}
+
+/// A frame whose served sequence carries a three-base `CCC` run starting at
+/// `run_at`, with both flanks broken so the run is exactly three.
+///
+/// Holding the run length and alphabet fixed is what makes the two boundary
+/// tests above an A/B on the boundary alone.
+fn boundary_run_frame(run_at: usize) -> Frame {
+    let mut core: Vec<u8> = at_core().into_bytes();
+    for offset in 0..3 {
+        core[run_at + offset] = b'C';
+    }
+    if run_at > 0 {
+        core[run_at - 1] = b'A';
+    }
+    if run_at + 3 < core.len() {
+        core[run_at + 3] = b'A';
+    }
+    let core = String::from_utf8(core).expect("the core stays ASCII");
+    Frame::build(RefShape::CodingMultiExon(Strand::Plus), &core)
+}
