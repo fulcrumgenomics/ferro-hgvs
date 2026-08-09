@@ -1031,12 +1031,13 @@ proptest! {
 /// Pins the shapes the indel model holds back, so the missing spanning-delins
 /// comparison does not become permanent by inattention.
 ///
-/// **The two rows now answer differently, and the difference is the point.**
-/// Both are "length-changing members versus the spanning delins", but they sit on
-/// opposite sides of `general.md:34`'s threshold, so under the partition model
-/// one merges and one does not. Which is what the model is for: the merge is
-/// decided by the input's own separation, not by re-reading the resulting
-/// sequence.
+/// **Both rows now answer the same way, and the second one changed to get
+/// there.** An earlier revision of this comment said "the two rows now answer
+/// differently, and the difference is the point" — #1260 diverging, #1262
+/// converging. That was measured while #1262's split spelling was still falling
+/// back to the re-deriving partitioner; it no longer does, and both rows are now
+/// two partitions of one sequence reaching two canonical strings. The
+/// per-row notes below say which measurement is which.
 ///
 /// - **#1260** — two one-base insertions at gaps `258|259` and `259|260`. The
 ///   reference base at 259 lies between them, so their separation is **one**
@@ -1047,8 +1048,15 @@ proptest! {
 ///   against a 3-base payload), so there is no column-wise correspondence in
 ///   which an interior unchanged run could be found without inventing an
 ///   alignment. Two partitions, two canonical strings, one resulting sequence.
-/// - **#1262** — a substitution at 258 and a deletion at 260. These *do*
-///   converge, on the form the block derives, and always did.
+/// - **#1262** — a substitution at 258 and a deletion at 260, the reference base
+///   at 259 unchanged between them. Separation **one**, so `general.md:34`
+///   describes them individually and the pair keeps both members
+///   (`g.[258A>C;263del]`, the deletion having 3'-shifted through the `A` run).
+///   The competing `g.258_260delinsCA` is one member and stays one
+///   (`g.258_259delinsC`, trimmed but not split — it is length-changing, so the
+///   split move declines it for the same reason it declines #1260's). This row
+///   converged until the preserving arm stopped declining; see the re-bless note
+///   on the assertion itself.
 ///
 /// **This is a deliberate narrowing of what "converge" means here, not a
 /// regression, and it is worth stating plainly because the test used to be
@@ -1063,8 +1071,20 @@ proptest! {
 #[test]
 fn adjacent_gap_insertions_and_the_delins_spelling_are_distinct_partitions() {
     let provider = SyntheticBuilder::genomic("AAAAAA").build();
-    let normalizer = Normalizer::new(provider);
+    let normalizer = Normalizer::new(provider.clone());
     let normalize_str = |input: &str| normalize(&normalizer, input).to_string();
+
+    // What each descriptor denotes, through `hgvs_to_spdi` — the applier the
+    // normalizer does not consult. Both rows below pin exact strings, and a
+    // pinned string on its own cannot tell a re-spelling from a corruption:
+    // that is the one distinction deciding whether a moved output is a
+    // representation change or a defect.
+    let reference = padded("AAAAAA");
+    let denotes = |descriptor: &str| -> String {
+        let parsed = parse_hgvs(descriptor).expect("the pinned descriptor must parse");
+        resulting_sequence(&parsed, &provider, &reference)
+            .unwrap_or_else(|e| panic!("`{descriptor}` denotes no sequence: {e}"))
+    };
 
     // #1260, driven through the model itself so the held-back
     // `as_spanning_delins` encoding stays exercised rather than rotting: two
@@ -1123,6 +1143,17 @@ fn adjacent_gap_insertions_and_the_delins_spelling_are_distinct_partitions() {
         normalized[0], normalized[1],
         "the two spellings assert different partitions and must stay distinct"
     );
+    // Each output denotes its own input's bases. Asserted per spelling, not just
+    // between the two spellings: the `SequenceMatch` rung below compares the two
+    // *inputs* with each other and would stay green if normalization corrupted
+    // both of them the same way.
+    for (input, output) in encodings.iter().zip(normalized.iter()) {
+        assert_eq!(
+            denotes(output),
+            denotes(input),
+            "`{input}` -> `{output}` changed the sequence"
+        );
+    }
     // …and the property #1260 is really about still holds, on the rung built for
     // it: different canonical strings, provably the same resulting sequence.
     // `EquivalenceChecker` reaches `SequenceMatch` only after `Identical` and
@@ -1166,18 +1197,72 @@ fn adjacent_gap_insertions_and_the_delins_spelling_are_distinct_partitions() {
     // #1262: a substitution and a deletion against the spanning delins. Spelled
     // literally because the indel model has no substitution event.
     //
-    // **Fixed** by removing the input-separator veto. The derivation always
-    // reached one piece from both spellings; the veto refused the two-member one
-    // because a derived piece covered the base that spelling had left between its
-    // members, so the same variant was answered two ways depending on how it was
-    // written.
+    // RE-BLESSED under `partition-is-the-unit-of-normalization` (DECIDED,
+    // 2026-08-08,
+    // `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`). This row
+    // used to converge and no longer does, so it now reads exactly like the
+    // #1260 row above rather than as its counterexample:
+    //
+    //   split     was NC_TEST.1:g.258_259delinsC   now NC_TEST.1:g.[258A>C;263del]
+    //   spanning     NC_TEST.1:g.258_259delinsC       NC_TEST.1:g.258_259delinsC   (unmoved)
+    //
+    // `g.[258A>C;260del]` asserts **two** changed blocks with the reference base
+    // at 259 unchanged between them — separation one, the shape `general.md:34`
+    // says to describe individually — while `g.258_260delinsCA` asserts **one**.
+    // Two partitions, two canonical strings, one resulting sequence. The
+    // substitution stays put and the deletion 3'-shifts through the `A` run to
+    // 263; the spanning member is length-changing (3 reference bases against a
+    // 2-base payload), so the split move cannot reach inside it and it keeps its
+    // single block.
+    //
+    // The convergence claim this row overturns lived in
+    // `src/normalize/merge/splitter_reproducer_corpus.rs`'s module doc ("End to
+    // end, though, **#1262 converges**"), and that paragraph has now been
+    // corrected at its source. An earlier revision of this comment attributed the
+    // claim to the ruling record instead, and quoted it as "#1262 still
+    // converges, on the byte-identical string it converged on before" —
+    // `hgvs_spec_normalization_overrides.json` contains no mention of #1262 at
+    // all, so that attribution and that quotation were both wrong. What is true
+    // is the mechanism: the preserving arm now returns window coordinates rather
+    // than forcing members into the trimmed block, so the fallback to the
+    // re-deriving `partition_block` no longer fires here.
     let split = normalize_str("NC_TEST.1:g.[258A>C;260del]");
     let spanning = normalize_str("NC_TEST.1:g.258_260delinsCA");
-    assert_eq!(split, spanning, "#1262's two spellings must converge");
     assert_eq!(
-        split, "NC_TEST.1:g.258_259delinsC",
-        "and they converge on the form the block itself derives"
+        split, "NC_TEST.1:g.[258A>C;263del]",
+        "#1262's two-member spelling must keep both members (separation 1, general.md:34)"
     );
+    assert_eq!(
+        spanning, "NC_TEST.1:g.258_259delinsC",
+        "#1262's spanning spelling must keep its single member, on the string it \
+         has always reached"
+    );
+    assert_ne!(
+        split, spanning,
+        "#1262's two spellings assert different partitions and must stay distinct"
+    );
+    // Both outputs denote their input's bases and both are fixed points —
+    // measured here rather than described. This paragraph previously stated both
+    // properties as measured while the test asserted neither, so a corruption
+    // that moved both spellings consistently would have read as a representation
+    // change. `denotes` goes through `hgvs_to_spdi`, which the normalizer does
+    // not consult; the fixed-point pass is what separates "settled on a second
+    // partition" from "still moving".
+    for (input, output) in [
+        ("NC_TEST.1:g.[258A>C;260del]", &split),
+        ("NC_TEST.1:g.258_260delinsCA", &spanning),
+    ] {
+        assert_eq!(
+            denotes(output),
+            denotes(input),
+            "`{input}` -> `{output}` changed the sequence"
+        );
+        let again = normalize_str(output);
+        assert_eq!(
+            &again, output,
+            "`{input}` -> `{output}` is not a fixed point: a second pass reaches `{again}`"
+        );
+    }
 }
 
 /// Non-vacuity guard for the indel model: it must actually produce deletions,

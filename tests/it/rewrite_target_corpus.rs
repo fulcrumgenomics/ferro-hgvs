@@ -22,13 +22,15 @@
 //!   model #1260 no longer does, and is no longer required to** — its two
 //!   spellings assert different partitions of the reference (two adjacent
 //!   insertions against one spanning delins), so they are two assertions rather
-//!   than two spellings of one question. #1262 still converges, on the same
-//!   string as before. `the_confluence_targets_converge` is therefore replaced by
+//!   than two spellings of one question. **#1262 no longer converges either** —
+//!   it did until `partition_block_preserving` stopped declining, which is a
+//!   later measurement than the one this paragraph originally carried; see
+//!   `TARGET_FORMS`. `the_confluence_targets_converge` is therefore replaced by
 //!   `each_confluence_target_reaches_one_form_per_asserted_partition`, which pins
 //!   **both** strings of both rows exactly (strictly stronger than the
 //!   convergence it replaces, which pinned one per row) plus the number of rows
-//!   that still agree. See `TARGET_FORMS` for the argument, including why #1262
-//!   holds for a reason that is not preservation.
+//!   that still agree. See `TARGET_FORMS` for the argument, including what
+//!   #1262's convergence used to rest on and why that support is gone.
 //!   `every_confluence_target_denotes_one_variant` is **not**
 //!   itself a pinned failure — it is a sanity guard on this file's own rows (both
 //!   spellings really are the same variant, checked by `cis_apply_oracle::apply`,
@@ -292,17 +294,39 @@ fn every_confluence_target_denotes_one_variant() {
 /// that independently of the normalizer — so `EquivalenceChecker` remains the
 /// fallback for a consumer that needs to know they are the same variant.
 ///
-/// **#1262 still converges, on the byte-identical string it converged on
-/// before**, which is worth stating because the naive prediction is that it
-/// would go the same way as #1260. It does not, and the reason is a *decline*
+/// **#1262 has now lost its convergence too, and the note this replaces
+/// explains why it had kept it.** That note read: "the reason is a *decline*
 /// rather than a preservation: `258A>C` and `260del` are one unchanged
 /// nucleotide apart in the input, but the deletion 3'-shifts out of the trimmed
 /// block, so `partition_block_preserving` cannot place every member inside the
 /// window, returns `None`, and the caller falls back to `partition_block` — the
-/// same re-derivation the default is moving away from. Do not read this row as
-/// evidence that the partition rule preserves two-member alleles here; read it
-/// as the fallback path being exercised, and as the reason this file pins the
-/// strings rather than the property.
+/// same re-derivation the default is moving away from." That fallback no longer
+/// fires. `partition_block_preserving` returns **window** coordinates instead of
+/// forcing each member into the trimmed block — the change
+/// `partition-is-the-unit-of-normalization` records as driving the arm's decline
+/// rate to 0.0% in both directions — so there is nothing left to refuse, and the
+/// split spelling keeps its two members:
+///
+/// ```text
+/// #1262  split     was TEMPLATE:g.258_259delinsC   now TEMPLATE:g.[258A>C;263del]
+///        spanning     TEMPLATE:g.258_259delinsC       TEMPLATE:g.258_259delinsC
+/// ```
+///
+/// So the old note's warning — "do not read this row as evidence that the
+/// partition rule preserves two-member alleles here" — has been overtaken: it
+/// now *is* that evidence, and the row it was warning about no longer exists.
+/// The stale claim it left behind has now been corrected at its source rather
+/// than annotated around. It was **not** in the ruling record — an earlier
+/// revision of this comment said "the ruling record's own rationale still says
+/// `#1262 still converges`", and `hgvs_spec_normalization_overrides.json`
+/// contains no mention of #1262 at all. The sentence lived in
+/// `src/normalize/merge/splitter_reproducer_corpus.rs`'s module doc, which said
+/// "End to end, though, **#1262 converges**"; that paragraph now records the
+/// non-convergence and points here for the pinned strings.
+///
+/// **#1260 is unmoved by this change**, both strings byte-identical to what they
+/// were, which is what says the movement is #1262's fallback disappearing rather
+/// than a partitioner-wide shift.
 const TARGET_FORMS: &[(&str, &str, &str)] = &[
     (
         "#1260",
@@ -311,18 +335,27 @@ const TARGET_FORMS: &[(&str, &str, &str)] = &[
     ),
     (
         "#1262",
-        "TEMPLATE:g.258_259delinsC",
+        "TEMPLATE:g.[258A>C;263del]",
         "TEMPLATE:g.258_259delinsC",
     ),
 ];
 
 /// How many of [`TARGET_FORMS`] still reach one string from both spellings.
 ///
-/// **One of two**, down from two of two. Pinned separately from the strings so
-/// neither direction can happen quietly: a row converging again means an
-/// assertion was overruled somewhere and needs saying, and a row losing its
-/// convergence is a migration for whoever stored the merged form.
-const CONVERGING_TARGETS: usize = 1;
+/// **Zero of two**, down from one of two and originally two of two. Pinned
+/// separately from the strings so neither direction can happen quietly: a row
+/// converging again means an assertion was overruled somewhere and needs saying,
+/// and a row losing its convergence is a migration for whoever stored the merged
+/// form.
+///
+/// Zero is a stronger claim than one, not a weaker one — it says every row in
+/// this table is now a *deliberate* non-confluence licensed by
+/// `partition-is-the-unit-of-normalization`, with no row left whose agreement
+/// depends on a fallback path. Both rows' split spellings still denote their
+/// inputs' bases ([`every_confluence_target_denotes_one_variant`] proves the two
+/// spellings are one variant; the fixed-point loop below proves each answer is
+/// stable), so this is criterion 1 of #1235 and nothing worse.
+const CONVERGING_TARGETS: usize = 0;
 
 /// Each confluence target reaches the pinned form from each of its two
 /// spellings, and exactly [`CONVERGING_TARGETS`] of them still agree.

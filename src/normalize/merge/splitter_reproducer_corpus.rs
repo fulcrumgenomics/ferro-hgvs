@@ -20,10 +20,20 @@
 //! `#1262a` is where the two come apart most visibly. Its harvested block is
 //! still a collision the splitter cannot resolve (`AA -> C` is
 //! placement-invariant: every alignment of it yields the same single piece), so
-//! the row stays a `KnownDefect` below. End to end, though, **#1262 converges** —
-//! the widened block is what its answer needed. A defect at the block level and
-//! a fix at the pipeline level are not in contradiction; they are two different
-//! questions about two different inputs.
+//! the row stays a `KnownDefect` below.
+//!
+//! **End to end, #1262 no longer converges, and this paragraph used to say it
+//! did.** Under `partition-is-the-unit-of-normalization` its split spelling
+//! keeps both members (`TEMPLATE:g.[258A>C;263del]`) while its spanning spelling
+//! keeps its single one (`TEMPLATE:g.258_259delinsC`), which is a *deliberate*
+//! non-confluence the ruling licenses rather than a defect. The committed
+//! statement of that is `tests/it/rewrite_target_corpus.rs`, whose
+//! `CONVERGING_TARGETS` is pinned at **0 of 2** and whose `TARGET_FORMS` pins
+//! both strings; read it rather than this comment when the two disagree.
+//!
+//! What survives of the original point is the part about levels: a defect at the
+//! block level and a *decision* at the pipeline level are not in contradiction,
+//! because they are two different questions about two different inputs.
 //!
 //! # Why this lives here and not in `tests/it/`
 //!
