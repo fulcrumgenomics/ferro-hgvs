@@ -81,6 +81,7 @@ mod coverage_gap_tests;
 mod cross_doc_adjacent_changes;
 mod cross_doc_compliance;
 mod dbsnp_tests;
+mod defect_371_transcript_exit;
 mod del_shift_matrix;
 mod delins_equal_vs_unequal_length_discriminator;
 mod delins_equal_vs_unequal_length_hermetic;
