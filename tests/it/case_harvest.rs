@@ -130,7 +130,7 @@
 //! `cargo run --features dev --example extract_case_harvest_windows -- \
 //!  --manifest <manifest>`, and never by hand.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use ferro_hgvs::conformance::audited_provider::AuditedProvider;
@@ -330,7 +330,29 @@ struct PartitionMove {
     now: &'static str,
     /// The filed defect this move closes, if any.
     closes: Option<&'static str>,
+    /// The test that establishes the claim making this move safe to make at all:
+    /// that `recorded` and `now` denote the **same bases**, so the move is a
+    /// representation change and not a denotation change.
+    ///
+    /// Carried as `(name, function)` via [`premise`] so the name is written once.
+    /// The function is *called* by
+    /// [`every_partition_move_overrides_a_real_recorded_answer`], which is what
+    /// binds the claim: renaming or deleting a premise test is then a compile
+    /// error rather than a central claim that silently stops being checked. The
+    /// name is asserted to appear in `argument`, so a reader of the table is sent
+    /// to the same place the gate goes.
+    premise: (&'static str, fn()),
     argument: &'static str,
+}
+
+/// `(stringify!(f), f)` — the name and the function, from one mention of it.
+///
+/// Two fields written by hand would be two things to keep in step, and the whole
+/// point of the pair is that they cannot disagree.
+macro_rules! premise {
+    ($f:ident) => {
+        (stringify!($f), $f as fn())
+    };
 }
 
 /// Every row of the harvested corpus whose answer the partition rule moves.
@@ -368,6 +390,7 @@ const PARTITION_MOVES: &[PartitionMove] = &[
         recorded: "NC_000002.11:g.[47639670_47639671del;47639673G>T]",
         now: "NC_000002.11:g.47639670_47639673delinsTT",
         closes: None,
+        premise: premise!(the_grch37_split_denotes_the_same_bases_as_its_input),
         argument: "IMPROVEMENT. The input asserts one changed block; 4 reference bases (AGTG) \
                    become a 2-base payload, so there is no column-for-column correspondence and \
                    the recorded `[del;sub]` split exists only because `T` reappears in the \
@@ -384,6 +407,7 @@ const PARTITION_MOVES: &[PartitionMove] = &[
         recorded: "NM_006420.3:c.[242del;245G>A;249A>T]",
         now: "NM_006420.3:c.[242C>A;247_249delinsTT]",
         closes: None,
+        premise: premise!(the_arfgef2_pair_denotes_one_sequence),
         argument: "IMPROVEMENT, and the clearest of the three. The input asserts TWO changed \
                    blocks and the recorded answer returned THREE, at coordinates the input names \
                    nowhere (245, 249) — a partition manufactured by re-alignment across a \
@@ -399,6 +423,7 @@ const PARTITION_MOVES: &[PartitionMove] = &[
         recorded: "NC_000017.11:g.[80110044C>G;80110045dup;80110047A>G]",
         now: "NC_000017.11:g.80110044_80110047delinsGTTGG",
         closes: Some("#1542"),
+        premise: premise!(the_dup_shaped_split_denotes_the_same_bases_as_its_input),
         argument: "IMPROVEMENT that closes a filed defect. The recorded answer is #1542 itself: a \
                    re-derived three-member split whose first two members sit at separation 0, \
                    which DNA/delins.md:16 forbids. The partition rule cannot emit that shape at \
@@ -406,16 +431,23 @@ const PARTITION_MOVES: &[PartitionMove] = &[
                    cuts only at unchanged runs that reach it — so the members are not \
                    re-separated and the input's own one-block partition stands. This is a removed \
                    mechanism, not a masked symptom, which is why \
-                   `the_dup_shaped_split_does_not_touch` is un-ignored rather than deleted. Note \
+                   `the_dup_shaped_split_does_not_touch` is un-ignored rather than deleted. The \
+                   premise that makes this a representation move rather than a denotation one is \
+                   `the_dup_shaped_split_denotes_the_same_bases_as_its_input`, which applies the \
+                   recorded three members to CTGA and reaches the input's own GTTGG payload. Note \
                    the corpus census still lists this input in the red set, because that set is \
                    read out of `cases.json`; retiring it there belongs with the fixture \
                    regeneration.",
     },
 ];
 
-/// The answer this file expects for `input` — the partition rule's, where
-/// [`PARTITION_MOVES`] records one, and the fixture's otherwise.
-fn expected_answer(input: &str, recorded: &str) -> &'static str {
+/// The partition rule's answer for `input`, where [`PARTITION_MOVES`] records
+/// one. `None` means the fixture's own string still stands.
+///
+/// Returns an `Option` rather than panicking on an unnamed row so the caller does
+/// not have to pre-filter: one lookup, no panic path, and `unwrap_or(recorded)`
+/// at the call site reads as "the override, or the fixture".
+fn moved_answer(input: &str, recorded: &str) -> Option<&'static str> {
     for moved in PARTITION_MOVES {
         if moved.input == input {
             assert_eq!(
@@ -423,21 +455,25 @@ fn expected_answer(input: &str, recorded: &str) -> &'static str {
                 "{input}: PARTITION_MOVES records a different pre-move answer than cases.json \
                  does, so the table has drifted from the fixture it overrides"
             );
-            return moved.now;
+            return Some(moved.now);
         }
     }
-    // Not a moved row: the fixture's own string, borrowed for the caller's
-    // lifetime by looking it up again is not possible here, so the caller
-    // compares against `recorded` directly.
-    unreachable!("expected_answer is only called for rows PARTITION_MOVES names")
+    None
 }
 
-/// Every row named in [`PARTITION_MOVES`] is a row of the corpus, and its
-/// recorded answer is the one `cases.json` still holds.
+/// Every row named in [`PARTITION_MOVES`] is a row of the corpus, its recorded
+/// answer is the one `cases.json` still holds, and its sequence-equivalence
+/// premise still passes.
 ///
 /// Without this the override table could name an input the corpus does not
 /// carry, or claim a pre-move answer the fixture never recorded, and the gate
 /// would still be green — the table would have quietly become fiction.
+///
+/// The premise half is the one that was missing. Everything else here is about
+/// the *strings*; the claim that makes a move admissible at all is that the two
+/// strings denote the **same bases**, which is a claim about the reference and
+/// not about the table. Each row now carries its premise test as a callable, so
+/// that claim is re-checked here and a renamed premise is a compile error.
 #[test]
 fn every_partition_move_overrides_a_real_recorded_answer() {
     let cases = cases();
@@ -468,6 +504,27 @@ fn every_partition_move_overrides_a_real_recorded_answer() {
             "{}: a move with no argument is a silent re-bless",
             moved.input
         );
+
+        // THE CLAIM THAT MAKES EACH MOVE SAFE IS SEQUENCE EQUIVALENCE, and until
+        // now nothing here checked it. The table's own doc says "None of the three
+        // changes what the description denotes" and delegated the verification to
+        // three tests named only inside prose `argument` strings, which binds
+        // nothing: rename or delete a premise test and the central claim silently
+        // stops being checked while this gate stays green.
+        //
+        // Two links, because a string match and a call check different things. The
+        // call is the real binding — a renamed or deleted premise test is a
+        // *compile* error at the `premise!` site, not a passing test. The name
+        // assertion is for the reader: it sends whoever is reviewing the argument
+        // to the same test the gate just ran.
+        let (premise_name, premise_test) = moved.premise;
+        assert!(
+            moved.argument.contains(premise_name),
+            "{}: the argument must name its premise test `{premise_name}`, which is what \
+             establishes that this is a representation change and not a denotation change",
+            moved.input
+        );
+        premise_test();
     }
     assert_eq!(
         PARTITION_MOVES.len(),
@@ -537,18 +594,13 @@ fn every_row_produces_its_recorded_answer() {
     }
     assert_the_slice_answered_everything(&provider, cases.cases.len());
 
-    let moved_inputs: BTreeSet<&str> = PARTITION_MOVES.iter().map(|m| m.input).collect();
     let mut failures = Vec::new();
     let mut compared = 0usize;
     for (case, actual) in cases.cases.iter().zip(&observed) {
         let Some(recorded) = case.expected.as_deref() else {
             continue;
         };
-        let expected = if moved_inputs.contains(case.input.as_str()) {
-            expected_answer(&case.input, recorded)
-        } else {
-            recorded
-        };
+        let expected = moved_answer(&case.input, recorded).unwrap_or(recorded);
         compared += 1;
         if actual.as_deref() != Ok(expected) {
             failures.push(format!(
@@ -636,33 +688,52 @@ fn the_confluence_classes_converge() {
     }
 }
 
+/// The shuffle directions this file's separation guards sweep, with the
+/// per-direction floor on multi-member outputs that
+/// [`no_emitted_output_puts_two_members_on_consecutive_nucleotides`] examines.
+///
+/// **One list, because two would drift.** The label, the direction and the floor
+/// are carried together so a direction cannot be added to the sweep without also
+/// acquiring a floor — a direction present in the sweep but absent from the
+/// floors would be examined and never checked, which is the same blindness the
+/// floors exist against, one level up. [`the_dup_shaped_split_does_not_touch`]
+/// reads the first two fields and ignores the third.
+///
+/// The floors are measured against the shipped rule — 6 and 6, so the combined
+/// 12 is above the summed floor of 8 they replace, not a relaxation. See the
+/// note at the assertion for why they are not summed.
+const SWEPT_DIRECTIONS: [(&str, ShuffleDirection, usize); 2] = [
+    ("3'", ShuffleDirection::ThreePrime, 6),
+    ("5'", ShuffleDirection::FivePrime, 6),
+];
+
 /// No emitted output puts two members on consecutive nucleotides
 /// (`DNA/delins.md:16`).
 ///
 /// A structural property, checked over the *whole* corpus rather than on the
 /// three rows that motivated it, because that is what makes it a guard rather
 /// than three more pins. Exactly one row is exempt — the #1542 reproducer — and
-/// it is exempt because it *is* the violation this check looks for; the
-/// `#[ignore]`d [`the_dup_shaped_split_does_not_touch`] holds it.
+/// it is exempt because it *is* the violation this check looks for;
+/// [`the_dup_shaped_split_does_not_touch`] holds it. That guard is **green and
+/// un-ignored** on this branch — the sentence here read "the `#[ignore]`d
+/// [`the_dup_shaped_split_does_not_touch`]", which two other places in this file
+/// already contradict, and a stale `#[ignore]` claim is exactly the sort of
+/// thing a reader trusts instead of checking.
 #[test]
 fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
     let cases = cases();
     let provider = audited_provider();
 
-    let directions = [
-        ("3'", ShuffleDirection::ThreePrime),
-        ("5'", ShuffleDirection::FivePrime),
-    ];
     let mut observed = Vec::new();
-    for (label, direction) in directions {
+    for (label, direction, _) in SWEPT_DIRECTIONS {
         for case in &cases.cases {
             observed.push((label, case, run_in(&provider, &case.input, direction)));
         }
     }
-    assert_the_slice_answered_everything(&provider, cases.cases.len() * directions.len());
+    assert_the_slice_answered_everything(&provider, cases.cases.len() * SWEPT_DIRECTIONS.len());
 
     let mut violations = Vec::new();
-    let mut multi_member_outputs = 0usize;
+    let mut multi_member_outputs: BTreeMap<&str, usize> = BTreeMap::new();
     for (label, case, actual) in &observed {
         let Ok(output) = actual else { continue };
         let Some(bounds) = member_bounds(output) else {
@@ -674,7 +745,7 @@ fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
         if case.allows_adjacent_members() {
             continue;
         }
-        multi_member_outputs += 1;
+        *multi_member_outputs.entry(label).or_default() += 1;
         for (previous_end, next_start) in adjacent_members(output) {
             violations.push(format!(
                 "  [{label}] {} -> {output}\n    members touch at {previous_end}/{next_start} — {}",
@@ -684,15 +755,21 @@ fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
     }
 
     println!(
-        "separation check: {multi_member_outputs} multi-member output(s) examined across {} \
-         direction(s) over {} rows",
-        directions.len(),
+        "separation check: {multi_member_outputs:?} multi-member output(s) examined over {} rows",
         cases.cases.len()
     );
 
-    // A zero is only meaningful if multi-member outputs were actually examined.
+    // A zero is only meaningful if multi-member outputs were actually examined,
+    // and the count is kept **per direction** rather than summed.
     //
-    // The floor was **8** and is measured, not chosen. It nearly went blind once
+    // A combined denominator cannot establish that both directions were
+    // exercised: a floor of 8 over the sum passes when 3' contributes 8 and 5'
+    // contributes 0, which is precisely the state in which the 5' sweep — the
+    // coverage widening this guard onto both directions was meant to buy —
+    // measures nothing while the assertion reports success. That is the same
+    // blindness this floor exists against, one level up.
+    //
+    // The floors are **measured, not chosen**. This nearly went blind once
     // already: under the re-derivation partitioner five 3' outputs were
     // multi-member, and the partition rule — which returns a lone `delins` as
     // the one-member partition its author wrote — took that to four, one below
@@ -700,13 +777,15 @@ fn no_emitted_output_puts_two_members_on_consecutive_nucleotides() {
     // both supported shuffle directions are now swept, because `delins.md:16`
     // constrains *any* emitted description and not merely the 3' one, and
     // sweeping 5' is coverage this file did not have at all before.
-    assert!(
-        multi_member_outputs >= 8,
-        "only {multi_member_outputs} multi-member output(s) were examined across {} direction(s), \
-         so the separation check cannot have measured what it claims to. Widen what is examined — \
-         never lower this floor",
-        directions.len()
-    );
+    for (label, _, floor) in SWEPT_DIRECTIONS {
+        let examined = multi_member_outputs.get(label).copied().unwrap_or(0);
+        assert!(
+            examined >= floor,
+            "the {label} sweep examined only {examined} multi-member output(s) against a floor of \
+             {floor}, so it cannot have measured what it claims to. Widen what is examined — \
+             never lower this floor"
+        );
+    }
     assert!(
         violations.is_empty(),
         "{} output(s) violate delins.md:16 (\"changes involving two or more consecutive \
@@ -1294,18 +1373,28 @@ fn the_dup_shaped_split_does_not_touch() {
         .find(|case| case.input == "NC_000017.11:g.80110044_80110047delinsGTTGG")
         .expect("#1542's row is in the corpus");
 
-    let output = run(&provider, &case.input);
-    assert_the_slice_answered_everything(&provider, 1);
+    // Swept in **both** directions, off the same [`SWEPT_DIRECTIONS`] list the
+    // corpus-wide check uses, for the reason that check states for itself:
+    // `delins.md:16` constrains *any* emitted description and not merely the 3'
+    // one, so a reproducer that only runs 3' leaves the 5' answer — a description
+    // ferro will equally emit — unguarded.
+    let observed: Vec<(&str, Result<String, String>)> = SWEPT_DIRECTIONS
+        .iter()
+        .map(|(label, direction, _)| (*label, run_in(&provider, &case.input, *direction)))
+        .collect();
+    assert_the_slice_answered_everything(&provider, SWEPT_DIRECTIONS.len());
 
-    let output = output.expect("#1542's row normalizes");
-    let touching = adjacent_members(&output);
-    assert!(
-        touching.is_empty(),
-        "#1542: `{}` -> `{output}` puts members on consecutive nucleotides at {touching:?}. \
-         delins.md:16: \"changes involving two or more consecutive nucleotides are described as \
-         deletion/insertion (delins) variants\".",
-        case.input
-    );
+    for (label, output) in observed {
+        let output = output.unwrap_or_else(|e| panic!("#1542's row normalizes ({label}): {e}"));
+        let touching = adjacent_members(&output);
+        assert!(
+            touching.is_empty(),
+            "#1542 [{label}]: `{}` -> `{output}` puts members on consecutive nucleotides at \
+             {touching:?}. delins.md:16: \"changes involving two or more consecutive nucleotides \
+             are described as deletion/insertion (delins) variants\".",
+            case.input
+        );
+    }
 }
 
 #[cfg(test)]

@@ -360,6 +360,22 @@ fn each_confluence_target_reaches_one_form_per_asserted_partition() {
              pinned here; a move is a representation change whichever way it \
              goes."
         );
+        // Both pinned forms are fixed points. Preservation that is not a fixed
+        // point means the second pass re-partitions the member the first pass kept,
+        // and neither exact-string assertion above can see that: they only pin
+        // where the *first* pass landed. #1260's spanning spelling is the site most
+        // exposed to it — it now lands on the trimmed `TEMPLATE:g.259delinsCAC`
+        // rather than the authored `g.258_260` span, so a further trim on a second
+        // pass is the plausible failure.
+        for (label, form) in [("split", &norm_a), ("spanning", &norm_b)] {
+            let again = normalize(&seq, form);
+            assert_eq!(
+                &again, form,
+                "{issue}: the {label} spelling's answer `{form}` is not a fixed point \
+                 (re-normalized to `{again}`), so a second pass moves what the first \
+                 pass settled"
+            );
+        }
         if norm_a == norm_b {
             converging += 1;
         }

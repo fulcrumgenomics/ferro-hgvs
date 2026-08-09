@@ -2150,12 +2150,21 @@ enum PartitionRule {
 
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
 ///
-/// Unset, empty, or unrecognised all yield [`PartitionRule::Preserve`], the
-/// shipped rule. `live` selects the former re-derivation partitioner, kept so a
-/// release-to-release representation diff can be measured against it. An unrecognised value is warned about rather than
+/// Unset, empty, and the explicit `preserve` all yield
+/// [`PartitionRule::Preserve`], the shipped rule. `live` selects the former
+/// re-derivation partitioner, kept so a release-to-release representation diff
+/// can be measured against it — it is a comparison rule by name only and is no
+/// longer the default. An unrecognised value is warned about rather than
 /// rejected: this is a measurement knob, and a typo that silently selected a
 /// different partitioner would poison a bake-off far more quietly than one that
 /// silently ran the default and said so.
+///
+/// **An unrecognised value falls back to `live`, which is NOT the default**, so
+/// a typo does not merely fail to select a rule — it selects the retired
+/// re-derivation partitioner. That is the one respect in which this knob is not
+/// inert when misspelled, it is stated here and in the `normalize --help` text
+/// because no logger is installed to surface the warning above, and it is pinned
+/// by `unset_selects_the_shipped_rule_and_an_unrecognised_value_falls_back_to_live`.
 ///
 /// Split out from [`partition_rule`] so the mapping is testable without an
 /// environment variable — the cached read below can only ever be exercised once
@@ -2415,36 +2424,57 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     }
 
     // Which rule cuts the block. `FERRO_PARTITION` unset — the only configuration
-    // that ships — takes the `Live` arm, so this is `partition_block` and nothing
-    // else. The other two arms fall back to it when their splitter declines,
-    // rather than abandoning the canonicalization, so a bake-off run measures the
-    // partitioners and not their decline rates.
+    // that ships — takes the `Preserve` arm. `live` names the re-derivation
+    // partitioner this replaced and is kept reachable so a release-to-release
+    // representation diff has something to measure against; it is also where an
+    // unrecognised value lands, which is stated on `partition_rule_from_env`.
+    // Every arm but `Live` falls back to `partition_block` when its splitter
+    // declines, rather than abandoning the canonicalization, so a bake-off run
+    // measures the partitioners and not their decline rates.
     // `piece_origin` is the window offset the returned pieces are relative to:
     // `lo` for every arm that partitions the *trimmed block*, and 0 for a
     // successful `Preserve`, whose pieces are already in window coordinates.
     // That difference is the whole of IMPL 1. `Preserve` keeps the members the
     // input asserted, and those members need not lie inside the block at all —
     // forcing them into it is what made this arm decline a third of the time.
-    let (mut pieces, piece_origin, preserved) = match partition_rule() {
+    //
+    // `axis_floor_applied` is the third fact, and it is deliberately NOT
+    // `preserved`. It says the splitter that produced these pieces was handed
+    // `axis_min_separation`, i.e. applied the DISTANCE half of `general.md:35`
+    // and nothing else, so the codon half below still owes them a split. Two
+    // arms qualify — `Preserve` and `Shadow` — and neither qualifies on a
+    // decline, since `partition_block` never applied the floor. Keyed on the
+    // partitioner rather than on `partition_rule()` for the reason spelled out
+    // on the weight bound: a fallback whose flag is inherited from the
+    // *requested* rule is a gate switched off over pieces its premise does not
+    // describe.
+    let (mut pieces, piece_origin, preserved, axis_floor_applied) = match partition_rule() {
         PartitionRule::Live => (
             partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
             lo,
             false,
-        ),
-        PartitionRule::Shadow => (
-            partition_block_sequence_first(
-                &ref_bytes[lo..hi_ref],
-                &result[lo..hi_alt],
-                axis_min_separation(frame.reading_frame),
-            )
-            .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
-            lo,
             false,
         ),
+        PartitionRule::Shadow => match partition_block_sequence_first(
+            &ref_bytes[lo..hi_ref],
+            &result[lo..hi_alt],
+            axis_min_separation(frame.reading_frame),
+        ) {
+            Some(pieces) => (pieces, lo, false, true),
+            None => (
+                partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
+                lo,
+                false,
+                false,
+            ),
+        },
         PartitionRule::Canonical => (
             partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
                 .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
             lo,
+            false,
+            // `partition_block_canonical` takes no separation floor, so there is
+            // no half-applied exception for the codon split to finish.
             false,
         ),
         PartitionRule::CanonicalCoalesced => (
@@ -2454,6 +2484,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
             partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
                 .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
             lo,
+            false,
             false,
         ),
         PartitionRule::Preserve => {
@@ -2476,7 +2507,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
                 // a counter and emphatically NOT a `log::debug!`.
                 Some(pieces) => {
                     record_preserve_outcome(true);
-                    (pieces, 0, true)
+                    (pieces, 0, true, true)
                 }
                 None => {
                     record_preserve_outcome(false);
@@ -2487,6 +2518,10 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
                         // i.e. from a re-derivation, whatever rule was asked
                         // for — so every gate below that exists to be
                         // suspicious of a re-derived partition must still apply.
+                        false,
+                        // Nor did that re-derivation apply the axis floor, so
+                        // the codon split below has no half-applied exception
+                        // to finish.
                         false,
                     )
                 }
@@ -2659,7 +2694,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // columns changed than the input did … and merges across ten bases the input
     // left unchanged". Under `Preserve` the partition IS the input's, so there is
     // no re-derivation to be suspicious of, and the only thing that can raise the
-    // column count is a merge `general.md:34-39` explicitly licenses: merging two
+    // column count is a merge `general.md:34-35` explicitly licenses: merging two
     // members separated by one unchanged nucleotide necessarily absorbs that
     // nucleotide, adding a column the input did not mark.
     //
@@ -2667,11 +2702,37 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // mandates, and only on the reading-frame axes — where `axis_min_separation`
     // is 2, so a separation-1 pair is merged, whereas on a frameless axis the
     // floor is 1 and only separation-0 merges happen, which absorb nothing. The
-    // measured effect is that `c.[1G>T;3T>A;5A>C]` (3 input columns, one merged
-    // piece of 5) is refused, and with it EVERY coding-axis allele carrying a
-    // separation-1 pair — a silent hole in the rule that ships, not a bake-off
-    // artifact. Refusal here does not even fall back to `partition_block`; it
-    // abandons canonicalization to the per-member pipeline.
+    // measured effect is that `c.[1G>T;3T>A;5A>C]` is refused, and with it EVERY
+    // coding-axis allele carrying a separation-1 pair — a silent hole in the rule
+    // that ships, not a bake-off artifact. Refusal here does not even fall back
+    // to `partition_block`; it abandons canonicalization to the per-member
+    // pipeline.
+    //
+    // What that row's licensed merge actually produces, because the arithmetic is
+    // the whole argument and it was previously written down here as "one merged
+    // piece of 5", which the code cannot produce. The merge test is
+    // `is_substitution(prev) && is_substitution(&piece)`, and `prev` is the
+    // *accumulator*, not the previous input piece: once `c.1` and `c.3` merge,
+    // `prev` spans three reference columns and is no longer a substitution, so the
+    // chain stops there. `c.5` therefore falls to `MIN_SEPARATION_NO_FRAME`, its
+    // gap of 1 is not below that floor, and it stays its own member. The merge's
+    // product is two pieces — a three-column `delins` plus the substitution — not
+    // one five-column piece. Either way it marks MORE columns than the input's
+    // three, so the bound still refuses it and the hole this paragraph describes
+    // is unchanged; only the count was wrong.
+    //
+    // Stopping there is also what `codon-carve-out-shape-restriction` requires —
+    // that ruling limits `general.md:35` to substitution / one unchanged base /
+    // substitution — and here it coincides with the codons, `c.1`/`c.3` in codon 1
+    // and `c.5` in codon 2. Note this describes THIS loop's product, not the
+    // pipeline's final answer for that descriptor: downstream
+    // `coalesce_whole_block_inversion` reads the HULL of the pieces, which is the
+    // whole `GTTAA -> TTAAC` block and is a reverse complement, so the shipped
+    // output on this branch is `c.1_5inv`. That is why
+    // `issue_1040_inv_overrecognition_probes::a_derived_whole_block_inversion_outranks_the_codon_exception`
+    // — which asserts `c.[1_3delinsTTA;5A>C]` — is currently red. Do not read this
+    // paragraph as a claim about that test's expected string; it is a claim about
+    // what the merge loop hands the passes after it.
     //
     // KEYED ON THE PARTITIONER, NOT ON THE REQUESTED RULE, and the distinction is
     // not pedantic — it was a measured hole. The gate read
@@ -2694,26 +2755,34 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // The two conditions are independent and both apply: `unwidened` (#1484)
     // decides *which* partition's columns are counted, `preserved` decides
     // *whether* to count at all.
-    let derived_columns = match unwidened {
-        None => changed_columns_of_pieces(&pieces),
-        Some(mut raw) => {
-            shift_pieces(&mut raw, &ref_bytes, direction);
-            coalesce_adjacent_pieces(&mut raw);
-            shrink_pieces_to_differences(&mut raw, &ref_bytes);
-            changed_columns_of_pieces(&raw)
+    //
+    // `preserved` is tested FIRST rather than as the left conjunct of one
+    // condition, and that is an evaluation order, not a change of gate. The
+    // `Some` arm re-shifts, re-coalesces and re-shrinks a whole window of up to
+    // `MAX_CANONICAL_WINDOW` bases only to answer a question that is not asked
+    // when the partition is the input's — and the input's is the shipping
+    // default, so that work was paid on every block and discarded.
+    if !preserved {
+        let derived_columns = match unwidened {
+            None => changed_columns_of_pieces(&pieces),
+            Some(mut raw) => {
+                shift_pieces(&mut raw, &ref_bytes, direction);
+                coalesce_adjacent_pieces(&mut raw);
+                shrink_pieces_to_differences(&mut raw, &ref_bytes);
+                changed_columns_of_pieces(&raw)
+            }
+        };
+        if derived_columns > changed_columns_of_edits(&edits) {
+            return None;
         }
-    };
-    if !preserved && derived_columns > changed_columns_of_edits(&edits) {
-        return None;
     }
 
     // `general.md:35`'s coding exception has two halves, and `axis_min_separation`
     // supplies only the distance one. Without the codon check a reading-frame axis
     // merges `c.3` with `c.5` — different codons, so the exception does not reach
-    // them — as readily as `c.1` with `c.3`. The `Shadow` arm already calls this
-    // immediately after its splitter; `Preserve` needs it for the same reason, and
-    // the need was masked until the weight bound above stopped vetoing every
-    // reading-frame merge.
+    // them — as readily as `c.1` with `c.3`. Both splitters that take the floor
+    // need it, and the need was masked on `Preserve` until the weight bound above
+    // stopped vetoing every reading-frame merge.
     //
     // WINDOW coordinates, because `pieces` were offset into the window at the
     // top of this block. Until IMPL 1 this call passed the trimmed block and
@@ -2721,14 +2790,42 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // and both the triplet's bases and its codon arithmetic were read `lo`
     // positions too far along — silently, since a piece past the short block
     // slice simply fails the `is_merged_triplet` test and is skipped. The
-    // `Shadow` arm's call above is block-relative and correct, because its
-    // pieces have not been offset yet.
-    // `preserved`, not `partition_rule()`, for the mirror of the reason given on
-    // the bound above: this pass splits back apart a merge *the preserving arm's
-    // own floor* made, so it belongs to that arm's pieces and to no others. On a
-    // decline the pieces came from `partition_block`, which never applied that
-    // floor, and `Shadow` already calls this itself right after its splitter.
-    if preserved {
+    // shadow AUDIT's call above — inside `seqfirst_shadow_enabled()`, on
+    // `shadow_pieces` — is block-relative and correct, because those pieces have
+    // not been offset yet. Naming it "the `Shadow` arm's call" is what this
+    // comment used to say, and that misreading is the whole of the defect the
+    // paragraph below records: the audit and the arm are different code, on
+    // different pieces, and only the audit was ever calling this.
+    //
+    // `axis_floor_applied`, not `preserved` and not `partition_rule()`. This
+    // pass splits back apart a merge *the splitter's own floor* made, so it
+    // belongs to the pieces of every splitter handed `axis_min_separation` and
+    // to no others. That is `Preserve` and `Shadow` alike — an earlier revision
+    // gated on `preserved` and justified excluding `Shadow` by claiming it
+    // "already calls this itself right after its splitter", which was false: the
+    // only other call site is inside `seqfirst_shadow_enabled()`, on
+    // `shadow_pieces`, which by its own comment never affect `pieces`. Under
+    // `FERRO_PARTITION=shadow` on a reading-frame axis `c.3` therefore merged
+    // with `c.5` and nothing split them, so the bake-off was measuring a
+    // partitioner held to a weaker rule than the one it was being compared
+    // against. On a decline of either arm the pieces came from `partition_block`,
+    // which never applied the floor, so the flag is false and this does not run.
+    //
+    // MEASURED, and the measurement is the reason to state this rather than
+    // assume it. Widening the gate is NOT decorative — the split fires **99**
+    // times under `shadow` on the designed cis corpus where it fired 0 before
+    // (`preserve` is unchanged at 539). But it moves no emitted description:
+    // that corpus's `--stats` census is byte-identical across the change in both
+    // rules — 11,272 classes, 7,542 divergent under `preserve` and 2,652 under
+    // `shadow`, with the family x axis breakdown unchanged — and the suite's
+    // failure set is byte-identical under both. So 99 partitions change shape
+    // here and every one of them is neutralised before rendering. Do not read
+    // this gate as having moved the bake-off; read it as closing a hole whose
+    // blast radius on this corpus is zero, which is the only reason it is safe
+    // to land in a change already carrying a representation declaration.
+    // `partition_rule()` caches into a `OnceLock`, so no in-process test can pin
+    // the `shadow` half; this comment and the flag's keying are the guard.
+    if axis_floor_applied {
         split_codon_incompatible_triplets(&mut pieces, frame.reading_frame, w_lo, &ref_bytes);
     }
 
@@ -4330,7 +4427,7 @@ fn pieces_rebuild_block(pieces: &[Piece], reference: &[u8], result: &[u8]) -> bo
 /// Every other arm of [`PartitionRule`] answers "given these two sequences, where
 /// are the members?". This one answers "the description already said where the
 /// members are; keep them". The only boundary it moves is the one
-/// `general.md:34-39` / `DNA/delins.md:44-47` authorise: two members separated by
+/// `general.md:34-35` / `DNA/delins.md:44-47` authorise: two members separated by
 /// fewer than `min_separation` unchanged nucleotides become one.
 ///
 /// # Window coordinates end to end, and that is load-bearing
@@ -11852,6 +11949,105 @@ mod tests {
         );
     }
 
+    /// The same shape end to end, through both public exits, and twice.
+    ///
+    /// [`preserving_keeps_a_member_asserted_five_prime_of_the_trimmed_block`]
+    /// stops at the partitioner, which is where the *coordinate* claim lives. The
+    /// arm's contract does not end there: it hands back window coordinates
+    /// precisely so the downstream sibling-aware 3' shift can place the member,
+    /// which means the second normalization pass is handed an already-shifted
+    /// input and must leave it alone. That is `norm(norm(x)) == norm(x)` for the
+    /// exact geometry IMPL 1 makes reachable, and nothing pinned it.
+    ///
+    /// **Both public exits are exercised, because they are not the same code path
+    /// as far as this file's history is concerned.** `normalize()` and
+    /// `normalize_with_diagnostics()` are the only two public normalizing methods,
+    /// they both route through `normalize_core_checked` today, and #1382 exists
+    /// because `normalize_with_diagnostics` once reached
+    /// `normalize_core_canonical` directly and so skipped the oracles and the
+    /// strict-mode ladder. Asserting the diagnostics exit reaches the same string
+    /// costs one call and would have caught that.
+    ///
+    /// `FERRO_ASSERT_IDEMPOTENT=1` covers the same invariant from
+    /// `assert_seam_oracles`, but it is `#[cfg(debug_assertions)]` and opt-in, so
+    /// a release run compiles it out and an unset debug run skips it. A committed
+    /// assertion runs unconditionally.
+    ///
+    /// Multi-member on purpose: a lone member cannot exhibit the sibling half of
+    /// the placement, and `general.md:34` — "two variants separated by one or more
+    /// nucleotides should be described individually" — is what keeps the two
+    /// members apart rather than merging them, so the answer's *arity* is a claim
+    /// as well as its coordinates.
+    #[test]
+    fn a_preserved_allele_outside_the_trimmed_block_is_a_fixed_point() {
+        // The test above's geometry, shrunk to a two-base tract and extended 3' so
+        // a second member has somewhere unambiguous to sit. Positions are 1-based:
+        //   1 T  2 A  3 A  4 G  5 C  6 C  7 T  8 T  9 G  10 G
+        //
+        // Two `A`s rather than six deliberately: a six-base tract is re-spelled by
+        // the repeat rule (`g.2_7A[3]`), which is correct and is a different rule's
+        // output, so the shift's own placement would no longer be legible in the
+        // string this test pins.
+        const CONTIG: &[u8] = b"TAAGCCTTGG";
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("NC_TEST.1", std::str::from_utf8(CONTIG).unwrap());
+        let normalizer = crate::Normalizer::new(provider);
+
+        // The geometry really is the one this test is named for, or it proves
+        // nothing: the trimmed block must sit 3' of the member. Deleting either `A`
+        // denotes `TAGCCTTGG`, so `trim_common_flanks` puts the changed block at
+        // 0-based `[2, 3)` — 1-based position 3 — while the input asserts 1-based
+        // position 2, i.e. 0-based `[1, 2)`, entirely outside it. Asserted rather
+        // than described, because a fixture that stopped exhibiting the shape would
+        // leave this passing as an ordinary idempotency test.
+        let (lo, hi_ref, hi_alt) = trim_common_flanks(CONTIG, b"TAGCCTTGG");
+        assert_eq!((lo, hi_ref, hi_alt), (2, 3, 2));
+
+        // `g.2del` is that excluded member. `g.8T>G` is clear of it and cannot
+        // shift (position 7 is also `T`, and a substitution does not shift
+        // regardless), so it is the sibling whose presence makes this multi-member.
+        let input = parse_hgvs("NC_TEST.1:g.[2del;8T>G]").expect("the input parses");
+        let once = normalizer.normalize(&input).expect("normalizes");
+        let once_text = once.to_string();
+
+        // The 3' shift placed the deletion — the arm did not, and must not.
+        assert_eq!(
+            once_text, "NC_TEST.1:g.[3del;8T>G]",
+            "the preserved members must be placed 3'-most by the downstream shift, \
+             and must stay two members (general.md:34)"
+        );
+
+        // The fixed point, which is the property this test exists for.
+        let twice = normalizer
+            .normalize(&once)
+            .expect("the placed answer normalizes");
+        assert_eq!(
+            twice.to_string(),
+            once_text,
+            "the placed answer is not a fixed point, so the second pass \
+             re-partitioned or re-placed a member the first pass had already settled"
+        );
+
+        // The other public exit reaches the same string, and is a fixed point too.
+        let diagnosed = normalizer
+            .normalize_with_diagnostics(&input)
+            .expect("the diagnostics exit normalizes");
+        assert_eq!(
+            diagnosed.result.to_string(),
+            once_text,
+            "`normalize_with_diagnostics` disagreed with `normalize` on the same \
+             input; the two public exits must not answer differently (#1382)"
+        );
+        let diagnosed_twice = normalizer
+            .normalize_with_diagnostics(&diagnosed.result)
+            .expect("the diagnostics exit re-normalizes");
+        assert_eq!(
+            diagnosed_twice.result.to_string(),
+            once_text,
+            "the diagnostics exit's answer is not a fixed point"
+        );
+    }
+
     /// The calibration this task must not break: `LRG_199t1:c.850_901`
     /// (`delins.md:44`) merges a 52-base member for a reason unrelated to the
     /// codon exception (its `partition_block` sibling reaches the aligner and is
@@ -12208,21 +12404,36 @@ mod tests {
             );
         }
 
-        /// Unset means `preserve` — the shipped rule — and so does anything the
-        /// knob does not recognise.
+        /// Unset and empty mean `preserve` — the shipped rule — and an
+        /// unrecognised value means `live`.
         ///
-        /// This is the property the default path depends on, and the direction it
-        /// points changed when the default flipped: an unrecognised value must
-        /// fall through to whatever ferro actually ships, so that a typo
-        /// (`FERRO_PARTITION=preserv`) is noise rather than an instruction. Were
-        /// it to fall through to `live` instead, a typo would silently select the
-        /// retired re-derivation partitioner and re-partition every block for
-        /// whoever set it — a representation change, not a configuration.
+        /// The first half is the property the default path depends on, and its
+        /// direction changed when the default flipped.
         ///
-        /// `live` is still reachable by name, deliberately: it is what a
+        /// **The second half is asserted as it behaves, and it is a hazard worth
+        /// naming rather than a property worth having.** A typo
+        /// (`FERRO_PARTITION=preserv`) is not noise: it selects the retired
+        /// re-derivation partitioner and re-partitions every block for whoever
+        /// set it, which is a representation change rather than a configuration.
+        /// Falling through to the shipped rule instead would make a typo inert,
+        /// which is what this knob's own doc argues for, but flipping it is a
+        /// behaviour change for anyone currently relying on the fallback and is
+        /// out of scope here — it needs its own adjudication and its own
+        /// `Representation-Change:` declaration. Until then the fallback is
+        /// stated three ways deliberately, so nobody meets it by surprise: here,
+        /// in [`partition_rule_from_env`]'s doc, and in the `normalize --help`
+        /// text.
+        ///
+        /// `live` is also reachable by name, deliberately: it is what a
         /// release-to-release representation diff measures against.
+        ///
+        /// The name says both halves because they differ. It was
+        /// `unset_and_unrecognised_values_select_the_shipped_rule`, which its own
+        /// second loop contradicts — `live` is not the shipped rule — so the one
+        /// place a reader would look for the fallback's behaviour asserted the
+        /// opposite of what it is named for.
         #[test]
-        fn unset_and_unrecognised_values_select_the_shipped_rule() {
+        fn unset_selects_the_shipped_rule_and_an_unrecognised_value_falls_back_to_live() {
             for value in [None, Some(""), Some("preserve")] {
                 assert_eq!(
                     partition_rule_from_env(value),
@@ -12239,7 +12450,12 @@ mod tests {
             }
         }
 
-        /// The two non-default rules are reachable, and only by their own names.
+        /// Every non-default rule is reachable by its own name.
+        ///
+        /// Not "and only by their own names": `live` is the exception and the
+        /// assertion below says so, since an unrecognised value falls back to it
+        /// too. The count is deliberately not stated — it was "two" while four
+        /// values were asserted, which is the drift a bare number invites here.
         #[test]
         fn the_alternative_rules_are_selected_by_name() {
             assert_eq!(
@@ -12258,6 +12474,17 @@ mod tests {
             assert_eq!(
                 partition_rule_from_env(Some("canonical-coalesced")),
                 PartitionRule::CanonicalCoalesced
+            );
+            // `live` is the one value whose arm a return value cannot separate
+            // from the fallback, since the fallback is also `Live`. Delete or
+            // misspell the arm and every assertion here stays green while the
+            // documented bake-off entry point silently stops being a name. The
+            // pin cannot close that gap on its own; it states the intent so the
+            // arm is not read as redundant with the fallback and removed.
+            assert_eq!(
+                partition_rule_from_env(Some("live")),
+                PartitionRule::Live,
+                "`live` must stay reachable by name for a release-to-release diff"
             );
         }
 

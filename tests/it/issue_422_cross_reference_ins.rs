@@ -249,8 +249,16 @@ fn rna_cross_reference_expands_to_literal() {
 
 #[test]
 fn rna_cross_reference_coding_expands_cds_relative() {
-    let mut p = MockProvider::with_test_data();
-    p.add_genomic_sequence("NC_000022.10", "ACGT".repeat(50));
+    // Built twice from one closure rather than cloned: `normalize` takes the
+    // provider by value, and the second normalization below must see the same
+    // reference as the first or its fixed-point claim is about a different
+    // sequence.
+    let provider = || {
+        let mut p = MockProvider::with_test_data();
+        p.add_genomic_sequence("NC_000022.10", "ACGT".repeat(50));
+        p
+    };
+    let p = provider();
     // NM_001234.1 is coding (cds_start=5 over "AAAAATGCCCAAG…"), so r. is
     // CDS-relative: r.1_3 == c.1_3 == "ATG" (NOT n.1_3 == "AAA"). After
     // expansion the normalizer suffix-trims the trailing "G" that matches the
@@ -298,6 +306,18 @@ fn rna_cross_reference_coding_expands_cds_relative() {
     assert_eq!(
         out, "NC_000022.10:g.10_14delinsAT",
         "CDS-relative r.1_3 (ATG) must normalize within the 10_14 range; got {out}",
+    );
+
+    // The re-blessed form is a fixed point. Pinned because preservation that is
+    // not a fixed point means the second pass re-partitions the member the first
+    // pass kept whole, and an exact-string assertion on the first pass alone
+    // cannot see that. The output is a plain literal `delins` by now, so it needs
+    // no cross-reference expansion and a fresh provider is the honest input.
+    let again = normalize(&out, provider()).expect("the normalized form must itself normalize");
+    assert_eq!(
+        again, out,
+        "`{out}` is not a fixed point, so the preserved single member is being \
+         re-partitioned on a second pass",
     );
 }
 

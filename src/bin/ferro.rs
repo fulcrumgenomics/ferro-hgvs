@@ -228,18 +228,28 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
   or the variable may be removed once the choice is settled. Do not depend on
   it in production.
 
-    live       the shipped rule (default; also used when unset or empty)
+    preserve   the shipped rule (default; also used when unset or empty).
+               Keeps the partition the description asserts, applying only the
+               merge and split general.md:34-35 license
+    live       the RETIRED re-derivation partitioner, which cuts each block
+               afresh from the resulting sequence. Kept selectable by name so a
+               release-to-release representation diff can be measured against
+               it; it is NOT the default any more
     shadow     cut at the steps common to every minimal alignment
     canonical  the member-count-minimal minimal alignment
     canonical-coalesced
                canonical, plus the delins.md:44-47 merge -- a split whose
                payload realigns as one block becomes a single delins
 
-  An unrecognised value falls back to `live`, so a misspelling looks exactly
-  like 'the candidate changes nothing'. The fallback logs a warning through the
-  `log` facade, but this CLI installs no logger, so that warning is NOT visible
-  here and RUST_LOG will not surface it. The only defence is to confirm your
-  comparison reports some differences before concluding it reports none.
+  An unrecognised value falls back to `live` -- which is NOT the default -- so a
+  misspelling does not merely fail to select a rule: it silently selects the
+  retired re-derivation partitioner and re-partitions every block. Compared
+  against the shipped output that reads as 'the candidate changes everything';
+  compared against a `live` run it reads as 'the candidate changes nothing'. The
+  fallback logs a warning through the `log` facade, but this CLI installs no
+  logger, so that warning is NOT visible here and RUST_LOG will not surface it.
+  The only defence is to check the spelling and to confirm your comparison
+  reports the number of differences you expected.
 
   It is read once per process and cached, so it cannot be changed after the
   first variant is normalized. That is also why this is an environment variable
@@ -3896,7 +3906,13 @@ mod tests {
             .expect("`normalize` subcommand")
             .clone();
         let help = normalize.render_long_help().to_string();
-        for value in ["live", "shadow", "canonical", "canonical-coalesced"] {
+        for value in [
+            "preserve",
+            "live",
+            "shadow",
+            "canonical",
+            "canonical-coalesced",
+        ] {
             assert!(
                 help.contains(value),
                 "`normalize --help` does not mention the `{value}` partition rule; \
@@ -3907,6 +3923,21 @@ mod tests {
         assert!(
             help.contains("FERRO_PARTITION"),
             "the switch itself must be named in the help"
+        );
+        // Which value is the *default* is part of the contract, not decoration:
+        // the whole point of naming the values is that a reader can tell which
+        // one they get by doing nothing, and `live` held that position until the
+        // partition model shipped. Pinned against the rendered text so the help
+        // cannot go on calling the retired rule the default.
+        let default_line = help
+            .lines()
+            .find(|line| line.contains("(default; also used when unset or empty)"))
+            .expect("the help must say which partition rule is the default");
+        assert!(
+            default_line.contains("preserve"),
+            "`normalize --help` names `{}` as the default partition rule, but \
+             `partition_rule_from_env` ships `preserve`",
+            default_line.trim()
         );
     }
 

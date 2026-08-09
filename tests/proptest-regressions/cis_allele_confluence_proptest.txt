@@ -13,13 +13,24 @@
 # now replays green, and `an_indel_haplotype_normalizes_to_its_own_sequence` is
 # no longer `#[ignore]`d.
 #
-# These fifteen seeds — which between them pin all seventeen defects, plus the
-# whole-span inversion pair #1392 recorded — are now
-# the load-bearing guard, so treat them as such:
-# they are RNG seeds replayed *through* `indel_haplotype_strategy`, and editing
-# how that strategy consumes randomness makes every one of them regenerate a
-# different case while the comments still name the old ones. Check them before
-# touching the strategy.
+# SIXTEEN seeds, in two model groups, and the groups are replayed through
+# DIFFERENT strategies:
+#
+#   14 x `IndelHaplotype`  -> `indel_haplotype_strategy` / `union_core_strategy`.
+#                             These pin all seventeen defects between them.
+#    2 x `Haplotype`       -> the substitution model's `haplotype_strategy`.
+#                             #1392's whole-span inversion pair, plus the
+#                             partition model's pre-split-move case (the
+#                             substitution model's spanning delins against its
+#                             members). Both replay green; neither is an open
+#                             failure.
+#
+# All sixteen are the load-bearing guard, so treat them as such: they are RNG
+# seeds replayed *through* a strategy, and editing how that strategy consumes
+# randomness makes every seed recorded against it regenerate a different case
+# while the comments still name the old ones. Check them before touching either
+# strategy — and note the two groups draw from different ones, so the substitution
+# model is no longer free to move: it now owns two of these seeds.
 #
 # On soak depth, and on not reading a trend into it: #1320 was found at 27,633
 # successes by a 1,000,000-case run that a 200,000-case run had just passed;

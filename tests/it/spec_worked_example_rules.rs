@@ -839,13 +839,21 @@ const REJECTED: &[Rejected] = &[
     },
     Rejected {
         id: "W42",
-        clause: "recommendations/DNA/duplication.md:92",
-        quote: "the variant is not described using <code class=\"invalid\">dupins</code>, a format not used in HGVS nomenclature",
+        clause: "recommendations/DNA/inversion.md:19",
+        quote: "not as <code class=\"invalid\">g.123_456dupinv</code>",
         input: "SPEC_W42.1:g.123_234dupinv",
         why: "an inverted duplication is an insertion carrying an `inv` payload \
-              (`duplication.md:20`), never a `dup` with a suffix. The positive \
-              half of W42 — whether the payload is spelled as a coordinate range \
-              or as literal bases — is the same under-specification pinned at W11",
+              (`duplication.md:20`), never a `dup` with a suffix. The cited clause \
+              is `inversion.md:19`, which marks `dupinv` itself invalid; this row \
+              previously cited `duplication.md:92`, whose prohibition is of \
+              `dupins` — a different malformed spelling, so the citation named a \
+              clause that does not reach this input and the verbatim-quote check \
+              cannot detect that (it verifies the quote is on the line, not that \
+              the line is about the input). `inversion.md:64` carries the same \
+              ruling at length in the Q&A, and the rest of the repo already cites \
+              `:19` for this form. The positive half of W42 — whether the payload \
+              is spelled as a coordinate range or as literal bases — is the same \
+              under-specification pinned at W11",
     },
     Rejected {
         id: "W50",
@@ -1746,9 +1754,16 @@ fn every_answer_is_a_fixed_point() {
     for row in DIVERGENT {
         inputs.push((row.id, row.fixture, row.input));
     }
+    let total = inputs.len();
+    let mut errored = Vec::new();
+    let mut checked = 0usize;
     for (id, fixture, input) in inputs {
-        let Ok(once) = run(fixture, input) else {
-            continue;
+        let once = match run(fixture, input) {
+            Ok(once) => once,
+            Err(e) => {
+                errored.push(format!("  [{id}] {input}: {e}"));
+                continue;
+            }
         };
         let twice = run(fixture, &once);
         assert_eq!(
@@ -1756,7 +1771,25 @@ fn every_answer_is_a_fixed_point() {
             Ok(once.as_str()),
             "[{id}] {input} normalized to {once}, which is not a fixed point"
         );
+        checked += 1;
     }
+    // The `Err` arm used to `continue` with nothing counted, so a fixture or an
+    // accession regressing every row to an error would have reported success —
+    // against this file's own stated policy of "no test that can pass vacuously"
+    // and inconsistently with `the_forbidden_description_is_never_what_ferro_emits`,
+    // which already treats an `Err` as a violation over the same NEGATIVE rows.
+    assert!(
+        errored.is_empty(),
+        "{} of {total} fixed-point rows failed to normalize at all, so their \
+         idempotency went unchecked:\n{}",
+        errored.len(),
+        errored.join("\n")
+    );
+    assert_eq!(
+        checked, total,
+        "every row must be exercised, not skipped — {checked} of {total} reached the \
+         fixed-point comparison"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -31,7 +31,7 @@
 //! `g.19_33delinsCGG` asserts one changed block; `g.[19_23del;27_33del]` asserts
 //! two. Those are different assertions about the same resulting sequence, and
 //! `partition_block_preserving` keeps each, moving a boundary only where
-//! `general.md:34-39` / `DNA/delins.md:44-47` license it (merge two members
+//! `general.md:34-35` / `DNA/delins.md:44-47` license it (merge two members
 //! closer than the axis floor) or where `general.md:34` requires it (split an
 //! **equal-length** member whose interior holds an unchanged run reaching that
 //! floor).

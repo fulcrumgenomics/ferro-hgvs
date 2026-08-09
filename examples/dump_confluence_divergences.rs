@@ -499,6 +499,16 @@ fn main() -> ExitCode {
     // `kept + declined` is the number of blocks that reached the arm, which is
     // not the class count — one class has many spellings and some never reach
     // canonicalization at all.
+    //
+    // A zero here cannot be a *disabled instrument*, which is the one other
+    // thing it could plausibly mean and the reading the census doc on
+    // `preserve_census` exists to rule out. `record_preserve_outcome` is a no-op
+    // without the `dev` feature, but this example cannot be built without it:
+    // `dev_partitioners` is `#[cfg(feature = "dev")]`, so the two calls below do
+    // not exist otherwise, and `Cargo.toml` marks this target
+    // `required-features = ["dev"]`, so cargo declines the target by name rather
+    // than building it against a stubbed counter. There is no configuration in
+    // which this branch reports a silenced instrument as an empty corpus.
     let (kept, declined) = ferro_hgvs::normalize::dev_partitioners::preserve_census();
     let total = kept + declined;
     if total == 0 {

@@ -232,7 +232,8 @@ Normalization cuts each changed region of sequence into allele members. `FERRO_P
 
 | Value | Rule |
 |-------|------|
-| unset / empty / `live` | The shipped rule. This is what every normal invocation uses. |
+| unset / empty / `preserve` | The shipped rule. This is what every normal invocation uses. It keeps the partition the description asserts, applying only the merge and split `general.md:34-35` licenses. |
+| `live` | The **retired** re-derivation partitioner, which cuts each block afresh from the resulting sequence. Kept selectable by name so a release-to-release representation diff can be measured against it; it is no longer the default. |
 | `shadow` | Cut only at alignment steps common to *every* minimal alignment. |
 | `canonical` | The member-count-minimal minimal alignment. |
 | `canonical-coalesced` | `canonical`, plus the `delins.md:44-47` merge: a split whose payload realigns as one block is re-spelled as a single `delins`. Applied after the downstream passes rather than at partition time, so it cuts identically to `canonical` and differs only in what survives. |
@@ -270,24 +271,30 @@ This works on a **stock release build** — the switch is not behind a build fea
 
 ### Two traps worth knowing
 
-**A misspelled value looks like success, and nothing tells you.** An unrecognised value falls back to `live`, so `FERRO_PARTITION=canonicl` produces a clean, empty diff that reads as "the candidate changes nothing".
+**A misspelled value silently selects the retired rule, and nothing tells you.** An unrecognised value falls back to `live`, which is **not** the default — so `FERRO_PARTITION=canonicl` does not merely fail to select your candidate, it re-partitions every block with the retired re-derivation partitioner. Against a shipped-behaviour baseline that reads as "the candidate changes everything"; against a `live` baseline it reads as "the candidate changes nothing".
 
 The fallback does emit a warning through the `log` facade — but the `ferro` CLI installs no logger, so **that warning is not visible from the command line, and `RUST_LOG` will not surface it**. There is no signal at all.
 
 The defence is a positive control on an input **known** to differ — not on your own corpus, where a zero is ambiguous between "the switch is not taking effect" and "this corpus has no affected variants".
 
-These three run against the built-in test data, so they need no `--reference` and no prepared reference directory:
+These three run against the built-in test data, so they need no `--reference` and no prepared reference directory. Each is a single spanning `delins` whose payload happens to realign as two pieces, which is exactly where the shipped rule and the retired one part company: `preserve` keeps the one member the description asserts, while `live` re-derives the split:
 
 ```bash
-printf 'NM_001234.1:c.[2del;9del]\nNM_001234.1:c.[3del;9del]\nNM_001234.1:c.[2del;9dup]\n' > control.txt
+printf 'NM_001234.1:c.6_9delinsAAT\nNM_001234.1:c.6_9delinsGAA\nNM_001234.1:c.5_9delinsAAT\n' > control.txt
 
 ferro normalize --input control.txt --format tsv --error-mode lenient | cut -f3
-#   NM_001234.1:c.[2del;11del]   <- live
-FERRO_PARTITION=canonical ferro normalize --input control.txt --format tsv --error-mode lenient | cut -f3
-#   NM_001234.1:c.[2del;33del]   <- canonical
+#   NM_001234.1:c.6_9delinsAAT   <- preserve (the default)
+#   NM_001234.1:c.6_9delinsGAA
+#   NM_001234.1:c.5_9delinsAAT
+FERRO_PARTITION=live ferro normalize --input control.txt --format tsv --error-mode lenient | cut -f3
+#   NM_001234.1:c.[6del;9G>T]    <- live
+#   NM_001234.1:c.[6C>G;11del]
+#   NM_001234.1:c.[5_6del;9G>T]
 ```
 
 If those two produce the same output, the variable is not reaching ferro and any comparison you run is meaningless. Only once the control differs is a zero on your own corpus informative.
+
+**Choose a control for the rule you are actually measuring, and re-check it when the default moves.** These three rows discriminate `preserve` from `live`, `canonical` and `shadow`, but *not* from `canonical-coalesced`, which reaches the same spanning form by a different route. And a control is only as good as the pair it separates: the rows previously printed here discriminated the old `live` default from `canonical` and, once the default became `preserve`, produced identical output under every value of the switch — a "positive control" that silently stopped controlling, which is the same failure this section exists to warn about.
 
 **From Python, it must be set before the first normalization.** The value is read once per process and cached, so:
 

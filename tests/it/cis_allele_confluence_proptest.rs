@@ -443,7 +443,15 @@ fn core_strategy() -> impl Strategy<Value = String> {
 /// defect by hardcoded input, so these seeds are the only thing standing between
 /// a strategy edit and seventeen guards that quietly stop guarding.
 ///
-/// The substitution model has no such pinned cases, so it is free to move.
+/// **The substitution model is no longer free to move.** That sentence used to
+/// stand here and it is now false: the regression file pins **two** `Haplotype`
+/// seeds against `haplotype_strategy` — #1392's whole-span inversion pair and the
+/// partition model's pre-split-move case — so editing how *that* strategy consumes
+/// randomness invalidates them exactly as it would these. The split this comment
+/// describes still buys what it always bought (the indel seeds are insulated from
+/// substitution-model work), but it no longer means one side is unpinned. Check
+/// both files' seeds against both strategies before touching either.
+///
 /// Collapsing these two is safe once every pinned case is either fixed and
 /// re-recorded or retired — all but #1312 are fixed and replay green — or once
 /// the indel corpus runs at the soak's case count and needs the speed.
@@ -934,8 +942,13 @@ proptest! {
     ///
     /// Each of the seventeen was masked behind the one before it, which is why
     /// this was kept committed rather than deleted until it passed. The
-    /// fifteen seeds that between them pin all seventeen — plus the whole-span
-    /// inversion pair #1392 recorded — are committed below and replay green.
+    /// **fourteen** `IndelHaplotype` seeds that between them pin all seventeen are
+    /// committed in
+    /// `tests/proptest-regressions/cis_allele_confluence_proptest.txt` and replay
+    /// green. That file holds **sixteen** seeds in total: those fourteen plus two
+    /// `Haplotype` seeds belonging to the substitution model — the whole-span
+    /// inversion pair #1392 recorded, and the partition model's pre-split-move
+    /// case. Both of those replay green too, and neither is an open failure.
     ///
     /// Enabling this test was #1292's acceptance criterion, then #1316's, then
     /// #1325's; none could carry it, because the property's next failure was
@@ -1116,17 +1129,38 @@ fn adjacent_gap_insertions_and_the_delins_spelling_are_distinct_partitions() {
     // `NormalizedMatch` have both declined, so this simultaneously re-states the
     // divergence and shows it is harmless to a consumer that asks the right
     // question.
+    //
+    // Asserted over the **normalized** pair, which is the pair the claim is about:
+    // checking `encodings[0]` against `encodings[1]` proves only that the two
+    // authored spellings denote one sequence, which `haplotype.encodings()`
+    // guarantees by construction and which the surrounding properties already
+    // cover. What needs pinning is that the two *outputs* above — the strings a
+    // consumer stores — are still recognised as one variant despite being
+    // different strings. The inputs are checked too, immediately below, so nothing
+    // that used to be asserted here has been dropped.
     let checker = EquivalenceChecker::new(SyntheticBuilder::genomic("AAAAAA").build());
     let verdict = checker
+        .check(
+            &parse_hgvs(&normalized[0]).expect("parse the normalized two-member spelling"),
+            &parse_hgvs(&normalized[1]).expect("parse the normalized spanning-delins spelling"),
+        )
+        .expect("the two normalized forms must be comparable");
+    assert_eq!(
+        verdict.level,
+        EquivalenceLevel::SequenceMatch,
+        "the two normalized partitions must still be recognised as denoting one sequence"
+    );
+    let input_verdict = checker
         .check(
             &parse_hgvs(&encodings[0]).expect("parse the two-member spelling"),
             &parse_hgvs(&encodings[1]).expect("parse the spanning-delins spelling"),
         )
         .expect("the two spellings must be comparable");
     assert_eq!(
-        verdict.level,
+        input_verdict.level,
         EquivalenceLevel::SequenceMatch,
-        "the two partitions must still be recognised as denoting one sequence"
+        "the two authored spellings must denote one sequence, or the pinned \
+         divergence above is a denotation difference and not a representation one"
     );
 
     // #1262: a substitution and a deletion against the spanning delins. Spelled

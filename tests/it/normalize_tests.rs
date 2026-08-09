@@ -5664,6 +5664,19 @@ mod ins_bracketed_expansion {
             result.ends_with(&format!("delins{expanded}")),
             "the expanded payload `{expanded}` is no longer recoverable from `{result}`"
         );
+
+        // The re-blessed form is a fixed point, following the pattern
+        // `ins_canonicalization_fires_inside_allele_once` already uses below. With
+        // the member kept whole rather than split into two insertions, the second
+        // pass is where a re-partition of the preserved member would show up, and
+        // the exact-string assertion on the first pass cannot see it.
+        let provider = provider_with_genomic("NC_000001.11", 100, bases);
+        let again = normalize_ok(provider, &result);
+        assert_eq!(
+            again, result,
+            "the expanded single member must be a fixed point; re-normalizing \
+             `{result}` produced `{again}`"
+        );
     }
 
     // -------------------------------------------------------------------
