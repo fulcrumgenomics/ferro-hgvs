@@ -66,6 +66,74 @@ cargo test --features dev            # Alternative
 cargo nextest run -E 'test(parse)'   # Run specific tests by name pattern
 ```
 
+#### Fast local iteration — two knobs, both measured
+
+A one-line test edit costing two minutes is not the crate being big; it is two
+settings. Measured on an M2 Max (12 core), interleaved A/B reps, `user` CPU
+seconds quoted because wall clock on a shared machine is not reproducible:
+
+| after editing… | default setup | both knobs | speedup |
+|---|---|---|---|
+| one `tests/it/*.rs` file | 16.8–18.0 s wall / 30.7–32.4 s CPU | 5.2–5.9 s / 4.0–4.4 s | **3.1× wall, 7.4× CPU** |
+| `src/lib.rs` | 38.0–38.7 s wall / 133–136 s CPU | 9.5 s / 15.1–15.2 s | **4.0× wall, 8.9× CPU** |
+
+**Knob 1 — do not export `CARGO_INCREMENTAL=0`.** This is the big one. If your
+shell sets it (a common sccache incantation), incremental compilation is off, so
+a one-line edit to any of the 428 files in `tests/it/` recompiles all ~139 k
+lines of that crate from scratch. Confirm with `du -sh target/debug/incremental`
+— `0B` means it is off, and rustc emitting 16 codegen units instead of 256 is
+the same tell.
+
+You cannot simply set it to `1`: sccache 0.16 **hard-errors**
+(`sccache: incremental compilation is prohibited: Unset CARGO_INCREMENTAL to
+continue.`) and the build dies on a dependency build script. **Unset** it
+instead — cargo passes `-C incremental` only to workspace members, so sccache
+never sees the flag on a dependency and keeps caching the whole dependency tree;
+it soft-skips only this crate's own units, which are the ones you are
+invalidating anyway.
+
+```bash
+env -u CARGO_INCREMENTAL CARGO_TARGET_DIR=$PWD/target-incr cargo t -E 'test(my_test)'
+```
+
+Two costs, both real: `target-incr/debug/incremental` reaches **2.0 GB**, and
+flipping `CARGO_INCREMENTAL` **re-fingerprints every dependency** (measured: 318
+crates recompiled), so the incremental and non-incremental builds cannot share
+one `target/`. Use a separate `CARGO_TARGET_DIR` (`/target-*/` is gitignored) or
+pick one mode and stay in it.
+
+**Knob 2 — narrow the target set: `cargo t`.** A bare `cargo nextest run` builds
+19 test binaries plus every `[[example]]` and `[[bin]]`, so a `src/` edit relinks
+`ferro`, `ferro-web`, `ferro-benchmark`, both spec generators, ~20 examples and
+11 example-test harnesses. The `cargo t` alias (`.cargo/config.toml`) is
+`nextest run --features dev --lib --test it`, which halves the work
+(37.3 → 18.1 CPU s on a `src/lib.rs` edit). It skips the two standalone
+integration targets and the examples' own unit tests, so run `cargo ta` (the
+full suite) before pushing.
+
+**Measured and NOT worth doing** — recorded so nobody repeats them:
+
+- `[profile.test] debug = 0` / `debug = "line-tables-only"`, with or without the
+  same on `[profile.dev]`. Three-way interleaved, no effect outside noise (4.95 /
+  5.08 / 4.49 CPU s). On macOS `split-debuginfo` already defaults to `unpacked`,
+  so debuginfo lives in the `.o` files and is never copied into the binary — the
+  linker only writes a debug map. `line-tables-only` did shrink objects 270 MB →
+  164 MB and bought nothing. It is also not free to try: it re-fingerprints the
+  whole dependency tree, which is what `ci.yml` means when it says
+  `CARGO_PROFILE_TEST_DEBUG=0` "re-fingerprints every dependency" (confirmed:
+  318 crates).
+- `split-debuginfo = "unpacked"` — already the default here. No `.dSYM` bundle is
+  produced, so there is no `dsymutil` step to remove.
+- **lld.** `ld64.lld` ships inside the rustc sysroot (no Homebrew needed) and does
+  link this crate on macOS arm64, via
+  `RUSTFLAGS="-C link-arg=-fuse-ld=$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/ld64.lld"`.
+  It is **not** a win: ~14 % less CPU but consistently *worse* wall clock than
+  Apple's `ld-1267`, which is already fast.
+- **Splitting the `it` binary.** Unnecessary once knob 1 is on: with incremental
+  compilation, editing one of 428 test modules costs 3.9 s of cargo time across a
+  139 k-line crate. A split would add a second full link for every change to
+  `tests/it/common/`.
+
 #### Normalization idempotency oracle
 
 `FERRO_ASSERT_IDEMPOTENT=1` turns every `Normalizer::normalize` call into an
