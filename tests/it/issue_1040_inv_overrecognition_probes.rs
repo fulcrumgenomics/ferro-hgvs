@@ -321,6 +321,18 @@ fn a_derived_whole_block_inversion_outranks_the_codon_exception() {
     //
     // `revcomp_runs_in_distinct_codons_are_individual_on_cds_axis` above pins the
     // other side of the same axis — the case where neither rule may fire.
+    //
+    // ADJUDICATED 2026-08-09, and the verdict is that this loop is right as it
+    // stands. A sweep document proposed that `c.[1G>T;3T>A;5A>C]` and
+    // `c.[1_3delinsTTA;5A>C]` be split out of the loop and re-pinned to
+    // `c.[1_3delinsTTA;5A>C]`. That was measured on an unmerged partitioner
+    // branch, where a changed-column weight bound was being skipped; on `main`
+    // all four spellings return `c.1_5inv` and this loop is green. The four-way
+    // convergence is also the shipped v0.13.1 behaviour, so keeping it is zero
+    // representation change. Do not re-bless this to a split expectation without
+    // first re-measuring on `main` — `inversion-vs-two-delins-76-83` already
+    // governs the same shape on `inversion.md:5`, so a second, contrary pin here
+    // would be two rulings drifting apart rather than new evidence.
     for input in [
         format!("{C}:c.1_5inv"),
         format!("{C}:c.1_5delinsTTAAC"),
@@ -331,6 +343,34 @@ fn a_derived_whole_block_inversion_outranks_the_codon_exception() {
             c("GTTAA", &input),
             format!("{C}:c.1_5inv"),
             "spelling `{input}` did not converge on the inv",
+        );
+    }
+    // The negative half, and the half that cannot be re-blessed by mistake.
+    //
+    // The positive loop above pins a value, and a value pin can be moved by
+    // anyone who reads a failure as drift. Naming the *forbidden* string says
+    // which competing rule must lose: `general.md:35`'s codon exception —
+    // "**exception**: two variants separated by one nucleotide, together
+    // affecting one amino acid, should be described as a \"delins\"" — reaches
+    // c.1 and c.3, which sit one unchanged nucleotide apart inside codon 1, and
+    // merging them leaves `c.[1_3delinsTTA;5A>C]`.
+    //
+    // Nothing downstream would reject that: the sub-span `GTT -> TTA` is a
+    // legitimate `delins` in isolation, it is well formed, and it denotes the
+    // same five bases. It is wrong only against the WHOLE span, where
+    // `DNA/delins.md:5` defines a delins as a replacement "**and which is not**
+    // a substitution or inversion" and `DNA/inversion.md:5` admits the `inv` on
+    // sequence alone ("**more than one nucleotide** replacing the original
+    // sequence is the reverse complement of the original sequence"). So this
+    // assertion is the only thing in the suite that notices the codon exception
+    // outranking the inversion.
+    for input in [format!("{C}:c.1_5inv"), format!("{C}:c.[1G>T;3T>A;5A>C]")] {
+        assert_ne!(
+            c("GTTAA", &input),
+            format!("{C}:c.[1_3delinsTTA;5A>C]"),
+            "`{input}` reached the codon-merged form; `coalesce_whole_block_inversion` \
+             must outrank `apply_coding_codon_exception` on these bases \
+             (`DNA/delins.md:5`, `DNA/inversion.md:5`)",
         );
     }
 }
