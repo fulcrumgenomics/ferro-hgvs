@@ -22,7 +22,11 @@
 //!
 //! **Three of those four counters are LENIENT-MODE figures, and nothing said
 //! so.** The axis census normalizes with `NormalizeConfig::default()`, which is
-//! `ErrorMode::Lenient`. Measured here:
+//! `ErrorConfig::lenient()` — and that is worth checking rather than assuming,
+//! because `ErrorMode`'s own `#[default]` is `Strict` and `ErrorConfig::default()`
+//! is `strict()`. Only `NormalizeConfig`'s `Default` impl (`src/normalize/config.rs:91`)
+//! substitutes the lenient config, so a reader who checks either of the other two
+//! reaches the opposite conclusion. Measured here:
 //!
 //! | census counter | in lenient mode | in strict mode |
 //! |---|---|---|
