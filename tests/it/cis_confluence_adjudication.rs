@@ -312,10 +312,22 @@ fn two_adjacent_members_that_both_consume_reference_are_one_delins() {
 fn a_dup_flush_against_a_del_is_left_alone() {
     let provider = provider();
     let authored = "NM_TEST.1:c.[9T>A;13_20dup;24_31del;34_35insCACCAAAA]";
+    let output = normalized(&provider, authored);
+
+    // The bases first, and by an applier the normalizer does not consult. This
+    // test pinned a string with no denotation check until 2026-08-09, which left
+    // it unable to tell a re-spelling from a corruption — the one distinction
+    // that matters. `denotes` splices through `hgvs_to_spdi`, so a re-typing
+    // that quietly changed the sequence fails HERE rather than merely
+    // disagreeing with the pinned string below.
+    assert_eq!(
+        denotes(&provider, &output),
+        denotes(&provider, authored),
+        "the normalized form must denote the bases the input denotes"
+    );
 
     assert_eq!(
-        normalized(&provider, authored),
-        "NM_TEST.1:c.[9T>A;16_23dup;24_31del;34_35insCACCAAAA]",
+        output, "NM_TEST.1:c.[9T>A;16_23dup;24_31del;34_35insCACCAAAA]",
         "separation 0 between `16_23dup` and `24_31del`, and `DNA/duplication.md:18` \
          competes — outside the scope of the adjacency ruling, not a deviation from it"
     );

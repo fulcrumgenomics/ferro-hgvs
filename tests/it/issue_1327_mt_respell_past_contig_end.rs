@@ -48,7 +48,9 @@
 //! insertion — is fixed alongside it. There refusing *is* right, because it
 //! leaves the members in the in-range spelling they already had.
 
-use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
+use ferro_hgvs::reference::ReferenceProvider;
+use ferro_hgvs::spdi::hgvs_to_spdi;
+use ferro_hgvs::{parse_hgvs, HgvsVariant, MockProvider, Normalizer};
 
 const MT: &str = "NC_012920.1";
 const MT_LENGTH: usize = 16569;
@@ -71,6 +73,46 @@ fn normalize(input: &str, tail: &str) -> String {
         .normalize(&variant)
         .expect("lenient normalization must not reject")
         .to_string()
+}
+
+/// The bases a description denotes, applied through `hgvs_to_spdi` rather than
+/// through the normalizer, so a re-typing that changed the sequence cannot hide
+/// behind a pinned string.
+///
+/// Members are applied 3' to 5' (longer deletion first at a shared position) so
+/// an earlier splice never shifts a later member's coordinates.
+fn denotes(description: &str, tail: &str) -> String {
+    let provider = mt_provider(tail);
+    let members: Vec<HgvsVariant> = match parse_hgvs(description).expect("parses") {
+        HgvsVariant::Allele(allele) => allele.variants.clone(),
+        single => vec![single],
+    };
+    let mut triples: Vec<(usize, String, String)> = members
+        .iter()
+        .map(|member| {
+            let triple = hgvs_to_spdi(member, &provider).expect("applies");
+            (
+                usize::try_from(triple.position).expect("non-negative"),
+                triple.deletion.clone(),
+                triple.insertion.clone(),
+            )
+        })
+        .collect();
+    triples.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.len().cmp(&a.1.len())));
+    let mut edited = provider
+        .get_sequence(MT, 0, MT_LENGTH as u64)
+        .expect("the contig is served")
+        .into_bytes();
+    for (position, deletion, insertion) in &triples {
+        let end = position + deletion.len();
+        assert_eq!(
+            &edited[*position..end],
+            deletion.as_bytes(),
+            "{description}: stated bases disagree with the reference"
+        );
+        edited.splice(*position..end, insertion.bytes());
+    }
+    String::from_utf8(edited).expect("ascii")
 }
 
 /// Every endpoint the output names must exist on the contig.
@@ -184,6 +226,21 @@ fn the_wrapped_insertion_spelling_is_not_valid_hgvs() {
 
 /// Declining must not cost the in-range repairs. A collision one base earlier
 /// resolves exactly as it did before.
+///
+/// # RED on this stack, and DELIBERATELY not re-blessed
+///
+/// Ferro emits `m.[16000del;16565dup]` here rather than the pinned
+/// `m.16000T>C`. The denotation check below **passes** — the bases are the
+/// input's — so this is a re-spelling and not a corruption. It is nonetheless
+/// left red, on the same grounds as
+/// `cis_confluence_adjudication::a_dup_flush_against_a_del_is_left_alone`:
+///
+/// **Measured attribution.** The row is green under `FERRO_PARTITION=live`, so
+/// it belongs to the partition-preserving-arm defect cluster documented in
+/// `tests/it/cis_junction_crossing_shift.rs`'s module doc, not to anything this
+/// corpus branch changed — it fails identically on the base branch (#1571).
+/// Adjudicating the value would be adjudicating a defect, so the expectation
+/// stays as it is until the arm is fixed.
 #[test]
 fn an_in_range_collision_is_still_repaired() {
     // Terminal run of `T`s with the members in a `C` run further 5', so the
@@ -191,6 +248,18 @@ fn an_in_range_collision_is_still_repaired() {
     let input = "NC_012920.1:m.[16000del;16001dup]";
     let output = normalize(input, "TTTT");
     assert_within_contig(input, &output);
+    // The bases, before the spelling. This test pinned a string with no
+    // denotation check until 2026-08-09, which left it unable to distinguish a
+    // re-spelling from a corruption — and a member that travels 564 bases (the
+    // partition model shifts `16001dup` to `16565dup`) is exactly the case where
+    // that distinction decides whether it is a representation change or a
+    // regression. `denotes` splices through `hgvs_to_spdi`, an applier the
+    // normalizer does not consult.
+    assert_eq!(
+        denotes(input, "TTTT"),
+        denotes(&output, "TTTT"),
+        "`{input}` -> `{output}` must denote the same bases"
+    );
     // Pinned, not merely "parseable". A refusal, a dropped member, or some other
     // in-range spelling all satisfy a parse check, and every one of those would
     // be the regression this control exists to catch — the point is that
