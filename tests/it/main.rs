@@ -103,6 +103,7 @@ mod hgvs_rs_projection_tests;
 mod hgvs_spec_normalization_tests;
 mod hgvs_standard_tests;
 mod idempotency_tests;
+mod in_bounds_oracle_scope;
 mod input_hygiene_rejections;
 mod ins_repeat_b1_matrix;
 mod ins_shift_matrix;
