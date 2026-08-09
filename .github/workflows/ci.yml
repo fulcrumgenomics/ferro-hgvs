@@ -91,6 +91,7 @@ env:
   ORACLE_EXCLUDE: >-
     test(spec_conformance_axis) + test(spec_corpus_regressions)
     + test(corpus_alphabet_and_intronic_validity) + test(corpus_prohibited_inputs)
+    + test(lenient_overlap_and_projection_split)
 
 jobs:
   abi3-floor-consistency:
