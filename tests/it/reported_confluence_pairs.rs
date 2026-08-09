@@ -143,12 +143,30 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
 /// would not. [`the_reported_pair_census_is_unchanged`] asserts inside the
 /// per-direction loop, so each direction is already compared against the
 /// constant on its own and no sum is ever taken. Measured: both are currently 0.
+///
+/// # A rise is not automatically progress — read this before raising either
+///
+/// The number going up looks like the goal and can be the opposite of it. A
+/// pair converges when both spellings reach one string; that string can be one
+/// **neither spelling asserted**, arrived at by re-partitioning across bases the
+/// input left unchanged. `1420-v2` is the specific hazard: its cis spelling
+/// `g.[37dup;41del]` has three unchanged nucleotides between its members (38,
+/// 39, 40), and a re-derivation that merges them lands on
+/// `g.[38T>A;40_41delinsTG]` — which happens to be exactly the form #1420 asks
+/// for. That coincidence is how a defect gets banked as a fix, and it has been
+/// observed on an experimental partitioner.
+/// [`the_1420_v2_pair_does_not_converge_by_re_derivation`] below names the
+/// string so it cannot happen quietly here.
+///
+/// So a rise must name **which** pair moved and **which clause** carried it. A
+/// rise that cannot name a clause is a re-derivation, not a convergence fix.
 const CONVERGING_PAIRS_THREE_PRIME: usize = 0;
 
 /// How many reported pairs converge today under `ShuffleDirection::FivePrime`.
 ///
 /// See [`CONVERGING_PAIRS_THREE_PRIME`] for why this is tracked separately
-/// rather than shared. Measured: currently 0, same as 3'.
+/// rather than shared, and for why a rise in either direction has to name the
+/// clause that carried it. Measured: currently 0, same as 3'.
 const CONVERGING_PAIRS_FIVE_PRIME: usize = 0;
 
 /// Both directions, because a rule that converges only under the default 3'
@@ -251,13 +269,66 @@ fn the_reported_pair_census_is_unchanged() {
             "reported-pair convergence moved under {direction:?}.\n\n\
              converged ({}):\n    {}\n\nstill split ({}):\n    {}\n\n\
              If this went UP, raise CONVERGING_PAIRS_THREE_PRIME/CONVERGING_PAIRS_FIVE_PRIME \
-             (whichever direction moved) and say so in the PR — it is a representation \
-             change for anyone storing the losing spelling. If it went DOWN, a change has \
-             regressed an externally-reported defect.",
+             (whichever direction moved) and say so in the PR — it is a \
+             representation change for anyone storing the losing spelling — AND \
+             name the clause that carried the move. A rise with no clause behind \
+             it is a re-derivation onto a form neither spelling asserted, which \
+             is not progress even when it lands on the form the issue asks for. \
+             If it went DOWN, a change has regressed an externally-reported \
+             defect.",
             converged.len(),
             converged.join("\n    "),
             split.len(),
             split.join("\n    "),
+        );
+    }
+}
+
+/// `1420-v2` must not converge by re-derivation, in either direction.
+///
+/// The one row in this family where a defect coincides with an issue's ask, and
+/// therefore the one that can be banked as a fix without anybody noticing.
+///
+/// `g.[37dup;41del]`'s members are separated by three unchanged nucleotides —
+/// 38, 39 and 40 — so `general.md:34` ("two variants separated by one or more
+/// nucleotides should be described individually and **not** as a \"delins\"")
+/// keeps them individual. Re-partitioning the block from the sequence instead
+/// yields `g.[38T>A;40_41delinsTG]`, which is both what the *span* spelling
+/// `g.38_41delinsATTG` prints and what #1420 asks for. So the census would show
+/// this pair converging, on the issue's own wanted string, purely because the
+/// merge-across-unchanged-bases veto stopped firing.
+///
+/// Observed exactly that way on an experimental partitioner arm, where the 5'
+/// count went 0 -> 1 on this row alone. Named here so the string, not the
+/// count, is what fails.
+///
+/// If a change genuinely licenses the merge, this assertion is the one to argue
+/// with — cite the clause, then delete it in the same PR that raises the census.
+#[test]
+fn the_1420_v2_pair_does_not_converge_by_re_derivation() {
+    // The span spelling's answer is MEASURED here rather than written into the
+    // assertion below as a literal, so the forbidden string cannot drift away
+    // from what the span actually prints. Measured in both directions:
+    // `g.38_41delinsATTG` -> `g.[38T>A;40_41delinsTG]`.
+    const SPAN: &str = "TEMPLATE:g.38_41delinsATTG";
+    const CIS: &str = "TEMPLATE:g.[37dup;41del]";
+    const SPAN_OUTPUT: &str = "TEMPLATE:g.[38T>A;40_41delinsTG]";
+
+    for direction in DIRECTIONS {
+        let span = normalize_in(TEMPLATE, SPAN, direction);
+        assert_eq!(
+            span, SPAN_OUTPUT,
+            "{direction:?}: the `1420-v2` span spelling moved off its pinned \
+             answer. The forbidden string below is defined as what the span \
+             prints, so re-measure it before re-blessing either",
+        );
+        let cis = normalize_in(TEMPLATE, CIS, direction);
+        assert_ne!(
+            cis, span,
+            "{direction:?}: the `1420-v2` cis spelling re-derived into its span \
+             sibling's answer across three unchanged nucleotides (38, 39, 40), \
+             which `general.md:34` forbids. It coincides with #1420's wanted \
+             form; that is not a licence to raise the census",
         );
     }
 }

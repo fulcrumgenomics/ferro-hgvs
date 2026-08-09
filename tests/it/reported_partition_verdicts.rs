@@ -307,6 +307,13 @@ const REPORTED_ROWS: &[Row] = &[
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[19T>G;22_33del]",
         authority: Authority::SpecSelfConflicting,
+        // TRAP, see OPEN_GAPS. The wanted form here is ALSO what a
+        // re-partitioning of the block from the sequence produces: two
+        // deletions three unchanged nucleotides apart (25, 26, 27) coming back
+        // as a substitution plus a deletion. So this row can close for the
+        // wrong reason, and closing it for the wrong reason looks identical to
+        // closing it for the right one. Do not flip the verdict without naming
+        // the clause that licensed the merge.
         argument: "Wanted `[19T>G;22_33del]`. Same general.md:56 reason, but \
                    note the exposed substitution lands at the 5' end here \
                    rather than the 3' end — which is why #1419 argues no \
@@ -338,6 +345,14 @@ const REPORTED_ROWS: &[Row] = &[
         verdict: Verdict::Gap,
         wanted: "TEMPLATE:g.[38T>A;40_41delinsTG]",
         authority: Authority::SpecExplicit,
+        // TRAP, see OPEN_GAPS. This row's members are three unchanged
+        // nucleotides apart (38, 39, 40), and the wanted form is what a
+        // re-partitioning across them produces — so the row can converge on
+        // #1420's own ask by violating `general.md:34`. Observed on an
+        // experimental partitioner arm, where it raised
+        // `reported_confluence_pairs`' 5' census from 0 to 1 on this row alone.
+        // `the_1420_v2_pair_does_not_converge_by_re_derivation` pins the string
+        // as forbidden; read it before flipping this verdict.
         argument: "Wanted `[38T>A;40_41delinsTG]`. Reference 38-41 is `TTGC` \
                    and the result is `ATTG`, so 38 and 40-41 change and 39 \
                    does not (asserted in `reported_spans_change_the_columns_\
@@ -525,6 +540,32 @@ const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1420-v2/cis"];
 ///
 /// **This may only go down.** Up means a change has moved a row *away* from the
 /// cited recommendation.
+///
+/// # Going down is not automatically progress either
+///
+/// A gap row closes when its output becomes its `wanted` string. There are two
+/// ways for that to happen and they are not equivalent:
+///
+///  * a **licensed move** — a pass that implements the clause the issue cites,
+///    which is the fix; or
+///  * a **re-derivation** — the block re-partitioned from the sequence across
+///    bases the input left unchanged, landing on a form *neither* spelling
+///    asserted and which happens to equal the issue's ask.
+///
+/// The second has been observed, on an experimental partitioner arm, on exactly
+/// the two rows below whose `wanted` form is reachable that way: `1419-r3/cis`
+/// (`g.[19_24del;28_33del]` -> `g.[19T>G;22_33del]`, two deletions three
+/// unchanged nucleotides apart coming back as a substitution plus a deletion)
+/// and `1420-v2/cis` (`g.[37dup;41del]` -> `g.[38T>A;40_41delinsTG]`, likewise
+/// three unchanged nucleotides apart). Both are `general.md:34` violations that
+/// land on an issue's wanted string, which is precisely how a defect gets banked
+/// as a fix.
+///
+/// So lowering this constant requires naming, in the PR, **which clause carried
+/// the move** — not merely that the row now prints its wanted form. A row that
+/// converged with no clause behind it is a re-derivation and the count must not
+/// move. `reported_confluence_pairs::the_1420_v2_pair_does_not_converge_by_re_derivation`
+/// pins the `1420-v2` half of that as a forbidden string.
 const OPEN_GAPS: usize = 9;
 
 /// The `<issue>-<row>` half of an `<issue>-<row>/<spelling>` label.
