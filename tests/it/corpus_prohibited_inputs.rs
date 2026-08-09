@@ -95,17 +95,24 @@
 //!
 //! # Rulings recorded alongside this file
 //!
-//! Three clause conflicts turned up that a test cannot carry on its own, so they
-//! are recorded in `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`:
+//! Four clause conflicts turned up that a test cannot carry on its own, so they
+//! are recorded in `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`
+//! and pinned in `hgvs_spec_normalization_tests::RULING_STATUSES`:
 //!
 //! - `alignment-only-symbol-in-a-description` — `standards.md:36` lists `X` in
-//!   the DNA symbol table; `:39` scopes it to alignment. **Decided.**
+//!   the DNA symbol table; `:39` daggers it as alignment-only. **Decided** for
+//!   `:39`.
 //! - `bare-transcript-intronic-position` — `checklist.md:20` says a bare `NM_`
 //!   cannot express an intron; `checklist.md:45` glosses one anyway.
-//!   **Decided.**
+//!   **Decided** for `:20`, as a conditional clause.
+//! - `conflicting-member-geometry-refusal-scope` — whether `general.md:58`
+//!   reaches the class or only the `del`+`dup` pair it names. **Decided** for
+//!   `DNA/alleles.md:5`, with `general.md:56` cited to record that it does
+//!   **not** reach a multi-member allele.
 //! - `absolute-prohibition-enforcement-stage` — whether an absolute prohibition
 //!   is refused at parse (unconditional) or at strict-mode normalize
-//!   (opt-outable). No clause addresses it. **Undecided.**
+//!   (opt-outable). The spec addresses descriptions, not stages.
+//!   **Undecided.**
 
 use std::collections::BTreeMap;
 

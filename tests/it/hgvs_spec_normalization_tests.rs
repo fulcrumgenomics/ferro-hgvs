@@ -901,6 +901,38 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "separation-is-a-property-of-the-spelling-not-of-the-variant",
         "undecided",
     ),
+    // `standards.md:36`/`:37` list `X` and `-` in the DNA symbol table while
+    // `:39` daggers both as "used in alignment only". Decided for `:39` — the
+    // dagger sits inside the symbol cell, so `:39` is the row's own annotation
+    // rather than a competing clause. The strength grading is moot either way:
+    // `general.md:48` admits only IUPAC-IUBMB symbols and `X` is not one, so the
+    // shape fails the grammar half of rank-1 validity on its own. Ferro already
+    // refuses `-` at parse and accepts `X` in both modes; ratifying the `-`
+    // treatment moves no legal output.
+    ("alignment-only-symbol-in-a-description", "decided"),
+    // `checklist.md:20` conditions an intronic `c.` position on a genomic
+    // wrapper; `checklist.md:45` then glosses a bare `c.12-14del` as an intronic
+    // deletion, twenty-five lines later. Decided for `:20` AS A CONDITIONAL
+    // clause: strict refuses (W4007), lenient accepts. Ratifies shipped
+    // behaviour in both modes. Does not excuse the 371 bare-`NM_` intronic
+    // descriptions ferro's own junction clamp EMITS.
+    ("bare-transcript-intronic-position", "decided"),
+    // Whether `general.md:58`'s member-vs-member prohibition reaches the class of
+    // alleles whose members claim intersecting territory, or only the `del`+`dup`
+    // pair it names. Decided for `DNA/alleles.md:5` — the definition, not `:58`,
+    // is what reaches nested and coincident-insertion geometries; `:58`'s ground
+    // ("replacing it with part of the same sequence") literally describes only its
+    // own example. `general.md:56` is cited to record that it does NOT reach the
+    // question: it ranks descriptions of ONE span, and citing it against a
+    // multi-member allele is this repository's recorded cautionary error.
+    ("conflicting-member-geometry-refusal-scope", "decided"),
+    // WHERE an absolute prohibition is refused — at parse (unconditional) or at
+    // strict-mode normalize (opt-outable). The spec addresses descriptions, not
+    // stages, so there is nothing to defer to. Undecided, and recorded because
+    // ferro answers it three ways for clauses of identical strength: within
+    // `checklist.md:16` alone, `g.*10del` is refused at parse while `g.266+2del`
+    // is refused nowhere.
+    ("absolute-prohibition-enforcement-stage", "undecided"),
 ];
 
 /// Ruling records must stay well-formed, and `undecided` must stay undecided.
