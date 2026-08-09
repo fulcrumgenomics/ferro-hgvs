@@ -457,6 +457,16 @@ impl Inventory {
             if let Err(error) = check_dna_symbol_table(root) {
                 problems.push(error);
             }
+            // `standards.md` is the only scoped file that currently carries a
+            // table (verified 2026-08-09, see `FILES_KNOWN_TO_CARRY_TABLES`).
+            // A submodule bump could add one to any other file with every
+            // pinned `clause_units` count staying exactly the same, since a
+            // clause unit is a bullet/numbered item/admonition and never a
+            // table row. Pin the absence directly, so that silently enlarges
+            // into a loud refusal instead.
+            if let Err(error) = check_no_undeclared_tables(root, &self.files) {
+                problems.push(error);
+            }
             // Every inventoried file must have a scope row, so "every clause"
             // has a mechanical denominator.
             match inventoried_files(root) {
@@ -567,13 +577,31 @@ fn dna_symbol_table(root: &Path) -> Result<(Vec<char>, Vec<char>), String> {
             }
             continue;
         }
-        seen_table = true;
         let cell = trimmed
             .trim_matches('|')
             .split('|')
             .next()
             .unwrap_or_default()
             .trim();
+        // Find the table by its HEADER, not by "the first `|`-led line after
+        // `### DNA`". Any pipe-bearing line in between — a footnote, a nested
+        // list continuation — otherwise becomes row 0, and the error below then
+        // names that line as a malformed header rather than saying the table was
+        // not found. The behaviour stayed loud either way; the diagnosis was
+        // wrong, which is worse than a bare failure.
+        //
+        // Locating the header this way does NOT weaken the positional rule the
+        // comment below defends: `Symbol` is a column name and never a DNA
+        // symbol, so no real row can be mistaken for it. Once the header is
+        // found, the underline and every symbol row are still recognised by
+        // POSITION relative to it, which is the part that must not become a
+        // content test.
+        if !seen_table {
+            if cell != "Symbol" {
+                continue;
+            }
+            seen_table = true;
+        }
         let row = rows_seen;
         rows_seen += 1;
         // The header row and the alignment underline directly beneath it are
@@ -586,8 +614,9 @@ fn dna_symbol_table(root: &Path) -> Result<(Vec<char>, Vec<char>), String> {
         if row == 0 {
             if cell != "Symbol" {
                 return Err(format!(
-                    "docs/background/standards.md: expected the DNA table under `### DNA` to \
-                     open with a `Symbol` header, found `{cell}`"
+                    "docs/background/standards.md: the DNA table under `### DNA` does not open \
+                     with a `Symbol` header (found `{cell}`) — the table was located by that \
+                     header, so this means it moved mid-parse"
                 ));
             }
             continue;
@@ -648,6 +677,98 @@ fn check_dna_symbol_table(root: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// Scoped files already known to carry a markdown or HTML table.
+///
+/// `docs/background/standards.md` is the only one today: [`check_dna_symbol_table`]
+/// reads its DNA table directly, and the corpus has no dependency on its RNA
+/// table, Genetic Code table or Amino Acid Descriptions table, or on the ISCN
+/// cytogenetic band tables (`git grep` for `RNA_SYMBOLS`, `GENETIC_CODE`,
+/// `cytoBand` etc. across `src/` and `examples/` turns up nothing — those are
+/// the declared protein-axis and chromosome-scale gaps recorded on `protein/`
+/// and `DNA/complex.md`'s scope rows, not a corpus dependency).
+///
+/// Every other file in the denominator was hand-verified table-free against
+/// the pinned submodule checkout on 2026-08-09 (`find docs/background
+/// docs/recommendations -name '*.md' | xargs grep -lE '^\s*\|.*\|'` and the
+/// same for `<table` matched only this file). Adding a file to this list is
+/// itself a change that must be reviewed on its own: it means a submodule
+/// bump added tabular content the clause-unit denominator cannot see, and
+/// whoever adds the row must first decide whether the corpus needs a
+/// table-reading guard for it — the way `check_dna_symbol_table` reads this
+/// file — before declaring it accounted for.
+const FILES_KNOWN_TO_CARRY_TABLES: &[&str] = &["docs/background/standards.md"];
+
+/// Fail if any scoped file **outside** [`FILES_KNOWN_TO_CARRY_TABLES`] carries
+/// markdown or HTML table syntax.
+///
+/// This is the mechanized half of the 2026-08-09 table-blindness audit: a
+/// clause unit is a bullet, a numbered item or an admonition
+/// ([`is_clause_unit`]), so a pinned `clause_units` count cannot detect a
+/// table being added to (or growing inside) a file that does not yet have
+/// one — the count would stay exactly the same while a whole new rule surface
+/// went uncovered, the way `standards.md`'s DNA alphabet did before
+/// `check_dna_symbol_table` existed. Rather than re-run that audit by hand on
+/// every submodule bump, pin its negative result: today's table-free files
+/// must stay table-free, or the build refuses and names the file and line so
+/// a human re-does the audit on exactly the file that changed.
+fn check_no_undeclared_tables(root: &Path, files: &[FileScope]) -> Result<(), String> {
+    let mut problems = Vec::new();
+    for scope in files {
+        if FILES_KNOWN_TO_CARRY_TABLES.contains(&scope.file.as_str()) {
+            continue;
+        }
+        let path = root.join(&scope.file);
+        // Accumulated, not `?`-propagated. This function's whole shape is an
+        // audit that visits every scope and reports the problems together, and
+        // a `?` here abandoned that on the first unreadable file — discarding
+        // the problems already found and never visiting the remaining scopes.
+        // The result was an audit that reported "reading X: …" while any number
+        // of undeclared tables sat unlooked-at behind it.
+        let text = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(e) => {
+                problems.push(format!("reading {}: {e}", path.display()));
+                continue;
+            }
+        };
+        if let Some(line) = first_table_line(&text) {
+            problems.push(format!(
+                "{}:{line} now carries table syntax (a markdown `|` row or an HTML `<table>`), \
+                 which the clause-unit count cannot see. Audit it for a rule-bearing table the \
+                 way `check_dna_symbol_table` reads `standards.md`'s DNA table, then add this \
+                 file to `FILES_KNOWN_TO_CARRY_TABLES` once the table either needs no guard or \
+                 has one.",
+                scope.file
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("\n  "))
+    }
+}
+
+/// The 1-based line number of the first table-like line in `text`, if any.
+///
+/// A markdown table row is recognised the same way [`dna_symbol_table`] reads
+/// one: a line whose content, after leading whitespace, starts with `|`. That
+/// is deliberately loose (it does not require a following header-separator
+/// row), because the audit this backs is "does anything here look like table
+/// syntax", not "is this specifically a well-formed table" — a `|`-led line
+/// that is not a genuine table is itself worth a human's attention on a file
+/// this inventory says has none. An HTML `<table` tag (case-insensitive, as
+/// `background/standards.md`'s Genetic Code table opens) is the other form
+/// this repository's spec checkout uses for tabular content.
+fn first_table_line(text: &str) -> Option<usize> {
+    text.lines().enumerate().find_map(|(index, line)| {
+        let trimmed = line.trim_start();
+        let is_table_row =
+            trimmed.starts_with('|') || trimmed.to_ascii_lowercase().starts_with("<table");
+        is_table_row.then_some(index + 1)
+    })
 }
 
 /// Every markdown file the inventory is a denominator over, as repo-relative
@@ -900,6 +1021,34 @@ fn render_report(
             scope.classification.label()
         );
     }
+    // Files that are CITED but carry no scope row — `consultation/` has none by
+    // design. Without this the loop above computes their counts and then drops
+    // them, so a clause is verified and then vanishes from the accounting and
+    // `TOTAL` under-reports. The quote was checked either way; what was wrong is
+    // that the table reads as a complete accounting and was not one.
+    //
+    // `units` is `-` rather than `0`: these files have no pinned unit count
+    // because they have no scope row, and printing `0` would claim they contain
+    // no clause units, which is a different and false statement.
+    let scoped: BTreeSet<&str> = inventory.files.iter().map(|s| s.file.as_str()).collect();
+    for (file, (cited, generatable, published)) in &cited_per_file {
+        if scoped.contains(file) {
+            continue;
+        }
+        totals.1 += cited;
+        totals.2 += generatable;
+        totals.3 += published;
+        let _ = writeln!(
+            out,
+            "  {:<48} {:>5} {:>5} {:>5} {:>5}  cited only, no scope row",
+            file.trim_start_matches("docs/recommendations/")
+                .trim_start_matches("docs/"),
+            "-",
+            cited,
+            generatable,
+            published
+        );
+    }
     let _ = writeln!(
         out,
         "  {:<48} {:>5} {:>5} {:>5} {:>5}",
@@ -986,7 +1135,12 @@ mod tests {
     /// and which the `†` footnote withholds.
     #[test]
     fn the_dna_symbol_table_is_read_with_its_alignment_only_footnote() {
-        let dir = std::env::temp_dir().join(format!("ferro-symbols-{}", std::process::id()));
+        // A `TempDir`, not a PID-named path under `temp_dir()`: the manual
+        // `remove_dir_all` those used is skipped on a panicking assertion, so a
+        // failing run leaked its scratch tree and the next one inherited it.
+        // Drop-based cleanup runs on the unwind too.
+        let scratch = tempfile::TempDir::new().expect("scratch dir");
+        let dir = scratch.path();
         let file = dir.join("docs/background/standards.md");
         std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
         std::fs::write(
@@ -999,7 +1153,7 @@ mod tests {
         )
         .expect("write");
 
-        let (usable, alignment_only) = dna_symbol_table(&dir).expect("the DNA table");
+        let (usable, alignment_only) = dna_symbol_table(dir).expect("the DNA table");
         // Table order, not sorted: `DNA_SYMBOLS` is indexed positionally.
         assert_eq!(usable, vec!['A', 'N']);
         assert_eq!(alignment_only, vec!['X', '-']);
@@ -1009,8 +1163,7 @@ mod tests {
 
         // A checkout with no such table is a refusal, not an empty answer.
         std::fs::write(&file, "### DNA\n\nno table here\n").expect("rewrite");
-        assert!(dna_symbol_table(&dir).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(dna_symbol_table(dir).is_err());
     }
 
     /// A quote that has moved must be reported, and the report must show the
@@ -1018,17 +1171,99 @@ mod tests {
     /// leaves the reader to guess whether the line or the citation moved.
     #[test]
     fn a_moved_quote_is_reported_with_the_line_it_found() {
-        let dir = std::env::temp_dir().join(format!("ferro-spec-corpus-{}", std::process::id()));
+        let scratch = tempfile::TempDir::new().expect("scratch dir");
+        let dir = scratch.path();
         let file = dir.join("docs/x.md");
         std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
         std::fs::write(&file, "first\nsecond line here\nthird\n").expect("write");
 
-        assert!(check_quote(&dir, "docs/x.md:2", "second line").is_ok());
-        let error = check_quote(&dir, "docs/x.md:2", "absent")
+        assert!(check_quote(dir, "docs/x.md:2", "second line").is_ok());
+        let error = check_quote(dir, "docs/x.md:2", "absent")
             .expect_err("a quote that is not on the line must be refused");
         assert!(error.contains("no longer on that line"), "{error}");
         assert!(error.contains("second line here"), "{error}");
-        assert!(check_quote(&dir, "docs/x.md:99", "anything").is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(check_quote(dir, "docs/x.md:99", "anything").is_err());
+    }
+
+    /// [`first_table_line`] must find both table syntaxes this spec checkout
+    /// actually uses — a markdown `|`-led row and an HTML `<table>` tag — and
+    /// must not fire on the literal `|` character HGVS uses for methylation
+    /// state changes (`general.md:94`, `DNA/other.md:42-47`) or on the `|`
+    /// EBNF alternation operator (`grammar.md:16-21`), neither of which opens
+    /// a line.
+    #[test]
+    fn first_table_line_finds_markdown_and_html_tables_but_not_a_bare_pipe_character() {
+        assert_eq!(first_table_line("prose\n| a | b |\n|---|---|\n"), Some(2));
+        assert_eq!(first_table_line("prose\n  <table class=\"gc\">\n"), Some(2));
+        assert_eq!(
+            first_table_line("prose\n  <TABLE>\n"),
+            Some(2),
+            "the check must be case-insensitive"
+        );
+        assert_eq!(
+            first_table_line(
+                "- `|` (pipe) is used to indicate a change of state.\n\
+                 - A \"pipe\" (`|`) separates alternatives, e.g. `\"A\" | \"B\"`.\n"
+            ),
+            None,
+            "a `|` that does not open the line is not a table row"
+        );
+        assert_eq!(first_table_line("prose only\nno tables here\n"), None);
+    }
+
+    /// The guard this audit adds: a file the inventory does not already list
+    /// in `FILES_KNOWN_TO_CARRY_TABLES` must stay table-free, and a table that
+    /// appears in one must fail the build by name and line rather than
+    /// passing silently under an unchanged `clause_units` count.
+    #[test]
+    fn check_no_undeclared_tables_flags_a_table_in_a_file_not_on_the_allow_list() {
+        let scratch = tempfile::TempDir::new().expect("scratch dir");
+        let dir = scratch.path();
+        let background = dir.join("docs/background");
+        std::fs::create_dir_all(&background).expect("mkdir");
+        std::fs::write(
+            background.join("standards.md"),
+            "the allow-listed file may carry a table\n\n| a | b |\n|---|---|\n",
+        )
+        .expect("write standards.md");
+        std::fs::write(
+            background.join("numbering.md"),
+            "- a bullet is fine\n- so is another\n",
+        )
+        .expect("write numbering.md");
+
+        let files = vec![
+            FileScope {
+                file: "docs/background/standards.md".to_string(),
+                clause_units: 7,
+                classification: Classification::NotGenerated,
+                reason: None,
+            },
+            FileScope {
+                file: "docs/background/numbering.md".to_string(),
+                clause_units: 2,
+                classification: Classification::NotGenerated,
+                reason: None,
+            },
+        ];
+        // Both table-free by this file set's lights: `standards.md` is on the
+        // allow list (so its table is skipped, not read), and `numbering.md`
+        // carries no table syntax at all.
+        assert!(check_no_undeclared_tables(dir, &files).is_ok());
+
+        // A submodule bump adds a table to a file the inventory does not
+        // expect one in.
+        std::fs::write(
+            background.join("numbering.md"),
+            "- a bullet is fine\n\n| newly | added |\n|---|---|\n",
+        )
+        .expect("rewrite numbering.md");
+        let error = check_no_undeclared_tables(dir, &files)
+            .expect_err("a table outside the allow list must be refused");
+        assert!(error.contains("docs/background/numbering.md:3"), "{error}");
+        // The allow-listed file's own table must not be (mis)reported as a
+        // problem — only the boilerplate guidance, which names
+        // `standards.md` as the model to follow, may mention it.
+        assert!(!error.contains("docs/background/standards.md:"), "{error}");
     }
 }
