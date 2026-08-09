@@ -692,10 +692,9 @@ pub fn protein_denotation_of(provider: &MockProvider, descriptor: &str) -> Prote
     {
         return ProteinDenotation::NotProteinAxis;
     }
-    let Some(reference) = reference_protein(provider, &accession) else {
-        return ProteinDenotation::NoSingleSequence(NoSingleSequence::ReferenceUnavailable(
-            accession,
-        ));
+    let reference = match reference_protein(provider, &accession) {
+        Ok(reference) => reference,
+        Err(why) => return ProteinDenotation::NoSingleSequence(why),
     };
 
     let mut spans = Vec::with_capacity(members.len());
@@ -728,20 +727,46 @@ pub fn protein_denotation_of(provider: &MockProvider, descriptor: &str) -> Prote
 }
 
 /// The reference protein for `accession`, terminator included.
-fn reference_protein(provider: &MockProvider, accession: &str) -> Option<Vec<AminoAcid>> {
-    let length = usize::try_from(provider.get_protein_length(accession).ok()?).ok()?;
+///
+/// Two failures, reported **differently** on purpose. "The provider serves
+/// nothing for this accession" is a property of the corpus, and a census filing
+/// it is recording a reference gap. "The provider serves a protein this oracle
+/// cannot read" — a residue outside the one-letter table, `X` or `*` — is a
+/// property of the *instrument*, and filing it as a missing reference would send
+/// the reader looking for data that is in fact present.
+///
+/// [`ProteinFrame`] cannot build such a protein, so the second case is
+/// unreachable through the frame. It is reachable through
+/// [`protein_denotation_of`], which is `pub` and takes any [`MockProvider`] — so
+/// the distinction is made here rather than assumed away.
+fn reference_protein(
+    provider: &MockProvider,
+    accession: &str,
+) -> Result<Vec<AminoAcid>, NoSingleSequence> {
+    let unavailable = || NoSingleSequence::ReferenceUnavailable(accession.to_string());
+
+    let length = provider
+        .get_protein_length(accession)
+        .ok()
+        .and_then(|length| usize::try_from(length).ok())
+        .ok_or_else(unavailable)?;
     if length == 0 {
-        return None;
+        return Err(unavailable());
     }
-    let sequence = provider
-        .get_protein_sequence(accession, 0, u64::try_from(length).ok()?)
-        .ok()?;
+    let sequence = u64::try_from(length)
+        .ok()
+        .and_then(|length| provider.get_protein_sequence(accession, 0, length).ok())
+        .ok_or_else(unavailable)?;
+
     let mut residues: Vec<AminoAcid> = sequence
         .chars()
         .map(AminoAcid::from_one_letter)
-        .collect::<Option<_>>()?;
+        .collect::<Option<_>>()
+        .ok_or(NoSingleSequence::Unsupported(
+            "the reference protein names a residue this oracle cannot read",
+        ))?;
     residues.push(AminoAcid::Ter);
-    Some(residues)
+    Ok(residues)
 }
 
 /// One member's replacement of `[start, start + removed)` with `inserted`,
@@ -897,11 +922,11 @@ fn member_span(
                     removed: 0,
                     inserted,
                 },
-                Payload::ByCount(added) => {
+                Payload::ByCount { count, terminates } => {
                     return Ok(MemberOutcome::Terminal(ProteinDenotation::Indeterminate(
                         Indeterminate {
                             prefix: ProteinFrame::spell(&reference[..end]),
-                            length: added.map(|count| stated_insert_length(reference, end, count)),
+                            length: Some(stated_insert_length(reference, end, count, terminates)),
                             reason: Indeterminacy::ResiduesStatedByCount,
                         },
                     )))
@@ -963,7 +988,12 @@ fn member_span(
             )?))
         }
 
-        ProteinEdit::Repeat { sequence, count } => repeat_span(reference, start, sequence, count)?,
+        ProteinEdit::Repeat { sequence, count } => {
+            if end < start {
+                return Err(NoSingleSequence::ReversedRange);
+            }
+            repeat_span(reference, start, end, sequence, count)?
+        }
 
         ProteinEdit::MultiRepeat { .. } => {
             return Err(NoSingleSequence::Unsupported("a multi-unit protein repeat"))
@@ -1073,9 +1103,13 @@ fn check_stated_count(removed: usize, stated: Option<u64>) -> Result<(), NoSingl
 enum Payload {
     /// The residues are named.
     Residues(Vec<AminoAcid>),
-    /// Only a count is named. `Some(n)` when the count is stated, `None` when
-    /// even that is open.
-    ByCount(Option<usize>),
+    /// Only a count is named.
+    ByCount {
+        /// How many residues the description says are inserted.
+        count: usize,
+        /// Whether the inserted run itself terminates translation (`ins*63`).
+        terminates: bool,
+    },
 }
 
 /// Resolve an insertion payload.
@@ -1094,28 +1128,56 @@ fn insertion_payload(
             let count = checked_count(*count, reference_len)?;
             if *aa == AminoAcid::Xaa {
                 // `p.Arg78_Gly79insXaa[23]`: the count is stated and the
-                // residues are not (`protein/insertion.md:45-47`).
-                Ok(Payload::ByCount(Some(count)))
+                // residues are not (`protein/insertion.md:45-47`). An open
+                // reading frame insertion, so the reference tail survives.
+                Ok(Payload::ByCount {
+                    count,
+                    terminates: false,
+                })
             } else {
                 Ok(Payload::Residues(vec![*aa; count]))
             }
         }
         // `p.Gln746_Lys747ins*63`: an inserted run ending in a stop at position
         // 63 of the insertion (`protein/insertion.md:49-51`). The length is
-        // fixed, the residues are not.
-        ProteinInsSeq::Stop { position } => Ok(Payload::ByCount(Some(
-            usize::try_from(*position).unwrap_or(usize::MAX),
-        ))),
+        // fixed, the residues are not, and translation ends inside the
+        // insertion so the reference tail does **not** survive.
+        //
+        // Bounded by `checked_count` for the same reason the `Repeat` arm is,
+        // and it was not: `ins*4000000000` used to saturate to a determinate
+        // length while `insXaa[4000000000]` on the same reference was refused
+        // as `RepeatCountOutOfRange`, so the oracle answered two spellings of
+        // one implausible count two different ways. Nothing overflowed —
+        // `ByCount` carries only a number and `stated_insert_length`
+        // saturates — but `RepeatCountOutOfRange`'s own doc claims counts are
+        // validated against the reference before use, and for this arm that was
+        // false. The spec's own example is `ins*63` against a 746-residue
+        // protein (`protein/insertion.md:49-51`), so bounding by
+        // `reference_len` leaves every published case valid.
+        ProteinInsSeq::Stop { position } => Ok(Payload::ByCount {
+            count: checked_count(*position, reference_len)?,
+            terminates: true,
+        }),
     }
 }
 
 /// Total residues, terminator included, after inserting `count` unnamed
-/// residues at the junction after 0-based `at`.
+/// residues at the junction after the residue at 0-based index `at - 1` — i.e.
+/// with `at` residues N-terminal of the insertion.
 ///
-/// A `ins*n` payload terminates inside itself, so the result ends there; an
+/// A `ins*n` payload terminates inside itself, so the protein ends there; an
 /// `insXaa[n]` payload does not, so the reference tail survives.
-fn stated_insert_length(reference: &[AminoAcid], at: usize, count: usize) -> usize {
-    reference.len().saturating_add(count).max(at + count)
+fn stated_insert_length(
+    reference: &[AminoAcid],
+    at: usize,
+    count: usize,
+    terminates: bool,
+) -> usize {
+    if terminates {
+        at.saturating_add(count)
+    } else {
+        reference.len().saturating_add(count)
+    }
 }
 
 /// The whole-molecule answer for an extension.
@@ -1190,10 +1252,16 @@ fn extension(
 /// The reference tract is measured rather than assumed: the description names
 /// the unit and where it starts, and how many copies the *reference* holds is a
 /// property of the reference (`protein/repeated.md:20-23`).
+///
+/// The unit is taken from the **location** when the description does not spell
+/// one: `p.Ala2[10]` names the unit only by the residue at its position, while
+/// `p.179_180AP[9]` spells it. Reading the location covers both without
+/// treating the first as malformed.
 fn repeat_span(
     reference: &[AminoAcid],
     start: usize,
-    unit: &AminoAcidSeq,
+    end: usize,
+    spelled_unit: &AminoAcidSeq,
     count: &RepeatCount,
 ) -> Result<Span, NoSingleSequence> {
     let RepeatCount::Exact(count) = count else {
@@ -1203,9 +1271,15 @@ fn repeat_span(
     // unit.0.len()` below panics in debug and wraps in release once `count` is
     // large, and the `take` would materialise it regardless.
     let count = checked_count(*count, reference.len())?;
-    if unit.0.is_empty() {
+    let unit: Vec<AminoAcid> = if spelled_unit.0.is_empty() {
+        reference[start..=end].to_vec()
+    } else {
+        spelled_unit.0.clone()
+    };
+    if unit.is_empty() {
         return Err(NoSingleSequence::Unsupported("an empty repeat unit"));
     }
+    let unit = AminoAcidSeq(unit);
     let mut copies = 0usize;
     while reference
         .get(start + copies * unit.0.len()..start + (copies + 1) * unit.0.len())
