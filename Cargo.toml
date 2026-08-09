@@ -251,6 +251,16 @@ toml = "0.8"
 # dev-dependencies, so this stays out of the runtime dependency tree.
 sha2 = "0.10"
 
+# `test = true` because the target carries `#[cfg(test)]` units pinning the
+# clause-unit definition and the quote checker — the two things the rule
+# inventory's honesty rests on. Cargo does not build a target's tests unless it
+# opts in; pinned by
+# `it::generator_completeness::examples_with_unit_tests_opt_into_running_them`.
+[[example]]
+name = "generate_spec_conformance_corpus"
+required-features = ["dev"]
+test = true
+
 [[example]]
 name = "harvest_multi_member_cis"
 required-features = ["dev"]

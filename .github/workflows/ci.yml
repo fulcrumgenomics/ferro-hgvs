@@ -330,6 +330,25 @@ jobs:
         run: cargo run --features dev --bin generate_spec_fixture
       - name: Generate HGVS spec test enumeration
         run: cargo run --features dev --bin generate_spec_enumeration
+      # The exhaustive spec-derived conformance corpus is enumerated at TEST time
+      # (`tests/it/spec_conformance_axis.rs` calls the library directly), so it
+      # needs no artifact and runs in the sharded `test` job with no wiring. What
+      # runs here is the other half of the job: re-deriving the committed rule
+      # inventory's citations and per-file clause-unit counts from the spec
+      # checkout, which is the ONLY place in CI the submodule is present. It
+      # refuses on a moved quote, a moved clause-unit count, a `generatable`
+      # clause no corpus row exercises, and a rule tag no clause claims — so a
+      # submodule bump that invalidates a coverage claim fails the build instead
+      # of leaving the claim standing.
+      #
+      # Deliberately a step in THIS job rather than a new one: a new job would
+      # need its own `actions/cache` entry, and the repository's Actions cache
+      # sits near its 10 GiB cap (#1218 records an earlier rotation reaching
+      # 13.61 GiB, evicting by LRU and destroying the nightly's 3.25 GiB
+      # `ferro-manifest-v3` as collateral). Adding a step reuses the existing
+      # `spec-fixtures` rust-cache key and adds no entry at all.
+      - name: Check the spec conformance corpus rule inventory
+        run: cargo run --features dev --example generate_spec_conformance_corpus
       # Only the fixtures are published from here. The two generator binaries
       # `spec_generator_preconditions` executes need no staging: they are
       # `[[bin]]` targets, so `test-build`'s archive already carries them and

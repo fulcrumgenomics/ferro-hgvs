@@ -1,0 +1,532 @@
+{
+  "description": "Rule inventory for the exhaustive spec-derived conformance corpus (`src/conformance/spec_corpus.rs`, `tests/it/spec_conformance_axis.rs`). It answers ONE question mechanically: is every clause unit in docs/recommendations accounted for? Each is either named by a `clauses` entry \u2014 with a verbatim quote checked against the spec checkout \u2014 or covered by its file's blanket classification, whose `clause_units` count is pinned so a submodule bump cannot enlarge an exemption in silence. A clause that cannot be generated is a legitimate answer and must state its reason; a clause silently skipped is impossible, because `generate_spec_conformance_corpus` refuses. Citations outside docs/recommendations (docs/background, docs/consultation) are quote-checked but are not part of the pinned denominator; those slices are inventoried separately by the spec gap audit.",
+  "clause_unit_definition": "a line opening a bullet (`- `/`* `), a numbered item (`1. `), or an admonition block (`!!! `)",
+  "clauses": [
+    {
+      "clause": "docs/recommendations/DNA/substitution.md:5",
+      "quote": "**one** nucleotide is replaced by **one** other nucleotide",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/substitution.md:5-sub-format"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/deletion.md:5",
+      "quote": "one or more nucleotides are not present (deleted)",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/deletion.md:5-del-format"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/insertion.md:5",
+      "quote": "where the insertion is not a copy of a sequence immediately 5'",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/insertion.md:5-ins-flanking-format"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/duplication.md:5",
+      "quote": "a copy of one or more nucleotides is inserted **directly 3'** of the original copy",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/duplication.md:5-dup-format"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/inversion.md:5",
+      "quote": "**more than one nucleotide** replacing the original sequence is the reverse complement",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/inversion.md:5-inv-format"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/delins.md:5",
+      "quote": "one or more nucleotides are replaced by one or more other nucleotides **and which is not** a substitution or inversion",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/delins.md:5-delins-format"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/repeated.md:5",
+      "quote": "is present several times, one after the other",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/repeated.md:5-repeat-format"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:34",
+      "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\"",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:34-separation-split"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:35",
+      "quote": "two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\"",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:35-codon-exception"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/delins.md:17",
+      "quote": "two variants separated by one or more nucleotides should be described individually",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/delins.md:17-adjacent-members-merge"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:41",
+      "quote": "the most 3' position possible of the reference sequence is arbitrarily assigned to have been changed",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:41-three-prime-rule"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:44",
+      "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:44-junction-exception"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:56",
+      "quote": "the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:56-type-priority"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:57",
+      "quote": "prioritisation determines it should be described as a duplication",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:57-dup-outranks-ins"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:58",
+      "quote": "descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:58-no-self-replacement"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/alleles.md:16",
+      "quote": "that are on **one chromosome** (in cis), this should be described as",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/alleles.md:16-cis-semicolon"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/alleles.md:17",
+      "quote": "that are **on different chromosomes** (in trans), this should be described as",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/alleles.md:17-trans-bracket-pairs"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/alleles.md:20",
+      "quote": "i.e. without using `[ ]`",
+      "classification": "generatable",
+      "exercised_by": [
+        "DNA/alleles.md:20-unknown-phase-without-brackets"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:79",
+      "quote": "which includes multiple inserted sequences at one position and insertions from a second reference sequence",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:79-brackets-composite-insertion"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:80",
+      "quote": "`;` (semicolon) is used to separate variants and alleles",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:80-allele-semicolon-separator"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:96",
+      "quote": "spaces are *not* permitted in any HGVS description",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:96-no-spaces"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:6",
+      "quote": "covers the most frequently offended rules",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:6-most-offended"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:16",
+      "quote": "can not have nucleotides with additions like a `+`, `-`, or `*`",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:16-genomic-has-no-offsets"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:17",
+      "quote": "nucleotide numbering starts with the `A` of the `ATG` translation initiation site",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:17-cds-numbering-from-atg"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:20",
+      "quote": "can only be used to describe variants in introns using a `c.` prefix when a genomic reference sequence is given",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:20-intron-needs-a-genomic-wrapper"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:24",
+      "quote": "are **not allowed**, these are ambiguous",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:24-intronic-positions-not-exon-numbers"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:26",
+      "quote": "is not, it is **incomplete**",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:26-intronic-range-is-complete"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:30",
+      "quote": "insertions should be reported using the format `c.51_52insT`",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:30-insertion-needs-two-anchors"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:32",
+      "quote": "do you provide the inserted sequence?",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:32-insertion-states-its-sequence"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:45",
+      "quote": "this describes a deletion of nucleotide -14 in the intron directly",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:45-range-is-underscore"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/checklist.md:49",
+      "quote": "are not allowed, correct is `g.123_125del`",
+      "classification": "generatable",
+      "exercised_by": [
+        "checklist.md:49-deletion-names-both-endpoints"
+      ]
+    },
+    {
+      "clause": "docs/background/standards.md:15",
+      "quote": "Nomenclature for Incompletely Specified Bases in Nucleic Acid Sequences",
+      "classification": "generatable",
+      "exercised_by": [
+        "standards.md:15-iupac-nucleotide-symbols"
+      ]
+    },
+    {
+      "clause": "docs/background/standards.md:39",
+      "quote": "used in alignment only",
+      "classification": "generatable",
+      "exercised_by": [
+        "standards.md:39-alignment-only-symbols"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:39",
+      "quote": "two variants separated by less than two nucleotides should be described as a \"delins\"",
+      "classification": "generatable",
+      "exercised_by": [
+        "rejected:svd-wg010-frameless-floor-two"
+      ]
+    },
+    {
+      "clause": "docs/consultation/SVD-WG010.md:8",
+      "quote": "The proposal has been **rejected**",
+      "classification": "generatable",
+      "exercised_by": [
+        "rejected:svd-wg010-frameless-floor-two"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/DNA/delins.md:47",
+      "quote": "**The \"delins\" format is recommended**: it is simpler and prevents software tools making incorrect predictions",
+      "classification": "published-example-only"
+    },
+    {
+      "clause": "docs/recommendations/DNA/duplication.md:18",
+      "quote": "it **must** be described as a duplication and not as, e.g., an insertion",
+      "classification": "published-example-only"
+    },
+    {
+      "clause": "docs/recommendations/DNA/duplication.md:19",
+      "quote": "when there is no evidence that the extra copy of a sequence detected is in tandem",
+      "classification": "not-generatable",
+      "reason": "Provenance, not sequence. The dup-vs-ins choice here turns on EXPERIMENTAL EVIDENCE of tandemness, which is not recoverable from the reference and the resulting sequence at all \u2014 two inputs with identical denoted sequences differ only in what the submitter observed. No synthesised input can carry that, so the corpus does not pretend to exercise it."
+    },
+    {
+      "clause": "docs/recommendations/DNA/delins.md:83",
+      "quote": "the two variants may have been reported (or might occur) individually",
+      "classification": "not-generatable",
+      "reason": "Provenance again, and the spec's own discriminator for the split-by-default rule. Recoverable only from the input's spelling, which is exactly what re-derivation from the resulting sequence discards; see rulings[canonical-form-choice-when-both-legal], which adopts the re-derivation half of this contradiction deliberately."
+    },
+    {
+      "clause": "docs/recommendations/RNA/delins.md:41",
+      "quote": "This format is preferred when either of the two variants is known as a frequently occurring variant",
+      "classification": "not-generatable",
+      "reason": "Population frequency is not a property of the two sequences. Ferro cannot implement it and this corpus cannot generate a discriminating pair."
+    },
+    {
+      "clause": "docs/background/numbering.md:5",
+      "quote": "genomic reference sequence nucleotide numbering is `g.1`, `g.2`, `g.3`",
+      "classification": "not-generatable",
+      "reason": "The corpus places rows in every `c.` zone (`-n`, `1..n`, `*n`) and across both junctions, but `numbering.md` never states how to convert positions ACROSS those zones onto one comparable axis before ordering or spanning two members \u2014 grep-verified that neither `numbering.md` nor `refseq.md` contains the word `allele` or `member`. Ferro's cross-zone endpoint ordering is therefore OUR POLICY, not compliance, and a cross-zone ordering is not spec-checkable. The corpus generates the shapes and measures confluence and idempotency over them; it does not claim a spec answer for them."
+    }
+  ],
+  "files": [
+    {
+      "file": "docs/recommendations/DNA/alleles.md",
+      "clause_units": 37,
+      "classification": "published-example-only",
+      "reason": "The combining mechanisms are cited and generated individually above; the residue is worked examples whose stated forms the generated spec fixture already pins via `ferro_produces_the_form_the_spec_states`."
+    },
+    {
+      "file": "docs/recommendations/DNA/complex.md",
+      "clause_units": 49,
+      "classification": "not-generatable",
+      "reason": "Translocations, ring chromosomes and `::` breakpoint junctions need two accessions and a breakpoint model; the corpus's synthetic reference is a single contig with a single transcript, so the `::` mechanism (complex.md:130) is DECLARED UNCOVERED rather than reported as covered."
+    },
+    {
+      "file": "docs/recommendations/DNA/deletion.md",
+      "clause_units": 41,
+      "classification": "published-example-only",
+      "reason": "Definition prose plus worked examples. The clauses that define the edit type and decide its form are cited individually above and generated; the remaining units are examples whose stated forms the generated spec fixture already pins via `ferro_produces_the_form_the_spec_states`, and Q&A about reporting practice."
+    },
+    {
+      "file": "docs/recommendations/DNA/delins.md",
+      "clause_units": 20,
+      "classification": "published-example-only",
+      "reason": "Definition prose plus worked examples. The clauses that define the edit type and decide its form are cited individually above and generated; the remaining units are examples whose stated forms the generated spec fixture already pins via `ferro_produces_the_form_the_spec_states`, and Q&A about reporting practice."
+    },
+    {
+      "file": "docs/recommendations/DNA/duplication.md",
+      "clause_units": 49,
+      "classification": "published-example-only",
+      "reason": "Definition prose plus worked examples. The clauses that define the edit type and decide its form are cited individually above and generated; the remaining units are examples whose stated forms the generated spec fixture already pins via `ferro_produces_the_form_the_spec_states`, and Q&A about reporting practice."
+    },
+    {
+      "file": "docs/recommendations/DNA/insertion.md",
+      "clause_units": 37,
+      "classification": "published-example-only",
+      "reason": "Definition prose plus worked examples. The clauses that define the edit type and decide its form are cited individually above and generated; the remaining units are examples whose stated forms the generated spec fixture already pins via `ferro_produces_the_form_the_spec_states`, and Q&A about reporting practice."
+    },
+    {
+      "file": "docs/recommendations/DNA/inversion.md",
+      "clause_units": 17,
+      "classification": "published-example-only",
+      "reason": "Definition prose plus worked examples. The clauses that define the edit type and decide its form are cited individually above and generated; the remaining units are examples whose stated forms the generated spec fixture already pins via `ferro_produces_the_form_the_spec_states`, and Q&A about reporting practice."
+    },
+    {
+      "file": "docs/recommendations/DNA/other.md",
+      "clause_units": 17,
+      "classification": "not-generatable",
+      "reason": "Methylation (`|met`, `|gom`, `|lom`) describes a change of STATE rather than of sequence, so there is no denoted sequence for the oracle to verify and neither confluence nor sequence preservation is defined for it."
+    },
+    {
+      "file": "docs/recommendations/DNA/repeated.md",
+      "clause_units": 28,
+      "classification": "published-example-only",
+      "reason": "Definition prose plus worked examples. The clauses that define the edit type and decide its form are cited individually above and generated; the remaining units are examples whose stated forms the generated spec fixture already pins via `ferro_produces_the_form_the_spec_states`, and Q&A about reporting practice."
+    },
+    {
+      "file": "docs/recommendations/DNA/substitution.md",
+      "clause_units": 23,
+      "classification": "published-example-only",
+      "reason": "Definition prose plus worked examples. The clauses that define the edit type and decide its form are cited individually above and generated; the remaining units are examples whose stated forms the generated spec fixture already pins via `ferro_produces_the_form_the_spec_states`, and Q&A about reporting practice."
+    },
+    {
+      "file": "docs/recommendations/RNA/adjoined_transcript.md",
+      "clause_units": 13,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/RNA/alleles.md",
+      "clause_units": 24,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/RNA/deletion.md",
+      "clause_units": 15,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/RNA/delins.md",
+      "clause_units": 19,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/RNA/duplication.md",
+      "clause_units": 17,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/RNA/insertion.md",
+      "clause_units": 17,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/RNA/inversion.md",
+      "clause_units": 11,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/RNA/repeated.md",
+      "clause_units": 14,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/RNA/splicing.md",
+      "clause_units": 28,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/RNA/substitution.md",
+      "clause_units": 21,
+      "classification": "not-generatable",
+      "reason": "The corpus has no `r.` reference shape. An RNA row needs a lowercase, u-bearing transcript and the `r.` path through the SPDI oracle, and `RNA/splicing.md`'s `spl` edit has no sequence denotation at all. Declared as a gap: the axis gate was widened to c./n./r. in #1484, so this is the highest-value extension of this corpus and it is stated rather than glossed."
+    },
+    {
+      "file": "docs/recommendations/checklist.md",
+      "clause_units": 33,
+      "classification": "not-generatable",
+      "reason": "The residue is publication practice: which reference sequence a paper should cite, not mixing variant-type counts across DNA/RNA/protein, providing a tabular overview, and the terminology guidance on 'mutation'/'polymorphism'/'pathogenic'. None of it is a property a synthesised description can satisfy or violate. Every clause here that constrains a description's FORM is cited individually above and generated."
+    },
+    {
+      "file": "docs/recommendations/general.md",
+      "clause_units": 86,
+      "classification": "not-generatable",
+      "reason": "The residue is reference-sequence selection (MANE, LRG, genome build), HGNC gene-symbol and gene-fusion nomenclature, the character inventory (already enforced by the parser's grammar rather than by a normalization property), and the Discussion Q&A on reporting practice and DNA-vs-RNA-vs-protein levels. The clauses that decide a description's form are cited individually above."
+    },
+    {
+      "file": "docs/recommendations/grammar.md",
+      "clause_units": 10,
+      "classification": "not-generatable",
+      "reason": "An EBNF primer explaining the notation the spec uses; it states no rule about a description."
+    },
+    {
+      "file": "docs/recommendations/protein/alleles.md",
+      "clause_units": 24,
+      "classification": "not-generatable",
+      "reason": "Protein axis. Ground truth here needs a translated protein reference and an amino-acid-level applier; the corpus's oracle (`hgvs_to_spdi` plus a nucleotide splice) is nucleotide-only, and a protein description's denotation depends on translation rather than on splicing bases. Covered instead by the existing protein suites and by the spec fixture's published forms."
+    },
+    {
+      "file": "docs/recommendations/protein/deletion.md",
+      "clause_units": 27,
+      "classification": "not-generatable",
+      "reason": "Protein axis. Ground truth here needs a translated protein reference and an amino-acid-level applier; the corpus's oracle (`hgvs_to_spdi` plus a nucleotide splice) is nucleotide-only, and a protein description's denotation depends on translation rather than on splicing bases. Covered instead by the existing protein suites and by the spec fixture's published forms."
+    },
+    {
+      "file": "docs/recommendations/protein/delins.md",
+      "clause_units": 25,
+      "classification": "not-generatable",
+      "reason": "Protein axis. Ground truth here needs a translated protein reference and an amino-acid-level applier; the corpus's oracle (`hgvs_to_spdi` plus a nucleotide splice) is nucleotide-only, and a protein description's denotation depends on translation rather than on splicing bases. Covered instead by the existing protein suites and by the spec fixture's published forms."
+    },
+    {
+      "file": "docs/recommendations/protein/duplication.md",
+      "clause_units": 34,
+      "classification": "not-generatable",
+      "reason": "Protein axis. Ground truth here needs a translated protein reference and an amino-acid-level applier; the corpus's oracle (`hgvs_to_spdi` plus a nucleotide splice) is nucleotide-only, and a protein description's denotation depends on translation rather than on splicing bases. Covered instead by the existing protein suites and by the spec fixture's published forms."
+    },
+    {
+      "file": "docs/recommendations/protein/extension.md",
+      "clause_units": 13,
+      "classification": "not-generatable",
+      "reason": "Protein axis. Ground truth here needs a translated protein reference and an amino-acid-level applier; the corpus's oracle (`hgvs_to_spdi` plus a nucleotide splice) is nucleotide-only, and a protein description's denotation depends on translation rather than on splicing bases. Covered instead by the existing protein suites and by the spec fixture's published forms."
+    },
+    {
+      "file": "docs/recommendations/protein/frameshift.md",
+      "clause_units": 19,
+      "classification": "not-generatable",
+      "reason": "Protein axis. Ground truth here needs a translated protein reference and an amino-acid-level applier; the corpus's oracle (`hgvs_to_spdi` plus a nucleotide splice) is nucleotide-only, and a protein description's denotation depends on translation rather than on splicing bases. Covered instead by the existing protein suites and by the spec fixture's published forms."
+    },
+    {
+      "file": "docs/recommendations/protein/insertion.md",
+      "clause_units": 24,
+      "classification": "not-generatable",
+      "reason": "Protein axis. Ground truth here needs a translated protein reference and an amino-acid-level applier; the corpus's oracle (`hgvs_to_spdi` plus a nucleotide splice) is nucleotide-only, and a protein description's denotation depends on translation rather than on splicing bases. Covered instead by the existing protein suites and by the spec fixture's published forms."
+    },
+    {
+      "file": "docs/recommendations/protein/repeated.md",
+      "clause_units": 6,
+      "classification": "not-generatable",
+      "reason": "Protein axis. Ground truth here needs a translated protein reference and an amino-acid-level applier; the corpus's oracle (`hgvs_to_spdi` plus a nucleotide splice) is nucleotide-only, and a protein description's denotation depends on translation rather than on splicing bases. Covered instead by the existing protein suites and by the spec fixture's published forms."
+    },
+    {
+      "file": "docs/recommendations/protein/substitution.md",
+      "clause_units": 33,
+      "classification": "not-generatable",
+      "reason": "Protein axis. Ground truth here needs a translated protein reference and an amino-acid-level applier; the corpus's oracle (`hgvs_to_spdi` plus a nucleotide splice) is nucleotide-only, and a protein description's denotation depends on translation rather than on splicing bases. Covered instead by the existing protein suites and by the spec fixture's published forms."
+    },
+    {
+      "file": "docs/recommendations/style.md",
+      "clause_units": 6,
+      "classification": "not-generatable",
+      "reason": "Documentation style for the recommendations themselves, including the RFC 2119 binding at :9 \u2014 which is worth knowing is inert here, since uppercase RFC 2119 keywords appear exactly ONCE outside this file, so clause strength cannot be ranked by keyword and the wording has to be quoted instead."
+    },
+    {
+      "file": "docs/recommendations/summary.md",
+      "clause_units": 0,
+      "classification": "not-generatable",
+      "reason": "An index page; zero clause units."
+    },
+    {
+      "file": "docs/recommendations/uncertain.md",
+      "clause_units": 63,
+      "classification": "not-generatable",
+      "reason": "An uncertainty wrapper (`( )`, `?`) denotes a SET of sequences rather than one, so the corpus's ground-truth oracle \u2014 apply the edits and compare bases \u2014 has nothing to compare against. Confluence over a set-valued denotation is a different property and is not what this instrument measures."
+    }
+  ]
+}

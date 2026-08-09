@@ -424,6 +424,8 @@ mod service_tools_tests;
 mod spdi_dup_recovery;
 mod spdi_tests;
 mod spec_canonical_locks;
+mod spec_conformance_axis;
+mod spec_corpus_regressions;
 mod spec_coverage_misc;
 mod spec_enumeration_tests;
 // `CARGO_BIN_EXE_generate_spec_*` is defined only for bin targets cargo builds,
