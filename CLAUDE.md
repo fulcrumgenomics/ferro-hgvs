@@ -712,6 +712,32 @@ recommendation" are all flags. The disposition table is inventoried in the consu
 9 accepted, 3 rejected, 8 open, 3 unclear — a rejected proposal is generated as a NEGATIVE
 guard, never as an expectation.
 
+### Comparing `c.` positions across numbering zones is OUR policy, not compliance
+
+`c.` has three numbering zones — `-n` upstream of the ATG, plain `n` in the CDS, `*n` downstream
+of the stop — and a cis allele's members can sit in different ones. Ferro therefore needs an
+endpoint ordering that spans zones, to sort members, detect overlap and decide separation.
+
+**The spec does not give one.** `background/numbering.md` defines each zone but states no rule
+for comparing positions across them, and it never speaks about alleles at all: it contains zero
+occurrences of "allele" and zero of "member". `refseq.md` contains "allele" twice (`:264-265`),
+but both are the population-genetics sense — the wild-type "major allele present in the human
+population" — not cis-allele membership. (An earlier version of this note claimed *neither* file
+contained the word; that overstated it, and the two hits are worth knowing about so the check is
+not re-run and read as a contradiction.)
+
+So ferro's cross-zone ordering is a house rule. **Never cite the spec for it.** Argue it from the
+underlying transcript coordinate, which is unambiguous, and say plainly that the `c.` spelling is
+a presentation of that.
+
+This is not theoretical. The sequence-changing and denotes-no-sequence classes the spec corpus
+found both localise to the `c.72`/`c.*1` transition and to nothing else: the same flush
+deletion-plus-insertion shape collapses correctly at all 22 other homopolymer runs in the test
+transcript and mis-normalizes only where the pair straddles the CDS/3'UTR zone boundary. See
+`the_cds_end_flush_pair_is_its_two_members_normalized_separately` and
+`the_five_prime_boundary_masks_the_same_per_member_defect` in `tests/it/spec_corpus_regressions.rs`
+— the second is the reminder that the 5' boundary is not a working case, only a masked one.
+
 ## Adjudication records: where the open questions live
 
 The `rulings` section of `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json` is the
