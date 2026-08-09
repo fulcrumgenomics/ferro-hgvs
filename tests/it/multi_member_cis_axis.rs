@@ -637,6 +637,34 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> AxisCensus {
 /// `respelling_converged` must only ever go up; `not_idempotent` and
 /// `sequence_changed` are asserted at zero on their own before the comparison,
 /// so a regression there names itself rather than surfacing as a moved tuple.
+///
+/// # LOWERED BY TWO, 376 -> 374, and the direction is deliberate
+///
+/// This is the one place the ratchet has been turned back, so it needs its
+/// reason recorded next to the number rather than in a commit message.
+///
+/// The typing-widening repair in this change stops a rendered member covering
+/// territory its asserted span did not claim — the shape where `g.[2_3dup;5_6insA]`
+/// came out as `g.[1_9T[11];5_6insA]`, a tract containing the sibling's `5|6`
+/// junction. Two of these 461 rows reached their converged form *through* such a
+/// widening, so refusing it costs their convergence.
+///
+/// That trade is what `adjudication-precedence-order` ranks, and it is not close:
+/// an allele whose members claim the same territory **denotes no single
+/// sequence**, so emitting one is a rank-(1) validity failure, while convergence
+/// is rank (2). Rank (1) is absolute and never traded, so two lost convergences
+/// is the correct price and not a regression to be argued down. It is also *not*
+/// a `PRECEDENCE_ESCALATIONS` entry: an escalation is confluence overriding the
+/// recommended form, and here validity simply outranks confluence, which is the
+/// ordinary case the ladder describes.
+///
+/// What would make this a real regression, and is separately asserted above:
+/// `sequence_changed` rising. The rejected alternative repair — re-spelling the
+/// growth at the *tract's* 3' junction rather than the asserted member's — turned
+/// `g.[2_3dup;5_6insA]` into `g.[5_6insA;8_9dup]`, which is disjoint,
+/// warning-free, re-parses, and denotes a **different sequence**. It would have
+/// raised this ratchet while corrupting data. Convergence going up is therefore
+/// not on its own evidence of an improvement here.
 const AXIS_CENSUS: AxisCensus = AxisCensus {
     rows: 592,
     declined: 0,
@@ -644,7 +672,7 @@ const AXIS_CENSUS: AxisCensus = AxisCensus {
     unwindowed: 96,
     sequence_changed: 0,
     respellable: 461,
-    respelling_converged: 376,
+    respelling_converged: 374,
 };
 
 #[test]

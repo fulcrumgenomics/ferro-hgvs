@@ -442,6 +442,7 @@ mod supernumerary;
 mod sweep_filter_invariant;
 mod tool_support_matrix;
 mod trans_mosaic_mixed;
+mod typing_must_not_widen_a_member;
 mod uta_loader_tests;
 mod variantvalidator_tests;
 mod web_service_tests;

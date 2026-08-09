@@ -7997,7 +7997,10 @@ pub(crate) fn demote_repeats_spanning_siblings<P: ReferenceProvider>(
         ) {
             continue;
         }
-        let Some(source) = cis_axis_parts(&before[i], kind).and_then(|(_, _, _, _, e)| match e {
+        // The *differential* reading of what the repeat grew out of: how many
+        // bases the asserted member added or removed. `None` for anything else,
+        // which is where the state-based route below takes over.
+        let differential = cis_axis_parts(&before[i], kind).and_then(|(_, _, _, _, e)| match e {
             // A deletion removes the bases under its span.
             NaEdit::Deletion { .. } => Some((RepeatSource::Removed, b.end - b.start + 1)),
             // A duplication adds a copy of the bases under its span.
@@ -8009,11 +8012,8 @@ pub(crate) fn demote_repeats_spanning_siblings<P: ReferenceProvider>(
                 .and_then(|n| i64::try_from(n).ok())
                 .map(|n| (RepeatSource::Added, n)),
             _ => None,
-        }) else {
-            continue;
-        };
-        let (source, length) = source;
-        if length <= 0 || b.region != a.region {
+        });
+        if differential.is_some_and(|(_, length)| length <= 0 || b.region != a.region) {
             continue;
         }
         // Does the tract actually swallow a sibling? Both snapshots, so a
@@ -8035,17 +8035,103 @@ pub(crate) fn demote_repeats_spanning_siblings<P: ReferenceProvider>(
                 .flatten()
                 .filter(|s| s.region == a.region && s.accession == a.accession)
         };
-        let spans_sibling_bases = siblings()
-            .filter(|s| s.claims_bases)
-            .any(|s| s.start <= a.end && s.end >= a.start);
-        let spans_sibling_junction = siblings()
-            .filter(|s| !s.claims_bases)
-            .filter_map(|s| s.junction)
-            .any(|junction| junction >= a.start && junction < a.end);
+        let spans_bases_of = |t: &MemberSpan| {
+            siblings()
+                .filter(|s| s.claims_bases)
+                .any(|s| s.start <= t.end && s.end >= t.start)
+        };
+        let spans_junction_of = |t: &MemberSpan| {
+            siblings()
+                .filter(|s| !s.claims_bases)
+                .filter_map(|s| s.junction)
+                .any(|junction| junction >= t.start && junction < t.end)
+        };
+        let spans_sibling_bases = spans_bases_of(a);
+        let spans_sibling_junction = spans_junction_of(a);
         let spans_sibling = spans_sibling_bases || spans_sibling_junction;
         if !spans_sibling {
             continue;
         }
+        let Some((source, length)) = differential else {
+            // No differential source, because the widening was not a repeat
+            // spelling of a `del`/`dup`/`ins`. Typing still widened this
+            // member's rendered extent — from the span the input's partition
+            // asserted to the whole tandem tract — and that is a boundary move,
+            // so it needs a licence whatever the asserted member was spelled as.
+            //
+            // The measured shape is `TEMPLATE:g.[2_3dup;5_6insA]` on the nine-`T`
+            // tract under a 5' shuffle, reaching the allele a second time from
+            // `canonicalize_from_sequence`: the partition-preserving
+            // re-derivation hands the member back as `before = g.1delinsTTT`,
+            // which names no duplicated or deleted length, and typing widens it
+            // to `after = g.1_9T[11]` — a tract containing the sibling's `5|6`
+            // junction.
+            //
+            // The repeat states its own growth, so re-spell that growth as an
+            // insertion — **at the asserted member's own junction**, which is
+            // the boundary the partition fixed.
+            //
+            // Scoped to a widening this pass can attribute to typing, and only
+            // to one. An **authored** overlap is a different question with a
+            // settled, opposite answer: ferro reports the conflict and hands the
+            // description back rather than picking an order the spec does not
+            // rank (#395, #486, #1004). `g.[263_265A[7];264_265insC]` and
+            // `g.[1005_1009inv;1005_1006A[4]]` are exactly that — the repeat
+            // arrives already spanning its sibling, `before == after`, and
+            // nothing here widened it — so both gates below must hold: the
+            // rendered extent has to reach outside the asserted one, and the
+            // asserted one must not have spanned a sibling already.
+            //
+            // Deliberately not at the tract's 3' junction, and not as the
+            // 3'-most duplication the differential routes below emit. Those are
+            // safe only because `clamp_sibling_crossing_shifts` and
+            // `clamp_sibling_crossing_junctions` run immediately after and pull
+            // the member back off the sibling — and both refuse a member whose
+            // span *grew* relative to its snapshot, which is exactly the
+            // geometry here (a one-base `delins` re-spelled as a two-base
+            // `dup`). Measured: targeting the tract's 3' end turns
+            // `g.[2_3dup;5_6insA]` into `g.[5_6insA;8_9dup]` — disjoint,
+            // re-parsing, warning-free and denoting a different sequence, which
+            // is strictly worse than the overlap it replaced.
+            let widened = a.start < b.start || a.end > b.end;
+            if !widened || spans_bases_of(b) || spans_junction_of(b) {
+                continue;
+            }
+            let Some((payload, unit)) = repeat_growth_as_insertion(&after[i], kind, a) else {
+                continue;
+            };
+            let Ok(unit_len) = i64::try_from(unit.len()) else {
+                continue;
+            };
+            // A base-claiming member's junction is the interbase immediately 3'
+            // of its last base; a junction-carrying one names its own.
+            let gap = b.junction.unwrap_or(b.end);
+            // Inside the tract, or flush against either end of it. Outside it
+            // the payload is not the tract's own sequence and inserting it there
+            // would state bases the repeat never asserted.
+            if gap < a.start - 1 || gap > a.end {
+                continue;
+            }
+            // A tandem tract repeats with period `unit_len`, so the payload —
+            // whole copies of the unit — denotes the same sequence at any
+            // in-phase junction and a *rotated* sequence anywhere else. Refuse
+            // the out-of-phase junctions rather than rotate: a homopolymer, the
+            // shape every measured case has, is trivially in phase.
+            if (gap - (a.start - 1)) % unit_len != 0 {
+                continue;
+            }
+            respell_at_gap(
+                &mut after[i],
+                a,
+                gap,
+                NaEdit::Insertion {
+                    sequence: InsertedSequence::Literal(Sequence::new(payload)),
+                },
+                provider,
+                TerminalOverrun::RespellAtBoundary,
+            );
+            continue;
+        };
         // Either way the equivalent edit sits on the 3'-most `length` bases of
         // the tract: removing them, or duplicating them.
         let start = a.end - length + 1;
@@ -10572,20 +10658,28 @@ mod tests {
             "the demotion left a tract repeat containing its sibling's junction: {rendered:?}"
         );
 
-        // THE DEFECT, characterised. The pass is *differential*: it compares a
-        // `before` snapshot against an `after` one and re-spells a repeat back to
-        // the edit it *grew from*. So it can only undo a respelling it has just
-        // observed. Hand it the swallowing form as BOTH snapshots — which is what
-        // a re-normalization does, since the form is a fixed point — and there is
-        // no growth to read, so it declines and the overlap stands.
+        // ADJUDICATED, and this half now pins a deliberate limit rather than an
+        // open defect. The pass is *differential*: it compares a `before`
+        // snapshot against an `after` one and re-spells a repeat back to the edit
+        // it grew from, so it can only undo a respelling it has just observed.
+        // Hand it the swallowing form as BOTH snapshots and there is no growth to
+        // read.
         //
-        // That is why the repair is structurally unavailable for this shape, and
-        // why `members_claim_the_same_territory` (a state predicate, not a
-        // differential one) is the right shape of check. What is NOT yet decided
-        // is where to apply it on this path: refusing the repeat spelling at
-        // source, or demoting unconditionally when territory is claimed. Both are
-        // output-moving and need their own measurement, so this test pins the
-        // mechanism rather than pre-judging the fix.
+        // The state-based fallback added for the *widening* path deliberately
+        // does not fire here, and both of its gates are why: nothing widened
+        // (`before == after`), and the asserted member already spanned its
+        // sibling. That is an **authored** conflict, and ferro's standing answer
+        // to one is to report it and hand the description back rather than pick
+        // an order the spec does not rank (#395, #486, #1004) — repairing it here
+        // would launder a strict-rejected input into a strict-accepted output,
+        // which is the #1307 failure mode. `repeat_lowering_sibling_junction` and
+        // `idempotency_tests::test_overlap_conflicting_allele_is_idempotent_across_respellings`
+        // pin two such alleles as preserved; `typing_must_not_widen_a_member`
+        // pins this one.
+        //
+        // So a repair reaching this call is a *regression* against that answer,
+        // not the closure of a defect. What was closed is the widening path,
+        // where `before` is the pre-typing member — see the fallback's own notes.
         let fixed_point = [
             crate::parse_hgvs("NC_TEST.1:g.1_9T[11]").expect("parses"),
             crate::parse_hgvs("NC_TEST.1:g.5_6insA").expect("parses"),
@@ -10600,8 +10694,8 @@ mod tests {
         );
         assert!(
             members_claim_the_same_territory(&after, CisKind::Genome, &provider),
-            "if this now repairs, the differential blindness is fixed — delete this \
-             half of the test and close the defect rather than re-blessing it"
+            "an authored conflict must be handed back, not repaired — a repair here \
+             launders a strict-rejected input into a strict-accepted output (#1307)"
         );
     }
 
