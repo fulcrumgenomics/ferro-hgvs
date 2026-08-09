@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 
 use ferro_hgvs::conformance::completeness::{Allowance, CaptureCounts, CaptureLedger};
 use ferro_hgvs::conformance::spec_corpus::{
-    enumerate, CorpusBounds, RowKind, SpecCorpus, BLOCK_LADDER, EXTENDED_BLOCK_LADDER,
+    enumerate, CorpusBounds, RowKind, SpecCorpus, BLOCK_LADDER, DNA_SYMBOLS, EXTENDED_BLOCK_LADDER,
     SEPARATION_LADDER,
 };
 
@@ -451,9 +451,15 @@ impl Inventory {
                     Err(error) => problems.push(error),
                 }
             }
-            // Every recommendation file must have a scope row, so "every clause"
+            // The alphabet the corpus draws from is a hand-transcribed copy of
+            // `background/standards.md`'s DNA table, and the clause-unit
+            // definition cannot see a markdown table. So pin it directly.
+            if let Err(error) = check_dna_symbol_table(root) {
+                problems.push(error);
+            }
+            // Every inventoried file must have a scope row, so "every clause"
             // has a mechanical denominator.
-            match recommendation_files(root) {
+            match inventoried_files(root) {
                 Ok(found) => {
                     let declared: BTreeSet<&str> =
                         self.files.iter().map(|s| s.file.as_str()).collect();
@@ -537,11 +543,126 @@ fn is_clause_unit(line: &str) -> bool {
     !digits.is_empty() && trimmed[digits.len()..].starts_with(". ")
 }
 
-/// Every markdown file under `docs/recommendations`, as repo-relative paths.
-fn recommendation_files(root: &Path) -> Result<Vec<String>, String> {
-    let base = root.join("docs/recommendations");
+/// The DNA nucleotide symbols `background/standards.md` tabulates, split into
+/// the ones a description may state and the ones its `†` footnote marks as
+/// "used in alignment only".
+///
+/// Returned in table order, because [`spec_corpus::DNA_SYMBOLS`] is indexed
+/// positionally (`&DNA_SYMBOLS[4..]` skips the four unambiguous bases), so a
+/// reordering of the table is a change to what the ambiguity stratum draws.
+fn dna_symbol_table(root: &Path) -> Result<(Vec<char>, Vec<char>), String> {
+    let path = root.join("docs/background/standards.md");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("reading the symbol table {}: {e}", path.display()))?;
+    let mut lines = text.lines().skip_while(|line| line.trim() != "### DNA");
+    lines.next();
+    let (mut usable, mut alignment_only) = (Vec::new(), Vec::new());
+    let mut seen_table = false;
+    let mut rows_seen = 0usize;
+    for line in lines {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('|') {
+            if seen_table {
+                break;
+            }
+            continue;
+        }
+        seen_table = true;
+        let cell = trimmed
+            .trim_matches('|')
+            .split('|')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        let row = rows_seen;
+        rows_seen += 1;
+        // The header row and the alignment underline directly beneath it are
+        // not symbols. Both are recognised by POSITION, never by content: `-`
+        // is itself a DNA symbol in this table, and it survives a content test
+        // only because it currently carries a `†`. Drop that footnote upstream
+        // and a content test would discard a real symbol silently — `usable`
+        // would shrink with nothing failing, which is precisely the silent
+        // shrink this whole check exists to prevent.
+        if row == 0 {
+            if cell != "Symbol" {
+                return Err(format!(
+                    "docs/background/standards.md: expected the DNA table under `### DNA` to \
+                     open with a `Symbol` header, found `{cell}`"
+                ));
+            }
+            continue;
+        }
+        if row == 1 {
+            if cell.is_empty() || !cell.chars().all(|c| c == ':' || c == '-') {
+                return Err(format!(
+                    "docs/background/standards.md: expected an alignment underline directly \
+                     under the DNA table header, found `{cell}`"
+                ));
+            }
+            continue;
+        }
+        let footnoted = cell.ends_with('†');
+        let symbol = cell.trim_end_matches('†');
+        let mut chars = symbol.chars();
+        let (Some(first), None) = (chars.next(), chars.next()) else {
+            return Err(format!(
+                "docs/background/standards.md: `{symbol}` is not a single-character DNA symbol"
+            ));
+        };
+        if footnoted {
+            alignment_only.push(first);
+        } else {
+            usable.push(first);
+        }
+    }
+    if usable.is_empty() {
+        return Err(
+            "docs/background/standards.md: found no DNA symbol table under `### DNA`".to_string(),
+        );
+    }
+    Ok((usable, alignment_only))
+}
+
+/// Check that the corpus's alphabet is the spec's, and that the symbols it
+/// withholds are exactly the ones the spec footnotes as alignment-only.
+///
+/// This exists because the clause-unit denominator cannot reach it. A clause
+/// unit is a bullet, a numbered item or an admonition, so `standards.md`'s seven
+/// counted units are its table of contents — the symbol tables themselves are
+/// markdown tables and are invisible to that count. Pinning the file's unit
+/// count therefore says nothing about the alphabet, while the corpus reads its
+/// alphabet from precisely there.
+fn check_dna_symbol_table(root: &Path) -> Result<(), String> {
+    let (usable, alignment_only) = dna_symbol_table(root)?;
+    if usable != DNA_SYMBOLS {
+        return Err(format!(
+            "the corpus alphabet is not the spec's DNA symbol table.\n      \
+             DNA_SYMBOLS: {DNA_SYMBOLS:?}\n      standards.md: {usable:?}"
+        ));
+    }
+    if !alignment_only.contains(&'X') {
+        return Err(format!(
+            "docs/background/standards.md no longer footnotes `X` as alignment-only, but the \
+             corpus still emits it as a prohibited base (`standards.md:39-alignment-only-symbols`). \
+             Footnoted: {alignment_only:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// Every markdown file the inventory is a denominator over, as repo-relative
+/// paths: `docs/recommendations` plus `docs/background`.
+///
+/// `docs/background` is included because the corpus does not merely cite it, it
+/// is DERIVED from it — the alphabet from `standards.md`, the `c.` coordinate
+/// zones the region axis walks from `numbering.md`. `docs/consultation` is
+/// deliberately not here; see the inventory's own `description`.
+fn inventoried_files(root: &Path) -> Result<Vec<String>, String> {
     let mut files = Vec::new();
-    let mut stack = vec![base.clone()];
+    let mut stack = vec![
+        root.join("docs/recommendations"),
+        root.join("docs/background"),
+    ];
     while let Some(dir) = stack.pop() {
         let entries = std::fs::read_dir(&dir)
             .map_err(|e| format!("reading the spec checkout {}: {e}", dir.display()))?;
@@ -768,7 +889,10 @@ fn render_report(
         let _ = writeln!(
             out,
             "  {:<48} {:>5} {:>5} {:>5} {:>5}  {}",
-            scope.file.trim_start_matches("docs/recommendations/"),
+            scope
+                .file
+                .trim_start_matches("docs/recommendations/")
+                .trim_start_matches("docs/"),
             scope.clause_units,
             cited,
             generatable,
@@ -854,6 +978,39 @@ mod tests {
         ));
         assert!(!is_clause_unit("1.2 a decimal is not an item"));
         assert!(!is_clause_unit(""));
+    }
+
+    /// The symbol table is read out of a markdown table, which the clause-unit
+    /// denominator cannot see — so the parser that replaces it has to be pinned
+    /// on its own. Both halves matter: which symbols a description may state,
+    /// and which the `†` footnote withholds.
+    #[test]
+    fn the_dna_symbol_table_is_read_with_its_alignment_only_footnote() {
+        let dir = std::env::temp_dir().join(format!("ferro-symbols-{}", std::process::id()));
+        let file = dir.join("docs/background/standards.md");
+        std::fs::create_dir_all(file.parent().expect("parent")).expect("mkdir");
+        std::fs::write(
+            &file,
+            "### RNA\n\n| Symbol |\n|:--:|\n|   a    |\n\n### DNA\n\n\
+             | Symbol |   Meaning    |\n|:------:|:------------:|\n\
+             |   A    |      A       |\n|   N    | A, C, G or T |\n\
+             |   X†   | A, C, G or T |\n|   -†   |     none     |\n\n\
+             † used in alignment only.\n\n## Genetic Code\n",
+        )
+        .expect("write");
+
+        let (usable, alignment_only) = dna_symbol_table(&dir).expect("the DNA table");
+        // Table order, not sorted: `DNA_SYMBOLS` is indexed positionally.
+        assert_eq!(usable, vec!['A', 'N']);
+        assert_eq!(alignment_only, vec!['X', '-']);
+        // The preceding `### RNA` table must not leak in, and the prose after
+        // the table must end it.
+        assert!(!usable.contains(&'a'), "{usable:?}");
+
+        // A checkout with no such table is a refusal, not an empty answer.
+        std::fs::write(&file, "### DNA\n\nno table here\n").expect("rewrite");
+        assert!(dna_symbol_table(&dir).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A quote that has moved must be reported, and the report must show the

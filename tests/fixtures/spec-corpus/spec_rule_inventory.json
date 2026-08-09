@@ -1,5 +1,5 @@
 {
-  "description": "Rule inventory for the exhaustive spec-derived conformance corpus (`src/conformance/spec_corpus.rs`, `tests/it/spec_conformance_axis.rs`). It answers ONE question mechanically: is every clause unit in docs/recommendations accounted for? Each is either named by a `clauses` entry \u2014 with a verbatim quote checked against the spec checkout \u2014 or covered by its file's blanket classification, whose `clause_units` count is pinned so a submodule bump cannot enlarge an exemption in silence. A clause that cannot be generated is a legitimate answer and must state its reason; a clause silently skipped is impossible, because `generate_spec_conformance_corpus` refuses. Citations outside docs/recommendations (docs/background, docs/consultation) are quote-checked but are not part of the pinned denominator; those slices are inventoried separately by the spec gap audit.",
+  "description": "Rule inventory for the exhaustive spec-derived conformance corpus (`src/conformance/spec_corpus.rs`, `tests/it/spec_conformance_axis.rs`). It answers ONE question mechanically: is every clause unit in docs/recommendations accounted for? Each is either named by a `clauses` entry \u2014 with a verbatim quote checked against the spec checkout \u2014 or covered by its file's blanket classification, whose `clause_units` count is pinned so a submodule bump cannot enlarge an exemption in silence. A clause that cannot be generated is a legitimate answer and must state its reason; a clause silently skipped is impossible, because `generate_spec_conformance_corpus` refuses.\n\nTHE DENOMINATOR IS docs/recommendations PLUS docs/background. Background used to be quote-checked only, on the ground that it is not where the recommendations live. That was the wrong test. The corpus does not merely cite background/, it is DERIVED from it: `spec_corpus::DNA_SYMBOLS` is `standards.md`'s DNA table minus the two rows its footnote marks alignment-only, the `X` prohibition row IS that footnote (and is the source of an already-found defect, an alignment-only symbol accepted as a nucleotide), and the `Region` axis walks exactly the `c.` zones `numbering.md` defines. A denominator that excludes the file the generator reads its alphabet from is not a declared gap, it is an UNPINNED DEPENDENCY — a submodule bump could add or drop a nucleotide symbol with nothing failing. So background/ is pinned like the rest, and where the pin is structurally weak the weakness is stated on the row rather than left implied: `standards.md`'s seven clause units are its table of contents, because a clause unit is a bullet/numbered item/admonition and its real content is markdown TABLES, so the generator also runs `check_dna_symbol_table` to pin the alphabet directly.\n\ndocs/consultation is STILL EXCLUDED, and this is a declared exclusion rather than an oversight. It is a record of proposals and their fates, not of rules: the corpus cites `SVD-WG010.md:8` to pin that a REJECTED proposal stays unimplemented (a negative guard), and a coverage denominator over that directory would be asking 'has every rejected proposal been covered?', which is not a coverage question. Consultation citations are quote-checked, so a bump that moves one still fails the build.",
   "clause_unit_definition": "a line opening a bullet (`- `/`* `), a numbered item (`1. `), or an admonition block (`!!! `)",
   "clauses": [
     {
@@ -375,6 +375,54 @@
     }
   ],
   "files": [
+    {
+      "file": "docs/background/basics.md",
+      "clause_units": 3,
+      "classification": "not-generatable",
+      "reason": "Three units, all of them the clinical-consequence list at `:73`-`:75` (X-linked recessive, autosomal recessive, imprinting). This file's one load-bearing sentence for this project is `:38` — 'designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**' — which is the spec's statement of values, not a rule any description satisfies or violates, and which is not a clause unit. It is quoted in the repository's own reading notes because MINIMALITY IS ABSENT FROM IT; that is an argument about where ferro's objectives come from, not a row the corpus can generate."
+    },
+    {
+      "file": "docs/background/edumaterial.md",
+      "clause_units": 10,
+      "classification": "not-generatable",
+      "reason": "Links to teaching slides, courses and exercises. States no rule about a description."
+    },
+    {
+      "file": "docs/background/glossary.md",
+      "clause_units": 94,
+      "classification": "not-generatable",
+      "reason": "Term definitions ('allele', 'variant', 'reference sequence', 'frameshift', ...). A glossary entry fixes what a WORD means in the recommendations; it does not constrain a string, so there is no shape to synthesise and nothing for the sequence oracle to compare. The terms it defines are used by the clauses that DO constrain a string, and those are cited against their own files."
+    },
+    {
+      "file": "docs/background/history.md",
+      "clause_units": 21,
+      "classification": "not-generatable",
+      "reason": "A dated changelog of the recommendations themselves. Every unit is a past revision, so none of them states the current rule."
+    },
+    {
+      "file": "docs/background/numbering.md",
+      "clause_units": 60,
+      "classification": "not-generatable",
+      "reason": "The corpus is DERIVED from this file — its `Region` axis walks exactly the zones numbering.md defines (`-n` 5'UTR, `1..n` CDS, `*n` 3'UTR, `+n`/`-n` intronic offsets, and both exon/exon junctions) on both strands — so it is in the denominator rather than out of scope. What it cannot do is check a rule AGAINST it, for the reason recorded on the `:5` clause entry above: numbering.md states each zone's own numbering and never states how to convert positions ACROSS zones onto one comparable axis, which is what ordering or spanning two members of an allele requires. Ferro's cross-zone endpoint ordering is therefore our policy, not compliance. The corpus generates the shapes and measures confluence and idempotency over them; it claims no spec answer for them."
+    },
+    {
+      "file": "docs/background/refseq.md",
+      "clause_units": 116,
+      "classification": "not-generatable",
+      "reason": "Which reference sequence to use and what each accession prefix denotes (`NC_`, `NG_`, `NM_`, `NR_`, `NP_`, `LRG_`, MANE, genome builds). Reference-sequence SELECTION is an external-identity question — it depends on what NCBI, LRG and MANE publish, not on the sequence in hand — so no synthesised description can satisfy or violate it. The corpus mints one accession per frame and asserts nothing about which real accession would have been the right choice. Same limit `general.md:15`-`:32` records."
+    },
+    {
+      "file": "docs/background/simple.md",
+      "clause_units": 31,
+      "classification": "not-generatable",
+      "reason": "A plain-language introduction to the recommendations for non-specialists. It restates rules stated normatively elsewhere; the restatements carry no constraint of their own."
+    },
+    {
+      "file": "docs/background/standards.md",
+      "clause_units": 7,
+      "classification": "not-generatable",
+      "reason": "Read the count before trusting it: all SEVEN units are this file's table of contents. Its actual content — the DNA and RNA nucleotide symbol tables, the genetic code, the amino-acid table, the ISCN band translation — is markdown TABLES, and a clause unit is a bullet, a numbered item or an admonition, so the pinned count cannot see any of it. Pinning `standards.md` at 7 would therefore pin its ToC and leave the alphabet unpinned, which matters because the corpus does not merely cite this file, it TRANSCRIBES it: `spec_corpus::DNA_SYMBOLS` is this file's DNA table minus the two rows its `†` footnote marks alignment-only, and the `X` prohibition row IS that footnote. The generator closes the gap with a second, direct check (`check_dna_symbol_table`) that re-derives the table from the checkout and refuses if the corpus's alphabet, in order, is not the spec's or if `X` stops being footnoted. Two clauses here are cited individually above and generated; the residue (the genetic code, the amino-acid table, the ISCN band tables) is protein-axis and chromosome-scale content covered by the gaps declared on `protein/` and `DNA/complex.md`."
+    },
     {
       "file": "docs/recommendations/DNA/alleles.md",
       "clause_units": 37,
