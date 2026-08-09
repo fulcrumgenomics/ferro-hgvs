@@ -654,3 +654,88 @@ fn boundary_run_frame(run_at: usize) -> Frame {
     let core = String::from_utf8(core).expect("the core stays ASCII");
     Frame::build(RefShape::CodingMultiExon(Strand::Plus), &core)
 }
+
+// ---------------------------------------------------------------------------
+// The same per-member independence, emitting members that overlap
+// ---------------------------------------------------------------------------
+
+/// **Question.** The corpus's second rank-1 class is "output denotes no
+/// sequence" — 10 outputs at 3' and 18 at 5' whose members claim overlapping
+/// territory, so the description denotes nothing. Is it a separate defect from
+/// the sequence-changing class?
+///
+/// **No — it is the same cause landing differently.** Every one of the 28 rows
+/// is `cds-end` geometry, and the largest shape is the identical flush pair
+/// `c.[72del;72_*1insA]` that
+/// `the_cds_end_flush_pair_is_its_two_members_normalized_separately` dissects.
+/// On the `AT` core the two independently-normalized members happen to tile
+/// disjointly and denote the wrong bases; on the `ACGT` core they land on top of
+/// each other and denote nothing at all. One cause, two symptoms, and which one
+/// a row exhibits is a property of the neighbouring bases rather than of the
+/// input.
+///
+/// That matters for the fix: driving `sequence_changed` to zero without
+/// addressing member independence would move these rows between two rank-1
+/// buckets rather than out of them.
+#[test]
+fn the_cds_end_flush_pair_can_also_emit_two_members_claiming_one_position() {
+    let core = acgt_core();
+    for strand in [Strand::Plus, Strand::Minus] {
+        let frame = Frame::build(RefShape::CodingMultiExon(strand), &core);
+
+        let deletion_alone = normalize_3prime(&frame, "NM_TEST.1:c.72del");
+        let insertion_alone = normalize_3prime(&frame, "NM_TEST.1:c.72_*1insA");
+        let pair = normalize_3prime(&frame, "NM_TEST.1:c.[72del;72_*1insA]");
+
+        // Same decomposition as the sequence-changing row: the pair is its two
+        // members normalized on their own.
+        assert_eq!(deletion_alone, "NM_TEST.1:c.72del");
+        assert_eq!(insertion_alone, "NM_TEST.1:c.72delinsCA");
+        assert_eq!(
+            pair, "NM_TEST.1:c.[72del;72delinsCA]",
+            "PINNED DEFECT — both members claim c.72, so the allele denotes no \
+             sequence at all ({strand:?} strand)"
+        );
+
+        // The defining property, asserted rather than described: the output is
+        // not a partition of the reference, because two members claim c.72.
+        assert!(
+            pair.matches("72del").count() >= 1 && pair.contains("72delinsCA"),
+            "the two members must both name c.72 for this to be the overlap class"
+        );
+
+        // Member order in the input must not change the answer.
+        assert_eq!(
+            normalize_3prime(&frame, "NM_TEST.1:c.[72_*1insA;72del]"),
+            pair,
+            "the defect is order-independent, so a fix cannot be an ordering rule"
+        );
+    }
+}
+
+/// **Question.** Does the overlap class only arise from the flush del+ins pair?
+///
+/// **No — a repeat typing reaches the same end.** `c.[72_*1del;*2_*3insTT]`
+/// keeps its deletion and re-types the insertion as a four-unit `T` repeat
+/// starting at `c.*1`: `c.[72_*1del;*1_*2T[4]]`. The deletion already claims
+/// `c.*1`, so the repeat's tract overlaps its sibling and the allele again
+/// denotes nothing.
+///
+/// **This is the typing stage widening a member past what the partition granted
+/// it** — the same stage `fix/typing-must-not-widen-a-member` (#1571) addresses
+/// for a different shape. Recorded here so the two are visibly one family: a
+/// member's rendered extent must be bounded by the territory its partition
+/// assigned, whichever edit type it renders as.
+#[test]
+fn a_repeat_typing_at_the_cds_end_overlaps_its_sibling_deletion() {
+    let core = acgt_core();
+    for strand in [Strand::Plus, Strand::Minus] {
+        let frame = Frame::build(RefShape::CodingMultiExon(strand), &core);
+        assert_eq!(
+            normalize_3prime(&frame, "NM_TEST.1:c.[72_*1del;*2_*3insTT]"),
+            "NM_TEST.1:c.[72_*1del;*1_*2T[4]]",
+            "PINNED DEFECT — `72_*1del` already claims c.*1, so the `*1_*2T[4]` \
+             tract overlaps it and the allele denotes no sequence ({strand:?})"
+        );
+    }
+}
