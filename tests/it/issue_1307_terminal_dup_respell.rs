@@ -168,6 +168,45 @@ fn assert_within_contig(input: &str, output: &str) {
     }
 }
 
+/// The output must denote the same bases as the input.
+///
+/// A bounds check ([`assert_within_contig`]) and a pinned expected string both
+/// pass on a well-formed description of the *wrong* sequence: a merge composes
+/// two members into one edit, and if the composition is wrong the result is a
+/// well-formed description of the wrong bases, which no other check here would
+/// notice. Checked with an applier that is **not** the normalizer —
+/// `apply_with` converts each member to its SPDI triple and splices `sequence`
+/// directly — so a bug shared between the normalizer and this check cannot
+/// cancel out. Mirrors the same pattern in
+/// `issue_1327_mt_respell_past_contig_end` and `cis_apply_oracle` generally.
+///
+/// Extracted from [`the_merged_output_denotes_the_inputs_bases`], which held
+/// this body inline and now calls it, so the two cannot drift apart.
+///
+/// [`a_deletion_sibling_at_the_last_base_still_merges`],
+/// [`a_three_member_allele_stays_in_range_in_any_order`] and
+/// [`an_in_range_collision_is_still_repaired`] call it directly too. The
+/// module's three remaining merged/reordered pins do **not**, and that does not
+/// leave them unguarded: all five inputs of
+/// [`a_substitution_sibling_leaves_the_terminal_duplication_alone`],
+/// [`a_delins_sibling_leaves_the_terminal_duplication_alone`] and
+/// [`the_circular_axis_gets_the_same_answer`] are themselves rows of
+/// `the_merged_output_denotes_the_inputs_bases`, which is where their sequence
+/// check lives. Adding a newly pinned input to any of those three is the case to
+/// watch, because that overlap is a coincidence nothing enforces.
+fn assert_denotes_the_same_bases(accession: &str, sequence: &str, input: &str, output: &str) {
+    let mut provider = MockProvider::new();
+    provider.add_genomic_sequence(accession, sequence.to_string());
+    let want = apply_with(&provider, sequence, input)
+        .unwrap_or_else(|| panic!("`{input}` must denote a sequence"));
+    let got = apply_with(&provider, sequence, output)
+        .unwrap_or_else(|| panic!("`{input}` -> `{output}`, which denotes no sequence at all"));
+    assert_eq!(
+        got, want,
+        "`{input}` -> `{output}` no longer denotes the input's bases"
+    );
+}
+
 /// The issue's reproducer, on both member orders.
 ///
 /// Pinned, not merely bounded. A bounds check alone is satisfied by a refusal,
@@ -239,9 +278,11 @@ fn the_circular_axis_gets_the_same_answer() {
 /// that only reordered would otherwise pass.
 #[test]
 fn a_deletion_sibling_at_the_last_base_still_merges() {
+    let sequence = run_terminated_sequence();
     for input in ["NC_TEST.1:g.[21del;22dup]", "NC_TEST.1:g.[22dup;21del]"] {
-        let output = normalize("NC_TEST.1", &run_terminated_sequence(), input);
+        let output = normalize("NC_TEST.1", &sequence, input);
         assert_within_contig(input, &output);
+        assert_denotes_the_same_bases("NC_TEST.1", &sequence, input, &output);
         // The pair cancels — one `A` removed from the terminal run and one added
         // back — so an identity is the right answer, and the merge that produces
         // it is only reachable through the junction spelling this fix must not
@@ -300,6 +341,7 @@ fn a_three_member_allele_stays_in_range_in_any_order() {
     ] {
         let output = normalize("NC_TEST.1", &sequence, input);
         assert_within_contig(input, &output);
+        assert_denotes_the_same_bases("NC_TEST.1", &sequence, input, &output);
         assert_eq!(
             output, expected,
             "`{input}` must stay in range and not depend on member order"
@@ -315,6 +357,7 @@ fn an_in_range_collision_is_still_repaired() {
     let input = "NC_TEST.1:g.[20dup;21A>G]";
     let output = normalize("NC_TEST.1", &sequence, input);
     assert_within_contig(input, &output);
+    assert_denotes_the_same_bases("NC_TEST.1", &sequence, input, &output);
     assert_eq!(
         output, "NC_TEST.1:g.21delinsGG",
         "`{input}` must still collapse as it did before"
@@ -388,16 +431,7 @@ fn the_merged_output_denotes_the_inputs_bases() {
         ("NC_012920.1", "NC_012920.1:m.[24dup;24C>G]"),
         ("NC_012920.1", "NC_012920.1:m.[24dup;24delinsGG]"),
     ] {
-        let mut provider = MockProvider::new();
-        provider.add_genomic_sequence(accession, SEQUENCE.to_string());
-        let want = apply_with(&provider, SEQUENCE, input)
-            .unwrap_or_else(|| panic!("`{input}` must denote a sequence"));
         let output = normalize("NC_TEST.1", SEQUENCE, input);
-        let got = apply_with(&provider, SEQUENCE, &output)
-            .unwrap_or_else(|| panic!("`{input}` -> `{output}`, which denotes no sequence at all"));
-        assert_eq!(
-            got, want,
-            "`{input}` -> `{output}` no longer denotes the input's bases"
-        );
+        assert_denotes_the_same_bases(accession, SEQUENCE, input, &output);
     }
 }
