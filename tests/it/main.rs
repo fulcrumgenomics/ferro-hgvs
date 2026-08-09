@@ -385,6 +385,7 @@ mod normalize_idempotency_proptest;
 mod normalize_property_tests;
 mod normalize_reparse_invariant;
 mod normalize_tests;
+mod oracle_exclude_invariant;
 mod paraphase_exhaustive_tests;
 mod parser_tests;
 mod pastcds_star_canonicalization;

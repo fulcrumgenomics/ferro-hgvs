@@ -44,9 +44,42 @@ env:
   # passes `--no-tests=fail`. So a rename that made the filter match nothing
   # reddens CI there instead of quietly emptying that job — while `test` and
   # `test-oracle`, which negate it, would just widen by 30 tests.
+  #
+  # NOTE: that partition is over `test` + `sweeps`. `test-oracle` additionally
+  # negates `ORACLE_EXCLUDE` below, so it runs a strict SUBSET of `test` rather
+  # than the same selection. Every test still runs somewhere unarmed.
   SWEEP_FILTER: >-
     test(cis_junction_crossing_shift) + test(repeat_span_sibling_overlap)
     + test(issue_1254_sibling_crossing_shift)
+  # The spec-corpus modules, excluded from `test-oracle` ONLY. They run in full
+  # in the plain `test` job; this is not a coverage exemption, it is a statement
+  # about which instrument may be armed while another is measuring.
+  #
+  # WHY: the corpus COUNTS non-idempotent outputs (4 at 3', 4 at 5' as pinned on
+  # this branch) as a pinned burn-down figure. `FERRO_ASSERT_IDEMPOTENT` PANICS
+  # on exactly that condition. The two agree perfectly about ferro — the oracle
+  # fires on precisely the rows the corpus classifies — but a panic returns no
+  # value, so the harness's `catch_unwind` files the row under `declined` and its
+  # output never reaches the family's output set.
+  #
+  # That does not merely re-bucket a counter, it DESTROYS EVIDENCE, and in the
+  # flattering direction. Measured directly on `main` @ 35de96c8, where the
+  # figures were 7 at 3' and 4 at 5': in all 11 cases the non-idempotent output
+  # is the one that disagreed with its siblings, so removing it makes the family
+  # look unanimous. Confluence read 9147 converged / 2428 split-2 under the
+  # oracle against a true 9140 / 2435 — CI would have reported seven more
+  # converged families than actually converge. The census has since moved with
+  # the partition stack (see `tests/it/spec_conformance_axis.rs`, which preserves
+  # that `main` column); the mechanism is unchanged, so the exclusion stands and
+  # the numbers above are kept as the measurement that established it rather than
+  # silently restated as ones nobody re-measured under an armed oracle.
+  #
+  # The corpus loses nothing by running un-armed: it measures idempotency itself,
+  # and more precisely than the oracle does (a count and a classification, versus
+  # a panic). `tests/it/oracle_exclude_invariant.rs` keeps this list honest in
+  # both directions.
+  ORACLE_EXCLUDE: >-
+    test(spec_conformance_axis) + test(spec_corpus_regressions)
 
 jobs:
   abi3-floor-consistency:
@@ -645,7 +678,7 @@ jobs:
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/3 \
-            -E "not test(proptest) and not ($SWEEP_FILTER)"
+            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE)"
 
   # 1,000,000-case idempotency soak on every PR, split 8 ways.
   #
