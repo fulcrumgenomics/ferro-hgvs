@@ -91,6 +91,41 @@
       ]
     },
     {
+      "clause": "docs/recommendations/general.md:42",
+      "quote": "the 3'rule also applies for changes in single residue stretches and tandem repeats",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:41-three-prime-rule",
+        "DNA/repeated.md:5-repeat-format"
+      ]
+    },
+    {
+      "clause": "docs/recommendations/general.md:43",
+      "quote": "the 3'rule applies to ALL descriptions (genome, gene, transcript, and protein) of a given variant",
+      "classification": "not-generatable",
+      "reason": "Not the same claim as `:41`, and the difference is the whole point of the clause: `:41` says each description is shifted 3', `:43` says the g./c./n./p. descriptions OF ONE VARIANT all are. The corpus builds each reference shape as an INDEPENDENT frame (genomic, single-exon c., multi-exon c. on both strands, multi-exon n. on both strands) and runs its four properties inside each; it never projects one variant onto a second axis, so it can show the rule holds per axis and cannot show that two axes agree about one variant. Cross-axis agreement is what the projection conformance suites measure, and the protein half is out of scope entirely (see the `protein/` rows). The Q&A at `:162`-`:167`, which works the minus-strand g.-vs-c. instance, shares this limit."
+    },
+    {
+      "clause": "docs/recommendations/general.md:17",
+      "quote": "the reference sequence used must contain the residue(s) described to be changed",
+      "classification": "not-generatable",
+      "reason": "Every corpus spelling is DERIVED FROM the served reference — positions are chosen inside the frame and the stated bases are read back out of it — so a description naming a residue the reference does not hold cannot arise by construction. Synthesising one would measure the provider's reference-agreement check (a W-code emitted before normalization) rather than the validity/confluence/idempotency/refusal properties this instrument runs, so the corpus does not claim it. Declared gap. The spec states this clause twice, verbatim; the second copy is inventoried at `:22`."
+    },
+    {
+      "clause": "docs/recommendations/general.md:22",
+      "quote": "the reference sequence used must contain the residue(s) described to be changed",
+      "classification": "not-generatable",
+      "reason": "A verbatim duplicate of `:17` in the spec's own text, inventoried separately so the clause-unit denominator stays mechanical. Same reason: every corpus spelling is derived from the served reference, so a residue mismatch cannot arise by construction."
+    },
+    {
+      "clause": "docs/recommendations/general.md:109",
+      "quote": "duplicating insertions are described as duplications, not as insertions",
+      "classification": "generatable",
+      "exercised_by": [
+        "general.md:57-dup-outranks-ins"
+      ]
+    },
+    {
       "clause": "docs/recommendations/general.md:44",
       "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences",
       "classification": "generatable",
@@ -448,7 +483,7 @@
       "file": "docs/recommendations/general.md",
       "clause_units": 86,
       "classification": "not-generatable",
-      "reason": "The residue is reference-sequence selection (MANE, LRG, genome build), HGNC gene-symbol and gene-fusion nomenclature, the character inventory (already enforced by the parser's grammar rather than by a normalization property), and the Discussion Q&A on reporting practice and DNA-vs-RNA-vs-protein levels. The clauses that decide a description's form are cited individually above."
+      "reason": "The residue, enumerated by line range rather than summarised, because the summary this reason used to carry ('reference selection, HGNC, the character inventory, and the Q&A') did not describe five of the units it absorbed — those five are now cited individually above. What is left: `:10`, `:12`-`:13`, `:46`, `:150`-`:153` and `:155`-`:160`, which say at WHICH LEVEL (DNA/RNA/protein) a variant is reported and how the levels relate — a publication-completeness property of a report, not of a string. `:15`-`:32`, reference-sequence choice (a public file, a recent genome build, MANE), the mandatory prefix letters `c/g/m/n/o/p/r`, and `:32`'s explicit deferral of numbering to `background/numbering.md`. `:47`-`:54`, the per-level rendering conventions (DNA capitals, RNA lower case, protein three-letter code, `*` for stop): the corpus renders DNA-level uppercase throughout and never emits the counter-case, and the RNA and protein halves are the declared axis gaps recorded on those files. `:60` and `:64`-`:67`, HGNC gene symbols and gene-fusion / adjoined-transcript nomenclature — external database identity, not sequence. `:75`-`:94`, the character inventory (the three units there that decide a form — `:79`, `:80`, `:96` — are cited above); these are grammar tokens the parser accepts or rejects before any normalization property applies. `:104`-`:113`, the edit-type keyword inventory (`>`, `del`, `dup`, `ins`, `inv`, `fs`, `ext`), which names the operators the per-edit-type files define and whose one form-deciding member, `:109`, is cited above. `:115`-`:120`, the ISCN landmarks `cen`/`chr`/`pter`/`qter`/`sup`: chromosome-scale features for which a single synthetic contig has no referent, so no row can spell one. `:122`-`:125`, changes of state (`gom`/`lom`/`met`), which have no denoted sequence at all — the same limit recorded on `DNA/other.md`. And `:129`-`:147` and `:162`-`:174`, the Discussion Q&A: `:129` restates `:96`, `:133` restates the range rule cited as `checklist.md:45`, `:162` is the minus-strand instance of `:43`'s cross-axis claim and shares the limit stated there, and the rest is reporting practice."
     },
     {
       "file": "docs/recommendations/grammar.md",
