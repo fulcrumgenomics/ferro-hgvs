@@ -188,11 +188,34 @@ uploaded xfail artifact as a FAILing case instead of failing the workflow. That
 applies equally to all three flags, and it is why a red oracle in the nightly must
 be read out of the xfail report rather than from the workflow conclusion.
 
-Red is not the same as blocked, though: `main`'s ruleset requires only eight
-checks — Build, Test, Clippy, Clippy (all features), Format, Python Lint, Python
-Wheel Test, abi3 floor — and neither `Test oracle` nor `Exhaustive sweeps` is
-among them. So an oracle fire shows up as a failed job that a human must not
-merge past, not as a ruleset-enforced merge block.
+**An oracle fire DOES block the merge — corrected 2026-08-09.** This section used
+to say the opposite: that the ruleset requires only eight checks, that neither
+`Test oracle` nor `Exhaustive sweeps` is among them, and so a fire "shows up as a
+failed job that a human must not merge past, not as a ruleset-enforced merge
+block." The premise is right and the conclusion does not follow, because it reads
+the ruleset's context names as job names.
+
+`Test` is not the sharded test job. It is the `test-required` job in
+`.github/workflows/ci.yml` — cited by name because a line number goes stale on
+the next insertion above it — a
+**rollup**:
+
+```yaml
+  test-required:
+    name: Test
+    needs: [test, test-oracle, soak, sweeps, generated-docs]
+```
+
+whose script echoes each result and exits 1 if any is not `success`. So the
+required `Test` context transitively gates on `test-oracle`, `soak`, `sweeps` and
+`generated-docs`. Observed directly on PR #1572: all six `Test (n/6)` shards
+succeeded, two `Test oracle` shards failed, and the `Test` context reported
+FAILURE with `test-oracle = failure` in its log.
+
+Two practical consequences. A red oracle is a hard merge block, not an advisory
+one. And `gh pr checks` showing `Test` red while every `Test (n/6)` row is green
+is not a contradiction — look at the rollup's log to find which upstream job
+actually failed, rather than re-running the shards.
 
 #### Exhaustive cis sweeps: `FERRO_SWEEP_SEEDS`
 
@@ -662,6 +685,32 @@ carries the worked answer (`NM_007294.3:c.2077delinsATA`) and `:89` records that
 permitting the two-member spelling was *removed* by the committee. `:79-84` likewise carries the
 spec's own discriminator — "the two variants may have been reported (or might occur)
 individually" — which is **provenance**, recoverable only from the input's spelling.
+
+### A forward-looking note is a suggestion, and may describe a proposal that FAILED
+
+`general.md:36-39` reads as forward guidance — "the SVD-WG is preparing a proposal… The new
+recommendation will be: two variants separated by less than two nucleotides should be described
+as a `delins`" — and it is tempting to treat it as the direction of travel and discount the
+current rule accordingly.
+
+**That proposal is SVD-WG010, and it was rejected.** Word for word, including its rationale.
+So the note is stale text describing a change that never happened, and three conclusions drawn
+from reading it as guidance are all withdrawn: the codon exception is *not* going away, the
+proposal to replace it having failed; it *strengthens* `codon-carve-out-shape-restriction`
+rather than undercutting it; and the "spec-admitted instability" argument built on it does not
+stand.
+
+The sharper way to state what this caught: ferro was **shipping a rejected proposal**, not
+merely missing a gate. `general.md:35` is implemented twice and only the partitioning arm
+carried the codon shape gate, so `coalesce_coding_frame_separation` re-merged what the arm had
+refused and emitted `LRG_199t1:c.992_1004delinsAC` — the exact answer the committee rejected in
+2021. The negative guard `the_forbidden_description_is_never_what_ferro_emits` pins it.
+
+**So: cross-check every forward-looking statement in `recommendations/` against the
+`consultation/` dispositions before citing it.** "is preparing", "will be", "the new
+recommendation" are all flags. The disposition table is inventoried in the consultation slice:
+9 accepted, 3 rejected, 8 open, 3 unclear — a rejected proposal is generated as a NEGATIVE
+guard, never as an expectation.
 
 ## Adjudication records: where the open questions live
 
