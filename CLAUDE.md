@@ -344,8 +344,25 @@ deliberately enriched for churn-prone shapes, so quote its rate as *of the affec
 as a repo-wide figure — for consumer impact, normalize a real corpus through both revisions with
 `ferro normalize -i <inputs> --reference <dir> -f tsv` instead.
 
+**A decline that then describes a move is rejected.** `no. 3 rows move` reads as a decline —
+first word wins — so the disclosure would vanish silently, which is the worst direction this
+mechanism can fail in. The checker fails a declining trailer that also claims `<n> rows
+move|merge|split|respell` for non-zero `n`. Quantifying a *zero* is encouraged and passes
+(`none. 0 of 950 rows move`); the pattern requires the count to sit immediately before `rows`,
+which is what keeps #1547's `0 of 950 real cis-allele rows move` from tripping on the 950. It is a
+tripwire for the phrasing this repo actually uses, not a general contradiction detector.
+
+**The section itself is audited, not just each PR's trailer.** `Changelog grouping audit` renders
+the changelog with the real `release-plz.toml` over `<latest tag>..HEAD` and checks the result
+against the commits: nothing filed under **Representation changes** may open with a decline word,
+nothing that declares a move may be filed elsewhere, and no heading may still carry its `<!-- N -->`
+ordering prefix. It deliberately shares **no code** with the checker — #1555 passed the test written
+to catch it precisely because that test compared the two halves against each other and they were
+wrong together, so a second opinion is only worth having when it is derived differently.
+
 Contributor-facing guidance is in `CONTRIBUTING.md`. The checker is
-`scripts/check_representation_change.py`; its decline vocabulary is pinned against
+`scripts/check_representation_change.py` and the audit is
+`scripts/check_changelog_grouping.py`; the decline vocabulary is pinned against
 `release-plz.toml` and `CONTRIBUTING.md` by tests in
 `tests/python/test_representation_change_trailer.py`, because three copies of one list drift
 silently.

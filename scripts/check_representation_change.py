@@ -109,6 +109,41 @@ def declines(declaration: str) -> bool:
     return DECLINE_RE.match(declaration.strip()) is not None
 
 
+#: A quantified movement claim -- "3 rows move", "577 rows merge", "2 rows respell",
+#: "3 rows of 500,004 move". Reading the verdict from the first word means a trailer can
+#: contradict itself in its own reason (`no. 3 rows move`), and that failure is silent and
+#: in the dangerous direction: the disclosure disappears from the changelog and nobody is
+#: told. This is the tripwire for it.
+#:
+#: Two deliberate limits, because a looser rule fails honest PRs. **Zero is excluded**: a
+#: good decline often quantifies its zero, and `0 rows move over 5,761,302 real
+#: expressions` (#1535) must not trip. Excluded by requiring a nonzero digit *somewhere in
+#: the count* rather than by rejecting a bare `0`, so `0,000` and `000` are zero here too —
+#: an anchored `(?!0\b)` read them as nonzero and failed the decline. **The count must sit
+#: immediately before `rows`**,
+#: which is what keeps `0 of 950 real cis-allele rows move their normalized string`
+#: (#1547) from tripping on the 950 -- a looser pattern fires on that exemplary decline,
+#: measured.
+#:
+#: It catches the phrasing this repository actually uses -- every quantified disclosure in
+#: the corpus takes this shape -- and it is not a general contradiction detector. Spelled
+#: out numbers and unquantified claims pass. It is a tripwire, not a proof.
+MOVEMENT_CLAIM_RE = re.compile(
+    r"\b(?=[\d,]*[1-9])\d[\d,]*\s+rows?(?:\s+of\s+[\d,]+)?\s+"
+    r"(?:move|moves|moved|merge|merges|merged|split|splits|"
+    r"respell|respells|respelled)\b",
+    re.IGNORECASE,
+)
+
+
+def contradicted_decline(declaration: str) -> str | None:
+    """Return the movement claim a declining `declaration` makes, if it makes one."""
+    if not declines(declaration):
+        return None
+    match = MOVEMENT_CLAIM_RE.search(declaration)
+    return match.group(0) if match else None
+
+
 def watched_files(changed: list[str]) -> list[str]:
     """Return the changed paths that sit under a watched directory."""
     return [p for p in changed if any(p.startswith(prefix) for prefix in WATCHED_PREFIXES)]
@@ -133,9 +168,20 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
     """
     Decide whether `changed` is adequately declared by `declaration_text`.
 
-    Returns `(ok, message)`. `ok` is False in two cases: a watched file changed and no
-    trailer is present at all, or the message carries more than one trailer. A trailer
-    whose value is `none` passes, because declining is a declaration.
+    Returns `(ok, message)`. `ok` is False in three cases:
+
+    1. the message carries **more than one** trailer (#1573) — checked first, and ahead of
+       the watched-file test, because two trailers are a disagreement with how the
+       *changelog* files the commit, which applies to every commit;
+    2. a watched file changed and **no** trailer is present at all;
+    3. the trailer **declines while describing a move** (`no. 3 rows move`).
+
+    A trailer whose value is `none` otherwise passes, because declining is a declaration.
+
+    Note case 3 is scoped to watched changes, unlike case 1: it sits after the
+    watched-file early return, so a docs-only commit whose voluntary trailer contradicts
+    itself is not refused. That is the narrower choice — the contradiction is the same
+    either way — and it keeps a gratuitous trailer on an unwatched change from failing CI.
     """
     # Refused BEFORE the watched-file test, and deliberately: the harm is in changelog
     # grouping, which applies to every commit, not only to the ones touching a watched
@@ -179,6 +225,21 @@ def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
         )
 
     if declines(declaration):
+        claim = contradicted_decline(declaration)
+        if claim is not None:
+            return False, (
+                f"This trailer declines and then describes a move:\n\n  {declaration}\n\n"
+                f"The verdict is the first word, so this is filed as `none` and the "
+                f"disclosure -- {claim!r} -- never reaches the changelog. Nobody is told, "
+                "which is the failure this whole mechanism exists to prevent.\n\n"
+                "Say which it is. If the change moves output, lead with what moved:\n\n"
+                "  Representation-Change: 3 rows of 500,004 move, 2 respell / 1 merge,\n"
+                "    all away from the already-shipped form. Previously-accepted inputs,\n"
+                "    so a real migration.\n\n"
+                "If it moves nothing and the number describes something else -- a corpus "
+                "that grew, a measurement quoted from another change -- say so without the "
+                "`N rows move` phrasing, which reads as this change's own disclosure."
+            )
         return (
             True,
             f"Declared `Representation-Change: {declaration}` over {len(watched)} watched file(s).",
