@@ -81,6 +81,7 @@ mod cross_doc_compliance;
 mod dbsnp_tests;
 mod del_shift_matrix;
 mod delins_equal_vs_unequal_length_discriminator;
+mod delins_equal_vs_unequal_length_hermetic;
 mod dup_shift_matrix;
 mod edge_case_notation_tests;
 mod error_code_audit;

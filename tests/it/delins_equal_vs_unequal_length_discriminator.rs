@@ -125,9 +125,21 @@
 //! things that has to be read. Note the flip is an output-moving change and owes
 //! the release a `Representation-Change:` trailer.
 //!
-//! # Gating
+//! # Gating, and the hermetic companion that covers what this file cannot
 //!
-//! Both rows need real reference bases, so they need `FERRO_MANIFEST`. The gate
+//! Both rows need real reference bases, so they need `FERRO_MANIFEST`, and PR
+//! CI provisions none (`.github/workflows/ci.yml` says so and emits a `::notice`
+//! about it). So the test below runs in the **nightly** and skips on every pull
+//! request. Its PR-time counterpart is
+//! `tests/it/delins_equal_vs_unequal_length_hermetic.rs`
+//! (`it::delins_equal_vs_unequal_length_hermetic::equal_and_unequal_length_delins_get_opposite_verdicts_hermetically`),
+//! which reproduces the same discriminator on a synthetic contig — one span, two
+//! payloads differing by a single dropped base, so net length is provably the
+//! only thing separating the two verdicts. Read the two together: the hermetic
+//! file is the gate, and this file is the reality check that the synthetic shape
+//! still matches biology.
+//!
+//! The gate
 //! is the strict form (the one `issue_806_effect_real_residues.rs` uses): an
 //! **unset** `FERRO_MANIFEST` is a legitimate skip, but a manifest that is set
 //! and unusable — or that does not carry these two loci with these bases — is a
