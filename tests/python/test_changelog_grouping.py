@@ -46,9 +46,11 @@ trailer_value = check_changelog_grouping.trailer_value
         "no — nothing reaches a normalizer",
         "n/a: docs",
         "na. generated artifact only",
-        # Not a decline by the *checker's* rule (no terminator), and that is the point:
-        # this rule is coarser on purpose, so that a shared mistake cannot hide.
-        "none, except two rows that merge",
+        # A missing space after the terminator is an ordinary typo, and it used to flip the
+        # verdict: `split()[0]` yielded `none.Tests`, so the checker called this a decline
+        # and the audit called it a move — a red build on a correct trailer.
+        "none.Tests only.",
+        "none—no watched file is touched",
     ],
 )
 def test_a_leading_decline_word_is_a_decline(value: str) -> None:
@@ -63,19 +65,88 @@ def test_a_leading_decline_word_is_a_decline(value: str) -> None:
         "3 rows of 500,004 move",
         "nothing moves under src/normalize/",
         "not measured yet",
+        # `CONTRIBUTING.md:103-105` documents both of these as filed as real changes: a comma
+        # is not a terminator, and `no rows move` has no terminator at all. "Both err toward
+        # listing a change rather than hiding one." The audit used to call them declines,
+        # which made them unsatisfiable — release-plz filed them one way and the audit failed
+        # them the other, with no trailer text able to satisfy both.
+        "none, except two rows that merge",
+        "no rows move",
     ],
 )
 def test_a_description_of_a_move_is_not_a_decline(value: str) -> None:
     assert not opens_with_a_decline(value)
 
 
+def test_the_audit_and_the_checker_agree_on_every_documented_form() -> None:
+    """The two halves must reach the same verdict, or CI is unsatisfiable.
+
+    This is the guard the audit shipped without. Its rule was deliberately coarser than the
+    checker's — first word, punctuation stripped, no terminator logic — on the reasoning that
+    a second opinion derived the same way is worth nothing. But a *disagreement* is not a
+    second opinion, it is a red build: `no rows move` and `none, except two rows that merge`
+    are filed as real changes by design (`CONTRIBUTING.md:103-105`) and the audit called them
+    declines, so no trailer text could satisfy both halves. Once such a commit is on `main`
+    the job is red for every open PR until the next release tag.
+
+    What is still independent is the derivation — this check renders the changelog through
+    real git-cliff and reads the result; the checker regexes the PR body. That is pinned
+    separately by `test_the_rule_shares_no_vocabulary_with_the_checker`. Agreement on the
+    verdict and independence of derivation are different properties, and #1555 is the reason
+    to want both: a test comparing only vocabulary found the two halves agreeing while both
+    were wrong.
+    """
+    checker_path = (
+        Path(__file__).resolve().parents[2] / "scripts" / "check_representation_change.py"
+    )
+    spec = importlib.util.spec_from_file_location("_checker_for_agreement", checker_path)
+    assert spec is not None and spec.loader is not None
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+
+    for value in [
+        # declines, including every terminator CONTRIBUTING.md names
+        "none",
+        "NONE",
+        "none.",
+        "none. Tests only; nothing under a watched directory.",
+        "none: comments only",
+        "none; one fixture JSON",
+        "none — 0 of 950 rows move",
+        "none.Tests only.",
+        "no. Nothing reaches a normalizer.",
+        "n/a: docs",
+        "na. generated artifact only",
+        # real changes, including the two the coarse rule got wrong
+        "577 rows move, 360 merge / 205 split",
+        "0 rows move over 5,761,302 real expressions",
+        "no rows move",
+        "none, except two rows that merge",
+        "nothing moves",
+        "not measured yet",
+    ]:
+        assert opens_with_a_decline(value) == checker.declines(value), (
+            f"{value!r}: the audit calls it "
+            f"{'a decline' if opens_with_a_decline(value) else 'a move'} and the checker calls "
+            f"it {'a decline' if checker.declines(value) else 'a move'}. A disagreement is a "
+            "red build on a correct trailer, not a useful second opinion — the independence "
+            "that matters is how each derives its answer, not that they answer differently."
+        )
+
+
 def test_the_rule_shares_no_vocabulary_with_the_checker() -> None:
-    """This is the whole design of the audit, so it is pinned rather than left to comments.
+    """The audit must not *import* the checker's rule, so the two can be wrong separately.
 
     #1555 survived a test written to catch exactly it, because that test compared the two
-    halves against *each other* and they were wrong together. A second opinion has to be
-    derived differently to be worth anything — here, a plain first-word test with no
-    terminator logic.
+    halves against *each other* and they were wrong together.
+
+    Note what this does and does not buy, because the original framing over-claimed and that
+    over-claim is what shipped the defect above. It keeps the implementations separate. It
+    does **not** make the audit's *verdict* independent — the verdict has to agree, or CI is
+    unsatisfiable (`test_the_audit_and_the_checker_agree_on_every_documented_form`). The
+    independence that catches a shared mistake is in the *derivation*: this check renders the
+    changelog through real git-cliff and reads the result, which is the question no
+    vocabulary-comparison test was asking.
     """
     source = _MODULE_PATH.read_text(encoding="utf-8")
     for borrowed in ("import check_representation_change", "NONE_VALUES", "DECLINE_RE"):
@@ -200,7 +271,20 @@ def test_ci_synthesizes_the_squash_commit_before_auditing() -> None:
     # Scoped to the synthesis step itself, not to everything above the audit. Asserting
     # against the whole preamble would let a match come from an unrelated step — and it is
     # the *dataflow inside this step* that carries the property.
-    step = workflow[synthesis:audit]
+    raw_step = workflow[synthesis:audit]
+
+    # And with `#`-comment lines removed, because YAML comments are not code. Adversarial
+    # review found three mutants that passed both this test and `actionlint` purely by
+    # matching comment text: commenting the reset out (`# git reset --soft "$PR_BASE_SHA"`)
+    # restored the pre-fix behaviour silently, and `# was: git reset --soft "$PR_BASE_SHA"`
+    # above a `reset --soft HEAD~0` did the same. Commenting a line out to debug is an
+    # ordinary edit, so the assertions must not be satisfiable by the prose that explains
+    # them. `step` is what every assertion below reads.
+    step = "\n".join(line for line in raw_step.splitlines() if not line.lstrip().startswith("#"))
+    assert "#" in raw_step and len(step) < len(raw_step), (
+        "comment stripping matched nothing, so it is not protecting anything — the step's "
+        "explanatory comments were expected to be present and removed"
+    )
 
     # The subject and body must both come from the PR, and through `env` — a PR title is
     # attacker-controlled text and `${{ }}` inside `run` would splice it into the shell.
@@ -213,6 +297,18 @@ def test_ci_synthesizes_the_squash_commit_before_auditing() -> None:
     # every PR regardless of its declaration. That is the exact failure this test exists to
     # prevent, so pin the whole chain: env var -> message file -> commit.
     message_file = "squash-message.txt"
+
+    # Written exactly once. `[^>]*` below is positional, so a second redirect appended after
+    # the good `printf` — `printf 'ci: preview\n' > squash-message.txt` — clobbers the file
+    # while the first match still succeeds. Adversarial review found that mutant surviving
+    # both this test and `actionlint`.
+    writes = len(re.findall(r">\s*" + re.escape(message_file), step))
+    assert writes == 1, (
+        f"{message_file} is redirected to {writes} times in this step; a second write "
+        "clobbers the message assembled from the PR and the audit then judges a commit that "
+        "never carried the trailer"
+    )
+
     written_from = re.search(
         r"printf\s+\S+\s+(?P<args>[^>]*)>\s*" + re.escape(message_file),
         step,
@@ -254,4 +350,27 @@ def test_ci_synthesizes_the_squash_commit_before_auditing() -> None:
     )
     assert step.index(reset.group(0)) < step.index("commit --allow-empty"), (
         "the reset must precede the commit, or the commit lands on the merge ref"
+    )
+
+    # The tag must be resolved on the MERGE REF, i.e. before the reset moves HEAD's
+    # ancestry, and handed to the audit explicitly.
+    #
+    # `base.sha` is the base tip as of the last PR event while the merge ref uses the
+    # *current* base, so once a release lands, an un-resynchronized PR resets to a commit
+    # from which the new tag is unreachable. `describe` then answers with the PREVIOUS tag
+    # and the audit silently widens back over an entire released cycle, re-judging merged
+    # work the PR author cannot touch. Measured: 3 commits audited that way against 1.
+    describe = re.search(r"(?P<var>[A-Z_]+)=\$\(git describe --tags --abbrev=0", step)
+    assert describe is not None, (
+        "the step must resolve the latest tag itself; leaving it to the audit resolves it "
+        "after the reset, against the wrong ancestry"
+    )
+    assert step.index(describe.group(0)) < step.index(reset.group(0)), (
+        "the tag must be resolved BEFORE the soft reset — after it, a release that landed "
+        "since the PR's base.sha is unreachable and `describe` silently returns the previous "
+        "tag, rewinding the audited range over an already-released cycle"
+    )
+    assert "AUDIT_RANGE=" in step and "GITHUB_ENV" in step, (
+        "the resolved range must be exported (AUDIT_RANGE -> $GITHUB_ENV) so the audit step "
+        "uses it rather than re-deriving it from the reset HEAD"
     )

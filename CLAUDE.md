@@ -360,6 +360,20 @@ ordering prefix. It deliberately shares **no code** with the checker — #1555 p
 to catch it precisely because that test compared the two halves against each other and they were
 wrong together, so a second opinion is only worth having when it is derived differently.
 
+**"Derived differently" means the derivation, not the verdict — and reading it the other way shipped
+a defect.** The audit's rule was originally made deliberately *coarser* than the checker's (first
+word, punctuation stripped, no terminator logic) on that reasoning. The result was a rule that
+disagreed with `release-plz.toml` on trailer forms `CONTRIBUTING.md` documents as **correct**:
+`no rows move` and `none, except two rows that merge` are filed as real changes by design, and the
+audit called them declines, so **no trailer text could satisfy both halves** — and once such a
+commit is on `main` the job is red for every open PR until the next release tag. The reverse also
+bit: `none.Tests only.` (a missing space) split to `none.Tests`, which the checker called a decline
+and the audit called a move. The two now agree on the verdict, pinned by
+`test_the_audit_and_the_checker_agree_on_every_documented_form`; what stays independent is that
+this check *renders the changelog through real git-cliff and reads the result*, which is the
+question no vocabulary-comparison test was asking. A disagreement is not a second opinion, it is an
+unsatisfiable build.
+
 Contributor-facing guidance is in `CONTRIBUTING.md`. The checker is
 `scripts/check_representation_change.py` and the audit is
 `scripts/check_changelog_grouping.py`; the decline vocabulary is pinned against

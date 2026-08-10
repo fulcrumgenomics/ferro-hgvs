@@ -272,19 +272,42 @@ jobs:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           printf '%s (#%s)\n\n%s\n' "$PR_TITLE" "$PR_NUMBER" "$PR_BODY" > squash-message.txt
+          # Resolve the tag BEFORE the reset, and hand it to the audit explicitly.
+          #
+          # `base.sha` is the base tip as of the last PR event, while the merge ref GitHub
+          # builds uses the *current* base — so after a release lands, an un-resynchronized
+          # PR resets to a commit from which the new tag is unreachable. `describe` would
+          # then answer with the PREVIOUS tag and silently widen the range back over an
+          # entire already-released cycle, re-judging merged work the PR author cannot
+          # touch. Measured: pre-reset `describe` gives v0.14.0, post-reset gives v0.13.1.
+          # Guarded because `describe` exits 128 on a tagless history and must not be what
+          # fails the job under `set -e`.
+          if AUDIT_TAG=$(git describe --tags --abbrev=0 2>/dev/null); then
+            echo "AUDIT_RANGE=$AUDIT_TAG..HEAD" >> "$GITHUB_ENV"
+          else
+            echo "no tag reachable from the merge ref; the audit will resolve its own range"
+          fi
           git reset --soft "$PR_BASE_SHA"
           git -c user.name='github-actions' -c user.email='github-actions@github.com' \
             commit --allow-empty --no-verify --quiet --file squash-message.txt
           echo "auditing this squash-equivalent commit:"
           git --no-pager log -1 --format='%H%n%s'
-          # Guarded: `describe` exits non-zero on a tagless history, and this echo is a
-          # debugging aid — it must not be what fails the job under `set -e`.
-          if tag=$(git describe --tags --abbrev=0 2>/dev/null); then
-            echo "audited range ($tag..HEAD) now contains:"
-            git --no-pager log --format='  %h %s' "$tag..HEAD"
+          if [ -n "${AUDIT_TAG:-}" ]; then
+            echo "audited range ($AUDIT_TAG..HEAD) now contains:"
+            git --no-pager log --format='  %h %s' "$AUDIT_TAG..HEAD"
           fi
       - name: Audit the Representation changes section
-        run: python scripts/check_changelog_grouping.py
+        # `AUDIT_RANGE` is set by the step above from the tag resolved on the merge ref,
+        # before the soft reset moved HEAD's ancestry. Empty on a push to `main` (no
+        # synthesis step runs) and on a tagless history, where the script resolves its own
+        # range — so this is an override, not a requirement.
+        run: |
+          if [ -n "${AUDIT_RANGE:-}" ]; then
+            echo "auditing $AUDIT_RANGE"
+            python scripts/check_changelog_grouping.py --range "$AUDIT_RANGE"
+          else
+            python scripts/check_changelog_grouping.py
+          fi
 
   clippy:
     name: Clippy
