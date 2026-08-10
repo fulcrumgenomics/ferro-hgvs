@@ -135,7 +135,22 @@ commit_parsers = [
   # `DECLINE_TERMINATORS` in `scripts/check_representation_change.py` by
   # `test_decline_vocabulary_matches_the_changelog_config` and
   # `test_the_two_decline_rules_agree_value_by_value`.
-  { footer = "(?i)^Representation-Change:[^\\S\\r\\n]*(none|no|n/a|na)[^\\S\\r\\n]*(?:[.;:—–][\\s\\S]*)?$", group = "<!-- 7 -->Other" },
+  #
+  # **`m`, because git-cliff matches this against the whole footer value, which spans
+  # lines** (#1573). Without it `$` is end-of-*string*, so the rule only fires when the
+  # decline is the last thing in the message -- and anything appended after a BARE `none`
+  # defeats it. That is not hypothetical: CodeRabbit appends a release-notes block to the
+  # PR description, GitHub makes the description the squash body, and `3ebcdddd` (#1551)
+  # declined and was then filed under "Representation changes" in the v0.14.0 changelog.
+  # The `[.;:—–]` terminator above does not cover it, because the character following a
+  # bare decline is a newline rather than punctuation.
+  #
+  # With `m` the verdict is read off the trailer's own line, which is what the checker
+  # already does -- its `TRAILER_RE` is `re.IGNORECASE | re.MULTILINE` and takes the value
+  # from one line. The two halves now agree by construction rather than by coincidence.
+  # A reason may still span lines: `[\s\S]*` after a terminator is unchanged, and `,` is
+  # still excluded, so `none, except two rows` remains a real change.
+  { footer = "(?im)^Representation-Change:[^\\S\\r\\n]*(none|no|n/a|na)[^\\S\\r\\n]*(?:[.;:—–][\\s\\S]*)?$", group = "<!-- 7 -->Other" },
   # A declining commit lands in `Other` whatever its type, so a `fix:` that correctly
   # declined is not listed under `Fixed` (#1557). That is a known cost of the ordering
   # above, not an oversight, and the obvious repair does not work: **git-cliff evaluates a

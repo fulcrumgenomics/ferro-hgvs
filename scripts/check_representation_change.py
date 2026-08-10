@@ -55,8 +55,19 @@ WATCHED_PREFIXES: tuple[str, ...] = (
 #: space as the value, so a bare `Representation-Change:` with nothing after it counted as
 #: a declaration — the precise hole this check exists to close. And `\s` spans newlines, so
 #: a permissive class would let the value be scavenged from the *following* line.
+#:
+#: **The token must sit at column 0** (#1573). The pattern used to allow `[ \t]*` before it,
+#: which made this checker recognise as a *trailer* what git and git-cliff both treat as a
+#: *continuation* of the value above it — and `CONTRIBUTING.md` documents indentation as
+#: exactly that continuation mechanism. The disagreement is only reachable when a
+#: continuation line itself opens with the token, i.e. when a PR description quotes a
+#: declining example under its own real disclosure, but there it is the whole defect: the
+#: quoted example became a second declaration here and stayed prose for git-cliff. Requiring
+#: column 0 makes both halves count the same trailers, which is what lets `check` refuse a
+#: genuine duplicate and pass an indented quotation. Measured over every open PR at the time
+#: of the change: no description carried an indented trailer, so nothing was reclassified.
 TRAILER_RE = re.compile(
-    r"^[ \t]*Representation-Change:[ \t]*(?P<value>\S.*?)[ \t]*$",
+    r"^Representation-Change:[ \t]*(?P<value>\S.*?)[ \t]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -103,25 +114,53 @@ def watched_files(changed: list[str]) -> list[str]:
     return [p for p in changed if any(p.startswith(prefix) for prefix in WATCHED_PREFIXES)]
 
 
+def find_declarations(text: str) -> list[str]:
+    """Return every trailer value in `text`, in the order they appear.
+
+    Plural because *how many* there are is itself a verdict — see `check`. One trailer is
+    the only shape whose meaning both this checker and `release-plz.toml` agree on.
+    """
+    return [match.group("value") for match in TRAILER_RE.finditer(text)]
+
+
 def find_declaration(text: str) -> str | None:
-    """Return the trailer's value, or `None` when the text carries no trailer."""
-    match = TRAILER_RE.search(text)
-    return match.group("value") if match else None
+    """Return the first trailer's value, or `None` when the text carries no trailer."""
+    declarations = find_declarations(text)
+    return declarations[0] if declarations else None
 
 
 def check(changed: list[str], declaration_text: str) -> tuple[bool, str]:
     """
     Decide whether `changed` is adequately declared by `declaration_text`.
 
-    Returns `(ok, message)`. `ok` is False only when a watched file changed and no
-    trailer is present at all — a trailer whose value is `none` passes, because
-    declining is a declaration.
+    Returns `(ok, message)`. `ok` is False in two cases: a watched file changed and no
+    trailer is present at all, or the message carries more than one trailer. A trailer
+    whose value is `none` passes, because declining is a declaration.
     """
+    # Refused BEFORE the watched-file test, and deliberately: the harm is in changelog
+    # grouping, which applies to every commit, not only to the ones touching a watched
+    # directory. This job already runs on every PR.
+    declarations = find_declarations(declaration_text)
+    if len(declarations) > 1:
+        listed = "\n".join(f"  Representation-Change: {value}" for value in declarations)
+        return False, (
+            f"{len(declarations)} `Representation-Change:` trailers found:\n{listed}\n\n"
+            "Keep exactly one. Two trailers do not mean anything consistent, because this\n"
+            "check and the changelog resolve them differently: this check reads the FIRST\n"
+            "trailer, while git-cliff matches its footer rule against EVERY footer and takes\n"
+            "the first rule that matches any of them -- so a decline anywhere wins there,\n"
+            "whatever its position. A message disclosing a move and then declining one\n"
+            "therefore passes here as a disclosure and is filed under `Other` in the\n"
+            "changelog, and the disclosure silently disappears.\n\n"
+            "Delete the superseded trailer, or indent it if it is quoted as an example --\n"
+            "an indented line is a continuation of the value above it, not a new trailer."
+        )
+
     watched = watched_files(changed)
     if not watched:
         return True, "No file under a watched directory changed; no declaration needed."
 
-    declaration = find_declaration(declaration_text)
+    declaration = declarations[0] if declarations else None
     if declaration is None:
         listed = "\n".join(f"  {p}" for p in sorted(watched))
         return False, (

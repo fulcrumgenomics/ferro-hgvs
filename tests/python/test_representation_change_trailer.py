@@ -26,6 +26,7 @@ _SPEC.loader.exec_module(check_representation_change)
 
 check = check_representation_change.check
 find_declaration = check_representation_change.find_declaration
+find_declarations = check_representation_change.find_declarations
 watched_files = check_representation_change.watched_files
 WATCHED_PREFIXES = check_representation_change.WATCHED_PREFIXES
 
@@ -135,10 +136,119 @@ def test_an_empty_trailer_value_is_not_a_declaration() -> None:
     assert find_declaration("Representation-Change:   \n") is None
 
 
+@pytest.mark.parametrize("indent", [" ", "  ", "\t", "    "])
+def test_an_indented_trailer_is_not_a_trailer(indent: str) -> None:
+    """The token must sit at column 0, because that is where git and git-cliff require it.
+
+    `CONTRIBUTING.md` documents indentation as the way to continue a trailer's *value* onto
+    another line, so a checker that read an indented line as a new trailer contradicted the
+    convention it enforces. A sole indented trailer now fails as absent — which is the
+    honest answer, since git-cliff would not group it either and the disclosure would be
+    lost rather than merely unread.
+    """
+    assert find_declaration(f"{indent}Representation-Change: none") is None
+    ok, message = check(["src/normalize/merge.rs"], f"{indent}Representation-Change: none")
+    assert not ok, "an indented trailer must not satisfy the check"
+    assert "Representation-Change: none" in message, "the message must show the column-0 form"
+
+
 @pytest.mark.parametrize("value", ["none", "None", "NONE", "no", "n/a", "na"])
 def test_decline_spellings_all_pass(value: str) -> None:
     ok, _ = check(["src/normalize/merge.rs"], f"Representation-Change: {value}")
     assert ok
+
+
+# ---------------------------------------------------------------------------
+# Exactly one trailer, because two do not mean anything consistent
+# ---------------------------------------------------------------------------
+
+#: A real disclosure followed by a *quoted* declining example at column 0. The shape is
+#: invited by `CONTRIBUTING.md`, which documents the declining form, and by a corrected
+#: trailer added without deleting the superseded one.
+_TWO_TRAILERS = (
+    "Representation-Change: 577 rows move, 360 merge.\n"
+    "\n"
+    "For contrast, a declining trailer looks like:\n"
+    "Representation-Change: none\n"
+)
+
+
+def test_two_trailers_are_refused() -> None:
+    """Neither half of the machinery can resolve two trailers the same way, so refuse.
+
+    Measured against git-cliff 2.13.1 with the real config: this message groups under
+    **Other**, because git-cliff matches its footer rule against *every* footer and takes
+    the first rule that matches any of them, so a decline wins wherever it sits. This
+    checker reads the *first* trailer and calls the same message a real disclosure. The
+    commit then passes CI as a disclosure and is filed as a decline, and the disclosure
+    disappears from the changelog — the under-reporting direction of #1522, one commit at
+    a time.
+
+    It is not an anchoring bug and #1573's `m` does not reach it: the shape reproduces
+    identically under `(?i)`, `(?im)` and `(?im)\\A`, because the second line is parsed as
+    its own footer and the rule matches at *that* footer's start.
+
+    Refusing rather than picking a winner keeps the rule that a decline must be *stated*,
+    never inferred from a message that also says the opposite.
+    """
+    ok, message = check(["src/normalize/merge.rs"], _TWO_TRAILERS)
+    assert not ok, "two trailers must not pass; the changelog and this check disagree on them"
+    assert "2 `Representation-Change:` trailers found" in message
+    assert "577 rows move, 360 merge." in message, "the message must show what it found"
+    assert "none" in message
+
+
+def test_two_trailers_are_refused_even_with_no_watched_file() -> None:
+    """The harm is in changelog grouping, which applies to every commit.
+
+    So this is refused ahead of the watched-file test — a docs-only commit reaches the
+    changelog exactly like a `src/normalize/` one.
+    """
+    ok, message = check(["README.md"], _TWO_TRAILERS)
+    assert not ok
+    assert "trailers found" in message
+
+
+def test_two_declining_trailers_are_still_refused() -> None:
+    """Even when both agree, one of them is unmaintained. Ambiguity is the defect."""
+    ok, _ = check(["src/hgvs/variant.rs"], "Representation-Change: none\nRepresentation-Change: no")
+    assert not ok
+
+
+def test_an_indented_second_trailer_is_a_continuation_not_a_second_trailer() -> None:
+    """The escape hatch the refusal message names must actually work.
+
+    Indenting makes the line a continuation of the value above it, which is also how
+    git-cliff sees it — measured, the indented form groups under **Representation
+    changes** where the column-0 form groups under **Other**. So the fix the message
+    recommends is the one that makes both halves agree.
+    """
+    body = (
+        "Representation-Change: 577 rows move, 360 merge.\n"
+        "\n"
+        "For contrast, a declining trailer looks like:\n"
+        "    Representation-Change: none\n"
+    )
+    assert find_declarations(body) == ["577 rows move, 360 merge."]
+    ok, _ = check(["src/normalize/merge.rs"], body)
+    assert ok
+
+
+def test_one_trailer_still_passes() -> None:
+    """The ordinary case, pinned so the refusal above cannot widen onto it."""
+    for body in (
+        "Representation-Change: none",
+        "Representation-Change: none. Tests only.",
+        "Some prose.\n\nCloses #1.\n\nRepresentation-Change: 577 rows move, 360 merge.\n",
+    ):
+        ok, _ = check(["src/normalize/merge.rs"], body)
+        assert ok, f"{body!r} carries exactly one trailer and must pass"
+
+
+def test_find_declarations_returns_every_value_in_order() -> None:
+    assert find_declarations("no trailer here") == []
+    assert find_declarations("Representation-Change: none") == ["none"]
+    assert find_declarations(_TWO_TRAILERS) == ["577 rows move, 360 merge.", "none"]
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +337,12 @@ def test_decline_vocabulary_matches_the_changelog_config() -> None:
     is told to declare something the changelog then hides.
     """
     config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
-    match = re.search(r'footer = "\(\?i\)\^Representation-Change:[^"]*?\(([^)]+)\)', config)
+    # `[a-z]*i[a-z]*` rather than `[a-z]+`: the flag group gained `m` in #1573, so matching
+    # `(?i)` literally would read as a rename -- but dropping the `i` requirement entirely
+    # would let this find a case-*sensitive* rule while asserting it found the opposite.
+    match = re.search(
+        r'footer = "\(\?[a-z]*i[a-z]*\)\^Representation-Change:[^"]*?\(([^)]+)\)', config
+    )
     assert match is not None, (
         "no case-insensitive Representation-Change exclusion rule found in release-plz.toml; "
         "the decline vocabulary cannot be checked"
@@ -255,7 +370,12 @@ def test_the_two_decline_rules_agree_value_by_value() -> None:
     rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
     assert rules, "no Representation-Change exclusion rule found in release-plz.toml"
     # The rule is a TOML basic string, so its backslashes are escaped in the file.
-    changelog_rule = re.compile(rules[0].replace("\\\\", "\\"), re.MULTILINE)
+    #
+    # Compiled with NO flags of our own: whatever the rule needs it must declare inline,
+    # because git-cliff adds none either. Passing `re.MULTILINE` here -- as this test did
+    # until #1573 -- makes the harness kinder than production and hides exactly the class
+    # of anchoring bug it exists to catch.
+    changelog_rule = re.compile(rules[0].replace("\\\\", "\\"))
 
     values = [
         "none",
@@ -283,6 +403,67 @@ def test_the_two_decline_rules_agree_value_by_value() -> None:
             f"{'a decline' if by_checker else 'a real change'}; the changelog and CI must "
             "agree, or a PR passes the check and is then filed as its opposite"
         )
+
+
+#: What a bot appends after the trailer. CodeRabbit posts a block like this on essentially
+#: every PR, and GitHub builds the squash commit body from the PR description, so it reaches
+#: the commit message verbatim and lands *after* the trailer.
+_APPENDED_BLOCK = (
+    "\n\n<!-- This is an auto-generated comment: release notes by coderabbit.ai -->\n"
+    "## Summary by CodeRabbit\n"
+    "- Tests: added coverage.\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("value", "is_a_decline"),
+    [
+        ("none", True),
+        ("NONE", True),
+        ("none. Comment prose only.", True),
+        ("none; tests only", True),
+        ("n/a: docs", True),
+        ("577 rows move, 360 merge / 205 split.", False),
+        ("none, except two rows that merge.", False),
+    ],
+)
+def test_a_trailer_keeps_its_verdict_when_text_is_appended_after_it(
+    value: str, is_a_decline: bool
+) -> None:
+    """Trailing text must not invert the verdict — #1573, and #1526 in a new shape.
+
+    git-cliff matches the exclusion rule against the **whole footer value**, which spans
+    lines. Anchored with `$` and no `m` flag, the rule only fired when the decline was the
+    last thing in the message, so a bare `none` followed by an appended block was filed
+    under **Representation changes**. `3ebcdddd` (#1551) is the real instance: it declined,
+    CodeRabbit appended release notes, and the v0.14.0 changelog listed it as a change.
+
+    The reason-terminator set from #1555 does not cover this: after a bare decline the next
+    character is a newline, not one of `.;:—–`.
+
+    Every other guard in this file inspects the config as a *string* — vocabulary, casing,
+    ordering — and all of them passed throughout the bug, because anchoring is a behaviour.
+    """
+    config = (Path(__file__).resolve().parents[2] / "release-plz.toml").read_text(encoding="utf-8")
+    rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
+    assert rules, "no Representation-Change exclusion rule found in release-plz.toml"
+    # No flags of our own: git-cliff supplies none, so the rule must declare what it needs.
+    changelog_rule = re.compile(rules[0].replace("\\\\", "\\"))
+
+    footer = f"Representation-Change: {value}{_APPENDED_BLOCK}"
+    assert (changelog_rule.search(footer) is not None) == is_a_decline, (
+        f"{value!r} followed by an appended block is filed as "
+        f"{'a real change' if is_a_decline else 'a decline'} by release-plz.toml; text "
+        "appended after a trailer must not change what the trailer says"
+    )
+
+    # And the checker must reach the same verdict on the same message, since disagreeing is
+    # what lets a PR pass CI and then render as its opposite.
+    declaration = find_declaration(footer)
+    assert declaration is not None, "the checker no longer finds a trailer it used to find"
+    assert check_representation_change.declines(declaration) == is_a_decline, (
+        f"{value!r}: the checker and release-plz.toml disagree once a block is appended"
+    )
 
 
 def test_the_ordering_prefix_is_stripped_from_rendered_headings() -> None:
@@ -316,7 +497,10 @@ def test_both_representation_change_rules_are_case_insensitive() -> None:
     rules = re.findall(r'\{ footer = "([^"]*Representation-Change[^"]*)"', config)
     assert len(rules) == 2, f"expected an exclusion and an inclusion rule, found {rules}"
     for rule in rules:
-        assert rule.startswith("(?i)"), (
+        # Read the inline flag group rather than matching `(?i)` literally, so that adding
+        # another flag -- `m`, in #1573 -- does not read as "the rule became case-sensitive".
+        flags = re.match(r"\(\?([a-z]+)\)", rule)
+        assert flags is not None and "i" in flags.group(1), (
             f"rule {rule!r} is case-sensitive; the checker's own trailer regex is not, so the "
             "two disagree about whether `REPRESENTATION-CHANGE:` is a declaration"
         )
