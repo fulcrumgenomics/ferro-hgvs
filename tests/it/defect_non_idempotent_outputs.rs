@@ -1,5 +1,30 @@
-//! The corpus's `non_idempotent_outputs` class, dissected: **7 outputs at 3' and
+//! The corpus's `non_idempotent_outputs` class, dissected: **4 outputs at 3' and
 //! 4 at 5'** that are not their own fixed point.
+//!
+//! # HALF OF THIS CLASS IS FIXED — the three `scale-*` rows are gone
+//!
+//! It was **7 at 3'**. The branch that adds `general.md:35`'s second conjunct
+//! ("together affecting one amino acid") to `coalesce_coding_frame_separation`
+//! removed the whole of "Mechanism 2 of 2" below: the three
+//! `scale-c3p-sep{120,128,136}-del-del` rows now settle in **one** pass, and the
+//! coding-axis onset sweep that found the class on five of six `ACGT` cores finds
+//! it on **none**.
+//!
+//! The mechanism is the one this file identified and is worth stating in its own
+//! terms, because it is the confirmation: the second pass was reaching a shorter
+//! partition than the first *by merging across codon boundaries the exception
+//! never reached*. Remove those merges and the first pass lands where the second
+//! used to. The three second-pass answers this file pinned are unchanged strings
+//! — they are simply now the **first**-pass answers, which is why
+//! [`pass_one_is_already_a_fixed_point_of_per_member_normalization`] can keep the
+//! same table of three expected strings, moved one pass earlier.
+//!
+//! **The pins below are flipped, not deleted.** Every one of them now asserts the
+//! fixed point, and says in its own doc what it used to assert and what changed.
+//! `KNOWN_DIVERGENT_INPUTS`'s discipline applies here too: a deviation that has
+//! been fixed must stay visible, so that it cannot silently come back. What is
+//! **not** claimed is that the class is fixed — mechanism 1, the four `cds-end`
+//! families, is untouched at both 3' and 5'.
 //!
 //! # What this file is for
 //!
@@ -54,7 +79,11 @@ const CDS_END_FAMILIES: [&str; 4] = [
     "s01-c3p-cds-end-dup-dup-p1-sep1",
 ];
 
-/// The three `scale-separation` families, at 3' only.
+/// The three `scale-separation` families. **They were the 3'-only half of the
+/// class and they are FIXED** — kept as a named list, because the tests that used
+/// to pin their instability now pin that they are fixed points, and the list is
+/// what stops a later generator edit from quietly un-generating the rows that
+/// prove it.
 const SCALE_FAMILIES: [&str; 3] = [
     "scale-c3p-sep120-del-del",
     "scale-c3p-sep128-del-del",
@@ -62,10 +91,38 @@ const SCALE_FAMILIES: [&str; 3] = [
 ];
 
 /// Every family holding a non-idempotent output, in id order.
+///
+/// **`SCALE_FAMILIES` is deliberately no longer chained in.** It was, and the
+/// three rows it names are the ones the amino-acid precondition fixed; leaving
+/// them here would make every caller iterate an empty spelling list, which is the
+/// silent-vacuity failure `every_scale_family_is_now_a_fixed_point` exists to
+/// make loud instead.
 fn affected_families() -> Vec<&'static str> {
-    let mut ids: Vec<&'static str> = CDS_END_FAMILIES.into_iter().chain(SCALE_FAMILIES).collect();
+    let mut ids: Vec<&'static str> = CDS_END_FAMILIES.to_vec();
     ids.sort_unstable();
     ids
+}
+
+/// The one spelling of `row` whose output is not its own fixed point.
+///
+/// Fails with a message naming the flip rather than panicking on an out-of-bounds
+/// index. A bare `[0]` on this list reported "the defect got fixed" as
+/// `index out of bounds: the len is 0 but the index is 0`, which is the opposite
+/// of the repo's rule that a fixed deviation must fail *legibly* — the same rule
+/// `ferro_produces_the_form_the_spec_states` implements by failing when a listed
+/// input starts matching the spec.
+fn sole_non_idempotent_spelling(row: &Row, direction: ShuffleDirection) -> String {
+    let spellings = non_idempotent_spellings(row, direction);
+    assert_eq!(
+        spellings.len(),
+        1,
+        "{} ({direction:?}): expected exactly one non-idempotent spelling. An EMPTY list means \
+         the defect this test pins is FIXED — flip the pin to assert the fixed point and \
+         re-bless `spec_conformance_axis`'s census in the same commit; more than one means the \
+         class grew. Found {spellings:#?}",
+        row.id
+    );
+    spellings[0].to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -131,6 +188,26 @@ fn non_idempotent_spellings(row: &Row, direction: ShuffleDirection) -> Vec<&str>
         .filter(|spelling| !is_fixed_point(&frame, spelling, direction))
         .map(String::as_str)
         .collect()
+}
+
+/// The `index`th core the corpus draws for `seeds` seeds, with a message rather
+/// than a bare panic when the generator stops drawing that many.
+///
+/// The tests below are written on specific cores (`corpus_cores` emits an `AT`
+/// core then an `ACGT` one per seed), so a generator that drew fewer would make
+/// them panic inside `Vec::remove` with nothing naming the cause. That is the
+/// #1460/#1478 drift class rather than a normalization change, and it should say
+/// so.
+fn core_at(seeds: u32, len: usize, index: usize) -> String {
+    let mut cores = corpus_cores(seeds, len);
+    assert!(
+        index < cores.len(),
+        "the corpus draws {} cores for {seeds} seeds at length {len}, so core {index} — the one \
+         this test is written on — is no longer generated. That is generator drift, not a \
+         normalization change.",
+        cores.len()
+    );
+    cores.remove(index)
 }
 
 /// The 0-based index into `frame`'s served sequence whose HGVS label is `label`.
@@ -217,11 +294,16 @@ fn each_member_normalized(frame: &Frame, input: &str, direction: ShuffleDirectio
 
 /// **Question.** Which spelling of an affected family is the non-idempotent one?
 ///
-/// **The spanning `delins` respelling, in all 11 cases — never an authored
+/// **The spanning `delins` respelling, in all 8 cases — never an authored
 /// allele, and never a description with more than one member.** Each of the
-/// seven families holds exactly one non-idempotent spelling at 3', four of them
-/// hold one at 5' as well, and every one of those 11 is a single-member `delins`
+/// four `cds-end` families holds exactly one non-idempotent spelling at 3' and
+/// one at 5' as well, and every one of those 8 is a single-member `delins`
 /// that the corpus generated as a *respelling* of a two-member design.
+///
+/// **It was 11 across seven families.** The three `scale-*` families no longer
+/// hold one at all; that half is checked by
+/// [`every_scale_family_is_now_a_fixed_point`], immediately below, so the fix
+/// stays asserted rather than merely absent from this loop.
 ///
 /// That is the first thing to know about this class, because it disposes of the
 /// most natural guess. The adjacent, already-pinned defect is that ferro
@@ -231,7 +313,7 @@ fn each_member_normalized(frame: &Frame, input: &str, direction: ShuffleDirectio
 /// reached from an input that has no members. Whatever moves these outputs, it
 /// moves them before an allele exists.
 ///
-/// The corpus's own census is the denominator: 7 and 4 are the only
+/// The corpus's own census is the denominator: 4 and 4 are the only
 /// non-idempotent outputs across all 58,552 spellings, pinned in
 /// `spec_conformance_axis.rs`. This test does not re-scan the corpus — it names
 /// the rows so a later generator edit cannot un-generate them silently, which is
@@ -292,7 +374,8 @@ fn the_non_idempotent_output_is_always_the_spanning_delins_respelling() {
         crate::spec_conformance_axis::THREE_PRIME.non_idempotent_outputs,
         "PINNED DEFECT — the named families no longer account for the axis census's 3' \
          non-idempotent outputs. If the corpus made a new family non-idempotent, name it in \
-         `SCALE_FAMILIES`/`CDS_END_FAMILIES` here and re-bless the axis in the same commit"
+         `CDS_END_FAMILIES` here and re-bless the axis in the same commit; if the count FELL, \
+         a family was fixed — move it out of `affected_families` and flip its pins"
     );
     assert_eq!(
         five_prime_families,
@@ -306,11 +389,67 @@ fn the_non_idempotent_output_is_always_the_spanning_delins_respelling() {
     );
 }
 
+/// **Question.** The three `scale-*` families were the 3'-only half of this
+/// class. Are they still?
+///
+/// **No — every spelling of all three is now its own fixed point, in both
+/// directions.** This is the FLIPPED pin: it used to be
+/// [`the_non_idempotent_output_is_always_the_spanning_delins_respelling`]'s job
+/// to find one moving spelling per `scale` row, and there is none to find. The
+/// cause is `coalesce_coding_frame_separation` gaining `general.md:35`'s second
+/// conjunct — "two variants … together affecting one amino acid" — so it stops
+/// merging pairs whose merged span crosses a codon boundary. Those merges were
+/// exactly what the second pass was doing that the first did not.
+///
+/// It exists as its own test rather than as an absence, because an absence is
+/// invisible: dropping `SCALE_FAMILIES` from `affected_families` alone would have
+/// left three rows with no assertion on them at all, and a fix that regressed
+/// would then show up only as the axis census moving — a struct diff, in a
+/// different file, with no mechanism attached. That is the
+/// "a committed test that has never executed reads as coverage" trap pointed
+/// backwards.
+///
+/// Asserted over **every** spelling of each row and in both directions, not just
+/// over the one that used to move, since the merge the precondition now declines
+/// is reachable from any respelling of the design.
+#[test]
+fn every_scale_family_is_now_a_fixed_point() {
+    let mut checked = 0usize;
+    for id in SCALE_FAMILIES {
+        let row = row(id);
+        let frame = row.frame();
+        assert!(
+            !row.spellings.is_empty(),
+            "{id}: VACUOUS — the corpus generates no spellings for this row"
+        );
+        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime] {
+            for spelling in &row.spellings {
+                let once = normalize(&frame, spelling, direction);
+                assert_eq!(
+                    normalize(&frame, &once, direction),
+                    once,
+                    "{id} ({direction:?}): FIXED, and it must stay fixed — `{spelling}` reached \
+                     `{once}`, which must be its own fixed point. Before the amino-acid \
+                     precondition the spanning-delins spelling of this row took two passes to \
+                     settle. If this fires the defect is back: re-bless \
+                     `spec_conformance_axis`'s `non_idempotent_outputs` and say so in the PR."
+                );
+                checked += 1;
+            }
+        }
+    }
+    assert!(
+        checked >= SCALE_FAMILIES.len() * 2,
+        "VACUOUS — only {checked} spellings were checked across {} rows and two directions",
+        SCALE_FAMILIES.len()
+    );
+}
+
 /// **Question.** Does the class reach a fixed point at all, or does it
 /// oscillate? Nobody had checked, and an oscillation would be far more serious
 /// than a two-step settle.
 ///
-/// **It settles, at the second pass. `norm^3 == norm^2` for all 11.** The chain
+/// **It settles, at the second pass. `norm^3 == norm^2` for all 8.** The chain
 /// is `x -> a -> b -> b`, with `a != b`: one extra pass, never more, and no
 /// two-cycle. So a caller who normalizes twice gets a stable answer, and the
 /// blast radius is "the first answer is wrong", not "there is no answer".
@@ -319,8 +458,16 @@ fn the_non_idempotent_output_is_always_the_spanning_delins_respelling() {
 /// well — without that the test would pass vacuously the moment the defect is
 /// fixed, which is the wrong way round for a pin. When it *is* fixed, `a == b`
 /// and this test must be deleted rather than relaxed.
+///
+/// **It was "all 11", and the `a != b` guard did not save it — the LOOP did the
+/// vacating.** When the three `scale-*` rows became fixed points,
+/// `non_idempotent_spellings` returned empty for them, so the guard sat inside a
+/// loop body that never ran: three rows silently stopped being measured and this
+/// test stayed green. The `chains` counter below is the fix, and it is the reason
+/// a guard against vacuity has to be outside the iteration it is guarding.
 #[test]
 fn norm_cubed_equals_norm_squared_for_every_row_in_the_class() {
+    let mut chains = 0usize;
     for id in affected_families() {
         let row = row(id);
         let frame = row.frame();
@@ -343,9 +490,20 @@ fn norm_cubed_equals_norm_squared_for_every_row_in_the_class() {
                     chain[2], chain[3],
                     "{id} ({direction:?}): chain: {chain:#?}"
                 );
+                chains += 1;
             }
         }
     }
+    // Outside the loop, deliberately: the `assert_ne!` above is the pin's own
+    // anti-vacuity guard and it cannot fire when the list it iterates is empty.
+    assert_eq!(
+        chains,
+        CDS_END_FAMILIES.len() * 2,
+        "VACUOUS — {chains} chains were walked, but the four `cds-end` families each hold one \
+         non-idempotent spelling in each of the two directions. A LOWER number means a family \
+         was fixed and this test stopped measuring it silently; flip its pin and re-bless \
+         `spec_conformance_axis` rather than letting the count drift"
+    );
 }
 
 /// **Question.** Does the instability cost bases, or only spelling?
@@ -370,6 +528,7 @@ fn norm_cubed_equals_norm_squared_for_every_row_in_the_class() {
 /// change under this repo's `Representation-Change:` trailer.
 #[test]
 fn the_chain_never_changes_the_sequence_it_denotes() {
+    let mut steps_checked = 0usize;
     for id in affected_families() {
         let row = row(id);
         let frame = row.frame();
@@ -386,10 +545,23 @@ fn the_chain_never_changes_the_sequence_it_denotes() {
                          that would move this row into the sequence-changing class, which is a \
                          rank-1 defect and must be reported as such rather than as churn"
                     );
+                    steps_checked += 1;
                 }
             }
         }
     }
+    // The same anti-vacuity guard `norm_cubed_equals_norm_squared_for_every_row_in_the_class`
+    // carries, and for the same reason: every assertion here lives inside a loop
+    // over `non_idempotent_spellings`, which goes empty the moment a family is
+    // fixed. Three chains stopped being walked once the `scale-*` rows settled
+    // and nothing went red.
+    assert_eq!(
+        steps_checked,
+        CDS_END_FAMILIES.len() * 2 * 3,
+        "VACUOUS — {steps_checked} chain steps were checked; expected 3 per direction per \
+         `cds-end` family. A lower number means a family was fixed and dropped out of the \
+         iteration silently"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +634,7 @@ fn an_insertion_immediately_after_the_last_cds_base_is_retyped_as_a_delins() {
         }
 
         // The exemplar chain, which is what the census counts.
-        let spelling = non_idempotent_spellings(row, ShuffleDirection::ThreePrime)[0].to_string();
+        let spelling = sole_non_idempotent_spelling(row, ShuffleDirection::ThreePrime);
         let chain = iterate(&frame, &spelling, ShuffleDirection::ThreePrime, 2);
         assert_eq!(
             chain,
@@ -521,7 +693,7 @@ fn an_insertion_immediately_after_the_last_cds_base_is_retyped_as_a_delins() {
 /// measures the discriminator, not the call site.
 #[test]
 fn the_retyping_needs_a_cds_and_tracks_the_cds_end_not_the_exon_structure() {
-    let core = corpus_cores(1, 96).remove(1);
+    let core = core_at(1, 96, 1);
 
     for (shape, expected) in [
         (RefShape::CodingMultiExon(Strand::Plus), vec!["72"]),
@@ -591,6 +763,34 @@ fn the_retyping_needs_a_cds_and_tracks_the_cds_end_not_the_exon_structure() {
 /// the same bytes with the same exon structure and the same numbering, so the
 /// CDS is the only thing that differs. `g.` is included because it also has no
 /// transcript at all.
+///
+/// # FLIPPED — the coding column is now `never` too, on all twelve cores
+///
+/// The diagnosis above was right and the table above is the evidence for it, so
+/// both are kept verbatim as the record of what was measured. **The measurement
+/// no longer reproduces**, and that is the point: the whole coding column is now
+/// `never`, so the sweep is `0 of 36` rather than `5 of 36`.
+///
+/// The reason is the diagnosis itself, taken seriously. "The coding axis's extra
+/// stages reach a different answer the second time they see the same variant" —
+/// the extra stage was `coalesce_coding_frame_separation` merging pairs one
+/// unchanged base apart *without* checking `general.md:35`'s second conjunct,
+/// "together affecting one amino acid". A merge across a codon boundary is not an
+/// answer the exception reaches, so the pass declining it removes the disagreement
+/// between the two passes rather than papering over it.
+///
+/// **This test is now a negative guard and is worth more as one than as a pin.**
+/// Every assertion below reads `None`/fixed-point, so it fails the moment any
+/// axis — coding or not — reacquires a separation at which a spanning `delins`
+/// stops being its own fixed point. The `AT`/`ACGT` and `c.`/`n.`/`g.` structure
+/// is retained deliberately: it is what makes a re-acquisition attributable to an
+/// axis, and re-deriving it from scratch cost the measurement that produced the
+/// table above.
+///
+/// The `n.` half is untouched by the change and is still asserted the same way,
+/// including the "splits it FURTHER and is stable anyway" contrast — which is now
+/// a contrast between two stable partitions of different sizes rather than
+/// between a stable and an unstable one.
 #[test]
 fn the_scale_class_is_a_coding_axis_repartition_not_a_long_block_effect() {
     let mut coding_onsets: Vec<Option<usize>> = Vec::new();
@@ -610,31 +810,31 @@ fn the_scale_class_is_a_coding_axis_repartition_not_a_long_block_effect() {
             );
         }
     }
+    assert!(
+        !coding_onsets.is_empty(),
+        "VACUOUS — no cores were swept, so the coding column below is a claim about the \
+         generator rather than about the normalizer"
+    );
     assert_eq!(
         coding_onsets,
-        vec![
-            None,
-            Some(84),
-            None,
-            Some(77),
-            None,
-            Some(71),
-            None,
-            Some(62),
-            None,
-            None,
-            None,
-            Some(69),
-        ],
-        "PINNED DEFECT — the coding axis loses idempotency on five of the six ACGT cores drawn, \
-         at a separation that differs per core. No `AT` core reaches it within 160, which is why \
-         the corpus's `AT`-cored strata never showed this class."
+        // Was `[None, Some(84), None, Some(77), None, Some(71), None, Some(62),
+        // None, None, None, Some(69)]` — the five ACGT onsets in the table above.
+        vec![None; 12],
+        "FIXED, and it must stay fixed — no separation from 1 to 160 makes a spanning delins \
+         non-idempotent on the CODING axis either, now that \
+         `coalesce_coding_frame_separation` tests `general.md:35`'s amino-acid conjunct. A \
+         `Some(_)` here is the class coming back: it names the core index and the separation, so \
+         re-measure that cell before touching anything else, and re-bless \
+         `spec_conformance_axis`'s `non_idempotent_outputs` in the same commit."
     );
 
     // The `n.` axis is stable because its partition is a FIXED POINT, not
     // because it declines to partition. Without this the sweep above would be
     // equally consistent with "only the coding axis splits at all", which would
-    // point a fix at the splitter rather than at the second pass.
+    // point a fix at the splitter rather than at the second pass. It is also what
+    // keeps the flipped sweep above from being satisfiable by a normalizer that
+    // simply stopped partitioning: both axes still split this block, into 8 and
+    // 39 members respectively.
     //
     // One geometry rather than the sweep, because it takes a block long enough
     // that both axes split it: `scale-c3p-sep136`'s core, anchored inside the
@@ -663,9 +863,11 @@ fn the_scale_class_is_a_coding_axis_repartition_not_a_long_block_effect() {
         "…and that larger partition must still be a fixed point: {input} -> {output}"
     );
     assert!(
-        !is_fixed_point(&coding, &coding_input, ShuffleDirection::ThreePrime),
-        "PINNED DEFECT — while the coding axis's smaller partition is not: \
-         {coding_input} -> {coding_output}"
+        is_fixed_point(&coding, &coding_input, ShuffleDirection::ThreePrime),
+        "FIXED — the coding axis's smaller partition is a fixed point too. This assertion was \
+         `!is_fixed_point` and pinned the defect; it inverted when \
+         `coalesce_coding_frame_separation` stopped merging across codon boundaries. If it fires \
+         again the two passes disagree once more: {coding_input} -> {coding_output}"
     );
 }
 
@@ -685,9 +887,25 @@ fn the_scale_class_is_a_coding_axis_repartition_not_a_long_block_effect() {
 /// nothing. Per this repository's `CLAUDE.md`, "record what was refuted, not only
 /// what was decided" — a measurement that kills a plausible belief is worth as
 /// much as the ruling, because the belief recurs.
+///
+/// # FLIPPED — and the refutation is what the fix confirmed
+///
+/// The unbanded sep-120 row is now a fixed point too, so both halves of the
+/// contrast read the same and the *contrast* is spent. The refutation is not: the
+/// knob that fixed the class was `general.md:35`'s amino-acid conjunct, which is
+/// a property of codon phase and has nothing to do with block length or with
+/// `canonical-pad-128`. A length threshold would indeed have moved nothing. The
+/// belief this test killed stayed dead, and it was killed for the right reason.
+///
+/// **What it still measures**, which is why it is flipped rather than deleted: the
+/// two rows' `scale_bands` metadata, which is the corpus's own record of what it
+/// is varying and is not otherwise asserted anywhere; and that neither row
+/// reacquires the instability. If the class comes back, this says whether it came
+/// back on a banded row, a bandless one, or both — the question the original
+/// measurement had to be built to answer.
 #[test]
 fn the_scale_onset_is_not_the_corpus_scale_band() {
-    // No band, and it moves.
+    // No band, and it no longer moves either.
     let unbanded = row("scale-c3p-sep120-del-del");
     assert!(
         unbanded.scale_bands.is_empty(),
@@ -695,12 +913,15 @@ fn the_scale_onset_is_not_the_corpus_scale_band() {
         unbanded.scale_bands
     );
     assert_eq!(
-        non_idempotent_spellings(unbanded, ShuffleDirection::ThreePrime).len(),
-        1,
-        "PINNED DEFECT — a row carrying no scale band is non-idempotent"
+        non_idempotent_spellings(unbanded, ShuffleDirection::ThreePrime),
+        Vec::<&str>::new(),
+        "FIXED — the bandless sep-120 row was non-idempotent and is not any more. This \
+         assertion pinned `1`; the amino-acid conjunct took it to `0`. A non-empty list is the \
+         class returning on a row that carries no scale band at all, which would again rule the \
+         band out as the trigger"
     );
 
-    // The band, and it does not move.
+    // The band, and it never moved.
     let banded = row("scale-g-sep128-del-del");
     assert!(
         banded.scale_bands.contains(&"canonical-pad-128"),
@@ -735,12 +956,55 @@ fn the_scale_onset_is_not_the_corpus_scale_band() {
 /// reconciled only by … apply the edit set to the reference, then re-derive the
 /// minimal canonical partition from the resulting sequence". Ferro does exactly
 /// that on pass two and not on pass one, and the gap between them is the class.
+///
+/// # FLIPPED — pass one now lands where pass two used to, and the table is the SAME
+///
+/// The three expected strings below have not changed. What changed is which pass
+/// produces them: the spanning `delins` reaches each of them on the **first**
+/// pass, and that answer is its own fixed point, so there is no second pass to
+/// compare against. `each_member_normalized` is therefore now checked against the
+/// single answer rather than against `^1` of a two-step chain, and the
+/// `chain[1] != chain[0]` and "the second pass's partition is SHORTER" assertions
+/// are gone, because there is no longer a `chain[1]` distinct from `chain[0]` to
+/// make them about.
+///
+/// **The refutation this test exists for survives intact and is now stronger.**
+/// The claim was: the class is not ferro normalizing cis members independently and
+/// concatenating, because the first pass's output was already a fixed point of
+/// per-member normalization. That is still asserted, and the second pass that used
+/// to do "something per-member normalization cannot" is precisely the pass that
+/// was merging across codon boundaries — a merge `general.md:35` never authorised.
+/// So the mechanism that made the two passes disagree was not member interaction
+/// at all, which is what the test said. The `matches_authored` column is the part
+/// worth keeping most: it is unchanged too, so **sep-136 still disagrees with its
+/// own authored design's output**, which is why that family remains non-confluent
+/// in `spec_conformance_axis`'s census even though it is now idempotent. Idempotent
+/// and confluent are different properties and this row is the demonstration.
 #[test]
 fn pass_one_is_already_a_fixed_point_of_per_member_normalization() {
+    // The spanning `delins` respelling, named the way the corpus names it rather
+    // than via `non_idempotent_spellings` — which now returns EMPTY for these
+    // rows, that being the whole point of the flip.
+    let spanning_delins_of = |row: &Row| -> String {
+        let candidates: Vec<&String> = row
+            .spellings
+            .iter()
+            .filter(|s| !s.contains('[') && s.contains("delins"))
+            .collect();
+        assert_eq!(
+            candidates.len(),
+            1,
+            "{}: the corpus must still respell this design as exactly one single-member spanning \
+             delins for this test to be about the same input, found {candidates:#?}",
+            row.id
+        );
+        candidates[0].clone()
+    };
+
     for id in SCALE_FAMILIES {
         let row = row(id);
         let frame = row.frame();
-        let spelling = non_idempotent_spellings(row, ShuffleDirection::ThreePrime)[0].to_string();
+        let spelling = spanning_delins_of(row);
         let chain = iterate(&frame, &spelling, ShuffleDirection::ThreePrime, 2);
 
         assert!(
@@ -750,26 +1014,22 @@ fn pass_one_is_already_a_fixed_point_of_per_member_normalization() {
         assert_eq!(
             each_member_normalized(&frame, &chain[0], ShuffleDirection::ThreePrime),
             chain[0],
-            "{id}: PINNED — the first pass's output is unchanged by normalizing each member \
-             independently, so member independence cannot be what moves it"
+            "{id}: PINNED — the answer is unchanged by normalizing each member independently, so \
+             member independence was never what moved it. This is the refutation this test \
+             exists for and it is unaffected by the fix"
         );
-        assert_ne!(
+        assert_eq!(
             chain[1], chain[0],
-            "{id}: the second pass reaches a different partition"
-        );
-        assert!(
-            chain[1].matches(';').count() < chain[0].matches(';').count(),
-            "{id}: the second pass's partition must be the SHORTER one — that is the direction \
-             that makes this a re-derivation rather than further fragmentation. \
-             ^1: {}\n^2: {}",
-            chain[0],
-            chain[1]
+            "{id}: FIXED — the second pass must now agree with the first. This assertion was \
+             `assert_ne!` and pinned the re-partition; if it fires again the two passes disagree \
+             once more and `spec_conformance_axis`'s `non_idempotent_outputs` needs re-blessing \
+             UP, which is the one direction it forbids"
         );
     }
 
-    // And the exact second-pass answers, because two of the three land on the
-    // authored design's own output and the third does not — a fix that converges
-    // the class must say which of those two it is aiming at.
+    // The exact answers, unchanged strings measured one pass earlier. Two of the
+    // three land on the authored design's own output and the third does not, which
+    // is why sep-136's family is still non-confluent.
     for (id, expected, matches_authored) in [
         (
             "scale-c3p-sep120-del-del",
@@ -789,20 +1049,24 @@ fn pass_one_is_already_a_fixed_point_of_per_member_normalization() {
     ] {
         let row = row(id);
         let frame = row.frame();
-        let spelling = non_idempotent_spellings(row, ShuffleDirection::ThreePrime)[0].to_string();
-        let chain = iterate(&frame, &spelling, ShuffleDirection::ThreePrime, 2);
-        assert_eq!(chain[1], expected, "{id}: the second pass's answer moved");
+        let spelling = spanning_delins_of(row);
+        let once = normalize(&frame, &spelling, ShuffleDirection::ThreePrime);
+        assert_eq!(
+            once, expected,
+            "{id}: the answer moved. It is the same string this test pinned as the SECOND pass's \
+             answer before the amino-acid conjunct; only the pass that produces it changed"
+        );
         let authored = normalize(
             &frame,
             row.authored_spelling(),
             ShuffleDirection::ThreePrime,
         );
         assert_eq!(
-            chain[1] == authored,
+            once == authored,
             matches_authored,
-            "{id}: PINNED DEFECT — whether the second pass agrees with the authored design's \
-             own output is itself unstable across the three rows. ^2: {}, authored -> {authored}",
-            chain[1]
+            "{id}: PINNED DEFECT — whether the answer agrees with the authored design's own \
+             output is still unstable across the three rows, and that is a CONFLUENCE defect \
+             surviving the idempotency fix. {once}, authored -> {authored}"
         );
     }
 }
@@ -828,22 +1092,55 @@ fn pass_one_is_already_a_fixed_point_of_per_member_normalization() {
 /// thing (`CLAUDE.md`: "a corpus zero is a claim about the corpus, not about the
 /// change"). It is also why the affected rows are all `mid-cds` — the only region
 /// where a 124-base block fits inside one exon of this fixture.
+///
+/// # FLIPPED — the third row, and ONLY the third row
+///
+/// The two junction-crossing rows are byte-for-byte unchanged: still one member,
+/// still trivially fixed points. The junction-clearing row moves from
+/// **6 members, NOT a fixed point** to **2 members, a fixed point**, landing on
+/// `c.[115_116del;213_214del]`.
+///
+/// **That is the same fix as everywhere else in this file, and its direction is
+/// not a surprise once the mechanism is named.** 6 -> 2 is *fewer* members, i.e.
+/// the shorter partition — which is precisely what the second pass used to
+/// produce and what `pass_one_is_already_a_fixed_point_of_per_member_normalization`
+/// now pins the first pass producing. Nothing is being merged here that was not
+/// merged before; the block is being partitioned once, correctly, instead of twice.
+/// Read as "something is now collapsed that used to stay whole", the row would
+/// look like the opposite of the rest of the file — hence this paragraph.
+///
+/// **The corpus-design lesson this test was written for is untouched**, which is
+/// why it keeps its name. A junction-crossing block is still left whole, so it
+/// still cannot exhibit a re-partition of any kind, so a sweep confined to
+/// junction-crossing blocks would still have measured zero and still would have
+/// meant nothing. What has changed is only that there is no longer a defect on the
+/// other side of the junction for it to have been blind to — and the guard now
+/// fails if either half moves: if a crossing block starts being split, or if the
+/// clearing block stops being a fixed point.
 #[test]
 fn a_block_crossing_an_exon_junction_is_not_split_so_the_defect_is_masked_there() {
-    let core = corpus_cores(3, 528).remove(1);
+    let core = core_at(3, 528, 1);
     let shape = RefShape::CodingMultiExon(Strand::Plus);
     let frame = Frame::build(shape, &core);
-    let junction = frame.exons()[0].1;
+    let exons = frame.exons();
+    assert!(
+        !exons.is_empty(),
+        "VACUOUS — a multi-exon fixture with no exons cannot have a junction for this test to \
+         slide a block across"
+    );
+    let junction = exons[0].1;
     assert_eq!(
         junction, 176,
         "the fixture's first exon must end where this test assumes"
     );
 
     let sep = 96usize;
+    // `(start, crosses the junction, members emitted, is a fixed point)`. The third
+    // row was `(180, false, 6, false)` before the amino-acid conjunct.
     for (start, crosses, members, fixed) in [
         (120usize, true, 1, true),
         (170, true, 1, true),
-        (180, false, 6, false),
+        (180, false, 2, true),
     ] {
         let input = spanning_delins(&frame, shape, start, sep).expect("in range");
         // `Frame::exons` is 1-based inclusive; `start` and the block's last index
@@ -860,13 +1157,16 @@ fn a_block_crossing_an_exon_junction_is_not_split_so_the_defect_is_masked_there(
         assert_eq!(
             output.matches(';').count() + 1,
             members,
-            "PINNED — a junction-crossing block is left whole ({output})"
+            "PINNED — a junction-crossing block is left whole, and a junction-clearing one is \
+             partitioned once into its minimal form ({output})"
         );
         assert_eq!(
             is_fixed_point(&frame, &input, ShuffleDirection::ThreePrime),
             fixed,
-            "PINNED — a block that is never split cannot show a re-partition defect, so a sweep \
-             confined to junction-crossing blocks would measure zero and mean nothing"
+            "a block that is never split cannot show a re-partition defect, so a sweep confined \
+             to junction-crossing blocks would measure zero and mean nothing — that is the \
+             corpus-design lesson, and it is unaffected by the junction-clearing block having \
+             become a fixed point ({input} -> {output})"
         );
     }
 }

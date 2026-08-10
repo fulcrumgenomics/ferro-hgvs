@@ -789,3 +789,131 @@ fn a_repeat_typing_at_the_cds_end_overlaps_its_sibling_deletion() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The codon gate splits a spanning `delins` that its own members do not reach
+// ---------------------------------------------------------------------------
+
+/// **Question.** `general.md:35`'s exception has two conjuncts — *separated by
+/// one nucleotide* **and** *together affecting one amino acid* — and
+/// `coalesce_coding_frame_separation` shipped testing only the first. Restoring
+/// the second is a conformance fix. What does it cost?
+///
+/// **Six of the corpus's 3' families stop converging, and it is always the
+/// spanning-`delins` respelling that moves.** Promoted here because
+/// `spec_conformance_axis`'s 3' `converged` figure went 9,140 -> **9,139** — the
+/// one direction that census's own instruction forbids without a re-bless and a
+/// named test. Six is the gross figure; five other families *gained*
+/// convergence in the same change, which is where the net -1 comes from.
+///
+/// The six are three designs on each of the plus and minus coding multi-exon
+/// shapes, all on the `AT` core (`s00`):
+///
+/// ```text
+/// s00-c3{p,m}-m3-all-del-p1-sep3       s00-c3{p,m}-m4-all-del-p1-sep2
+/// s00-c3{p,m}-pair-del-del-p1-sep8
+/// ```
+///
+/// In every one the authored multi-member spelling is **unchanged** and the
+/// spanning `delins` — which used to merge its way down to the members' own
+/// answer — now stops at a finer partition, because at least one of the joins it
+/// used to make spans two codons. So this is not a case of two answers competing
+/// on the merits: the exception simply does not reach the pair, and
+/// `general.md:34`'s plain rule governs it.
+///
+/// What remains unanswered is whether the *members'* answer is reachable from the
+/// `delins` at all under the restored precondition. What is **not** unanswered is
+/// the neighbouring record: `codon-carve-out-shape-restriction` is `decided`, and
+/// it runs the same way — WIDEN, the exception applies wherever its precondition
+/// holds, regardless of edit type, because edit type is a property of the
+/// spelling. So the predicate may not be narrowed back to a shape test in order
+/// to recover these six rows.
+///
+/// **This is churn, not a rank-1 defect**, and that is asserted rather than
+/// claimed: both outputs are checked through `denotation_of` to denote the row's
+/// own bases. A fix that converges these must therefore choose between two legal
+/// descriptions, which is `canonical-form-choice-when-both-legal` — `decided`,
+/// and it says to derive from the resulting sequence rather than to preserve
+/// either previously-shipped string.
+///
+/// Named rather than left in the corpus for the usual reason: a later generator
+/// edit could stop emitting `sep3`/`sep8` separations, or stop respelling a
+/// design as a spanning `delins` at all, and the regression would vanish with the
+/// rows (#1456/#1460/#1478).
+#[test]
+fn the_codon_gate_splits_a_spanning_delins_its_own_members_do_not() {
+    let core = at_core();
+    // `(row id, the spanning-delins respelling, its output, the authored member
+    // spelling, the answer every member spelling reaches)`. On `main` the third
+    // column equalled the fifth in all three rows, which is what made them
+    // converge.
+    let rows = [
+        (
+            "m3-all-del-p1-sep3",
+            "NM_TEST.1:c.24_32delinsAATTTT",
+            "NM_TEST.1:c.[24T>A;26_28del;32A>T]",
+            "NM_TEST.1:c.[24del;28del;32del]",
+            "NM_TEST.1:c.[24del;33_34del]",
+        ),
+        (
+            "m4-all-del-p1-sep2",
+            "NM_TEST.1:c.24_33delinsAATTTA",
+            "NM_TEST.1:c.[24T>A;26_29del;32_33delinsTA]",
+            "NM_TEST.1:c.[24del;27del;30del;33del]",
+            "NM_TEST.1:c.[24del;30_33delinsA]",
+        ),
+        (
+            "pair-del-del-p1-sep8",
+            "NM_TEST.1:c.24_33delinsAATTTTTA",
+            "NM_TEST.1:c.[24_27delinsAA;32_33delinsTA]",
+            "NM_TEST.1:c.[24del;33del]",
+            "NM_TEST.1:c.[24del;33del]",
+        ),
+    ];
+
+    for strand in [Strand::Plus, Strand::Minus] {
+        let frame = Frame::build(RefShape::CodingMultiExon(strand), &core);
+        for (design, spanning, spanning_output, members, members_output) in rows {
+            // The half that did NOT move, asserted first so a future failure says
+            // which side drifted.
+            assert_eq!(
+                normalize_3prime(&frame, members),
+                members_output,
+                "{design} ({strand:?}): the authored member spelling's answer is unchanged by \
+                 the amino-acid precondition — if this moved, the divergence below has a \
+                 different cause than the one recorded here"
+            );
+
+            let output = normalize_3prime(&frame, spanning);
+            assert_eq!(
+                output, spanning_output,
+                "{design} ({strand:?}): PINNED — the spanning delins stops at the partition \
+                 `general.md:34` gives it, because the join it used to make spans two codons \
+                 and `general.md:35`'s second conjunct (\"together affecting one amino acid\") \
+                 is unmet. On `main` this reached `{members_output}` and the family converged."
+            );
+            assert_ne!(
+                output, members_output,
+                "{design} ({strand:?}): this test exists because the two spellings DISAGREE. If \
+                 they now agree the family has converged again — lower `split_two` and raise \
+                 `converged` in `spec_conformance_axis` and delete this row"
+            );
+
+            // …and the disagreement is about spelling only. Without this the row
+            // would be equally consistent with a member having been dropped,
+            // which is a rank-1 defect and would have to be reported as one.
+            let denoted = denotation_of(frame.provider(), frame.served(), &output);
+            assert_eq!(
+                denoted,
+                denotation_of(frame.provider(), frame.served(), members_output),
+                "{design} ({strand:?}): the two outputs must denote the SAME bases — that is \
+                 what makes this a confluence failure rather than sequence loss"
+            );
+            assert!(
+                matches!(denoted, Denotation::Sequence(_)),
+                "{design} ({strand:?}): VACUOUS — both outputs must denote a real sequence for \
+                 the equality above to mean anything, got {denoted:?}"
+            );
+        }
+    }
+}

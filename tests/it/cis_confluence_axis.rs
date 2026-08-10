@@ -211,12 +211,37 @@ const CDS_END: u64 = 63;
 /// and 10 underdetermined, with `converged` *rising* at the same time. A pass
 /// that corrupts a sequence can raise the convergence figure, so the three zeros
 /// have to be read before the headline.
+///
+/// # Raised again by the amino-acid precondition: 8 026 -> 8 027
+///
+/// `coalesce_coding_frame_separation` now tests the second conjunct of
+/// `DNA/delins.md:18` — "together affecting one amino acid" — instead of the
+/// `length_changing` proxy, so it declines a merge whose span crosses a codon
+/// boundary. `split_two` falls by the same 1 and `split_three`/`split_more` are
+/// unchanged, so the one class that moved moved from two outputs to one, and the
+/// three zeros are still zero.
+///
+/// One is a small number and worth saying plainly: the change's value is
+/// conformance, not this census.
+///
+/// **And the reading it invites is wrong — scoped, 2026-08-11.** This paragraph
+/// used to end "What the census rules out is the opposite reading — that
+/// restoring the precondition *costs* confluence. It does not, in either
+/// direction." That is true **of this corpus** and false in general, so it must
+/// not be read as a claim about the change. `spec_conformance_axis`'s corpus is
+/// deliberately harsher — it varies member geometry, transcript geometry and
+/// scale rather than holding them fixed — and there the 3' direction **loses**
+/// one: `converged` 9,140 -> 9,139, six classes losing convergence against five
+/// gaining it. Both censuses are correct about their own corpus; neither
+/// generalises to the other, which is the whole reason two of them exist. The
+/// promoted rows are in
+/// `spec_corpus_regressions::the_codon_gate_splits_a_spanning_delins_its_own_members_do_not`.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_026,
-    split_two: 3_112,
+    converged: 8_027,
+    split_two: 3_111,
     split_three: 115,
     split_more: 19,
     underdetermined: 0,
@@ -253,12 +278,19 @@ const THREE_PRIME: Census = Census {
 /// runs before the shift, so a member it cuts is then 3'- or 5'-shifted on its
 /// own, and only some of those landings coincide with the other spelling's.
 /// See `THREE_PRIME` for why the three zeros are read first.
+///
+/// **Raised again by the amino-acid precondition: 8 021 -> 8 023**, with
+/// `split_two` falling by the same 2 and `split_three`/`split_more` unchanged.
+/// The 3' direction gains 1 rather than 2 — the same asymmetry the paragraph
+/// above records, and for the same reason: the precondition is tested before the
+/// shift, so a pair it leaves split is then shuffled independently and only some
+/// of those landings coincide with the other spelling's.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_021,
-    split_two: 3_137,
+    converged: 8_023,
+    split_two: 3_135,
     split_three: 105,
     split_more: 9,
     underdetermined: 0,

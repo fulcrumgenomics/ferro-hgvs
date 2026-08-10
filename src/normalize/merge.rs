@@ -2599,6 +2599,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         &mut pieces,
         frame.reading_frame,
         hi_ref != hi_alt,
+        w_lo,
         &ref_bytes,
     );
     // `general.md:34` binds the members a split emits, not only the block it
@@ -6258,7 +6259,8 @@ fn split_codon_incompatible_triplets(
 }
 
 /// Merge runs of change separated by a single unchanged base on a **reading
-/// frame** axis, returning the pieces as they were if anything merged.
+/// frame** axis, when the merged span affects one amino acid — returning the
+/// pieces as they were if anything merged.
 ///
 /// # The rule
 ///
@@ -6271,14 +6273,60 @@ fn split_codon_incompatible_triplets(
 /// descriptions the spec keeps whole. That is the gap #1235's widened axis gate
 /// exposed on `c.`/`n.`/`r.`.
 ///
-/// Scoped to **length-changing** blocks. An equal-length block reaches
+/// # Both halves of the clause, not just the distance half
+///
+/// The exception has two conjuncts — *separated by one nucleotide* **and**
+/// *together affecting one amino acid* — and this pass shipped implementing
+/// only the first. `reading_frame` says an amino acid exists to speak of; it
+/// does not say the two variants share one. So the merge was gated on
+/// `length_changing`, which is a **proxy** and not the clause: it asks what kind
+/// of edit the block is, where `:18` asks only which positions it touches.
+///
+/// The precondition is not optional and the spec never weakens it. The same
+/// sentence appears verbatim in nine places — `general.md:35`,
+/// `DNA/delins.md:18`, `DNA/substitution.md:17`, `DNA/deletion.md:19`,
+/// `DNA/insertion.md:20`, `DNA/inversion.md:21`, `DNA/duplication.md:23`,
+/// `RNA/delins.md:18`, `RNA/substitution.md:18` — and the four
+/// *length-changing* pages among those (`deletion`, `insertion`, `duplication`,
+/// `inversion`) state it exactly as the equal-length ones do, with no
+/// relaxation for their own edit type. `DNA/delins.md:81` restates it as a
+/// parenthetical exclusion ("unless they together affect one amino acid") and
+/// `general.md:37` names it as something a tool has to *know*: "one needs to
+/// know whether the two variants are in a coding sequence and affecting one
+/// amino acid." `protein/delins.md:21` is the sole variant, and it carries no
+/// exception at all.
+///
+/// So the gate is the clause: the merged piece's reference span must lie inside
+/// a single codon of the reading frame. That is the same `same_codon`
+/// arithmetic [`apply_coding_codon_exception`] applies to the equal-length
+/// shape, and it reproduces both of the spec's worked examples —
+/// `c.235_237delinsTAT` (`delins.md:19`) and `LRG_199t1:c.145_147delinsTGG`
+/// (`delins.md:42`) sit in codons 79 and 49 respectively.
+///
+/// **Edit type stays out of the predicate, deliberately, and that is now the
+/// ruling rather than a preference.** Not "decline on a frameshift", not
+/// "decline on a duplication" — those are the proxy again, pointed the other
+/// way. `codon-carve-out-shape-restriction` is **`decided`: WIDEN** — the
+/// exception "applies wherever its stated precondition holds … REGARDLESS OF
+/// EDIT TYPE", on the ground that edit type is a property of the *spelling*
+/// while "together affecting one amino acid" is a property of the resulting
+/// sequence. (An earlier revision of this comment called that record
+/// `undecided`; it was decided in #1623, before this pass landed, and the
+/// decision runs the same way this predicate does.) So this pass answers exactly
+/// the question the ruling leaves: given that it fires, does its result affect
+/// one amino acid? A block whose merged span crosses a codon boundary fails that
+/// test whatever its members are, and one that does not, passes.
+///
+/// Still scoped to **length-changing** blocks, which is a routing decision
+/// rather than part of the predicate. An equal-length block reaches
 /// [`apply_coding_codon_exception`], which applies the same exception
 /// triplet-precisely (`[Sub@p; Identity@p+1; Sub@p+2]` with `p` and `p+2` in one
-/// codon) and must keep owning that shape: merging it here instead would drop
-/// the codon half of the exception, which `general.md:35` states and
-/// `test_no_codon_frame_pair_straddles_codon_boundary` pins. On a
-/// length-changing block that shape cannot arise — the pieces do not pair up
-/// position-wise — so the two passes do not overlap.
+/// codon) and must keep owning that shape: merging it here instead would apply
+/// the codon test to the *hull* rather than the triplet, which
+/// `apply_coding_codon_exception`'s own doc records as the mistake that made
+/// this rule disagree with the per-member pipeline on `c.10_13delinsTCAG`. This
+/// pass also runs before the 3'-shift and that one after, so moving the shape
+/// across would move when it is decided as well as how.
 ///
 /// The merge is **pairwise**, not whole-block: only pieces one unchanged base
 /// apart join, and a genuinely separated pair stays split. Refusing the whole
@@ -6336,17 +6384,35 @@ fn coalesce_coding_frame_separation(
     pieces: &mut Vec<Piece>,
     reading_frame: bool,
     length_changing: bool,
+    w_lo: i64,
     ref_bytes: &[u8],
 ) -> Option<Vec<Piece>> {
     // `ref_end` is exclusive and a pure insertion occupies no width, so a gap of
     // one is one unchanged *base* — the same counting `separations_are_meaningful`
     // does, and for the same reason.
+    let joins = |pair: &[Piece]| pair[1].ref_start.saturating_sub(pair[0].ref_end) == 1;
+    // "together affecting one amino acid": every reference position the merged
+    // piece would claim belongs to one codon. `w_lo + offset` is the axis
+    // coordinate of a window byte, which on `c.`/`r.` is the CDS-relative
+    // position [`same_codon`] is defined on — the same conversion
+    // `apply_coding_codon_exception` makes from the same `w_lo`.
     //
+    // The span is never empty, so `ref_end - 1` is a real position: `joins` puts
+    // `pair[1].ref_start` one past `pair[0].ref_end`, hence
+    // `pair[1].ref_end >= pair[0].ref_start + 1`. A pure insertion contributes no
+    // width of its own but is anchored by the unchanged base the merge absorbs,
+    // which is inside the span by construction.
+    let one_amino_acid = |pair: &[Piece]| {
+        same_codon(
+            w_lo + pair[0].ref_start as i64,
+            w_lo + pair[1].ref_end as i64 - 1,
+        )
+    };
     // Scanned before anything is copied: the copy exists only to hand the weight
     // bound the un-widened partition, so a block that merges nothing must not pay
     // for one. Every coding length-changing block reaches here.
-    let joins = |pair: &[Piece]| pair[1].ref_start.saturating_sub(pair[0].ref_end) == 1;
-    if !reading_frame || !length_changing || !pieces.windows(2).any(joins) {
+    let mergeable = |pair: &[Piece]| joins(pair) && one_amino_acid(pair);
+    if !reading_frame || !length_changing || !pieces.windows(2).any(mergeable) {
         return None;
     }
     let unwidened = pieces.clone();
@@ -6357,7 +6423,12 @@ fn coalesce_coding_frame_separation(
         // byte. Read through `get` regardless: this is the only raw index in the
         // pass, and declining to merge is a sound answer where a bare index would
         // panic.
-        let Some(middle) = (joins(&pieces[index - 1..=index]))
+        //
+        // `mergeable` is re-asked against the piece as it stands, so a chain of
+        // three runs one base apart merges only as far as one codon reaches: the
+        // left piece has already grown by the time the second pair is judged, and
+        // the span tested is the whole accumulated span rather than the last hop.
+        let Some(middle) = (mergeable(&pieces[index - 1..=index]))
             .then(|| ref_bytes.get(pieces[index - 1].ref_end).copied())
             .flatten()
         else {
@@ -11600,24 +11671,34 @@ mod tests {
         coalesce_adjacent_pieces(&mut pieces);
     }
 
-    /// `general.md:35`'s exception on a length-changing block, asserted against
-    /// the pass itself (#1235 review).
+    /// `general.md:35`'s exception on a length-changing block — **both**
+    /// conjuncts of it — asserted against the pass itself (#1235 review).
     ///
-    /// Its integration-level sibling —
-    /// `merge_consecutive_edits_tests::coding_length_changing_block_merges_across_one_unchanged_base`
-    /// — can only assert that the `c.` answer equals its input, and that
-    /// equality is satisfied by *any* upstream decline (a window clamp, the
-    /// weight bound, the round-trip guard) just as well as by the merge. Only a
-    /// direct call proves the pass ran, so the discriminating assertion lives
-    /// here and that test carries the control that ties the two together.
+    /// Its integration-level siblings are
+    /// `merge_consecutive_edits_tests::one_base_gap_within_one_codon_merges` and
+    /// `…::one_base_gap_across_a_codon_boundary_stays_split`, which draw the same
+    /// distinction end to end on a codon-designed transcript. Only a direct call
+    /// proves *this pass* is what drew it — an end-to-end split is equally
+    /// consistent with a window clamp, the weight bound or the round-trip guard
+    /// declining — so the discriminating assertion lives here and those tests
+    /// carry the `n.` control that ties the two levels together.
     ///
-    /// `TGCA -> AAC` is that test's `NM_TEST.1:c.2_5delinsAAC`. The payload
-    /// coincides at exactly one column, which is what leaves two runs one
-    /// unchanged base apart for the exception to close.
+    /// `ACG -> CT` is the fixture, and it is chosen so the *only* thing that
+    /// varies between the two halves is the reading frame. Its minimal
+    /// alignment deletes the `A` and substitutes the `G`, leaving the `C` at
+    /// offset 1 as the one unchanged base the exception is scoped to. The
+    /// merged span is therefore exactly three reference positions — the width
+    /// at which "together affecting one amino acid" is decided by codon phase
+    /// and nothing else.
+    ///
+    /// At `w_lo == 1` those are `c.1_3`, codon 1, so the exception applies. At
+    /// `w_lo == 2` they are `c.2_4`, which straddles codons 1 and 2, so
+    /// `general.md:34`'s plain rule governs and the pair stays split. Same
+    /// pieces, same payloads, same flags; one integer apart.
     #[test]
-    fn coalesce_coding_frame_separation_merges_one_base_gap_only_in_frame() {
-        let reference = b"TGCA";
-        let split = partition_block(reference, b"AAC");
+    fn coalesce_coding_frame_separation_merges_only_within_one_codon() {
+        let reference = b"ACG";
+        let split = partition_block(reference, b"CT");
         assert_eq!(
             split.len(),
             2,
@@ -11630,44 +11711,120 @@ mod tests {
             "and the two runs must be exactly one unchanged base apart, which is \
              the gap the exception is scoped to; got {split:?}",
         );
+        assert_eq!(
+            (split[0].ref_start, split[1].ref_end),
+            (0, 3),
+            "the merged span must be the whole three-base block, so that codon \
+             phase is the only thing the two halves below differ in; got {split:?}",
+        );
 
-        // In a reading frame the pair rejoins into the whole block, and the
-        // un-widened partition comes back for the weight bound to judge.
-        let mut in_frame = split.clone();
-        let unwidened = coalesce_coding_frame_separation(&mut in_frame, true, true, reference);
+        // `c.1_3` — one codon, so the pair rejoins and the un-widened partition
+        // comes back for the weight bound to judge.
+        let mut in_codon = split.clone();
+        let unwidened = coalesce_coding_frame_separation(&mut in_codon, true, true, 1, reference);
         assert_eq!(
             unwidened.as_deref(),
             Some(&split[..]),
             "a widening pass must return the pieces it replaced",
         );
-        assert_eq!(in_frame.len(), 1, "got {in_frame:?}");
-        assert_eq!(in_frame[0].ref_start, 0);
-        assert_eq!(in_frame[0].ref_end, reference.len());
-        assert_eq!(in_frame[0].alt, b"AAC");
-
-        // With no reading frame it declines, which is `general.md:34`'s plain
-        // rule and the `n.` answer the sibling test pins end to end.
-        let mut no_frame = split.clone();
-        assert!(coalesce_coding_frame_separation(&mut no_frame, false, true, reference).is_none());
+        assert_eq!(in_codon.len(), 1, "got {in_codon:?}");
+        assert_eq!(in_codon[0].ref_start, 0);
+        assert_eq!(in_codon[0].ref_end, reference.len());
         assert_eq!(
-            no_frame, split,
+            in_codon[0].alt, b"CT",
+            "the unchanged middle base is interior to the merged replacement and \
+             must be carried through explicitly",
+        );
+
+        // `c.2_4` — two codons. `delins.md:18`'s second conjunct is unmet, so
+        // there is no exception to apply and `:17` governs.
+        let mut across_codons = split.clone();
+        assert!(
+            coalesce_coding_frame_separation(&mut across_codons, true, true, 2, reference)
+                .is_none(),
+            "a merged span crossing a codon boundary does not affect one amino \
+             acid, whatever its members are",
+        );
+        assert_eq!(
+            across_codons, split,
             "a declined pass must leave the pieces untouched",
         );
 
-        // And it declines an equal-length block even in frame, which is the
-        // half of the scoping that keeps `apply_coding_codon_exception` owning
-        // the `[Sub@p; Identity@p+1; Sub@p+2]` triplet — merging that shape here
-        // instead would drop the codon half of `general.md:35`. Asserted with
-        // this same pair so only the flag varies.
+        // With no reading frame it declines at either offset, which is
+        // `general.md:34`'s plain rule and the `n.` answer the sibling test pins
+        // end to end. There is no amino acid to affect, so the exception is not
+        // merely unmet — it does not apply at all.
+        for w_lo in [1, 2] {
+            let mut no_frame = split.clone();
+            assert!(
+                coalesce_coding_frame_separation(&mut no_frame, false, true, w_lo, reference)
+                    .is_none()
+            );
+            assert_eq!(
+                no_frame, split,
+                "a declined pass must leave the pieces untouched",
+            );
+        }
+
+        // And it declines an equal-length block even in frame and in codon,
+        // which is the routing that keeps `apply_coding_codon_exception` owning
+        // the `[Sub@p; Identity@p+1; Sub@p+2]` triplet — that pass tests the
+        // triplet rather than the hull, which is the distinction its own doc
+        // records `c.10_13delinsTCAG` for. Asserted with this same pair so only
+        // the flag varies.
         let mut equal_length = split.clone();
         assert!(
-            coalesce_coding_frame_separation(&mut equal_length, true, false, reference).is_none()
+            coalesce_coding_frame_separation(&mut equal_length, true, false, 1, reference)
+                .is_none()
         );
         assert_eq!(
             equal_length, split,
             "the length-changing scope is what routes an equal-length block to \
              `apply_coding_codon_exception`",
         );
+    }
+
+    /// A merged span wider than a codon can never satisfy the exception, at any
+    /// phase — the arithmetic half of the test above, asserted on the fixture
+    /// the pass shipped with.
+    ///
+    /// `TGCA -> AAC` is `NM_TEST.1:c.2_5delinsAAC` in
+    /// `merge_consecutive_edits_tests`. Its payload coincides at exactly one
+    /// column, so the two runs are one unchanged base apart and the *distance*
+    /// half of `delins.md:18` is met — but the span it would merge is four
+    /// reference positions, and four consecutive positions never share a codon.
+    /// Before this pass tested the amino-acid half it merged this block at every
+    /// offset, which is the defect: `:18` is an exception to `:17` and not a
+    /// replacement for it, so a pair the exception cannot reach is described
+    /// individually.
+    #[test]
+    fn coalesce_coding_frame_separation_declines_a_span_wider_than_a_codon() {
+        let reference = b"TGCA";
+        let split = partition_block(reference, b"AAC");
+        assert_eq!(split.len(), 2, "got {split:?}");
+        assert_eq!(
+            split[1].ref_start - split[0].ref_end,
+            1,
+            "the distance half of the exception must be met, so that the codon \
+             half is what this test measures; got {split:?}",
+        );
+        assert_eq!(
+            (split[0].ref_start, split[1].ref_end),
+            (0, 4),
+            "the span this would merge must be four positions wide; got {split:?}",
+        );
+
+        // Every phase, so this is the width and not a phase coincidence.
+        for w_lo in 1..=6 {
+            let mut pieces = split.clone();
+            assert!(
+                coalesce_coding_frame_separation(&mut pieces, true, true, w_lo, reference)
+                    .is_none(),
+                "a four-base span merged at c.{w_lo}, where no codon holds four \
+                 consecutive positions",
+            );
+            assert_eq!(pieces, split);
+        }
     }
 
     /// The enumerated classes of disagreement between the two block splitters.
