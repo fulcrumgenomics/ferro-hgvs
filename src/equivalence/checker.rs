@@ -244,6 +244,22 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
                     .with_note("Variants produce the same resulting sequence"));
             }
 
+            // #1578 follow-up: `NotEquivalent` is a *positive claim* that two
+            // descriptions denote different variants, and it is only sound if
+            // some rung above actually examined them. For a structural
+            // rearrangement both deciding rungs are blind at once — see
+            // `undecidable_reason` — so falling through here would answer a
+            // question nobody asked. Decline instead, which is what the other
+            // three modules that hand-roll `Allele` recursion already do with a
+            // ring (`spdi::apply`, `vcf::from_hgvs`, `project::projector`).
+            for side in [&norm1, &norm2] {
+                if let Some(reason) = self.undecidable_reason(side) {
+                    return Err(FerroError::UnsupportedVariant {
+                        variant_type: reason,
+                    });
+                }
+            }
+
             Ok(EquivalenceResult::new(EquivalenceLevel::NotEquivalent)
                 .with_normalized(norm_str1, norm_str2)
                 .with_note("Variants do not normalize to the same form"))
@@ -354,6 +370,55 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
             (Some(a), Some(b)) => a.eq_ignore_ascii_case(&b),
             _ => false,
         }
+    }
+
+    /// Why no rung can decide equivalence for `variant`, or `None` if some rung
+    /// can.
+    ///
+    /// The checker decides in rungs, and a structural rearrangement defeats both
+    /// of the two that compare *meaning* rather than text:
+    ///
+    /// - [`Normalizer::normalize`] returns a genome ring and a `sup` marker
+    ///   unchanged (the pass-through arms in `src/normalize/mod.rs`), so
+    ///   comparing normalized forms degenerates into the string comparison the
+    ///   `Identical` rung already made; and
+    /// - [`hgvs_to_spdi`] cannot represent either, so [`Self::edit_triples`]
+    ///   declines and the `SequenceMatch` rung (#1158) cannot fire either.
+    ///
+    /// With both blind, `NotEquivalent` would be asserted having evaluated
+    /// nothing. The two *textual* rungs — `Identical` and
+    /// `AccessionVersionDifference` — are unaffected and still answer, because
+    /// they need neither normalization nor a provider.
+    ///
+    /// **The SPDI conjunct is not redundant, and it is what keeps this honest.**
+    /// It makes the predicate self-retiring: if `hgvs_to_spdi` ever gains ring
+    /// support, `edit_triples` starts succeeding, the `SequenceMatch` rung
+    /// begins deciding these pairs, and this decline stops firing on its own
+    /// rather than masking the new capability. `Circular` (`o.`) is the live
+    /// proof that the conjunct matters: its normalization is a pass-through too,
+    /// yet SPDI represents it, so it is decided by the sequence rung and must
+    /// never reach this decline.
+    /// **Scoped to the two shapes a defect was measured on.**
+    /// [`HgvsVariant::RnaFusion`] shares both blindnesses and is deliberately
+    /// *not* listed: no pair of fusion spellings denoting one fusion has been
+    /// exhibited, so widening the decline to `::` transcript fusions would
+    /// refuse pairs the checker answers today on no evidence that any of those
+    /// answers is wrong. Add it when a wrong answer is measured, with the pair
+    /// that measures it.
+    fn undecidable_reason(&self, variant: &HgvsVariant) -> Option<String> {
+        let structural = matches!(
+            variant,
+            HgvsVariant::GenomeRing(_) | HgvsVariant::Supernumerary(_)
+        );
+        if !structural || self.edit_triples(variant).is_some() {
+            return None;
+        }
+        Some(format!(
+            "{variant}: cannot decide equivalence — normalization passes this \
+             description through unchanged and SPDI cannot represent it, so \
+             neither the normalized-form nor the resulting-sequence comparison \
+             examined it"
+        ))
     }
 
     /// Project a variant to the SPDI primitive edits that make up its resulting
