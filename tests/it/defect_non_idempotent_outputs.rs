@@ -250,7 +250,7 @@ fn the_non_idempotent_output_is_always_the_spanning_delins_respelling() {
             1,
             "{id} must hold exactly one non-idempotent spelling at 3', found {at_three:#?}"
         );
-        three_prime += 1;
+        three_prime += at_three.len();
 
         let spelling = at_three[0];
         assert!(
@@ -277,15 +277,32 @@ fn the_non_idempotent_output_is_always_the_spanning_delins_respelling() {
         }
     }
 
+    // Compared against the AXIS census, not against a literal. A literal `7` is
+    // tautological here: the loop runs once per `affected_families()` entry and
+    // each is asserted to hold exactly one spelling, so the count is the length
+    // of a hardcoded list and equals itself whatever the corpus does. The axis
+    // figure is derived independently — by scanning every row rather than the
+    // seven named ones — so a family the corpus NEWLY makes non-idempotent moves
+    // it while this list stays put, and the two disagree. That disagreement is
+    // the coverage; it is the same cross-check
+    // `corpus_prohibited_inputs::every_prohibition_violating_output_is_a_re_emitted_prohibited_input`
+    // makes with `CENSUS_TOTAL`.
     assert_eq!(
-        three_prime, 7,
-        "PINNED DEFECT — the 3' class is 7 outputs; if this moved, re-bless \
-         `spec_conformance_axis`'s census in the same commit"
+        three_prime,
+        crate::spec_conformance_axis::THREE_PRIME.non_idempotent_outputs,
+        "PINNED DEFECT — the named families no longer account for the axis census's 3' \
+         non-idempotent outputs. If the corpus made a new family non-idempotent, name it in \
+         `SCALE_FAMILIES`/`CDS_END_FAMILIES` here and re-bless the axis in the same commit"
     );
     assert_eq!(
         five_prime_families,
         CDS_END_FAMILIES.to_vec(),
         "PINNED DEFECT — the 5' class is the four cds-end families and nothing else"
+    );
+    assert_eq!(
+        five_prime_families.len(),
+        crate::spec_conformance_axis::FIVE_PRIME.non_idempotent_outputs,
+        "the 5' family list no longer accounts for the axis census's 5' non-idempotent outputs"
     );
 }
 
@@ -345,8 +362,11 @@ fn norm_cubed_equals_norm_squared_for_every_row_in_the_class() {
 ///
 /// The consequence for a fix: any of the three forms in a chain is a *legal*
 /// description of the same variant, so choosing between them is the
-/// `canonical-form-choice-when-both-legal` ruling (still `undecided`), and
-/// whichever way it lands, moving these strings is a declared representation
+/// `canonical-form-choice-when-both-legal` ruling, which is `decided` —
+/// `general.md:157` governs, and ferro derives the description from the
+/// RESULTING SEQUENCE rather than preserving the input's spelling or the
+/// previously-shipped string. That names the direction a fix takes; it does not
+/// make the move free. Moving these strings is still a declared representation
 /// change under this repo's `Representation-Change:` trailer.
 #[test]
 fn the_chain_never_changes_the_sequence_it_denotes() {
