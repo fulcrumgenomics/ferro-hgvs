@@ -14,6 +14,9 @@
 //! - `fixture_gen`: the shared on-demand regeneration flow (locking,
 //!   subprocess, atomic rename) that `spec_fixture` and `spec_enumeration`
 //!   both wrap.
+//! - `rulings`: reads the adjudication ledger's `rulings` section into typed
+//!   records, so the citation-currency scan and the clause index share one
+//!   definition of what a record is.
 //! - `spec_fixture`: regenerates the gitignored HGVS spec-normalization
 //!   fixture on demand so tests that read it work on a fresh checkout.
 //! - `spec_enumeration`: same, for the gitignored exhaustive spec test
@@ -29,6 +32,7 @@
 pub mod cis_apply_oracle;
 pub mod failure_expectations;
 pub mod fixture_gen;
+pub mod rulings;
 pub mod spec_enumeration;
 pub mod spec_fixture;
 pub mod synthetic;

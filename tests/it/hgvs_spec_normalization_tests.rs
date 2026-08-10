@@ -572,7 +572,9 @@ fn ferro_produces_the_form_the_spec_states() {
 const EQUIVALENCE_CLASS_VERDICTS: &[(&str, &str)] = &[
     // The spec's own worked non-confluent pair: it calls the bracketed split an
     // "alternative description" of the delins, and ferro keeps both. Which form
-    // should win is the undecided ruling `delins-merge-vs-individual-gap-two-or-more`.
+    // should win is settled: `delins-merge-vs-individual-gap-two-or-more` is
+    // `decided` for `:47`, the spanning delins. Ferro has not converged on it
+    // yet, so this class stays pinned `non-confluent` until it does.
     ("dna-delins-vs-aligned-split-850-901", "non-confluent"),
     // Codon carve-out, gap of one. Both spellings survive normalization here —
     // but READ THAT AS A HARNESS LIMIT, NOT AS A VIOLATED RULING. The rule is
