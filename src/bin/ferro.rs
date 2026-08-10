@@ -235,11 +235,12 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
                canonical, plus the delins.md:44-47 merge -- a split whose
                payload realigns as one block becomes a single delins
 
-  An unrecognised value falls back to `live`, so a misspelling looks exactly
-  like 'the candidate changes nothing'. The fallback logs a warning through the
-  `log` facade, but this CLI installs no logger, so that warning is NOT visible
-  here and RUST_LOG will not surface it. The only defence is to confirm your
-  comparison reports some differences before concluding it reports none.
+  An unrecognised value is REFUSED: the process aborts at the first variant it
+  normalizes, naming the value you gave and the arms this build has. It does not
+  fall back to `live`. It used to, which made a misspelling look exactly like
+  'the candidate changes nothing' -- and the warning that fallback logged went
+  through the `log` facade, which this CLI installs no logger for, so it reached
+  no stream and RUST_LOG could not surface it.
 
   It is read once per process and cached, so it cannot be changed after the
   first variant is normalized. That is also why this is an environment variable
@@ -3887,6 +3888,10 @@ mod tests {
     ///
     /// Pinned against the rendered help rather than the source string, so a
     /// clap attribute that silently stopped being applied would also fail.
+    ///
+    /// The help no longer carries the "confirm you see some differences"
+    /// workaround, because an unrecognised value is now refused outright. It
+    /// still has to name every arm: the arms are what the rejection offers.
     #[test]
     fn normalize_help_documents_every_partition_value() {
         use clap::CommandFactory;
@@ -3901,7 +3906,8 @@ mod tests {
                 help.contains(value),
                 "`normalize --help` does not mention the `{value}` partition rule; \
                  every value `partition_rule_from_env` accepts has to appear here, \
-                 because an unrecognised one falls back to `live` silently"
+                 because an unrecognised one is refused and this list is how a \
+                 reader learns which arms the build has"
             );
         }
         assert!(

@@ -270,24 +270,50 @@ This works on a **stock release build** — the switch is not behind a build fea
 
 ### Two traps worth knowing
 
-**A misspelled value looks like success, and nothing tells you.** An unrecognised value falls back to `live`, so `FERRO_PARTITION=canonicl` produces a clean, empty diff that reads as "the candidate changes nothing".
+**A misspelled value is refused, loudly.** `FERRO_PARTITION=canonicl` aborts at the first variant ferro normalizes, naming the value you gave and the arms this build has:
 
-The fallback does emit a warning through the `log` facade — but the `ferro` CLI installs no logger, so **that warning is not visible from the command line, and `RUST_LOG` will not surface it**. There is no signal at all.
-
-The defence is a positive control on an input **known** to differ — not on your own corpus, where a zero is ambiguous between "the switch is not taking effect" and "this corpus has no affected variants".
-
-These three run against the built-in test data, so they need no `--reference` and no prepared reference directory:
-
-```bash
-printf 'NM_001234.1:c.[2del;9del]\nNM_001234.1:c.[3del;9del]\nNM_001234.1:c.[2del;9dup]\n' > control.txt
-
-ferro normalize --input control.txt --format tsv --error-mode lenient | cut -f3
-#   NM_001234.1:c.[2del;11del]   <- live
-FERRO_PARTITION=canonical ferro normalize --input control.txt --format tsv --error-mode lenient | cut -f3
-#   NM_001234.1:c.[2del;33del]   <- canonical
+```
+FERRO_PARTITION="canonicl" is not a partitioner this build has. This build's arms
+are: live, shadow, canonical, canonical-coalesced. Refusing rather than falling
+back to `live`, because a bake-off served the shipped rule under a candidate's
+name reports that the candidate changes nothing.
 ```
 
-If those two produce the same output, the variable is not reaching ferro and any comparison you run is meaningless. Only once the control differs is a zero on your own corpus informative.
+Naming *this build's* arms is the point: a value that exists on some other branch, or that used to exist, is reported as absent here rather than quietly answered as `live`.
+
+Builds up to and including v0.13.1 fell back to `live` instead, and produced a clean, empty diff that read as "the candidate changes nothing". The fallback emitted a warning through the `log` facade, but the `ferro` CLI installs no logger, so that warning reached no stream and `RUST_LOG` could not surface it — there was no signal at all. If you are on an older build, treat every empty diff as unproven.
+
+A positive control on an input **known** to differ is still worth running, because it catches the other way a comparison can be vacuous: a variable that never reached the process at all (a lost `export`, a `sudo` that scrubbed the environment, a container that did not forward it). That case is indistinguishable from `unset`, which is legitimately `live`, so no amount of validation inside ferro can catch it. On your own corpus a zero remains ambiguous between "the switch is not taking effect" and "this corpus has no affected variants".
+
+These three inputs run against the built-in test data, so they need no `--reference` and no prepared reference directory. Between them they separate all four arms — every pair of arms disagrees on at least one row, so the control tells you *which* arm you got, not merely that something changed:
+
+```bash
+printf 'NM_001234.1:c.[5_6insAC;9del]\nNM_001234.1:c.[2del;5del]\nNM_001234.1:c.[2del;9del]\n' > control.txt
+
+for arm in live shadow canonical canonical-coalesced; do
+  echo "== $arm"
+  if FERRO_PARTITION=$arm ferro normalize --input control.txt --format tsv \
+       --error-mode lenient > "control.$arm.tsv"; then
+    tail -n +2 "control.$arm.tsv" | cut -f3
+  else
+    echo "   FAILED (exit $?) -- ferro did not produce this arm's column"
+  fi
+done
+```
+
+The status check is not boilerplate. An unrecognised arm now aborts the process, and a pipeline reports the exit status of its *last* command — so `ferro … | tail | cut` reports `cut`'s success and the loop prints an empty column under the arm's heading. An empty column and an aborted run look identical, which is the same "a broken measurement reads as a result" failure this whole section is about. Redirecting first and testing the status makes the abort say so.
+
+| input | `live` | `shadow` | `canonical` | `canonical-coalesced` |
+|---|---|---|---|---|
+| `c.[5_6insAC;9del]` | `c.6_9delinsACCAA` | `c.[5_6insAC;11del]` | `c.[5_6insAC;11del]` | `c.[5_6insAC;11del]` |
+| `c.[2del;5del]` | `c.[2del;6del]` | `c.[2del;6del]` | `c.2_4delinsG` | `c.2_4delinsG` |
+| `c.[2del;9del]` | `c.[2del;11del]` | `c.[2del;11del]` | `c.[2del;11del]` | `c.2_9delinsGCCCAA` |
+
+Row 1 separates `live` from the other three, row 2 separates `{live, shadow}` from `{canonical, canonical-coalesced}`, and row 3 separates `canonical` from `canonical-coalesced`.
+
+If the arm you selected does not produce its column above, the variable is not reaching ferro and any comparison you run is meaningless. Only once the control behaves is a zero on your own corpus informative.
+
+> The control this section used to give did not work. It offered `c.[2del;9del]`, `c.[3del;9del]`, `c.[2del;9dup]` and claimed `canonical` answers `c.[2del;33del]`; on those three inputs **no arm differs from `live`**, so the documented check failed for a correct setup and would have been read as "the variable is not reaching ferro". The table above is verified against both a debug and a release build.
 
 **From Python, it must be set before the first normalization.** The value is read once per process and cached, so:
 
