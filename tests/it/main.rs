@@ -455,5 +455,6 @@ mod trans_mosaic_mixed;
 mod uta_loader_tests;
 mod variantvalidator_tests;
 mod web_service_tests;
+mod weight_bound_worked_examples;
 
 mod reported_confluence_pairs;
