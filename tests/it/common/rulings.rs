@@ -70,6 +70,13 @@ pub struct Record {
     /// `decided` or `undecided`, verbatim from the ledger. No other value
     /// parses; see [`STATUSES`].
     pub status: String,
+    /// The record's `rationale` prose, verbatim.
+    ///
+    /// Exposed because a rationale cites *other records* — that is how the
+    /// ledger cross-references itself — and those citations are not covered by
+    /// the source scan in `ruling_citation_currency.rs`, which reads `.rs` files
+    /// only. See `every_record_to_record_citation_resolves` there.
+    pub rationale: String,
     /// Every clause the record names, in the ledger's own order, each tagged
     /// with the role the record's verdict fields give it.
     pub citations: Vec<Citation>,
@@ -180,6 +187,8 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                  value is a status no citation could agree with"
             );
 
+            let rationale = required_str(record, "rationale", &format!("record {id}")).to_string();
+
             let governing = optional_str(record, "governing", &id);
             let deviates_from: Vec<&str> = match record.get("deviates_from") {
                 None | Some(serde_json::Value::Null) => Vec::new(),
@@ -248,6 +257,7 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
             Record {
                 id,
                 status,
+                rationale,
                 citations,
             }
         })
@@ -296,6 +306,7 @@ fn one_valid_record() -> serde_json::Value {
         "rulings": [{
             "id": "a-test-record",
             "status": "decided",
+            "rationale": "A test record, with prose that cites no other record.",
             "governing": "docs/a.md:1",
             "clauses": [{ "clause": "docs/a.md:1" }],
         }],
@@ -341,6 +352,23 @@ fn a_clause_that_both_governs_and_is_deviated_from_is_rejected() {
 fn a_non_string_required_field_is_not_reported_as_missing() {
     let mut document = one_valid_record();
     document["rulings"][0]["id"] = serde_json::json!(17);
+    records_from_value(&document, "<test>");
+}
+
+/// A missing `rationale` is rejected rather than read as empty prose.
+///
+/// Empty prose would silently satisfy `every_record_to_record_citation_resolves`
+/// in `ruling_citation_currency.rs`: a record with no rationale cites nothing,
+/// so it can never fail, and a ledger that lost its prose would still pass the
+/// scan that exists to read it.
+#[test]
+#[should_panic(expected = "has no `rationale`")]
+fn a_missing_rationale_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]
+        .as_object_mut()
+        .expect("record is an object")
+        .remove("rationale");
     records_from_value(&document, "<test>");
 }
 
