@@ -65,6 +65,23 @@ fn legal_member() -> HgvsVariant {
     parse_hgvs("NC_000022.11:g.500A>T").expect("plain genomic member parses")
 }
 
+/// The allele-shaped positive control: two *legal* genomic members in cis. The
+/// ring shapes below are also alleles, so without this the declines could come
+/// from the allele wrapper rather than from the ring inside it.
+///
+/// Both members state `A` as their reference base, for the reason `provider()`
+/// documents: the contig is all-`A`, and a member whose stated base disagrees
+/// makes the control fail for a reason that has nothing to do with rings.
+fn legal_allele() -> HgvsVariant {
+    HgvsVariant::Allele(AlleleVariant::new(
+        vec![
+            parse_hgvs("NC_000022.11:g.500A>T").expect("first legal member parses"),
+            parse_hgvs("NC_000022.11:g.600A>G").expect("second legal member parses"),
+        ],
+        AllelePhase::Cis,
+    ))
+}
+
 /// A contig long enough to serve every position the ring shapes name, so a
 /// decline is never merely "the provider had no bases".
 ///
@@ -174,6 +191,13 @@ fn projection_declines_every_ring_shape() {
             .to_string(),
         "NC_000022.11:g.500A>T",
     );
+    // The allele half of that control, which the comment above promised and the
+    // code did not make. Without it the ring-in-allele decline below is not shown
+    // to be about the *ring*: a projector that declined every `Allele` would pass
+    // this test just as well.
+    projector
+        .project_to_genomic(&legal_allele())
+        .expect("control: a cis allele of two legal genomic members must project");
 
     for (label, variant) in ring_shapes() {
         let error = projector

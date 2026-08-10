@@ -36,6 +36,7 @@
 //! normalization. Only the fall-through is replaced by a decline.
 
 use ferro_hgvs::equivalence::{EquivalenceChecker, EquivalenceLevel};
+use ferro_hgvs::hgvs::variant::{AllelePhase, AlleleVariant, HgvsVariant};
 use ferro_hgvs::parse_hgvs;
 use ferro_hgvs::reference::MockProvider;
 
@@ -242,5 +243,77 @@ fn a_circular_pair_is_still_decided_by_the_sequence_rung() {
         EquivalenceLevel::SequenceMatch,
         "`o.` normalization is a pass-through, but the SPDI rung still decides \
          the pair — this is why the decline must not key on the pass-through",
+    );
+}
+
+/// A ring **inside a cis allele** must be declined too, and it was not.
+///
+/// The blindness is the same one level down: `hgvs_to_spdi` refuses the ring
+/// member, so `edit_triples` declines for the whole allele, and normalization
+/// passes the ring through — yet `undecidable_reason` matched only on the *top
+/// level* variant kind, so two such alleles compared `NotEquivalent`. That is
+/// the positive claim this whole change exists to stop making.
+///
+/// Not reachable through `parse_hgvs` — `g.[…::…;…]` is rejected — but this is a
+/// shape the codebase constructs on purpose:
+/// `issue_1578_followup_ring_declines.rs` builds exactly this pairing and
+/// requires `spdi::apply`, `vcf::from_hgvs` and the projector to decline it. The
+/// equivalence checker was the one module that answered it.
+#[test]
+fn a_ring_inside_a_cis_allele_is_declined_like_a_bare_ring() {
+    let checker = EquivalenceChecker::new(provider());
+    let with_ring = |ring: &str| {
+        let legal = parse_hgvs("NC_000022.11:g.500A>T").expect("legal member parses");
+        let ring = parse_hgvs(ring).expect("ring parses");
+        HgvsVariant::Allele(AlleleVariant::new(vec![legal, ring], AllelePhase::Cis))
+    };
+
+    let error = checker
+        .check(
+            &with_ring("NC_000022.11:g.100_101del::200_201del"),
+            &with_ring("NC_000022.11:g.300_301del::400_401del"),
+        )
+        .expect_err("a cis allele carrying a ring must be declined, not answered");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("cannot decide equivalence"),
+        "the decline must give the undecidable reason; got: {rendered}"
+    );
+    assert!(
+        rendered.contains("::"),
+        "the decline must name the ring member it could not examine; got: {rendered}"
+    );
+}
+
+/// The recursion must not swallow alleles the checker can still decide: a cis
+/// allele of two ordinary genomic members is SPDI-representable, so
+/// `edit_triples` succeeds and the sequence rung answers it. Without this, a
+/// recursion that declined on structure alone would look correct above while
+/// refusing every compound variant.
+#[test]
+fn a_cis_allele_of_ordinary_members_is_still_decided() {
+    let checker = EquivalenceChecker::new(provider());
+    let allele = |a: &str, b: &str| {
+        HgvsVariant::Allele(AlleleVariant::new(
+            vec![parse_hgvs(a).unwrap(), parse_hgvs(b).unwrap()],
+            AllelePhase::Cis,
+        ))
+    };
+    let result = checker
+        .check(
+            &allele("NC_000022.11:g.100del", "NC_000022.11:g.500A>T"),
+            &allele("NC_000022.11:g.105del", "NC_000022.11:g.500A>T"),
+        )
+        .expect("an all-ordinary cis allele stays decidable");
+    // The contract, not the rung. These two resolve at `NormalizedMatch` — earlier
+    // than the sequence rung, because the members normalize to one string in this
+    // poly-A contig — and which rung answers is exactly what a later change is
+    // entitled to move. Pinning `SequenceMatch` here failed for that reason on the
+    // first draft, and would have re-failed the next time an earlier rung widened.
+    assert!(
+        result.is_equivalent(),
+        "an all-ordinary cis allele must still be answered, and these two spellings \
+         denote one sequence; got {:?}",
+        result.level,
     );
 }

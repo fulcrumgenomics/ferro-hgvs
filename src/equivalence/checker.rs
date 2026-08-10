@@ -406,11 +406,31 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
     /// answers is wrong. Add it when a wrong answer is measured, with the pair
     /// that measures it.
     fn undecidable_reason(&self, variant: &HgvsVariant) -> Option<String> {
-        let structural = matches!(
+        // SPDI first, at every level: if `edit_triples` succeeds the `SequenceMatch`
+        // rung can decide, so there is nothing undecidable to report. Keeping this
+        // ahead of the structural test is what makes the predicate self-retiring —
+        // ring support in `hgvs_to_spdi` silently switches these pairs back to being
+        // answered instead of declined.
+        if self.edit_triples(variant).is_some() {
+            return None;
+        }
+        // A cis allele carrying a ring is the same blindness one level down, and it
+        // is a shape this codebase constructs deliberately —
+        // `issue_1578_followup_ring_declines.rs` pairs a legal genomic member with a
+        // ring and requires `spdi::apply`, `vcf::from_hgvs` and the projector to all
+        // decline it. Without this recursion the equivalence checker was the one
+        // module that answered it: two such alleles compared `NotEquivalent`, which
+        // is a positive claim that no rung examined.
+        if let HgvsVariant::Allele(allele) = variant {
+            return allele
+                .variants
+                .iter()
+                .find_map(|member| self.undecidable_reason(member));
+        }
+        if !matches!(
             variant,
             HgvsVariant::GenomeRing(_) | HgvsVariant::Supernumerary(_)
-        );
-        if !structural || self.edit_triples(variant).is_some() {
+        ) {
             return None;
         }
         Some(format!(
