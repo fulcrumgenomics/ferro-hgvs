@@ -53,10 +53,49 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 #: prefix is stripped, so it survives a change to the `<!-- N -->` numbering.
 REPRESENTATION_GROUP = "Representation changes"
 
-#: Words that mean "this moves nothing", as a *first word*. Deliberately a plain prefix
-#: test with no terminator logic: `scripts/check_representation_change.py` owns the precise
-#: rule, and a second opinion derived the same way is not a second opinion.
+#: Words that mean "this moves nothing", as the *verdict*.
 DECLINE_WORDS = frozenset({"none", "no", "n/a", "na"})
+
+#: Punctuation that may introduce the reason for a decline. A comma is deliberately absent,
+#: matching `CONTRIBUTING.md`: it usually introduces a qualification that changes the answer
+#: ("none, except two rows"), which is filed as a real change.
+DECLINE_TERMINATORS = ".;:—–"
+
+#: A decline: a verdict word, optionally followed by a terminator and a reason, and nothing
+#: else. Built from the two constants above.
+#:
+#: **This rule agrees with `scripts/check_representation_change.py` on the verdict, and it
+#: has to.** An earlier revision was deliberately coarser — first word, punctuation stripped,
+#: no terminator logic — on the reasoning that "a second opinion derived the same way is not
+#: a second opinion". That reasoning confused *deriving the answer differently* with *giving
+#: a different answer*, and the coarse rule failed CI on trailer forms `CONTRIBUTING.md`
+#: documents as correct, in both directions:
+#:
+#: - `no rows move` and `none, except two rows that merge` are filed as real changes **by
+#:   design** (`CONTRIBUTING.md`: "Both err toward listing a change rather than hiding one"),
+#:   and the coarse rule called them declines — so the audit failed, and no trailer text
+#:   could satisfy both halves at once.
+#: - `none.Tests only.` — a missing space after the terminator — went the other way:
+#:   `split()[0]` yields `none.Tests`, which strips to neither a decline nor a description,
+#:   so the checker called it a decline and the audit called it a move.
+#:
+#: Either direction turns `Changelog grouping audit` red for **every** open PR once such a
+#: commit is on `main`, until the next release tag, and no PR author can fix it.
+#:
+#: What stays independent is the *derivation*, which is where the value always was: this
+#: check renders the changelog through real git-cliff with the real config and reads the
+#: result, where the checker regexes the PR body. #1555 slipped past a test that compared
+#: the two halves' **vocabulary** and found them agreeing; rendering is what that test could
+#: not do. Sharing no code is still pinned by
+#: `test_the_rule_shares_no_vocabulary_with_the_checker`.
+DECLINE_RULE = re.compile(
+    r"^(?:"
+    + "|".join(re.escape(word) for word in sorted(DECLINE_WORDS, key=len, reverse=True))
+    + r")[ \t]*(?:["
+    + re.escape(DECLINE_TERMINATORS)
+    + r"].*)?$",
+    re.IGNORECASE | re.DOTALL,
+)
 
 #: A body template that renders one commit id per line under its group heading. Rendering
 #: ids rather than messages makes the mapping back to commits exact, and keeps this check
@@ -200,9 +239,18 @@ def commit_bodies(commit_range: str, repo: Path) -> dict[str, str]:
 
 
 def trailer_value(message: str) -> str | None:
-    """Return the `Representation-Change:` value in `message`, or None."""
+    """Return the `Representation-Change:` value in `message`, or None.
+
+    **Column 0, matching `scripts/check_representation_change.py` (#1573).** This pattern
+    allowed `^[ \\t]*` before the token, which git and git-cliff both treat as a
+    *continuation* of the value above it — so the two halves counted different trailers. A PR
+    description that quotes the declining example above its own real disclosure was the live
+    divergence: the checker read the column-0 disclosure and this read the indented `none`,
+    then reported the commit as a decline filed under **Representation changes** and failed
+    the build.
+    """
     match = re.search(
-        r"^[ \t]*Representation-Change:[ \t]*(?P<value>\S.*?)[ \t]*$",
+        r"^Representation-Change:[ \t]*(?P<value>\S.*?)[ \t]*$",
         message,
         re.IGNORECASE | re.MULTILINE,
     )
@@ -210,13 +258,14 @@ def trailer_value(message: str) -> str | None:
 
 
 def opens_with_a_decline(value: str) -> bool:
-    """Return whether `value`'s first word means "nothing moved".
+    """Return whether `value`'s verdict means "nothing moved".
 
-    Punctuation is stripped from the first word, so `none.`, `none:` and `none —` all read
-    as declines. This is the whole rule: no terminator logic, no vocabulary sharing.
+    The verdict is the first word; a terminator from `DECLINE_TERMINATORS` may introduce a
+    reason after it. Anything else following the word — another word, or a comma — makes it a
+    description of a move. See `DECLINE_RULE` for why this agrees with the checker rather
+    than being deliberately coarser.
     """
-    first_word = value.strip().split()[0] if value.strip() else ""
-    return first_word.strip(".,;:!—–").lower() in DECLINE_WORDS
+    return DECLINE_RULE.match(value.strip()) is not None
 
 
 def check(commit_range: str, repo: Path) -> tuple[bool, list[str]]:
@@ -286,14 +335,26 @@ def check(commit_range: str, repo: Path) -> tuple[bool, list[str]]:
 
 
 def latest_tag(repo: Path) -> str:
-    """Return the most recent tag reachable from HEAD."""
+    """Return the most recent tag reachable from HEAD.
+
+    Raises `RuntimeError` naming the fix rather than surfacing a `CalledProcessError`
+    traceback: on a shallow clone or a history with no tags, `describe` exits 128, and the
+    workflow already guards its own `describe` against exactly that.
+    """
     result = subprocess.run(
         ["git", "describe", "--tags", "--abbrev=0"],
         cwd=repo,
         capture_output=True,
         text=True,
-        check=True,
+        check=False,
     )
+    if result.returncode != 0:
+        raise RuntimeError(
+            "no tag is reachable from HEAD, so the audited range cannot be derived: "
+            f"`git describe --tags --abbrev=0` exited {result.returncode} "
+            f"({result.stderr.strip()}). Pass an explicit `--range`, or fetch tags "
+            "(`fetch-depth: 0`) if this is a shallow clone."
+        )
     return result.stdout.strip()
 
 
