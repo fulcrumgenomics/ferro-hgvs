@@ -1327,42 +1327,77 @@ pub(crate) fn predict_stop_region_extension(
 
 // ── In-cis combined protein consequence (#1070) ───────────────────────────────
 
-/// Outcome of translating the combined product of a cis compound allele whose
-/// members individually frameshift but together net to an in-frame length.
+/// Outcome of translating the combined product of a cis compound allele.
 #[derive(Debug)]
 pub(crate) enum CisCombined {
     /// The reading frame reconverged before the stop: a single bounded in-frame
     /// delins (or stop-delins / identity) describing the whole-allele change.
-    /// Boxed to keep the enum small (the data-less `Frameshift` variant would
-    /// otherwise leave a large size gap, `clippy::large_enum_variant`).
+    /// Boxed to keep the enum small (`clippy::large_enum_variant`).
     InFrame(Box<HgvsVariant>),
-    /// The shifted frame terminated at a stop before reconverging: a genuine
-    /// frameshift (the caller renders the #855 whole-protein-unknown `p.?`).
-    Frameshift,
+    /// The frame did not reconverge before translation ended: either it
+    /// terminated at a stop while still shifted, or no stop was reached at all.
+    /// Carries the description `build_frameshift_variant` derives from the
+    /// *combined* product — the same builder a single-member spelling of the same
+    /// sequence change goes through. Boxed for the same reason.
+    ///
+    /// **The payload is not always an `fs` form**, so do not read the variant
+    /// name as the consequence kind. `build_frameshift_variant` emits the
+    /// nonsense substitution `p.(Xxx{N}Ter)` when the shifted frame's first
+    /// changed codon is itself the stop (`fsTer1` is illegal, `frameshift.md:22`)
+    /// and a C-terminal `…ext…` when the divergence is at or past the reference
+    /// terminator. Callers must therefore derive any `is_frameshift` flag from
+    /// the built consequence rather than from this variant; see
+    /// `project_cis_flag_and_protein`.
+    Frameshift(Box<HgvsVariant>),
 }
 
-/// Predict the whole-allele protein consequence of an **in-cis** compound whose
-/// members compose on one molecule to a net in-frame change (#1070).
+/// Predict the whole-allele protein consequence of an **in-cis** compound from
+/// its members' *combined* product (#1070, #1588).
 ///
 /// Per HGVS `recommendations/protein/frameshift.md` (Discussion), a protein
 /// description must be derived by comparing the *combined* variant protein to
 /// the reference protein — not by describing each member independently. This
 /// builds the combined mutated CDS (all members spliced onto the reference CDS),
 /// translates it, and:
-/// - if the frame reconverges before the stop, returns an in-frame delins built
-///   by [`build_inframe_variant`] (the same translate-and-diff path a single
-///   in-frame indel uses); otherwise
-/// - returns [`CisCombined::Frameshift`] (the shifted frame hit a stop first).
+/// - if the frame is in phase at the terminating stop **and** the members net in
+///   frame, returns an in-frame delins built by [`build_inframe_variant`] (the
+///   same translate-and-diff path a single in-frame indel uses);
+/// - if the frame is shifted at the stop, or no stop is reached, returns
+///   [`CisCombined::Frameshift`] carrying the description
+///   [`build_frameshift_variant`] derives from that same combined product — the
+///   identical builder the single-member spelling of the same sequence change
+///   goes through, so the two spellings agree. That description is not
+///   necessarily an `fs` form; see [`CisCombined::Frameshift`];
+/// - if the frame is in phase at the stop while the members net *out* of frame,
+///   declines (see the `Err` list below) — neither builder's contract holds.
 ///
 /// `members` are the pre-classified SimpleExonic members as `(lo, hi, edit)`
 /// with insertion spans already collapsed to `hi == lo`, in any order.
 ///
 /// # Preconditions (caller-enforced gate)
-/// The net length change over the members is `≡ 0 (mod 3)` and at least one
-/// member individually frameshifts. Overlapping members, a non-literal inserted
-/// sequence, or an unreadable CDS surface as `Err`, which the caller treats as a
-/// conservative fallback.
-pub(crate) fn try_project_cis_combined_inframe(
+/// Every member is a trustworthy `SimpleExonic` (no `Opaque`), so the net length
+/// change over the members is determinate. When that net is `≡ 0 (mod 3)` the
+/// caller additionally requires at least one individually-frameshifting member,
+/// which is what makes the combined build worth doing over the per-residue
+/// paths.
+///
+/// # Declines (`Err`), all treated by the caller as a conservative `p.?` fallback
+/// - overlapping members, an out-of-bounds span, a non-literal inserted sequence,
+///   or an unreadable CDS;
+/// - a net in-frame product with no stop codon anywhere in the read-through;
+/// - a product that **terminates in phase while the members net out of frame**
+///   (#1588). An upstream premature stop masks the frame-shifting member, so
+///   neither builder's contract holds: `build_inframe_variant` assumes
+///   `net % 3 == 0`, and the shifted frame did not actually survive to a shifted
+///   terminus. Deliberately out of scope rather than described from an
+///   assumption that does not hold; see
+///   `cis_combined_out_of_frame_net_terminating_in_phase_declines`.
+///
+/// Note the `debug_assert_eq!(net % 3, 0, …)` that used to guard this function
+/// is deliberately gone, since the frameshift arm makes `net % 3 != 0` legal. It
+/// was also the only cross-check that the caller's `cds_frame_net` agreed with
+/// the length actually spliced here, so that disagreement is now silent.
+pub(crate) fn try_project_cis_combined(
     transcript: &Transcript,
     ref_bundle: &RefProteinBundle,
     members: &[(i64, i64, &NaEdit)],
@@ -1416,7 +1451,9 @@ pub(crate) fn try_project_cis_combined_inframe(
     }
 
     let net = mut_cds.len() as i64 - ref_bundle.ref_cds.len() as i64;
-    debug_assert_eq!(net % 3, 0, "gate guarantees a net in-frame combined length");
+    // `net % 3 != 0` is the net-frameshift case (#1588): the combined product
+    // runs off the reference frame and its new stop usually lies past the
+    // annotated CDS end, so every read below is over the read-through sequence.
 
     // Translate the combined product; force residue 1 to Met on a recognized
     // initiator so it agrees with the Met-forced reference protein.
@@ -1425,16 +1462,66 @@ pub(crate) fn try_project_cis_combined_inframe(
         force_initiator_met(&mut alt_protein);
     }
 
+    // The read-through sequence (combined CDS ++ the unchanged 3'UTR). A net
+    // frameshift's new stop commonly lies past the annotated CDS end, exactly as
+    // it does for a single-member frameshift, so the stop scan — and the
+    // `fsTer{K}` count `build_frameshift_variant` derives from it — must read
+    // the same extended sequence the single-variant path reads. Appending only
+    // ever *extends* `mut_cds`, so `mut_cds`-relative offsets below are unchanged.
+    //
+    // For a net in-frame product this is a no-op **whenever the reference CDS
+    // ends in a terminator**: that stop survives the edit, sits inside `mut_cds`,
+    // and is still the first Ter found. The one in-frame population it does move
+    // is a reference CDS with **no** terminal stop, where the CDS-only scan found
+    // no Ter at all and declined to `p.?`; the widened scan describes it instead,
+    // matching what the single-member spelling of the same change has always
+    // produced. See
+    // `cis_combined_inframe_on_a_stopless_reference_matches_the_single_member_spelling`.
+    let scan_seq = mut_cds_with_3utr(&mut_cds, transcript)?;
+
+    // The description of the combined product, derived by the same builder a
+    // single-member spelling of this sequence change goes through. Pinned
+    // byte-identical against `predict_indel_protein` by
+    // `cis_combined_frameshift_arm_matches_the_single_member_builder` and
+    // `cis_combined_frameshift_stopping_in_the_3utr_matches_the_single_member_builder`.
+    //
+    // Known asymmetry, recorded rather than fixed: the alt residues come from
+    // `alt_protein` (the CDS-only translation) while the stop scan reads
+    // `scan_seq` (the read-through), so `build_frameshift_variant` derives
+    // `first_diff`/`new_aa` from a shorter sequence than it terminates in. The
+    // single-member path differs here — `predict_indel_protein` routes a disrupted
+    // reference terminator through `classify_stop_disruption`, and
+    // `build_stop_loss_frameshift` re-translates from the read-through first. The
+    // two can only disagree when `first_diff >= alt_protein.len()`, i.e. the
+    // CDS-only translation is a proper prefix of the reference protein; no cis
+    // input reaching this arm has been shown to satisfy that (the corpus's 62
+    // moved rows do not), so widening the alt translation is deliberately left
+    // alone rather than flipped without a measured blast radius.
+    let combined_frameshift = || -> Result<CisCombined, FerroError> {
+        Ok(CisCombined::Frameshift(Box::new(build_frameshift_variant(
+            &ref_bundle.ref_protein,
+            &alt_protein,
+            &scan_seq,
+            protein_accession,
+            transcript,
+        )?)))
+    };
+
     // 0-based `mut_cds` index of the first base of the terminating stop codon.
-    // Under the gate a stop always exists (net%3==0, no stop-region member);
-    // fall back if not.
-    let alt_with_stop = translate_full_cds_with_stop(&mut_cds);
-    let ter_residue = alt_with_stop
-        .iter()
-        .position(|aa| *aa == AminoAcid::Ter)
-        .ok_or_else(|| FerroError::UnsupportedProjection {
-            reason: "combined in-cis product has no stop codon".to_string(),
-        })?;
+    // For a net in-frame product the reference stop survives, so one always
+    // exists. A net frameshift may genuinely run off the end of the transcript
+    // with no downstream stop in frame — that is a frameshift with an unknown
+    // terminus (`fsTer?`), which the builder renders, not a reason to decline.
+    let alt_with_stop = translate_full_cds_with_stop(&scan_seq);
+    let ter_residue = match alt_with_stop.iter().position(|aa| *aa == AminoAcid::Ter) {
+        Some(ter) => ter,
+        None if net % 3 != 0 => return combined_frameshift(),
+        None => {
+            return Err(FerroError::UnsupportedProjection {
+                reason: "combined in-cis product has no stop codon".to_string(),
+            });
+        }
+    };
     let stop_base = 3 * ter_residue as i64;
 
     // Frame-phase criterion (#1070). The change is a genuine frameshift iff the
@@ -1481,7 +1568,8 @@ pub(crate) fn try_project_cis_combined_inframe(
             if stop_base == mut_edit_start || member_delta % 3 == 0 {
                 phase_at_stop = Some(cum_delta);
             } else {
-                return Ok(CisCombined::Frameshift); // shifted interior of a frame-shifting member
+                // Shifted interior of a frame-shifting member.
+                return combined_frameshift();
             }
             break;
         }
@@ -1490,7 +1578,24 @@ pub(crate) fn try_project_cis_combined_inframe(
     let phase_at_stop = phase_at_stop.unwrap_or(net); // stop after all members = net
     if phase_at_stop % 3 != 0 {
         // Terminated in a shifted frame, before the frame is restored → frameshift.
-        return Ok(CisCombined::Frameshift);
+        return combined_frameshift();
+    }
+
+    // In phase at the stop, yet the members' net length change is NOT — so the
+    // terminating stop lies upstream of the member(s) that shift the frame, and
+    // those members are masked by it. The product really is bounded, but
+    // describing it means calling `build_inframe_variant` with a `net` that
+    // breaks its `net % 3 == 0` contract (`expected_alt_len` truncates `net / 3`,
+    // and the codon-alignment arms assume whole codons). Rather than emit a
+    // description derived from an assumption that does not hold, decline and let
+    // the caller keep the honest `p.?`. Reachable only from the net-frameshift
+    // arm, so no in-frame behaviour changes here.
+    if net % 3 != 0 {
+        return Err(FerroError::UnsupportedProjection {
+            reason: "combined in-cis product terminates in phase but nets out of frame; \
+                     the bounded description is ambiguous"
+                .to_string(),
+        });
     }
 
     // The delins range END (`build_inframe_stop_delins` derives it from
@@ -1546,7 +1651,7 @@ pub(crate) fn try_project_cis_combined_inframe(
 /// applied **together** to the reference CDS (#1079).
 ///
 /// This is the length-preserving companion of
-/// [`try_project_cis_combined_inframe`]: it does not build a description, it
+/// [`try_project_cis_combined`]: it does not build a description, it
 /// just reports which residues moved and to what, so the caller can render them
 /// with the spec's grouping rules (one contiguous run → a single
 /// substitution / delins; runs separated by an unchanged residue stay
@@ -1571,7 +1676,7 @@ pub(crate) fn try_project_cis_combined_inframe(
 /// - fewer than two members, an out-of-bounds or overlapping span (overlapping
 ///   members are contradictory in cis), or an unreadable CDS;
 /// - the combined CDS changes length — an in-frame indel is a length-changing
-///   consequence that [`try_project_cis_combined_inframe`] already describes;
+///   consequence that [`try_project_cis_combined`] already describes;
 /// - the combined protein changes length, i.e. a premature stop (nonsense) or a
 ///   stop-loss, both of which need their own spec forms (a stop-delins or a
 ///   C-terminal extension) rather than a residue-wise diff.
@@ -1584,7 +1689,7 @@ pub(crate) fn combined_cis_residue_changes(
         return None;
     }
 
-    // Bounds guard, mirroring `try_project_cis_combined_inframe`: a `lo < 1`
+    // Bounds guard, mirroring `try_project_cis_combined`: a `lo < 1`
     // would underflow the `lo - 1` usize cast in `build_mutated_cds_with_ref`
     // into an out-of-bounds slice panic.
     let ref_cds_len = ref_bundle.ref_cds.len() as i64;
@@ -3002,7 +3107,7 @@ mod tests {
         };
         // lo = 0 would compute `(0 - 1) as usize` in the splicer.
         let members = [(0i64, 1i64, &del)];
-        let result = try_project_cis_combined_inframe(&t, &bundle, &members, "NP_TEST.1");
+        let result = try_project_cis_combined(&t, &bundle, &members, "NP_TEST.1");
         assert!(
             matches!(result, Err(FerroError::UnsupportedProjection { .. })),
             "out-of-bounds span must be a typed Err, got {result:?}"
@@ -3010,7 +3115,7 @@ mod tests {
         // hi > ref_cds_len is likewise rejected up front.
         let members = [(4i64, 99i64, &del)];
         assert!(matches!(
-            try_project_cis_combined_inframe(&t, &bundle, &members, "NP_TEST.1"),
+            try_project_cis_combined(&t, &bundle, &members, "NP_TEST.1"),
             Err(FerroError::UnsupportedProjection { .. })
         ));
     }
@@ -3053,11 +3158,11 @@ mod tests {
             length: None,
         };
         let members = [(4i64, 6i64, &delins), (10i64, 12i64, &del)];
-        let result = try_project_cis_combined_inframe(&t, &bundle, &members, "NP_TEST.1")
-            .expect("must not error");
+        let result =
+            try_project_cis_combined(&t, &bundle, &members, "NP_TEST.1").expect("must not error");
         let pv = match result {
             CisCombined::InFrame(pv) => *pv, // (a) not a frameshift
-            CisCombined::Frameshift => {
+            CisCombined::Frameshift(_) => {
                 panic!(
                     "in-phase stop inside a phase-neutral member must be InFrame, not Frameshift"
                 )
@@ -3074,6 +3179,269 @@ mod tests {
             rendered.contains("Ter") || rendered.contains('*'),
             "expected a terminating stop, got {rendered}"
         );
+    }
+
+    /// #1588: the one shape the widened (net-frameshift) gate deliberately still
+    /// declines. Same CDS `ATGAAACCCGGGTAA` (Met-Lys-Pro-Gly-Ter), members
+    /// `c.4_6delinsTGGTAA` (+3, phase-neutral, carrying its own internal stop) and
+    /// `c.10del` (−1) — so the members net **+2**, out of frame, yet the product
+    /// terminates at the phase-neutral member's internal stop, *upstream* of the
+    /// frame-shifting member, which is therefore masked. The bounded description
+    /// is a stop-delins, but building one means handing `build_inframe_variant` a
+    /// `net` that violates its `net % 3 == 0` contract (`expected_alt_len`
+    /// truncates `net / 3`). Rather than emit a description derived from an
+    /// assumption that does not hold, decline — the caller keeps `p.?`.
+    #[test]
+    fn cis_combined_out_of_frame_net_terminating_in_phase_declines() {
+        use crate::hgvs::edit::{Base, InsertedSequence, Sequence};
+        let t = tx("ATGAAACCCGGGTAA", 1, 15); // Met-Lys-Pro-Gly-Ter
+        let bundle = RefProteinBundle::from_transcript(&t).expect("ref bundle");
+        let delins = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![
+                Base::T,
+                Base::G,
+                Base::G,
+                Base::T,
+                Base::A,
+                Base::A,
+            ])),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        };
+        let del = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let members = [(4i64, 6i64, &delins), (10i64, 10i64, &del)];
+        let err = try_project_cis_combined(&t, &bundle, &members, "NP_TEST.1")
+            .expect_err("an out-of-frame net terminating in phase must decline");
+        // Match the reason, not just the variant: `UnsupportedProjection` is also
+        // how the bounds and overlap guards decline, and this case must not pass
+        // by tripping one of those instead.
+        match err {
+            FerroError::UnsupportedProjection { reason } => assert!(
+                reason.contains("terminates in phase but nets out of frame"),
+                "declined for the wrong reason: {reason}"
+            ),
+            other => {
+                panic!("must be the caller-swallowed decline that yields `p.?`, got {other:?}")
+            }
+        }
+    }
+
+    /// #1588 blast-radius pin: the ONE net-**in-frame** population the widened
+    /// stop scan moves, and the direction it moves in.
+    ///
+    /// Reading the stop over `mut_cds ++ 3'UTR` instead of `mut_cds` alone is a
+    /// no-op whenever the reference CDS ends in a terminator — the reference stop
+    /// survives a net in-frame edit and is still the first Ter found. It is NOT a
+    /// no-op when the reference CDS has **no terminal stop**: the combined product
+    /// then had no Ter at all, so the old CDS-only scan declined ("combined in-cis
+    /// product has no stop codon") and the caller fell back to `p.?`, while the
+    /// widened scan finds the 3'UTR terminator, computes phase `= net = 0`, and
+    /// describes the product.
+    ///
+    /// That move is toward confluence, which is why it is kept rather than guarded
+    /// off: the single-variant spelling of the identical sequence change has always
+    /// described this shape (`predict_indel_protein` skips its stop-disruption
+    /// block on `ref_protein_with_stop.last() != Ter` and builds the in-frame form
+    /// directly). Declining here would restore an answer that depends on member
+    /// arity — the exact defect #1588 removes. The assertion that matters is the
+    /// equality; the pinned string only records which answer they agree on.
+    ///
+    /// CDS `ATGAAACCCGGG` = Met-Lys-Pro-Gly, no terminator, with `TAA` as 3'UTR.
+    /// `c.[4del;8_9del]` (−1 and −2, net −3) and `c.4_9delinsAAC` both denote
+    /// `ATGAACGGG` = Met-Asn-Gly.
+    #[test]
+    fn cis_combined_inframe_on_a_stopless_reference_matches_the_single_member_spelling() {
+        use crate::hgvs::edit::{Base, InsertedSequence, Sequence};
+        let t = tx("ATGAAACCCGGGTAA", 1, 12);
+        let bundle = RefProteinBundle::from_transcript(&t).expect("ref bundle");
+        assert_ne!(
+            bundle.ref_protein_with_stop.last(),
+            Some(&AminoAcid::Ter),
+            "the fixture is only meaningful while the reference CDS lacks a terminator"
+        );
+
+        let d = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let members = [(4i64, 4i64, &d), (8i64, 9i64, &d)];
+        let combined = match try_project_cis_combined(&t, &bundle, &members, "NP_TEST.1")
+            .expect("a stop-less reference must not make the combined build decline")
+        {
+            CisCombined::InFrame(pv) => pv,
+            CisCombined::Frameshift(pv) => {
+                panic!("net −3 is in frame, got a frameshift: {}", prot_str(&pv))
+            }
+        };
+
+        let delins = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![Base::A, Base::A, Base::C])),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        };
+        let single = predict_indel_protein(&t, &bundle, 4, 9, &delins, "NP_TEST.1")
+            .expect("the single-member spelling already describes this shape");
+
+        assert_eq!(
+            prot_str(&combined),
+            prot_str(&single),
+            "the same sequence change must get the same protein consequence \
+             whether it is spelled as one member or as two"
+        );
+        assert_eq!(prot_str(&combined), "NP_TEST.1:p.(Lys2_Pro3delinsAsn)");
+    }
+
+    /// #1588: the `Frameshift` arm's description must be byte-identical to what
+    /// the single-variant spelling of the identical sequence change gets — that
+    /// byte-identity is the whole claim, so it is asserted rather than described.
+    ///
+    /// It is asserted **at the builder seam** (`try_project_cis_combined` against
+    /// `predict_indel_protein`) rather than through `VariantProjector`, because
+    /// the projector normalizes first and re-partitions the single delins into
+    /// same-codon substitutions, which then take the substitution-combination path
+    /// and answer `p.[(Val2Ter);(Lys3=)]`. That divergence is real, is present on
+    /// `main`, and is not something this change reaches — it lives in the
+    /// substitution path, not in the combined build.
+    ///
+    /// CDS `ATGGTAAAAGGGCCCTAA` = Met-Val-Lys-Gly-Pro-Ter. `c.[4del;10dup]` (−1
+    /// and +1, net 0) and `c.4_12delinsTAAAAGGGG` both denote
+    /// `ATGTAAAAGGGGCCCTAA`, whose first changed residue is itself the terminator
+    /// — so `frameshift.md:22` forbids `fsTer1` and both routes must land on the
+    /// nonsense substitution `p.(Val2Ter)`.
+    #[test]
+    fn cis_combined_frameshift_arm_matches_the_single_member_builder() {
+        use crate::hgvs::edit::{Base, InsertedSequence, Sequence};
+        let t = tx("ATGGTAAAAGGGCCCTAA", 1, 18);
+        let bundle = RefProteinBundle::from_transcript(&t).expect("ref bundle");
+        let d = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let dup = NaEdit::Duplication {
+            sequence: None,
+            length: None,
+            uncertain_extent: None,
+        };
+        let members = [(4i64, 4i64, &d), (10i64, 10i64, &dup)];
+        let combined = match try_project_cis_combined(&t, &bundle, &members, "NP_TEST.1")
+            .expect("the combined build must describe this product")
+        {
+            CisCombined::Frameshift(pv) => pv,
+            CisCombined::InFrame(pv) => panic!(
+                "the shifted frame stops before reconverging, so this is the \
+                 Frameshift arm, got InFrame({})",
+                prot_str(&pv)
+            ),
+        };
+
+        let delins = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![
+                Base::T,
+                Base::A,
+                Base::A,
+                Base::A,
+                Base::A,
+                Base::G,
+                Base::G,
+                Base::G,
+                Base::G,
+            ])),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        };
+        let single = predict_indel_protein(&t, &bundle, 4, 12, &delins, "NP_TEST.1")
+            .expect("the single-member spelling must describe the same product");
+
+        assert_eq!(
+            prot_str(&combined),
+            prot_str(&single),
+            "the same sequence change must get the same protein consequence \
+             whether it is spelled as one member or as two"
+        );
+        assert_eq!(prot_str(&combined), "NP_TEST.1:p.(Val2Ter)");
+    }
+
+    /// #1588: the `Frameshift` arm on a **genuine `fsTer{K}`** whose new stop
+    /// lies in the **3'UTR**, past the annotated CDS end — the shape the widened
+    /// read-through scan exists for, and the only one that can observe it.
+    ///
+    /// This is a deliberate complement to the two tests above, both of which are
+    /// blind to the widening: `cis_combined_frameshift_arm_matches_the_single_member_builder`
+    /// lands on the `fsTer1`→nonsense special case, and every other cis fixture
+    /// has `cds_end == sequence.len()` — i.e. **no 3'UTR at all** — so
+    /// `mut_cds_with_3utr` appends the empty string and `scan_seq == mut_cds`.
+    /// Measured: with those tests alone, reverting `&scan_seq` to `&mut_cds`
+    /// inside `combined_frameshift` passes the entire suite. Here it cannot —
+    /// the CDS-only scan finds no terminator, so the answer degrades to the
+    /// unknown terminus `fsTer?` and this test fails.
+    ///
+    /// It is also the non-vacuous half of the equivalence claim. The projector-
+    /// level test in `projector.rs` cannot check it: normalization re-partitions
+    /// any single delins back into the same two members, so both of its sides run
+    /// the identical code path. Asserting at the builder seam
+    /// (`try_project_cis_combined` against `predict_indel_protein`) is what
+    /// actually compares two implementations.
+    ///
+    /// CDS `ATGAAACCCGGGTTTTAA` = Met-Lys-Pro-Gly-Phe-Ter, with 3'UTR `AATAA`.
+    /// `c.[4del;10del]` (−1 and −1, net −2) and `c.4_10delinsAACCC` both denote
+    /// `ATGAACCCGGTTTTAA`, which reads Met-Asn-Pro-Val-Leu and then runs off the
+    /// annotated CDS to terminate at the `TAA` inside the 3'UTR.
+    #[test]
+    fn cis_combined_frameshift_stopping_in_the_3utr_matches_the_single_member_builder() {
+        use crate::hgvs::edit::{Base, InsertedSequence, Sequence};
+        let t = tx("ATGAAACCCGGGTTTTAAAATAA", 1, 18);
+        let bundle = RefProteinBundle::from_transcript(&t).expect("ref bundle");
+        assert_eq!(
+            bundle.ref_protein_with_stop.last(),
+            Some(&AminoAcid::Ter),
+            "the fixture is a normal stop-terminated CDS; the widening, not a \
+             missing terminator, is what this test isolates"
+        );
+
+        let d = NaEdit::Deletion {
+            sequence: None,
+            length: None,
+        };
+        let members = [(4i64, 4i64, &d), (10i64, 10i64, &d)];
+        let combined = match try_project_cis_combined(&t, &bundle, &members, "NP_TEST.1")
+            .expect("a net frameshift terminating in the 3'UTR must be described")
+        {
+            CisCombined::Frameshift(pv) => pv,
+            CisCombined::InFrame(pv) => {
+                panic!("net −2 is a frameshift, got InFrame({})", prot_str(&pv))
+            }
+        };
+
+        let delins = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::new(vec![
+                Base::A,
+                Base::A,
+                Base::C,
+                Base::C,
+                Base::C,
+            ])),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        };
+        let single = predict_indel_protein(&t, &bundle, 4, 10, &delins, "NP_TEST.1")
+            .expect("the single-member spelling must describe the same product");
+
+        assert_eq!(
+            prot_str(&combined),
+            prot_str(&single),
+            "the same sequence change must get the same protein consequence \
+             whether it is spelled as one member or as two"
+        );
+        // The terminus is what pins the widening: `Ter6` counts through the 3'UTR
+        // stop. A CDS-only scan would render `Ter?` here.
+        assert_eq!(prot_str(&combined), "NP_TEST.1:p.(Lys2AsnfsTer6)");
     }
 
     // ── Stop-region deletion → frameshift when a sense residue changes (PR-B) ──
