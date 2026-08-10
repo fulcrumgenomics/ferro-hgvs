@@ -1887,7 +1887,9 @@ const MAX_SPLIT_BLOCK: usize = 1024;
 /// `general.md:34` splits there (and the rejected SVD-WG010's own example at
 /// `:45` splits `c.[235A>T;238G>T]` at exactly two nucleotides) while Mutalyzer
 /// merges on 23 of 25 measured rows. Which authority governs that choice is
-/// itself unsettled — see `rulings[adjudication-precedence-order]` in
+/// settled: `rulings[adjudication-precedence-order]` is `decided`, and ranks
+/// the spec first while giving Mutalyzer no rank at all. So `general.md:34`
+/// governs and the Mutalyzer count above is a sanity check, not a reason. See
 /// `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`.
 const MIN_PIECE_SEPARATION: usize = 1;
 
@@ -5362,8 +5364,9 @@ fn changed_columns_of_edits(edits: &[GEdit]) -> usize {
 /// example: `DNA/delins.md:44-47`'s spanning
 /// `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG` covers 66 columns where the split
 /// alternative at `:46` needs 40, and `:47` recommends the spanning form
-/// anyway. Whether that carve-out governs the general instruction at `:17` is
-/// open — `rulings[delins-merge-vs-individual-gap-two-or-more]`.
+/// anyway. That carve-out does govern the general instruction at `:17`:
+/// `rulings[delins-merge-vs-individual-gap-two-or-more]` is `decided` for
+/// `:47`, scoped to the alignment-driven split `:46` constructs.
 fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
     pieces
         .iter()
