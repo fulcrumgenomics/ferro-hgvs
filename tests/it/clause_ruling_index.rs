@@ -84,8 +84,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 15 records, 10 decided / 5 undecided
-//! 58 clause lines, of which 10 are named by more than one record
+//! 16 records, 10 decided / 6 undecided
+//! 60 clause lines, of which 12 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -109,6 +109,10 @@
 //!     `conflicting-member-geometry-refusal-scope` — decided (governing)
 //! docs/recommendations/DNA/complex.md:5
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/DNA/complex.md:13
+//!     `ring-telomere-anchoring` — undecided (cited)
+//! docs/recommendations/DNA/complex.md:28
+//!     `ring-telomere-anchoring` — undecided (cited)
 //! docs/recommendations/DNA/complex.md:39
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/complex.md:50
@@ -127,11 +131,13 @@
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/complex.md:117
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
-//! docs/recommendations/DNA/complex.md:127
+//! docs/recommendations/DNA/complex.md:127  [MULTI]
+//!     `ring-telomere-anchoring` — undecided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/complex.md:130
 //!     `self-cancelling-across-ring-junctions` — decided (governing)
-//! docs/recommendations/DNA/complex.md:161
+//! docs/recommendations/DNA/complex.md:161  [MULTI]
+//!     `ring-telomere-anchoring` — undecided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/delins.md:16
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
@@ -231,6 +237,12 @@
 //! docs/consultation/open-issues.md:78
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/consultation/open-issues.md:77-78)
+//! docs/recommendations/DNA/complex.md:127
+//!     `ring-telomere-anchoring` — undecided (cited)
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/DNA/complex.md:161
+//!     `ring-telomere-anchoring` — undecided (cited)
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited)
@@ -286,6 +298,15 @@
 //! the same line, so reading either alone gives a confident and half-wrong
 //! picture. The index does not adjudicate anything — it only tells you that more
 //! than one record is in play, which is the fact that was missing.
+//!
+//! `DNA/complex.md:127` and `:161` joined that set when the ring rules landed:
+//! they are the spec's two published ring shapes — the bare ring and the
+//! supernumerary one — and each is cited both by
+//! `self-cancelling-across-ring-junctions` (**decided**) and by
+//! `ring-telomere-anchoring` (**undecided**). That split is the honest state —
+//! the same examples settle one question about rings and are merely suggestive
+//! about another — and it is the case this block exists to surface, since citing
+//! either for "rings are anchored" would read a ruling out of the undecided half.
 //!
 //! The same-verdict lines are a much weaker signal: they are the clauses cited
 //! as background in nearly every conflict — `basics.md:38`, `general.md:56`,
@@ -550,7 +571,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (15, 10, 5),
+        (16, 10, 6),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -714,7 +735,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        10,
+        12,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
@@ -732,7 +753,7 @@ fn clauses_named_by_several_records_are_flagged() {
         .collect();
     assert_eq!(
         mixed.len(),
-        6,
+        8,
         "measured count of mixed-verdict clause lines changed: {mixed:?}"
     );
 

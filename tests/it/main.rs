@@ -469,3 +469,4 @@ mod web_service_tests;
 mod weight_bound_worked_examples;
 
 mod reported_confluence_pairs;
+mod ring_segment_wellformedness;

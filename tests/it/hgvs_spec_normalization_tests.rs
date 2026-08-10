@@ -918,6 +918,17 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // `checklist.md:16` alone, `g.*10del` is refused at parse while `g.266+2del`
     // is refused nowhere.
     ("absolute-prohibition-enforcement-stage", "undecided"),
+    // Must a ring's first `::` segment start at `pter` and its last end at
+    // `qter`? **Undecided on purpose.** A ring loses both telomeres, and both
+    // published ring shapes are anchored (`complex.md:127`, `:161`) — but that is
+    // biology plus two examples, and no clause states it. `complex.md:28` only
+    // defines what the markers mean; `:13` warns that a complex description can
+    // be "literally correct" yet meaningless, which cuts against inventing a
+    // structural requirement. Its sibling junction rule *was* decided, on
+    // `:60-64`'s record that the committee withdrew `::` as a general join
+    // operator — a materially stronger argument, which is exactly why this one is
+    // not decided by analogy to it. Ferro accepts an unanchored ring today.
+    ("ring-telomere-anchoring", "undecided"),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the

@@ -27,9 +27,19 @@
 //! forecloses, and E3006's repair hint ("rewrite as a single delins") is
 //! actively wrong advice for a ring.
 //!
-//! What the ruling does **not** settle is recorded in `no_ring_wellformedness_rule_yet`
-//! below: three of the rings ferro accepts are malformed for reasons that have
-//! nothing to do with self-cancellation.
+//! **The gap this file used to pin is now closed.**
+//! `no_ring_wellformedness_rule_yet_so_malformed_rings_are_still_accepted` lived
+//! here and asserted that `g.100_200del::150_250dup`, `g.100_200del::300_400dup`
+//! and `g.150_250dup::100_200del` were still accepted — the status quo the ruling
+//! declined to change, recorded so it was visible rather than implied. All three
+//! are now rejected by `validate_ring_segments_are_wellformed`, and
+//! `ring_segment_wellformedness.rs` owns those rows. The test was deleted rather
+//! than inverted, exactly as its own failure message instructed.
+//!
+//! The ruling is untouched: `general.md:58` still does not cross `::`, and the two
+//! tests here pin that with overlapping `del::del`, which the new rules
+//! deliberately leave alone. Both were `del::dup` originally; had they stayed so,
+//! they would now pass by being rejected for the *wrong* reason.
 
 use ferro_hgvs::parse_hgvs;
 
@@ -68,15 +78,24 @@ fn the_specs_own_ring_shapes_are_accepted() {
 /// If someone extends `detect_self_cancelling_pair` to ring segments, this test
 /// fails and points at the ruling record. That is its whole purpose; do not
 /// "fix" it by relaxing the assertion.
+///
+/// **The inputs are all-`del` deliberately.** They were originally `del::dup`
+/// pairs — the literal shape of `general.md:58`'s own example — but
+/// `validate_ring_segments_are_wellformed` now rejects a non-deletion segment on
+/// separate grounds (`DNA/complex.md:39`/`:60-64`), which would have made this
+/// test pass for the wrong reason: rejected, but by the junction rule rather than
+/// by `:58`. Overlapping `del::del` isolates the question this ruling answers,
+/// since the junction rule has nothing to say about it.
 #[test]
 fn an_overlapping_ring_is_not_rejected_as_self_cancelling() {
     for input in [
-        // overlap at 150–200, the shape of `general.md:58`'s own example
-        "NC_000022.11:g.100_200del::150_250dup",
+        // overlap at 150–200, the spec example's geometry with both segments
+        // spelled as deletions
+        "NC_000022.11:g.100_200del::150_250del",
         // identical spans — the strongest "cancelling" shape available
-        "NC_000022.11:g.100_200del::100_200dup",
+        "NC_000022.11:g.100_200del::100_200del",
         // and under the `sup` marker, which is blind through the same arms
-        "NC_000022.11:g.[100_200del::150_250dup]sup",
+        "NC_000022.11:g.[100_200del::150_250del]sup",
     ] {
         let variant = parse_hgvs(input).unwrap_or_else(|e| {
             panic!(
@@ -124,57 +143,22 @@ fn the_identical_overlap_is_still_rejected_as_a_cis_allele() {
     }
 }
 
-/// Non-overlapping `del` + `dup` is legal both ways, and this is the row that
-/// shows `:58` is the wrong instrument for the malformed rings noted below: a
-/// `:58`-based check is an *overlap* predicate, so it would accept this one no
-/// matter how it were wired.
+/// Non-overlapping members are legal, and this is the row that shows `:58` is an
+/// *overlap* predicate and therefore the wrong instrument for ring
+/// well-formedness — it accepts a non-overlapping pair however it is wired.
+///
+/// The `::` case is spelled `del::del` for the reason given above: the
+/// `del::dup` form this test originally used is now rejected by the junction rule
+/// (`DNA/complex.md:39`/`:60-64`), which is a different question. The cis-allele
+/// half keeps its `dup`, since `:58` is exactly what governs it there.
 #[test]
-fn a_non_overlapping_del_dup_pair_is_legal_in_both_operators() {
+fn a_non_overlapping_pair_is_legal_in_both_operators() {
     for input in [
         "NC_000022.11:g.[100_200del;300_400dup]",
-        "NC_000022.11:g.100_200del::300_400dup",
+        "NC_000022.11:g.100_200del::300_400del",
     ] {
         let variant = parse_hgvs(input)
             .unwrap_or_else(|e| panic!("`{input}` has no overlap and is legal: {e}"));
         assert_eq!(variant.to_string(), input, "`{input}` must round-trip");
-    }
-}
-
-/// **What the ruling does not settle, pinned as an open gap rather than as
-/// correct behaviour.**
-///
-/// Each input below is accepted today and none is a well-formed ring, for
-/// reasons independent of self-cancellation:
-///
-/// - a `dup` segment contributes no break junction (`DNA/complex.md:39`: "a
-///   double colon is used to designate break point junctions creating a ring
-///   chromosome"), and neither segment is telomere-anchored, so these describe
-///   no ring geometry; and
-/// - `g.150_250dup::100_200del` additionally lists its segments out of order,
-///   which `DNA/complex.md:51` ("`pter` of the chromosome is to be listed
-///   first"), `:53` and `:55` forbid.
-///
-/// This test asserts the **status quo**, deliberately, so the gap is visible and
-/// counted rather than implied by the ruling's silence. When a ring
-/// well-formedness rule lands, these inputs should start being rejected and this
-/// test is expected to fail — that failure is the signal to delete it and move
-/// the rows into the new rule's own tests, not to re-derive whether the ruling
-/// above was wrong.
-#[test]
-fn no_ring_wellformedness_rule_yet_so_malformed_rings_are_still_accepted() {
-    for input in [
-        // no telomere anchor, and `dup` contributes no junction
-        "NC_000022.11:g.100_200del::150_250dup",
-        "NC_000022.11:g.100_200del::300_400dup",
-        // segments out of pter->qter order
-        "NC_000022.11:g.150_250dup::100_200del",
-    ] {
-        assert!(
-            parse_hgvs(input).is_ok(),
-            "`{input}` is accepted today. If this now fails, a ring \
-             well-formedness rule has landed — move this row into that rule's \
-             tests rather than reopening \
-             rulings[self-cancelling-across-ring-junctions]",
-        );
     }
 }

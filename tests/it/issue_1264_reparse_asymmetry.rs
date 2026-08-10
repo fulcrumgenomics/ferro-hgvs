@@ -73,16 +73,43 @@ fn a_ring_segment_insertion_anchor_must_be_flanking() {
     }
 }
 
-/// The control for the test above: a ring whose insertion anchors *are*
-/// flanking stays valid, and still round-trips.
+/// The control for the test above: a ring whose insertion anchors *are* flanking
+/// is not rejected **by the anchor rule**.
 ///
 /// Without this, tightening the ring path could pass by rejecting every ring
-/// insertion.
+/// insertion for the wrong reason.
+///
+/// **The observable changed when `validate_ring_segments_are_wellformed` landed,
+/// and the guarantee did not.** This used to assert the input parses. It no longer
+/// does: an insertion segment designates no break point junction, so a ring may
+/// not contain one at all (`DNA/complex.md:39`, and `:60-64` on the committee
+/// withdrawing `::` as a general join operator). Every ring insertion is now
+/// rejected — deliberately — which makes "it parses" unavailable as evidence.
+///
+/// So the control asserts the *reason* instead: this input is rejected by the
+/// **ring** rule and not by the anchor rule, which is exactly the original claim
+/// — a flanking pair is not something the anchor rule refuses. Asserting the
+/// reason is in fact stronger than asserting acceptance was, because acceptance
+/// could have come from the anchor rule silently not running.
+///
+/// Note the sibling test above still fails for its own reason: the per-leaf
+/// validators run *before* the ring rules, so a non-flanking anchor is caught by
+/// the anchor rule and never reaches the junction check.
 #[test]
-fn a_ring_segment_with_flanking_anchors_still_parses() {
+fn a_ring_segment_with_flanking_anchors_is_not_rejected_by_the_anchor_rule() {
     let input = "NC_000022.11:g.100_101insATG::200_201insG";
-    let variant = parse_hgvs(input).expect("flanking ring anchors must stay valid");
-    assert_eq!(variant.to_string(), input);
+    let rendered = parse_hgvs(input)
+        .expect_err("an insertion segment designates no break junction")
+        .to_string();
+    assert!(
+        rendered.contains("break point junction"),
+        "`{input}`'s anchors are a flanking pair, so it must be the ring rule that \
+         refuses it, not the insertion-anchor rule; got: {rendered}"
+    );
+    assert!(
+        !rendered.contains("single-position insertion") && !rendered.contains("flanking"),
+        "the anchor rule must not be what rejects a flanking pair; got: {rendered}"
+    );
 }
 
 // ---------------------------------------------------------------------------
