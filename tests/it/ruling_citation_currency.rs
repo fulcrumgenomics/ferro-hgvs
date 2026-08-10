@@ -23,6 +23,15 @@
 //! `error_code_audit.rs` and `issue_1197_required_error_config.rs` use for their
 //! registries.
 //!
+//! # The other direction
+//!
+//! This file judges prose that *already cites* a record. It is blind to the more
+//! common failure: someone reads a spec clause, forms a view from it, and never
+//! learns a record governs that clause — so there is no citation to judge.
+//! `tests/it/clause_ruling_index.rs` covers that direction, with a clause-to-
+//! record index rendered into its own module docs. Both files read the ledger
+//! through `tests/it/common/rulings.rs`, so "what a record is" is defined once.
+//!
 //! # What it caught on landing
 //!
 //! Three sites, all asserting "open"/"unsettled"/"undecided" about a record the
@@ -68,15 +77,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-/// Where the ledger lives, relative to the crate root.
-const LEDGER_RELATIVE_PATH: &str = "tests/fixtures/grammar/hgvs_spec_normalization_overrides.json";
+use crate::common::rulings::{self, looks_like_a_record_id, LEDGER_RELATIVE_PATH};
 
 /// Roots scanned for citations, relative to the crate root.
 const SCAN_ROOTS: &[&str] = &["src", "tests"];
 
 /// This file cites every id and every status word by construction, so scanning
-/// it would report itself. Excluded by path suffix.
+/// it would report itself. Excluded by its scan-relative path, which
+/// [`the_scan_reads_the_tree_it_claims_to`] asserts both exists and matches.
 const SELF_PATH: &str = "tests/it/ruling_citation_currency.rs";
+
+/// Floor for how many lines must make a status claim about a cited record.
+///
+/// Measured at **84** on the commit that added this constant. The floor is set
+/// at less than half of that, so ordinary prose edits cannot trip it while a
+/// matcher that stopped recognising claims still would.
+const STATUS_CLAIMS_FLOOR: usize = 40;
 
 /// Words that assert a record IS settled, and words that assert it is NOT.
 ///
@@ -88,7 +104,8 @@ const DECIDED_WORDS: &[&str] = &["decided", "settled"];
 
 /// See [`DECIDED_WORDS`]. "open" earns its place here because that is the word
 /// `merge.rs` actually used for a decided record; it is matched as a whole word
-/// so `open-issues.md` and `opened` do not trip it.
+/// so `open-issues.md` and `opened` do not trip it, and via [`contains_as_prose`]
+/// so `File::open(` does not either.
 const UNDECIDED_WORDS: &[&str] = &["undecided", "unsettled", "unresolved", "open"];
 
 fn crate_root() -> PathBuf {
@@ -96,42 +113,11 @@ fn crate_root() -> PathBuf {
 }
 
 /// `id -> status`, read from the committed ledger.
+///
+/// The parsing lives in `common::rulings` so that this scan and
+/// `clause_ruling_index.rs` share one definition of a record.
 fn ledger() -> BTreeMap<String, String> {
-    let path = crate_root().join(LEDGER_RELATIVE_PATH);
-    let text =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    let value: serde_json::Value =
-        serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()));
-    let rulings = value
-        .get("rulings")
-        .and_then(|r| r.as_array())
-        .unwrap_or_else(|| panic!("{} has no `rulings` array", path.display()));
-    let map: BTreeMap<String, String> = rulings
-        .iter()
-        .map(|r| {
-            let id = r
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or_else(|| panic!("a ruling has no `id` in {}", path.display()));
-            let status = r
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or_else(|| panic!("ruling {id} has no `status`"));
-            (id.to_string(), status.to_string())
-        })
-        .collect();
-    assert_eq!(
-        map.len(),
-        rulings.len(),
-        "duplicate ruling id in {}",
-        path.display()
-    );
-    assert!(
-        !map.is_empty(),
-        "{} lists no rulings — the scan below would be vacuous",
-        path.display()
-    );
-    map
+    rulings::statuses()
 }
 
 /// Whether `needle` occurs in `haystack` with non-identifier characters on both
@@ -139,8 +125,9 @@ fn ledger() -> BTreeMap<String, String> {
 ///
 /// Ruling ids are kebab-case, so `-` counts as part of an identifier: without
 /// that, `delins-codon-carve-out-gap-one` would be found inside a longer id.
-fn contains_at_identifier_boundary(haystack: &str, needle: &str) -> bool {
+fn identifier_boundary_matches(haystack: &str, needle: &str) -> Vec<usize> {
     let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '-';
+    let mut found = Vec::new();
     let mut from = 0usize;
     while let Some(offset) = haystack[from..].find(needle) {
         let start = from + offset;
@@ -151,11 +138,37 @@ fn contains_at_identifier_boundary(haystack: &str, needle: &str) -> bool {
             .is_none_or(|c| !is_word(c));
         let after_ok = haystack[end..].chars().next().is_none_or(|c| !is_word(c));
         if before_ok && after_ok {
-            return true;
+            found.push(start);
         }
         from = start + 1;
     }
-    false
+    found
+}
+
+fn contains_at_identifier_boundary(haystack: &str, needle: &str) -> bool {
+    !identifier_boundary_matches(haystack, needle).is_empty()
+}
+
+/// Whether `needle` occurs as prose rather than as part of a code identifier.
+///
+/// `open` is the hazard, being both a status word and one of the most common
+/// method names there is: `File::open(`, `.open()` and `provider.open` all
+/// contain it at an identifier boundary, so a line carrying such a call *and* a
+/// ruling id would be read as claiming that record is unsettled. No line in the
+/// tree does today, and this keeps it that way.
+///
+/// Deliberately narrower than "only look at comments", which was the other
+/// option: several status claims in this repo live inside assertion messages and
+/// `const` doc strings, and a comments-only scan would stop judging them.
+fn contains_as_prose(haystack: &str, needle: &str) -> bool {
+    identifier_boundary_matches(haystack, needle)
+        .into_iter()
+        .any(|start| {
+            let before = haystack[..start].trim_end();
+            let called = haystack[start + needle.len()..].starts_with('(');
+            let field_or_path = before.ends_with('.') || before.ends_with("::");
+            !called && !field_or_path
+        })
 }
 
 /// One `.rs` line, with the path it came from and its 1-based number.
@@ -217,19 +230,6 @@ fn collect(dir: &Path, rel: &str, out: &mut Vec<SourceLine>) {
     }
 }
 
-/// Ruling-id-shaped tokens: lowercase alphanumerics in three or more
-/// hyphen-separated segments. Matches the shortest real id
-/// (`adjudication-precedence-order`) without matching two-word prose.
-fn looks_like_a_ruling_id(token: &str) -> bool {
-    let segments: Vec<&str> = token.split('-').collect();
-    segments.len() >= 3
-        && segments.iter().all(|s| {
-            !s.is_empty()
-                && s.chars()
-                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        })
-}
-
 /// Id-shaped tokens on a line that cites a ruling — either by the explicit
 /// `rulings[...]` form or by naming a backticked token near the word "ruling".
 fn id_shaped_citations(line: &str) -> BTreeSet<String> {
@@ -242,7 +242,7 @@ fn id_shaped_citations(line: &str) -> BTreeSet<String> {
         match after.find(']') {
             Some(close) => {
                 let token = after[..close].trim_matches('`');
-                if looks_like_a_ruling_id(token) {
+                if looks_like_a_record_id(token) {
                     found.insert(token.to_string());
                 }
                 rest = &after[close..];
@@ -254,7 +254,7 @@ fn id_shaped_citations(line: &str) -> BTreeSet<String> {
     // A backticked token on a line that says "ruling".
     if line.to_ascii_lowercase().contains("ruling") {
         for (index, chunk) in line.split('`').enumerate() {
-            if index % 2 == 1 && looks_like_a_ruling_id(chunk) {
+            if index % 2 == 1 && looks_like_a_record_id(chunk) {
                 found.insert(chunk.to_string());
             }
         }
@@ -265,13 +265,37 @@ fn id_shaped_citations(line: &str) -> BTreeSet<String> {
 /// Whole-word status claims on one line.
 fn status_words(line: &str) -> (bool, bool) {
     let lower = line.to_ascii_lowercase();
-    let says_decided = DECIDED_WORDS
-        .iter()
-        .any(|w| contains_at_identifier_boundary(&lower, w));
-    let says_undecided = UNDECIDED_WORDS
-        .iter()
-        .any(|w| contains_at_identifier_boundary(&lower, w));
+    let says_decided = DECIDED_WORDS.iter().any(|w| contains_as_prose(&lower, w));
+    let says_undecided = UNDECIDED_WORDS.iter().any(|w| contains_as_prose(&lower, w));
     (says_decided, says_undecided)
+}
+
+/// A status word used as a code identifier is not a status claim.
+///
+/// Pins both directions of [`contains_as_prose`], because the risk runs both
+/// ways: too loose and `File::open` on a citing line reports a contradiction
+/// that does not exist; too tight and real claims stop being judged.
+#[test]
+fn a_status_word_used_as_code_is_not_a_status_claim() {
+    for line in [
+        "    let text = File::open(&path)?;",
+        "    provider.open();",
+        "        .open()",
+    ] {
+        assert_eq!(
+            status_words(line),
+            (false, false),
+            "{line} uses a status word as code, not as a claim"
+        );
+    }
+    // Prose is still judged — including inside a string literal, where several
+    // of this repo's real claims live.
+    assert_eq!(status_words("// the question is open"), (false, true));
+    assert_eq!(
+        status_words("\"...is decided, scoped to...\""),
+        (true, false)
+    );
+    assert_eq!(status_words("// nothing to say here"), (false, false));
 }
 
 /// The scan is not vacuous: it read a realistic number of files and found the
@@ -308,6 +332,41 @@ fn the_scan_reads_the_tree_it_claims_to() {
         cited.len(),
         ledger.len()
     );
+
+    // The self-exclusion must fire, and must not be vacuous. This file names
+    // every id and every status word by construction, so if `SELF_PATH` stopped
+    // matching, the two checks below would report its own examples as real
+    // contradictions — a confusing failure pointing at the guard rather than at
+    // the drift.
+    assert!(
+        crate_root().join(SELF_PATH).is_file(),
+        "{SELF_PATH} is not there — this file moved, so its self-exclusion now excludes nothing"
+    );
+    assert!(
+        !lines.iter().any(|l| l.path == SELF_PATH),
+        "{SELF_PATH} was not excluded from the scan"
+    );
+
+    // The *status* half must not be vacuous either. Only lines that make a
+    // status claim are judged, so a matcher that stopped recognising claims
+    // would leave `no_ruling_citation_contradicts_the_ledger_status` passing by
+    // never judging anything — which is exactly the risk carried by narrowing
+    // the match to prose (see `contains_as_prose`).
+    let judged = lines
+        .iter()
+        .filter(|l| {
+            status_words(&l.text) != (false, false)
+                && ledger
+                    .keys()
+                    .any(|id| contains_at_identifier_boundary(&l.text, id))
+        })
+        .count();
+    assert!(
+        judged >= STATUS_CLAIMS_FLOOR,
+        "only {judged} lines make a status claim about a cited record, below the floor of \
+         {STATUS_CLAIMS_FLOOR} — the status matcher is probably broken, and the contradiction \
+         check would pass by judging nothing"
+    );
 }
 
 /// (a) Every id cited as a ruling resolves in the ledger.
@@ -342,11 +401,17 @@ fn no_ruling_citation_contradicts_the_ledger_status() {
     let ledger = ledger();
     let mut wrong: Vec<String> = Vec::new();
     for line in source_lines() {
+        // Hoisted out of the per-id loop below: the status claim is a property of
+        // the line, not of the record, so computing it per id repeated the whole
+        // word scan once per ledger entry.
+        let (says_decided, says_undecided) = status_words(&line.text);
+        if (says_decided, says_undecided) == (false, false) {
+            continue;
+        }
         for (id, status) in &ledger {
             if !contains_at_identifier_boundary(&line.text, id) {
                 continue;
             }
-            let (says_decided, says_undecided) = status_words(&line.text);
             let claimed = match (says_decided, says_undecided) {
                 (false, false) => continue,
                 (true, true) => {

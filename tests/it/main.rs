@@ -50,6 +50,7 @@ mod cis_confluence_axis;
 mod cis_junction_crossing_shift;
 mod cis_spelling_confluence_gap;
 mod civic_validation;
+mod clause_ruling_index;
 mod cli_build_transcript;
 mod cli_check_transcripts_json;
 mod cli_convert_gff_flags;
