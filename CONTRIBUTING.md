@@ -58,11 +58,24 @@ fix(normalize): correct boundary detection for UTR regions
 
 ### Declaring a representation change
 
-**Representation stability is a shipped guarantee.** The downstream consumer keys
-its read counts on the normalized HGVS string, so what matters is not which
-representation ferro picks but whether the pick *moves*. A canonical form that
-churns between releases silently re-buckets every stored design — a
-re-normalization of the consumer's whole library, not a bugfix they can ignore.
+This section is the mechanism for rule 7 of the project's
+[normalization rules](README.md#normalization-rules); read that section for what has to be
+disclosed, and this one for how to declare it.
+
+**Disclosure is the shipped guarantee — stability is not.** A downstream consumer
+keys its read counts on the normalized HGVS string, so a canonical form that
+churns between releases silently re-buckets everything already stored: a
+re-normalization of that consumer's whole library, not a bugfix they can ignore.
+That is why a move must never be silent — and *silent* is the part the project
+promises to avoid.
+
+It does **not** promise the string stays put. Every fix to rule 3 (*confluent*)
+picks a winner between two spellings, and whichever side loses is a
+representation change for someone; a project that refused to move a string could
+not converge on one. So the ranking is **confluence, then disclosure, then
+stability**. Where the spec permits either form *and confluence is unaffected
+either way*, the already-shipped representation is a reasonable tiebreaker — but
+it is a tiebreaker of last resort, never an argument against a confluence fix.
 
 So if your change can alter any normalized output string, say so in the commit,
 with a `Representation-Change:` trailer:

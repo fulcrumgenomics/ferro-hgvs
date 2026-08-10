@@ -167,6 +167,84 @@ print(str(result.result))                      # the same normalized string
 print([(w.code, w.message) for w in result.warnings])
 ```
 
+## Normalization rules
+
+ferro's normalizer follows four rules about its output, and three about how it handles the gaps.
+
+### The output contract
+
+1. **Conformant.** Output follows the HGVS recommendations. *Absolute — never traded.*
+   Scope: the `syntax.yaml` grammar, plus every prohibition, read from **prose force** rather than
+   keyword casing — "not allowed", "not correct", "can not be used", "by definition", the
+   `class="invalid"` markup, and the set `checklist.md` enumerates.
+
+2. **Recommended form.** Where the spec prefers among conformant forms, ferro produces it.
+   *Best effort.*
+   Scope: "recommended", "preferred", lowercase "should", the 3' rule. A preference clause outranks
+   maintainer judgment.
+
+3. **Confluent.** Inputs denoting one variant produce one output. *Best effort.*
+   Every rule is evaluated over the **resulting sequence**, never over the input's spelling.
+
+4. **Deterministic.** Same input, same output. *Absolute.*
+   Note that 4 does not imply 3 — a deterministic normalizer can be arbitrarily non-confluent.
+
+### The procedure
+
+5. **Where the spec is silent, ambiguous, or self-contradictory:** the issue is filed upstream
+   **first** and cited, and only then does ferro ship a provisional choice.
+    - **Self-contradictory** — two clauses that cannot both hold — is a **defect**. Every conforming
+      tool must pick a side and none of them can be right, so filing is a bug report and is not
+      optional.
+    - **Silent** is merely incomplete. Ferro decides under rule 6 and violates nothing; filing is a
+      feature request, worth making but never a reason to hold a release.
+
+6. **Among multiple conformant forms:** the maintainers choose. **There are no user options for
+   normalization form.** Options remain available for orthogonal axes — error mode, 3'/5' direction.
+
+7. **Disclosure.** Any change to these rules, and any different choice made under 5 or 6, is
+   disclosed: in the changelog before v1, by a major version bump after. Output that *violates*
+   rules 1-4 is a **bug**, not a disclosure.
+
+### Why 2 and 3 are best effort, and 1 and 4 are not
+
+Rules 1 and 4 are always achievable. Conformance is checkable against the spec text, and
+determinism is a property of ferro's own code; nothing external can prevent us honouring them.
+
+Rules 2 and 3 depend on the spec **determining an answer**, and sometimes it does not:
+
+- **No preference exists.** The spec ranks substitution, deletion, inversion, duplication and
+  insertion, but says nothing about competing `delins` forms.
+- **Two preferences disagree.** `general.md` ranks duplication above insertion; `DNA/inversion.md`
+  prefers an insertion for inverted copies. No single output satisfies both.
+- **The same clause has two versions.** `general.md`'s current text and its forthcoming NOTE give
+  opposite answers for variants separated by one nucleotide.
+- **The variant's decomposition is not recoverable.** For an equal-length block the column
+  correspondence is unique, so "two variants separated by N nucleotides" is a fact about the
+  variant. For an unequal-length block there is no correspondence — recovering one means *choosing*
+  an alignment, and the spec does not say which. There is no derivable form to converge on.
+
+**"Best effort" is bounded by the spec's determinacy, not by ferro's implementation quality.** A
+failure of rule 2 or 3 caused by ferro's code is a **bug** under rule 7. Only a failure caused by
+the spec not determining an answer falls under best effort — and that triggers rule 5.
+
+### A worked example of reading force from prose
+
+`DNA/duplication.md` says a variant that *can* be described as a duplication **must** be — but the
+"must" is scoped by the preceding clause, which defines when a duplication *can* be used at all:
+only when the additional copy is directly 3'-flanking the original. So the rule ranks the *label*
+for one span; it does not require that a partition be chosen so as to produce a duplication.
+Reading the force without the scope inverts the rule.
+
+### Known limitation
+
+ferro cannot today guarantee that every input form is normalized according to these rules. They are
+enforced intent, not a claim of current completeness.
+
+Rule 7's disclosure mechanism — the `Representation-Change:` trailer and how it reaches the
+changelog — is documented in
+[CONTRIBUTING.md](CONTRIBUTING.md#declaring-a-representation-change).
+
 ## Supported HGVS Syntax
 
 | Type | Prefix | Example |
