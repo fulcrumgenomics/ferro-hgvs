@@ -30,10 +30,13 @@
 //!
 //! Confluence over real rows does not hold today. Pinning the numbers documents
 //! where it stands; asserting perfection would just leave the suite red. The
-//! target is total convergence and the pinned figures must only move towards
-//! it — the same contract `cis_confluence_axis` states at greater length.
+//! target is total convergence, and a move towards it is the welcome direction —
+//! but every figure is pinned by **equality**, and the converged *rows* are
+//! pinned alongside the count so a move in either direction names itself. See
+//! [`CONVERGED_ROWS`]: "must only ever go up" is a statement about which
+//! direction is good news, never a licence for the guard to pass quietly.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -541,9 +544,16 @@ fn spanning_respelling(
     Some(format!("{accession}:{axis_prefix}{low}_{high}delins{alt}"))
 }
 
-fn measure_axis(provider: &Arc<MultiFastaProvider>) -> AxisCensus {
+/// Measure the census, and return the *inputs* of the rows that converged.
+///
+/// The row list is not a debugging aid, it is half the guard: see
+/// [`CONVERGED_ROWS`]. A census of seven integers cannot distinguish `+19` from
+/// `+20 −1`, so the set has to be carried out of the measurement alongside the
+/// count.
+fn measure_axis(provider: &Arc<MultiFastaProvider>) -> (AxisCensus, Vec<String>) {
     let normalizer = Normalizer::with_config(provider.clone(), NormalizeConfig::default());
     let mut census = AxisCensus::default();
+    let mut converged_rows = Vec::new();
 
     for row in &fixture().rows {
         census.rows += 1;
@@ -611,10 +621,11 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> AxisCensus {
         });
         if respelled.as_deref() == Some(output.as_str()) {
             census.respelling_converged += 1;
+            converged_rows.push(row.input.clone());
         }
     }
 
-    census
+    (census, converged_rows)
 }
 
 /// The pinned gated census, measured against a prepared reference.
@@ -626,17 +637,19 @@ fn measure_axis(provider: &Arc<MultiFastaProvider>) -> AxisCensus {
 /// so `sequence_changed: 0` cannot quietly mean "nothing was checked".
 ///
 /// The two numbers worth arguing about are the last pair: of **461** rows whose
-/// spanning-`delins` respelling can be built at all, **376 (82%)** normalize to
-/// the same string as the row itself, and 85 do not. That 82% is the real-data
+/// spanning-`delins` respelling can be built at all, **395 (86%)** normalize to
+/// the same string as the row itself, and 66 do not. That 86% is the real-data
 /// counterpart to the 59% `cis_confluence_axis` measures over designed alleles,
 /// and the gap between them is the point of this issue: real rows are easy
 /// because their members are far apart (see
 /// [`the_separation_census_is_unchanged`]), so they do not exercise the
 /// partitioner that the designed corpus does.
 ///
-/// `respelling_converged` must only ever go up; `not_idempotent` and
-/// `sequence_changed` are asserted at zero on their own before the comparison,
-/// so a regression there names itself rather than surfacing as a moved tuple.
+/// `not_idempotent` and `sequence_changed` are asserted at zero on their own
+/// before the comparison, so a regression there names itself rather than
+/// surfacing as a moved tuple. Every field here is pinned by **equality**,
+/// including `respelling_converged` — see [`CONVERGED_ROWS`] for why this is
+/// deliberately not a ratchet.
 const AXIS_CENSUS: AxisCensus = AxisCensus {
     rows: 592,
     declined: 0,
@@ -644,8 +657,539 @@ const AXIS_CENSUS: AxisCensus = AxisCensus {
     unwindowed: 96,
     sequence_changed: 0,
     respellable: 461,
-    respelling_converged: 376,
+    respelling_converged: 395,
 };
+
+/// The rows behind `respelling_converged`, by input, sorted.
+///
+/// # Why the rows and not just the count
+///
+/// The census above is seven integers, and a move of `+19` in
+/// `respelling_converged` is indistinguishable from `+20 −1`. A count cannot
+/// tell an improvement from a swap, and cannot tell either from a regression
+/// offset by an unrelated gain — the same defect as a test that pins a
+/// normalized string with no assertion that it still denotes the same sequence.
+/// So the *set* is pinned too, and a failure prints the symmetric difference:
+/// the rows that started converging and the rows that stopped, by name. Nobody
+/// after this has to re-derive them by bisecting.
+///
+/// The list is inline rather than a fixture file so the moved rows are visible
+/// in the failure output and in the review diff, with no second artifact to
+/// keep in step.
+///
+/// # Why equality and not `>=`
+///
+/// The message this constant replaced said `respelling_converged` "must only
+/// ever go up" while the assertion was `assert_eq!` on the whole struct, so it
+/// failed on precisely the movement it declared acceptable — stated invariant
+/// monotone, mechanism equality. The resolution is **not** to relax the
+/// mechanism to a monotone ratchet: a ratchet passes silently on every
+/// improvement, so the floor rots and the project loses the ability to say
+/// "this release converged N more rows", which is the disclosure this repository
+/// exists to produce (see the `Representation-Change:` requirement in
+/// `CONTRIBUTING.md`). Equality is kept, and the *message* branches on direction
+/// instead: a fall is a defect, a rise is good news to be re-blessed and
+/// declared, and an equal-count set change is the swap a count-only census
+/// cannot see at all.
+///
+/// # What this pin does and does not record
+///
+/// The baseline moved from 376 to 395 here: 19 rows started converging and none
+/// stopped. Bisected to a single commit — `30ca8f7d`, "feat(normalize): widen the
+/// axis gate to c./n./r." (#1484). Measured at `3ebcdddd` (its parent) the
+/// verdict is identical row-for-row to the commit that blessed the 376, so none
+/// of the other 50 commits in between moved a single row.
+///
+/// Fifteen of the nineteen are unambiguous: the row's own output does not move
+/// at all, and the lone spanning `c.delins` respelling — which #1484 admitted to
+/// the sequence-first derivation for the first time — re-derives onto the allele
+/// the row already normalized to. Nothing a consumer stored changes.
+///
+/// The remaining four *do* move the row's own output onto a merged spanning
+/// `delins`, and that spelling is contested:
+///
+/// * `NM_001042492.2:c.[6708delT;6710C>G]` → `c.6708_6710delinsGG`
+/// * `NM_001291867.2:c.[107C>G;111del]` → `c.107_109delinsGG`
+/// * `NM_021625.4:c.[2481_2484delCCGC;2486T>A]` → `c.2481_2486delinsGA`
+/// * `NM_001022.4:c.[134_135inv;138_139dup]` → `c.134_136delinsAAGCT`
+///
+/// All four are merged by `coalesce_coding_frame_separation`
+/// (`src/normalize/merge.rs`), which cites `general.md:35` — "two variants
+/// separated by one nucleotide, **together affecting one amino acid**" — but
+/// drops the amino-acid half for length-changing blocks. All four are
+/// frameshifts, and the `codon-carve-out-shape-restriction` record (undecided)
+/// states the bound in as many words: *"`general.md:35`'s 'together affecting
+/// one amino acid' cannot cover a frameshift pair, because a frameshift does not
+/// affect one amino acid."* The fourth also merges a `dup` away, which the
+/// decided `delins-adjacent-members-when-both-consume-reference` record
+/// explicitly scopes itself out of — *"where either member is a `dup` or an
+/// `ins` the ruling does not reach, because `duplication.md:18` requires a
+/// variant describable as a duplication to be described as one, and merging
+/// would destroy it"*.
+///
+/// **They are nevertheless blessed here, because this census does not record the
+/// form.** `respelling_converged` counts rows whose own output equals the
+/// spanning-`delins` respelling — it asks whether the two agree, never *which*
+/// spelling they agree on. An earlier revision of this comment withheld the
+/// re-bless to avoid "silently adopting" the merged spelling; that reasoning does
+/// not hold, because blessing this figure adopts nothing. The spelling is decided
+/// in `merge.rs`, and #1599 ("gate the coding delins carve-out on the amino-acid
+/// precondition") is where it is being decided — measured directly, all four
+/// revert under it to the pre-#1484 split, e.g. `c.6708_6710delinsGG` back to
+/// `c.[6708del;6710C>G]`.
+///
+/// **And the census is identical on both sides of that**: run against #1599's
+/// head the measurement is still 395, with this exact row set, because under
+/// #1599 the row's output *and* its respelling both become the split form and so
+/// still agree. That is the point of pinning the set as well as the count — the
+/// two worlds are indistinguishable by the seven integers alone, and would have
+/// been indistinguishable by the set too, which is worth knowing about the limits
+/// of this guard. What separates them is the normalized string, which
+/// `cis_confluence_axis` and the mutalyzer conformance rows carry.
+///
+/// So this baseline is stable across #1599 either way, and the form question
+/// belongs to that PR and to `codon-carve-out-shape-restriction`, not here. The
+/// counter-argument is on record so it is not re-discovered as a refutation:
+/// `DNA/delins.md:47` and #1484's own worked cases show a split degrading
+/// `p.(Arg1459SerfsTer19)` to `p.?`, and the decided
+/// `canonical-form-choice-when-both-legal` record says ferro re-derives from the
+/// resulting sequence rather than preserving the previously-shipped string.
+const CONVERGED_ROWS: &[&str] = &[
+    "NC_000001.10:g.[227173033G>A;227170697C>T]",
+    "NC_000001.11:g.[25301061C>G;25301552T>G;25301582G>C;25301618G>C;25301629C>T;25375385C>T]",
+    "NC_000001.11:g.[25301061C>G;25301552T>G;25301629C>T;25306613G>A;25306681T>C;25306719G>A]",
+    "NC_000002.11:g.[202611376G>T;202574623G>A]",
+    "NC_000003.11:g.[33060002G>A;33065789G>T]",
+    "NC_000004.12:g.[10273397T>C;10322896G>C]",
+    "NC_000005.9:g.[225549G>C;240589A>G]",
+    "NC_000006.11:g.[39880653C>T;39877666G>A]",
+    "NC_000007.13:g.[87072999G>C;87082365C>T]",
+    "NC_000008.10:g.[1719428C>T;1728664C>G]",
+    "NC_000012.11:g.[103271835C>A;103246681G>A]",
+    "NC_000012.11:g.[57906083C>T;57894189G>A]",
+    "NC_000014.9:g.[94381049G>A;94383051G>A]",
+    "NC_000017.10:g.[41201181C>T;41201185A>T]",
+    "NC_000018.9:g.[50994293A>G;51013178G>A]",
+    "NC_000022.10:g.[30057723_30063344del;30063345_30067790del]",
+    "NC_000022.10:g.[40760969G>A;40757623G>C]",
+    "NC_000023.11:g.[149482996C>T;149483005T>A]",
+    "NG_000006.1:g.[37931A>G;37935C>G]",
+    "NG_006669.1:g.[21404C>T;21740G>C]",
+    "NG_006672.1:g.[6309G>T;6310C>T]",
+    "NG_007080.2:g.[5900G>T;6286C>T]",
+    "NG_007119.1:g.[8980G>C;9118C>T]",
+    "NG_007267.1:g.[21073A>T;21075A>G]",
+    "NG_007280.1:g.[13217T>A;13219A>G]",
+    "NG_007385.1:g.[30208A>G;30234C>G]",
+    "NG_007404.1:g.[27817C>T;40833G>A]",
+    "NG_007493.1:g.[50210C>T;68377C>T;68405G>T]",
+    "NG_007528.1:g.[11811C>T;12502G>A]",
+    "NG_007941.2:g.[6500T>A;6503T>A;6509T>A]",
+    "NG_008035.1:g.[19301T>G;19348G>A]",
+    "NG_008035.1:g.[19484_19485delAG;19588T>C]",
+    "NG_008055.1:g.[8083T>A;8091G>A;8546C>G]",
+    "NG_008094.1:g.[14951C>A;14988C>T]",
+    "NG_008103.1:g.[20771G>C;22397A>T]",
+    "NG_008290.1:g.[12642C>T;14644C>T]",
+    "NG_008358.1:g.[8473G>A;8735A>G]",
+    "NG_008374.1:g.[7744C>T;9994T>C]",
+    "NG_008374.1:g.[7797A>C;9994T>C]",
+    "NG_008376.2:g.[7941C>T;9271G>C]",
+    "NG_008383.1:g.[3739G>C;3979C>T]",
+    "NG_008489.1:g.[40329A>C;40350G>A]",
+    "NG_008645.1:g.[5310G>A;16492G>A]",
+    "NG_008675.1:g.[38863G>A;38901C>T]",
+    "NG_008806.1:g.[75301T>C;75384G>A]",
+    "NG_008866.1:g.[75620C>T;76659C>G]",
+    "NG_008866.1:g.[94512C>G;151683G>A]",
+    "NG_008936.2:g.[111409T>G;111410G>T]",
+    "NG_009005.1:g.[83693C>T;77906C>A]",
+    "NG_009015.1:g.[16571G>A;17296A>G]",
+    "NG_009015.1:g.[17237C>G;18135C>T;18183C>T]",
+    "NG_009015.1:g.[17296A>G;18133A>T]",
+    "NG_009073.1:g.[62900T>C;82737C>T]",
+    "NG_009092.1:g.[17030G>C;17031C>A]",
+    "NG_009092.1:g.[17030G>C;17031C>T;17035C>T]",
+    "NG_009265.1:g.[27852G>A;33529G>A]",
+    "NG_009299.1:g.[140610G>T;143694G>A]",
+    "NG_009778.1:g.[6174G>A;6548C>T]",
+    "NG_009783.1:g.[11128G>C;13322G>A]",
+    "NG_009783.1:g.[12240T>G;13971G>C]",
+    "NG_009783.1:g.[14446T>C;14481G>C;14495G>C]",
+    "NG_011449.1:g.[14863A>T;27506T>G]",
+    "NG_011618.3:g.[228237A>G;228238A>T]",
+    "NG_011633.1:g.[68987C>T;69000G>A]",
+    "NG_011704.1:g.[29341G>A;29371G>A]",
+    "NG_011900.2:g.[27401G>C;27399G>T]",
+    "NG_012137.1:g.[21147G>A;29457A>G]",
+    "NG_012646.1:g.[32860C>A;32875C>A]",
+    "NG_012647.1:g.[56085G>A;56129C>T]",
+    "NG_013041.1:g.[5537T>C;10473G>T]",
+    "NG_013356.1:g.[8852G>A;14565A>T]",
+    "NG_013370.1:g.[12131G>A;17513T>G]",
+    "NG_015865.1:g.[8168C>G;8536G>C]",
+    "NG_016465.1:g.[128647C>T;167489G>T]",
+    "NG_016465.1:g.[65343C>A;65347C>A]",
+    "NG_016598.1:g.[240110T>C;240113G>T]",
+    "NG_016648.1:g.[20557T>C;22424C>T]",
+    "NG_017037.1:g.[9857A>G;18561G>C]",
+    "NG_021243.1:g.[74172A>G;74253C>T]",
+    "NG_023228.1:g.[17790A>G;17918T>G]",
+    "NG_031930.1:g.[73137G>A;73151G>A]",
+    "NG_034223.1:g.[5381C>A;5510G>C]",
+    "NM_000016.6:c.[351A>C;362C>T]",
+    "NM_000018.3:c.[194C>T;739A>C]",
+    "NM_000030.3:c.[32C>T;836T>C]",
+    "NM_000038.6:c.[5026A>G;7399C>A]",
+    "NM_000041.3:c.[137T>C;388T>C]",
+    "NM_000041.3:c.[305C>G;388T>C]",
+    "NM_000041.3:c.[349G>A;508G>C]",
+    "NM_000041.3:c.[388T>C;478C>T]",
+    "NM_000041.3:c.[388T>C;805C>G]",
+    "NM_000041.3:c.[434G>A;526C>T]",
+    "NM_000041.3:c.[487C>T;91G>A]",
+    "NM_000041.3:c.[526C>T;725G>A]",
+    "NM_000041.3:c.[784G>A;787G>A]",
+    "NM_000046.5:c.[215T>A;219_230delinsG]",
+    "NM_000057.4:c.[289C>T;649C>T]",
+    "NM_000060.2:c.[1207T>G;1330G>C]",
+    "NM_000060.2:c.[511G>A;1330G>C]",
+    "NM_000071.3:c.[233C>G;306G>C]",
+    "NM_000091.4:c.[1900G>A;1927G>A]",
+    "NM_000124.4:c.[1727C>G;1834C>T]",
+    "NM_000138.5:c.[7238G>C;7244A>T]",
+    "NM_000140.3:c.[1224T>A;1225C>T;1231T>G]",
+    "NM_000142.4:c.[1130T>G;1138G>A]",
+    "NM_000142.4:c.[1454A>G;1620C>A]",
+    "NM_000145.4:c.[2039G>A;919G>A]",
+    "NM_000149.3:c.[59T>G;508G>A]",
+    "NM_000152.5:c.[2228A>G;2237G>C]",
+    "NM_000152.5:c.[752C>T;761C>T]",
+    "NM_000155.4:c.[413C>T;469G>A]",
+    "NM_000160.5:c.[1102G>A;674G>A]",
+    "NM_000169.2:c.[196G>C;334C>T]",
+    "NM_000169.3:c.[167G>C;170A>T]",
+    "NM_000169.3:c.[351T>G;361G>C]",
+    "NM_000169.3:c.[359T>C;361G>A]",
+    "NM_000179.3:c.[3601C>G;3724C>A]",
+    "NM_000198.4:c.[742_743delinsAA;745C>T]",
+    "NM_000200.2:c.[122G>A;141T>A]",
+    "NM_000202.6:c.[1403G>A;1394A>T]",
+    "NM_000202.8:c.[1411G>C;1418C>T]",
+    "NM_000204.5:c.[142T>C;146A>T]",
+    "NM_000208.3:c.[1465A>G;3160G>A]",
+    "NM_000208.3:c.[2504G>T;2525C>T]",
+    "NM_000208.3:c.[2997T>G;766C>T]",
+    "NM_000215.3:c.[1796T>G;2125T>A]",
+    "NM_000218.2:c.[1249G>A;760G>A]",
+    "NM_000231.2:c.[800G>C;801T>C]",
+    "NM_000243.2:c.[1105C>T;1223G>A]",
+    "NM_000243.2:c.[1437C>G;501G>C]",
+    "NM_000243.2:c.[442G>C;2082G>A]",
+    "NM_000243.3:c.[329T>C;442G>C]",
+    "NM_000257.3:c.[1816G>A;2183C>T]",
+    "NM_000260.4:c.[3256del;3260T>C]",
+    "NM_000260.4:c.[3784G>A;5086C>T]",
+    "NM_000271.5:c.[2727C>T;2793C>T]",
+    "NM_000277.1:c.[722delG;735G>A]",
+    "NM_000281.3:c.[79G>T;263G>A]",
+    "NM_000295.4:c.[1096G>A;35T>C]",
+    "NM_000295.5:c.[190C>A;863A>T]",
+    "NM_000295.5:c.[602A>G;863A>T]",
+    "NM_000311.3:c.[385A>G;532G>A]",
+    "NM_000329.3:c.[1206G>A;1207_1210dup]",
+    "NM_000334.4:c.[4468T>C;4479G>A]",
+    "NM_000335.4:c.[3919C>T;694G>A]",
+    "NM_000339.2:c.[488C>T;2612G>A]",
+    "NM_000348.4:c.[169G>T;691C>T]",
+    "NM_000350.2:c.[1622T>C;3113C>T]",
+    "NM_000350.2:c.[1A>G;6089G>A]",
+    "NM_000350.2:c.[5512C>G;5882G>A]",
+    "NM_000350.3:c.[1411G>A;5693G>A]",
+    "NM_000350.3:c.[1531C>T;872C>T]",
+    "NM_000350.3:c.[1610G>A;5603A>T]",
+    "NM_000350.3:c.[2588G>C;5603A>T]",
+    "NM_000350.3:c.[3322C>T;6320G>A]",
+    "NM_000350.3:c.[52C>T;5603A>T]",
+    "NM_000358.2:c.[1637C>A;1652C>A]",
+    "NM_000372.5:c.[1205G>A;575C>A]",
+    "NM_000400.4:c.[1381C>G;2150C>G]",
+    "NM_000402.4:c.[292G>A;466A>G]",
+    "NM_000404.2:c.[1285C>T;1097C>A]",
+    "NM_000426.3:c.[2461A>C;8282T>C]",
+    "NM_000426.4:c.[2522G>A;2932G>A]",
+    "NM_000426.4:c.[533C>T;8733G>C]",
+    "NM_000436.3:c.[173C>T;398T>A]",
+    "NM_000441.2:c.[2168A>G;2326C>G]",
+    "NM_000444.4:c.[755T>C;759G>A]",
+    "NM_000448.2:c.[1213A>G;1871G>A]",
+    "NM_000448.2:c.[1229G>A;1863delG]",
+    "NM_000448.2:c.[1681C>T;1815G>C]",
+    "NM_000448.2:c.[1871G>A;2182T>C]",
+    "NM_000452.2:c.[728T>C;785C>T]",
+    "NM_000477.7:c.[1030G>A;67C>T]",
+    "NM_000482.4:c.[1008G>T;1134_1145dup]",
+    "NM_000492.3:c.[1397C>G;3209G>A]",
+    "NM_000492.3:c.[2816A>G;2846A>T]",
+    "NM_000492.4:c.[1523T>G;3752G>A]",
+    "NM_000492.4:c.[1727G>C;2002C>T]",
+    "NM_000492.4:c.[220C>T;3808G>A]",
+    "NM_000492.4:c.[3846G>A;3848G>T]",
+    "NM_000492.4:c.[4C>T;7A>T]",
+    "NM_000496.2:c.[343C>A;355G>A]",
+    "NM_000498.3:c.[541C>T;1157T>C]",
+    "NM_000498.3:c.[594A>C;1157T>C]",
+    "NM_000500.7:c.[710T>A;713T>A;719T>A]",
+    "NM_000500.9:c.[1019G>A;1360C>T]",
+    "NM_000500.9:c.[710T>A;713T>A]",
+    "NM_000500.9:c.[710T>A;719T>A]",
+    "NM_000500.9:c.[713T>A;719T>A]",
+    "NM_000512.5:c.[1097T>C;451C>A]",
+    "NM_000517.4:c.[339C>G;340_351delCTCCCCGCCGAG]",
+    "NM_000518.4:c.[154C>T;157G>A]",
+    "NM_000518.4:c.[169G>C;259G>C]",
+    "NM_000518.4:c.[176C>G;20A>T]",
+    "NM_000518.4:c.[197A>T;367T>C]",
+    "NM_000518.4:c.[19G>A;286A>G]",
+    "NM_000518.4:c.[205C>T;20A>T]",
+    "NM_000518.4:c.[20A>T;220G>A]",
+    "NM_000518.4:c.[20A>T;249G>Y]",
+    "NM_000518.4:c.[20A>T;271G>A]",
+    "NM_000518.4:c.[20A>T;364G>A]",
+    "NM_000518.4:c.[20A>T;428C>T]",
+    "NM_000518.4:c.[20A>T;70G>A]",
+    "NM_000518.4:c.[278A>C;315G>Y]",
+    "NM_000518.4:c.[280T>C;364G>C]",
+    "NM_000518.4:c.[295G>A;98T>A]",
+    "NM_000518.4:c.[29C>A;364G>C]",
+    "NM_000518.4:c.[334G>C;359G>A]",
+    "NM_000518.4:c.[343C>A;359G>A]",
+    "NM_000518.4:c.[34G>A;364G>A]",
+    "NM_000518.4:c.[364G>C;79G>A]",
+    "NM_000518.4:c.[424C>G;433A>T]",
+    "NM_000518.5:c.[70G>T;79G>A]",
+    "NM_000520.4:c.[574G>C;598G>A]",
+    "NM_000527.4:c.[1268T>C;829G>A]",
+    "NM_000527.4:c.[1979A>C;2359G>A]",
+    "NM_000527.4:c.[932A>G;939C>G]",
+    "NM_000530.6:c.[241C>T;337G>T]",
+    "NM_000530.6:c.[341T>C;346A>C;382G>A]",
+    "NM_000540.2:c.[14344G>A;14928C>G]",
+    "NM_000540.2:c.[8026C>T;8360C>G]",
+    "NM_000553.4:c.[375A>T;403A>G]",
+    "NM_000558.3:c.[235A>G;239C>G]",
+    "NM_000559.2:c.[227C>T;409G>T]",
+    "NM_000559.2:c.[227C>T;410C>G]",
+    "NM_000603.4:c.[774T>C;894T>G]",
+    "NM_000607.4:c.[113G>A;520G>A]",
+    "NM_000634.3:c.[1003C>T;92T>G]",
+    "NM_000769.4:c.[1004G>A;1197A>G]",
+    "NM_000770.3:c.[1196A>G;416G>A]",
+    "NM_000823.4:c.[1102C>T;481C>T]",
+    "NM_000852.4:c.[313A>G;341C>T]",
+    "NM_000894.2:c.[104T>C;82T>C]",
+    "NM_001005741.2:c.[1448T>C;1483G>C;1497G>C]",
+    "NM_001009944.3:c.[8200C>A;8204A>T]",
+    "NM_001012331.1:c.[25C>T;1792C>T;1820G>T]",
+    "NM_001022.4:c.[134_135inv;138_139dup]",
+    "NM_001040142.2:c.[4565G>C;5644C>G]",
+    "NM_001042351.1:c.[202G>A;376A>G]",
+    "NM_001042351.1:c.[317C>G;544C>T;592C>T]",
+    "NM_001042351.1:c.[376A>G;542A>T]",
+    "NM_001042492.2:c.[6708delT;6710C>G]",
+    "NM_001080463.1:c.[11284A>G;5971A>T]",
+    "NM_001080463.1:c.[12602C>T;9865G>A]",
+    "NM_001080467.3:c.[1135C>T;2470C>T]",
+    "NM_001105537.3:c.[4183delC;4185G>A]",
+    "NM_001127701.1:c.[187C>T;739C>T]",
+    "NM_001127701.1:c.[227_229delTCT;514G>A]",
+    "NM_001130004.1:c.[2156A>C;2157G>C]",
+    "NM_001142800.1:c.[3906C>A;9405T>A]",
+    "NM_001144958.2:c.[430A>G;898G>T]",
+    "NM_001161404.1:c.[261C>G;275C>T]",
+    "NM_001164342.2:c.[1847C>T;2221G>A]",
+    "NM_001171174.1:c.[841G>A;935C>T]",
+    "NM_001178015.2:c.[1730A>T;3308A>T]",
+    "NM_001205293.3:c.[2253G>A;2255G>A]",
+    "NM_001232.3:c.[730C>T;731A>G]",
+    "NM_001243279.3:c.[1385A>C;1394_1411del]",
+    "NM_001282225.2:c.[1196G>A;1367A>G]",
+    "NM_001288953.1:c.[1715A>G;1912T>C]",
+    "NM_001289396.1:c.[3495G>C;3917G>A]",
+    "NM_001289862.1:c.[1243C>G;1250A>G]",
+    "NM_001291867.2:c.[107C>G;111del]",
+    "NM_001304548.2:c.[1337C>T;706G>A]",
+    "NM_001360016.2:c.[1037A>T;637G>T]",
+    "NM_001360016.2:c.[1048G>C;406C>T]",
+    "NM_001360016.2:c.[1106T>C;499A>T]",
+    "NM_001360016.2:c.[1159C>T;376A>G]",
+    "NM_001360016.2:c.[1347G>C;1360C>T]",
+    "NM_001360016.2:c.[1376G>T;1502T>G]",
+    "NM_001360016.2:c.[143T>C;202G>A]",
+    "NM_001360016.2:c.[143T>C;563C>T]",
+    "NM_001360016.2:c.[202G>A;563C>T]",
+    "NM_001360016.2:c.[202G>A;871G>A]",
+    "NM_001360016.2:c.[311G>A;376A>G]",
+    "NM_001360016.2:c.[376A>G;463C>G]",
+    "NM_001360016.2:c.[376A>G;563C>T]",
+    "NM_001360016.2:c.[376A>G;680G>T]",
+    "NM_001360016.2:c.[376A>G;871G>A]",
+    "NM_001360016.2:c.[376A>G;968T>C]",
+    "NM_001360016.2:c.[769C>A;770G>T]",
+    "NM_001372.4:c.[5641A>G;8894G>A]",
+    "NM_001375567.1:c.[1687C>T;3694G>C]",
+    "NM_001378615.1:c.[1880G>A;2206A>T]",
+    "NM_001388492.1:c.[5473A>G;8248G>A]",
+    "NM_001399.5:c.[866G>C;868A>T]",
+    "NM_001849.3:c.[2489G>A;2527C>T]",
+    "NM_001928.2:c.[638T>G;640T>C]",
+    "NM_002055.4:c.[236G>A;667G>C]",
+    "NM_002055.4:c.[988C>G;994G>A]",
+    "NM_002185.5:c.[160T>C;245G>T]",
+    "NM_002215.3:c.[1754A>T;1784A>G]",
+    "NM_002227.4:c.[2198C>T;2494C>T]",
+    "NM_002238.3:c.[1066G>C;974C>A]",
+    "NM_002292.3:c.[4140C>A;4177C>T]",
+    "NM_002474.3:c.[3791T>C;3824G>T]",
+    "NM_002501.3:c.[346C>T;348G>A]",
+    "NM_002691.4:c.[2052G>C;2816C>G]",
+    "NM_002693.3:c.[1760C>T;752C>T]",
+    "NM_002977.3:c.[2794A>C;2971G>T]",
+    "NM_003049.4:c.[601_611del;745C>T]",
+    "NM_003242.6:c.[1152T>A;1163A>G]",
+    "NM_003265.2:c.[2228G>A;2432G>T]",
+    "NM_003560.4:c.[2356G>A;668C>A]",
+    "NM_003718.5:c.[838C>T;839G>C]",
+    "NM_004004.5:c.[134G>A;408C>A]",
+    "NM_004004.6:c.[101T>C;550C>T]",
+    "NM_004153.4:c.[2483C>T;2484del]",
+    "NM_004317.4:c.[867C>G;913C>T]",
+    "NM_004380.2:c.[4112T>A;4118C>A]",
+    "NM_004646.3:c.[1339G>A;2456A>T]",
+    "NM_004646.4:c.[2552C>T;2618_2620delinsCC]",
+    "NM_004752.3:c.[1136T>A;751C>G]",
+    "NM_004771.4:c.[1046C>T;911C>G]",
+    "NM_004826.3:c.[1252C>T;590G>A]",
+    "NM_004959.4:c.[368G>C;386C>T]",
+    "NM_005035.4:c.[1696C>T;3578C>T]",
+    "NM_005154.3:c.[2138T>G;2150A>G]",
+    "NM_005157.6:c.[1516G>A;1531G>C]",
+    "NM_005215.4:c.[4009C>T;4210G>A]",
+    "NM_005413.3:c.[206G>A;406_407dup]",
+    "NM_005559.4:c.[2932A>G;2935del]",
+    "NM_005912.3:c.[105C>A;110A>T]",
+    "NM_006000.3:c.[541G>A;547G>C]",
+    "NM_006005.3:c.[2119G>T;2649del]",
+    "NM_006302.2:c.[329G>A;65C>A]",
+    "NM_006420.3:c.[242C>A;247_249delinsTT]",
+    "NM_006796.3:c.[1385C>T;1858C>A]",
+    "NM_007347.4:c.[1549G>A;2401G>A]",
+    "NM_012434.5:c.[509T>C;511G>A]",
+    "NM_014251.3:c.[1956C>A;1962del]",
+    "NM_014363.5:c.[1634G>T;1640C>T]",
+    "NM_014363.6:c.[7504C>T;8132C>T]",
+    "NM_014780.5:c.[3129G>A;4763T>C]",
+    "NM_015046.5:c.[1807A>G;1957C>A]",
+    "NM_015046.5:c.[3880C>T;822G>H]",
+    "NM_015058.2:c.[3070G>A;4558C>T]",
+    "NM_016035.4(COQ4):c.[331G>T;356C>T]",
+    "NM_016035.5:c.[284G>A;305G>A]",
+    "NM_016035.5:c.[577C>T;718C>T]",
+    "NM_016124.4:c.[602C>G;667T>G;744C>T;957G>A;1025T>C;1063G>A]",
+    "NM_016222.3:c.[711G>T;712C>A]",
+    "NM_016239.4:c.[5192T>C;823G>C]",
+    "NM_016341.3:c.[6093T>C;6800G>A]",
+    "NM_016824.5:c.[1588G>A;86A>G]",
+    "NM_017426.4:c.[1414G>A;1420C>T]",
+    "NM_018100.3:c.[229C>A;662G>A]",
+    "NM_018671.5:c.[2678C>T;2779T>G]",
+    "NM_019109.5:c.[212C>T;221A>T]",
+    "NM_019616.4:c.[179G>T;190_191delinsTT]",
+    "NM_019892.6:c.[1787G>C;746C>T]",
+    "NM_020877.5:c.[1546T>C;3637G>A]",
+    "NM_020964.2:c.[2461C>T;3582G>A]",
+    "NM_020964.2:c.[3152C>G;4230G>A]",
+    "NM_020975.4:c.[1896G>C;1897C>G;1900T>C]",
+    "NM_020975.4:c.[2410G>A;2711C>G]",
+    "NM_020975.4:c.[2410G>A;2832C>G]",
+    "NM_021133.4:c.[175G>A;793G>T]",
+    "NM_021625.4:c.[2481_2484delCCGC;2486T>A]",
+    "NM_022124.5:c.[7762G>C;7764G>T]",
+    "NM_022154.5:c.[97G>A;1004G>C]",
+    "NM_023110.2:c.[2165C>A;2172C>G]",
+    "NM_024063.3:c.[213T>G;1313T>C]",
+    "NM_024312.4:c.[545T>A;614A>C]",
+    "NM_024675.4:c.[520A>T;792del]",
+    "NM_031307.4:c.[497G>A;896T>G]",
+    "NM_032119.4:c.[1718G>T;9440G>A]",
+    "NM_032340.3:c.[23G>C;28C>T]",
+    "NM_032756.4:c.[832G>A;91T>C]",
+    "NM_032888.4:c.[295G>A;3056C>A]",
+    "NM_033071.3:c.[1985A>G;9283G>A]",
+    "NM_033380.2:c.[866G>T;4282C>T]",
+    "NM_033641.4:c.[1384G>A;2230G>A]",
+    "NM_058004.4:c.[1414A>C;355C>T]",
+    "NM_130466.4:c.[1445T>A;1616T>C]",
+    "NM_130468.3:c.[403C>G;410T>A]",
+    "NM_133378.4:c.[45418A>G;45419A>T]",
+    "NM_138694.4:c.[2165C>T;7438A>T]",
+    "NM_139025.3:c.[1342C>G;1523G>A]",
+    "NM_152393.3:c.[1849T>C;1850G>A]",
+    "NM_152564.5:c.[1044G>A;8916G>A]",
+    "NM_152703.5:c.[1076G>A;3353A>G]",
+    "NM_153704.6:c.[1634G>A;2241G>A]",
+    "NM_170784.2:c.[250C>T;724G>T]",
+    "NM_173467.5:c.[242T>G;634C>T]",
+    "NM_173591.3:c.[6220A>G;6221T>C]",
+    "NM_173628.4:c.[10496C>T;10784T>C]",
+    "NM_173628.4:c.[11803C>T;6308C>T]",
+    "NM_177987.3:c.[1033C>T;1039A>G]",
+    "NM_198056.2:c.[1535C>T;1673A>G]",
+    "NM_198056.2:c.[3694C>T;4859C>T]",
+    "NM_199461.2:c.[737G>A;826_827delinsTA]",
+    "NM_206933.2:c.[15319C>T;3902G>T]",
+    "NM_206933.3:c.[12448A>G;5012G>A]",
+    "NM_207122.1:c.[260T>G;283C>T]",
+];
+
+/// Render a convergence-set move, branched on direction.
+///
+/// Three genuinely different events, which the old single message conflated:
+/// a fall is a defect, a rise is good news that must still be re-blessed and
+/// declared, and an equal-count set change is a swap that a count-only census
+/// could never have reported at all.
+fn describe_convergence_move(started: &[&str], stopped: &[&str], pinned: usize) -> String {
+    let measured = pinned + started.len() - stopped.len();
+    let headline = match measured.cmp(&pinned) {
+        std::cmp::Ordering::Less => format!(
+            "convergence REGRESSED, from {pinned} to {measured} — this is a defect. Two \
+             spellings of one variant that used to agree no longer do; find the change that \
+             moved them before touching this pin."
+        ),
+        std::cmp::Ordering::Greater => format!(
+            "convergence IMPROVED, from {pinned} to {measured} — this is good news. Re-bless \
+             `AXIS_CENSUS.respelling_converged` to {measured} and `CONVERGED_ROWS` to the \
+             measured set, name the rows below in the changelog, and declare the representation \
+             change. Check each row first: convergence onto the *wrong* form is a regression \
+             that raises this figure."
+        ),
+        std::cmp::Ordering::Equal => format!(
+            "convergence SWAPPED at an unchanged count of {measured} — rows left and rows \
+             joined in equal number. This is exactly what a count-only census cannot see, and \
+             it is never benign by default."
+        ),
+    };
+    let mut out = format!("the multi-member cis axis census moved: {headline}\n");
+    out.push_str(&format!("  {} rows STARTED converging:\n", started.len()));
+    for row in started {
+        out.push_str(&format!("    + {row}\n"));
+    }
+    out.push_str(&format!("  {} rows STOPPED converging:\n", stopped.len()));
+    for row in stopped {
+        out.push_str(&format!("    - {row}\n"));
+    }
+    out
+}
 
 #[test]
 fn axis_normalized() {
@@ -656,7 +1200,7 @@ fn axis_normalized() {
         );
         return;
     };
-    let census = measure_axis(&provider);
+    let (census, converged_rows) = measure_axis(&provider);
     println!("multi-member-cis axis: {census:?}");
     assert_eq!(
         census.not_idempotent, 0,
@@ -668,9 +1212,54 @@ fn axis_normalized() {
         "{} rows normalize to a description of a different sequence",
         census.sequence_changed
     );
+
+    // The row set is compared before the tuple, because it is the comparison
+    // that can name what moved. The tuple comparison that follows still runs:
+    // every other field has no documented allowed direction and is pinned flat.
+    let pinned: BTreeSet<&str> = CONVERGED_ROWS.iter().copied().collect();
+    let measured: BTreeSet<&str> = converged_rows.iter().map(String::as_str).collect();
+    if measured != pinned {
+        let started: Vec<&str> = measured.difference(&pinned).copied().collect();
+        let stopped: Vec<&str> = pinned.difference(&measured).copied().collect();
+        panic!(
+            "{}",
+            describe_convergence_move(&started, &stopped, pinned.len())
+        );
+    }
+
     assert_eq!(
         census, AXIS_CENSUS,
-        "the multi-member cis axis census moved; `respelling_converged` must only ever go up"
+        "the multi-member cis axis census moved in a field the row list does not cover; every \
+         field here is pinned flat and none has a documented allowed direction"
+    );
+}
+
+/// The pinned list and the pinned count are two spellings of one fact, so they
+/// are checked against each other rather than left to drift apart.
+///
+/// Always on: it reads no reference, so a checkout with no manifest still fails
+/// if a re-bless updates one of the two and forgets the other.
+#[test]
+fn the_pinned_convergence_list_agrees_with_the_pinned_count() {
+    assert_eq!(
+        CONVERGED_ROWS.len(),
+        AXIS_CENSUS.respelling_converged,
+        "CONVERGED_ROWS lists {} rows but AXIS_CENSUS pins {} — re-bless both together",
+        CONVERGED_ROWS.len(),
+        AXIS_CENSUS.respelling_converged
+    );
+    let unique: BTreeSet<&str> = CONVERGED_ROWS.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        CONVERGED_ROWS.len(),
+        "CONVERGED_ROWS repeats a row, so the set comparison in `axis_normalized` would under-count"
+    );
+    let mut sorted: Vec<&str> = CONVERGED_ROWS.to_vec();
+    sorted.sort_unstable();
+    assert_eq!(
+        sorted,
+        CONVERGED_ROWS.to_vec(),
+        "CONVERGED_ROWS is out of order; keep it sorted so a re-bless diff is readable"
     );
 }
 
