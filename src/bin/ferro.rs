@@ -1606,10 +1606,14 @@ fn run_normalize(
         if let Some(rejection) = preprocess_result.take_rejection_error() {
             return failed(NormalizeTsvFailure::Preprocess, &rejection.to_string());
         }
-        let corrections: Vec<(&str, &str)> = preprocess_result
+        // Owned rather than borrowed from `preprocess_result`, because the
+        // normalizer's warnings are rendered on demand (`Display`) and so have
+        // nothing to borrow from. Both phases end up in one list; the code
+        // namespaces keep them apart (`W1001` vs `MEMBERS_COALESCED_…`).
+        let mut corrections: Vec<(String, String)> = preprocess_result
             .warnings
             .iter()
-            .map(|w| (w.error_type.code(), w.message.as_str()))
+            .map(|w| (w.error_type.code().to_string(), w.message.clone()))
             .collect();
         for warning in &preprocess_result.warnings {
             let _ = writeln!(
@@ -1623,15 +1627,31 @@ fn run_normalize(
             Ok(parsed) => parsed,
             Err(e) => return failed(NormalizeTsvFailure::Parse, &e.to_string()),
         };
-        match normalizer.normalize(&parsed) {
-            Ok(normalized) => {
+        // `normalize_with_diagnostics`, not `normalize`: the latter discards the
+        // normalizer's warnings (see its doc comment), which left every
+        // normalizer-generated diagnostic — W5005 coalescing, ins-payload
+        // expansion, W5001 lenient reference correction — unreachable from
+        // `ferro normalize` in every format and every error mode. The normalized
+        // variant is the same one either way; both exits share
+        // `normalize_core_checked`.
+        match normalizer.normalize_with_diagnostics(&parsed) {
+            Ok(diagnosed) => {
+                let normalized = diagnosed.result;
+                for warning in &diagnosed.warnings {
+                    let _ = writeln!(err, "warning[{}]: {}", warning.code(), warning);
+                    corrections.push((warning.code().to_string(), warning.to_string()));
+                }
                 let normalized_str = normalized.to_string();
+                let corrections_view: Vec<(&str, &str)> = corrections
+                    .iter()
+                    .map(|(code, message)| (code.as_str(), message.as_str()))
+                    .collect();
                 let row = normalize_tsv_row(
                     line,
                     v,
                     NormalizeTsvOutcome::Normalized {
                         normalized: normalized_str.as_str(),
-                        corrections: &corrections,
+                        corrections: &corrections_view,
                     },
                 );
                 // The verdict comes back from the renderer rather than being
@@ -1661,7 +1681,11 @@ fn run_normalize(
         }
 
         let parsed = parse_hgvs(&preprocess_result.preprocessed)?;
-        let normalized = normalizer.normalize(&parsed)?;
+        // `normalize_with_diagnostics`, not `normalize` — see the comment on the
+        // TSV path above. Same normalized variant, plus the warnings the quiet
+        // exit throws away.
+        let diagnosed = normalizer.normalize_with_diagnostics(&parsed)?;
+        let normalized = diagnosed.result;
         match format {
             "json" => {
                 let corrections: Vec<String> = preprocess_result
@@ -1675,12 +1699,29 @@ fn run_normalize(
                         )
                     })
                     .collect();
+                // A separate key from `corrections`, which is the preprocessor's
+                // population: these are raised by the normalizer and carry its
+                // own code namespace. Always emitted, `[]` included, so a
+                // consumer can index `.warnings` unconditionally — matching what
+                // `ferro project --format json` does (#1182).
+                let warnings: Vec<String> = diagnosed
+                    .warnings
+                    .iter()
+                    .map(|w| {
+                        format!(
+                            r#"{{"code":"{}","message":"{}"}}"#,
+                            w.code(),
+                            w.to_string().replace('"', "\\\"")
+                        )
+                    })
+                    .collect();
                 writeln!(
                     out,
-                    r#"{{"input": "{}", "output": "{}", "status": "ok", "corrections": [{}]}}"#,
+                    r#"{{"input": "{}", "output": "{}", "status": "ok", "corrections": [{}], "warnings": [{}]}}"#,
                     v,
                     normalized,
-                    corrections.join(",")
+                    corrections.join(","),
+                    warnings.join(",")
                 )
                 .map_err(|e| FerroError::Io { msg: e.to_string() })?;
             }
@@ -1694,6 +1735,15 @@ fn run_normalize(
                         warning.message
                     )
                     .map_err(|e| FerroError::Io { msg: e.to_string() })?;
+                }
+                // Then the normalizer's own, in the same shape. The two phases
+                // stay distinguishable by code namespace: the preprocessor's are
+                // `W`-numbered SVA codes, the normalizer's are the stable
+                // SCREAMING_SNAKE names (`MEMBERS_COALESCED_FROM_REPORTED_FORM`,
+                // `INSERTED_SEQUENCE_EXPANDED`, `REFSEQ_MISMATCH`, …).
+                for warning in &diagnosed.warnings {
+                    writeln!(err, "warning[{}]: {}", warning.code(), warning)
+                        .map_err(|e| FerroError::Io { msg: e.to_string() })?;
                 }
                 // Format the normalized variant once and reuse it for both the
                 // unchanged-vs-changed comparison and the written output. The
