@@ -21,6 +21,7 @@
 //! which the parser does not have — so there is no canonical form to rewrite
 //! to and every mode rejects.
 
+use ferro_hgvs::error::ErrorCode;
 use ferro_hgvs::error_handling::ErrorConfig;
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
 use ferro_hgvs::parse_hgvs;
@@ -106,4 +107,38 @@ fn inverted_insertion_source_is_untouched() {
     ] {
         assert!(parse_hgvs(input).is_ok(), "{input:?} must still parse");
     }
+}
+
+// =====================================================================
+// Inside allele brackets — the validator's `Allele` recursion
+// =====================================================================
+//
+// `validate_no_single_nucleotide_inversion` walks `HgvsVariant::Allele` members and re-applies
+// itself to each. That recursion arm had no test: neutering it left the whole
+// `it` suite green (5,547 tests), so the mutant survived. #1576 closed the same
+// gap for three sibling rules; these are the remaining three of the eleven
+// validators that share the arm.
+//
+// The assertion is on the contract — rejected, with a structured code and the
+// spec citation — not on which mechanism rejected it, so it survives a refactor
+// that moves the check.
+
+#[test]
+fn rejects_single_nucleotide_inversion_inside_a_cis_allele() {
+    let err = parse_hgvs("NC_000023.11:g.[100A>T;234inv]")
+        .expect_err("a bracketed member is still bound by DNA/inversion.md:16");
+    assert_eq!(
+        err.code(),
+        Some(ErrorCode::InvalidEdit),
+        "the allele member rejection must carry a structured InvalidEdit code"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("DNA/inversion.md:16"),
+        "the allele member must earn the single-nucleotide-inversion diagnostic; got: {msg}"
+    );
+    assert!(
+        msg.contains("substitution"),
+        "the diagnostic should still point at the substitution form; got: {msg}"
+    );
 }
