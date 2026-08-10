@@ -26,6 +26,7 @@
 //! author wrote — a frameshift becomes a substitution — so it is surfaced
 //! rather than performed.
 
+use ferro_hgvs::error::ErrorCode;
 use ferro_hgvs::error_handling::ErrorConfig;
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
 use ferro_hgvs::parse_hgvs;
@@ -108,4 +109,38 @@ fn nonsense_substitution_still_parses() {
     for input in ["NP_003997.1:p.Tyr4Ter", "NP_003997.1:p.Tyr4*"] {
         assert!(parse_hgvs(input).is_ok(), "{input:?} must parse");
     }
+}
+
+// =====================================================================
+// Inside allele brackets — the validator's `Allele` recursion
+// =====================================================================
+//
+// `validate_no_immediate_ter_frameshift` walks `HgvsVariant::Allele` members and re-applies
+// itself to each. That recursion arm had no test: neutering it left the whole
+// `it` suite green (5,547 tests), so the mutant survived. #1576 closed the same
+// gap for three sibling rules; these are the remaining three of the eleven
+// validators that share the arm.
+//
+// The assertion is on the contract — rejected, with a structured code and the
+// spec citation — not on which mechanism rejected it, so it survives a refactor
+// that moves the check.
+
+#[test]
+fn rejects_immediate_ter_frameshift_inside_a_cis_allele() {
+    let err = parse_hgvs("NP_003997.1:p.[Arg76Ser;Tyr4TerfsTer1]")
+        .expect_err("a bracketed member is still bound by protein/frameshift.md:22");
+    assert_eq!(
+        err.code(),
+        Some(ErrorCode::InvalidEdit),
+        "the allele member rejection must carry a structured InvalidEdit code"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("protein/frameshift.md:22"),
+        "the allele member must earn the immediate-Ter-frameshift diagnostic; got: {msg}"
+    );
+    assert!(
+        msg.contains("p.Tyr4Ter"),
+        "the diagnostic should still name the nonsense repair; got: {msg}"
+    );
 }

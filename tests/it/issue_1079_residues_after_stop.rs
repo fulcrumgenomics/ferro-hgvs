@@ -29,6 +29,7 @@
 //! which needs the reference sequence. Truncating would swap one
 //! non-canonical description for another.
 
+use ferro_hgvs::error::ErrorCode;
 use ferro_hgvs::error_handling::ErrorConfig;
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
 use ferro_hgvs::parse_hgvs;
@@ -109,4 +110,38 @@ fn stop_position_insertion_form_is_untouched() {
     ] {
         assert!(parse_hgvs(input).is_ok(), "{input:?} must still parse");
     }
+}
+
+// =====================================================================
+// Inside allele brackets — the validator's `Allele` recursion
+// =====================================================================
+//
+// `validate_no_residues_after_stop` walks `HgvsVariant::Allele` members and re-applies
+// itself to each. That recursion arm had no test: neutering it left the whole
+// `it` suite green (5,547 tests), so the mutant survived. #1576 closed the same
+// gap for three sibling rules; these are the remaining three of the eleven
+// validators that share the arm.
+//
+// The assertion is on the contract — rejected, with a structured code and the
+// spec citation — not on which mechanism rejected it, so it survives a refactor
+// that moves the check.
+
+#[test]
+fn rejects_residues_after_stop_inside_a_cis_allele() {
+    let err = parse_hgvs("NP_004371.2:p.[Arg76Ser;Asn47delinsSerSerTerAlaAsp]")
+        .expect_err("a bracketed member is still bound by protein/delins.md:45");
+    assert_eq!(
+        err.code(),
+        Some(ErrorCode::InvalidEdit),
+        "the allele member rejection must carry a structured InvalidEdit code"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("protein/delins.md:45"),
+        "the allele member must earn the residues-after-stop diagnostic; got: {msg}"
+    );
+    assert!(
+        msg.contains("delinsSerSerTer"),
+        "the diagnostic should still name the truncated peptide; got: {msg}"
+    );
 }
