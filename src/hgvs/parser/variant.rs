@@ -7240,56 +7240,69 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
     // (HGVS recommendations/general.md line 58, tracked under issue #115).
     validate_no_self_cancelling(&variant, input)?;
 
-    // Spec-mandated post-parse semantic check: reject `dupins` mash-up
-    // (HGVS DNA/duplication.md:92 — "a format not used in HGVS
-    // nomenclature"; #445).
-    validate_no_dupins(&variant)?;
+    // All remaining post-parse semantic checks are per-leaf rules; run them
+    // inside one structural walk so ring segments and supernumerary inners
+    // are validated exactly like standalone descriptions (#1578).
+    // Whether the walk's leaves ARE the authored description: false when the
+    // top level is an allele bracket, a `::`-join, or a `sup` marker, whose
+    // leaves are members/segments of something larger. A repair suggestion
+    // for such a leaf must respell only the offending edit — offering it as a
+    // whole-variant replacement would silently drop the siblings.
+    let leaf_is_whole = !matches!(
+        &variant,
+        HgvsVariant::Allele(_) | HgvsVariant::GenomeRing(_) | HgvsVariant::Supernumerary(_)
+    );
+    for_each_leaf(&variant, &mut |leaf| {
+        // Reject `dupins` mash-up (HGVS DNA/duplication.md:92 — "a format
+        // not used in HGVS nomenclature"; #445).
+        validate_no_dupins(leaf)?;
 
-    // Spec-mandated post-parse semantic check: reject single-position
-    // insertion (HGVS DNA/insertion.md:95-101 Q&A — explicit "No"; #446).
-    validate_no_point_insertion(&variant, input)?;
+        // Reject single-position insertion (HGVS DNA/insertion.md:95-101
+        // Q&A — explicit "No"; #446).
+        validate_no_point_insertion(leaf)?;
 
-    // Spec-mandated post-parse semantic check: reject a `del`/`dup` size
-    // suffix on a single-position anchor (HGVS checklist.md:49,
-    // DNA/deletion.md:117, DNA/duplication.md:140, RNA/deletion.md:49; #1079).
-    validate_no_point_size_suffix(&variant, input)?;
+        // Reject a `del`/`dup` size suffix on a single-position anchor
+        // (HGVS checklist.md:49, DNA/deletion.md:117,
+        // DNA/duplication.md:140, RNA/deletion.md:49; #1079).
+        validate_no_point_size_suffix(leaf, input)?;
 
-    // Spec-mandated post-parse semantic check: reject a multi-nucleotide
-    // substitution (HGVS DNA/substitution.md:30, DNA/delins.md:73; #1079).
-    validate_no_multibase_substitution(&variant)?;
+        // Reject a multi-nucleotide substitution (HGVS
+        // DNA/substitution.md:30, DNA/delins.md:73; #1079).
+        validate_no_multibase_substitution_at(leaf, leaf_is_whole)?;
 
-    // Spec-mandated post-parse semantic check: reject a start-codon variant
-    // written as an amino acid substitution (HGVS protein/substitution.md:49,
-    // checklist.md:65; #1079).
-    validate_no_start_loss_substitution(&variant)?;
+        // Reject a start-codon variant written as an amino acid
+        // substitution (HGVS protein/substitution.md:49, checklist.md:65;
+        // #1079).
+        validate_no_start_loss_substitution(leaf)?;
 
-    // Spec-mandated post-parse semantic check: reject a one-nucleotide
-    // inversion (HGVS DNA/inversion.md:16; #1079).
-    validate_no_single_nucleotide_inversion(&variant)?;
+        // Reject a one-nucleotide inversion (HGVS DNA/inversion.md:16;
+        // #1079).
+        validate_no_single_nucleotide_inversion(leaf)?;
 
-    // Spec-mandated post-parse semantic check: reject a frameshift that
-    // terminates immediately (HGVS protein/frameshift.md:22,
-    // protein/substitution.md:20; #1079).
-    validate_no_immediate_ter_frameshift(&variant)?;
+        // Reject a frameshift that terminates immediately (HGVS
+        // protein/frameshift.md:22, protein/substitution.md:20; #1079).
+        validate_no_immediate_ter_frameshift(leaf)?;
 
-    // Spec-mandated post-parse semantic check: reject a frameshift anchored at
-    // an unchanged residue — it must start at the first amino acid *changed*
-    // (HGVS protein/frameshift.md:47-49; #1079).
-    validate_no_unchanged_anchor_frameshift(&variant)?;
+        // Reject a frameshift anchored at an unchanged residue — it must
+        // start at the first amino acid *changed* (HGVS
+        // protein/frameshift.md:47-49; #1079).
+        validate_no_unchanged_anchor_frameshift(leaf)?;
 
-    // Spec-mandated post-parse semantic check: reject residues listed after
-    // a translation stop in an inserted peptide (HGVS protein/delins.md:45,
-    // protein/insertion.md:43; #1079).
-    validate_no_residues_after_stop(&variant)?;
+        // Reject residues listed after a translation stop in an inserted
+        // peptide (HGVS protein/delins.md:45, protein/insertion.md:43;
+        // #1079).
+        validate_no_residues_after_stop(leaf)?;
 
-    // Spec-mandated post-parse semantic check: reject a coding/genomic/mito
-    // coordinate system on a non-coding RNA (NR_/XR_) reference (#486,
-    // ECOORDINATESYSTEMMISMATCH).
-    validate_coordinate_system(&variant)?;
+        // Reject a coding/genomic/mito coordinate system on a non-coding
+        // RNA (NR_/XR_) reference (#486, ECOORDINATESYSTEMMISMATCH).
+        validate_coordinate_system(leaf)?;
 
-    // Spec-mandated post-parse semantic check: reject the RNA base `U`/`u` in
-    // a DNA-context edit (DNA is A/C/G/T; mutalyzer's `ENODNA`; #486).
-    validate_no_u_in_dna(&variant)?;
+        // Reject the RNA base `U`/`u` in a DNA-context edit (DNA is
+        // A/C/G/T; mutalyzer's `ENODNA`; #486).
+        validate_no_u_in_dna(leaf)?;
+
+        Ok(())
+    })?;
 
     Ok(variant)
 }
@@ -7300,7 +7313,8 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
 /// or mitochondrial reference, so a `c.`/`g.`/`m.`/`o.` description on it is a
 /// coordinate-system mismatch (mutalyzer's `ECOORDINATESYSTEMMISMATCH`). The
 /// only valid forms are `n.` (non-coding transcript) and `r.` (RNA), which are
-/// not matched here. The check walks `Allele` wrappers and inspects each leaf.
+/// not matched here. Runs per leaf — `for_each_leaf` in the driver owns
+/// `Allele`/ring/`sup` structure.
 fn validate_coordinate_system(variant: &HgvsVariant) -> Result<(), FerroError> {
     fn make_error(coord: &str) -> FerroError {
         use crate::error::{Diagnostic, ErrorCode};
@@ -7320,11 +7334,6 @@ fn validate_coordinate_system(variant: &HgvsVariant) -> Result<(), FerroError> {
         HgvsVariant::Genome(v) if v.accession.is_noncoding_rna() => return Err(make_error("g.")),
         HgvsVariant::Mt(v) if v.accession.is_noncoding_rna() => return Err(make_error("m.")),
         HgvsVariant::Circular(v) if v.accession.is_noncoding_rna() => return Err(make_error("o.")),
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_coordinate_system(inner)?;
-            }
-        }
         _ => {}
     }
     Ok(())
@@ -7338,9 +7347,10 @@ fn validate_coordinate_system(variant: &HgvsVariant) -> Result<(), FerroError> {
 /// [`Base::U`], so a `Base::U` anywhere in a DNA variant's edit sequence is the
 /// unambiguous signal. RNA (`r.`) variants are skipped — `u` is correct there.
 ///
-/// Like the sibling validators it walks `Allele` wrappers and inspects each
-/// leaf `NaEdit`, returning a structured `InvalidEdit` parse error so the
-/// rejection survives slash-form fallback paths.
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure — and inspects each leaf `NaEdit`, returning a structured
+/// `InvalidEdit` parse error so the rejection survives slash-form fallback
+/// paths.
 fn validate_no_u_in_dna(variant: &HgvsVariant) -> Result<(), FerroError> {
     use crate::hgvs::edit::{Base, InsertedPart, InsertedSequence, NaEdit, Sequence};
     use crate::hgvs::uncertainty::Mu;
@@ -7414,14 +7424,91 @@ fn validate_no_u_in_dna(variant: &HgvsVariant) -> Result<(), FerroError> {
         HgvsVariant::Mt(v) if edit_has_u(&v.loc_edit.edit) => return Err(make_error("m.")),
         HgvsVariant::Circular(v) if edit_has_u(&v.loc_edit.edit) => return Err(make_error("o.")),
         // RNA (`r.`) legitimately uses `u`; protein has no nucleotide alphabet.
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_u_in_dna(inner)?;
-            }
-        }
         _ => {}
     }
     Ok(())
+}
+
+/// Deliver every *leaf* description inside `variant` to `f`, owning all of
+/// the structural recursion the post-parse semantic validators need:
+///
+/// - `Allele` members and the `Supernumerary` inner are recursed into;
+/// - a `GenomeRing`'s `::`-joined segments are `LocEdit<GenomeInterval,
+///   NaEdit>` hanging off the ring — NOT nested `HgvsVariant`s — so no
+///   validator can reach them by matching on variant kind. Each is re-wrapped
+///   as a temporary `GenomeVariant` carrying the ring's accession and yielded
+///   as an ordinary `g.` leaf: this walk is the only thing standing between a
+///   ring segment and no validation at all (#1264, #1578). An unvalidated
+///   escape round-trips — ferro parses it *and* renders it back — so the
+///   `FERRO_ASSERT_REPARSE` oracle can never see this class; only parser
+///   tests can (`tests/it/issue_1578_ring_validator_escapes.rs`).
+///
+/// `validate_no_self_cancelling` is deliberately NOT served by this walker:
+/// it inspects allele *siblings*, which a per-leaf view cannot express. Do
+/// not migrate it here.
+///
+/// Note the same asymmetry for both structural wrappers: the `GenomeRing`
+/// and `Supernumerary` nodes themselves are never yielded, only what they
+/// contain — a future *node-level* rule added to the driver closure would
+/// silently never run, and must be called top-level like
+/// `validate_no_self_cancelling` instead.
+///
+/// The driver runs all leaf rules against each leaf before moving to the
+/// next one, so for an input that violates a different rule in different
+/// members, the diagnostic that surfaces follows member order (leaf-major),
+/// not rule order — deliberate, not a race
+/// (`a_multi_member_allele_reports_the_first_member_in_error` pins it).
+fn for_each_leaf(
+    variant: &HgvsVariant,
+    f: &mut impl FnMut(&HgvsVariant) -> Result<(), FerroError>,
+) -> Result<(), FerroError> {
+    match variant {
+        HgvsVariant::Allele(allele) => {
+            for inner in &allele.variants {
+                for_each_leaf(inner, f)?;
+            }
+            Ok(())
+        }
+        HgvsVariant::Supernumerary(inner) => for_each_leaf(inner, f),
+        HgvsVariant::GenomeRing(ring) => {
+            for segment in &ring.segments {
+                let leaf = HgvsVariant::Genome(GenomeVariant {
+                    accession: ring.accession.clone(),
+                    gene_symbol: ring.gene_symbol.clone(),
+                    loc_edit: segment.clone(),
+                });
+                f(&leaf)?;
+            }
+            Ok(())
+        }
+        // Every remaining kind is a leaf, enumerated instead of wildcarded so
+        // that adding a variant to `HgvsVariant` fails to compile here and
+        // forces the "structural or leaf?" question — a wildcard arm silently
+        // misclassifying a composite is exactly the #1264/#1578 defect class.
+        // (`RnaFusion` is a genuine leaf: its breakpoints carry no edit.)
+        leaf @ (HgvsVariant::Genome(_)
+        | HgvsVariant::Cds(_)
+        | HgvsVariant::Tx(_)
+        | HgvsVariant::Rna(_)
+        | HgvsVariant::Protein(_)
+        | HgvsVariant::Mt(_)
+        | HgvsVariant::Circular(_)
+        | HgvsVariant::RnaFusion(_)
+        | HgvsVariant::NullAllele
+        | HgvsVariant::UnknownAllele) => f(leaf),
+    }
+}
+
+/// Both boundaries name the same single certain position.
+fn is_single_point_anchor<T: PartialEq>(
+    start: &crate::hgvs::interval::UncertainBoundary<T>,
+    end: &crate::hgvs::interval::UncertainBoundary<T>,
+) -> bool {
+    use crate::hgvs::uncertainty::Mu;
+    match (start.as_single(), end.as_single()) {
+        (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
+        _ => false,
+    }
 }
 
 /// Reject `dupins` edits per `DNA/duplication.md:92`:
@@ -7439,6 +7526,9 @@ fn validate_no_u_in_dna(variant: &HgvsVariant) -> Result<(), FerroError> {
 /// data-type refactor) — this check just ensures it is never produced
 /// by the parser's user-facing entry point. Internal code that
 /// constructs `DupIns` for normalization intermediates is unaffected.
+///
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure.
 fn validate_no_dupins(variant: &HgvsVariant) -> Result<(), FerroError> {
     use crate::hgvs::edit::NaEdit;
     use crate::hgvs::uncertainty::Mu;
@@ -7467,11 +7557,6 @@ fn validate_no_dupins(variant: &HgvsVariant) -> Result<(), FerroError> {
         HgvsVariant::Rna(v) if is_dupins(&v.loc_edit.edit) => return Err(make_error()),
         HgvsVariant::Mt(v) if is_dupins(&v.loc_edit.edit) => return Err(make_error()),
         HgvsVariant::Circular(v) if is_dupins(&v.loc_edit.edit) => return Err(make_error()),
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_dupins(inner)?;
-            }
-        }
         _ => {}
     }
     Ok(())
@@ -7606,10 +7691,10 @@ impl Linearize for crate::hgvs::location::ProtPos {
 /// Both are rejections rather than repairs: given `g.123_125insG` there is
 /// no way to recover which flanking pair the author intended.
 ///
-/// The check walks Allele wrappers and inspects each leaf edit. Adjacency is
-/// only enforced where it is decidable from the description alone — see
-/// [`Linearize`].
-fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(), FerroError> {
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure. Adjacency is only enforced where it is decidable from the
+/// description alone — see [`Linearize`].
+fn validate_no_point_insertion(variant: &HgvsVariant) -> Result<(), FerroError> {
     use crate::hgvs::edit::NaEdit;
     use crate::hgvs::interval::UncertainBoundary;
     use crate::hgvs::uncertainty::Mu;
@@ -7672,16 +7757,12 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
         )
     }
 
-    /// Apply both sub-rules to one loc/edit pair.
-    ///
-    /// Takes the `LocEdit` rather than the variant so the ring path — whose
-    /// `segments` are bare `LocEdit`s with no enclosing variant — shares the
-    /// exact rule the single-variant axes get, instead of a re-derived copy.
-    macro_rules! check_loc_edit_anchor {
-        ($le:expr, $prefix:expr) => {{
-            if is_insertion(&$le.edit) {
-                let start = &$le.location.start;
-                let end = &$le.location.end;
+    /// Apply both sub-rules to one nucleotide variant's loc/edit pair.
+    macro_rules! check_na_anchor {
+        ($v:expr, $prefix:expr) => {{
+            if is_insertion(&$v.loc_edit.edit) {
+                let start = &$v.loc_edit.location.start;
+                let end = &$v.loc_edit.location.end;
                 if pos_eq(start, end) {
                     return Err(make_error($prefix));
                 }
@@ -7689,13 +7770,6 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
                     return Err(make_gap_error($prefix));
                 }
             }
-        }};
-    }
-
-    /// Apply both sub-rules to one nucleotide variant's loc/edit pair.
-    macro_rules! check_na_anchor {
-        ($v:expr, $prefix:expr) => {{
-            check_loc_edit_anchor!($v.loc_edit, $prefix)
         }};
     }
 
@@ -7735,32 +7809,6 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
                 ));
             }
         }
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_point_insertion(inner, _source)?;
-            }
-        }
-        // A ring's `::`-joined segments are `LocEdit<GenomeInterval, NaEdit>`
-        // — the same loc/edit pair every arm above inspects — but they hang off
-        // `GenomeRing` rather than a nested `HgvsVariant`, so recursion cannot
-        // reach them and they fell through the catch-all below (#1264). Both
-        // MUST-level sub-rules were therefore unenforced inside a join:
-        // `g.100_102insATG::200_201insG` and `g.100insATG::200_201insG` both
-        // parsed, while the identical spellings outside a join were rejected.
-        //
-        // Invisible to the `FERRO_ASSERT_REPARSE` oracle, because these round
-        // trip: ferro renders back exactly what it accepted. Only a parser test
-        // can see it.
-        HgvsVariant::GenomeRing(ring) => {
-            for segment in &ring.segments {
-                check_loc_edit_anchor!(segment, "g.");
-            }
-        }
-        // `sup` wraps either a plain genome variant or a ring. The plain inner
-        // was already covered (it is parsed through this same validator before
-        // being wrapped); the ring inner was not, so recurse explicitly rather
-        // than relying on that.
-        HgvsVariant::Supernumerary(inner) => validate_no_point_insertion(inner, _source)?,
         _ => {}
     }
     Ok(())
@@ -7783,30 +7831,30 @@ fn validate_no_point_insertion(variant: &HgvsVariant, _source: &str) -> Result<(
 /// size (`c.100_102del3`) already names them, and stays a soft W3011/W3016
 /// concern handled by the preprocessor.
 ///
-/// Lenient and silent modes never reach this check for a deletion — the
-/// preprocessor rewrites `g.123del3` to `g.123_125del` first (the spec states
-/// that replacement outright). A duplication has no such repair: the spec
-/// declines to say whether `g.123dup6` starts at or after position 123
-/// (`DNA/duplication.md:143`), so guessing would risk emitting a different
-/// variant than the author meant, and every mode rejects.
+/// Lenient and silent modes never reach this check for a *standalone*
+/// deletion — the preprocessor rewrites `g.123del3` to `g.123_125del` first
+/// (the spec states that replacement outright). Inside a `::`-join that
+/// rewrite never happens: `corrections::point_size_token` recognizes a token
+/// only between `.`/`[`/`;` and `)`/`;`/`]`/whitespace/end-of-string, and a
+/// ring join satisfies neither side, so a ring `del<size>` reaches this check
+/// — and hard-fails — in every mode (#1578 tracks extending the repair to
+/// ring segments). A duplication has no repair in any
+/// context: the spec declines to say whether `g.123dup6` starts at or after
+/// position 123 (`DNA/duplication.md:143`), so guessing would risk emitting a
+/// different variant than the author meant, and every mode rejects.
+///
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure.
 fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<(), FerroError> {
     use crate::error::{Diagnostic, ErrorCode};
     use crate::error_handling::corrections::suggest_point_del_range_form;
     use crate::hgvs::edit::{NaEdit, ProteinEdit};
-    use crate::hgvs::interval::UncertainBoundary;
     use crate::hgvs::uncertainty::Mu;
 
     /// The edit kind whose size suffix was found, for the diagnostic text.
     enum SizedEdit {
         Deletion,
         Duplication,
-    }
-
-    fn is_point<T: PartialEq>(start: &UncertainBoundary<T>, end: &UncertainBoundary<T>) -> bool {
-        match (start.as_single(), end.as_single()) {
-            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
-            _ => false,
-        }
     }
 
     /// The rule targets a description "of more than one residue" that fails
@@ -7859,7 +7907,7 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
     macro_rules! check_na {
         ($v:expr) => {
             if let Some(kind) = sized_na_edit(&$v.loc_edit.edit) {
-                if is_point(&$v.loc_edit.location.start, &$v.loc_edit.location.end) {
+                if is_single_point_anchor(&$v.loc_edit.location.start, &$v.loc_edit.location.end) {
                     return Err(make_error(&kind, source));
                 }
             }
@@ -7873,19 +7921,16 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
         HgvsVariant::Rna(v) => check_na!(v),
         HgvsVariant::Mt(v) => check_na!(v),
         HgvsVariant::Circular(v) => check_na!(v),
-        HgvsVariant::Protein(v) => {
+        HgvsVariant::Protein(v)
             if matches!(
                 v.loc_edit.edit.inner(),
                 Some(ProteinEdit::Deletion { count: Some(n), .. }) if *n > 1
-            ) && is_point(&v.loc_edit.location.start, &v.loc_edit.location.end)
-            {
-                return Err(make_error(&SizedEdit::Deletion, source));
-            }
-        }
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_point_size_suffix(inner, source)?;
-            }
+            ) && is_single_point_anchor(
+                &v.loc_edit.location.start,
+                &v.loc_edit.location.end,
+            ) =>
+        {
+            return Err(make_error(&SizedEdit::Deletion, source));
         }
         _ => {}
     }
@@ -7933,6 +7978,27 @@ fn validate_no_point_size_suffix(variant: &HgvsVariant, source: &str) -> Result<
 /// a base, and the no-reference form (`c.100_102>ATG`) states no reference
 /// bases at all; both remain ordinary preprocessor concerns.
 pub fn validate_no_multibase_substitution(variant: &HgvsVariant) -> Result<(), FerroError> {
+    let leaf_is_whole = !matches!(
+        variant,
+        HgvsVariant::Allele(_) | HgvsVariant::GenomeRing(_) | HgvsVariant::Supernumerary(_)
+    );
+    for_each_leaf(variant, &mut |leaf| {
+        validate_no_multibase_substitution_at(leaf, leaf_is_whole)
+    })
+}
+
+/// Body of [`validate_no_multibase_substitution`], called per leaf. The
+/// driver's walk calls this directly with its own `leaf_is_whole` — the flag
+/// cannot be recovered from the leaf itself (an allele member and a
+/// synthesized ring segment both arrive as ordinary leaves), and it decides
+/// the repair's scope: a leaf that IS the whole description gets a full
+/// replacement to paste; any other leaf gets only its edit respelled, since a
+/// whole-variant replacement would silently drop the sibling members or ring
+/// segments (and any `sup` marker).
+fn validate_no_multibase_substitution_at(
+    variant: &HgvsVariant,
+    leaf_is_whole: bool,
+) -> Result<(), FerroError> {
     use crate::error::{Diagnostic, ErrorCode};
     use crate::hgvs::edit::{NaEdit, Sequence};
     use crate::hgvs::interval::UncertainBoundary;
@@ -7965,17 +8031,6 @@ pub fn validate_no_multibase_substitution(variant: &HgvsVariant) -> Result<(), F
         }
     }
 
-    /// A single certain position, or `None` for uncertain / range boundaries.
-    fn point<T: PartialEq>(
-        start: &UncertainBoundary<T>,
-        end: &UncertainBoundary<T>,
-    ) -> Option<&'static ()> {
-        match (start.as_single(), end.as_single()) {
-            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) if s == e => Some(&()),
-            _ => None,
-        }
-    }
-
     // The canonical repair names both endpoints. Extending a point anchor is
     // only safe for a plain positive coordinate with no intronic offset and no
     // `*`/`-`/pter-style qualifier — the same restriction the preprocessor's
@@ -7997,36 +8052,49 @@ pub fn validate_no_multibase_substitution(variant: &HgvsVariant) -> Result<(), F
         (p.offset.is_none() && !p.utr3 && p.base >= 1).then(|| RnaPos::new(p.base + extra as i64))
     }
 
-    fn make_error(canonical: &str) -> FerroError {
+    fn make_error(canonical: &str, edit_respelling: &str, leaf_is_whole: bool) -> FerroError {
+        // See `validate_no_multibase_substitution_at`'s doc for why the
+        // repair's scope depends on the leaf being the whole description.
+        let (repair, hint) = if leaf_is_whole {
+            (
+                format!("write `{canonical}` instead"),
+                format!("describe the change as a deletion-insertion — write `{canonical}`"),
+            )
+        } else {
+            (
+                format!("rewrite that edit as `{edit_respelling}`"),
+                format!(
+                    "describe that edit's change as a deletion-insertion — `{edit_respelling}`"
+                ),
+            )
+        };
         FerroError::parse_with_diagnostic(
             0,
             format!(
                 "a substitution replaces one nucleotide by one other, so naming several \
                  reference bases is not allowed (DNA/substitution.md:30, DNA/delins.md:73); \
-                 write `{canonical}` instead"
+                 {repair}"
             ),
             Diagnostic::new()
                 .with_code(ErrorCode::InvalidEdit)
-                .with_hint(format!(
-                    "describe the change as a deletion-insertion — write `{canonical}`"
-                )),
+                .with_hint(hint),
         )
     }
 
     /// Clone `$v`, strip the provenance and widen a point anchor to the run's
-    /// full span, then render the result as the canonical repair.
+    /// full span, then render the result as the canonical repair — both as a
+    /// full description and as the coordinate-prefixed edit alone, so
+    /// `make_error` can scope the suggestion to what the leaf actually is.
     macro_rules! check {
-        ($v:expr, $ctor:path, $widen:ident) => {{
+        ($v:expr, $ctor:path, $widen:ident, $prefix:literal) => {{
             if let Some(run) = multibase_run(&$v.loc_edit.edit) {
                 let extra = run.len() as u64 - 1;
                 let mut repaired = $v.clone();
                 clear_run(&mut repaired.loc_edit.edit);
-                if point(
+                if is_single_point_anchor(
                     &repaired.loc_edit.location.start,
                     &repaired.loc_edit.location.end,
-                )
-                .is_some()
-                {
+                ) {
                     if let Some(end) = repaired
                         .loc_edit
                         .location
@@ -8037,23 +8105,23 @@ pub fn validate_no_multibase_substitution(variant: &HgvsVariant) -> Result<(), F
                         repaired.loc_edit.location.end = UncertainBoundary::certain(end);
                     }
                 }
-                return Err(make_error(&$ctor(repaired).to_string()));
+                let edit_respelling = format!("{}{}", $prefix, repaired.loc_edit);
+                return Err(make_error(
+                    &$ctor(repaired).to_string(),
+                    &edit_respelling,
+                    leaf_is_whole,
+                ));
             }
         }};
     }
 
     match variant {
-        HgvsVariant::Genome(v) => check!(v, HgvsVariant::Genome, wider_genome),
-        HgvsVariant::Cds(v) => check!(v, HgvsVariant::Cds, wider_cds),
-        HgvsVariant::Tx(v) => check!(v, HgvsVariant::Tx, wider_tx),
-        HgvsVariant::Rna(v) => check!(v, HgvsVariant::Rna, wider_rna),
-        HgvsVariant::Mt(v) => check!(v, HgvsVariant::Mt, wider_genome),
-        HgvsVariant::Circular(v) => check!(v, HgvsVariant::Circular, wider_genome),
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_multibase_substitution(inner)?;
-            }
-        }
+        HgvsVariant::Genome(v) => check!(v, HgvsVariant::Genome, wider_genome, "g."),
+        HgvsVariant::Cds(v) => check!(v, HgvsVariant::Cds, wider_cds, "c."),
+        HgvsVariant::Tx(v) => check!(v, HgvsVariant::Tx, wider_tx, "n."),
+        HgvsVariant::Rna(v) => check!(v, HgvsVariant::Rna, wider_rna, "r."),
+        HgvsVariant::Mt(v) => check!(v, HgvsVariant::Mt, wider_genome, "m."),
+        HgvsVariant::Circular(v) => check!(v, HgvsVariant::Circular, wider_genome, "o."),
         _ => {}
     }
     Ok(())
@@ -8082,6 +8150,9 @@ pub fn validate_no_multibase_substitution(variant: &HgvsVariant) -> Result<(), F
 /// The `insTer<n>` / `ins*<n>` form gives the stop's position inside the
 /// insertion rather than spelling residues out, so nothing can follow the
 /// stop and it is untouched.
+///
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure.
 fn validate_no_residues_after_stop(variant: &HgvsVariant) -> Result<(), FerroError> {
     use crate::error::{Diagnostic, ErrorCode};
     use crate::hgvs::edit::{AminoAcidSeq, ProteinEdit, ProteinInsSeq};
@@ -8107,33 +8178,25 @@ fn validate_no_residues_after_stop(variant: &HgvsVariant) -> Result<(), FerroErr
         }
     }
 
-    match variant {
-        HgvsVariant::Protein(v) => {
-            if let Some((keyword, truncated)) = offending_peptide(&v.loc_edit.edit) {
-                let canonical = format!("{keyword}{truncated}");
-                return Err(FerroError::parse_with_diagnostic(
-                    0,
-                    format!(
-                        "amino acids after the translation termination codon are not listed; \
-                         the inserted peptide ends at its first `Ter`, so write `{canonical}` \
-                         (protein/delins.md:45, protein/insertion.md:43)"
+    if let HgvsVariant::Protein(v) = variant {
+        if let Some((keyword, truncated)) = offending_peptide(&v.loc_edit.edit) {
+            let canonical = format!("{keyword}{truncated}");
+            return Err(FerroError::parse_with_diagnostic(
+                0,
+                format!(
+                    "amino acids after the translation termination codon are not listed; \
+                     the inserted peptide ends at its first `Ter`, so write `{canonical}` \
+                     (protein/delins.md:45, protein/insertion.md:43)"
+                ),
+                Diagnostic::new()
+                    .with_code(ErrorCode::InvalidEdit)
+                    .with_suggestion(canonical)
+                    .with_hint(
+                        "translation stops at the first `Ter`, so residues written after \
+                         it are not part of any protein product",
                     ),
-                    Diagnostic::new()
-                        .with_code(ErrorCode::InvalidEdit)
-                        .with_suggestion(canonical)
-                        .with_hint(
-                            "translation stops at the first `Ter`, so residues written after \
-                             it are not part of any protein product",
-                        ),
-                ));
-            }
+            ));
         }
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_residues_after_stop(inner)?;
-            }
-        }
-        _ => {}
     }
     Ok(())
 }
@@ -8160,6 +8223,9 @@ fn validate_no_residues_after_stop(variant: &HgvsVariant) -> Result<(), FerroErr
 /// (`p.Tyr4Ter`), but performing it would silently change the edit kind the
 /// author wrote from a frameshift to a substitution, so it is surfaced
 /// rather than applied.
+///
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure.
 fn validate_no_immediate_ter_frameshift(variant: &HgvsVariant) -> Result<(), FerroError> {
     use crate::error::{Diagnostic, ErrorCode};
     use crate::hgvs::edit::{FrameshiftTer, ProteinEdit};
@@ -8210,11 +8276,6 @@ fn validate_no_immediate_ter_frameshift(variant: &HgvsVariant) -> Result<(), Fer
                     ),
             ));
         }
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_immediate_ter_frameshift(inner)?;
-            }
-        }
         _ => {}
     }
     Ok(())
@@ -8244,6 +8305,9 @@ fn validate_no_immediate_ter_frameshift(variant: &HgvsVariant) -> Result<(), Fer
 /// claim and is untouched, as is any genuine change (`p.Gln151Thr…`). A
 /// `FrameshiftAlternatives` (`p.Gly719(Ala^Ser)fs…`) is rejected only when
 /// *every* alternative equals the reference, i.e. no alternative is a change.
+///
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure.
 fn validate_no_unchanged_anchor_frameshift(variant: &HgvsVariant) -> Result<(), FerroError> {
     use crate::error::{Diagnostic, ErrorCode};
     use crate::hgvs::edit::ProteinEdit;
@@ -8265,40 +8329,32 @@ fn validate_no_unchanged_anchor_frameshift(variant: &HgvsVariant) -> Result<(), 
         }
     }
 
-    match variant {
-        HgvsVariant::Protein(v) => {
-            // Read the anchor position through `.inner()` so an *uncertain*
-            // position (`p.(His150)HisfsTer10`) is validated too, not only a
-            // certain one — mirroring how `names_unchanged_anchor` reads the
-            // edit. Gating on `Mu::Certain` here would silently let an
-            // uncertain-position unchanged anchor slip through.
-            let anchor = v.loc_edit.location.start.as_single();
-            if let Some(pos) = anchor.as_ref().and_then(|mu| mu.inner()) {
-                if names_unchanged_anchor(&v.loc_edit.edit, pos.aa) {
-                    return Err(FerroError::parse_with_diagnostic(
-                        0,
-                        format!(
-                            "a frameshift is anchored at the first amino acid changed, but \
-                             `{}{}` names an unchanged residue; anchor the description at the \
-                             first residue the shifted frame alters (protein/frameshift.md:47-49)",
-                            pos.aa, pos.number
-                        ),
-                        Diagnostic::new()
-                            .with_code(ErrorCode::InvalidEdit)
-                            .with_hint(
-                                "e.g. `p.Gln151ThrfsTer9`, not `p.His150HisfsTer10` — the anchor \
+    if let HgvsVariant::Protein(v) = variant {
+        // Read the anchor position through `.inner()` so an *uncertain*
+        // position (`p.(His150)HisfsTer10`) is validated too, not only a
+        // certain one — mirroring how `names_unchanged_anchor` reads the
+        // edit. Gating on `Mu::Certain` here would silently let an
+        // uncertain-position unchanged anchor slip through.
+        let anchor = v.loc_edit.location.start.as_single();
+        if let Some(pos) = anchor.as_ref().and_then(|mu| mu.inner()) {
+            if names_unchanged_anchor(&v.loc_edit.edit, pos.aa) {
+                return Err(FerroError::parse_with_diagnostic(
+                    0,
+                    format!(
+                        "a frameshift is anchored at the first amino acid changed, but \
+                         `{}{}` names an unchanged residue; anchor the description at the \
+                         first residue the shifted frame alters (protein/frameshift.md:47-49)",
+                        pos.aa, pos.number
+                    ),
+                    Diagnostic::new()
+                        .with_code(ErrorCode::InvalidEdit)
+                        .with_hint(
+                            "e.g. `p.Gln151ThrfsTer9`, not `p.His150HisfsTer10` — the anchor \
                              residue must differ from the reference",
-                            ),
-                    ));
-                }
+                        ),
+                ));
             }
         }
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_unchanged_anchor_frameshift(inner)?;
-            }
-        }
-        _ => {}
     }
     Ok(())
 }
@@ -8321,18 +8377,12 @@ fn validate_no_unchanged_anchor_frameshift(variant: &HgvsVariant) -> Result<(), 
 /// Only the top-level edit is inspected. An inverted *inserted range*
 /// (`g.234_235ins123_234inv`, the spec's inverted-duplication form) is an
 /// insertion whose source happens to be reversed, and is untouched.
+///
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure.
 fn validate_no_single_nucleotide_inversion(variant: &HgvsVariant) -> Result<(), FerroError> {
     use crate::error::{Diagnostic, ErrorCode};
     use crate::hgvs::edit::NaEdit;
-    use crate::hgvs::interval::UncertainBoundary;
-    use crate::hgvs::uncertainty::Mu;
-
-    fn is_point<T: PartialEq>(start: &UncertainBoundary<T>, end: &UncertainBoundary<T>) -> bool {
-        match (start.as_single(), end.as_single()) {
-            (Some(Mu::Certain(s)), Some(Mu::Certain(e))) => s == e,
-            _ => false,
-        }
-    }
 
     fn make_error() -> FerroError {
         FerroError::parse_with_diagnostic(
@@ -8352,7 +8402,7 @@ fn validate_no_single_nucleotide_inversion(variant: &HgvsVariant) -> Result<(), 
     macro_rules! check_inv {
         ($v:expr) => {
             if matches!($v.loc_edit.edit.inner(), Some(NaEdit::Inversion { .. }))
-                && is_point(&$v.loc_edit.location.start, &$v.loc_edit.location.end)
+                && is_single_point_anchor(&$v.loc_edit.location.start, &$v.loc_edit.location.end)
             {
                 return Err(make_error());
             }
@@ -8366,11 +8416,6 @@ fn validate_no_single_nucleotide_inversion(variant: &HgvsVariant) -> Result<(), 
         HgvsVariant::Rna(v) => check_inv!(v),
         HgvsVariant::Mt(v) => check_inv!(v),
         HgvsVariant::Circular(v) => check_inv!(v),
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_single_nucleotide_inversion(inner)?;
-            }
-        }
         _ => {}
     }
     Ok(())
@@ -8401,6 +8446,9 @@ fn validate_no_single_nucleotide_inversion(variant: &HgvsVariant) -> Result<(), 
 /// A start-codon variant that activates an **upstream** initiation site is an
 /// extension (`protein/extension.md`), not a substitution, and a downstream
 /// one is a deletion — neither shape reaches this check.
+///
+/// Runs per leaf — `for_each_leaf` in the driver owns `Allele`/ring/`sup`
+/// structure.
 fn validate_no_start_loss_substitution(variant: &HgvsVariant) -> Result<(), FerroError> {
     use crate::error::{Diagnostic, ErrorCode};
     use crate::hgvs::edit::{ExtDirection, ProteinEdit};
@@ -8433,38 +8481,30 @@ fn validate_no_start_loss_substitution(variant: &HgvsVariant) -> Result<(), Ferr
         }
     }
 
-    match variant {
-        HgvsVariant::Protein(v) => {
-            let at_initiator = matches!(
-                (v.loc_edit.location.start.as_single(), v.loc_edit.location.end.as_single()),
-                (Some(Mu::Certain(s)), Some(Mu::Certain(e)))
-                    if s == e && s.number == 1 && s.aa == AminoAcid::Met
-            );
-            if at_initiator && is_residue_swap(&v.loc_edit.edit) {
-                return Err(FerroError::parse_with_diagnostic(
-                    0,
-                    "a variant that changes the translation initiation codon is not described \
-                     as a substitution or as an extension; use `p.0` (no protein), `p.0?` \
-                     (predicted no protein) or `p.(Met1?)` (consequence unknown), or — when \
-                     an upstream initiation site is activated — the insertion form \
-                     `p.Met1_Leu2ins...` (protein/substitution.md:49, checklist.md:65, \
-                     protein/extension.md:28)",
-                    Diagnostic::new()
-                        .with_code(ErrorCode::InvalidEdit)
-                        .with_hint(
-                            "losing the initiator methionine abolishes translation from that \
-                             codon rather than swapping one residue for another, so the \
-                             consequence is `p.0`, `p.0?` or `p.(Met1?)`",
-                        ),
-                ));
-            }
+    if let HgvsVariant::Protein(v) = variant {
+        let at_initiator = matches!(
+            (v.loc_edit.location.start.as_single(), v.loc_edit.location.end.as_single()),
+            (Some(Mu::Certain(s)), Some(Mu::Certain(e)))
+                if s == e && s.number == 1 && s.aa == AminoAcid::Met
+        );
+        if at_initiator && is_residue_swap(&v.loc_edit.edit) {
+            return Err(FerroError::parse_with_diagnostic(
+                0,
+                "a variant that changes the translation initiation codon is not described \
+                 as a substitution or as an extension; use `p.0` (no protein), `p.0?` \
+                 (predicted no protein) or `p.(Met1?)` (consequence unknown), or — when \
+                 an upstream initiation site is activated — the insertion form \
+                 `p.Met1_Leu2ins...` (protein/substitution.md:49, checklist.md:65, \
+                 protein/extension.md:28)",
+                Diagnostic::new()
+                    .with_code(ErrorCode::InvalidEdit)
+                    .with_hint(
+                        "losing the initiator methionine abolishes translation from that \
+                         codon rather than swapping one residue for another, so the \
+                         consequence is `p.0`, `p.0?` or `p.(Met1?)`",
+                    ),
+            ));
         }
-        HgvsVariant::Allele(allele) => {
-            for inner in &allele.variants {
-                validate_no_start_loss_substitution(inner)?;
-            }
-        }
-        _ => {}
     }
     Ok(())
 }
