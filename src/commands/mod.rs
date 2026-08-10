@@ -89,7 +89,7 @@ pub struct BatchResults {
 /// same reason.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub struct NormalizeConfig {
+pub struct NormalizeCommandConfig {
     /// Reference directory (with manifest.json)
     pub reference_dir: Option<std::path::PathBuf>,
 
@@ -100,7 +100,7 @@ pub struct NormalizeConfig {
     pub workers: usize,
 }
 
-impl Default for NormalizeConfig {
+impl Default for NormalizeCommandConfig {
     fn default() -> Self {
         Self {
             reference_dir: None,
@@ -215,7 +215,7 @@ pub fn cdot_cache_load_source(
 /// Batch results with all normalize results and timing info.
 pub fn normalize_batch<P: AsRef<Path>>(
     input: P,
-    config: &NormalizeConfig,
+    config: &NormalizeCommandConfig,
 ) -> Result<BatchResults, FerroError> {
     let input = input.as_ref();
 

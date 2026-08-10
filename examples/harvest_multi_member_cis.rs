@@ -207,10 +207,28 @@ fn harvest() -> Result<Fixture, String> {
         ));
     }
 
-    // Sorted and deduplicated: the same allele appears in more than one corpus
-    // (`clinvar_hgvs_unique` is a subset of the 500k by construction), and a
-    // fixture whose order depended on corpus iteration would churn its diff for
-    // no reason.
+    // Sorted and deduplicated: the same allele appears in more than one corpus,
+    // and a fixture whose order depended on corpus iteration would churn its
+    // diff for no reason.
+    //
+    // The dedup is load-bearing because the two ClinVar corpora genuinely
+    // overlap — **not** because either contains the other. They are drawn
+    // differently and neither is a subset of the other:
+    //
+    //   `clinvar_hgvs_500k`    a stratified sample of ClinVar HGVS *expressions*
+    //                          (a variant may contribute several)
+    //   `clinvar_hgvs_unique`  one expression per `VariationID`, across all of
+    //                          ClinVar — an order of magnitude larger
+    //
+    // Measured on the committed fixtures, their intersection is a small
+    // minority of either side, and each holds inputs the other does not; among
+    // the bracketed multi-member candidates this harvest cares about, a handful
+    // are shared and both corpora contribute rows the other lacks. So dropping
+    // either source would lose alleles, and skipping the dedup would double-count
+    // the shared ones.
+    //
+    // (This comment previously claimed `clinvar_hgvs_unique` was "a subset of
+    // the 500k by construction". It is not, in either direction.)
     rows.sort();
     rows.dedup_by(|a, b| a.input == b.input);
 
