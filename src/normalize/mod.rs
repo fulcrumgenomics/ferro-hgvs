@@ -2299,7 +2299,56 @@ impl<P: ReferenceProvider> Normalizer<P> {
         variant: &HgvsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         let (normalized, warnings) = self.normalize_core(variant)?;
-        self.canonicalize_from_sequence(normalized, warnings)
+        let (normalized, warnings) = self.canonicalize_from_sequence(normalized, warnings)?;
+        Ok((self.split_protein_separation(normalized), warnings))
+    }
+
+    /// The protein-axis partition pass, run once at the top level.
+    ///
+    /// [`Self::try_protein_split_delins`] holds the rule and its citations; this
+    /// is only about **where** it runs. It runs here, beside
+    /// [`Self::canonicalize_from_sequence`] and for the same reason: the move
+    /// turns one member into several, so it belongs at the seam that sees the
+    /// whole description rather than in
+    /// [`normalize_protein`](Self::normalize_protein), which `normalize_allele`
+    /// re-enters once per member.
+    ///
+    /// Wiring it into `normalize_protein` was tried, and produced two defects
+    /// that every bare-description test passes straight over:
+    ///
+    /// ```text
+    ///   p.[Ser44_Trp46delinsArgLeuArg;Ala60Gly]
+    ///     -> [NP_003997.1:p.Ala60Gly;NP_003997.1:p.[Ser44Arg;Trp46Arg]]
+    ///   p.[Ser44_Trp46delinsArgLeuArg];[Ala60Gly]
+    ///     -> NP_003997.1:p.[Ser44Arg;Trp46Arg];[Ala60Gly]     (does not re-parse)
+    /// ```
+    ///
+    /// The first is a nested bracket carrying a repeated accession, which is not
+    /// a description at all. The second *is* legal HGVS — the DNA axis emits
+    /// `g.[A;B];[C]` and reads it back — but ferro's **protein** allele grammar
+    /// accepts only single-member arms, so normalization would emit a string
+    /// `parse_hgvs` refuses. That is exactly what `FERRO_ASSERT_REPARSE` exists to
+    /// catch, and its exemption list is closed on purpose.
+    ///
+    /// So the move applies to a whole `p.` description and **declines for a
+    /// member of one**: `p.[<separated delins>;…]` keeps its delins. Closing that
+    /// needs two decisions this pass deliberately does not take — where an inner
+    /// allele's `( )` marker goes once its members flatten into the outer bracket
+    /// (`protein/alleles.md:34` puts it per member, `:90` puts it round the group)
+    /// and a protein allele grammar that reads `p.[A;B];[C]`. Pinned by
+    /// `protein_axis_split_move::a_delins_inside_a_cis_allele_is_left_alone` and
+    /// its trans sibling.
+    fn split_protein_separation(&self, variant: HgvsVariant) -> HgvsVariant {
+        let HV::Protein(protein) = &variant else {
+            return variant;
+        };
+        match self.try_protein_split_delins(protein) {
+            Some(members) => {
+                let uncertain = protein.loc_edit.edit.is_uncertain();
+                wrap_allele_if_split(members.into_iter().map(HV::Protein).collect(), uncertain)
+            }
+            None => variant,
+        }
     }
 
     /// Normalize a variant, apply the strict-mode rejection ladder, and return
@@ -5750,6 +5799,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
             None => final_variant,
         };
 
+        // NOTE: the protein-axis split move (`protein/delins.md:21`, `:64`) is
+        // deliberately NOT applied here. It turns one member into several, so it
+        // runs at the whole-description seam —
+        // [`Self::split_protein_separation`], called from
+        // `normalize_core_canonical` — which this method cannot be, because
+        // `normalize_allele` re-enters it once per member. That helper records
+        // what wiring it in here was measured to produce.
         Ok((HV::Protein(final_variant), warnings))
     }
 
@@ -6286,6 +6342,200 @@ impl<P: ReferenceProvider> Normalizer<P> {
             },
             Interval::new(dstart, dend),
         ))
+    }
+
+    /// The protein-axis split move: an **equal-length** `delins` whose interior
+    /// leaves at least one residue unchanged describes two or more separate
+    /// changes, not one `delins`.
+    ///
+    /// `recommendations/protein/delins.md:21` states it outright — "two variants
+    /// separated by one or more amino acids should be described individually and
+    /// not as a `delins`" — and `:64` publishes the worked answer:
+    /// `p.[Ser44Arg;Trp46Arg]`, with the explicit note that "the variant is
+    /// **not** described as `p.Ser44_Trp46delinsArgLeuArg`". This is the protein
+    /// analogue of the nucleotide separation rule (`general.md:34`) that
+    /// [`Self::apply_canonical_split`] applies via
+    /// [`rules::decompose_delins`](crate::normalize::rules::decompose_delins).
+    ///
+    /// # Why equal length, and only equal length
+    ///
+    /// A `delins` whose reference span and payload have the **same** length has
+    /// exactly one residue-wise correspondence, so "the middle residue is
+    /// unchanged" is a fact about the two sequences rather than a choice. An
+    /// unequal-length `delins` has no such correspondence: finding an unchanged
+    /// run inside it means first picking an alignment, and *which* alignment is
+    /// not determined by the reference and the payload — several are equally
+    /// good and they disagree about where the unchanged residue sits. On the
+    /// nucleotide axis that choice is settled by applying the edits to the
+    /// reference and re-deriving from the resulting sequence
+    /// (`canonical-form-choice-when-both-legal`), which is not available here:
+    /// there is no apply-to-reference on the protein axis, which is why
+    /// [`merge::cis_kind_of`](crate::normalize::merge) returns `None` for
+    /// `Protein`. With nothing to derive the answer from, ferro declines rather
+    /// than invent an alignment, and those are left as authored.
+    ///
+    /// The floor is **one** unchanged residue: `delins.md:21` says "separated by
+    /// one or more amino acids", and unlike the nucleotide axis there is no
+    /// codon carve-out here (`general.md:35-38` is a *reading-frame* exception,
+    /// and a protein description has no codons of its own to share).
+    ///
+    /// # Why this is not routed through the nucleotide canonicalizer
+    ///
+    /// [`merge::canonicalize_from_sequence`](crate::normalize::merge) applies the
+    /// edit set to a reference window and re-derives the partition from the
+    /// resulting sequence. There is no apply-to-reference on the protein axis —
+    /// [`merge::cis_kind_of`](crate::normalize::merge) returns `None` for
+    /// `Protein` for exactly that reason — so the move is implemented here, on
+    /// the reference residues themselves.
+    ///
+    /// # When it declines
+    ///
+    /// Returning `None` leaves the input `delins` exactly as authored. It
+    /// declines when:
+    ///
+    /// - the edit is not a `Delins`, or either endpoint is uncertain or a range
+    ///   (there is then no residue-wise correspondence to read);
+    /// - the payload length differs from the span, per the section above;
+    /// - the span is under three residues, which has no interior to be
+    ///   unchanged;
+    /// - **the protein reference is unavailable for this accession.** The
+    ///   unchanged middle residue is a claim about the *reference*, and the
+    ///   payload cannot testify to it: assuming `payload[i]` matches the
+    ///   reference is the guess this rule must never make. `has_protein_data()`
+    ///   is provider-wide, so the fetch itself is what decides (#1131);
+    /// - the reference span or the payload names an unknown residue (`Xaa`),
+    ///   where equality is not a statement about identity;
+    /// - **either side carries a `Ter`.** In the *payload*, a split across a stop
+    ///   would emit members 3' of it, which `delins.md:45` forbids ("amino acids
+    ///   after the translation termination codon are **not** listed"). In the
+    ///   *reference span*, a stop replaced by an ordinary residue is a
+    ///   **stop-loss**, and `extension.md:18` ranks it — "prioritisation: (1)
+    ///   extension, (2) frameshift or deletion-insertion" — so it is described
+    ///   with `ProteinEdit::Extension` (`:30`, `p.Ter110GlnextTer17`), never a
+    ///   substitution. Splitting `Ser-Leu-Ter` against a payload of
+    ///   `Ala-Leu-His` would emit `p.[Ser988Ala;Ter990His]`, which spells an
+    ///   extension as a substitution and states the wrong consequence. Both are
+    ///   the mirror of the `first_ter_pos` gate in
+    ///   [`merge::coalesce_protein_adjacent_changes`](crate::normalize::merge);
+    /// - **residue 1 is the changed one.** A member at the translation
+    ///   initiation codon renders as `p.Met1Xxx`, which `substitution.md:49`
+    ///   forbids ("not described as a substitution or as an extension") and
+    ///   which `parse_hgvs` refuses, so the split would emit a description ferro
+    ///   cannot read back. The correct description — `p.0`, `p.0?`,
+    ///   `p.(Met1?)`, or the insertion form when an upstream initiation site is
+    ///   activated — is a claim about the *consequence*, and two protein
+    ///   sequences do not settle which. The range input parses only because
+    ///   `validate_no_start_loss_substitution` keys on a single certain
+    ///   position; the illegality is created by the split, so the guard belongs
+    ///   here;
+    /// - fewer than two changed runs survive, i.e. the change really is one
+    ///   contiguous `delins`.
+    fn try_protein_split_delins(
+        &self,
+        variant: &crate::hgvs::variant::ProteinVariant,
+    ) -> Option<Vec<crate::hgvs::variant::ProteinVariant>> {
+        use crate::hgvs::edit::AminoAcidSeq;
+        use crate::hgvs::variant::{LocEdit, ProteinVariant};
+
+        let seq = match variant.loc_edit.edit.inner()? {
+            ProteinEdit::Delins { sequence } => sequence,
+            _ => return None,
+        };
+        // Certain single points only — same rationale as
+        // `try_protein_delins_canonicalize`.
+        let start_pos = match variant.loc_edit.location.start.as_single()? {
+            Mu::Certain(p) => *p,
+            _ => return None,
+        };
+        let end_pos = match variant.loc_edit.location.end.as_single()? {
+            Mu::Certain(p) => *p,
+            _ => return None,
+        };
+        if start_pos.number == 0 || end_pos.number < start_pos.number {
+            return None;
+        }
+        let span = (end_pos.number - start_pos.number + 1) as usize;
+        // Equal length, and at least one interior residue to be unchanged.
+        if span < 3 || span != seq.0.len() {
+            return None;
+        }
+        if seq.0.contains(&AminoAcid::Ter) || seq.0.contains(&AminoAcid::Xaa) {
+            return None;
+        }
+
+        // The reference residues, or nothing. Never the payload's own middle.
+        if !self.provider.has_protein_data() {
+            return None;
+        }
+        let accession = variant.accession.transcript_accession();
+        let ref_aas =
+            self.fetch_protein_window(&accession, start_pos.number - 1, end_pos.number)?;
+        if ref_aas.len() != span
+            || ref_aas.contains(&AminoAcid::Xaa)
+            || ref_aas.contains(&AminoAcid::Ter)
+        {
+            return None;
+        }
+
+        // The translation initiation codon, changed. A member here would be
+        // `p.Met1Xxx`, which `substitution.md:49` forbids and `parse_hgvs`
+        // refuses — so the split would emit a description ferro cannot read
+        // back. Which description is correct (`p.0`, `p.0?`, `p.(Met1?)`, or
+        // the upstream-initiation insertion form) is a claim about the
+        // *consequence*, which two protein sequences cannot settle, so decline
+        // and leave the input as authored rather than guess.
+        if start_pos.number == 1 && ref_aas[0] != seq.0[0] {
+            return None;
+        }
+
+        // Maximal runs of residue-wise disagreement. Two or more runs means an
+        // unchanged residue separates them, which is the separation the clause
+        // is about.
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        let mut offset = 0usize;
+        while offset < span {
+            if ref_aas[offset] == seq.0[offset] {
+                offset += 1;
+                continue;
+            }
+            let lo = offset;
+            while offset < span && ref_aas[offset] != seq.0[offset] {
+                offset += 1;
+            }
+            runs.push((lo, offset - 1));
+        }
+        if runs.len() < 2 {
+            return None;
+        }
+
+        // One member per run: a single-residue run is a substitution
+        // (`general.md:56` ranks substitution above delins), a longer one the
+        // smaller delins it really is. Members are always certain — a predicted
+        // `p.(…)` input carries its marker onto the whole allele, which
+        // `wrap_allele_if_split` does.
+        let members = runs
+            .into_iter()
+            .map(|(lo, hi)| {
+                let member_start = ProtPos::new(ref_aas[lo], start_pos.number + lo as u64);
+                let member_end = ProtPos::new(ref_aas[hi], start_pos.number + hi as u64);
+                let edit = if lo == hi {
+                    ProteinEdit::Substitution {
+                        reference: ref_aas[lo],
+                        alternative: seq.0[lo],
+                    }
+                } else {
+                    ProteinEdit::Delins {
+                        sequence: AminoAcidSeq::new(seq.0[lo..=hi].to_vec()),
+                    }
+                };
+                ProteinVariant {
+                    accession: variant.accession.clone(),
+                    gene_symbol: variant.gene_symbol.clone(),
+                    loc_edit: LocEdit::new(Interval::new(member_start, member_end), edit),
+                }
+            })
+            .collect();
+        Some(members)
     }
 
     /// HGVS Prioritization: if a protein insertion is equivalent to a
