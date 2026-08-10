@@ -2134,31 +2134,99 @@ enum PartitionRule {
     CanonicalCoalesced,
 }
 
+/// Every `FERRO_PARTITION` value this build recognises, in the order the
+/// diagnostic lists them.
+///
+/// Named rather than spelled inline so the error message, the `normalize --help`
+/// text and the tests cannot drift apart — an arm added to [`PartitionRule`]
+/// without a name here is an arm the diagnostic would not offer.
+const PARTITION_RULE_NAMES: [&str; 4] = ["live", "shadow", "canonical", "canonical-coalesced"];
+
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
 ///
-/// Unset, empty, or unrecognised all yield [`PartitionRule::Live`], so no
-/// environment can make ferro emit something other than its shipped
-/// representation by accident. An unrecognised value is warned about rather than
-/// rejected: this is a measurement knob, and a typo that silently selected a
-/// different partitioner would poison a bake-off far more quietly than one that
-/// silently ran the default and said so.
+/// Unset and empty yield [`PartitionRule::Live`], the shipped rule. Anything
+/// else that is not an arm name is an **error**, not a fallback.
 ///
-/// Split out from [`partition_rule`] so the mapping is testable without an
-/// environment variable — the cached read below can only ever be exercised once
-/// per process.
-fn partition_rule_from_env(value: Option<&str>) -> PartitionRule {
+/// # Why this refuses rather than warning
+///
+/// The knob's only purpose is to compare arms, so a value that quietly means
+/// "the default" is a measurement instrument that manufactures agreement: the
+/// candidate column is served by `live`, the diff comes back empty, and the run
+/// reads as *"the candidate changes nothing"*. There is no output that
+/// distinguishes that from the real thing.
+///
+/// It used to warn through the `log` facade and return [`PartitionRule::Live`].
+/// **That warning reached nobody.** This repository installs no logger anywhere
+/// — no `env_logger`, no `log::set_logger` — so every `log::warn!` in it is
+/// discarded by the facade's no-op default, `RUST_LOG` included. The CLI's own
+/// `normalize --help` said so in as many words. A diagnostic on a channel with
+/// no sink is indistinguishable from silence, and a warning that *did* reach
+/// stderr would still be the wrong shape here, because these runs are batch
+/// measurements whose stderr is redirected or discarded.
+///
+/// Two harvested measurement rows are the evidence: one records a `Preserve`
+/// arm, which exists only on an unmerged branch and never on `main`, and one
+/// records an output form no arm on this commit produces. Both were served by
+/// `live`. The message below names the offending value and the arms that exist
+/// **on this build**, so `FERRO_PARTITION=preserve` reports that no such arm is
+/// here rather than silently answering as `live`.
+///
+/// The cost of refusing is the trade this accepts: an unrecognised value now
+/// aborts the process at the first normalized variant (see [`partition_rule`])
+/// rather than degrading. That is confined to runs which *set* the variable — a
+/// process that leaves it unset, which is every production and CI path, cannot
+/// reach this error at all.
+///
+/// Split out from [`partition_rule`] so the mapping is testable without touching
+/// a process-global environment variable — the cached read below can only ever
+/// be exercised once per process.
+fn partition_rule_from_env(value: Option<&str>) -> Result<PartitionRule, String> {
     match value {
-        None | Some("") | Some("live") => PartitionRule::Live,
-        Some("shadow") => PartitionRule::Shadow,
-        Some("canonical") => PartitionRule::Canonical,
-        Some("canonical-coalesced") => PartitionRule::CanonicalCoalesced,
-        Some(other) => {
-            log::warn!(
-                "FERRO_PARTITION={other} is not one of \
-                 live|shadow|canonical|canonical-coalesced; using live"
-            );
-            PartitionRule::Live
-        }
+        None | Some("") | Some("live") => Ok(PartitionRule::Live),
+        Some("shadow") => Ok(PartitionRule::Shadow),
+        Some("canonical") => Ok(PartitionRule::Canonical),
+        Some("canonical-coalesced") => Ok(PartitionRule::CanonicalCoalesced),
+        Some(other) => Err(format!(
+            "FERRO_PARTITION={other:?} is not a partitioner this build has. \
+             This build's arms are: {}. \
+             Refusing rather than falling back to `live`, because a bake-off \
+             served the shipped rule under a candidate's name reports that the \
+             candidate changes nothing.",
+            PARTITION_RULE_NAMES.join(", ")
+        )),
+    }
+}
+
+/// The string [`partition_rule_from_env`] should see, from a raw environment read.
+///
+/// Split out from [`partition_rule`] for the same reason
+/// [`partition_rule_from_env`] is: the cached read below can only ever be
+/// exercised once per process, so the mapping has to be testable without it.
+///
+/// # Why this is not `.ok()`
+///
+/// [`std::env::var`] returns `Err` for two unrelated reasons and `.ok()`
+/// collapses both to `None` — but `None` is the **unset** case, which is
+/// legitimately `live`. So a value that *was* set, to bytes that are not UTF-8,
+/// selected the shipped rule and said nothing: exactly the silent fallback the
+/// rejection in [`partition_rule_from_env`] exists to remove, reachable through
+/// a door that function never sees. A bake-off whose `FERRO_PARTITION` was
+/// mangled in transit (a locale-mismatched shell, a mis-encoded CI variable)
+/// reads as "the candidate changes nothing".
+///
+/// Only [`VarError::NotPresent`] means unset. A [`VarError::NotUnicode`] value
+/// is rendered lossily and handed to the parser so it is refused *and* quoted in
+/// the diagnostic. The U+FFFD replacements that rendering inserts cannot collide
+/// with an arm name, because a value needing no replacement would have decoded
+/// as UTF-8 and never reached this arm.
+///
+/// [`VarError::NotPresent`]: std::env::VarError::NotPresent
+/// [`VarError::NotUnicode`]: std::env::VarError::NotUnicode
+fn partition_rule_env_value(read: Result<String, std::env::VarError>) -> Option<String> {
+    match read {
+        Ok(value) => Some(value),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(raw)) => Some(raw.to_string_lossy().into_owned()),
     }
 }
 
@@ -2168,9 +2236,24 @@ fn partition_rule_from_env(value: Option<&str>) -> PartitionRule {
 /// [`seqfirst_shadow_enabled`], so the default path pays one relaxed atomic load
 /// per canonicalized block and nothing else; with the variable unset the result
 /// is byte-identical to having no switch at all.
+///
+/// # Panics
+///
+/// If `FERRO_PARTITION` names an arm this build does not have. Both call sites
+/// are inside `canonicalize_from_sequence`, which is infallible and sits deep
+/// under every public normalization entry point, so there is no `Result` to
+/// return the rejection through without threading one the length of the
+/// pipeline. A panic here is the honest alternative: it fires once, at the first
+/// normalized variant, before any output exists to be mistaken for a
+/// measurement. See [`partition_rule_from_env`] for why silence was not an
+/// option, and [`partition_rule_env_value`] for why the raw read is matched
+/// rather than `.ok()`-ed.
 fn partition_rule() -> PartitionRule {
     static RULE: std::sync::OnceLock<PartitionRule> = std::sync::OnceLock::new();
-    *RULE.get_or_init(|| partition_rule_from_env(std::env::var("FERRO_PARTITION").ok().as_deref()))
+    *RULE.get_or_init(|| {
+        let value = partition_rule_env_value(std::env::var("FERRO_PARTITION"));
+        partition_rule_from_env(value.as_deref()).unwrap_or_else(|message| panic!("{message}"))
+    })
 }
 
 /// The unchanged-base separation threshold an axis merges runs below.
@@ -11516,51 +11599,161 @@ mod tests {
             );
         }
 
-        /// Unset means `live`, and so does anything the knob does not recognise.
+        /// Only *absence* means `live` — an unset or empty variable.
         ///
-        /// This is the property the default path depends on. A knob that fell
-        /// through to a different rule on an empty string, or that treated a
-        /// typo (`FERRO_PARTITION=cannonical`) as an instruction rather than as
-        /// noise, would silently re-partition every block for whoever set it —
-        /// which for this repo is a representation change, not a configuration.
+        /// This is the property the default path depends on: leaving the knob
+        /// alone, which is every production and CI path, must reach the shipped
+        /// rule. Distinguished from a typo deliberately, because the two used to
+        /// share an answer; see the sibling test below.
         #[test]
-        fn unset_and_unrecognised_values_select_the_live_rule() {
+        fn an_absent_value_selects_the_live_rule() {
             for value in [None, Some(""), Some("live")] {
                 assert_eq!(
                     partition_rule_from_env(value),
-                    PartitionRule::Live,
+                    Ok(PartitionRule::Live),
                     "{value:?}"
-                );
-            }
-            for typo in ["cannonical", "LIVE", "shadow ", "1", "true"] {
-                assert_eq!(
-                    partition_rule_from_env(Some(typo)),
-                    PartitionRule::Live,
-                    "{typo} must not select a rule"
                 );
             }
         }
 
-        /// The two non-default rules are reachable, and only by their own names.
+        /// **Every** arm name this build has still resolves, and to its own rule.
+        ///
+        /// The guard on the guard: refusing unknown values is only safe if it
+        /// cannot also refuse a real arm. Driven off [`PARTITION_RULE_NAMES`] —
+        /// the same list the rejection message prints — so an arm that the
+        /// diagnostic advertises but the parser does not accept fails here
+        /// rather than at somebody's bake-off.
         #[test]
-        fn the_alternative_rules_are_selected_by_name() {
+        fn every_advertised_arm_name_resolves() {
+            let expected = [
+                ("live", PartitionRule::Live),
+                ("shadow", PartitionRule::Shadow),
+                ("canonical", PartitionRule::Canonical),
+                ("canonical-coalesced", PartitionRule::CanonicalCoalesced),
+            ];
             assert_eq!(
-                partition_rule_from_env(Some("shadow")),
-                PartitionRule::Shadow
+                expected.map(|(name, _)| name),
+                PARTITION_RULE_NAMES,
+                "the advertised names and the names under test have drifted"
+            );
+            for (name, rule) in expected {
+                assert_eq!(
+                    partition_rule_from_env(Some(name)),
+                    Ok(rule),
+                    "{name} must still select its own rule"
+                );
+            }
+        }
+
+        /// An unrecognised value is **refused**, and must not produce `live`.
+        ///
+        /// The defect this pins is not "a typo picks the wrong rule" — it is
+        /// that a typo used to pick the *shipped* rule and say nothing, so a
+        /// bake-off measured `live` against `live` and reported that the
+        /// candidate changes nothing. The `log::warn!` that stood here was a
+        /// no-op: this repository installs no logger, so nothing reached any
+        /// stream, `RUST_LOG` included.
+        ///
+        /// Asserted on the concrete behaviour, not merely on non-`Ok`: the
+        /// message must quote the offending value verbatim and list the arms
+        /// this build actually has. `preserve` is in the list because it is one
+        /// of the two values a harvested measurement row recorded — it exists
+        /// only on an unmerged branch, so on this commit the message has to be
+        /// what tells the operator that.
+        #[test]
+        fn an_unrecognised_value_is_refused_and_never_falls_back_to_live() {
+            for bad in [
+                "cannonical",
+                "LIVE",
+                "shadow ",
+                "1",
+                "true",
+                "preserve",
+                "Canonical",
+                "none",
+            ] {
+                let outcome = partition_rule_from_env(Some(bad));
+                let message = match outcome {
+                    Ok(rule) => panic!(
+                        "FERRO_PARTITION={bad} silently selected {rule:?}; \
+                         an unrecognised arm must be refused, not defaulted"
+                    ),
+                    Err(message) => message,
+                };
+                assert!(
+                    message.contains(bad),
+                    "the rejection must quote the offending value verbatim, got: {message}"
+                );
+                for name in PARTITION_RULE_NAMES {
+                    assert!(
+                        message.contains(name),
+                        "the rejection must list the `{name}` arm so the reader \
+                         can see what this build has, got: {message}"
+                    );
+                }
+            }
+        }
+
+        /// An **unset** variable is the only thing that reads as unset.
+        ///
+        /// The two `Err` arms of [`std::env::VarError`] mean opposite things
+        /// here, and the collapse that `.ok()` performs on them is the defect
+        /// [`partition_rule_env_value`] exists to prevent — see its notes.
+        #[test]
+        fn only_a_missing_variable_reads_as_unset() {
+            assert_eq!(
+                partition_rule_env_value(Err(std::env::VarError::NotPresent)),
+                None,
+                "an unset FERRO_PARTITION is the legitimate `live` case"
             );
             assert_eq!(
-                partition_rule_from_env(Some("canonical")),
-                PartitionRule::Canonical
+                partition_rule_env_value(Ok("canonical".to_owned())),
+                Some("canonical".to_owned()),
+                "a readable value must reach the parser unaltered"
             );
-            // The rule this change adds. Without it the knob's newest value was
-            // the one value nothing exercised, so a typo in the match arm would
-            // have surfaced only as a silent fallback to `Live` during a
-            // bake-off — exactly the failure the knob's own doc says it is
-            // designed to make loud.
-            assert_eq!(
-                partition_rule_from_env(Some("canonical-coalesced")),
-                PartitionRule::CanonicalCoalesced
+        }
+
+        /// A **non-UTF-8** value is refused, and must not produce `live`.
+        ///
+        /// The sibling of `an_unrecognised_value_is_refused_and_never_falls_back_to_live`,
+        /// covering the door that test cannot reach: its subject is the parser,
+        /// which only ever sees a `str`, so a value that fails to decode was
+        /// silently `live` no matter what the parser did. Bytes chosen to spell
+        /// a *valid* arm followed by one invalid byte, so the assertion cannot
+        /// pass merely because the value was unrecognisable anyway.
+        ///
+        /// Unix-only because constructing a non-UTF-8 `OsString` is
+        /// platform-specific; the mapping under test is not.
+        #[cfg(unix)]
+        #[test]
+        fn a_non_unicode_value_is_refused_and_never_falls_back_to_live() {
+            use std::os::unix::ffi::OsStringExt;
+
+            let raw = std::ffi::OsString::from_vec(vec![b'l', b'i', b'v', b'e', 0xff]);
+            let value = partition_rule_env_value(Err(std::env::VarError::NotUnicode(raw)))
+                .expect("a set-but-undecodable value must reach the parser, not read as unset");
+
+            let message = match partition_rule_from_env(Some(&value)) {
+                Ok(rule) => panic!(
+                    "a non-UTF-8 FERRO_PARTITION silently selected {rule:?}; \
+                     a value that was set but cannot be decoded must be refused, \
+                     not treated as unset"
+                ),
+                Err(message) => message,
+            };
+            assert!(
+                message.contains(&value),
+                "the rejection must quote the offending value, mangled bytes and \
+                 all, so the reader can see it was the encoding that broke, \
+                 got: {message}"
             );
+            for name in PARTITION_RULE_NAMES {
+                assert!(
+                    message.contains(name),
+                    "the rejection must list the `{name}` arm so the reader \
+                     can see what this build has, got: {message}"
+                );
+            }
         }
 
         /// This suite's expectations are the live rule's, and the cached read
