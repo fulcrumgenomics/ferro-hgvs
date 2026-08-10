@@ -402,9 +402,11 @@ refuses) are skipped rather than compared, so an error string never counts as a 
 
 The sibling `rulings` section is the decision log for clauses that **conflict while pointing at the
 same description**. (This used to say "conflict at equal RFC 2119 strength", citing `style.md:9`.
-That framing is withdrawn — uppercase RFC 2119 keywords appear exactly once outside `style.md`
-itself, so essentially every clause in play is lowercase prose and keyword strength cannot rank
-them. See [Reading the spec](#reading-the-spec).) Each record names the clauses in tension, which
+That framing is withdrawn — uppercase RFC 2119 keywords appear only **twice** outside `style.md`
+itself, both in one file, so essentially every clause in play is lowercase prose and keyword
+strength cannot rank them. The count is stated once, under
+[Reading the spec](#reading-the-spec), with the grep it came from; do not restate it here.)
+Each record names the clauses in tension, which
 one governs, which is deviated from, and why. `undecided` is a first-class state and the generator
 **refuses** to build a record that is `undecided` yet names a governing *or* a deviated-from clause
 — either implies a side was chosen, and an unsettled question must not be able to smuggle in a
@@ -776,13 +778,21 @@ pinned `assets/hgvs-nomenclature` checkout; re-check rather than trust this list
 
 `style.md:9` binds the spec to RFC 2119, which invites the habit of arguing that clause A is a
 SHOULD and clause B a MUST. That argument almost never works here, because **uppercase RFC 2119
-keywords appear exactly once outside `style.md` itself**:
+keywords appear exactly twice outside `style.md` itself**, and both are in one file:
 
 ```bash
-grep -rnoE '\b(MUST|SHOULD|RECOMMENDED|MAY|SHALL|REQUIRED|OPTIONAL)( NOT)?\b' \
+grep -rnoE '\b(MUST|SHOULD|RECOMMENDED|MAY|SHALL|REQUIRED|REQUIRES|OPTIONAL)( NOT)?\b' \
   assets/hgvs-nomenclature/docs/recommendations/ | grep -v '/style\.md'
-# -> docs/recommendations/RNA/adjoined_transcript.md:21:SHOULD   (and nothing else)
+# -> docs/recommendations/RNA/adjoined_transcript.md:20:REQUIRES
+# -> docs/recommendations/RNA/adjoined_transcript.md:21:SHOULD    (and nothing else)
 ```
+
+**The count was recorded here as "exactly once" and that was wrong** — corrected 2026-08-10.
+`REQUIRES` is missing from the RFC 2119 alternation everyone copies (RFC 2119 lists `REQUIRED`),
+so `:20` — "This syntax REQUIRES the use of a range (not a single position)" — was invisible to
+the grep the count was taken from. Neither hit generalises: `:20` constrains one syntax, and
+`:21`'s SHOULD is assay-scoped, conditioned on the junction rather than the whole transcript
+being analyzed. Do not restate "exactly once" anywhere.
 
 Every clause this project has litigated — `general.md:34`, `:35`, `:56`, `:58`,
 `DNA/delins.md:17`, `:18`, `:47`, `DNA/inversion.md:20` — is lowercase prose. Read strictly,
@@ -880,10 +890,15 @@ The `rulings` section of `tests/fixtures/grammar/hgvs_spec_normalization_overrid
 decision log, pinned by `ruling_records_are_intact` (ids **and** statuses; keep `RULING_STATUSES`
 in sync).
 
-**Do not trust a count of decided/undecided records written down here.** Both this file and its
-predecessors have carried one that had gone stale — the sentence this replaces said "five of its
-eight records are `undecided`" long after the ledger had grown and four of those five had been
-ruled on. The statuses are pinned in exactly one place, `RULING_STATUSES` in
+**Do not trust a count of decided/undecided records written down here, and do not trust which
+side of the line a record is on either.** Both failures have happened: the sentence this replaces
+said "five of its eight records are `undecided`" long after the ledger had grown and four of those
+five had been ruled on, and both tables below have carried a record on the wrong side for days
+after it was decided. A stale denominator reads as a claim about coverage; a stale status reads as
+an open question that is in fact settled, which is the more expensive of the two because someone
+then re-derives it.
+
+The statuses are pinned in exactly one place, `RULING_STATUSES` in
 `tests/it/hgvs_spec_normalization_tests.rs`, and `ruling_records_are_intact` fails when the ledger
 and that list disagree. Read them from there, or straight off the ledger:
 
@@ -902,7 +917,7 @@ re-deriving the same argument; the first is an operator decision that blocks oth
 | `codon-carve-out-shape-restriction` | `delins.md:18` names no edit type; ferro applies it only to sub/unchanged/sub |
 | `exon-junction-dup-converge-from-the-far-side` | `LRG_199t1:c.3921dup` and `c.3922dup` denote one transcript sequence but are two fixed points, projecting 2,790 bp apart. `duplication.md:26` argues for converging them, `general.md:44` does not prescribe the 5' shift that would |
 | `rna-repeat-range-plus-unit-redundancy` | `RNA/repeated.md:22` calls range-plus-unit invalid, `:27` publishes exactly that shape as valid. Upstream's conflict (#466); ferro answers both ways depending on input-hygiene mode |
-| `separation-is-a-property-of-the-spelling-not-of-the-variant` | The separation rule keys on unchanged nucleotides "between two variants", which presupposes a decomposition a normalizer does not receive. Two spellings of one variant can present different separations, so the rule as written is not evaluable on what a normalizer knows |
+| `separation-is-a-property-of-the-spelling-not-of-the-variant` | `general.md:34` is stated over "two variants", so the separation it keys on is read off a decomposition a normalizer never sees. Which spelling the rule is evaluated on is unanswered; the spec's own discriminator (`delins.md:79-84`) is provenance, which makes it unfixable as stated |
 | `absolute-prohibition-enforcement-stage` | Whether an absolute prohibition is refused at PARSE (unconditional) or at strict-mode normalize (opt-outable). Recorded because ferro answers it three ways for clauses of identical strength — within `checklist.md:16` alone, `g.*10del` is refused at parse while `g.266+2del` is refused nowhere |
 
 The `decided` records, and the scope each was decided **at** — read the record before citing it,
@@ -910,21 +925,22 @@ because several of these rulings are narrower than their one-line summary:
 
 | record | ruling |
 |---|---|
+| `adjudication-precedence-order` | **A pointer, not an order.** The canonical ruleset lives in `README.md`; this record cites it, carries the evidence base for it, and holds the escalation register. It deliberately states no ordering of its own — a rule restated in four places is how `CLAUDE.md`, the ledger and a PR body came to disagree, and how a ruling came to cite a record that had never merged |
+| `canonical-form-choice-when-both-legal` | **Re-derivation governs.** Where two legal descriptions of one variant compete and no clause selects, ferro derives from the resulting sequence and emits what falls out, subject to every explicit spec tie-break — not the input's spelling, not the previously-shipped string. `general.md:157-160` is the spec's own strongest statement of the method. The counter-evidence is recorded in the record rather than left to be re-discovered as a refutation: `delins.md:83` grounds the split-by-default rule in **provenance**, which no normalizer can recover |
 | `delins-codon-carve-out-gap-one` | `delins.md:18` governs |
+| `delins-adjacent-members-when-both-consume-reference` | `substitution.md:32` governs: at separation **zero** the split spelling is marked `class="invalid"` and called "not correct" by name, so two adjacent members are one `delins`. **Scoped** to both members consuming reference bases (`sub`/`del`/`delins`/`inv`); a `dup` or `ins` on either side is left open, because `duplication.md:18` would be destroyed by merging, as is an adjacent repeat expansion |
+| `self-cancelling-across-ring-junctions` | `DNA/complex.md:130` governs: `general.md:58` does **not** reach the `::`-joined segments of a ring. `:58` is a sub-bullet of the prioritisation bullet `:56`, so it inherits its antecedent — it redirects to a preferred single-type description — and `complex.md:5` defines complex as precisely the case where no such description exists. `:130` settles the operators on identical member content: `::` asserts a join that `;` does not, so a `::` composite is not reducible to its member set |
 | `alignment-only-symbol-in-a-description` | `standards.md:39` governs: neither `X` nor `-` may appear in a description. The dagger sits inside the symbol cell, so `:39` annotates the row rather than competing with `:36`/`:37`, and the strength grading is moot either way — `general.md:48` admits only IUPAC-IUBMB symbols |
 | `bare-transcript-intronic-position` | `checklist.md:20` governs, **as a conditional clause**: strict input hygiene refuses a bare `NM_…:c.20+2del` (`W4007`), lenient accepts. Does not excuse the 371 bare-`NM_` intronic descriptions ferro's own junction clamp emits |
 | `conflicting-member-geometry-refusal-scope` | `DNA/alleles.md:5` governs — the *definition*, not `general.md:58`, is what reaches nested and coincident-insertion geometries; `:58`'s stated ground literally describes only its own `del`+`dup` example. `general.md:56` is cited to record that it does **not** reach a multi-member allele |
 | `delins-merge-vs-individual-gap-two-or-more` | `DNA/delins.md:44-47` governs `:17`, **scoped** to the alignment-coincidence shape `:44-47` describes. Where a separation of two or more arises from anything else, `general.md:34` still governs; unscoped the reading reaches roughly fifteen times the row set the argument was made on |
 | `inversion-vs-two-delins-76-83` | `inversion.md:5` governs: a whole-block reverse complement is one `inv` when the members it competes with are `delins`, since `general.md:56` ranks substitution but not `delins`. #1230's substitution case is untouched and still splits |
-| `adjudication-precedence-order` | What ranks next where the spec is silent. The order is (1) the spec where it speaks, (2) confluence, (3) re-derivation from the resulting sequence, (4) disclosure of any resulting move, (5) stability toward the already-shipped form, as a last-resort tiebreaker only. Mutalyzer appears nowhere in it |
-| `canonical-form-choice-when-both-legal` | Where two descriptions are legal and no clause selects between them, ferro derives from the **resulting sequence** and emits the form that falls out, subject to every explicit spec tie-break. It preserves neither the input's spelling nor the previously-shipped string |
-| `delins-adjacent-members-when-both-consume-reference` | `substitution.md:32` governs: at separation **zero** no clause licenses a split, and the spec marks one invalid by name — `c.[79G>T;80C>T]` for `LRG_199t1:c.79_80delinsTT` is rendered `class="invalid"` and called "not correct" |
 
-Two things follow for representation-stability work specifically. The repository's doctrine reads
-as "do not move a normalized output", while the downstream filer has said instability is
-acceptable **provided it is declared a breaking change** — different bars, and
-`adjudication-precedence-order` now settles which applies: disclosure ranks above stability, and
-stability is a last-resort tiebreaker rather than a veto. And Mutalyzer is not a spec oracle:
+Two things follow for representation-stability work specifically. The repository's doctrine once
+read as "do not move a normalized output", while the downstream filer has said instability is
+acceptable **provided it is declared a breaking change** — different bars, and the README ruleset
+chooses between them: disclosure is the obligation, so the filer's bar is the project's bar. And
+Mutalyzer is not a spec oracle:
 its normalizer re-derives a description by minimizing a **weighted description length** with
 constants dated 2014, and has no separation rule at all, so a separation disagreement with it is
 two objectives meeting rather than evidence it knows something the spec does not. The full
