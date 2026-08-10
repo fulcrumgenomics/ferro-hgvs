@@ -142,8 +142,8 @@ fn ordinary_substitutions_are_untouched() {
 #[test]
 fn rejects_start_loss_substitution_inside_a_cis_allele() {
     // Assert the start-loss-substitution rule still fires on a member
-    // written inside p.[…], which it can only reach through the validator's
-    // Allele recursion
+    // written inside p.[…], which it can only reach through the driver's
+    // `for_each_leaf` walk (#1578)
     let err = parse_hgvs("NP_003997.1:p.[Met1Val;Arg76Ser]")
         .expect_err("a bracketed member is still bound by substitution.md:49");
     assert_eq!(

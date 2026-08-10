@@ -73,8 +73,9 @@ fn rejection_names_the_canonical_delins_form() {
 #[test]
 fn rejects_multibase_substitution_inside_a_cis_allele() {
     // Assert the multi-base-substitution rule still fires on a member written
-    // inside c.[…], which it can only reach through the validator's Allele
-    // recursion — and that it fires for that reason, not incidentally.
+    // inside c.[…], which it can only reach through the driver's
+    // `for_each_leaf` walk (#1578) — and that it fires for that reason, not
+    // incidentally.
     let err = parse_hgvs("NM_004006.2:c.[10A>G;79GC>TT]")
         .expect_err("a bracketed member is still bound by DNA/substitution.md:30");
     assert_eq!(
@@ -87,6 +88,32 @@ fn rejects_multibase_substitution_inside_a_cis_allele() {
         msg.contains("DNA/substitution.md:30"),
         "the allele member must earn the multi-base-substitution diagnostic; got: {msg}"
     );
+}
+
+#[test]
+fn rejects_multibase_substitution_on_the_mito_and_circular_axes() {
+    // The `m.` and `o.` arms of the check are otherwise unexercised — every
+    // other case in this file is `c.`/`g.`/`n.`/`r.` — so the rule's reach onto
+    // the two circular axes rested on nothing. Kept out of `MULTIBASE_SUBS`
+    // because that corpus is also driven through `Normalizer<MockProvider>`,
+    // which holds no sequence for these accessions.
+    for (input, canonical) in [
+        ("NC_012920.1:m.100AG>TT", "m.100_101delinsTT"),
+        ("NC_001416.1:o.100AG>TT", "o.100_101delinsTT"),
+    ] {
+        let err = parse_hgvs(input)
+            .expect_err("DNA/substitution.md:30 binds the circular axes like any other");
+        assert_eq!(
+            err.code(),
+            Some(ErrorCode::InvalidEdit),
+            "{input:?} must carry a structured InvalidEdit code"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains(canonical),
+            "the diagnostic for {input:?} should offer {canonical:?}; got: {msg}"
+        );
+    }
 }
 
 // =====================================================================

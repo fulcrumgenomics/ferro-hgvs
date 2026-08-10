@@ -41,17 +41,20 @@ use ferro_hgvs::{parse_hgvs, HgvsVariant, VariantProjector};
 // ---------------------------------------------------------------------------
 
 /// A ring segment must obey the same two insertion-anchor rules as any other
-/// insertion.
+/// insertion: `DNA/insertion.md:15` adjacency and `DNA/insertion.md:95-101`
+/// single-position, both MUST-level.
 ///
-/// `validate_no_point_insertion` matches on the variant kind and ends in
-/// `_ => {}`. `HgvsVariant::Allele` is recursed into; `HgvsVariant::GenomeRing`
-/// is not — yet its `segments` are `LocEdit<GenomeInterval, NaEdit>`, exactly
-/// the loc/edit pair the check inspects. So both MUST-level sub-rules
-/// (`DNA/insertion.md:15` adjacency, `DNA/insertion.md:95-101` single-position)
-/// are unenforced inside a `::`-join.
+/// A ring's `segments` are `LocEdit<GenomeInterval, NaEdit>` hanging off
+/// `GenomeRing` rather than nested variants, so no validator reaches them by
+/// matching on variant kind — they are validated only because the parse
+/// driver's `for_each_leaf` walk re-wraps each segment as an ordinary `g.`
+/// leaf (and unwraps the `sup` marker) before running the leaf rules
+/// (#1264, #1578). This test pins that delivery for the insertion-anchor
+/// rules, on both ring spellings.
 ///
-/// This one round-trips — ferro parses it *and* renders it back — so the
-/// re-parse oracle can never see it. Only a parser test can.
+/// A parser test is the only guard that can: an accepted escape round-trips
+/// — ferro parses it *and* renders it back — so the re-parse oracle never
+/// sees it.
 #[test]
 fn a_ring_segment_insertion_anchor_must_be_flanking() {
     for input in [
