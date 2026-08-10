@@ -25,10 +25,10 @@
 //! normalizes both sides, so it passed on the broken behavior.
 
 use crate::common::cis_apply_oracle::{
-    apply, assert_normalizes_preserving, assert_normalizes_preserving_in, normalize, sweep_seeds,
-    sweep_sequences,
+    apply_parsed_with, apply_with, assert_normalizes_preserving, assert_normalizes_preserving_in,
+    normalizer_for, provider, sweep_seeds, sweep_sequences,
 };
-use ferro_hgvs::ShuffleDirection;
+use ferro_hgvs::{parse_hgvs, ShuffleDirection};
 
 /// The reported reference: an `(AT)` tract that ends at position 11, where
 /// `11=A, 12=A` breaks the repeat.
@@ -142,6 +142,10 @@ fn shifts_never_change_the_sequence_across_an_exhaustive_two_member_sweep() {
     // otherwise.
     let seeds = sweep_seeds(64);
     for seq in sweep_sequences(seeds) {
+        // One provider and one normalizer per sequence rather than three per case:
+        // `normalize` and each `apply` built their own `TEMPLATE` provider.
+        let template = provider(&seq);
+        let normalizer = normalizer_for(&seq, ShuffleDirection::ThreePrime);
         for first_start in 1..=14usize {
             for first_len in 1..=2usize {
                 let first_end = first_start + first_len - 1;
@@ -160,18 +164,26 @@ fn shifts_never_change_the_sequence_across_an_exhaustive_two_member_sweep() {
                         format!("{second_start}{base}>{alt}"),
                     ] {
                         let input = format!("TEMPLATE:g.[{first};{second}]");
-                        let output = normalize(&seq, &input);
+                        let variant = parse_hgvs(&input).expect("generated input parses");
+                        let output = normalizer
+                            .normalize(&variant)
+                            .expect("normalize")
+                            .to_string();
                         // Counted before the skip, so the floor below
                         // measures enumeration and not how many cases
                         // happened to be convertible — otherwise a small
                         // change in the skip rate trips a coverage floor
                         // for a reason unrelated to coverage.
                         enumerated += 1;
-                        let Some(want) = apply(&seq, &input) else {
+                        // The input is already parsed, so the oracle is spared a
+                        // second parse of it. The *output* keeps the string form:
+                        // re-parsing what the normalizer produced is part of the
+                        // assertion.
+                        let Some(want) = apply_parsed_with(&template, &seq, &variant) else {
                             skipped += 1; // the input itself is unconvertible
                             continue;
                         };
-                        let Some(got) = apply(&seq, &output) else {
+                        let Some(got) = apply_with(&template, &seq, &output) else {
                             if overlapping.len() < 10 {
                                 overlapping.push(format!("{seq}: {input} -> {output}"));
                             }

@@ -25,9 +25,10 @@
 //! pre-existing on `main` and independent of both.
 
 use crate::common::cis_apply_oracle::{
-    apply, assert_normalizes_preserving, normalize_in, sweep_seeds, sweep_sequences,
+    apply, apply_parsed_with, apply_with, assert_normalizes_preserving, normalize_in,
+    normalizers_for, provider, sweep_seeds, sweep_sequences,
 };
-use ferro_hgvs::ShuffleDirection;
+use ferro_hgvs::{parse_hgvs, ShuffleDirection};
 
 /// Nine `T` at positions 1-9, then `AA` breaking the run.
 const TRACT: &str = "TTTTTTTTTAATATATTTTA";
@@ -171,6 +172,11 @@ fn no_two_member_allele_normalizes_to_overlapping_members() {
     // otherwise. This sweep was 33.1s of an 86.6s local suite.
     let seeds = sweep_seeds(64);
     for seq in sweep_sequences(seeds) {
+        // One provider and one normalizer per direction per sequence, rather than
+        // three providers per case: `normalize_in` and each `apply` built their own
+        // `TEMPLATE` provider internally.
+        let template = provider(&seq);
+        let normalizers = normalizers_for(&seq);
         for first_start in 1..=14usize {
             for first_len in 1..=2usize {
                 let first_end = first_start + first_len - 1;
@@ -186,16 +192,25 @@ fn no_two_member_allele_normalizes_to_overlapping_members() {
                         format!("{second_start}del"),
                         format!("{second_start}{base}>{alt}"),
                     ] {
-                        for direction in [ShuffleDirection::ThreePrime, ShuffleDirection::FivePrime]
-                        {
-                            let input = format!("TEMPLATE:g.[{first};{second}]");
-                            let output = normalize_in(&seq, &input, direction);
+                        // Direction-invariant, so hoisted: the description, its
+                        // parse, and the bases it denotes.
+                        let input = format!("TEMPLATE:g.[{first};{second}]");
+                        let variant = parse_hgvs(&input).expect("generated input parses");
+                        let input_applied = apply_parsed_with(&template, &seq, &variant);
+                        for (_direction, normalizer) in &normalizers {
+                            let output = normalizer
+                                .normalize(&variant)
+                                .expect("normalize")
+                                .to_string();
                             checked += 1;
-                            let Some(want) = apply(&seq, &input) else {
+                            let Some(want) = input_applied.as_deref() else {
                                 skipped += 1; // unconvertible input
                                 continue;
                             };
-                            match apply(&seq, &output) {
+                            // The *output* still goes through the string-taking
+                            // oracle: re-parsing what the normalizer produced is
+                            // part of what this sweep asserts.
+                            match apply_with(&template, &seq, &output) {
                                 // `apply` declines an overlapping output, so
                                 // `None` here is the overlap signal.
                                 None if overlapping.len() < 10 => {

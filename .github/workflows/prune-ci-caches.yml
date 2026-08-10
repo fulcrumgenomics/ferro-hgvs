@@ -1,0 +1,121 @@
+name: Prune CI caches
+
+# Bound the per-commit cache families so they cannot re-create the over-cap
+# problem they were added into.
+#
+# `ci.yml` caches three artifacts under a key that ends in the commit SHA — the
+# nextest archive (106.6 MB), the soak archive (25.8 MB) and the generated
+# fixtures (~0.5 MB). Keying on the SHA is what makes them safe: a hit means the
+# tree is byte-identical, so a stale archive cannot be served. It also means one
+# entry per commit, ~133 MB apiece, and nothing reclaims them but GitHub's own
+# eviction.
+#
+# That eviction is the hazard rather than the remedy. The repository's cache cap
+# is 10 GiB and eviction is LRU across ALL entries, so an unbounded archive family
+# does not evict itself — it evicts whatever is least recently used, which is
+# exactly how #1218 destroyed the nightly's 3.25 GiB `ferro-manifest-v3`. Measured
+# 2026-08-08, before the `save-if` change in this PR: 42 entries, 13.79 GiB against
+# the 10 GiB cap.
+#
+# So the per-commit families get an explicit ceiling here: keep the newest
+# KEEP_PER_FAMILY of each, delete the rest. At the default that is at most
+# 5 x ~133 MB ~= 0.65 GiB on top of the ~4.2 GiB of one-generation-per-key
+# `rust-cache` entries.
+#
+# Deliberately NOT pruned: anything outside those three families. The
+# `rust-cache` entries are bounded already (this PR made them save only from
+# `main`, so there is one generation per key), and the nightly reference manifest
+# is precisely the thing this workflow exists to protect.
+
+on:
+  schedule:
+    # Daily, well away from the nightly workflows so a prune cannot race a run
+    # that is actively restoring what it is about to delete.
+    - cron: "23 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  # `actions: write` is required to delete a cache entry, and is the only
+  # elevated permission this workflow takes.
+  actions: write
+
+concurrency:
+  group: prune-ci-caches
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune per-commit CI caches
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      # How many of each per-commit family to keep. Enough that a re-run of a
+      # recent commit still hits, small enough to bound the total.
+      KEEP_PER_FAMILY: "5"
+    steps:
+      - name: Report usage before
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/cache/usage" \
+            --jq '"before: \(.active_caches_count) entries, \(.active_caches_size_in_bytes / 1073741824 * 100 | floor / 100) GiB"'
+
+      - name: Delete all but the newest of each per-commit family
+        run: |
+          set -euo pipefail
+          # The three families `ci.yml` writes per commit. Matched as key
+          # PREFIXES, so a family that gains an OS or a suffix is still covered.
+          families="nextest-archive- nextest-soak-archive- generated-fixtures-"
+
+          # `--paginate` because the cap allows far more entries than one page,
+          # and a partial listing would delete the wrong ones: this keeps the
+          # newest N *of what it can see*.
+          gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | [.id, .created_at, .size_in_bytes, .key] | @tsv' > all-caches.tsv
+
+          total_deleted=0
+          total_bytes=0
+          for family in $families; do
+            # Newest first, then drop the ones to keep. `sort -r` on an ISO-8601
+            # timestamp is a chronological sort, which is why `created_at` is
+            # used rather than `last_accessed_at` — a re-run touches an entry and
+            # would otherwise make an old commit's archive look new.
+            awk -F'\t' -v f="$family" 'index($4, f) == 1' all-caches.tsv \
+              | sort -t"$(printf '\t')" -k2,2r \
+              | tail -n "+$((KEEP_PER_FAMILY + 1))" > victims.tsv || true
+
+            while IFS=$'\t' read -r id created size key; do
+              [ -n "${id:-}" ] || continue
+              echo "deleting ${key} (${size} bytes, created ${created})"
+              # A 404 is the one tolerated outcome: a concurrent run may have
+              # evicted the entry already, which is what we wanted anyway.
+              #
+              # Everything else fails the job, and the counters below advance
+              # only on a delete that actually returned 0. A blanket `|| true`
+              # here swallowed a 403 from a token without `actions: write`, and a
+              # secondary rate limit, exactly as it swallowed the 404 — while the
+              # summary still reported every attempted entry as deleted. A prune
+              # that silently deletes nothing and says it deleted 12 entries is
+              # how the over-cap problem this workflow bounds comes back, and it
+              # is the one failure the `usage` steps either side cannot surface,
+              # because nothing compares them.
+              rc=0
+              gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/actions/caches/${id}" \
+                >/dev/null 2>delete-err.txt || rc=$?
+              if [ "$rc" -eq 0 ]; then
+                total_deleted=$((total_deleted + 1))
+                total_bytes=$((total_bytes + size))
+              elif grep -q 'HTTP 404' delete-err.txt; then
+                echo "  already evicted"
+              else
+                cat delete-err.txt >&2
+                exit 1
+              fi
+            done < victims.tsv
+          done
+          echo "deleted ${total_deleted} entries, ${total_bytes} bytes"
+
+      - name: Report usage after
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/cache/usage" \
+            --jq '"after: \(.active_caches_count) entries, \(.active_caches_size_in_bytes / 1073741824 * 100 | floor / 100) GiB"'
