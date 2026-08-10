@@ -55,8 +55,8 @@ env:
   # in the plain `test` job; this is not a coverage exemption, it is a statement
   # about which instrument may be armed while another is measuring.
   #
-  # WHY: the corpus COUNTS non-idempotent outputs (4 at 3', 4 at 5' as pinned on
-  # this branch) as a pinned burn-down figure. `FERRO_ASSERT_IDEMPOTENT` PANICS
+  # WHY: the corpus COUNTS non-idempotent outputs (7 at 3', 4 at 5' as pinned in
+  # `spec_conformance_axis.rs`) as a burn-down figure. `FERRO_ASSERT_IDEMPOTENT` PANICS
   # on exactly that condition. The two agree perfectly about ferro — the oracle
   # fires on precisely the rows the corpus classifies — but a panic returns no
   # value, so the harness's `catch_unwind` files the row under `declined` and its
@@ -68,11 +68,8 @@ env:
   # is the one that disagreed with its siblings, so removing it makes the family
   # look unanimous. Confluence read 9147 converged / 2428 split-2 under the
   # oracle against a true 9140 / 2435 — CI would have reported seven more
-  # converged families than actually converge. The census has since moved with
-  # the partition stack (see `tests/it/spec_conformance_axis.rs`, which preserves
-  # that `main` column); the mechanism is unchanged, so the exclusion stands and
-  # the numbers above are kept as the measurement that established it rather than
-  # silently restated as ones nobody re-measured under an armed oracle.
+  # converged families than actually converge. Those are still the pinned
+  # figures, re-measured unchanged on `main` @ 5b54b2b6.
   #
   # The corpus loses nothing by running un-armed: it measures idempotency itself,
   # and more precisely than the oracle does (a count and a classification, versus

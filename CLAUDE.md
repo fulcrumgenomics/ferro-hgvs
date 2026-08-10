@@ -283,7 +283,16 @@ the next insertion above it — a **rollup**:
 whose script echoes each result and exits 1 if any is not `success`. So the
 required `Test` context transitively gates on `test-oracle`, `soak` and `sweeps`.
 
-Both halves of that are checkable from the tree rather than from prose, and
+**`generated-docs` is NOT in that list, and still gates** — it is one hop further
+out, so do not read its absence as a gap. The doc generators run inside
+`spec-fixtures`, and `test`/`test-oracle` both `needs:` that job, so a generator
+failure *skips* them; `test-required` demands `result == "success"` from each and
+a skip is not a success, so the required `Test` context still goes red. The
+comment at `ci.yml`'s "Gating is unchanged" step records the move — and it is the
+reason to read the `needs:` array from the workflow rather than from prose, since
+a job named there can be retired without the gate it provided going away.
+
+Both halves of the claim are checkable from the tree rather than from prose, and
 should be re-checked rather than trusted — the `needs:` list above and the
 required-context list below have each changed at least once already:
 
@@ -827,11 +836,11 @@ proposal to replace it having failed; it *strengthens* `codon-carve-out-shape-re
 rather than undercutting it; and the "spec-admitted instability" argument built on it does not
 stand.
 
-The sharper way to state what this caught: ferro was **shipping a rejected proposal**, not
-merely missing a gate. `general.md:35` is implemented twice and only the partitioning arm
-carried the codon shape gate, so `coalesce_coding_frame_separation` re-merged what the arm had
-refused and emitted `LRG_199t1:c.992_1004delinsAC` — the exact answer the committee rejected in
-2021. The negative guard `the_forbidden_description_is_never_what_ferro_emits` pins it.
+So a rejected proposal earns a **negative guard**, not an expectation. The spec corpus builds
+210 rows whose only purpose is to catch a frameless separation floor of two — what implementing
+SVD-WG010 looks like from the outside — and asserts `guard_violations == 0` over them, with the
+denominator asserted non-zero so `0 of 0` cannot pass as a result. See
+`spec_conformance_axis.rs`.
 
 **So: cross-check every forward-looking statement in `recommendations/` against the
 `consultation/` dispositions before citing it.** "is preparing", "will be", "the new
@@ -885,7 +894,8 @@ python3 -c "import json;d=json.load(open('tests/fixtures/grammar/hgvs_spec_norma
 
 The table below lists the records that are **open**, with what each leaves unsettled. It is a
 description of the open questions, not a census — when a record is ruled on it moves out of this
-table, and the authority for which rows belong here is the ledger, not this list:
+table, and the authority for which rows belong here is the ledger, not this list. Read them before
+re-deriving the same argument; the first is an operator decision that blocks other work:
 
 | record | what is open |
 |---|---|
@@ -893,6 +903,7 @@ table, and the authority for which rows belong here is the ledger, not this list
 | `exon-junction-dup-converge-from-the-far-side` | `LRG_199t1:c.3921dup` and `c.3922dup` denote one transcript sequence but are two fixed points, projecting 2,790 bp apart. `duplication.md:26` argues for converging them, `general.md:44` does not prescribe the 5' shift that would |
 | `rna-repeat-range-plus-unit-redundancy` | `RNA/repeated.md:22` calls range-plus-unit invalid, `:27` publishes exactly that shape as valid. Upstream's conflict (#466); ferro answers both ways depending on input-hygiene mode |
 | `separation-is-a-property-of-the-spelling-not-of-the-variant` | The separation rule keys on unchanged nucleotides "between two variants", which presupposes a decomposition a normalizer does not receive. Two spellings of one variant can present different separations, so the rule as written is not evaluable on what a normalizer knows |
+| `absolute-prohibition-enforcement-stage` | Whether an absolute prohibition is refused at PARSE (unconditional) or at strict-mode normalize (opt-outable). Recorded because ferro answers it three ways for clauses of identical strength — within `checklist.md:16` alone, `g.*10del` is refused at parse while `g.266+2del` is refused nowhere |
 
 The `decided` records, and the scope each was decided **at** — read the record before citing it,
 because several of these rulings are narrower than their one-line summary:
@@ -900,6 +911,9 @@ because several of these rulings are narrower than their one-line summary:
 | record | ruling |
 |---|---|
 | `delins-codon-carve-out-gap-one` | `delins.md:18` governs |
+| `alignment-only-symbol-in-a-description` | `standards.md:39` governs: neither `X` nor `-` may appear in a description. The dagger sits inside the symbol cell, so `:39` annotates the row rather than competing with `:36`/`:37`, and the strength grading is moot either way — `general.md:48` admits only IUPAC-IUBMB symbols |
+| `bare-transcript-intronic-position` | `checklist.md:20` governs, **as a conditional clause**: strict input hygiene refuses a bare `NM_…:c.20+2del` (`W4007`), lenient accepts. Does not excuse the 371 bare-`NM_` intronic descriptions ferro's own junction clamp emits |
+| `conflicting-member-geometry-refusal-scope` | `DNA/alleles.md:5` governs — the *definition*, not `general.md:58`, is what reaches nested and coincident-insertion geometries; `:58`'s stated ground literally describes only its own `del`+`dup` example. `general.md:56` is cited to record that it does **not** reach a multi-member allele |
 | `delins-merge-vs-individual-gap-two-or-more` | `DNA/delins.md:44-47` governs `:17`, **scoped** to the alignment-coincidence shape `:44-47` describes. Where a separation of two or more arises from anything else, `general.md:34` still governs; unscoped the reading reaches roughly fifteen times the row set the argument was made on |
 | `inversion-vs-two-delins-76-83` | `inversion.md:5` governs: a whole-block reverse complement is one `inv` when the members it competes with are `delins`, since `general.md:56` ranks substitution but not `delins`. #1230's substitution case is untouched and still splits |
 | `adjudication-precedence-order` | What ranks next where the spec is silent. The order is (1) the spec where it speaks, (2) confluence, (3) re-derivation from the resulting sequence, (4) disclosure of any resulting move, (5) stability toward the already-shipped form, as a last-resort tiebreaker only. Mutalyzer appears nowhere in it |
