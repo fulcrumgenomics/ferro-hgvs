@@ -31,6 +31,7 @@
 //! one for the author would assert a finding they never made, so every mode
 //! rejects and the diagnostic lists all three.
 
+use ferro_hgvs::error::ErrorCode;
 use ferro_hgvs::error_handling::ErrorConfig;
 use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
 use ferro_hgvs::parse_hgvs;
@@ -136,4 +137,23 @@ fn ordinary_substitutions_are_untouched() {
     ] {
         assert!(parse_hgvs(input).is_ok(), "{input:?} must still parse");
     }
+}
+
+#[test]
+fn rejects_start_loss_substitution_inside_a_cis_allele() {
+    // Assert the start-loss-substitution rule still fires on a member
+    // written inside p.[…], which it can only reach through the validator's
+    // Allele recursion
+    let err = parse_hgvs("NP_003997.1:p.[Met1Val;Arg76Ser]")
+        .expect_err("a bracketed member is still bound by substitution.md:49");
+    assert_eq!(
+        err.code(),
+        Some(ErrorCode::InvalidEdit),
+        "the allele member rejection must carry a structured InvalidEdit code"
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("protein/substitution.md:49"),
+        "the allele member must earn the start-loss-substitution diagnostic; got: {msg}"
+    );
 }
