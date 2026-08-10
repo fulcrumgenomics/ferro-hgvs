@@ -99,6 +99,33 @@ Smaller fixtures (<1 MB) are tracked directly in git. Key categories:
 
 See `SCHEMAS.md` for JSON format documentation.
 
+## Generated hermetic-gate fixtures (a deliberate exception)
+
+Test data is generated programmatically and new committed fixtures are the exception, not the
+rule. These directories are the exception, and each one is **generated from a prepared reference
+and committed on purpose** — never hand-edited:
+
+| directory | contents | regenerate with |
+|---|---|---|
+| `case-harvest/` | `cases.json` + `reference-windows.json` | `cargo run --features dev --example extract_case_harvest_windows -- --manifest <manifest>` |
+| `spec-worked-examples/` | `cases.json` + `reference-windows.json` | `cargo run --features dev --example extract_spec_worked_example_windows -- --manifest <manifest>` |
+| `split-member-separation/` | `inputs.txt` + `reference-windows.json` | `cargo run --features dev --example extract_split_member_separation_windows -- --manifest <manifest>` |
+| `inversion-sweep/` | `cases.tsv` (2,075 pinned outputs) + `reference-windows.json` | `cargo run --features dev --example extract_inversion_sweep_windows -- --manifest <manifest>` |
+
+The rationale is the same in every case, and it is why generating the data at test time is not an
+option: each gate is **sequence-dependent**, so it needs real reference bases, and the prepared
+reference is multi-GB and exists on a few machines only. A test that resolved it from
+`FERRO_MANIFEST` would skip on PR CI — always — and report PASS having evaluated nothing. So the
+generator runs the real pass against a real manifest through a recording provider and commits
+precisely the slice it touched, and the gate replays that slice with no out-of-band data.
+
+Each generator also takes `--check`, which reports drift without writing.
+
+`inversion-sweep/cases.tsv` additionally pins exact normalized outputs, so a diff there is a
+representation change: it needs a `Representation-Change:` declaration in the PR description, not a
+re-bless. `tests/it/inversion_sweep.rs` documents which of its rows are adjudications and which are
+characterization pins.
+
 ## Spec-divergence tracking
 
 `grammar/hgvs_spec_normalization.json` (generated, gitignored) classifies every harvested spec string

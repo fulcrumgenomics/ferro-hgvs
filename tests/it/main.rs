@@ -110,6 +110,7 @@ mod ins_repeat_b1_matrix;
 mod ins_shift_matrix;
 mod inserted_range_special_positions;
 mod integration_tests;
+mod inversion_sweep;
 mod inverted_uncertain_range_insertion;
 mod issue_1001_strict_reference;
 mod issue_1004_samegap_insertion_idempotency;
