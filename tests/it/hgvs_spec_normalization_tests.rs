@@ -867,6 +867,25 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "separation-is-a-property-of-the-spelling-not-of-the-variant",
         "undecided",
     ),
+    // `general.md:58` (removing and replacing part of the same reference
+    // sequence "are not allowed") against `DNA/complex.md:130` ("'::' is used to
+    // indicate the join, instead of ';'") on whether the self-cancelling check
+    // reaches a ring's `::`-joined segments. **Decided for `complex.md:130`**:
+    // `:58` is a four-space sub-bullet of `general.md:56`'s *prioritisation*
+    // bullet — sibling to `:57`, which is explicitly a prioritisation rule — so
+    // it applies only "when a description is possible according to several
+    // types" and works by redirecting to the preferred one. `complex.md:5`
+    // defines complex as what *cannot* be described as a basic type, so no
+    // competing single-type description exists for a ring and there is nothing
+    // to redirect to. Ratifies shipped behaviour, so it moves no row.
+    //
+    // Scope: this decides only that `:58` does not cross `::`. It explicitly
+    // does NOT bless the three malformed rings ferro currently accepts — those
+    // are ring *well-formedness* defects (`complex.md:39`/`:51`/`:53`/`:55`)
+    // needing their own rule. The negative is pinned by
+    // `issue_1578_followup_self_cancelling_rings.rs` so nobody closes the escape
+    // the cheap way by pointing `:58` at rings.
+    ("self-cancelling-across-ring-junctions", "decided"),
 ];
 
 /// Ruling records must stay well-formed, and `undecided` must stay undecided.

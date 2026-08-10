@@ -615,6 +615,63 @@
         }
       ],
       "rationale": "THE QUANTITY THE RULE KEYS ON IS NOT A FUNCTION OF THE VARIANT. `general.md:34` and `delins.md:17` are stated over \"two variants\", which presupposes a decomposition; the separation between them is read off that decomposition, not off the reference and the denoted sequence. A normalizer sees only the latter pair, so the rule as written is not evaluable on what a normalizer knows.\n\nDEMONSTRATED, NOT ARGUED. On a synthetic transcript whose `c.9` is `T` and whose `c.10`/`c.11` are both `A`, the spellings `c.[9del;10del;13del]` and `c.[9del;11del;13del]` denote the same sequence — verified by applying each to the reference through `hgvs_to_spdi`, independently of the normalizer. The first presents separations of 0 and 2, the second separations of 1 and 1. `general.md:34` merges the first pair and splits the second, so it returns two answers for one variant. Both are pinned in `tests/it/cis_confluence_adjudication.rs`.\n\nAT CORPUS SCALE, RE-MEASURED AFTER #1537. Over the 11,272-class designed cis corpus, 642 of the 9,442 distinct `(axis, reference, denoted sequence)` variants are reachable from more than one design, and 286 of those from designs whose separation parameters differ — both unchanged by #1537, which is itself the point: that PR settled the separation-ZERO question, and this record is about every other separation. And of the 4,643 classes that diverge in the 3' direction, 4,568 (98.4%) have the single spanning spelling reaching an output DISJOINT from every output the multi-member spellings reach — i.e. ferro is preserving the partition it was handed rather than deriving one. That is what evaluating a spelling-relative rule looks like from the outside, and it is the mechanism behind two thirds of the pile. (The pre-#1537 figures were 4,639 and 4,567; the shape this record describes is untouched.)\n\nTHE SPEC'S OWN DISCRIMINATOR IS PROVENANCE, WHICH MAKES THIS UNFIXABLE AS STATED. `delins.md:79-84` gives the reason for preferring individual descriptions: \"the two variants may have been reported (or might occur) individually\". Provenance is carried only by the input's spelling. A normalizer that reads it back is, by construction, not confluent; one that ignores it must pick a canonical partition for every `(reference, sequence)` pair, which is `canonical-form-choice-when-both-legal`. `open-issues.md:77-78` records that the committee agrees the gap is a gap.\n\nWHAT IS NOT ESTABLISHED. Which partition should be canonical. Nothing here chooses one, and nothing here should be read as choosing one: the choice moves a stored representation for a downstream consumer and is an operator decision, ranked by `adjudication-precedence-order`. What this record adds is that the question cannot be deferred to `general.md:34`, because `:34` does not answer it.\n\nRE-CHECKED AGAINST #1537, AND STILL UNDECIDED. #1537 (\"never split a delins into members on consecutive nucleotides\") settled the separation-ZERO case and is recorded at `delins-adjacent-members-when-both-consume-reference`. It does not reach this record: the demonstration above turns on a separation-0 pair being MERGED while a separation-1 pair is SPLIT, and #1537 strengthened exactly the first half — `c.[9del;10del;13del]` still normalizes to `c.[9_10del;13del]` and `c.[9del;11del;13del]` still normalizes to itself, so the two spellings of one variant still reach two outputs. Both pinned assertions passed unchanged across #1537. The record stays `undecided`."
+    },
+    {
+      "id": "self-cancelling-across-ring-junctions",
+      "question": "Does `general.md:58`'s prohibition on removing part of a reference sequence and replacing it with part of the same sequence reach the `::`-joined segments of a ring chromosome, as it reaches the members of a `[a;b]` cis allele?",
+      "status": "decided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/general.md:56",
+          "quote": "when a description is possible according to several types"
+        },
+        {
+          "clause": "docs/recommendations/general.md:58",
+          "quote": "descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:130",
+          "quote": "\"::\" is used to indicate the join, instead of \";\" to describe two not connected deletions"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:5",
+          "quote": "a range of changes occur that can not be described as one of the basic variant types"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:127",
+          "quote": "NC_000022.11:g.pter_(12200001_14700000)del::(37600001_410000000)_qterdel"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:39",
+          "quote": "a double colon is used to designate break point junctions creating a ring chromosome.<br>"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:51",
+          "quote": "Break point location is determined by the first break point encountered, i.e. `pter` of the chromosome is to be listed first."
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:53",
+          "quote": "multiple breakpoints in one chromosome are listed in order of occurrence from `pter` to `qter`."
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:55",
+          "quote": "variant descriptions are always in the forward orientation (from `pter` to `qter`, the end of the chromosome), determined by the chromosomal origin of the intact centromere (`cen`)."
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:113",
+          "quote": "NC_000006.12:g.[776788_93191545inv;93191546T>C]`**<br>"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:117",
+          "quote": "NC_000002.12:g.[32310435_32310710del;32310711_171827243inv;insG]`**<br>"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:161",
+          "quote": "NC_000022.11:g.[pter_(12200001_14700000)del::(37600001_410000000)_qterdel]sup`**<br>"
+        }
+      ],
+      "governing": "docs/recommendations/DNA/complex.md:130",
+      "rationale": "It does not. `general.md:58` is a four-space-indented sub-bullet of `general.md:56`, the **prioritisation** bullet, and its sibling `:57` is unambiguously a prioritisation rule (\"when a variant can be described as a duplication or an insertion, prioritisation determines it should be described as a duplication\"). `:58` therefore inherits `:56`'s antecedent: it applies *when a description is possible according to several types*, and it works by redirecting to the preferred one — for its own example `NM_004006.2:c.[762_768del;767_774dup]`, the `delins` over the union span. It is a redirection clause, not a hygiene clause.\n\nThat antecedent cannot hold for a ring. `complex.md:5` defines complex as a range of changes that *cannot* be described as one of the basic variant types, so there is no competing single-type description to prioritise toward: a `delins` over the union span describes a **linear** product and silently discards the join, which is the whole content of the ring description. A clause that can only reject, never redirect, is not doing the job `:56` assigns it.\n\n`complex.md:130` settles the operators directly, and on identical member content: \"'::' is used to indicate the join, instead of ';' to describe two not connected deletions.\" The same two deletions spelled with `;` denote a linear chromosome missing both ends; spelled with `::` they denote a ring. The `::` composite is therefore not reducible to its member set — it carries a topological assertion the members do not — so reading ring segments as cis-allele members is the one reading the spec explicitly forecloses.\n\nTwo corollaries make the question nearly moot in practice, and both are worth recording because they explain why extending the check would *look* free. A same-chromosome ring has exactly two breakpoints, so its segments are telomere-anchored and disjoint by construction: that is the shape of both ring examples the spec publishes (`complex.md:127` and the supernumerary form at `:161`), and `detect_self_cancelling_pair` would never fire on either. And the spec spells rearrangement-plus-local-edit composites as `;` cis alleles rather than as extra `::` segments (`complex.md:113`, `:117`), where `:58` governs them normally. So this ruling exempts no edit from `:58`; it only declines to read `::` as `;`.\n\n**What this ruling does NOT settle, and must not be read as blessing.** ferro currently accepts `g.100_200del::150_250dup`, `g.100_200del::300_400dup` and `g.150_250dup::100_200del`. None is a well-formed ring: a `dup` contributes no break junction (`complex.md:39`), neither segment is telomere-anchored, and the third also violates the `pter`-to-`qter` segment ordering `complex.md:51`/`:53`/`:55` requires. Those are ring **well-formedness** defects and need their own rule; `:58` is the wrong instrument for them, which the non-overlapping case (`del::300_400dup`) proves — an `:58`-based check would accept it. Rejecting them via `:58` would also emit E3006's repair hint (\"rewrite as a single delins\"), which `complex.md:5` makes actively wrong advice for a ring.\n\nIndependently adjudicated twice, reaching the same verdict by different routes; the prioritisation-sub-bullet argument above is the stronger one and is what the ruling rests on. Note that `for_each_leaf`'s doc comment already excludes this validator from the ring walker, but for a *mechanical* reason (it inspects allele siblings, which a per-leaf view cannot express) rather than a semantic one — so the code did not previously adjudicate this question."
     }
   ]
 }

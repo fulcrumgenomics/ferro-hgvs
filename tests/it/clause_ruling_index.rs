@@ -67,8 +67,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 10 records, 6 decided / 4 undecided
-//! 36 clause lines, of which 7 are named by more than one record
+//! 11 records, 7 decided / 4 undecided
+//! 47 clause lines, of which 7 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -81,12 +81,32 @@
 //! docs/consultation/open-issues.md:78  [MULTI]
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/consultation/open-issues.md:77-78)
+//! docs/recommendations/DNA/complex.md:5
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/DNA/complex.md:39
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/complex.md:50
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
+//! docs/recommendations/DNA/complex.md:51
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/DNA/complex.md:53
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/DNA/complex.md:55
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/complex.md:63
 //!     `adjudication-precedence-order` — decided (governing)
 //! docs/recommendations/DNA/complex.md:64
 //!     `adjudication-precedence-order` — decided (cited)
+//! docs/recommendations/DNA/complex.md:113
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/DNA/complex.md:117
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/DNA/complex.md:127
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/DNA/complex.md:130
+//!     `self-cancelling-across-ring-junctions` — decided (governing)
+//! docs/recommendations/DNA/complex.md:161
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/delins.md:16
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
@@ -147,6 +167,9 @@
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/general.md:58
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/general.md:157
 //!     `canonical-form-choice-when-both-legal` — decided (governing)
 //! docs/recommendations/style.md:9  [MULTI]
@@ -185,6 +208,7 @@
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/style.md:9
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
@@ -462,7 +486,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (10, 6, 4),
+        (11, 7, 4),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
