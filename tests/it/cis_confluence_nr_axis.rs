@@ -98,23 +98,30 @@ const TX_CONTIG: &str = "chr_synth";
 /// figure is a baseline that must only ever go down, and `converged` a floor
 /// that must only ever go up.
 ///
-/// **71.2% of designed `n.` classes converge** (4 012 of 5 636); `r.` is
-/// 71.1% (4 010, see [`R_THREE_PRIME`]). `cis_confluence_axis` pins **8 026 of
-/// 11 272 — also 71.2%** across its combined `g,c` corpus, so the
-/// transcript-typed axes now converge at the same rate as the two originals.
+/// **100.0% of designed `n.` classes converge** (5 635 of 5 636); `r.` is 99.9%
+/// (5 633, see [`R_THREE_PRIME`]). `cis_confluence_axis` pins **11 271 of
+/// 11 272 — also 100.0%** across its combined `g,c` corpus, so the
+/// transcript-typed axes converge at the same rate as the two originals.
 ///
 /// Take that combined figure from `cis_confluence_axis::THREE_PRIME` and not
-/// from that module's prose: its headline sentence still reads "58.8% ...
-/// (6 633 of 11 272)", which its own later notes have since moved past. That
-/// drift is on `main` and predates this file; it is not this module's to
-/// correct, but it must not be cited from here either.
+/// from prose anywhere; that module's own headline has now been stale for five
+/// successive movements of its pin, which is recorded there at length.
 ///
-/// Re-blessed when this branch was rebased onto `main`, as all four pins here
-/// were: `converged` 2_628 -> 4_012, `split_two` 2_941 -> 1_558, `split_three`
-/// 58 -> 57. `split_more`, `classes` and `spellings` are unchanged and
-/// `sequence_changed` stayed 0, so this is the same corpus measured against a
-/// moved normalizer rather than a different corpus. The mover is #1484; see
-/// [`R_THREE_PRIME`] for the `r.` figures and the same argument in full.
+/// Re-blessed twice, and both entries are historical rather than competing.
+/// #1484 took it 2_628 -> 4_012 (`split_two` 2_941 -> 1_558, `split_three`
+/// 58 -> 57). **The weight-bound deletion then took it 4_012 -> 5_635**, with
+/// `split_two` 1_558 -> 1, `split_three` 57 -> 0 and `split_more` 9 -> 0. Across
+/// both, `classes`, `spellings`, `declined`, `underdetermined` and
+/// `sequence_changed` are unchanged, so this is the same corpus measured against
+/// a moved normalizer rather than a different corpus. See
+/// `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`, and
+/// [`R_THREE_PRIME`] for the `r.` figures.
+///
+/// **These axes carry no reading frame**, so `general.md:35`'s codon exception
+/// cannot license any of the merges counted here. Whether a merge across two or
+/// more unchanged nucleotides is permitted on such an axis is the open question
+/// the two decided `delins` records both scope themselves *out* of; this census
+/// measures the movement and does not adjudicate it.
 ///
 /// # What these constants refuted
 ///
@@ -153,39 +160,49 @@ const TX_CONTIG: &str = "chr_synth";
 /// against `cis_confluence_axis`'s 334/344 — the `n.` and `r.` axes gain in the
 /// same proportion as the `c.` one, which is what a partitioner change should
 /// look like and what an axis-scoped carve-out would not.
+///
+/// **Re-blessed again by the weight-bound deletion: 4 179 -> 5 635**
+/// (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`), with
+/// `split_two` 1 420 -> 1, `split_three` 33 -> 0 and `split_more` 4 -> 0. One
+/// class is left divergent at 3', so the losses are zero by the same counting
+/// argument `cis_confluence_axis::THREE_PRIME` makes. Earlier revisions of this
+/// block quoted a 4 010 base and a 5 633 landing for this census; both are on a
+/// pre-#1649 tree and are not to be re-quoted.
 const N_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_179,
-    split_two: 1_420,
-    split_three: 33,
-    split_more: 4,
+    converged: 5_635,
+    split_two: 1,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };
 
 /// The `r.` 3'-direction census, pinned. See [`N_THREE_PRIME`].
 ///
-/// Re-blessed when this branch was rebased onto `main`: `converged` 2_627 ->
-/// 4_010, `split_two` 2_941 -> 1_560, `split_three` 59 -> 57. Every figure moved
-/// in the direction [`assert_census`] demands, `sequence_changed` stayed 0, and
-/// `classes`/`spellings` are unchanged, so the corpus is the same one. The mover
-/// is #1484, which changed the `n.`/`r.` axes with no test covering them — this
-/// file is the coverage, and the re-bless is the first measurement of what that
-/// PR did here.
-/// **Re-blessed again by #1649: 4 010 -> 4 177**, an identical +167 to its `n.`
-/// twin with identical `split_*` deltas. The `r.` and `n.` axes tracking each
-/// other exactly is the cross-check this pair of pins exists for: the alphabet
-/// differs and the partition does not.
+/// Re-blessed three times, and the chronology matters because two of the three
+/// bases have been quoted after they went stale. #1484 took `converged`
+/// 2_627 -> 4_010 (`split_two` 2_941 -> 1_560, `split_three` 59 -> 57) — that
+/// PR changed the `n.`/`r.` axes with no test covering them, and this file is
+/// the coverage. #1649 then took it **4 010 -> 4 177**, an identical +167 to its
+/// `n.` twin with identical `split_*` deltas; the `r.` and `n.` axes tracking
+/// each other exactly is the cross-check this pair of pins exists for, since the
+/// alphabet differs and the partition does not. The weight-bound deletion
+/// (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) then took
+/// it **4 177 -> 5 633**, with `split_two` 1 422 -> 3, `split_three` 33 -> 0 and
+/// `split_more` 4 -> 0. Every figure moved in the direction [`assert_census`]
+/// demands, `sequence_changed` stayed 0, and `classes`/`spellings` are unchanged,
+/// so the corpus is the same one throughout.
 const R_THREE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_177,
-    split_two: 1_422,
-    split_three: 33,
-    split_more: 4,
+    converged: 5_633,
+    split_two: 3,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -194,45 +211,49 @@ const R_THREE_PRIME: Census = Census {
 /// public option and confluence is a property of the normalizer rather than of
 /// one shuffle direction, so it is measured in full rather than spot-checked.
 ///
-/// Re-blessed alongside [`N_THREE_PRIME`]: `converged` 2_625 -> 4_011,
-/// `split_two` 2_954 -> 1_569, `split_three` 53 -> 52, every other field
-/// unchanged. Its `r.` twin is [`R_FIVE_PRIME`].
-/// **Re-blessed again by #1649: 4 011 -> 4 183** (+172), `split_two` -154,
-/// `split_three` -16, `split_more` -2. The 5' direction gains five more classes
-/// than the 3' does, the same asymmetry [`N_THREE_PRIME`]'s history records: the
-/// finer partition is chosen before the shift, so the members are shuffled
-/// independently afterwards and only some of those landings coincide.
+/// Re-blessed alongside [`N_THREE_PRIME`], three times. #1484 took `converged`
+/// 2_625 -> 4_011 (`split_two` 2_954 -> 1_569, `split_three` 53 -> 52). #1649
+/// took it **4 011 -> 4 183** (+172), `split_two` -154, `split_three` -16,
+/// `split_more` -2 — the 5' direction gaining five more classes than the 3'
+/// does, the same asymmetry [`N_THREE_PRIME`]'s history records: the finer
+/// partition is chosen before the shift, so the members are shuffled
+/// independently afterwards and only some of those landings coincide. The
+/// weight-bound deletion then took it **4 183 -> 5 636** — every class in the
+/// corpus, with `split_two`/`split_three`/`split_more` all 0. Its `r.` twin is
+/// [`R_FIVE_PRIME`].
 const N_FIVE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_183,
-    split_two: 1_415,
-    split_three: 36,
-    split_more: 2,
+    converged: 5_636,
+    split_two: 0,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };
 
 /// The `r.` 5'-direction census, pinned. See [`N_FIVE_PRIME`].
 ///
-/// Re-blessed alongside [`R_THREE_PRIME`], and by almost exactly the same
-/// margin: `converged` 2_624 -> 4_009, `split_two` 2_954 -> 1_571,
-/// `split_three` 54 -> 52. That the two directions moved together (+1_383 and
-/// +1_385) is itself the evidence the change is a property of the normalizer
-/// rather than of one shuffle direction.
-/// **Re-blessed again by #1649: 4 009 -> 4 181**, again matching its `n.` twin
-/// exactly at +172. All four censuses in this file move monotonically — every
-/// `converged` up, every divergence figure down — so the ratchet is satisfied in
-/// the direction it was written for on both axes and both directions.
+/// Re-blessed alongside [`R_THREE_PRIME`], three times. #1484 moved it by
+/// almost exactly the same margin as its `n.` twin: `converged` 2_624 -> 4_009,
+/// `split_two` 2_954 -> 1_571, `split_three` 54 -> 52 — the two directions
+/// moving together (+1_383 and +1_385) being the evidence that change was a
+/// property of the normalizer rather than of one shuffle direction. #1649 took
+/// it **4 009 -> 4 181**, again matching its `n.` twin exactly at +172. The
+/// weight-bound deletion then took it **4 181 -> 5 634**, and the same reading
+/// holds a third time: the 3' and 5' walks land 1 apart on both axes. All four
+/// censuses in this file move monotonically across all three — every `converged`
+/// up, every divergence figure down — so the ratchet is satisfied in the
+/// direction it was written for on both axes and both directions.
 const R_FIVE_PRIME: Census = Census {
     classes: 5_636,
     spellings: 23_696,
     declined: 0,
-    converged: 4_181,
-    split_two: 1_417,
-    split_three: 36,
-    split_more: 2,
+    converged: 5_634,
+    split_two: 2,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };

@@ -71,7 +71,16 @@ fn a_noncoding_del_dup_collision_is_repaired() {
     assert_repairs_to(
         &provider,
         "NR_TEST.1:n.[7_8del;9_10insA;11delinsAC]",
-        "NR_TEST.1:n.[8del;10_11insA]",
+        // Re-blessed with the deletion of the input-relative weight bound
+        // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`).
+        // The block is `CAG` -> `AGA`, EQUAL length 3/3, so the column
+        // correspondence is unique and all three columns change:
+        // `DNA/delins.md:16` — "changes involving two or more consecutive
+        // nucleotides are described as deletion/insertion (delins) variants" —
+        // gives `n.8_10delinsAGA` directly. The old `[8del;10_11insA]` was the
+        // input's own spelling handed back, which no clause derives from the
+        // sequence; the bound produced it by refusing the derivation.
+        "NR_TEST.1:n.8_10delinsAGA",
     );
 }
 

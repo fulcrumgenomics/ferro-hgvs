@@ -83,7 +83,7 @@ fn the_pair_alone_merges_instead_of_staying_barred() {
 }
 
 #[test]
-fn a_third_member_clear_of_the_tract_keeps_the_pair_barred() {
+fn a_third_member_clear_of_the_tract_is_re_derived_with_the_pair() {
     // The discriminator `the_pair_alone_...` above used to be, restored on the
     // nucleotide axis. That row stopped bounding the barrier once the pair began
     // merging from the sequence: it now passes whether the barrier runs or not,
@@ -105,21 +105,38 @@ fn a_third_member_clear_of_the_tract_keeps_the_pair_barred() {
     // be vacuous in a new way, pinning a merged form while claiming to pin a
     // barrier. `270del` and `272del` both sit clear; 270 is used here.
     //
-    // Verified to fail both ways, which is the only thing that makes it a guard:
-    // stubbing `clamp_sibling_crossing_junctions` to return immediately turns
-    // this output into `g.[261_262dup;265dup;270del]` — the `insGA` swept past
-    // its sibling — and restoring the mechanism turns it back.
+    // **The device stopped working, and this row stopped being a guard.**
+    // `270del` kept the pair barred only because the derivation *declined* the
+    // three-member group, and that decline was the input-relative weight bound
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`). With the
+    // bound deleted the allele is re-derived from the sequence, the per-member
+    // pipeline never runs, and the barrier is not consulted — so this row no
+    // longer fails both ways.
+    //
+    // `clamp_sibling_crossing_junctions` itself is **not** unguarded, which is
+    // measured rather than assumed: stubbing it to return immediately reddens 38
+    // other tests across `cis_junction_crossing_shift`, `issue_1290`,
+    // `issue_1292`, `issue_1308`, `issue_1312`, `issue_1323`, `issue_1325`,
+    // `issue_1513`, `issue_1592`, `repeat_lowering_sibling_junction` and both
+    // confluence censuses. What is lost here is this shape's *discrimination*,
+    // not the mechanism's coverage.
+    //
+    // The re-blessed output is SPEC-SILENT: the block is `AAATACGT` ->
+    // `GAAAAATACG`, unequal 8/10, so no column correspondence exists and
+    // `delins.md:15`/`:16`/`:17` have no defined input.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[260_261insGA;261_262insA;270del]");
-    assert_eq!(output, "NC_TEST.1:g.[260_261insGA;261_262insA;270del]");
+    assert_eq!(output, "NC_TEST.1:g.[263A>G;266T>A;268_270delinsATACG]");
 }
 
 #[test]
-fn the_barred_pair_does_not_depend_on_authored_order() {
+fn the_re_derived_allele_does_not_depend_on_authored_order() {
     // The barrier reads both snapshots, so its answer must not depend on the
     // order the members were written in — the same independence the #1261/#1301
     // discriminators carry. Same allele as above, authored backwards.
+    // Re-blessed alongside its sibling above; the authored-order independence it
+    // asserts is unaffected by which answer the pair reaches.
     let output = assert_padded_preserving(CORE, "NC_TEST.1:g.[270del;261_262insA;260_261insGA]");
-    assert_eq!(output, "NC_TEST.1:g.[260_261insGA;261_262insA;270del]");
+    assert_eq!(output, "NC_TEST.1:g.[263A>G;266T>A;268_270delinsATACG]");
 }
 
 #[test]

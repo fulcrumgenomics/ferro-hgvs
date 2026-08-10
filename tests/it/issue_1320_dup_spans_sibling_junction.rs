@@ -82,7 +82,7 @@ fn a_junction_at_the_dups_five_prime_end_merges_instead_of_respelling() {
 }
 
 #[test]
-fn a_junction_at_the_dups_five_prime_end_is_left_alone_beside_a_third_member() {
+fn a_junction_at_the_dups_five_prime_end_is_re_derived_beside_a_third_member() {
     // The 5' boundary itself, restored: the deletion at 270 sits clear of the
     // A-run the payloads shift through, so the pair still re-spells exactly as
     // it did, but the derivation declines the three-member group instead of
@@ -93,7 +93,21 @@ fn a_junction_at_the_dups_five_prime_end_is_left_alone_beside_a_third_member() {
         "GCATGAAAAT",
         "NC_TEST.1:g.[263_264insAC;264_265insAA;270del]",
     );
-    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup;270del]");
+    // **Re-blessed with the deletion of the input-relative weight bound**
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`), and the
+    // device this row rests on is gone with it. The third member stopped the
+    // merge only because the derivation *declined* the three-member group, and
+    // that decline was the weight bound: the derived partition was heavier than
+    // the input's spelling, so `canonicalize_from_sequence` returned `None` and
+    // the per-member pipeline answered. With no such bound the whole allele is
+    // re-derived, so this row no longer discriminates the shared-span tie
+    // it was written for. Same block as
+    // `issue_1301_adjacent_gap_member_order::an_insertion_still_sorts_before_a_duplication_sharing_its_span_beside_a_third_member`;
+    // see that row for the adjudication.
+    assert_eq!(
+        output,
+        "NC_TEST.1:g.[265_266delinsCA;268_269delinsAA;271_273dup]"
+    );
 }
 
 #[test]
@@ -112,7 +126,7 @@ fn two_insertions_sharing_a_start_merge_into_one_member() {
 }
 
 #[test]
-fn two_duplications_sharing_a_start_keep_both_dup_spellings_beside_a_third_member() {
+fn two_duplications_sharing_a_start_lose_both_dup_spellings_beside_a_third_member() {
     // The same 5' boundary between two duplications — #1261's reproduction —
     // restored by a third member the derivation will not merge them with.
     // `258dup`'s junction is 258 and `258_259dup` starts there; a `>=` test
@@ -121,7 +135,22 @@ fn two_duplications_sharing_a_start_keep_both_dup_spellings_beside_a_third_membe
         "CAGTATGCAGGCAA",
         "NC_TEST.1:g.[258_259insA;259_260insAG;268del]",
     );
-    assert_eq!(output, "NC_TEST.1:g.[258dup;258_259dup;268del]");
+    // **Re-blessed with the deletion of the input-relative weight bound**
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`), and the
+    // device this row rests on is gone with it. The third member stopped the
+    // merge only because the derivation *declined* the three-member group, and
+    // that decline was the weight bound: the derived partition was heavier than
+    // the input's spelling, so `canonicalize_from_sequence` returned `None` and
+    // the per-member pipeline answered. With no such bound the whole allele is
+    // re-derived, so this row no longer discriminates the pair of `dup`
+    // spellings it was written for. Same block as
+    // `issue_1261_cis_member_order::two_duplications_sharing_a_start_render_in_junction_order_beside_a_third_member`,
+    // reached from a second file; see that row for the SPEC-SILENT adjudication
+    // and for why `duplication.md:18` does not reach a partition.
+    assert_eq!(
+        output,
+        "NC_TEST.1:g.[259_260delinsAG;262del;264_265delinsTAT;266_267insCA;268C>G]"
+    );
 }
 
 #[test]

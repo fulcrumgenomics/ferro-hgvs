@@ -103,7 +103,6 @@
 //! # The index
 //!
 //! <!-- BEGIN GENERATED INDEX -->
-//! ```text
 //! CLAUSE -> RECORD INDEX
 //! 27 records, 23 decided / 4 undecided
 //! 111 clause lines, of which 27 are named by more than one record
@@ -514,7 +513,6 @@
 //! docs/recommendations/style.md:9
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
-//! ```
 //! <!-- END GENERATED INDEX -->
 //!
 //! # Reading the mixed-verdict block

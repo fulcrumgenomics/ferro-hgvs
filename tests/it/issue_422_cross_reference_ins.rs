@@ -439,28 +439,33 @@ fn cross_reference_inv_suffix_expands_inside_a_complex_bracket() {
         "the spanning delins must be a normalization fixed point",
     );
 
-    // KNOWN LIMITATION, pinned deliberately so it is visible rather than merely
-    // absent: the hand-written two-member spelling of this same variant does
-    // *not* converge on the spanning delins. Two stable strings, one variant.
+    // **CLOSED, 2026-08-10.** This was a KNOWN LIMITATION pinned deliberately: the
+    // hand-written two-member spelling of this same variant did *not* converge on
+    // the spanning delins, so one variant had two stable strings.
     //
-    // It cannot be closed from here. The two-member input trips the
-    // `input_separator_positions` veto (`general.md:34` — do not merge across a
-    // base the input left unchanged), which returns it verbatim. Letting a
-    // coincidence-driven collapse override that veto does close this case, but it
-    // also merges `g.[306dup;308C>A]` into `g.307_308delinsCGA`, breaking #999 —
-    // and the collapse cannot tell the two apart, because both are two-member
-    // inputs whose derived pieces collapse to one. The veto is what protects
-    // #999, so it stays and this case stays split.
-    //
-    // Change this assertion only alongside a fix that keeps #999 green.
+    // The reason recorded here for why it could not be closed — the
+    // `input_separator_positions` veto, whose removal would break #999 — was
+    // already stale: that veto is gone (see the commemorative note in
+    // `canonicalize_from_sequence`, which records that it measured what the
+    // *input's spelling* separated rather than what the *sequence* separates).
+    // What was actually holding this row apart was the input-relative weight
+    // bound, and deleting it
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) converges
+    // the pair without touching #999, which stays green.
     assert_eq!(
         normalize(
             "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
             inv_payload_provider()
         )
         .expect("normalize"),
-        "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
-        "the two-member spelling is left alone by the separator veto (known non-confluence)",
+        "NC_000022.10:g.10_15delinsAAACCCC",
+        "converged on the spanning form: with the input-relative weight bound \
+         deleted (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) \
+         the two-member spelling is re-derived instead of being handed back, so \
+         this is no longer a non-confluence. SPEC-SILENT — the block is `CTATAG` \
+         -> `AAACCCC`, unequal 6/7, so `delins.md:15`/`:16`/`:17` have no defined \
+         input and the separation of 1 the old form presented is a property of \
+         that spelling rather than of the variant",
     );
 }
 

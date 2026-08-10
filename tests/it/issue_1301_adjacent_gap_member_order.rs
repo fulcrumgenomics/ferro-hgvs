@@ -123,7 +123,26 @@ fn an_insertion_still_sorts_before_a_duplication_sharing_its_span_beside_a_third
     // re-spell exactly as they did, and the tie is still broken by the key.
     let input = "NC_TEST.1:g.[263_264insAC;264_265insAA;270del]";
     let output = normalize(input);
-    assert_eq!(output, "NC_TEST.1:g.[264_265insCA;264_265dup;270del]");
+    // **Re-blessed with the deletion of the input-relative weight bound**
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`), and the
+    // device this row rests on is gone with it. The third member stopped the
+    // merge only because the derivation *declined* the three-member group, and
+    // that decline was the weight bound: the derived partition was heavier than
+    // the input's spelling, so `canonicalize_from_sequence` returned `None` and
+    // the per-member pipeline answered. With no such bound the whole allele is
+    // re-derived, so this row no longer discriminates the `junction_rank`
+    // tie-break it was written for; the nucleotide half of that key is now
+    // pinned only by the sibling rows above and by
+    // `the_protein_order_does_not_depend_on_how_it_was_authored`.
+    //
+    // The output is SPEC-SILENT: the block is `ATACGT` -> `CAAAATACG`, unequal
+    // 6/9, so no column correspondence exists. Note the new form still carries a
+    // `dup` (`271_273dup`), so nothing is lost under `duplication.md:18` here
+    // even on its strongest reading.
+    assert_eq!(
+        output,
+        "NC_TEST.1:g.[265_266delinsCA;268_269delinsAA;271_273dup]"
+    );
     assert_preserving(input, &output);
 
     let starts = member_starts(&output);

@@ -127,12 +127,17 @@ const CDS_END: u64 = 63;
 /// figure is a baseline that must only ever go down, and `converged` a floor
 /// that must only ever go up.
 ///
-/// **74.2% of designed classes converge** (8 361 of 11 272). The 2 911 that do
-/// not are the measurement this module exists to make: nothing in the repo
-/// could state that number before, because only 650 real rows reach the
-/// partitioner at all — and `multi_member_cis_axis` measures 82% convergence
-/// over the respellable ones of those, which is what a corpus of far-apart
-/// members looks like.
+/// **100.0% of designed classes converge** (11 271 of 11 272). The 1 that does
+/// not is `s06-g-m4-sep1-p1-all-dup`, which diverged before this change too.
+/// The measurement this module exists to make is now a ceiling rather than a
+/// gap: nothing in the repo could state either number before, because only 650
+/// real rows reach the partitioner at all — and `multi_member_cis_axis` measures
+/// 82% convergence over the respellable ones of those, which is what a corpus of
+/// far-apart members looks like.
+///
+/// The percentage is rounded to the nearest tenth by
+/// [`the_headline_matches_the_pin`]; 11 271 / 11 272 is 99.991%, which rounds to
+/// 100.0 and is deliberately **not** written as "every class".
 ///
 /// # This headline was wrong for four movements of the pin
 ///
@@ -141,18 +146,19 @@ const CDS_END: u64 = 63;
 /// reading 6 632 / 4 640 and was carried forward exactly once, by #1493 — the
 /// change that closed #1454 — and never again. So #1454 is the one movement it
 /// did track, and the ones it missed are #1524, the axis gate, #1539 and #1599.
-/// Each of those four is recorded in the chronology below, which terminates
-/// correctly at the pinned figure; only the headline was left behind. The one
+/// Each of those four is recorded in the chronology below, whose final entry is
+/// the weight-bound deletion; only the headline was left behind. The one
 /// number a reader takes away was therefore the one number in the file that was
 /// wrong, and it was wrong by 1 394 classes — larger than any single movement the
-/// chronology records.
+/// chronology recorded at the time.
 ///
-/// Both counts here were re-derived from the pin rather than carried across the
-/// rebase onto #1599: the movement to 8 027 landed while this correction was in
-/// review, which turned "three movements" into four and 1 393 into 1 394. That is
-/// the drift this section is about, arriving once more during the change that
-/// documents it — and it is why the numbers below are asserted rather than
-/// written down.
+/// **It then happened a fifth time, during this change.** Both counts here were
+/// re-derived from the pin rather than carried across the rebase onto #1599, and
+/// the weight-bound deletion moved the pin again while that correction was in
+/// review — 8 027 to 11 271. So the headline was corrected to 71.2% and was
+/// obsolete on the same branch. That is the drift this section is about, arriving
+/// twice during the change that documents it, and it is why the numbers below are
+/// asserted rather than written down.
 ///
 /// It arrived a **third** time in #1649, which moved the pin to 8 361 while that
 /// very paragraph was on the branch. The headline moved with it because
@@ -169,8 +175,9 @@ const CDS_END: u64 = 63;
 /// forgets the prose now reddens rather than silently ageing.
 ///
 /// Note the entries below are **historical and correctly labelled** — in
-/// particular the axis gate's "6 633 -> 8 006 … by 1 373", which the three
-/// sections after it correct to 8 003, then 8 026, then 8 027. They are a
+/// particular the axis gate's "6 633 -> 8 006 … by 1 373", which the four
+/// sections after it correct to 8 003, then 8 026, then 8 027, then 11 271. They
+/// are a
 /// changelog, not competing claims, and an earlier review of this file mistook
 /// one of them for a second stale figure.
 ///
@@ -313,16 +320,38 @@ const CDS_END: u64 = 63;
 /// merge across `c.9..c.18`, i.e. codons 3 to 6, which `general.md:34` says to
 /// describe individually. Agreement is lost; correctness is not. `declined`,
 /// `underdetermined` and `sequence_changed` are all still 0.
+///
+/// # Removing the input-relative weight bound: 8 361 -> 11 271 of 11 272
+///
+/// `split 2` 2 835 -> 1, `split 3` 67 -> 0, `split 4+` 9 -> 0, with `declined`
+/// and `sequence_changed` still 0. **Net +2 910, and the losses are ZERO — which
+/// the counts prove rather than merely suggest**: exactly one class remains
+/// divergent, and it is `s06-g-m4-sep1-p1-all-dup`, which was divergent before
+/// the change too, so no class that was converged can have stopped being so.
+///
+/// Read the three zeros first, per the note below: a pass that corrupts a
+/// sequence can raise this figure.
+///
+/// **THE BASE HAS MOVED TWICE AND THE OLDER FIGURES ARE WITHDRAWN.** The change
+/// was first measured against a base predating #1599's amino-acid precondition
+/// and carried through review as 8 026 -> 11 271 / +3 245; that was corrected to
+/// 8 027 -> 11 271 / +3 244, and #1649's two-deletion alignment then raised the
+/// base again to 8 361. The figures above are re-derived from the pin below on
+/// the current base. **Do not re-quote 3 245, 3 244 or the 8 02x bases** — they
+/// describe trees this one is not, and the first of them is explicitly withdrawn
+/// in `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`. The
+/// per-class gain/loss *decomposition* that record quotes was taken on the
+/// oldest of those bases; the net movement and the zero-loss claim above are the
+/// parts this file can and does assert.
+///
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_361,
-    // #1716: one class (`s03-c-m3-sep1-p8-rot2`) moved from two outputs to
-    // three — see the section above.
-    split_two: 2_834,
-    split_three: 68,
-    split_more: 9,
+    converged: 11_271,
+    split_two: 1,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -383,15 +412,30 @@ const THREE_PRIME: Census = Census {
 /// as at 3', and no asymmetry this time because the merge the fix declines is
 /// decided before either shuffle. See `THREE_PRIME` for the class's two forms and
 /// for why losing this agreement is not losing correctness.
+///
+/// See `THREE_PRIME` for why the three zeros are read first, and for why the
+/// 8 021 and 8 023 bases carried through review are withdrawn rather than stale.
+///
+/// # Removing the input-relative weight bound: 8 367 -> 11 272 of 11 272
+///
+/// **Every class in the corpus converges under the 5' shuffle** (`split
+/// 2`/`3`/`4+` 2 826/74/5 -> 0/0/0). Net +2 905, losses ZERO — trivially so
+/// here, since nothing is left divergent to have lost.
+///
+/// The two directions **gained** 5 apart (2 910 against 2 905) and now **land**
+/// 1 apart, both at or one from the ceiling. Those are two different quantities
+/// and an earlier revision of this paragraph reported the gain difference as the
+/// landing difference; the landing gap is what says the residual was a property
+/// of the bound rather than of a shuffle direction.
+///
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_367,
-    // #1716: see `THREE_PRIME` — one class moved from two outputs to three.
-    split_two: 2_825,
-    split_three: 75,
-    split_more: 5,
+    converged: 11_272,
+    split_two: 0,
+    split_three: 0,
+    split_more: 0,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -833,7 +877,7 @@ fn the_headline_matches_the_pin() {
             )
         });
 
-    // The headline spells thousands with ASCII spaces (`8 027`), so digits are
+    // The headline spells thousands with ASCII spaces (`11 271`), so digits are
     // gathered across a single space and joined before parsing.
     // `usize`, matching the `Census` fields these are compared against.
     let numbers: Vec<usize> = {
@@ -856,7 +900,7 @@ fn the_headline_matches_the_pin() {
         found
     };
 
-    // `71`, `2`, `8027`, `11272`, `3245` — the percentage's two parts, then the
+    // `100`, `0`, `11271`, `11272`, `1` — the percentage's two parts, then the
     // three counts, in the order the sentence states them.
     assert_eq!(
         numbers.len(),
@@ -868,7 +912,7 @@ fn the_headline_matches_the_pin() {
     let tenths = numbers[0] * 10 + numbers[1];
     // Rounded to the nearest tenth rather than truncated, because the headline is
     // a percentage a human reads and a reader rounds. Truncation makes no
-    // difference at the current pin (8 027 / 11 272 = 71.212 %), but at some
+    // difference at the current pin (11 271 / 11 272 = 99.991 %), but at some
     // future pin whose fraction lands at or above .x5 it would oblige the prose
     // to state a tenth that is not the correctly-rounded one — the guard
     // dictating a wrong-looking number, which is the opposite of its job.

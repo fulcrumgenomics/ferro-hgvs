@@ -49,7 +49,8 @@
 //! #1537 ("never split a delins into members on consecutive nucleotides") is
 //! what collapsed the `has-0` arms and removed a ninth `same-arity/has-0`
 //! family. What remains under `has-0` is the carve-out — see
-//! `a_dup_flush_against_a_del_is_left_alone`.
+//! `a_dup_flush_against_a_del_is_re_derived_into_the_span` (renamed from
+//! `…_is_left_alone`, because the allele is no longer left alone).
 //!
 //! The mechanism behind the bulk of the pile is that the single spanning
 //! spelling reaches an output disjoint from every output the multi-member
@@ -67,21 +68,29 @@
 //!    `two_adjacent_members_that_both_consume_reference_are_one_delins` pins the
 //!    exact form a cited clause requires, so it fails if behaviour regresses
 //!    away from a decided answer.
-//!  - **One scope carve-out.** `a_dup_flush_against_a_del_is_left_alone` pins
+//!  - **One scope carve-out.** `a_dup_flush_against_a_del_is_re_derived_into_the_span` pins
 //!    the limit of that same ruling. Ferro's output there is not adjudicated
 //!    right; it is adjudicated *out of scope*, which is a third thing.
 //!  - **One decided-but-not-yet-implemented.** Record 1's ruling is `decided`
-//!    and ferro does **not** produce its answer yet, so the record needs both
-//!    halves: the two `the_separation_…` tests pin today's divergent output as
-//!    pre-fix behaviour, and `the_decided_target_is_the_re_derived_form` is
-//!    `#[ignore]`d and asserts the decided answer. #1617 is the gap.
-//!  - **One pinned open disagreement.**
-//!    `a_spanning_delins_and_its_aligned_split_are_two_fixed_points` pins the
-//!    largest family with the ruling it waits on named, so a future session does
-//!    not re-derive it.
+//!    and ferro does **not** produce its answer on the record's own genomic case
+//!    yet, so the record needs both halves: the two `the_separation_…` tests pin
+//!    today's output, and `the_decided_target_is_the_re_derived_form` is
+//!    `#[ignore]`d and asserts the decided answer. #1617 is the gap. The
+//!    transcript-axis half of that record's demonstration **has** converged,
+//!    with the deletion of the input-relative weight bound.
+//!  - **One family that has since converged.**
+//!    `a_spanning_delins_and_its_aligned_split_converge_on_the_span` records
+//!    that the largest family converged — measured, not ruled: the
+//!    input-relative weight bound was what kept the two spellings apart, and the
+//!    scope question its old pin named is still not decided. Renamed from
+//!    `…_are_two_fixed_points`, which is no longer true.
 //!
-//! **One assertion here is not ferro's output on `main` today**, and it is the
-//! `#[ignore]`d one. Every other expectation below is.
+//! **One assertion here is not ferro's output today**, and it is the
+//! `#[ignore]`d one. Every other expectation below is measured. Four of them
+//! moved when the input-relative weight bound was deleted
+//! (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`), and each
+//! carries its own re-blessing note saying whether the new form is what a clause
+//! produces (one is) or a choice the spec does not make (three are).
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::reference::MockProvider;
@@ -443,7 +452,7 @@ fn the_decided_target_is_the_re_derived_form() {
 /// #1537 the count in this ruling's scope is **zero**.
 ///
 /// **Scope.** Both adjacent members must consume reference bases; see
-/// `a_dup_flush_against_a_del_is_left_alone` for the other side of that line.
+/// `a_dup_flush_against_a_del_is_re_derived_into_the_span` for the other side of that line.
 #[test]
 fn two_adjacent_members_that_both_consume_reference_are_one_delins() {
     let provider = provider();
@@ -460,11 +469,25 @@ fn two_adjacent_members_that_both_consume_reference_are_one_delins() {
         "NM_TEST.1:c.10_13delinsTAAT",
         "adjudicated CORRECT against `DNA/substitution.md:32`; fixed by #1537, closing #1524"
     );
-    // The other spelling of the same variant still keeps its own partition, so
-    // the class remains divergent. That residue is not this record's — it is
-    // `separation-is-a-property-of-the-spelling-not-of-the-variant`, whose
-    // ruling is decided and whose implementation is #1617.
-    assert_eq!(normalized(&provider, authored), "NM_TEST.1:c.[9dup;13del]");
+    // **The class has converged**, with the deletion of the input-relative
+    // weight bound (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`).
+    // The other spelling used to keep its own partition — `c.[9dup;13del]`, the
+    // input handed back — and now reaches the same single `delins`.
+    //
+    // This one is SPEC-CONFORMANT rather than merely converged, and the
+    // arithmetic says why: the block is `AATA` -> `TAAT`, EQUAL length 4/4, so
+    // the column correspondence is unique and columns {0, 2, 3} change as a
+    // fact. `delins.md:18` merges `c.10` and `c.12` (one nucleotide apart,
+    // together affecting one amino acid) and `:16` then merges the consecutive
+    // `c.13` — which is exactly `c.10_13delinsTAAT`, the form this record's own
+    // ruling names. The residue that used to be filed under
+    // `separation-is-a-property-of-the-spelling-not-of-the-variant` is gone.
+    assert_eq!(
+        normalized(&provider, authored),
+        "NM_TEST.1:c.10_13delinsTAAT",
+        "both spellings now reach the form `delins-adjacent-members-when-both-\
+         consume-reference` names"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -485,17 +508,59 @@ fn two_adjacent_members_that_both_consume_reference_are_one_delins() {
 ///
 /// The case is corpus class `s00-c-m4-sep3-p8-rot3`, taken verbatim rather than
 /// invented, and it is one of the 33 classes that still leave a zero interior
-/// gap after #1537. `c.16_23dup` and `c.24_31del` are flush and stay flush.
+/// gap after #1537. The flush pair is `c.16_23dup` against `c.24_31del` — note
+/// `16_23dup` is the **3'-shifted pre-removal output**, not the authored
+/// `13_20dup` below, so the two positions are the same member seen before and
+/// after the shuffle rather than a contradiction.
+///
+/// **Renamed** from `…_is_left_alone`: the allele is no longer left alone, it is
+/// re-derived into the spanning `delins` asserted below.
 #[test]
-fn a_dup_flush_against_a_del_is_left_alone() {
+fn a_dup_flush_against_a_del_is_re_derived_into_the_span() {
     let provider = provider();
     let authored = "NM_TEST.1:c.[9T>A;13_20dup;24_31del;34_35insCACCAAAA]";
 
+    // Re-blessed with the deletion of the input-relative weight bound
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`), and
+    // this row reads AGAINST the old form rather than for it.
+    //
+    // The block is UNEQUAL (22/30), so `delins.md:15`/`:16`/`:17` have no
+    // defined input and the partition is a choice the spec does not make —
+    // SPEC-SILENT. `duplication.md:18` does not rescue the old form either: it
+    // is a sub-bullet of `:17`, whose subject is when the duplication *label*
+    // may be used, and the alternatives it names are other type names ("an
+    // insertion"), never a partition. See the ruling record for the full
+    // reading, which is confirmed against this repo's own adjudicated output
+    // (`two_insertions_sharing_a_start_merge_into_one_member` already ships
+    // `g.258_259insAGA` with a legal `dup` partition available).
+    //
+    // What the old form *is* exposed to is `general.md:58`: "descriptions
+    // removing part of a reference sequence and replacing it with part of the
+    // same sequence are not allowed (e.g., `NM_004006.2:c.[762_768del;767_774dup]`)".
+    // `c.[…;16_23dup;24_31del;…]` removes reference 24-31 and replaces it with a
+    // copy of reference 16-23. The spec's counter-example overlaps where this
+    // row is flush, so they are cousins rather than identical and this is
+    // recorded as a reading, not a finding — but it means the pre-removal form
+    // was at least as exposed to `:58` as this one ever was to
+    // `duplication.md:18`.
+    let expected = "NM_TEST.1:c.9_30delinsAAATATATTTTAATATTTTAATAAAACACC";
+    // The re-derivation is only interesting if it still says the same thing, and
+    // a string pin cannot say that: `denotes` reaches the bases through
+    // `hgvs_to_spdi` rather than through the normalizer, so this cannot agree
+    // merely because normalization produced it. Asserted BEFORE the string, so a
+    // re-blessed expectation can never carry a changed sequence with it.
+    assert_eq!(
+        denotes(&provider, authored),
+        denotes(&provider, expected),
+        "the re-derived form must denote the authored allele"
+    );
     assert_eq!(
         normalized(&provider, authored),
-        "NM_TEST.1:c.[9T>A;16_23dup;24_31del;34_35insCACCAAAA]",
-        "separation 0 between `16_23dup` and `24_31del`, and `DNA/duplication.md:18` \
-         competes — outside the scope of the adjacency ruling, not a deviation from it"
+        expected,
+        "SPEC-SILENT on an unequal-length block; see \
+         `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]` for why \
+         `duplication.md:18` does not reach a partition, and why `general.md:58` \
+         reads against the form this row used to print"
     );
 }
 
@@ -537,7 +602,7 @@ fn a_dup_flush_against_a_del_is_left_alone() {
 /// re-states the finer one's interior gap bases. So the whole divergent pile is
 /// one question wearing eight shapes, and this record is where it is named.
 #[test]
-fn a_spanning_delins_and_its_aligned_split_are_two_fixed_points() {
+fn a_spanning_delins_and_its_aligned_split_converge_on_the_span() {
     let provider = provider();
     let spanning = "NM_TEST.1:c.9_17delinsA";
     let split = "NM_TEST.1:c.[9_12del;14_17del]";
@@ -549,11 +614,25 @@ fn a_spanning_delins_and_its_aligned_split_are_two_fixed_points() {
     // `:17` and `general.md:34` demand this one — the members are two unchanged
     // nucleotides apart, and `general.md:35`'s codon exception needs a gap of
     // exactly one, so it cannot rescue either side here.
+    // **Answered by measurement rather than by ruling**: with the
+    // input-relative weight bound deleted
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) the
+    // already-split spelling reaches `:47`'s form too, so the pair has
+    // converged. The bound, not a scope question, was what kept them apart — it
+    // refused the merge on principle, since a span covering a block always
+    // weighs at least as much as any split of it.
+    //
+    // The scope question the old pin named is still not *decided*: this test now
+    // records that ferro converges on `:47`'s form here, not that the ruling was
+    // widened to say it must. The block is UNEQUAL (`TAATATATT` -> `A`, 9/1), so
+    // `:15`/`:16`/`:17` have no defined input and this is SPEC-SILENT either
+    // way. It is nonetheless a representation change for anyone storing the
+    // split.
     assert_eq!(
         normalized(&provider, split),
-        "NM_TEST.1:c.[9_12del;15_18del]",
-        "pinned as an observation: whether `delins-merge-vs-individual-gap-two-or-more`'s \
-         scope reaches a spelling that arrives already split is not settled"
+        "NM_TEST.1:c.9_17delinsA",
+        "the two spellings converge on `:47`'s form now that no derivation is \
+         judged against the input's own weight"
     );
 }
 

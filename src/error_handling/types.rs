@@ -513,8 +513,12 @@ pub enum ErrorType {
     /// ferro cannot answer it in the canonical string. Making the output depend
     /// on which spelling arrived is the definition of non-confluence, which is
     /// what #1235 exists to remove — and the cost is measured, not assumed: a
-    /// single input-relative comparand in the normalizer's weight bound cost 427
-    /// converged classes per shuffle direction over the 11,272-class corpus.
+    /// single input-relative comparand in the normalizer's since-deleted weight
+    /// bound cost 427 converged classes per shuffle direction over the
+    /// 11,272-class corpus, and deleting that bound outright converged a further
+    /// 2,910 at 3' (see
+    /// `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`, whose
+    /// own `BASE CORRECTION` withdraws the 3,245 this sentence used to give).
     ///
     /// So the spelling-dependence goes where it is harmless. The string stays a
     /// function of the denoted sequence; this warning carries how the variant

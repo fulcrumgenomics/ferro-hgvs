@@ -2,18 +2,26 @@
 //!
 //! # Why this file exists
 //!
-//! `canonicalize_from_sequence` carries a bound — `derived_columns >
-//! changed_columns_of_edits(&edits)` in `merge.rs` — whose comment states it as
+//! `canonicalize_from_sequence` **carried** a bound — `derived_columns >
+//! changed_columns_of_edits(&edits)` in `merge.rs` — whose comment stated it as
 //! *"a canonicalization may re-partition and re-type the change; it may not
 //! describe **more** change than the input already did."*
 //!
-//! It is the single largest confluence blocker measured in this codebase, and
+//! It was the single largest confluence blocker measured in this codebase, and
 //! also the thing standing between several inputs and an answer the spec
-//! recommends. Whether it should exist at all is an open question. What kept
-//! making that question expensive to ask is that its two faces were only ever
+//! recommends. Whether it should exist at all was the open question, and it is
+//! now answered: **deleted**, by the operator ruling
+//! `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`. What kept
+//! making the question expensive to ask is that its two faces were only ever
 //! discussed one at a time, in prose, in documents outside the repository. This
 //! file pins both, against the same reference, so the next reader gets the
 //! contrast in one screen and does not have to reconstruct it.
+//!
+//! **Both rows have flipped, in the direction their own failure messages named**
+//! — that is what "assert-then-flip" below was for, and the flip is now history
+//! rather than a prediction. The arithmetic sections are kept verbatim: they are
+//! the record of what the bound cost and of why it could not be narrowed to a
+//! threshold, which is the reasoning the ruling rests on.
 //!
 //! **Nothing here asserts that the bound is right or wrong.** Each row pins what
 //! ferro does today, with the arithmetic that produced it and the clause that
@@ -189,25 +197,28 @@ fn the_reference_is_the_one_the_examples_were_measured_on() {
     assert_eq!(SEQ.len(), 125, "the reproductions used a 125 nt TEMPLATE");
 }
 
-/// Example 1 is preserved: the bound refuses a derivation heavier than the input.
+/// Example 1, **flipped**: with the bound deleted the pair is re-derived.
 ///
-/// **Assert-then-flip.** If the bound is removed or narrowed this becomes the
-/// re-derived form `TEMPLATE:g.[3_6delinsAGCA;8_12delinsCAGTC]` — **measured**,
-/// not predicted (see the module docs' 2026-08-10 correction; an earlier version
-/// of this comment predicted a substitution run, from another fixture's
-/// reference).
+/// The flip is the one this row's own message named in advance, and it is
+/// reached verbatim — `TEMPLATE:g.[3_6delinsAGCA;8_12delinsCAGTC]`. The block is
+/// EQUAL length (11/11) with 9 changed columns, so the column correspondence is
+/// unique and the changed-column set is a fact rather than a choice:
+/// `DNA/delins.md:16` types each consecutive run as a `delins` and `:17` keeps
+/// the two runs separate. **Spec-conformant, and it is the pre-flip form that
+/// the clauses never generate** — that was the input's own spelling handed back
+/// by the refusal.
+///
+/// Authority: `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`.
+/// The renamed constant is kept so the two examples still line up by name.
 #[test]
-fn a_net_zero_insert_delete_pair_is_left_to_the_per_member_pipeline() {
+fn a_net_zero_insert_delete_pair_is_re_derived_into_two_delins_runs() {
     let out = oracle::normalize(SEQ, INSERT_AND_DELETE);
     assert_eq!(
-        out, INSERT_AND_DELETE,
-        "the weight bound refuses a re-derivation that marks more columns changed \
-         than the input did, so the per-member pipeline answers and the input is \
-         preserved. If this just failed with \
-         `TEMPLATE:g.[3_6delinsAGCA;8_12delinsCAGTC]`, the bound moved and that is \
-         the expected new form: the block is equal-length (11/11) with 9 columns \
-         changed, so `DNA/delins.md:16` types each run as a delins and `:17` keeps \
-         them separate. Flip this expectation and record the adjudication. Any \
+        out, "TEMPLATE:g.[3_6delinsAGCA;8_12delinsCAGTC]",
+        "the input-relative weight bound used to refuse this re-derivation and \
+         hand the variant to the per-member pipeline, preserving \
+         `{INSERT_AND_DELETE}`. With the bound deleted the equal-length block is \
+         re-derived; `DNA/delins.md:16`/`:17` produce exactly these two runs. Any \
          OTHER form is a finding — re-derive the columns before accepting it"
     );
 }
@@ -236,15 +247,20 @@ fn the_two_spellings_denote_the_same_sequence() {
     );
 }
 
-/// Example 2 is non-confluent: one variant, two stable normalized strings.
+/// Example 2, **flipped**: the two spellings converge, on the spanning form.
 ///
-/// **Assert-then-flip**, and the flip is the point. `delins.md:47` recommends
-/// the spanning form, the decided ruling
-/// `delins-merge-vs-individual-gap-two-or-more` scopes itself to exactly this
-/// shape, and Mutalyzer merges it — so the expected convergence is on
-/// [`SPANNING_DELINS`].
+/// This is #1421's non-confluence closed. `delins.md:47` recommends the spanning
+/// form on exactly the construction `:46` builds — an interior that survives the
+/// split only because payload bases coincide with the reference, here the `AC` at
+/// `g.30_31` — and the decided ruling
+/// `delins-merge-vs-individual-gap-two-or-more` scopes itself to that shape. Its
+/// SCOPE ADDENDUM of 2026-08-10 names **this pair by coordinate** as inside the
+/// scope, so the convergence target is adjudicated rather than merely measured.
+///
+/// The equality is the load-bearing assertion, not either string on its own: it
+/// is what a re-introduced spelling-relative gate would break.
 #[test]
-fn one_variant_normalizes_to_two_strings_because_a_span_outweighs_its_split() {
+fn one_variant_normalizes_to_one_string_now_the_span_is_reachable() {
     let from_span = oracle::normalize(SEQ, SPANNING_DELINS);
     let from_split = oracle::normalize(SEQ, SEPARATED_MEMBERS);
 
@@ -253,27 +269,33 @@ fn one_variant_normalizes_to_two_strings_because_a_span_outweighs_its_split() {
         "the spanning spelling is a fixed point"
     );
     assert_eq!(
-        from_split, SEPARATED_MEMBERS,
-        "the separated spelling is also a fixed point: re-deriving it yields the \
-         span, which weighs 11 against the input's 9, and the weight bound \
-         refuses anything heavier than the input's spelling"
+        from_split, SPANNING_DELINS,
+        "the separated spelling now re-derives to the span. It used to be a \
+         second fixed point: the span weighs 11 against the input's 9, and the \
+         deleted input-relative weight bound refused anything heavier than the \
+         input's own spelling"
     );
-    assert_ne!(
+    assert_eq!(
         from_span, from_split,
-        "if these now agree the defect is FIXED — confirm they agree on \
-         {SPANNING_DELINS} (`DNA/delins.md:47`, and the decided ruling \
-         `delins-merge-vs-individual-gap-two-or-more`), flip these expectations, \
-         and declare the representation change"
+        "one variant, one string — the confluence #1421 reported as missing. If \
+         this splits again, a spelling-relative gate has been reintroduced; see \
+         `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`"
     );
 }
 
 /// The bound's measure, stated as arithmetic rather than as prose.
 ///
 /// Pinned because every explanation of this defect has had to re-derive these
-/// four numbers, and because the retained bases are what make the cost
-/// structural: the span must pay for the `AC` at 30–31 that the split keeps, and
-/// no threshold on the bound can be tuned to let that through without also
-/// admitting the derivations Example 1 exists to refuse.
+/// four numbers, and because the retained bases are what price the refusal: the
+/// span must pay for the `AC` at 30–31 that the split keeps, and the difference
+/// is exactly those two bases.
+///
+/// **It does not follow that no threshold could separate this from Example 1,
+/// and an earlier revision of this doc claimed it did.** A delta threshold of 2
+/// admits this row (11 − 9 = 2) while still refusing Example 1 (9 − 2 = 7), so
+/// two worked examples cannot establish that every narrowed bound fails. What
+/// they establish is what the measure *charges for*; whether some narrowing
+/// survives is a corpus question and is not answered here.
 ///
 /// **Scoped deliberately.** An earlier revision of this test was named
 /// `a_span_always_outweighs_a_split_of_the_same_block` and its message claimed
@@ -306,9 +328,8 @@ fn a_span_outweighs_a_split_that_keeps_reference_bases() {
     assert!(
         span_weight > split_weight,
         "a merge across retained reference bases is refused: the span pays for \
-         the kept bases while the split does not, so no threshold separates \
-         this from the derivations Example 1 refuses. Note this is the \
-         retained-gap case specifically — a gap-free split can be heavier than \
-         its span, and that merge is accepted"
+         the kept bases while the split does not. Note this is the retained-gap \
+         case specifically — a gap-free split can be heavier than its span, and \
+         that merge is accepted"
     );
 }

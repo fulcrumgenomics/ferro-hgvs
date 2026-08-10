@@ -99,7 +99,33 @@ fn two_duplications_sharing_a_start_render_in_junction_order_beside_a_third_memb
         "CAGTATGCAGGCAA",
         "TEMPLATE:g.[258_259insA;259_260insAG;268del]",
     );
-    assert_eq!(output, "TEMPLATE:g.[258dup;258_259dup;268del]");
+    // **Re-blessed with the deletion of the input-relative weight bound**
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`), and the
+    // device this row rests on is gone with it. The third member stopped the
+    // merge only because the derivation *declined* the three-member group, and
+    // that decline was the weight bound: the derived partition was heavier than
+    // the input's spelling, so `canonicalize_from_sequence` returned `None` and
+    // the per-member pipeline answered. With no such bound the whole allele is
+    // re-derived, so this row no longer discriminates the member-ordering
+    // key it was written for. The nucleotide half of that key is now pinned only
+    // by the sibling rows above and by
+    // `protein_members_sharing_a_start_render_in_end_order`; stated rather than
+    // quietly lost.
+    //
+    // The output itself is SPEC-SILENT: the block is `GTATGCAGGC` ->
+    // `AGAGTATGCAGG`, unequal 10/12, so no column correspondence exists and
+    // `delins.md:15`/`:16`/`:17` have no defined input. The two `dup` members
+    // that disappear are not a `duplication.md:18` violation — `:18` is a
+    // sub-bullet of `:17`, whose subject is which *type label* a span may carry,
+    // and it names other type labels ("an insertion") as the alternative rather
+    // than a partition. `two_insertions_sharing_a_start_merge_into_one_member`
+    // already shipped `g.258_259insAGA` for the same bases with the bound in
+    // place, so the strong reading of `:18` was already violated by adjudicated
+    // behaviour. See the ruling record.
+    assert_eq!(
+        output,
+        "TEMPLATE:g.[259_260delinsAG;262del;264_265delinsTAT;266_267insCA;268C>G]"
+    );
 }
 
 #[test]

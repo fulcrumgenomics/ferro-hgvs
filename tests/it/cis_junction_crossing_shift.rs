@@ -236,11 +236,50 @@ fn the_five_prime_junction_barrier_does_not_over_clamp() {
         ShuffleDirection::FivePrime,
     );
     // The deletion is outside the tract entirely, so there is no sweep and
-    // nothing for the barrier to bound — both members stay put.
+    // nothing for the barrier to bound.
+    //
+    // **Re-blessed from `TEMPLATE:g.[2_3insA;12del]`, and it is a SPEC-CONFORMANT
+    // move rather than a loss.** With the input-relative weight bound deleted
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) this
+    // allele is re-derived from the sequence instead of being handed back
+    // verbatim. The block is `TTTTTTTAAT` -> `ATTTTTTTAA`, **equal length 10/10**,
+    // so the column correspondence is unique and columns {0, 7, 9} — positions
+    // 3, 10 and 12 — change as a *fact* rather than a choice.
+    // `DNA/delins.md:15` types each single changed column as a substitution
+    // ("by definition, when **one** nucleotide is replaced by **one** other
+    // nucleotide, the change is a substitution") and `:17` describes variants
+    // separated by one or more nucleotides individually. `g.[3T>A;10A>T;12T>A]`
+    // is that answer verbatim; the old `[2_3insA;12del]` is the input's own
+    // spelling, which no clause derives from the sequence.
+    //
+    // **This row no longer bounds the barrier**, and that is measured rather
+    // than assumed: deleting `.filter(|_| a.junction.is_none())` from the 5'
+    // branch of `clamp_sibling_crossing_shifts` leaves this answer
+    // byte-identical, because the sequence-first derivation answers the allele
+    // and never consults the per-member clamp. The two rows above still bound
+    // it. See the note on
+    // `a_third_member_clear_of_the_tract_is_re_derived_from_the_sequence`,
+    // which lost the same bite at the same time; the junction filter's guard is
+    // now
+    // `a_third_member_past_the_derivation_window_keeps_the_duplication_reaching_its_five_prime_most_position`
+    // (#1603).
+    //
+    // Both spellings are asserted, and the authored one is the load-bearing
+    // half. The paragraph above claims a MOVE — `[2_3insA;12del]` is re-derived
+    // onto the three substitutions — and pinning only the output's
+    // fixed-pointedness leaves that claim unobservable: a change that stopped
+    // re-deriving the authored form would hand it straight back and this row
+    // would stay green while its own doc had become false.
     assert_normalizes_preserving_in(
         TRACT,
         "TEMPLATE:g.[2_3insA;12del]",
-        "TEMPLATE:g.[2_3insA;12del]",
+        "TEMPLATE:g.[3T>A;10A>T;12T>A]",
+        ShuffleDirection::FivePrime,
+    );
+    assert_normalizes_preserving_in(
+        TRACT,
+        "TEMPLATE:g.[3T>A;10A>T;12T>A]",
+        "TEMPLATE:g.[3T>A;10A>T;12T>A]",
         ShuffleDirection::FivePrime,
     );
 }
@@ -268,8 +307,15 @@ const DUP_RUN: &str = "TTAATATATAATAATATTAT";
 /// that guard runs or not — the output contains no duplication at all, so the
 /// property in its old name (`…_still_reaches_its_five_prime_most_position`) is
 /// not exercised here. That coverage moved to
-/// [`a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position`],
-/// which is the row that still goes red when the guard is removed.
+/// [`a_third_member_past_the_derivation_window_keeps_the_duplication_reaching_its_five_prime_most_position`],
+/// which is the row that still goes red when the guard is removed (#1603).
+///
+/// It is **not**
+/// [`a_third_member_clear_of_the_tract_is_re_derived_from_the_sequence`], which
+/// this line used to name: that row lost its bite to the same deletion, and its
+/// own doc records the mutation leaving it byte-identical. Pointing here at a
+/// row that no longer discriminates is how a filter comes to look guarded when
+/// nothing guards it.
 #[test]
 fn a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence() {
     assert_normalizes_preserving_in(
@@ -310,24 +356,51 @@ fn a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence() {
 /// `18del` the third member itself 5'-shifts, which muddies the row. `15del` is
 /// 4 nt clear, stays exactly where it is written, and reaches the tie.
 ///
-/// **Fails both ways.** Deleting `.filter(|_| a.junction.is_none())` from the 5'
-/// branch of `clamp_sibling_crossing_shifts` turns this output into
-/// `g.[4_5insC;5_6dup;15del]`; restoring it turns it back. (Removing the whole
-/// 5' `across_junctions` barrier instead leaves this row green — that half is
-/// guarded by `an_insertion_merging_with_a_deletion_keeps_its_base_in_place`.)
+/// # It stopped bounding anything, and that is measured
 ///
-/// **The pinned string is where the barrier puts the member, NOT an adjudicated
-/// canonical form.** Read only as a barrier assertion it is exactly right; read
-/// as "this is the canonical description of this variant" it is wrong, and it
-/// has already been argued both ways. The adjudication is
-/// [`the_three_member_spelling_and_its_one_member_form_are_two_fixed_points`]
-/// below, which is the row to read before re-blessing this one.
+/// It used to **fail both ways**: deleting `.filter(|_| a.junction.is_none())`
+/// from the 5' branch of `clamp_sibling_crossing_shifts` turned the output into
+/// `g.[4_5insC;5_6dup;15del]`, and restoring it turned it back. That is no
+/// longer true. With the input-relative weight bound deleted
+/// (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) the third
+/// member no longer keeps the allele out of the sequence-first derivation: the
+/// whole thing is re-derived, the per-member pipeline never runs, and the clamp
+/// is not consulted. Applying that same mutation now leaves this row
+/// **byte-identical**.
+///
+/// The coverage that cost was real: running the mutation against the whole
+/// suite added **zero** failures, so this row and the `[2_3insA;12del]` row in
+/// [`the_five_prime_junction_barrier_does_not_over_clamp`] were the filter's
+/// only two guards and both lost their bite for the same reason. It is restored
+/// by
+/// [`a_third_member_past_the_derivation_window_keeps_the_duplication_reaching_its_five_prime_most_position`],
+/// which reaches the same property through a decline the deleted bound had
+/// nothing to do with (#1603). This row is kept as the *characterisation* of how
+/// the shape reads once the derivation answers it. (The *other* half of the
+/// barrier — removing the whole 5' `across_junctions` branch — was never guarded
+/// here either; that is
+/// `an_insertion_merging_with_a_deletion_keeps_its_base_in_place`, which still
+/// bites.)
+///
+/// The re-blessed output itself is **SPEC-SILENT**: the block is
+/// `TATATAATAAT` -> `CTATATATAATAA`, unequal 11/13, so no column correspondence
+/// exists and `delins.md:15`/`:16`/`:17` have no defined input. The `dup` that
+/// disappears is not a `duplication.md:18` violation — see the ruling record for
+/// why `:18` ranks type labels for one span rather than requiring a partition
+/// that manufactures a `dup` member.
+///
+/// Renamed with the re-bless, on the precedent
+/// `issue_1304_junction_barrier_snapshot.rs` sets at its own line 50: the old
+/// name promised a `dup` reaching its 5'-most position and the form this pins
+/// carries no `dup` at all, so the name stated the opposite of the assertion. A
+/// failure message and a `grep` both have to land on the guard that actually
+/// broke.
 #[test]
-fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_prime_most_position() {
+fn a_third_member_clear_of_the_tract_is_re_derived_from_the_sequence() {
     assert_normalizes_preserving_in(
         DUP_RUN,
         "TEMPLATE:g.[4_5insC;5_6dup;15del]",
-        "TEMPLATE:g.[4_5insC;4_5dup;15del]",
+        "TEMPLATE:g.[5_10delinsCTATAT;16A[3]]",
         ShuffleDirection::FivePrime,
     );
 }
@@ -409,6 +482,23 @@ fn a_third_member_clear_of_the_tract_keeps_the_duplication_reaching_its_five_pri
 /// members are separation 1 rather than separation 0. The arithmetic is right
 /// and the conclusion does not follow: it evaluates `general.md:34` on the
 /// spelling, which is the very thing the sibling record says cannot be done.
+///
+/// # RED ON THIS BRANCH, DELIBERATELY — DO NOT TAKE THE RE-BLESS THE MESSAGE OFFERS
+///
+/// Deleting the input-relative weight bound
+/// (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) removed the
+/// decline that kept the three-member spelling out of the sequence-first
+/// derivation, so the first pin below now reads
+/// `g.[5_10delinsCTATAT;16A[3]]` rather than `g.[4_5insC;4_5dup;15del]`.
+///
+/// The `assert_ne!` further down says "this gap is closed, so re-bless the four
+/// pins above". **It is not closed.** `contiguous-insertion-split-by-a-blocked-derivation`
+/// decides for the re-derived ONE-MEMBER insertion — `g.[3_4insACT;15del]` at 5'
+/// and `g.[4_5insCTA;15del]` at 3' — and the branch reaches neither. The output
+/// moved off the recorded gap onto a THIRD form, which is an adjudication rather
+/// than a re-bless, and it is the same frameless merge the ruling record's
+/// `THE FRAMELESS RESIDUAL IS A BUG` paragraph says must be closed rather than
+/// declared. Leave this red until it is.
 #[test]
 fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
     const THREE_MEMBER: &str = "TEMPLATE:g.[4_5insC;5_6dup;15del]";
@@ -516,6 +606,106 @@ fn the_three_member_spelling_and_its_one_member_form_are_two_fixed_points() {
             );
         }
     }
+}
+
+/// Where a third member has to sit for the sequence-first derivation to decline
+/// on width alone.
+///
+/// `canonicalize_from_sequence` pads the member-span union by `CANONICAL_PAD`
+/// (128) at each end and refuses a window wider than `MAX_CANONICAL_WINDOW`
+/// (4096). The **pair alone** pads to `1..=134`, comfortably inside the limit —
+/// so the pair is not what declines. A member here widens the span union to
+/// 4-4200, whose padded window is `1..=4328` and therefore over the limit. That
+/// is what takes the allele out of the derivation, without depending on anything
+/// the derivation *decides* — which is the property the guard below needs. Both
+/// figures are stated because the next reader will use this arithmetic to pick a
+/// new constant.
+const PAST_THE_DERIVATION_WINDOW: usize = 4200;
+
+/// [`DUP_RUN`] followed by a plain `ACGT` filler long enough to carry a member
+/// at [`PAST_THE_DERIVATION_WINDOW`].
+///
+/// The filler is 4-periodic on purpose: it holds no homopolymer or dinucleotide
+/// tract a member could shuffle through, so the third member stays exactly where
+/// it is written and contributes nothing to the case but its distance.
+fn dup_run_past_the_derivation_window() -> String {
+    let mut seq = String::from(DUP_RUN);
+    while seq.len() < PAST_THE_DERIVATION_WINDOW + 100 {
+        seq.push_str("ACGT");
+    }
+    seq
+}
+
+/// #1603 — the 5' junction filter, guarded again.
+///
+/// [`a_third_member_clear_of_the_tract_is_re_derived_from_the_sequence`]
+/// used to be the discriminator for `.filter(|_| a.junction.is_none())` in the 5'
+/// branch of `clamp_sibling_crossing_shifts`, and stopped being one when the
+/// input-relative weight bound was deleted: its third member no longer keeps the
+/// allele out of the sequence-first derivation, so the per-member pipeline — the
+/// only place the filter runs — never decides the output. Measured at the time:
+/// deleting that line left the **whole suite** green.
+///
+/// The property is unchanged and is worth restating, because it is invisible to
+/// every other check here. The barrier bounds a member by its **span start**,
+/// which is the right edge only for a member that claims bases. A `dup` carries
+/// its junction at its *end* (`junction_of`), so bounding its start holds it back
+/// by `len - 1` more than the invariant requires. `3_4dup` really is illegal —
+/// it would share interbase 4 with the insertion — so `4_5dup` is the 5'-most
+/// legal spelling and the member must reach it. Without the filter it is
+/// stranded at `5_6dup`, its input position: sequence-preserving, so the
+/// exhaustive sweeps below cannot see it, and silently non-canonical. The sweeps
+/// are blind to the class twice over — their only oracle is `apply`, and their
+/// second member is always a single-base `dup`, exactly the length at which
+/// `len - 1` is zero and the over-clamp disappears.
+///
+/// What is new is the *decline*. A third member past
+/// [`PAST_THE_DERIVATION_WINDOW`] refuses the derivation on window width, which
+/// is a property of the members' geometry rather than of what the derivation
+/// would have produced — so, unlike the old `15del`, it survives every change to
+/// the rules governing the derived pieces, which is what re-admitted that row.
+///
+/// State that claim at its actual width, because the wider one is false and was
+/// written here once: `CANONICAL_PAD` and `MAX_CANONICAL_WINDOW` **are** the
+/// derivation's own bounds, so raising either re-admits this row exactly as
+/// raising the weight bound re-admitted the old `15del`. The decline is durable
+/// against what the derivation *produces*, not against how far it is allowed to
+/// look. The 3' row is the control: it pins
+/// the same allele reaching `9_10dup`, which is what shows the derivation really
+/// declined (the pair alone merges to a single member — see
+/// [`a_multi_base_duplication_beside_an_insertion_merges_from_the_sequence`])
+/// and that the filter is 5'-only.
+///
+/// Verified both ways on this tree: with the filter deleted the 5' row emits
+/// `g.[4_5insC;5_6dup;4200T>A]` and this test fails, while the 3' row is
+/// byte-identical.
+#[test]
+fn a_third_member_past_the_derivation_window_keeps_the_duplication_reaching_its_five_prime_most_position(
+) {
+    let seq = dup_run_past_the_derivation_window();
+    // Fixture sanity: the third member's stated reference base is part of the
+    // case, and a mis-stated one is refused upstream by
+    // `stated_reference_bases_match` — which would decline the derivation for
+    // the wrong reason and make this row pass whatever the clamp does.
+    assert_eq!(
+        seq.as_bytes()[PAST_THE_DERIVATION_WINDOW - 1],
+        b'T',
+        "the ACGT filler must put a T at {PAST_THE_DERIVATION_WINDOW}"
+    );
+    let input = format!("TEMPLATE:g.[4_5insC;5_6dup;{PAST_THE_DERIVATION_WINDOW}T>A]");
+
+    assert_normalizes_preserving_in(
+        &seq,
+        &input,
+        &format!("TEMPLATE:g.[4_5insC;4_5dup;{PAST_THE_DERIVATION_WINDOW}T>A]"),
+        ShuffleDirection::FivePrime,
+    );
+    assert_normalizes_preserving_in(
+        &seq,
+        &input,
+        &format!("TEMPLATE:g.[4_5insC;9_10dup;{PAST_THE_DERIVATION_WINDOW}T>A]"),
+        ShuffleDirection::ThreePrime,
+    );
 }
 
 #[test]

@@ -75,9 +75,8 @@
 //! change to declare and re-bless deliberately — not a test to repair by pasting
 //! in the new output.
 
-use crate::common::cis_apply_oracle::apply_with;
-use crate::common::synthetic::{padded, SyntheticBuilder};
-use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer, ShuffleDirection};
+use crate::common::cis_apply_oracle;
+use ferro_hgvs::ShuffleDirection;
 
 /// The core every case here is drawn against.
 ///
@@ -87,40 +86,18 @@ use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer, ShuffleDirection};
 /// and gets spelled as a copy count over.
 const CORE: &str = "GAACAGCAGAAGCGA";
 
-/// Normalize `input` against [`CORE`] in `direction`, assert the output denotes
-/// the same bases the input does, and return the rendered output.
+/// [`common::cis_apply_oracle::normalized_preserving_in`] bound to [`CORE`].
 ///
-/// The sequence check runs **before** the caller compares strings, matching
-/// `issue_1592_reduced_member_junction_clamp.rs` and for the same reason: a
-/// string mismatch asserted first would mean the sequence check never ran, so a
-/// re-blessed expectation could silently carry a changed sequence with it. Here
-/// the sequence is the assertion and the string is the record.
+/// The helper is shared rather than copied: it encodes a deliberate contract —
+/// the `apply_with` sequence check runs before the caller compares strings — and
+/// a contract kept in two places can be weakened in one of them.
 fn normalized_preserving_in(input: &str, direction: ShuffleDirection) -> String {
-    let provider = SyntheticBuilder::genomic(CORE).build();
-    let reference = padded(CORE);
-    let normalizer = Normalizer::with_config(
-        provider.clone(),
-        NormalizeConfig::default().with_direction(direction),
-    );
-    let output = normalizer
-        .normalize(&parse_hgvs(input).expect("parse"))
-        .expect("normalize")
-        .to_string();
-
-    let from_input = apply_with(&provider, &reference, input).expect("input applies");
-    let from_output = apply_with(&provider, &reference, &output).unwrap_or_else(|| {
-        panic!("`{input}` -> `{output}` has no resulting sequence (overlapping or unconvertible)")
-    });
-    assert_eq!(
-        from_output, from_input,
-        "`{input}` -> `{output}` denotes a different sequence"
-    );
-    output
+    cis_apply_oracle::normalized_preserving_in(CORE, input, direction)
 }
 
 /// [`normalized_preserving_in`] in the default 3' direction.
 fn normalized_preserving(input: &str) -> String {
-    normalized_preserving_in(input, ShuffleDirection::ThreePrime)
+    cis_apply_oracle::normalized_preserving(CORE, input)
 }
 
 #[test]
@@ -135,10 +112,20 @@ fn a_reducing_delins_landing_in_a_tract_stops_at_its_sibling() {
 
 #[test]
 fn the_bracketed_spelling_of_that_haplotype_agrees() {
-    // The same haplotype written as two members. It was already correct — the
-    // input-relative weight bound in `canonicalize_from_sequence` declines the
-    // re-derivation for this spelling — and is pinned here so the fix is shown to
-    // *converge* the two spellings rather than merely to move one of them.
+    // The same haplotype written as two members. It was already correct, and is
+    // pinned here so the fix is shown to *converge* the two spellings rather than
+    // merely to move one of them.
+    //
+    // **The reason it was already correct no longer exists.** The
+    // input-relative weight bound in `canonicalize_from_sequence` used to decline
+    // the re-derivation for this spelling, handing it to the per-member pipeline
+    // so the input's partition survived verbatim. That bound is deleted — see
+    // `rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`, which
+    // records that a derivation may not be refused because it is heavier than the
+    // spelling the input happened to use. So this spelling is now re-derived, and
+    // what holds `g.[261del;267_268insAC]` is #1600's own fix: the tract-wide
+    // repeat a reducing `delins` grew is demoted back to the plain edit, leaving
+    // the sibling visible to the clamps.
     let output = normalized_preserving("NC_TEST.1:g.[261del;267_268insAC]");
     assert_eq!(output, "NC_TEST.1:g.[261del;267_268insAC]");
 }
