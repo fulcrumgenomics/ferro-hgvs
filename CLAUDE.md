@@ -336,11 +336,88 @@ real disagreements inside ferro rather than noise:
 | row | what disagrees |
 |---|---|
 | #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` reads the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 |
-| #1619 — `NM_000492.4:c.1520_1522del` → `c.1521_1523del` | the two forms are equivalent on the flat transcript; `hgvs_to_spdi` resolves the `c.` position by walking `normalization_transcripts.json`'s exon list, whose 1-base synthetic introns land it **10 bases** 3' of where the normalizer reads |
+| #1619 — `NM_033517.1:c.4818dupC` → `c.4818dup` | `hgvs_to_spdi` resolves the `c.` position by **walking** the exon list while the normalizer indexes the **flat** transcript, so the two disagree across any transcript-coordinate gap: the input applies `C`, the output applies `T`, at transcript position 4877. `NM_033517.1` carries a real 39-base cdot hole between exons 10 and 11 — see below, because this row **replaced** an earlier one on the same issue |
 
 Suppressing either would hollow out the oracle, and turning the flag on before
 they are settled would redden the job for a reason no PR caused. Move it into
 `test-oracle` once both are closed.
+
+**#1619's row was replaced, not closed, and the swap is the whole point.** The
+old row (`NM_000492.4:c.1520_1522del` → `c.1521_1523del`) rode on a **fixture
+defect**, not on annotation: `normalization_transcripts.json` was the real cdot
+exon table with every exon's `end` decremented by one, so all 22 of its
+multi-exon records carried a one-base hole at every junction — a shape that
+occurs nowhere in 474,818 real builds. Repairing the fixture removed that row.
+
+The row that stands in its place rides on **cdot's own annotation**.
+`NM_033517.1` is one of the 58 gapped builds, with a genuine 39-base hole
+between exon 10 (ends 1302) and exon 11 (starts 1342), and the fixture now
+carries its real table. So #1619 is demonstrated on real transcript geometry
+rather than on an artifact — which is a *stronger* reason to keep
+`FERRO_ASSERT_SEQUENCE` out of `test-oracle`, and it hands the issue the
+reproducer the repair would otherwise have destroyed. The gap is exempted by
+name in `CDOT_GAP_JUNCTIONS`
+(`tests/it/normalization_transcripts_exon_contract.rs`), never by loosening the
+contiguity rule.
+
+**No CI job arms the oracle where it fires** — checked, not assumed.
+`FERRO_ASSERT_SEQUENCE` is set in exactly two places: `ci.yml`'s `sweeps`, which
+selects `SWEEP_FILTER + test(issue_1615_denoted_sequence_oracle)`, and
+`nightly-mutalyzer.yml`, which selects the three reference-aware modules and is
+`continue-on-error`. `normalize_tests` is in neither selection, so the fire is
+reachable only by setting the flag by hand.
+
+**Here is the command the before/after comes from**, because a figure with no
+command is one nobody can re-derive. Swap only the fixture, and exclude the guard
+this change adds — that guard is *about* the fixture, so it cannot be a term in a
+before/after on it:
+
+```bash
+# "before" = the fixture as it stands on the PR's base; "after" = the fixed one
+git show <base>:tests/fixtures/sequences/normalization_transcripts.json \
+  > tests/fixtures/sequences/normalization_transcripts.json
+FERRO_ASSERT_IDEMPOTENT=1 FERRO_ASSERT_REPARSE=1 FERRO_ASSERT_IN_BOUNDS=1 \
+FERRO_ASSERT_SEQUENCE=1 \
+  cargo nextest run --features dev --lib --test it \
+  -E 'not test(normalization_transcripts_exon_contract)'
+```
+
+Against `origin/main` at `d5f26fcb`: **25 failures before, 22 after, zero new.**
+The three that went green are `idempotency_tests::test_normalization_idempotency`,
+`normalize_tests::normalization_transformations::test_3prime_shifting::case_1` and
+`normalize_tests::normalization_transformations::test_deletion_shifts_in_real_homopolymer::case_1`.
+
+**That is two files, not three.** Three files read the fixture —
+`normalize_property_tests`, `normalize_tests` and `idempotency_tests` — and the
+three green tests come from the latter two; `normalize_property_tests` reads it
+and contributes none. This paragraph used to call them "exactly the three suites
+that read that fixture", which is the claim being corrected.
+
+**Quote the command, not the pair.** The *difference* is stable — three tests,
+always the same three — but the totals are a property of `main` on the day: the
+same measurement read **20 before, 17 after** against `5f22abed` and 25/22
+against `d5f26fcb` a few hours later, because unrelated PRs were landing into the
+pre-existing oracle residue the whole time. A bare "25 / 22" quoted without its
+base is not reproducible, which is what this paragraph originally shipped.
+`tests/it/normalization_transcripts_exon_contract.rs` now guards the shape.
+
+**The defect the issue names is still live**, and losing the only corpus that
+exercised it is the hazard here. `hgvs_to_spdi` resolves a `c.` position by
+*walking* the exon list while the normalizer indexes the *flat* transcript, and
+those two readings disagree whenever the exon table has a transcript-coordinate
+gap. Real cdot has such gaps — measured over cdot-0.2.32.refseq.GRCh38,
+**58** of 474,818 multi-exon builds, sizes 23–2718 bases (none of them one base,
+which is why the fixture's shape was diagnostic of a generator bug rather than of
+real annotation).
+
+**And the suite does exercise it, on real geometry.** `NM_033517.1`'s restored
+cdot table is that corpus: one record, one genuine gap, one existing case
+(`c.4818dupC`) that fires the denoted-sequence oracle. So closing #1619 does not
+need a corpus built from scratch — it needs the walk and the flat read to be
+reconciled, and this row is the regression guard for whichever way that is
+settled. Do **not** "fix" it by re-flattening the record or by widening
+`CDOT_GAP_JUNCTIONS`: the first destroys the reproducer, the second re-admits
+the synthetic one-base holes the contract guard exists to keep out.
 
 **Measured false-positive classes, and what closed each.** The first run of this
 oracle over the suite raised **344** fires, all but 16 of them false. Each fix

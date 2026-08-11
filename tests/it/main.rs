@@ -405,6 +405,7 @@ mod mutalyzer_grammar_tests;
 mod mutalyzer_normalize_tests;
 mod mutalyzer_tests;
 mod network_benchmark_tests;
+mod normalization_transcripts_exon_contract;
 mod normalize_config_disambiguation;
 mod normalize_idempotency_proptest;
 mod normalize_property_tests;
