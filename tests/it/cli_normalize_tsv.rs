@@ -281,7 +281,26 @@ fn a_successful_row_explains_a_correction_in_its_detail() {
     ]);
     assert!(run.success, "{}", run.stderr);
     let rows = run.rows();
-    assert_eq!(fields(rows[0])[5], "", "an uncorrected row has no detail");
+    // Row 0 is uncorrected *by the preprocessor*, which is the contrast this
+    // test draws — so what must be absent from its detail is the W3025 code,
+    // not all content.
+    //
+    // Its detail is no longer empty. `UNCHANGED` is `c.459` on the mock
+    // `NM_000088.3`, whose CDS is 60 bases, so the **normalizer** raises W4004
+    // for it — and always did. Until `ferro normalize` moved off
+    // `Normalizer::normalize` (the exit that discards warnings) that diagnostic
+    // was produced and dropped, which is why this row read as clean. It is
+    // pinned rather than dodged with a different fixture: an out-of-CDS position
+    // silently accepted is exactly the thing worth showing.
+    let uncorrected = fields(rows[0]);
+    assert!(
+        !uncorrected[5].contains("W3025"),
+        "row 0 must carry no preprocessor correction: {uncorrected:?}"
+    );
+    assert_eq!(
+        uncorrected[5], "POSITION_PAST_END: NM_000088.3:c.459 lies past the cds-end (bound 60)",
+        "the normalizer's own diagnostic belongs in the row that caused it"
+    );
 
     let corrected = fields(rows[1]);
     assert_eq!(corrected[3], "true");
@@ -546,6 +565,15 @@ fn parallel_tsv_output_is_byte_identical_to_serial() {
 fn text_and_json_output_is_untouched() {
     // The `tsv` addition must be purely additive: these are the exact byte
     // streams the two pre-existing formats produced before it existed.
+    //
+    // The json record has since gained one key — `warnings`, the normalizer's
+    // population, separate from the preprocessor's `corrections` — when
+    // `ferro normalize` was moved onto the diagnostics exit. It is present
+    // unconditionally so a consumer can index it without branching, which is why
+    // it shows here as `[]`: under `--error-mode silent` W4004 is suppressed, so
+    // these two rows raise nothing. (Under `lenient` the first row carries
+    // `POSITION_PAST_END` — see
+    // `a_successful_row_explains_a_correction_in_its_detail`.)
     let variants = [UNCHANGED, CHANGED_IN, "not-a-variant"];
     let tf = input_file(&variants);
     let path = tf.path().to_str().unwrap();
@@ -566,9 +594,9 @@ fn text_and_json_output_is_untouched() {
         json.stdout,
         format!(
             "{{\"input\": \"{UNCHANGED}\", \"output\": \"{UNCHANGED}\", \
-             \"status\": \"ok\", \"corrections\": []}}\n\
+             \"status\": \"ok\", \"corrections\": [], \"warnings\": []}}\n\
              {{\"input\": \"{CHANGED_IN}\", \"output\": \"{CHANGED_OUT}\", \
-             \"status\": \"ok\", \"corrections\": []}}\n"
+             \"status\": \"ok\", \"corrections\": [], \"warnings\": []}}\n"
         )
     );
     assert!(

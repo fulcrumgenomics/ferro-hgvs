@@ -54,6 +54,45 @@ def normalize(hgvs_string: str, direction: str = "3prime") -> str:
     """
     ...
 
+def normalize_with_warnings(
+    hgvs_string: str, direction: str = "3prime"
+) -> NormalizeResultWithWarnings:
+    """Normalize an HGVS variant string, returning the warnings with it.
+
+    The warning-bearing sibling of :func:`normalize`, which returns only the
+    string and so cannot tell a caller that normalization *repaired* something.
+    Several repairs are lossy in a way the returned string does not record —
+    ``MEMBERS_COALESCED_FROM_REPORTED_FORM`` (separately reported cis members
+    were merged), ``INSERTED_SEQUENCE_EXPANDED`` (a bracketed/range ``ins``
+    payload became a literal), ``REFSEQ_MISMATCH`` (a stated reference base was
+    corrected) — so on :func:`normalize` they look exactly like a clean pass.
+
+    The normalized string is identical to what :func:`normalize` returns; only
+    the diagnostics are added.
+
+    Args:
+        hgvs_string: The HGVS variant description to normalize
+        direction: Shuffle direction - "3prime" (default) or "5prime"
+
+    Returns:
+        A NormalizeResultWithWarnings.
+
+    Raises:
+        ParseError: If the HGVS string cannot be parsed (a subclass of
+            ValueError).
+        ValueError: If ``direction`` is not one of
+            "3prime"/"5prime"/"3"/"5"/"3'"/"5'" (case-insensitive).
+        NormalizationError: If normalization fails (a subclass of RuntimeError).
+
+    Example:
+        >>> result = normalize_with_warnings("NM_000088.3:c.100delA")
+        >>> str(result.result)
+        'NM_000088.3:c.100del'
+        >>> [w.code for w in result.warnings]
+        []
+    """
+    ...
+
 # ============================================================================
 # SPDI Functions
 # ============================================================================
@@ -2133,6 +2172,31 @@ class NormalizationWarning:
     @property
     def message(self) -> str:
         """Human-readable description of the warning."""
+        ...
+
+class NormalizeResultWithWarnings:
+    """A normalized variant together with the warnings normalization raised.
+
+    Returned by :func:`normalize_with_warnings` and by
+    :meth:`Normalizer.normalize_with_warnings`.
+    """
+
+    @property
+    def result(self) -> HgvsVariant:
+        """The normalized variant.
+
+        Identical to what the warning-free entry points return — collecting the
+        diagnostics does not move the normalized form.
+        """
+        ...
+
+    @property
+    def warnings(self) -> list[NormalizationWarning]:
+        """Warnings raised during normalization; empty when it was clean."""
+        ...
+
+    def has_warnings(self) -> bool:
+        """True when at least one warning was raised."""
         ...
 
 class VariantProjection:

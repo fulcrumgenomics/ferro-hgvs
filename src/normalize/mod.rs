@@ -1750,10 +1750,40 @@ impl<P: ReferenceProvider> Normalizer<P> {
         })
     }
 
-    /// Normalize a variant
+    /// Normalize a variant — **the quiet exit**.
     ///
-    /// In strict mode (default), rejects variants with reference mismatches.
-    /// Use `normalize_with_diagnostics` for lenient mode that corrects mismatches.
+    /// This returns the normalized variant and **discards every
+    /// [`NormalizationWarning`] the normalization raised**. The core produces
+    /// them (`normalize_core_checked` returns a `(variant, warnings)` pair); the
+    /// `.0` below throws the second half away. That is a deliberate signature
+    /// choice — the return type has nowhere to put them — but it means a caller
+    /// on this exit cannot learn that a repair happened.
+    ///
+    /// Several of those repairs are lossy in a way the output string does not
+    /// record: `MEMBERS_COALESCED_FROM_REPORTED_FORM` (the individually reported
+    /// members are gone), `INSERTED_SEQUENCE_EXPANDED` (the `[100_110]` payload
+    /// is now a literal), `REFSEQ_MISMATCH` with `corrected=true` (the caller's
+    /// stated base was wrong and was silently replaced). On this exit each of
+    /// those is indistinguishable from a clean normalization.
+    ///
+    /// **Use [`normalize_with_diagnostics`](Self::normalize_with_diagnostics)
+    /// unless you specifically want the quiet behaviour.** It routes through the
+    /// same `normalize_core_checked`, so the normalized variant is
+    /// byte-identical; it simply also hands back the warnings, plus the
+    /// info-grade shuffle signals. `ferro normalize`, `ferro project` and the
+    /// Python `normalize_with_warnings` bindings are all on that exit.
+    ///
+    /// `error_mode` is orthogonal and does **not** substitute for reading the
+    /// warnings: strict mode promotes a specific ladder of conditions to hard
+    /// errors, and every warning outside that ladder is raised identically in
+    /// strict and lenient — so a strict `Normalizer` on this exit drops exactly
+    /// the same diagnostics a lenient one does.
+    ///
+    /// # Errors
+    ///
+    /// In strict mode, rejects variants with reference mismatches and the rest
+    /// of the `should_reject_*` ladder. In the default lenient mode those
+    /// conditions become warnings — which this exit then discards.
     pub fn normalize(&self, variant: &HgvsVariant) -> Result<HgvsVariant, FerroError> {
         // Thin wrapper: `normalize()` returns only the variant. Both the core
         // normalization AND the strict-mode rejection ladder live in

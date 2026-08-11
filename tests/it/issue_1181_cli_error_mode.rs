@@ -140,12 +140,26 @@ fn strict_rejects_a_reference_mismatch_that_lenient_accepts() {
 /// against a "fix" that hardwires strict everywhere.
 ///
 /// Note what is and is not distinct here. `strict` is distinguishable — it
-/// rejects, and names the mismatch. `lenient` and `silent` are **not**: for this
-/// input the CLI emits no normalizer diagnostic in either mode, so their
+/// rejects, and names the mismatch. `lenient` and `silent` are **not**: their
 /// combined stdout+stderr is byte-identical. That equality is asserted rather
 /// than glossed, because the tempting assertion — "silent omits the diagnostic
-/// that lenient prints" — is vacuously true (neither prints one) and would keep
-/// passing if the diagnostic disappeared everywhere.
+/// that lenient prints" — would keep passing if the diagnostic disappeared
+/// everywhere.
+///
+/// **What that equality now contains has changed.** It used to hold because
+/// neither mode printed a normalizer diagnostic at all: `ferro normalize` was on
+/// `Normalizer::normalize`, the exit that discards warnings. Since the CLI moved
+/// to `normalize_with_diagnostics`, both modes print
+/// `warning[REFSEQ_MISMATCH]`, so the equality is now "both disclose it
+/// identically" rather than "neither discloses anything". The assertion below
+/// pins the disclosure explicitly, so the equality can never again be satisfied
+/// by two silences.
+///
+/// That `silent` prints it is a genuine open question, recorded rather than
+/// decided here: `ErrorMode::emits_warnings()` says only `Lenient` should, but
+/// that predicate has no call site in `src/`, and `ferro project` (#1182) prints
+/// normalizer warnings in every mode. The two sibling commands are consistent
+/// with each other, which is the property this change preserved.
 #[test]
 fn strict_is_distinct_from_lenient_and_silent_at_the_cli() {
     let (_dir, reference, variant) = fixture();
@@ -158,13 +172,19 @@ fn strict_is_distinct_from_lenient_and_silent_at_the_cli() {
     assert!(!strict_ok, "strict must reject");
     assert!(lenient_ok, "lenient must accept");
     assert!(silent_ok, "silent must accept");
-    // Neither accepting mode surfaces a normalizer diagnostic for this input, so
-    // pin the equality as the fact it is. If lenient ever gains one, this fails
-    // and the distinction gets asserted properly instead of assumed.
+    // Both accepting modes surface the same normalizer diagnostic, so pin the
+    // equality as the fact it is. If they ever diverge, this fails and the
+    // distinction gets asserted properly instead of assumed.
     assert_eq!(
         lenient_out, silent_out,
         "lenient and silent are indistinguishable on this input; if that changes, \
          assert the actual difference rather than relaxing this"
+    );
+    // …and pin what they agree *on*, so the equality above cannot degenerate
+    // back into two silences without failing here.
+    assert!(
+        lenient_out.contains("warning[REFSEQ_MISMATCH]"),
+        "an accepted reference mismatch must be disclosed, not silently taken; got: {lenient_out}"
     );
     assert!(
         strict_out.contains("Reference mismatch"),

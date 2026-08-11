@@ -640,6 +640,85 @@ fn normalize(py: Python<'_>, hgvs_string: &str, direction: &str) -> PyResult<Str
     Ok(normalized.to_string())
 }
 
+/// Normalize an HGVS variant description, returning the warnings with it.
+///
+/// The warning-bearing sibling of :func:`normalize`, which returns only the
+/// string and therefore cannot tell a caller that normalization *repaired*
+/// something. Several repairs are lossy in a way the returned string does not
+/// record — coalescing separately reported cis members
+/// (``MEMBERS_COALESCED_FROM_REPORTED_FORM``), expanding a bracketed/range
+/// ``ins`` payload to a literal (``INSERTED_SEQUENCE_EXPANDED``), correcting a
+/// stated reference base (``REFSEQ_MISMATCH``) — so on :func:`normalize` they
+/// are indistinguishable from a clean pass.
+///
+/// Same return type as :meth:`Normalizer.normalize_with_warnings`, which is the
+/// equivalent on a caller-configured reference.
+///
+/// **WARNING**: As :func:`normalize`, this uses built-in test data for reference
+/// sequences. For production use, create a Normalizer instance with your
+/// reference data.
+///
+/// Args:
+///     hgvs_string: The HGVS variant description to normalize
+///     direction: Shuffle direction - "3prime" (default) or "5prime"
+///
+/// Returns:
+///     NormalizeResultWithWarnings — `.result` is the normalized variant,
+///     `.warnings` the (possibly empty) list of NormalizationWarning.
+///
+/// Raises:
+///     ValueError: If the HGVS string cannot be parsed
+///     RuntimeError: If normalization fails
+#[pyfunction]
+#[pyo3(signature = (hgvs_string, direction="3prime"))]
+fn normalize_with_warnings(
+    py: Python<'_>,
+    hgvs_string: &str,
+    direction: &str,
+) -> PyResult<PyNormalizeResultWithWarnings> {
+    let variant = parse_hgvs(hgvs_string)
+        .map_err(|e| ferro_typed("ParseError", format!("Parse error: {e}"), &e))?;
+
+    // Lenient by design, exactly as `normalize` above: this convenience API
+    // takes no error-mode argument, and a lenient normalizer is precisely the
+    // one that produces warnings rather than errors — which is what this
+    // function exists to hand back.
+    let config = NormalizeConfig::for_entry_point(
+        parse_direction_or_raise(direction)?,
+        ErrorConfig::lenient(),
+    );
+    let provider = JsonProvider::with_test_data();
+    emit_reduced_capability_warning(
+        py,
+        provider.has_genomic_data(),
+        ProviderKind::TestData,
+        "normalize_with_warnings()",
+        "Normalizer.from_manifest(...)",
+    )?;
+    let normalizer = Normalizer::with_config(provider, config);
+
+    let result = py
+        .detach(|| normalizer.normalize_with_diagnostics(&variant))
+        .map_err(|e| {
+            ferro_typed(
+                "NormalizationError",
+                format!("Normalization error: {e}"),
+                &e,
+            )
+        })?;
+
+    Ok(PyNormalizeResultWithWarnings {
+        result: PyHgvsVariant {
+            inner: result.result,
+        },
+        warnings: result
+            .warnings
+            .iter()
+            .map(PyNormalizationWarning::from)
+            .collect(),
+    })
+}
+
 /// The coordinate axis (reference molecule / coordinate system) a variant's
 /// positions are expressed in.
 ///
@@ -6182,6 +6261,7 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Core functions
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(normalize, m)?)?;
+    m.add_function(wrap_pyfunction!(normalize_with_warnings, m)?)?;
 
     // SPDI functions
     m.add_function(wrap_pyfunction!(parse_spdi, m)?)?;

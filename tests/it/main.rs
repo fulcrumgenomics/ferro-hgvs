@@ -394,6 +394,7 @@ mod normalize_idempotency_proptest;
 mod normalize_property_tests;
 mod normalize_reparse_invariant;
 mod normalize_tests;
+mod normalize_warning_seam;
 mod paraphase_exhaustive_tests;
 mod parser_tests;
 mod pastcds_star_canonicalization;

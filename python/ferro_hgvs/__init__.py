@@ -96,6 +96,7 @@ __all__ = [
     # Core functions
     "parse",
     "normalize",
+    "normalize_with_warnings",
     # SPDI functions
     "parse_spdi",
     "hgvs_to_spdi",
@@ -155,6 +156,7 @@ __all__ = [
     "ErrorConfig",
     "ParseResultWithWarnings",
     "NormalizationWarning",
+    "NormalizeResultWithWarnings",
     # Backtranslation classes
     "CodonChange",
     "CodonTable",

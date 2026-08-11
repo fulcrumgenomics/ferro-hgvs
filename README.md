@@ -89,6 +89,18 @@ ferro check --reference ferro-reference --build-cache
 ferro normalize "NM_000088.3:c.459del" --reference ferro-reference/
 ```
 
+> **Read the warnings.** Normalization sometimes *repairs* a description in a way
+> the normalized string does not record — separately reported cis members merged
+> into one `delins` (`MEMBERS_COALESCED_FROM_REPORTED_FORM`), a `ins[100_110]`
+> reference-range payload replaced by the bases it denotes
+> (`INSERTED_SEQUENCE_EXPANDED`), a stated reference base that contradicted the
+> reference and was accepted anyway (`REFSEQ_MISMATCH`). Those are reported as
+> `warning[CODE]: message` on **stderr** (and in the `warnings` array under
+> `--format json`, the `detail` column under `--format tsv`), so a pipeline
+> reading only stdout will not see them. `--error-mode strict` is not a
+> substitute: it rejects a specific ladder of conditions and reports the rest
+> exactly as lenient does.
+
 > **Throughput tip:** when normalizing many variants, feed them **sorted by transcript accession (or by genomic position)**. ferro caches each resolved transcript, so consecutive variants on the same transcript skip the (dominant) cost of re-reading and re-building it from the reference. Sorted input keeps the relevant transcripts resident in the cache and is markedly faster on large batches — see [Performance Comparison](#performance-comparison).
 
 ### Optional reference data
@@ -146,6 +158,13 @@ print(str(variant))          # "NM_000088.3:c.459A>G"
 # Normalize with reference data
 normalizer = ferro_hgvs.Normalizer(reference_json="ferro-reference/cdot.json")
 normalized = normalizer.normalize("NM_000088.3:c.459del")
+
+# `normalize` returns only the string, so it cannot tell you that normalization
+# repaired something. `normalize_with_warnings` returns the same string plus the
+# diagnostics — as a free function, or as a Normalizer method.
+result = normalizer.normalize_with_warnings("NM_000088.3:c.459del")
+print(str(result.result))                      # the same normalized string
+print([(w.code, w.message) for w in result.warnings])
 ```
 
 ## Supported HGVS Syntax
