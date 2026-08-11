@@ -1,5 +1,15 @@
-//! Every ruling id cited in Rust source must resolve, and must not contradict
-//! the ledger's `status`.
+//! Every ruling id cited in Rust source must resolve **and** must not contradict
+//! the ledger's `status`; every id cited in the ledger's own prose must resolve.
+//!
+//! The asymmetry is deliberate and is stated rather than implied, because the
+//! opening line used to claim both halves for both sources. A Rust doc comment
+//! saying "this is still open" about a `decided` record is the failure this file
+//! was built for, and the source scan checks exactly that. The ledger's own
+//! rationales are discursive — they narrate what a record *used* to say, what a
+//! withdrawn amendment argued, which neighbouring question a record does not
+//! settle — so a status-claim matcher over that prose would fire on history
+//! rather than on drift. What is checked there is resolution: an id named in a
+//! rationale must be a record the ledger has, or a declared retired id.
 //!
 //! # Why a source scan
 //!
@@ -73,6 +83,42 @@
 //! (`assert-then-flip`, `column-for-column`). Requiring the word "ruling" on the
 //! line, or the explicit `rulings[...]` form, matches how the repo actually
 //! cites a record and keeps the check free of judgement calls.
+//!
+//! # The ledger's own cross-references
+//!
+//! The scan above reads `.rs` files, so it never looks at the ledger — and the
+//! ledger cross-references itself constantly, because that is how one record
+//! says which neighbouring question it does *not* settle.
+//! [`every_record_to_record_citation_resolves`] closes that, with a looser
+//! extractor ([`record_ids_named_in`]) because a rationale cites its siblings by
+//! bare backticked id rather than with the word "ruling".
+//!
+//! # What is deliberately NOT checked: whether a quoted sentence is really the
+//! # record's
+//!
+//! The sibling failure is prose that puts words in a record's mouth — a doc
+//! comment quoting a sentence and attributing it to a ruling, where the ledger
+//! contains no such sentence. That happened: a module doc quoted
+//! `canonical-form-choice-when-both-legal` as saying "Sequence-level equivalence
+//! still needs an answer for consumers who dedupe … a groupable SPDI key, not
+//! the canonical string", which is text from an unmerged branch's copy of the
+//! ledger and appears nowhere in `main`'s.
+//!
+//! It is not checked here, for two measured reasons rather than as an oversight:
+//!
+//! 1. **Attribution is not mechanically decidable.** Prose in this repo quotes
+//!    the *spec* far more often than it quotes a record, frequently in the same
+//!    paragraph as a record citation. Deciding which of the two a quoted run
+//!    belongs to is the judgement call the rest of this file is built to avoid.
+//! 2. **The population is empty, so the check would be vacuous.** Measured on
+//!    the tree at the commit that added this: blocks citing a record *and*
+//!    carrying a quoted run of 40+ characters *and* naming no spec clause —
+//!    **zero**. A guard over an empty population reads as coverage and provides
+//!    none, which is the failure `the_index_is_not_vacuous` exists to name.
+//!
+//! If the population ever becomes non-empty, the missing ingredient is an
+//! explicit attribution convention in the prose (a marker saying "this record
+//! says"), not a cleverer heuristic over the text we have.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -86,6 +132,47 @@ const SCAN_ROOTS: &[&str] = &["src", "tests"];
 /// it would report itself. Excluded by its scan-relative path, which
 /// [`the_scan_reads_the_tree_it_claims_to`] asserts both exists and matches.
 const SELF_PATH: &str = "tests/it/ruling_citation_currency.rs";
+
+/// Record ids that no longer exist, and the record that carries their question
+/// now.
+///
+/// A rationale may name a **former** id on purpose — `inversion-vs-two-delins-76-83`
+/// opens with "THE RECORD'S FORMER ID AND QUESTION WERE BOTH WRONG … It was
+/// `inversion-vs-two-substitutions-76-83`", because the rename *is* the argument:
+/// the old id asserted the competing members were substitutions, and they are
+/// two-base `delins`.
+///
+/// Declaring those here rather than pattern-matching on words like "former"
+/// keeps [`every_record_to_record_citation_resolves`] free of judgement calls,
+/// and turns the retired id into a fact the ledger states rather than one a
+/// reader has to infer. [`no_retired_id_is_also_a_live_record`] stops an entry
+/// masking a live record.
+const RETIRED_RECORD_IDS: &[(&str, &str)] = &[
+    (
+        "inversion-vs-two-substitutions-76-83",
+        "renamed to `inversion-vs-two-delins-76-83`, which names its own former id \
+         because the rename corrected the argument",
+    ),
+    // Not a rename and not a deletion: this id names a record that **never
+    // existed on `main`**. `adjudication-precedence-order` cites it to record
+    // that a 2026-08-08 amendment removed a rank "on the strength of
+    // `partition-is-the-unit-of-normalization`, a record that has never existed
+    // on `main`" — the citation IS the finding, so it must survive.
+    //
+    // Added after measuring the interop rather than after CI reported it: this
+    // citation arrives with #1604, so on `main` today the check passes and on
+    // `main` plus #1604 it fails. Neither PR's own CI can see that — each is
+    // green alone. Declaring it here makes the merge order irrelevant.
+    //
+    // It is also why the second field is prose and not a replacement id: there
+    // is no record that carries this question now, and a schema demanding one
+    // could not express that.
+    (
+        "partition-is-the-unit-of-normalization",
+        "never existed on `main`; cited by `adjudication-precedence-order` as the \
+         non-existent record a withdrawn amendment was argued from",
+    ),
+];
 
 /// Floor for how many lines must make a status claim about a cited record.
 ///
@@ -441,5 +528,133 @@ fn no_ruling_citation_contradicts_the_ledger_status() {
         "these citations contradict {LEDGER_RELATIVE_PATH}. Update the prose (or the ledger, if \
          the ledger is what is wrong):\n  {}",
         wrong.join("\n  ")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The ledger's own cross-references
+// ---------------------------------------------------------------------------
+
+/// Every record id a **rationale** names, as the ledger spells them.
+///
+/// Deliberately not [`id_shaped_citations`]: that requires the word "ruling" on
+/// the line, which is how *Rust prose* cites a record. A rationale cites its
+/// siblings by bare backticked id — "see `delins-merge-vs-individual-gap-two-or-more`,
+/// which remains decided" — so requiring the keyword would find almost nothing.
+///
+/// The looser rule is safe here because of what else appears in a rationale:
+/// code identifiers are `snake_case` or `CamelCase` and fail the hyphen grammar,
+/// and clause citations carry a `/` and a `.md:` and fail it too. Measured on the
+/// ledger at the commit that added this: 8 tokens matched across 11 records, of
+/// which 7 were live records and 1 was the declared former id below.
+fn record_ids_named_in(rationale: &str) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    for (index, chunk) in rationale.split('`').enumerate() {
+        if index % 2 == 1 && looks_like_a_record_id(chunk) {
+            found.insert(chunk.to_string());
+        }
+    }
+    found
+}
+
+/// (c) A record's rationale may not cite a record that does not exist.
+///
+/// The source scan above reads `.rs` files, so it never looks at the ledger —
+/// and the ledger cross-references itself constantly, because that is how one
+/// record says which neighbouring question it does *not* settle. A record
+/// deleted or renamed leaves those references pointing at nothing, and nothing
+/// noticed.
+///
+/// This is not hypothetical. PR #1569 rewrote the `decided` record
+/// `adjudication-precedence-order` and removed a rank from the precedence order,
+/// on the stated ground that `partition-is-the-unit-of-normalization` was
+/// decided — a record that has never existed on `main`. The rewrite was caught
+/// by a human reading the diff, twice, which is not a mechanism.
+#[test]
+fn every_record_to_record_citation_resolves() {
+    let records = rulings::records();
+    let live: BTreeSet<&str> = records.iter().map(|r| r.id.as_str()).collect();
+    let retired: BTreeMap<&str, &str> = RETIRED_RECORD_IDS.iter().copied().collect();
+
+    let mut unknown: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    for record in &records {
+        for cited in record_ids_named_in(&record.rationale) {
+            if cited == record.id {
+                continue;
+            }
+            checked += 1;
+            if !live.contains(cited.as_str()) && !retired.contains_key(cited.as_str()) {
+                unknown.push(format!("`{}` cites `{cited}`", record.id));
+            }
+        }
+    }
+
+    assert!(
+        unknown.is_empty(),
+        "these rationales in {LEDGER_RELATIVE_PATH} name a record the ledger does not have. \
+         Fix the id, restore the record, or — if the reference is to a former id on purpose — \
+         add it to `RETIRED_RECORD_IDS` with the record that carries the question now:\n  {}",
+        unknown.join("\n  ")
+    );
+
+    // Non-vacuity. The ledger cross-references itself by construction, so a run
+    // that checked nothing means the extractor stopped recognising citations —
+    // and this test would then pass forever by looking at an empty set. Measured
+    // at 8 on the commit that added this; the floor is deliberately far below
+    // that so ordinary prose edits cannot trip it.
+    assert!(
+        checked >= 4,
+        "only {checked} record-to-record citations were found in {LEDGER_RELATIVE_PATH} — \
+         `record_ids_named_in` is probably broken, and this check would pass by reading nothing"
+    );
+}
+
+/// A retired id must not name a record that still exists.
+///
+/// Without this, `RETIRED_RECORD_IDS` is a way to silence the check above rather
+/// than to declare a rename: adding a live id would make every stale citation of
+/// it resolve through the exemption instead of through the ledger.
+#[test]
+fn no_retired_id_is_also_a_live_record() {
+    let live: BTreeSet<String> = rulings::records().into_iter().map(|r| r.id).collect();
+    let overlapping: Vec<&str> = RETIRED_RECORD_IDS
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| live.contains(*id))
+        .collect();
+    assert!(
+        overlapping.is_empty(),
+        "these ids are listed as retired but are live records in {LEDGER_RELATIVE_PATH}: \
+         {overlapping:?} — remove them from `RETIRED_RECORD_IDS`, which is for ids the ledger \
+         no longer has"
+    );
+
+    // And the successor an entry NAMES must itself resolve.
+    //
+    // The second field is prose, so a successor id inside it was checked by
+    // nothing — "renamed to `inversion-vs-two-delnis-76-83`" would read as a
+    // complete declaration while pointing at a record that does not exist,
+    // which is the same dangling-citation defect this file exists to close,
+    // one level up. Every backticked record-shaped token in the note must be
+    // live.
+    //
+    // Deliberately NOT a required field. `partition-is-the-unit-of-normalization`
+    // never existed and has no successor, so a schema demanding one could only
+    // be satisfied by inventing a record or by lying. An entry naming no
+    // successor is legitimate; an entry naming a wrong one is not.
+    let mut dangling: Vec<String> = Vec::new();
+    for (retired_id, note) in RETIRED_RECORD_IDS {
+        for named in record_ids_named_in(note) {
+            if named != *retired_id && !live.contains(&named) {
+                dangling.push(format!("`{retired_id}`'s note names `{named}`"));
+            }
+        }
+    }
+    assert!(
+        dangling.is_empty(),
+        "a `RETIRED_RECORD_IDS` note names a record the ledger does not have:\n  {}\n\
+         Either the successor id is misspelled, or the record it names was itself removed.",
+        dangling.join("\n  ")
     );
 }
