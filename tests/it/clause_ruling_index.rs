@@ -102,8 +102,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 19 records, 16 decided / 3 undecided
-//! 74 clause lines, of which 16 are named by more than one record
+//! 20 records, 17 decided / 3 undecided
+//! 77 clause lines, of which 17 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -170,11 +170,15 @@
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18  [MULTI]
 //!     `codon-carve-out-shape-restriction` — decided (governing)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/DNA/delins.md:42
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (governing)
 //! docs/recommendations/DNA/delins.md:46
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47  [MULTI]
@@ -248,6 +252,10 @@
 //!     `absolute-prohibition-enforcement-stage` — decided (cited)
 //! docs/recommendations/checklist.md:45
 //!     `bare-transcript-intronic-position` — decided (cited)
+//! docs/recommendations/general.md:23
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/general.md:26
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:34  [MULTI]
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (governing)
@@ -263,11 +271,13 @@
 //! docs/recommendations/general.md:41  [MULTI]
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
-//! docs/recommendations/general.md:43
+//! docs/recommendations/general.md:43  [MULTI]
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:44  [MULTI]
 //!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:48
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //! docs/recommendations/general.md:56  [MULTI]
@@ -316,6 +326,7 @@
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
@@ -343,6 +354,7 @@
 //!     `codon-carve-out-shape-restriction` — decided (governing)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:18
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
@@ -350,9 +362,13 @@
 //! docs/recommendations/general.md:41
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
+//! docs/recommendations/general.md:43
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:44
 //!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
+//!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:56
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
@@ -676,7 +692,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (19, 16, 3),
+        (20, 17, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -840,7 +856,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        16,
+        17,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 

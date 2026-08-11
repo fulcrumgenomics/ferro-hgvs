@@ -3332,11 +3332,13 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     ///
     /// Closed issue #79 scoped this exception out of the bare genomic axis: a
     /// `g.` description names no transcript, so there is no frame to consult.
-    /// That is preserved twice over. Nothing here runs outside a projection, so
-    /// plain `Normalizer::normalize` of a `g.` description is untouched; and the
-    /// genomic half is applied only to a genomic axis this projector *derived*,
-    /// never to one that is a genomic input's own normalization — which is why
-    /// `is_genomic_description` gates it.
+    /// That is preserved, and more simply than #1664's first cut managed:
+    /// nothing here runs outside a projection, so plain `Normalizer::normalize`
+    /// of a `g.` description is untouched, and the exception is applied only to
+    /// axes that *have* a reading frame. There is deliberately no genomic half —
+    /// a derived `g.` axis is still a `g.` description, and `general.md:22-31`
+    /// makes the prefix a statement about the type of reference sequence used.
+    /// See the comment at the end of this function for the full reasoning.
     fn apply_codon_frame_exception(
         &self,
         mut projection: VariantProjection,
@@ -3379,25 +3381,38 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             }
         }
 
-        // Half two: a frame-bearing partition lost on the derived genomic axis.
-        if !codon::is_genomic_description(original) {
-            if let (Some(coding), Some(genomic)) =
-                (projection.coding.as_ref(), projection.genomic.as_ref())
-            {
-                // `get_sequence` is 0-based and end-exclusive, so the 1-based
-                // HGVS position `at` is the half-open window `[at - 1, at)`.
-                let merged = codon::merge_genomic_codon_split(genomic, coding, |accession, at| {
-                    self.provider
-                        .get_sequence(&accession.to_string(), at.checked_sub(1)?, at)
-                        .ok()
-                        .and_then(|bases| bases.chars().next())
-                        .and_then(crate::hgvs::edit::Base::from_char)
-                });
-                if let Some(merged) = merged {
-                    projection.genomic = Some(merged);
-                }
-            }
-        }
+        // There is deliberately no second half re-merging the derived genomic
+        // axis from the coding axis's answer.
+        //
+        // `general.md:22-31` makes the prefix a statement about the **type of
+        // reference sequence used** — "`c` for a coding DNA reference sequence,
+        // `g` for a linear genomic reference sequence" — and every frame-derived
+        // rule in the recommendations is conditioned on that type, e.g.
+        // `repeated.md:21`'s "using a coding DNA reference sequence (`"c."`
+        // description)". A `g.` description therefore declares a genomic
+        // reference no matter how gene-scoped its accession is: `LRG_199:g.…` is
+        // genomic, `LRG_199t1:c.…` is the coding one. So there is no `NG_`/`LRG_`
+        // carve-out to make either.
+        //
+        // Merging here would put information into the genomic string that cannot
+        // be recovered from its own reference. Whether a transcript covers the
+        // locus, which isoform, which strand, which frame — none of that is a
+        // property of the genomic sequence; it is annotation, and it is routinely
+        // ambiguous. Two consequences, and the second is the serious one:
+        //
+        // 1. The output is not reproducible. Given the string and the genome,
+        //    nobody — including ferro — can re-derive the merge, which is exactly
+        //    why it was not a fixed point.
+        // 2. It is non-confluent **within one axis**: the merged and split forms
+        //    denote the same bases on the same accession, so one genomic variant
+        //    would have two stable strings depending on whether it was reached by
+        //    projection or by normalization.
+        //
+        // That the projector happens to hold a transcript is *provenance*, and
+        // `canonical-form-choice-when-both-legal` rules that ferro does not read
+        // provenance at runtime. #79 had already scoped this exception out of the
+        // bare genomic axis; the derived axis is the same question, because the
+        // string it produces is a `g.` description either way.
 
         Ok(projection)
     }

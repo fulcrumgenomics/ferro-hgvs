@@ -369,50 +369,73 @@ fn splits_into_members(rendered: &str) -> bool {
 /// `c.[145C>T;147C>G]` is not correct" — with that split spelling rendered
 /// `class="invalid"` in the published page.
 ///
-/// **ADJUDICATED CORRECT (#1664).** Ferro used to apply that exception on four
-/// axes and not on the fifth. One input, one projection, as it stands now:
+/// **But `:42` reaches only an axis that declares a reading frame (#161).** The
+/// clause is a conditional with two conjuncts — "separated by one nucleotide"
+/// **and** "together affecting one amino acid". The second is unstatable on a
+/// genomic reference, so the exception does not fire there, and `:17` — same
+/// document, no condition attached — positively requires the individual
+/// descriptions. The genomic split is the recommendation's default, not a gap in
+/// it.
+///
+/// `general.md:22-31` is what makes the axis, not the biology, the thing that
+/// decides: the prefix is mandatory and states "the **type of reference
+/// sequence** used … `c` for a coding DNA reference sequence, `g` for a linear
+/// genomic reference sequence". So `LRG_199:g.…` is genomic however gene-scoped
+/// its accession, and `LRG_199t1:c.…` is the coding one.
+///
+/// **This comment previously mis-cited its own authority, and that mis-citation
+/// is what licensed the genomic merge.** It claimed the exception "is a property
+/// of the variant, and this variant affects one amino acid whichever coordinate
+/// system it is spelled in", offering `rulings[delins-codon-carve-out-gap-one]`
+/// as settling that reading. It does not. That record settles *when* two
+/// variants merge — a gap of one, one amino acid — and says nothing about which
+/// axes. Its own `applies_to` is six entries, every one a `c.` or `r.` string
+/// with no genomic spelling among them, and its rationale states the opposite of
+/// what was claimed: "The carve-out is **scoped to the coding sequence** and to
+/// one amino acid". Read a record's scope from the record.
+///
+/// One input, one projection, as it stands now:
 ///
 /// ```text
-/// c   LRG_199t1:c.145_147delinsTGG      1 member
-/// n   LRG_199t1:n.389_391delinsTGG      1 member
-/// r   LRG_199t1:r.(145_147delinsugg)    1 member
-/// p   LRG_199p1:p.(Arg49Trp)            1 member
-/// g   LRG_199:g.494841_494843delinsTGG  1 member   <- was `[494841C>T;494843C>G]`
+/// c   LRG_199t1:c.145_147delinsTGG        1 member   frame -> `:18` fires
+/// r   LRG_199t1:r.(145_147delinsugg)      1 member   frame -> `RNA/delins.md:18`
+/// p   LRG_199p1:p.(Arg49Trp)              1 member   the consequence itself
+/// n   LRG_199t1:n.389_391delinsTGG        1 member   see the caveat below
+/// g   LRG_199:g.[494841C>T;494843C>G]     2 members  no frame -> `:17` governs
 /// ```
 ///
-/// `g.494841` and `g.494843` are `c.145` and `c.147`, so the genomic axis used
-/// to emit precisely the description `:42` calls not correct, re-coordinated.
-/// The exception at `DNA/delins.md:18` ("**exception**: two variants separated
-/// by one nucleotide, together affecting one amino acid, should be described as
-/// a 'delins'") is a property of the variant, and this variant affects one amino
-/// acid whichever coordinate system it is spelled in. That reading is settled
-/// for ferro: `rulings[delins-codon-carve-out-gap-one]` is **decided**,
-/// `delins.md:18` governing.
+/// Note the `r.` row is merged on **RNA authority**, `RNA/delins.md:18`, which
+/// states the same exception with its own worked example `r.142_144delinsugg`.
+/// A DNA clause cannot scope an RNA axis; `DNA/delins.md` is jurisdiction over
+/// `g.`/`c.`/`n.`/`m.` and nothing else.
 ///
-/// The mechanism was that the exception was evaluated against the axis being
-/// rendered rather than against the transcript. A `g.` axis has no reading frame
-/// of its own, so `general.md:34`'s floor of one applied unopposed and the pair
-/// separated. The projector now re-decides it against the transcript it is
-/// projecting against. Nothing about the cis-allele partitioner was implicated —
-/// the input has no members to partition.
+/// **The `n.` row is pinned as OBSERVED, not as adjudicated.** `n.` declares a
+/// non-coding DNA reference and so carries no frame of its own, yet it renders
+/// merged here because [`VariantProjection::noncoding`] is derived from the `c.`
+/// form by CDS-offset arithmetic rather than normalized on its own axis —
+/// normalizing `LRG_199t1:n.389_391delinsTGG` directly yields
+/// `n.[389C>T;391C>G]`. Whether the projector or the normalizer is the wrong
+/// side of that is an open question and is deliberately not settled here.
 #[test]
-fn the_genomic_axis_renders_the_specs_own_codon_delins_whole() {
+fn the_codon_delins_merges_only_on_an_axis_that_declares_a_frame() {
     let projector = slice_projector();
 
     for (input, transcript, genomic) in [
         (
             "LRG_199t1:c.145_147delinsTGG",
             "LRG_199t1",
-            "LRG_199:g.494841_494843delinsTGG",
+            "LRG_199:g.[494841C>T;494843C>G]",
         ),
         // `delins.md:19`'s example, whose stated purpose is to stop tools
-        // predicting `p.[Lys79*;Lys79Asn]` for one Lys79Tyr change. Ferro's `p.`
-        // axis always got that right — `p.(Lys79Tyr)` — while its `g.` axis used
-        // to publish the split the note exists to prevent.
+        // predicting `p.[Lys79*;Lys79Asn]` for one Lys79Tyr change. That purpose
+        // is served on the axes that translate: ferro's `p.` axis renders
+        // `p.(Lys79Tyr)` and its `c.` axis keeps the single `delins`. The `g.`
+        // axis carries no such prediction to protect, which is the whole reason
+        // `:42`'s second conjunct cannot be stated there.
         (
             "LRG_199t1:c.235_237delinsTAT",
             "LRG_199t1",
-            "LRG_199:g.499798_499800delinsTAT",
+            "LRG_199:g.[499798A>T;499800G>T]",
         ),
     ] {
         let variant = parse_hgvs(input).unwrap_or_else(|e| panic!("{input} must parse: {e}"));
@@ -441,16 +464,29 @@ fn the_genomic_axis_renders_the_specs_own_codon_delins_whole() {
              assertions below to quantify over anything"
         );
 
-        let split: Vec<&(char, String)> = axes
+        // Which axes carry the merge is decided by the axis's REFERENCE TYPE,
+        // not by the variant. `c.` and `r.` each declare a reading frame on
+        // their own document's authority (`DNA/delins.md:18` and
+        // `RNA/delins.md:18` state the same exception separately, the latter
+        // with its own `r.142_144delinsugg` example); `p.` is the consequence
+        // itself. `g.` declares a genomic reference, where `:42`'s second
+        // conjunct — "together affecting one amino acid" — cannot be stated, so
+        // `DNA/delins.md:17` governs and the members stay individual.
+        //
+        // `n.` sits in this list as OBSERVED, not as ruled; see the caveat in
+        // this test's doc comment.
+        let split: Vec<char> = axes
             .iter()
             .filter(|(_, rendered)| splits_into_members(rendered))
+            .map(|(code, _)| *code)
             .collect();
-        assert!(
-            split.is_empty(),
-            "no axis of `{input}` may render the form `DNA/delins.md:42` calls \
-             \"not correct\"; these did: {split:?}"
+        assert_eq!(
+            split,
+            vec!['g'],
+            "{input}: the genomic axis and only the genomic axis may render \
+             individual descriptions here; rendered {axes:?}"
         );
-        // The exact string, not only the member count: a merge that landed on
+        // The exact string, not only the member count: a split that landed on
         // the wrong coordinates or the wrong payload would satisfy the property
         // above while denoting something else.
         assert_eq!(
@@ -458,7 +494,8 @@ fn the_genomic_axis_renders_the_specs_own_codon_delins_whole() {
                 .find(|(code, _)| *code == 'g')
                 .map(|(_, rendered)| rendered.as_str()),
             Some(genomic),
-            "the genomic axis of `{input}` must be the delins re-coordinated"
+            "the genomic axis of `{input}` must be the individual descriptions \
+             `DNA/delins.md:17` asks for, re-coordinated"
         );
     }
 }

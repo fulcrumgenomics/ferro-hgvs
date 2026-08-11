@@ -34,10 +34,10 @@
 //! axis it *derived* — a genomic input's own axis is still returned as that
 //! input normalizes on its own, which is #79's answer.
 
-use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
+use crate::hgvs::edit::{Base, NaEdit};
 use crate::hgvs::interval::UncertainBoundary;
 use crate::hgvs::uncertainty::Mu;
-use crate::hgvs::variant::{Accession, AllelePhase, HgvsVariant};
+use crate::hgvs::variant::{AllelePhase, HgvsVariant};
 use crate::normalize::merge::same_codon;
 
 /// The number of top-level members a description carries: 1 for a single
@@ -46,23 +46,6 @@ pub(crate) fn member_count(variant: &HgvsVariant) -> usize {
     match variant {
         HgvsVariant::Allele(allele) => allele.variants.len(),
         _ => 1,
-    }
-}
-
-/// Is `variant` a genomic description — a `g.`/`m.` variant, or a cis allele of
-/// them?
-///
-/// Used by the projector to tell a *derived* genomic axis from one that is the
-/// input's own normalization. Only the former is re-partitioned; see the module
-/// doc on #79.
-pub(crate) fn is_genomic_description(variant: &HgvsVariant) -> bool {
-    match variant {
-        HgvsVariant::Genome(_) | HgvsVariant::Mt(_) => true,
-        HgvsVariant::Allele(allele) => allele
-            .variants
-            .first()
-            .is_some_and(|first| matches!(first, HgvsVariant::Genome(_) | HgvsVariant::Mt(_))),
-        _ => false,
     }
 }
 
@@ -110,81 +93,6 @@ pub(crate) fn coding_codon_pair(coding: &HgvsVariant) -> Option<(i64, i64)> {
     })
 }
 
-/// Re-merge a genomic axis the frameless re-derivation split, when the coding
-/// axis — which does carry the frame — kept the same variant whole.
-///
-/// Returns `None` whenever the exception does not apply, which is the common
-/// case; the caller then leaves the genomic axis exactly as normalization
-/// produced it.
-///
-/// The precondition is read off `coding`: a lone `delins` occupying exactly one
-/// codon *is* "two variants separated by one nucleotide, together affecting one
-/// amino acid" once the genomic axis has split it into that pair. Reading it
-/// there rather than re-mapping the genomic positions back through cdot is what
-/// keeps this correct in an `NG_`/`LRG_` frame, whose coordinates are not the
-/// chromosome coordinates cdot is placed against.
-///
-/// # Why the payload is not taken from the coding axis
-///
-/// The merged genomic edit replaces three bases with `[alt, unchanged, alt]`,
-/// and the two flanking bases are the substitutions themselves. Only the middle
-/// one has to be looked up, and `middle_base` supplies it from the genomic
-/// reference. Transliterating the coding payload instead would need the
-/// transcript's orientation *relative to the accession the genomic axis is
-/// written on*, which is not `Transcript::strand`: `LRG_199t1` is a minus-strand
-/// transcript on `NC_000023.11` and yet ascends on `LRG_199`, because an LRG
-/// record is stored in its own gene's orientation. Reading the one base that is
-/// actually unknown sidesteps the question.
-pub(crate) fn merge_genomic_codon_split(
-    genomic: &HgvsVariant,
-    coding: &HgvsVariant,
-    middle_base: impl Fn(&Accession, u64) -> Option<Base>,
-) -> Option<HgvsVariant> {
-    codon_delins_replacement(coding)?;
-    let HgvsVariant::Allele(allele) = genomic else {
-        return None;
-    };
-    if allele.uncertain || allele.phase != AllelePhase::Cis || allele.variants.len() != 2 {
-        return None;
-    }
-    let (left_pos, left_alt) = genome_substitution(&allele.variants[0])?;
-    let (right_pos, right_alt) = genome_substitution(&allele.variants[1])?;
-    if right_pos != left_pos + 2 {
-        return None;
-    }
-    let HgvsVariant::Genome(left) = &allele.variants[0] else {
-        return None;
-    };
-    let HgvsVariant::Genome(right) = &allele.variants[1] else {
-        return None;
-    };
-    if left.accession != right.accession {
-        return None;
-    }
-    let middle = middle_base(&left.accession, left_pos + 1)?;
-    let bases = vec![left_alt, middle, right_alt];
-
-    let mut merged = left.clone();
-    merged.loc_edit.location.start = UncertainBoundary::certain(position(left_pos));
-    merged.loc_edit.location.end = UncertainBoundary::certain(position(right_pos));
-    merged.loc_edit.edit = Mu::Certain(NaEdit::Delins {
-        sequence: InsertedSequence::Literal(Sequence::new(bases)),
-        deleted: None,
-        deleted_length: None,
-        substitution_reference: None,
-    });
-    Some(HgvsVariant::Genome(merged))
-}
-
-/// A plain genomic position with no offset and no `pter`/`qter`/`cen` marker.
-fn position(base: u64) -> crate::hgvs::location::GenomePos {
-    crate::hgvs::location::GenomePos {
-        base,
-        special: None,
-        offset: None,
-    }
-}
-
 /// The position a boundary names, **only** when it is stated with certainty.
 ///
 /// `UncertainBoundary::inner` deliberately answers for `(pos)` as well as for
@@ -230,51 +138,6 @@ fn cds_substitution(variant: &HgvsVariant) -> Option<(i64, Base)> {
     }
     match certain_edit(&cds.loc_edit.edit)? {
         NaEdit::Substitution { alternative, .. } => Some((start.base, *alternative)),
-        _ => None,
-    }
-}
-
-/// `(position, alternative base)` for a lone single-base `g.` substitution.
-fn genome_substitution(variant: &HgvsVariant) -> Option<(u64, Base)> {
-    let HgvsVariant::Genome(genome) = variant else {
-        return None;
-    };
-    let start = certain_boundary(&genome.loc_edit.location.start)?;
-    let end = certain_boundary(&genome.loc_edit.location.end)?;
-    if start != end || start.offset.is_some() || start.special.is_some() {
-        return None;
-    }
-    match certain_edit(&genome.loc_edit.edit)? {
-        NaEdit::Substitution { alternative, .. } => Some((start.base, *alternative)),
-        _ => None,
-    }
-}
-
-/// Does `coding` name a lone `c.` `delins` occupying exactly one codon?
-///
-/// This is the precondition of `delins.md:18` read on the axis that can answer
-/// it: a three-position span inside one codon "affects one amino acid", and the
-/// genomic split of it is "two variants separated by one nucleotide".
-fn codon_delins_replacement(coding: &HgvsVariant) -> Option<()> {
-    let HgvsVariant::Cds(cds) = coding else {
-        return None;
-    };
-    let start = certain_boundary(&cds.loc_edit.location.start)?;
-    let end = certain_boundary(&cds.loc_edit.location.end)?;
-    if start.offset.is_some() || start.utr3 || start.special.is_some() || start.base < 1 {
-        return None;
-    }
-    if end.offset.is_some() || end.utr3 || end.special.is_some() {
-        return None;
-    }
-    if end.base != start.base + 2 || !same_codon(start.base, end.base) {
-        return None;
-    }
-    match certain_edit(&cds.loc_edit.edit)? {
-        NaEdit::Delins {
-            sequence: InsertedSequence::Literal(sequence),
-            ..
-        } if sequence.len() == 3 => Some(()),
         _ => None,
     }
 }
@@ -355,34 +218,5 @@ mod tests {
         let certain = parse_hgvs("NM_000000.1:c.[4C>A;6G>A]").expect("parses");
         assert_eq!(coding_codon_pair(&certain), Some((4, 6)));
         assert_eq!(coding_codon_pair(&make_edits_uncertain(&certain)), None);
-    }
-
-    #[test]
-    fn a_lone_codon_delins_is_the_genomic_halfs_precondition() {
-        let whole = parse_hgvs("NM_000000.1:c.4_6delinsATA").expect("parses");
-        assert_eq!(codon_delins_replacement(&whole), Some(()));
-        // Two codons wide: three bases replaced is not the test, one codon is.
-        let wide = parse_hgvs("NM_000000.1:c.5_7delinsATA").expect("parses");
-        assert_eq!(codon_delins_replacement(&wide), None);
-        // A payload that is not three bases does not restore the triplet the
-        // genomic split came from.
-        let unbalanced = parse_hgvs("NM_000000.1:c.4_6delinsAT").expect("parses");
-        assert_eq!(codon_delins_replacement(&unbalanced), None);
-    }
-
-    #[test]
-    fn a_genomic_description_is_told_apart_from_a_transcript_one() {
-        // The genomic half applies only to an axis the projector derived; this
-        // is what keeps a genomic *input*'s own normalization at #79's answer.
-        for genomic in ["NC_000001.11:g.4C>A", "NC_000001.11:g.[4C>A;6G>A]"] {
-            assert!(is_genomic_description(
-                &parse_hgvs(genomic).expect("parses")
-            ));
-        }
-        for transcript in ["NM_000000.1:c.4C>A", "NM_000000.1:c.[4C>A;6G>A]"] {
-            assert!(!is_genomic_description(
-                &parse_hgvs(transcript).expect("parses")
-            ));
-        }
     }
 }
