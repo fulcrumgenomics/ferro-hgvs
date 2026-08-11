@@ -136,15 +136,15 @@
     },
     {
       "input": "LRG_199t1:c.3922dup",
-      "spec_expected": null,
+      "spec_expected": "LRG_199t1:c.3921dup",
       "default_output": "LRG_199t1:c.3922dup",
       "lenient_output": "LRG_199t1:c.3922dup",
       "strict_output": "LRG_199t1:c.3922dup",
       "citation": {
-        "clause": "docs/recommendations/general.md:44",
-        "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences"
+        "clause": "docs/recommendations/DNA/duplication.md:60",
+        "quote": "the variant (`NC_000023.11:g.32441180dup`) is **not described** as `c.3922dup` since this would shift the position of the variant to the next exon"
       },
-      "note": "`spec_expected` IS NULL ON PURPOSE, and NOT ASSERTED EQUAL TO ITS SIBLING. c.3921 and c.3922 are both T, so at the transcript level `c.3921dup` and `c.3922dup` denote one sequence — yet they are two fixed points, and they project 2,790 bp apart (`LRG_199:g.903430dup` vs `g.906220dup`, matching the spec's own `g.32459297dup` vs `g.32456507dup`). Whether they should converge is an open interpretive question: `duplication.md:26` names c.3921dup as THE description of that genomic change, but `general.md:44` only suspends the 3'rule around the junction — it does not say to shift 5' back, and c.3922dup may legitimately describe a different genomic event yielding the same transcript. Writing `LRG_199t1:c.3921dup` here would answer that question by fixture edit, so the field is null and only ferro's current behaviour is pinned. Recorded as the undecided ruling `exon-junction-dup-converge-from-the-far-side`."
+      "note": "`spec_expected` WAS NULL AND IS NOT ANY MORE, and that is the whole change here. c.3921 and c.3922 are both T, so at the transcript level `c.3921dup` and `c.3922dup` denote one sequence — yet ferro emits two fixed points, and they project 2,790 bp apart (`LRG_199:g.903430dup` vs `g.906220dup`, matching the spec's own `g.32459297dup` vs `g.32456507dup`). The field was null on the reasoning that the spec published no answer for this input. It does, three times, independently: `duplication.md:26` names c.3921dup as THE description and says the variant is not described as c.3922dup, `:60` restates that on the GRCh38 coordinates, and `:148` gives the reason — translating c.3922dup back to a genomic position lands at the wrong nucleotide, in the wrong exon. The ruling `exon-junction-dup-converge-from-the-far-side` is now DECIDED: CONVERGE, so this row is a recorded DIVERGENCE — ferro's three outputs below are today's behaviour and none of them is the spec's answer. #1621 closes the gap; when it lands, all three become `LRG_199t1:c.3921dup` and the row stops diverging."
     }
   ]
 }

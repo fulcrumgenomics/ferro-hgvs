@@ -168,9 +168,11 @@
 //!     `codon-carve-out-shape-restriction` — undecided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:26
-//!     `exon-junction-dup-converge-from-the-far-side` — undecided (cited)
+//!     `exon-junction-dup-converge-from-the-far-side` — decided (governing)
+//! docs/recommendations/DNA/duplication.md:60
+//!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:148
-//!     `exon-junction-dup-converge-from-the-far-side` — undecided (cited)
+//!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //! docs/recommendations/DNA/inversion.md:5
 //!     `inversion-vs-two-delins-76-83` — decided (governing)
 //! docs/recommendations/DNA/inversion.md:33
@@ -210,7 +212,7 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/general.md:44  [MULTI]
 //!     `bare-transcript-intronic-position` — decided (cited)
-//!     `exon-junction-dup-converge-from-the-far-side` — undecided (cited)
+//!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //! docs/recommendations/general.md:48
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //! docs/recommendations/general.md:56  [MULTI]
