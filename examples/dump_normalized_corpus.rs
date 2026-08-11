@@ -83,6 +83,32 @@
 //!    brings its own designed references because a random core cannot be asked to
 //!    have a coincidence pattern.
 //!
+//!    **Two corpus totals appear in this file and both are correct — do not
+//!    "reconcile" them.** `78,028` is the corpus *before* `separated_revcomp_runs`
+//!    existed, which is the only denominator a measurement taken before that
+//!    family was added can honestly carry; `78,298` is the corpus now, and
+//!    `78,298 - 78,028 = 270` is exactly that family's row count. They differ by a
+//!    digit transposition as well as by 270, which is a coincidence and has
+//!    already been read once as a typo in one of them. When you quote a figure,
+//!    quote the denominator it was measured against.
+//!
+//! 6. **…and only on the molecule types it builds** (#1606). Every family above is
+//!    spelled from nucleotides, so until the protein axis was added this corpus
+//!    could not emit one `p.` row and a protein-scoped change measured a structural
+//!    `0 of 78,298`. #1606 is the live instance: it moves an equal-length protein
+//!    `delins` onto its members and had to *report* the zero and name the generator
+//!    as its cause, because there was no measurement to quote. With the axis in
+//!    place the same change measures **1,584 of 85,642 rows, all in
+//!    `protein_equal_length_delins` and none anywhere else**.
+//!
+//!    Note what the four instances have in common and why the list keeps growing:
+//!    fixing one blindness does not reveal the next. Geometry (#1456) was only
+//!    findable once the conflict families existed, scale (#1460) once geometry was
+//!    fixed, transcript geometry (#1478) once scale was — and molecule type was
+//!    invisible behind all three, because a corpus with three axes looks well
+//!    covered. `compare` names the families it covered (#1459), which catches a
+//!    missing *family*; it cannot tell you the axis you never built.
+//!
 //! ## One family knows its own ground truth, and that buys three oracles
 //!
 //! Everything above measures **movement** — two dumps, one diff — and never
@@ -178,6 +204,40 @@ const EXON_SPANS: &[(usize, usize)] = &[(0, 7), (7, 14), (14, 20)];
 /// Long enough that an exon's genomic span cannot abut its neighbour's, so a shift
 /// that runs off an exon end lands in intron rather than silently in the next exon.
 const INTRON_LEN: usize = 10;
+
+/// The protein reference a `p.` row is drawn against (#1606).
+///
+/// A bare `NP_` accession with no nucleotide counterpart, which is deliberate: it
+/// takes `MockProvider::add_protein` and nothing else, so the protein axis needs
+/// neither a transcript nor a CDS and cannot be perturbed by the exon geometry the
+/// `c.`/`cx.` references carry.
+const PROTEIN_ACCESSION: &str = "NP_TEST.1";
+
+/// Residues protein cores are built from, as `(one-letter, three-letter)`.
+///
+/// `Met` leads the table because it is residue 1 of every core and is **never
+/// drawn** into the body — cores draw from `[1..]`. Two reasons, and the second is
+/// the one that would silently weaken the corpus. A protein starts at `Met`, so a
+/// core that did not would not be a protein; and an edit reaching residue 1 emits
+/// the illegal start-loss spelling filed as #1607, so a `Met` in the body would let
+/// a shift *arrive* at residue 1 and turn a representation measurement into a
+/// rediscovery of that bug. Keeping `Met` out of the body means the only residue-1
+/// interaction is one the families never construct.
+const RESIDUE_CODES: &[(char, &str)] = &[
+    ('M', "Met"),
+    ('A', "Ala"),
+    ('G', "Gly"),
+    ('S', "Ser"),
+    ('L', "Leu"),
+    ('K', "Lys"),
+    ('V', "Val"),
+];
+
+/// Residues in a protein core, `Met` included.
+///
+/// Twenty, matching the DNA cores, so the two halves of the corpus report row
+/// counts on the same scale and a per-core figure means the same thing on either.
+const PROTEIN_LEN: usize = 20;
 
 /// The dump header, written on emit and required verbatim on read.
 const HEADER: &str = "reference\taxis\tdirection\tfamily\tinput\toutput\twas_fixed_point\n";
@@ -525,6 +585,45 @@ const FAMILIES: &[(&str, &str)] = &[
     (
         "repeat_expansion",
         "a ranged repeat as an input — emitted on 1,558 rows, consumed on none",
+    ),
+];
+
+/// The shape families drawn against the **protein** cores (#1606).
+///
+/// Kept out of `FAMILIES` because they are not crossed with the DNA axes: a `p.`
+/// description is spelled from residues, so nothing above can be evaluated on a
+/// protein core and nothing here on a nucleotide one. The split is the same one
+/// `LONG_FAMILY` and `REVCOMP_FAMILY` make, and it has the same consequence — every
+/// existing row is byte-identical, because an added axis, like an added family,
+/// only appends.
+///
+/// **This is the fourth instance of the corpus-blindness class**, after member
+/// geometry (#1456), scale (#1460) and transcript geometry (#1478). The corpus
+/// built no protein row at all, so a change scoped to the protein axis measured a
+/// structural `0 of 78,298` — indistinguishable in the output from a change that
+/// genuinely moved nothing. #1606 is the live instance: it moves an equal-length
+/// `p.` delins onto its members, and had to report the zero and name the generator
+/// as the reason, because there was no measurement to quote.
+const PROTEIN_FAMILIES: &[(&str, &str)] = &[
+    (
+        "protein_shift_del",
+        "#91 — a deletion inside a residue run, which shifts to the C-terminal end",
+    ),
+    (
+        "protein_shift_dup",
+        "#91 / #92 — a duplication inside a residue run",
+    ),
+    (
+        "protein_ins_becomes_dup",
+        "#92 — an insertion whose payload copies its 5' neighbour, so it re-types as a dup",
+    ),
+    (
+        "protein_equal_length_delins",
+        "#1606 — an equal-length delins whose interior residues are unchanged",
+    ),
+    (
+        "protein_cis_separated",
+        "#1232 / #1401 on the protein axis — two members separated by unchanged residues",
     ),
 ];
 
@@ -990,6 +1089,43 @@ fn dump(seeds: u32) -> Vec<Row> {
             }
         }
     }
+    // The protein axis, appended last so every row above keeps its position in the
+    // dump (#1606).
+    //
+    // **One direction, not two, and that is measured rather than assumed.** Every
+    // loop above crosses its cores with `axes_and_directions`, which carries a 3'
+    // and a 5' cell. The protein normalization path never reads
+    // `NormalizeConfig::direction` — a `p.` row comes out identical under both — so
+    // dumping the second direction would double the protein half of the corpus with
+    // byte-identical rows and make a reader believe the axis had been measured under
+    // 5' shifting when nothing had. `the_protein_axis_is_direction_invariant` pins
+    // that, and it is a live guard rather than a comment: if the protein path ever
+    // starts honouring the direction, it fails and says to add the cell here.
+    for peptide in protein_sequences(seeds) {
+        let normalizer = Normalizer::with_config(
+            protein_provider(&peptide),
+            NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+        );
+        for (family, _) in PROTEIN_FAMILIES {
+            for input in protein_inputs_for(family, &peptide) {
+                let output = normalize_through(&normalizer, &input);
+                rows.push(Row {
+                    reference: peptide.clone(),
+                    // The protein axis brings no designed references, so the
+                    // `reference` column is the peptide itself rather than a
+                    // label — `core` is therefore equal to it, which is the
+                    // ordinary case the field documents (#1624/#1625).
+                    core: peptide.clone(),
+                    axis: "p",
+                    direction: "3prime",
+                    family,
+                    was_fixed_point: output == input,
+                    input,
+                    output,
+                });
+            }
+        }
+    }
     rows
 }
 
@@ -1042,6 +1178,183 @@ fn corpus_sequences(seeds: u32) -> Vec<String> {
         }
     }
     sequences
+}
+
+/// Deterministic 20-residue peptides, two per seed, each starting with `Met`.
+///
+/// Two per seed mirrors [`corpus_sequences`] — one drawn from a two-residue
+/// alphabet and one from the full table — so the protein half of the corpus scales
+/// with `--seeds` exactly as the DNA half does and stays prefix-stable.
+///
+/// **Runs are planted, not hoped for.** The residues are drawn in runs of one to
+/// three rather than one at a time, and that is the whole design. Every family
+/// below is about *shifting*, and a shift only has somewhere to go inside a tract
+/// of equal residues; drawing residue-by-residue from a 6-letter alphabet gives a
+/// run of 3 about once per 36 positions, so most cores would be fixed points for
+/// the two shift families and the corpus would report a near-zero it had generated
+/// rather than measured. This is the same lesson as `#1517` — a random core cannot
+/// be *asked* to have a structural property, so the property is built in.
+fn protein_sequences(seeds: u32) -> Vec<String> {
+    let drawn = &RESIDUE_CODES[1..];
+    let mut peptides = Vec::with_capacity(2 * seeds as usize);
+    for seed in 0..seeds {
+        for alphabet in [&drawn[..2], drawn] {
+            let mut state = u64::from(seed).wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+            let mut peptide = String::with_capacity(PROTEIN_LEN);
+            peptide.push('M');
+            while peptide.len() < PROTEIN_LEN {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let residue = alphabet[(state % alphabet.len() as u64) as usize].0;
+                let run = 1 + (state >> 32) % 3;
+                for _ in 0..run {
+                    if peptide.len() == PROTEIN_LEN {
+                        break;
+                    }
+                    peptide.push(residue);
+                }
+            }
+            peptides.push(peptide);
+        }
+    }
+    peptides
+}
+
+/// Three-letter code of the residue at 1-based `position` of `peptide`.
+///
+/// Panics on a residue outside [`RESIDUE_CODES`] rather than rendering something
+/// unparseable: cores are generated from that table, so a miss means the generator
+/// and the table have drifted apart, and a description built from a wrong code
+/// would be recorded as a parse error — a corpus row that looks like a measurement
+/// and is really a bug in the corpus.
+fn residue_at(peptide: &str, position: usize) -> &'static str {
+    let one = peptide
+        .as_bytes()
+        .get(position - 1)
+        .map(|b| *b as char)
+        .unwrap_or_else(|| panic!("position {position} is past the end of a {PROTEIN_LEN}-mer"));
+    RESIDUE_CODES
+        .iter()
+        .find(|(letter, _)| *letter == one)
+        .map(|(_, three)| *three)
+        .unwrap_or_else(|| panic!("residue {one} is not in RESIDUE_CODES"))
+}
+
+/// A three-letter residue that is **not** the one at `position`, for building an
+/// edit whose payload genuinely changes the reference.
+///
+/// A payload equal to the reference residue would make the edit a no-op that
+/// normalizes to `=`, which is a different family's question. The table has seven
+/// entries, so a differing one always exists.
+fn residue_other_than(peptide: &str, position: usize) -> &'static str {
+    let same = residue_at(peptide, position);
+    RESIDUE_CODES
+        .iter()
+        .skip(1)
+        .map(|(_, three)| *three)
+        .find(|three| *three != same)
+        .expect("the residue table holds more than one entry")
+}
+
+/// The inputs one protein `family` contributes for one peptide core.
+///
+/// Every position is read **off the peptide** rather than assumed, because
+/// normalization checks the spelled residue against the reference and rejects a
+/// mismatch (`Amino acid mismatch at position N`). A hardcoded residue would turn
+/// the whole family into rejected rows that still look like a populated corpus.
+///
+/// All spans start at residue 2 or later. Residue 1 is `Met`, and an edit that
+/// reaches it emits the illegal start-loss spelling of #1607 — a defect worth its
+/// own guard, not worth silently seeding thousands of corpus rows with.
+fn protein_inputs_for(family: &str, peptide: &str) -> Vec<String> {
+    let prefix = format!("{PROTEIN_ACCESSION}:p.");
+    let at = |p: usize| format!("{}{}", residue_at(peptide, p), p);
+    let mut out = Vec::new();
+    match family {
+        "protein_shift_del" => {
+            for start in 2..PROTEIN_LEN {
+                out.push(format!("{prefix}{}del", at(start)));
+                out.push(format!("{prefix}{}_{}del", at(start), at(start + 1)));
+            }
+        }
+        "protein_shift_dup" => {
+            for start in 2..PROTEIN_LEN {
+                out.push(format!("{prefix}{}dup", at(start)));
+                out.push(format!("{prefix}{}_{}dup", at(start), at(start + 1)));
+            }
+        }
+        "protein_ins_becomes_dup" => {
+            // The payload copies the residue 5' of the junction, so the insertion
+            // denotes a duplication and the question is whether it is re-typed as
+            // one. `general.md:56` ranks duplication above insertion.
+            for start in 2..PROTEIN_LEN {
+                out.push(format!(
+                    "{prefix}{}_{}ins{}",
+                    at(start),
+                    at(start + 1),
+                    residue_at(peptide, start)
+                ));
+            }
+        }
+        "protein_equal_length_delins" => {
+            // Payload length equals span length and the interior residues repeat
+            // the reference, so the span is unchanged in the middle and changed at
+            // both ends — the shape #1606 splits. Widths 3 and 4 give one and two
+            // unchanged interior residues respectively.
+            // `start` is bounded per width rather than once for the widest, so a
+            // width-3 span reaches the C-terminal residue instead of stopping one
+            // short of it. Deriving the bound this way also means there is no
+            // unreachable `end > PROTEIN_LEN` guard to mislead a later reader about
+            // whether spans can run off the end — they cannot, by construction.
+            for width in [3usize, 4] {
+                for start in 2..=(PROTEIN_LEN - width + 1) {
+                    let end = start + width - 1;
+                    let mut payload = String::new();
+                    payload.push_str(residue_other_than(peptide, start));
+                    for interior in (start + 1)..end {
+                        payload.push_str(residue_at(peptide, interior));
+                    }
+                    payload.push_str(residue_other_than(peptide, end));
+                    out.push(format!("{prefix}{}_{}delins{payload}", at(start), at(end)));
+                }
+            }
+        }
+        "protein_cis_separated" => {
+            // Two members with two unchanged residues between them: the protein
+            // analogue of `split_vs_spanning_delins`, which is where the DNA axes
+            // see most of their churn.
+            for start in 2..(PROTEIN_LEN - 3) {
+                let far = start + 3;
+                out.push(format!(
+                    "{prefix}[{}{};{}{}]",
+                    at(start),
+                    residue_other_than(peptide, start),
+                    at(far),
+                    residue_other_than(peptide, far)
+                ));
+                out.push(format!(
+                    "{prefix}[{}del;{}{}]",
+                    at(start),
+                    at(far),
+                    residue_other_than(peptide, far)
+                ));
+            }
+        }
+        other => unreachable!("unknown protein family {other}"),
+    }
+    out
+}
+
+/// The provider a protein row is normalized through.
+///
+/// `add_protein` and nothing else — no transcript, no CDS, no contig. That is why
+/// the protein axis costs so much less per row than the coding axes, which rebuild
+/// a `Transcript` per cell (see [`normalizer_for`]).
+fn protein_provider(peptide: &str) -> MockProvider {
+    let mut provider = MockProvider::new();
+    provider.add_protein(PROTEIN_ACCESSION, peptide);
+    provider
 }
 
 /// 1-based position of core offset `i` on the axis in question. A `g.` row sits in
@@ -1711,7 +2024,7 @@ mod tests {
     ///
     /// The one that earns the test is `Unverifiable`. `canonical_spdi` declines an
     /// allele whose members overlap, and this corpus is deliberately full of those
-    /// — 20,526 of 78,028 rows. Classifying a decline as `Different` would report
+    /// — 20,516 of 78,298 rows. Classifying a decline as `Different` would report
     /// twenty thousand findings and bury the eighty real ones, which is exactly
     /// what the first hand-written cut of this check did.
     #[test]
@@ -1793,7 +2106,7 @@ mod tests {
     /// The two views agree on thirteen of the fifteen families, and that is
     /// precisely what made the verify pass's confusion of them survive review —
     /// a bug that only manifests on `long_block_inversion` and
-    /// `separated_revcomp_runs` is a bug in 286 rows out of 78,028. So this pins
+    /// `separated_revcomp_runs` is a bug in 286 rows out of 78,298. So this pins
     /// the distinction itself, on both sides: where the column is a label the
     /// sequence must be the design's, and where it is not the two must be equal.
     #[test]
@@ -1807,11 +2120,30 @@ mod tests {
             // A label is not over `ACGT` — `revcomp_sep0_at0` and
             // `nearpalindrome_1024` both fail this — so it is the one predicate
             // that separates the two kinds of string without consulting the map.
+            //
+            // The alphabet is per-axis, and that is load-bearing rather than a
+            // widening: a `p.` row is drawn against a **peptide**, so testing it
+            // for `ACGT` would fail every protein row on the strength of the
+            // corpus having grown a molecule type. Exempting them instead would
+            // be worse — it would leave the protein half of the corpus with no
+            // check that `core` holds a sequence at all — so each axis is
+            // checked against the alphabet it is actually drawn from.
+            let (alphabet_ok, alphabet) = if row.axis == "p" {
+                (
+                    row.core
+                        .chars()
+                        .all(|c| RESIDUE_CODES.iter().any(|(one, _)| *one == c)),
+                    "one-letter residue codes",
+                )
+            } else {
+                (row.core.bytes().all(|b| b"ACGT".contains(&b)), "ACGT")
+            };
             assert!(
-                !row.core.is_empty() && row.core.bytes().all(|b| b"ACGT".contains(&b)),
-                "[{}] {} carries something that is not a sequence: {}",
+                !row.core.is_empty() && alphabet_ok,
+                "[{}] {} carries something that is not a {} sequence: {}",
                 row.family,
                 row.reference,
+                alphabet,
                 row.core
             );
             match labelled.get(&row.reference) {
@@ -2131,6 +2463,191 @@ mod tests {
                     !inputs_for(family, axis, core).is_empty(),
                     "family {family} emitted no {axis}. rows"
                 );
+            }
+        }
+    }
+
+    /// Every protein family emits something, so none can contribute a silent zero.
+    ///
+    /// The sibling of `every_family_emits_rows_on_both_axes`, and the reason it is
+    /// separate is that the protein families are not crossed with the DNA axes —
+    /// there is one axis here, so there is one loop.
+    #[test]
+    fn every_protein_family_emits_rows() {
+        let peptide = &protein_sequences(1)[0];
+        for (family, _) in PROTEIN_FAMILIES {
+            assert!(
+                !protein_inputs_for(family, peptide).is_empty(),
+                "protein family {family} emitted no rows"
+            );
+        }
+    }
+
+    /// The protein corpus scales and truncates like the DNA one.
+    #[test]
+    fn the_protein_corpus_is_prefix_stable() {
+        let few = protein_sequences(3);
+        let many = protein_sequences(9);
+        assert_eq!(few, many[..few.len()]);
+        assert_eq!(few.len(), 6, "two peptides per seed");
+        assert!(
+            few.iter()
+                .all(|p| p.len() == PROTEIN_LEN && p.starts_with('M')),
+            "every core is a {PROTEIN_LEN}-mer starting at Met"
+        );
+    }
+
+    /// **The pin that justifies dumping the protein axis at one direction.**
+    ///
+    /// Every other loop in [`dump`] crosses its cores with `axes_and_directions`,
+    /// which carries a 3' and a 5' cell. The protein path does not read
+    /// `NormalizeConfig::direction` at all, so the second cell would be a
+    /// byte-identical copy of the first — 7,344 more rows asserting nothing, and
+    /// worse, a dump that *looks* like it measured the axis under 5' shifting.
+    ///
+    /// This is a live guard, not a comment restating an assumption. If protein
+    /// normalization ever starts honouring the direction, this fails, and the fix
+    /// is to add the 5' cell to the protein loop rather than to relax the test.
+    ///
+    /// Measured over every family on two cores rather than argued from the source,
+    /// because "the code does not mention `direction`" is exactly the kind of claim
+    /// that stops being true without anyone noticing.
+    #[test]
+    fn the_protein_axis_is_direction_invariant() {
+        let mut compared = 0;
+        for peptide in protein_sequences(2) {
+            let provider = protein_provider(&peptide);
+            let three = Normalizer::with_config(
+                provider.clone(),
+                NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+            );
+            let five = Normalizer::with_config(
+                provider,
+                NormalizeConfig::default().with_direction(ShuffleDirection::FivePrime),
+            );
+            for (family, _) in PROTEIN_FAMILIES {
+                for input in protein_inputs_for(family, &peptide) {
+                    let a = normalize_through(&three, &input);
+                    let b = normalize_through(&five, &input);
+                    assert_eq!(
+                        a, b,
+                        "{input} differs by shuffle direction on the protein axis — \
+                         the protein loop in `dump` must now carry both directions"
+                    );
+                    compared += 1;
+                }
+            }
+        }
+        assert!(
+            compared > 500,
+            "only {compared} rows compared — the families stopped emitting"
+        );
+    }
+
+    /// No protein row is a parse error, a decline or a panic.
+    ///
+    /// This is the guard on the thing most likely to go quietly wrong here.
+    /// Normalization checks each spelled residue against the reference and rejects
+    /// a mismatch, so one wrong three-letter code turns a whole family into
+    /// `<declined>` rows — a populated-looking corpus measuring nothing. It would
+    /// not fail any other test: the rows exist, the key is unique, and the family
+    /// is non-vacuous.
+    #[test]
+    fn no_protein_input_is_rejected() {
+        for peptide in protein_sequences(2) {
+            let normalizer = Normalizer::with_config(
+                protein_provider(&peptide),
+                NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+            );
+            for (family, _) in PROTEIN_FAMILIES {
+                for input in protein_inputs_for(family, &peptide) {
+                    let output = normalize_through(&normalizer, &input);
+                    assert!(
+                        !output.starts_with('<'),
+                        "{family}: {input} on {peptide} gave {output}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The cores carry residue runs long enough for a shift to move through.
+    ///
+    /// The generator plants runs rather than drawing residue-by-residue, and this
+    /// is what pins that. Without it a later "simplification" of
+    /// [`protein_sequences`] to a per-residue draw would leave the two shift
+    /// families almost entirely fixed points, and the corpus would report a
+    /// near-zero it had generated rather than measured — the corpus-blindness class
+    /// one level down.
+    #[test]
+    fn protein_cores_carry_runs_a_shift_can_move_through() {
+        for peptide in protein_sequences(4) {
+            let bytes = peptide.as_bytes();
+            let longest = bytes
+                .iter()
+                .enumerate()
+                .map(|(i, b)| bytes[i..].iter().take_while(|other| *other == b).count())
+                .max()
+                .unwrap_or(0);
+            assert!(
+                longest >= 3,
+                "{peptide}'s longest residue run is {longest}, so the shift families \
+                 have almost nowhere to move on it"
+            );
+        }
+    }
+
+    /// The measured floor behind the bound above, so the bound is not folklore.
+    ///
+    /// Over the whole 48-core default corpus the shortest longest-run is **3** and
+    /// the longest is 16. The `>= 3` bound is therefore the real floor rather than a
+    /// round number picked to pass: a first cut asserted `>= 2`, which every core
+    /// clears by a margin and which a regression to per-residue drawing would very
+    /// likely clear too, since a two-residue alphabet throws adjacent pairs by
+    /// chance. Asserting the distribution here keeps the two numbers honest — if
+    /// the generator changes, this fails with what it actually produced.
+    #[test]
+    fn the_planted_runs_are_longer_than_chance_would_give() {
+        let longest_run = |peptide: &str| -> usize {
+            let bytes = peptide.as_bytes();
+            bytes
+                .iter()
+                .enumerate()
+                .map(|(i, b)| bytes[i..].iter().take_while(|other| *other == b).count())
+                .max()
+                .unwrap_or(0)
+        };
+        let cores = protein_sequences(24);
+        assert_eq!(cores.len(), 48, "the default corpus is 24 seeds");
+        let floor = cores
+            .iter()
+            .map(|p| longest_run(p))
+            .min()
+            .expect("non-empty");
+        let ceiling = cores
+            .iter()
+            .map(|p| longest_run(p))
+            .max()
+            .expect("non-empty");
+        assert_eq!(floor, 3, "measured floor moved");
+        assert_eq!(ceiling, 16, "measured ceiling moved");
+    }
+
+    /// No protein family constructs an edit reaching residue 1.
+    ///
+    /// Residue 1 is `Met`, and an edit that reaches it emits the illegal start-loss
+    /// spelling filed as #1607. Seeding the corpus with that would mean thousands
+    /// of rows whose movement is a known bug rather than a representation choice.
+    #[test]
+    fn no_protein_family_touches_residue_one() {
+        for peptide in protein_sequences(2) {
+            for (family, _) in PROTEIN_FAMILIES {
+                for input in protein_inputs_for(family, &peptide) {
+                    assert!(
+                        !input.contains("Met1"),
+                        "{family} built {input}, which reaches residue 1"
+                    );
+                }
             }
         }
     }
