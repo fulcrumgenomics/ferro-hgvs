@@ -7357,9 +7357,19 @@ pub(crate) fn clamp_sibling_crossing_shifts<P: ReferenceProvider>(
 /// Re-spell as the plain edit it grew from any cis member whose repeat notation
 /// spans a sibling's bases.
 ///
-/// Covers all three sources, not deletions alone: a repeat grown from a
+/// Covers all four sources, not deletions alone: a repeat grown from a
 /// `Deletion` re-spells as a deletion, and one grown from a `Duplication` or an
-/// `Insertion` as a duplication over the tract's 3'-most bases. Demoting an
+/// `Insertion` as a duplication over the tract's 3'-most bases. A `Delins` goes
+/// **either** way, decided by its net length change rather than by its edit
+/// type: net-positive takes `RepeatSource::Added` and re-spells as a
+/// duplication, net-negative takes `RepeatSource::Removed` and re-spells as a
+/// **deletion**, and net-zero is no growth at all so the member is skipped
+/// here entirely.
+/// The `Delins` source is #1600 and is the one that makes this pass complete
+/// rather than nearly so: the two sibling clamps hand a tract-wide repeat here
+/// because neither can bind one (see the ownership table on
+/// [`reduced_before_junction`]), so any `before` form this match does not
+/// recognise is a shape no pass bounds at all. Demoting an
 /// insertion to a *duplication* rather than back to an insertion is deliberate
 /// and load-bearing: a duplication's payload is read from the reference under
 /// its span, so it is in phase at whatever position it lands on, whereas an
@@ -7446,6 +7456,31 @@ pub(crate) fn demote_repeats_spanning_siblings<P: ReferenceProvider>(
                 .len()
                 .and_then(|n| i64::try_from(n).ok())
                 .map(|n| (RepeatSource::Added, n)),
+            // A `delins` is the #1592 family's signature, one step further
+            // along: the per-member pipeline reduces it to the pure insertion
+            // or deletion it stands for, that reduction lands in a tandem
+            // tract, and `deletion_to_repeat`/`insertion_to_repeat` then spell
+            // the result as a copy count over the **whole** tract. Skipping it
+            // here left the tract spanning a sibling with no pass able to see
+            // it: a repeat states no junction, so
+            // `clamp_sibling_crossing_junctions` has nothing to bound, and
+            // `clamp_sibling_crossing_shifts` declines a member that grew
+            // (#1266/#1279), deferring to exactly that clamp.
+            //
+            // The quantity the three arms above compute is the member's **net
+            // length change** — bases removed for a deletion, bases added for
+            // a duplication or an insertion — and a `delins` states it
+            // directly, as its payload length against its own span. An equal
+            // exchange changes no length, so no repeat can have grown or shrunk
+            // out of it and there is nothing to re-spell.
+            NaEdit::Delins { sequence, .. } => sequence
+                .len()
+                .and_then(|n| i64::try_from(n).ok())
+                .and_then(|alt_len| match alt_len - (b.end - b.start + 1) {
+                    0 => None,
+                    net if net > 0 => Some((RepeatSource::Added, net)),
+                    net => Some((RepeatSource::Removed, -net)),
+                }),
             _ => None,
         }) else {
             continue;
@@ -8104,14 +8139,29 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
 /// | claims bases | `dup`/`dupins`, grew | declines — the #1266/#1279 refusal | **owns**, via this function |
 /// | claims bases | `dup`/`dupins`, shrank | bounds the span | also bounds the junction |
 /// | `ins`/`dup` | `ins`/`dup` | bounds a `dup` that translated | **owns** |
+/// | claims bases | `repeat` | declines if it grew | inert — a repeat states no junction |
 ///
-/// Row four is the only one both act on, and they compose: each pass walks the
-/// member back **toward** where it started and neither may pass that point, so
-/// applying both cannot overshoot. The junction pass re-reads its `post` spans
-/// from `after` after the span pass has mutated it, so the second bound is
-/// measured against the first's result rather than against a stale snapshot.
+/// Row four is the only one the two clamps both act on, and they compose: each
+/// pass walks the member back **toward** where it started and neither may pass
+/// that point, so applying both cannot overshoot. The junction pass re-reads its
+/// `post` spans from `after` after the span pass has mutated it, so the second
+/// bound is measured against the first's result rather than against a stale
+/// snapshot.
 ///
 /// Row two and row three are the ones that previously had no owner.
+///
+/// **Row six is owned by neither clamp, and that is not a gap — it is a third
+/// pass.** `insertion_to_repeat` / `deletion_to_repeat` spell a reduction that
+/// lands in a tandem tract as a copy count over the *whole* tract, and a repeat
+/// states no junction at all, so nothing here can bound it. What restores a
+/// bindable form is [`demote_repeats_spanning_siblings`], which runs *before*
+/// both clamps and re-spells such a repeat as the plain `dup`/`del` it grew out
+/// of — after which the row becomes row three or row four and is owned as
+/// usual. So the partition is only complete while that pass covers every
+/// `before` form that can reduce into a tract: it was keyed on
+/// `Deletion`/`Duplication`/`Insertion` alone, which excluded the very
+/// `delins` this function exists for, and #1600 is the resulting fall-through
+/// (`g.261_267delinsGCAGAAAC` -> `g.[261del;266_267insCA]`, different bases).
 fn reduced_before_junction(before: &MemberSpan, after_junction: i64) -> Option<i64> {
     // An edit that claims no bases and states no junction — there is no
     // footprint to read a starting junction off.
