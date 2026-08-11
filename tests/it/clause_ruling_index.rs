@@ -84,8 +84,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 16 records, 10 decided / 6 undecided
-//! 60 clause lines, of which 12 are named by more than one record
+//! 16 records, 11 decided / 5 undecided
+//! 61 clause lines, of which 13 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -101,10 +101,10 @@
 //! docs/consultation/SVD-WG010.md:5
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
 //! docs/consultation/open-issues.md:77
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/consultation/open-issues.md:78  [MULTI]
 //!     `adjudication-precedence-order` — decided (cited)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/consultation/open-issues.md:77-78)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/recommendations/DNA/alleles.md:5
 //!     `conflicting-member-geometry-refusal-scope` — decided (governing)
 //! docs/recommendations/DNA/complex.md:5
@@ -143,26 +143,27 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18  [MULTI]
 //!     `codon-carve-out-shape-restriction` — undecided (cited)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //! docs/recommendations/DNA/delins.md:46
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
-//! docs/recommendations/DNA/delins.md:47
+//! docs/recommendations/DNA/delins.md:47  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:79
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:80
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:81
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:82
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:83
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:84
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/duplication.md:18  [MULTI]
 //!     `codon-carve-out-shape-restriction` — undecided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
@@ -200,11 +201,13 @@
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //! docs/recommendations/general.md:35
 //!     `codon-carve-out-shape-restriction` — undecided (cited)
 //! docs/recommendations/general.md:39
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
+//! docs/recommendations/general.md:41
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/general.md:44  [MULTI]
 //!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — undecided (cited)
@@ -234,29 +237,18 @@
 //! -- unanswered question on the same line. This is where re-derivation from --
 //! -- the spec text actually happens; read BOTH records before forming a view. --
 //!
-//! docs/consultation/open-issues.md:78
-//!     `adjudication-precedence-order` — decided (cited)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/recommendations/DNA/complex.md:127
 //!     `ring-telomere-anchoring` — undecided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/complex.md:161
 //!     `ring-telomere-anchoring` — undecided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
-//! docs/recommendations/DNA/delins.md:17
-//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited)
 //! docs/recommendations/DNA/delins.md:18
 //!     `codon-carve-out-shape-restriction` — undecided (cited)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //! docs/recommendations/DNA/duplication.md:18
 //!     `codon-carve-out-shape-restriction` — undecided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
-//! docs/recommendations/general.md:34
-//!     `canonical-form-choice-when-both-legal` — decided (cited)
-//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
-//!     `inversion-vs-two-delins-76-83` — decided (cited)
-//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited)
 //! docs/recommendations/general.md:44
 //!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — undecided (cited)
@@ -266,6 +258,20 @@
 //! docs/background/basics.md:38
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
+//! docs/consultation/open-issues.md:78
+//!     `adjudication-precedence-order` — decided (cited)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
+//! docs/recommendations/DNA/delins.md:17
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
+//! docs/recommendations/DNA/delins.md:47
+//!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
+//! docs/recommendations/general.md:34
+//!     `canonical-form-choice-when-both-legal` — decided (cited)
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //! docs/recommendations/general.md:56
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
@@ -293,11 +299,16 @@
 //! the measured number moves *and* someone re-reads prose the test does not
 //! check.
 //!
-//! What is worth saying in prose is which row matters. `delins.md:17` is the one
-//! this project keeps tripping over: a settled record and an unanswered one name
-//! the same line, so reading either alone gives a confident and half-wrong
-//! picture. The index does not adjudicate anything — it only tells you that more
-//! than one record is in play, which is the fact that was missing.
+//! What is worth saying in prose is which row matters, and that the mixed count
+//! falls as records get *decided* rather than as clauses stop being contested.
+//! `delins.md:17` is the row this project keeps tripping over, and it is no
+//! longer in the mixed block at all: it was mixed until
+//! `separation-is-a-property-of-the-spelling-not-of-the-variant` was decided,
+//! and it now resolves to two settled records whose scopes differ — which is
+//! its own way of being half-wrong when read from one of them alone. So a line
+//! leaving the mixed block is not evidence that it is safe to read from a
+//! single record. The index does not adjudicate anything — it only tells you
+//! that more than one record is in play, which is the fact that was missing.
 //!
 //! `DNA/complex.md:127` and `:161` joined that set when the ring rules landed:
 //! they are the spec's two published ring shapes — the bare ring and the
@@ -571,7 +582,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (16, 10, 6),
+        (16, 11, 5),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -735,7 +746,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        12,
+        13,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
@@ -753,7 +764,7 @@ fn clauses_named_by_several_records_are_flagged() {
         .collect();
     assert_eq!(
         mixed.len(),
-        8,
+        5,
         "measured count of mixed-verdict clause lines changed: {mixed:?}"
     );
 
@@ -771,17 +782,30 @@ fn clauses_named_by_several_records_are_flagged() {
     );
     assert!(
         ids.contains("separation-is-a-property-of-the-spelling-not-of-the-variant"),
-        "{key} must also resolve to the record that leaves the framing question unanswered: \
-         {ids:?}"
+        "{key} must also resolve to the record that frames it as spelling-relative: {ids:?}"
     );
+
+    // `delins.md:17` was the canonical MIXED-verdict line until the separation
+    // record was decided; it now resolves to two settled records whose scopes
+    // differ, which is why the two `contains` assertions above are the load-
+    // bearing ones and the verdict spread is not. The mixed-verdict section
+    // must still be exercised by something, so it is asserted on the line that
+    // currently carries the spread.
+    let mixed_key = ClauseLine {
+        file: "docs/recommendations/DNA/delins.md".to_string(),
+        line: 18,
+    };
+    let mixed_claims = index
+        .get(&mixed_key)
+        .unwrap_or_else(|| panic!("{mixed_key} is not in the index"));
     assert!(
-        claims
+        mixed_claims
             .iter()
             .map(|c| &c.status)
             .collect::<BTreeSet<_>>()
             .len()
             > 1,
-        "{key} is the canonical mixed-verdict clause line and must render in that section"
+        "{mixed_key} is the canonical mixed-verdict clause line and must render in that section"
     );
 }
 
