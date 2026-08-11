@@ -205,6 +205,7 @@
 //! docs/recommendations/general.md:48
 //!     `alignment-only-symbol-in-a-description` — decided (cited)
 //! docs/recommendations/general.md:56  [MULTI]
+//!     `adjudication-precedence-order` — decided (cited)
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
@@ -254,6 +255,7 @@
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //! docs/recommendations/general.md:56
+//!     `adjudication-precedence-order` — decided (cited)
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)

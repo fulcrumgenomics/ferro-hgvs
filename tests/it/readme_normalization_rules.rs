@@ -247,3 +247,82 @@ fn the_ruleset_and_its_disclosure_mechanism_point_at_each_other() {
          reachable from the trailer's instructions"
     );
 }
+
+/// The ledger record that names `README.md` as canonical must find the section
+/// it names.
+///
+/// The `adjudication-precedence-order` record was rewritten from a restatement
+/// of the ruleset into a **pointer** at it. A pointer has a failure mode a
+/// restatement does not: it can dangle. Nothing asserted that it resolved —
+/// `readme_normalization_rules.rs` guards the README against itself and knows
+/// nothing of the ledger, and `ruling_citation_currency.rs` checks the ledger's
+/// citations of *spec clauses*, not of this repository's own documents.
+///
+/// The gap was live, and named at the time it was live: while the ruleset PR was
+/// unmerged, this record's opening claim — that the ruleset "lives in
+/// `README.md`" — was false on `main`, and the required merge order was carried
+/// only by a PR comment. The guard could not be written on that branch because
+/// it would have been red until the README section landed. It has, so this is
+/// that guard, and from here the order is enforced by the suite rather than
+/// remembered.
+///
+/// Deliberately checks that the record *is still a pointer*, not only that the
+/// pointer resolves. "Do not restate the rules" is the substance of the ruling,
+/// and a record that quietly grew a copy of them would satisfy a
+/// resolves-only check while recreating the drift the ruling exists to stop.
+#[test]
+fn the_ledgers_pointer_at_the_readme_ruleset_resolves() {
+    let ledger_path =
+        repo_root().join("tests/fixtures/grammar/hgvs_spec_normalization_overrides.json");
+    let text = std::fs::read_to_string(&ledger_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", ledger_path.display()));
+    let ledger: serde_json::Value =
+        serde_json::from_str(&text).expect("the overrides ledger is valid JSON");
+
+    let record = ledger["rulings"]
+        .as_array()
+        .expect("`rulings` is an array")
+        .iter()
+        .find(|r| r["id"] == "adjudication-precedence-order")
+        .expect(
+            "the `adjudication-precedence-order` record must exist; it is what names the README \
+             ruleset as canonical",
+        );
+    let rationale = record["rationale"].as_str().expect("a string rationale");
+
+    assert!(
+        rationale.contains("README.md"),
+        "`adjudication-precedence-order` no longer names `README.md`. If the canonical ruleset \
+         moved, move this guard with it; if the record went back to restating the rules, that is \
+         the drift the ruling forbids"
+    );
+
+    // `section` panics with the heading it could not find, so this call IS the
+    // "the pointer resolves" assertion — the same construction
+    // `the_ruleset_and_its_disclosure_mechanism_point_at_each_other` relies on.
+    let readme = read("README.md");
+    let rules = section(&readme, "## Normalization rules");
+    assert!(
+        !rules.trim().is_empty(),
+        "the `## Normalization rules` section exists but is empty, so the ledger's pointer \
+         resolves to nothing"
+    );
+
+    // Still a pointer, not a restatement. The rules are numbered `1.`..`7.` in
+    // the README; a record that had grown its own copy would carry several of
+    // their bolded names.
+    let restated: Vec<&str> = [
+        "**Confluent.**",
+        "**Deterministic.**",
+        "**Idempotent.**",
+        "**Disclosed.**",
+    ]
+    .into_iter()
+    .filter(|name| rationale.contains(name))
+    .collect();
+    assert!(
+        restated.is_empty(),
+        "`adjudication-precedence-order` has started restating the ruleset it is supposed to \
+         point at ({restated:?}). The ruling is that the rules are stated in exactly one place"
+    );
+}

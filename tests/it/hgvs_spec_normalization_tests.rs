@@ -920,6 +920,80 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     ("absolute-prohibition-enforcement-stage", "undecided"),
 ];
 
+/// Every case where a preference the spec *states* was overridden, because the
+/// spec supplied nothing that decides between the candidates satisfying it.
+///
+/// **This is a census, and its whole job is to make growth loud.** The canonical
+/// ruleset is in `README.md`; `adjudication-precedence-order` points at it and
+/// holds this register. Under that ruleset, producing the recommended form is
+/// rule 2 — so an override of rule 2 is the rare, deliberate act this register
+/// exists to count. Left uncounted, overrides would accumulate into a second,
+/// undeclared ruleset, which is precisely the drift the pointer record guards
+/// against.
+///
+/// **Do not file ordinary spec silence here.** Where the spec says *nothing at
+/// all* the ruleset's rule 5 applies — file upstream first, cite it, ship a
+/// provisional choice — and that zone is normal and not rare. This register is
+/// only for a *stated* preference being overridden, of which there is one.
+///
+/// Adding an entry therefore fails [`precedence_escalations_are_censused`] until
+/// the count below is updated deliberately. That friction is the point; it is the
+/// same reason `KNOWN_DIVERGENT_INPUTS` is pinned rather than appended to freely.
+///
+/// Each entry must additionally carry, per the record: the clause that expresses
+/// the preference, the reason no rule follows from it, and a unit test locking the
+/// choice with an exact `file.md:line` citation. The second field names the ruling
+/// record that governs the choice.
+const PRECEDENCE_ESCALATIONS: &[(&str, &str)] = &[
+    // E1. `general.md:56` ranks substitution, deletion, inversion, duplication
+    // and insertion — and `delins` appears nowhere in it. So where the competing
+    // forms are all `delins`, `:56` ranks nothing, while `general.md:34` gives a
+    // separation test but no preference between two forms that both satisfy it.
+    // The spec has stated a preference and supplied nothing that decides, which
+    // is what puts this here rather than under ordinary spec silence.
+    //
+    // Recorded rather than decided. `canonical-form-choice-when-both-legal` is
+    // `decided` and answers the general form of the question — derive from the
+    // resulting sequence, then apply every explicit spec tie-break — so what E1
+    // covers is the residue: two all-`delins` candidates that derivation itself
+    // left tied and the spec ranks neither. That is a *typing* question over
+    // candidates the derivation produced, which is exactly `:56`'s domain and
+    // exactly where its `delins` gap bites. It is never a licence to keep the
+    // partition the input arrived in.
+    (
+        "delins-is-unranked-by-general-56",
+        "canonical-form-choice-when-both-legal",
+    ),
+];
+
+/// The escalation register is exactly as long as the ruling says it is.
+///
+/// A bare length check on purpose. Asserting the *contents* would duplicate the
+/// per-entry tests the record already requires; what is not otherwise guarded is
+/// the count, because an entry can be appended without any existing test failing.
+#[test]
+fn precedence_escalations_are_censused() {
+    const EXPECTED: usize = 1;
+    assert_eq!(
+        PRECEDENCE_ESCALATIONS.len(),
+        EXPECTED,
+        "the escalation register changed. Adding one is a decision for the operator, \
+         not a contributor: `adjudication-precedence-order` requires every override of \
+         a stated spec preference to be surfaced, documented in the register, and locked \
+         by a unit test citing the clause. Update this count only alongside those three. \
+         If what you are adding is ordinary spec silence, it does not belong here — that \
+         is the ruleset's rule 5, and it is filed upstream instead."
+    );
+    let ids: std::collections::BTreeSet<&str> =
+        PRECEDENCE_ESCALATIONS.iter().map(|(id, _)| *id).collect();
+    assert_eq!(
+        ids.len(),
+        PRECEDENCE_ESCALATIONS.len(),
+        "duplicate escalation id: a duplicate would let one entry shadow another \
+         while the count still matched"
+    );
+}
+
 /// Ruling records must stay well-formed, and `undecided` must stay undecided.
 ///
 /// The generator enforces the same shape at build time (and additionally checks
