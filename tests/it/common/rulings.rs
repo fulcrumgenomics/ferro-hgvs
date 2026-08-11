@@ -1,11 +1,14 @@
 //! Reads the adjudication ledger — the `rulings` section of
 //! `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`.
 //!
-//! Two integration tests need the same file for different reasons:
+//! Three integration tests need the same file for different reasons:
 //! `ruling_citation_currency.rs` wants `id -> status` so it can judge prose that
-//! makes a status claim, and `clause_ruling_index.rs` wants the citations so it
-//! can invert the ledger into a clause-to-record index. Parsing it twice would
-//! give two definitions of "a record", so both read it from here.
+//! makes a status claim, `clause_ruling_index.rs` wants the citations so it
+//! can invert the ledger into a clause-to-record index, and
+//! `ledger_clause_jurisdiction.rs` wants the citations, their quotes and
+//! `applies_to` so it can compare what a record rules on against the molecule
+//! directories it cites. Parsing it three times would give three definitions of
+//! "a record", so all three read it from here.
 //!
 //! Nothing in this module names a record id, deliberately: it is scanned by
 //! `ruling_citation_currency.rs` along with every other `.rs` file in the tree.
@@ -58,6 +61,13 @@ pub struct Citation {
     /// The clause as the record spells it — a repo-relative path into the spec
     /// checkout with a line or line range (`docs/…/delins.md:79-84`).
     pub clause: String,
+    /// The clause's quoted text, verbatim from the ledger.
+    ///
+    /// Required rather than optional, matching what `generate_spec_fixture`
+    /// already demands: a citation with no quote is a `file:line` nothing checks
+    /// against the spec checkout. `ledger_clause_jurisdiction.rs` also reads it,
+    /// so an absent quote would silently narrow the authority a clause supplies.
+    pub quote: String,
     /// How the record relates to this clause; see [`Role`].
     pub role: Role,
 }
@@ -77,9 +87,23 @@ pub struct Record {
     /// the source scan in `ruling_citation_currency.rs`, which reads `.rs` files
     /// only. See `every_record_to_record_citation_resolves` there.
     pub rationale: String,
+    /// The descriptions the record declares itself to apply to, verbatim, in the
+    /// ledger's own order. Absent or `null` reads as none.
+    ///
+    /// Exposed because it is the record's own statement of what it rules on, and
+    /// so the strongest available evidence of which axes it reaches;
+    /// `ledger_clause_jurisdiction.rs` reads the axis prefix of each entry.
+    pub applies_to: Vec<String>,
     /// Every clause the record names, in the ledger's own order, each tagged
     /// with the role the record's verdict fields give it.
     pub citations: Vec<Citation>,
+    /// The clause the record rules **under**, verbatim, when it names one.
+    ///
+    /// Derivable from `citations` by looking for [`Role::Governing`], but
+    /// exposed directly because "this record has no governing clause" and "this
+    /// record's governing clause is molecule-agnostic" are different states and
+    /// `ledger_clause_jurisdiction.rs` distinguishes them.
+    pub governing: Option<String>,
 }
 
 /// The only two `status` values a record may carry.
@@ -222,10 +246,20 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 .unwrap_or_else(|| panic!("record {id} has no `clauses` array"));
             let citations: Vec<Citation> = clauses
                 .iter()
-                .map(|clause| {
-                    let clause =
-                        required_str(clause, "clause", &format!("a clause of record {id}"))
+                .map(|entry| {
+                    let subject = format!("a clause of record {id}");
+                    let clause = required_str(entry, "clause", &subject).to_string();
+                    let quote =
+                        required_str(entry, "quote", &format!("clause {clause} of record {id}"))
                             .to_string();
+                    // A blank quote is the absent case wearing a string: it
+                    // checks against nothing in the spec checkout and supplies
+                    // no axis text, which is precisely what requiring the field
+                    // was meant to prevent.
+                    assert!(
+                        !quote.trim().is_empty(),
+                        "clause {clause} of record {id} has a blank `quote`"
+                    );
                     let role = if governing == Some(clause.as_str()) {
                         Role::Governing
                     } else if deviates_from.contains(&clause.as_str()) {
@@ -233,7 +267,11 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                     } else {
                         Role::Cited
                     };
-                    Citation { clause, role }
+                    Citation {
+                        clause,
+                        quote,
+                        role,
+                    }
                 })
                 .collect();
 
@@ -254,11 +292,30 @@ fn records_from_value(value: &serde_json::Value, origin: &str) -> Vec<Record> {
                 );
             }
 
+            let applies_to: Vec<String> = match record.get("applies_to") {
+                None | Some(serde_json::Value::Null) => Vec::new(),
+                Some(value) => value
+                    .as_array()
+                    .unwrap_or_else(|| panic!("record {id} has a non-array `applies_to`: {value}"))
+                    .iter()
+                    .map(|entry| {
+                        entry
+                            .as_str()
+                            .unwrap_or_else(|| {
+                                panic!("record {id} has a non-string `applies_to` entry: {entry}")
+                            })
+                            .to_string()
+                    })
+                    .collect(),
+            };
+
             Record {
                 id,
                 status,
                 rationale,
+                applies_to,
                 citations,
+                governing: governing.map(str::to_string),
             }
         })
         .collect();
@@ -308,7 +365,7 @@ fn one_valid_record() -> serde_json::Value {
             "status": "decided",
             "rationale": "A test record, with prose that cites no other record.",
             "governing": "docs/a.md:1",
-            "clauses": [{ "clause": "docs/a.md:1" }],
+            "clauses": [{ "clause": "docs/a.md:1", "quote": "a quoted clause" }],
         }],
     })
 }
@@ -406,11 +463,61 @@ fn a_non_array_deviates_from_is_rejected() {
 fn a_mixed_type_deviates_from_is_rejected() {
     let mut document = one_valid_record();
     document["rulings"][0]["clauses"] = serde_json::json!([
-        { "clause": "docs/a.md:1" },
-        { "clause": "docs/b.md:2" },
+        { "clause": "docs/a.md:1", "quote": "a quoted clause" },
+        { "clause": "docs/b.md:2", "quote": "another quoted clause" },
     ]);
     document["rulings"][0]["deviates_from"] = serde_json::json!(["docs/b.md:2", 17]);
     records_from_value(&document, "<test>");
+}
+
+/// A clause with no `quote` is rejected rather than read as an empty quote.
+///
+/// An empty quote is not a harmless absence: it is a `file:line` the spec-fixture
+/// generator has nothing to check against the spec checkout, and it supplies no
+/// axis text for `ledger_clause_jurisdiction.rs` to read. Both would go on
+/// passing.
+#[test]
+#[should_panic(expected = "has no `quote`")]
+fn a_clause_with_no_quote_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["clauses"] = serde_json::json!([{ "clause": "docs/a.md:1" }]);
+    records_from_value(&document, "<test>");
+}
+
+/// A present-but-blank `quote` is rejected too.
+///
+/// Requiring the key buys nothing on its own: `""` satisfies it, checks against
+/// no line of the spec checkout, and supplies `ledger_clause_jurisdiction.rs`
+/// with no axis text — the same silent narrowing the required field exists to
+/// stop, one step further in.
+#[test]
+#[should_panic(expected = "has a blank `quote`")]
+fn a_clause_with_a_blank_quote_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["clauses"] =
+        serde_json::json!([{ "clause": "docs/a.md:1", "quote": "   " }]);
+    records_from_value(&document, "<test>");
+}
+
+/// A non-array `applies_to` is rejected rather than read as absent — the same
+/// reasoning as `deviates_from` above, and it matters more here because
+/// `ledger_clause_jurisdiction.rs` reads that array to decide which axes a
+/// record rules on. Silently reading it as empty would narrow the record's
+/// declared reach to nothing and pass every jurisdiction check.
+#[test]
+#[should_panic(expected = "non-array `applies_to`")]
+fn a_non_array_applies_to_is_rejected() {
+    let mut document = one_valid_record();
+    document["rulings"][0]["applies_to"] = serde_json::json!("c.235_237delinsTAT");
+    records_from_value(&document, "<test>");
+}
+
+/// An absent `applies_to` reads as none, which is what most records spell.
+#[test]
+fn an_absent_applies_to_reads_as_none() {
+    let records = records_from_value(&one_valid_record(), "<test>");
+    assert!(records[0].applies_to.is_empty());
+    assert_eq!(records[0].governing.as_deref(), Some("docs/a.md:1"));
 }
 
 /// An explicit `null` verdict field still means "not set" — that is a

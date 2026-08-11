@@ -523,6 +523,14 @@
           "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\""
         },
         {
+          "clause": "docs/recommendations/RNA/delins.md:18",
+          "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\" (e.g., `r.142_144delinsugg` `p.(Arg48Trp)`)."
+        },
+        {
+          "clause": "docs/recommendations/RNA/substitution.md:18",
+          "quote": "**exception**: two variants separated by one nucleotide, together affecting one amino acid, should be described as a \"delins\" (e.g., `r.142_144delinsugg` (`p.Arg48Trp`))."
+        },
+        {
           "clause": "docs/recommendations/general.md:39",
           "quote": "The new recommendation will be: **two variants separated by less than two nucleotides should be described as a \"delins\"**."
         },

@@ -103,7 +103,7 @@
 //! ```text
 //! CLAUSE -> RECORD INDEX
 //! 21 records, 18 decided / 3 undecided
-//! 79 clause lines, of which 19 are named by more than one record
+//! 81 clause lines, of which 19 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -234,6 +234,8 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
 //! docs/recommendations/DNA/substitution.md:95
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//! docs/recommendations/RNA/delins.md:18
+//!     `delins-codon-carve-out-gap-one` — decided (cited)
 //! docs/recommendations/RNA/delins.md:41
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //! docs/recommendations/RNA/delins.md:70
@@ -246,6 +248,8 @@
 //!     `rna-repeat-range-plus-unit-redundancy` — undecided (cited)
 //! docs/recommendations/RNA/repeated.md:27
 //!     `rna-repeat-range-plus-unit-redundancy` — undecided (cited)
+//! docs/recommendations/RNA/substitution.md:18
+//!     `delins-codon-carve-out-gap-one` — decided (cited)
 //! docs/recommendations/checklist.md:5
 //!     `absolute-prohibition-enforcement-stage` — decided (governing)
 //! docs/recommendations/checklist.md:16
