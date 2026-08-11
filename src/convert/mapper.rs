@@ -517,13 +517,6 @@ impl<'a> CoordinateMapper<'a> {
             .map(|(_, pos)| pos)
     }
 
-    /// Check if a genomic position is intronic
-    pub fn is_intronic_at_genomic(&self, genomic_pos: u64) -> bool {
-        self.transcript
-            .find_intron_at_genomic(genomic_pos)
-            .is_some()
-    }
-
     /// Convert transcript position to genomic position
     ///
     /// Returns None if the transcript position is not covered by exons with genomic coords.
@@ -621,11 +614,6 @@ impl<'a> CoordinateMapper<'a> {
     /// Get the chromosome name for this transcript
     pub fn chromosome(&self) -> Option<&str> {
         self.transcript.chromosome.as_deref()
-    }
-
-    /// Get the strand for this transcript
-    pub fn strand(&self) -> Strand {
-        self.transcript.strand
     }
 
     /// Convert CDS position with intronic offset to genomic position
