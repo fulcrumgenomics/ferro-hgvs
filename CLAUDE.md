@@ -188,11 +188,26 @@ uploaded xfail artifact as a FAILing case instead of failing the workflow. That
 applies equally to all three flags, and it is why a red oracle in the nightly must
 be read out of the xfail report rather than from the workflow conclusion.
 
-Red is not the same as blocked, though: `main`'s ruleset requires only eight
-checks — Build, Test, Clippy, Clippy (all features), Format, Python Lint, Python
-Wheel Test, abi3 floor — and neither `Test oracle` nor `Exhaustive sweeps` is
-among them. So an oracle fire shows up as a failed job that a human must not
-merge past, not as a ruleset-enforced merge block.
+Red is not the same as blocked, though: `main`'s ruleset requires only a subset
+of the jobs CI runs, and neither `Test oracle` nor `Exhaustive sweeps` is among
+them. So an oracle fire shows up as a failed job that a human must not merge
+past, not as a ruleset-enforced merge block.
+
+Read the required set from the ruleset rather than from a count written down
+here — it grows (`Representation change declared` and `zizmor + actionlint` were
+both added after this paragraph was first written), so any number quoted in prose
+is stale by the next contexts change:
+
+```bash
+gh api --paginate repos/fulcrumgenomics/ferro-hgvs/rulesets \
+  --jq '.[] | select(.target=="branch") | .id' \
+| xargs -I{} gh api repos/fulcrumgenomics/ferro-hgvs/rulesets/{} \
+  --jq 'select(.enforcement=="active")
+        | select(.conditions.ref_name.include
+                 | any(. == "refs/heads/main" or . == "~DEFAULT_BRANCH"))
+        | .rules[] | select(.type=="required_status_checks")
+        | .parameters.required_status_checks[].context'
+```
 
 #### Exhaustive cis sweeps: `FERRO_SWEEP_SEEDS`
 
@@ -698,30 +713,48 @@ individually" — which is **provenance**, recoverable only from the input's spe
 
 The `rulings` section of `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json` is the
 decision log, pinned by `ruling_records_are_intact` (ids **and** statuses; keep `RULING_STATUSES`
-in sync). **Five of its eight records are `undecided`**, and the first below is an operator
-decision that blocks other work — read them before re-deriving the same argument:
+in sync).
+
+**Do not trust a count of decided/undecided records written down here.** Both this file and its
+predecessors have carried one that had gone stale — the sentence this replaces said "five of its
+eight records are `undecided`" long after the ledger had grown and four of those five had been
+ruled on. The statuses are pinned in exactly one place, `RULING_STATUSES` in
+`tests/it/hgvs_spec_normalization_tests.rs`, and `ruling_records_are_intact` fails when the ledger
+and that list disagree. Read them from there, or straight off the ledger:
+
+```bash
+python3 -c "import json;d=json.load(open('tests/fixtures/grammar/hgvs_spec_normalization_overrides.json'));\
+[print(f\"{r['status']:<10} {r['id']}\") for r in d['rulings']]"
+```
+
+The table below lists the records that are **open**, with what each leaves unsettled. It is a
+description of the open questions, not a census — when a record is ruled on it moves out of this
+table, and the authority for which rows belong here is the ledger, not this list:
 
 | record | what is open |
 |---|---|
-| `adjudication-precedence-order` | **Two competing precedence orders are on record and neither is chosen.** It does not reopen the two records decided below, but it governs how the next such conflict is ranked |
-| `canonical-form-choice-when-both-legal` | Which of two legal forms ships. An open *product* decision |
 | `codon-carve-out-shape-restriction` | `delins.md:18` names no edit type; ferro applies it only to sub/unchanged/sub |
 | `exon-junction-dup-converge-from-the-far-side` | `LRG_199t1:c.3921dup` and `c.3922dup` denote one transcript sequence but are two fixed points, projecting 2,790 bp apart. `duplication.md:26` argues for converging them, `general.md:44` does not prescribe the 5' shift that would |
 | `rna-repeat-range-plus-unit-redundancy` | `RNA/repeated.md:22` calls range-plus-unit invalid, `:27` publishes exactly that shape as valid. Upstream's conflict (#466); ferro answers both ways depending on input-hygiene mode |
+| `separation-is-a-property-of-the-spelling-not-of-the-variant` | The separation rule keys on unchanged nucleotides "between two variants", which presupposes a decomposition a normalizer does not receive. Two spellings of one variant can present different separations, so the rule as written is not evaluable on what a normalizer knows |
 
-The three `decided` records, and the scope each was decided **at** — read the record before
-citing it, because both of the 2026-08-07 rulings are narrower than their one-line summary:
+The `decided` records, and the scope each was decided **at** — read the record before citing it,
+because several of these rulings are narrower than their one-line summary:
 
 | record | ruling |
 |---|---|
 | `delins-codon-carve-out-gap-one` | `delins.md:18` governs |
 | `delins-merge-vs-individual-gap-two-or-more` | `DNA/delins.md:44-47` governs `:17`, **scoped** to the alignment-coincidence shape `:44-47` describes. Where a separation of two or more arises from anything else, `general.md:34` still governs; unscoped the reading reaches roughly fifteen times the row set the argument was made on |
 | `inversion-vs-two-delins-76-83` | `inversion.md:5` governs: a whole-block reverse complement is one `inv` when the members it competes with are `delins`, since `general.md:56` ranks substitution but not `delins`. #1230's substitution case is untouched and still splits |
+| `adjudication-precedence-order` | What ranks next where the spec is silent. The order is (1) the spec where it speaks, (2) confluence, (3) re-derivation from the resulting sequence, (4) disclosure of any resulting move, (5) stability toward the already-shipped form, as a last-resort tiebreaker only. Mutalyzer appears nowhere in it |
+| `canonical-form-choice-when-both-legal` | Where two descriptions are legal and no clause selects between them, ferro derives from the **resulting sequence** and emits the form that falls out, subject to every explicit spec tie-break. It preserves neither the input's spelling nor the previously-shipped string |
+| `delins-adjacent-members-when-both-consume-reference` | `substitution.md:32` governs: at separation **zero** no clause licenses a split, and the spec marks one invalid by name — `c.[79G>T;80C>T]` for `LRG_199t1:c.79_80delinsTT` is rendered `class="invalid"` and called "not correct" |
 
 Two things follow for representation-stability work specifically. The repository's doctrine reads
 as "do not move a normalized output", while the downstream filer has said instability is
-acceptable **provided it is declared a breaking change** — different bars, and which one applies
-is part of what `adjudication-precedence-order` leaves open. And Mutalyzer is not a spec oracle:
+acceptable **provided it is declared a breaking change** — different bars, and
+`adjudication-precedence-order` now settles which applies: disclosure ranks above stability, and
+stability is a last-resort tiebreaker rather than a veto. And Mutalyzer is not a spec oracle:
 its normalizer re-derives a description by minimizing a **weighted description length** with
 constants dated 2014, and has no separation rule at all, so a separation disagreement with it is
 two objectives meeting rather than evidence it knows something the spec does not. The full

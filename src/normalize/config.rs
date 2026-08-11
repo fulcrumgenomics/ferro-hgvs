@@ -52,6 +52,14 @@ impl std::str::FromStr for ShuffleDirection {
 /// field directly. Mirrors the attribute on its result-side counterpart
 /// [`crate::normalize::NormalizeResult`], which #1033 marked for the same
 /// reason.
+///
+/// This is the type that carries the **error mode** — [`Default`] and
+/// [`NormalizeConfig::lenient`] both give it `ErrorConfig::lenient()`. Do not
+/// confuse it with [`crate::commands::NormalizeCommandConfig`], which
+/// configures the batch run around a normalization (reference directory,
+/// progress, workers) and has no error mode at all. The two used to share the
+/// name `NormalizeConfig`, so `NormalizeConfig::default()` resolved to
+/// whichever one a single `use` line had brought into scope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct NormalizeConfig {

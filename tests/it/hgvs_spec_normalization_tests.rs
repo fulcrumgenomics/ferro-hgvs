@@ -912,10 +912,24 @@ fn ruling_records_are_intact() {
     // that survived is checked, the one it shadowed is not (#1530). Its sibling
     // `EQUIVALENCE_CLASS_VERDICTS` already carries this; the generator checks
     // duplicates on both of its own tables.
+    //
+    // Both sides need the guard, not just the pinned one. The hazard above is
+    // symmetric, but only `RULING_STATUSES` was checked, so a duplicated id in
+    // the *fixture* stayed invisible here: the shadowed record's status is never
+    // compared against anything, which is the one property this assertion pair
+    // exists to enforce. (The loop below iterates `fx.rulings` directly, so a
+    // shadowed record still gets its clause/rationale/governing checks — it is
+    // specifically the id-to-status pin that could be evaded.)
     assert_eq!(
         pinned.len(),
         RULING_STATUSES.len(),
         "RULING_STATUSES has a duplicate id"
+    );
+    assert_eq!(
+        observed.len(),
+        fx.rulings.len(),
+        "the ruling fixture has a duplicate id; one record's status is shadowed and \
+         therefore unpinned"
     );
     assert_eq!(
         observed, pinned,

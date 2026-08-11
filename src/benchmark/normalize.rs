@@ -29,7 +29,7 @@ pub fn normalize_ferro<P: AsRef<Path>>(
     let timing_output = timing_output.as_ref();
 
     // Use commands module for normalization
-    let config = commands::NormalizeConfig {
+    let config = commands::NormalizeCommandConfig {
         reference_dir: reference_dir.map(|p| p.as_ref().to_path_buf()),
         show_progress: true,
         workers: 1,
