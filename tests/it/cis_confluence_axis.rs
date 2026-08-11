@@ -126,12 +126,45 @@ const CDS_END: u64 = 63;
 /// figure is a baseline that must only ever go down, and `converged` a floor
 /// that must only ever go up.
 ///
-/// **58.8% of designed classes converge** (6 633 of 11 272). The 4 639 that do
+/// **71.2% of designed classes converge** (8 027 of 11 272). The 3 245 that do
 /// not are the measurement this module exists to make: nothing in the repo
 /// could state that number before, because only 650 real rows reach the
 /// partitioner at all — and `multi_member_cis_axis` measures 82% convergence
 /// over the respellable ones of those, which is what a corpus of far-apart
 /// members looks like.
+///
+/// # This headline was wrong for four movements of the pin
+///
+/// It read **"58.8% … (6 633 of 11 272). The 4 639 that do not"** until
+/// 2026-08-11. That is not the figure as *first* landed: it landed in #1458
+/// reading 6 632 / 4 640 and was carried forward exactly once, by #1493 — the
+/// change that closed #1454 — and never again. So #1454 is the one movement it
+/// did track, and the ones it missed are #1524, the axis gate, #1539 and #1599.
+/// Each of those four is recorded in the chronology below, which terminates
+/// correctly at the pinned 8 027; only the headline was left behind. The one
+/// number a reader takes away was therefore the one number in the file that was
+/// wrong, and it was wrong by 1 394 classes — larger than any single movement the
+/// chronology records.
+///
+/// Both counts here were re-derived from the pin rather than carried across the
+/// rebase onto #1599: the movement to 8 027 landed while this correction was in
+/// review, which turned "three movements" into four and 1 393 into 1 394. That is
+/// the drift this section is about, arriving once more during the change that
+/// documents it — and it is why the numbers below are asserted rather than
+/// written down.
+///
+/// Restating a pinned constant in prose is the drift this repository names as
+/// its recurring failure mode, and prose cannot be derived from a `const`. The
+/// restatement is therefore *checked* instead:
+/// [`the_headline_matches_the_pin`] reads this file's own source and fails when
+/// the three figures here disagree with [`THREE_PRIME`]. A future re-bless that
+/// forgets the prose now reddens rather than silently ageing.
+///
+/// Note the entries below are **historical and correctly labelled** — in
+/// particular the axis gate's "6 633 -> 8 006 … by 1 373", which the three
+/// sections after it correct to 8 003, then 8 026, then 8 027. They are a
+/// changelog, not competing claims, and an earlier review of this file mistook
+/// one of them for a second stale figure.
 ///
 /// Note what the remainder is *not*: `declined` and `sequence_changed` are both
 /// zero, so every divergence is two well-formed, sequence-preserving outputs
@@ -277,7 +310,6 @@ const THREE_PRIME: Census = Census {
 /// direction gains 23 rather than 18, which is the expected asymmetry: the audit
 /// runs before the shift, so a member it cuts is then 3'- or 5'-shifted on its
 /// own, and only some of those landings coincide with the other spelling's.
-/// See `THREE_PRIME` for why the three zeros are read first.
 ///
 /// **Raised again by the amino-acid precondition: 8 021 -> 8 023**, with
 /// `split_two` falling by the same 2 and `split_three`/`split_more` unchanged.
@@ -285,6 +317,12 @@ const THREE_PRIME: Census = Census {
 /// above records, and for the same reason: the precondition is tested before the
 /// shift, so a pair it leaves split is then shuffled independently and only some
 /// of those landings coincide with the other spelling's.
+///
+/// See `THREE_PRIME` for why the three zeros are read first — and for why the
+/// entries above, including "both 8 006" and the 8 003 and 8 021 the last two
+/// start from, are historical and correctly labelled rather than stale figures.
+/// An earlier review of this file mistook the 3' side's equivalent entry for a
+/// second stale number; this side carries the same shape.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
@@ -617,4 +655,118 @@ fn three_prime_confluence_census() {
 #[test]
 fn five_prime_confluence_census() {
     assert_census(ShuffleDirection::FivePrime, "5prime", &FIVE_PRIME);
+}
+
+/// [`THREE_PRIME`]'s headline restates three figures that live in the `const`
+/// itself, and prose cannot be derived from a constant — so it is checked here.
+///
+/// This exists because the restatement **did** drift, silently, through four
+/// movements of the pin (#1524, the axis gate, #1539, #1599). Every one of those
+/// was recorded in the chronology directly below the headline, and none of them
+/// updated the headline, so the file's most-read sentence was 1 394 classes out
+/// while everything under it was right. It was carried forward exactly once, by
+/// #1493, and never again. A census re-bless is exactly the moment this is
+/// easiest to forget — #1599 moved the pin again while this very correction was
+/// in review — which is why the guard belongs next to the pin rather than in a
+/// docs-audit test somewhere else.
+///
+/// It guards the headline and nothing else, and that is the whole class rather
+/// than a first instalment: every other figure in this file's prose sits inside a
+/// dated chronology entry and is a claim about *then*, so it stays true as the
+/// pin moves. That was established by reading them, not assumed — see the note on
+/// [`THREE_PRIME`] about the entry an earlier review misread as a second stale
+/// figure.
+///
+/// It reads this file's own source rather than a doc-comment reflection API,
+/// because none exists: `include_str!` on the module's own path is the only way
+/// to get the rendered prose at runtime. That makes the test sensitive to the
+/// headline's *wording* — deliberately. If someone rewrites the sentence, they
+/// should have to look at this test and confirm the numbers are still asserted,
+/// rather than have a silent regex quietly stop matching and pass.
+#[test]
+fn the_headline_matches_the_pin() {
+    const MARKER: &str = "% of designed classes converge**";
+    let source = include_str!("cis_confluence_axis.rs");
+
+    let headline = source
+        .lines()
+        // Doc-comment lines only. `MARKER` is a literal in this very function, so
+        // an unrestricted search always matches *something* — the line above —
+        // which makes the panic below unreachable and turns a reworded headline
+        // into `got [] from "const MARKER: …"` on the count assertion instead of
+        // the instruction written for exactly that case.
+        .find(|line| line.trim_start().starts_with("///") && line.contains(MARKER))
+        .unwrap_or_else(|| {
+            panic!(
+                "no line contains `{MARKER}` — the headline was reworded. Re-point this \
+                 test at the new wording and keep asserting the three figures against \
+                 THREE_PRIME; do not delete it, or the prose goes back to ageing silently"
+            )
+        });
+
+    // The headline spells thousands with ASCII spaces (`8 027`), so digits are
+    // gathered across a single space and joined before parsing.
+    // `usize`, matching the `Census` fields these are compared against.
+    let numbers: Vec<usize> = {
+        let flattened = headline.replace(' ', "");
+        let mut found = Vec::new();
+        let mut digits = String::new();
+        for character in flattened.chars() {
+            if character.is_ascii_digit() {
+                digits.push(character);
+            } else if !digits.is_empty() {
+                // `71.2` contributes `71` and `2`; the fractional part is
+                // re-joined below rather than dropped, so a wrong tenth fails.
+                found.push(digits.parse::<usize>().expect("digits parse"));
+                digits.clear();
+            }
+        }
+        if !digits.is_empty() {
+            found.push(digits.parse::<usize>().expect("digits parse"));
+        }
+        found
+    };
+
+    // `71`, `2`, `8027`, `11272`, `3245` — the percentage's two parts, then the
+    // three counts, in the order the sentence states them.
+    assert_eq!(
+        numbers.len(),
+        5,
+        "the headline should state a percentage and three counts, got {numbers:?} from \
+         {headline:?}"
+    );
+
+    let tenths = numbers[0] * 10 + numbers[1];
+    // Rounded to the nearest tenth rather than truncated, because the headline is
+    // a percentage a human reads and a reader rounds. Truncation makes no
+    // difference at the current pin (8 027 / 11 272 = 71.212 %), but at some
+    // future pin whose fraction lands at or above .x5 it would oblige the prose
+    // to state a tenth that is not the correctly-rounded one — the guard
+    // dictating a wrong-looking number, which is the opposite of its job.
+    let expected_tenths =
+        (THREE_PRIME.converged * 1000 + THREE_PRIME.classes / 2) / THREE_PRIME.classes;
+    assert_eq!(
+        tenths,
+        expected_tenths,
+        "the headline says {}.{}% but THREE_PRIME is {} of {} = {}.{}%",
+        numbers[0],
+        numbers[1],
+        THREE_PRIME.converged,
+        THREE_PRIME.classes,
+        expected_tenths / 10,
+        expected_tenths % 10,
+    );
+    assert_eq!(
+        numbers[2], THREE_PRIME.converged,
+        "the headline's converged count disagrees with the pin"
+    );
+    assert_eq!(
+        numbers[3], THREE_PRIME.classes,
+        "the headline's class count disagrees with the pin"
+    );
+    assert_eq!(
+        numbers[4],
+        THREE_PRIME.classes - THREE_PRIME.converged,
+        "the headline's non-converging count is not `classes - converged`"
+    );
 }
