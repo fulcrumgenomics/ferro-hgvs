@@ -288,6 +288,16 @@ fn verify_row(row: &Row) -> (SpdiVerdict, String, String) {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // This is the harness a bake-off runs through, so it is the entry point that
+    // can least afford to serve `live` under a candidate's name. In a release
+    // build the library falls safe rather than aborting, and the two silences
+    // compound: the dump would come back identical to the `live` dump, and
+    // `report_partition_declines` would print nothing at all, because a `live`
+    // run attempts no sequence-first partition. Refuse here instead.
+    if let Some(message) = ferro_hgvs::normalize::partition_switch_startup_error() {
+        eprintln!("error: {message}");
+        return ExitCode::FAILURE;
+    }
     if let (Some(before), Some(after)) = (&cli.compare, &cli.against) {
         return match compare(before, after) {
             Ok(report) => {

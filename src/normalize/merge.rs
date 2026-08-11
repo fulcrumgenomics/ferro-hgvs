@@ -2273,6 +2273,91 @@ fn partition_rule_env_value(read: Result<String, std::env::VarError>) -> Option<
     }
 }
 
+/// Whether a refused `FERRO_PARTITION` value may abort the process where it is
+/// read, rather than being reported at a boundary that can return a failure.
+///
+/// `debug_assertions`, the same gate the three assertion oracles at this seam
+/// take. A debug build is one somebody is measuring in, and there aborting at
+/// the first normalized variant is the honest answer. A release build is one
+/// somebody is *shipping*, and a development-only switch must not be able to
+/// abort a production process from the environment — least of all from inside
+/// [`canonicalize_from_sequence`], which is infallible, sits under every public
+/// entry point, and is reached across the FFI boundary by the Python bindings.
+///
+/// # What this deliberately does **not** do
+///
+/// It does not compile the switch out of release builds. That was tried first
+/// and it is wrong here: `README.md` documents the A/B recipe as working on a
+/// **stock release build**, which is also the only way to normalize a real
+/// corpus at size, so compiling it out would delete the measurement this whole
+/// switch exists for. Release builds still honour every arm; what changes is
+/// only what happens to a value that names no arm.
+const PARTITION_SWITCH_MAY_ABORT: bool = cfg!(debug_assertions);
+
+/// The rule to cut with, given how `FERRO_PARTITION` parsed and whether this
+/// build may abort on a refusal.
+///
+/// Split out of [`partition_rule`] so both halves of the contract are testable:
+/// [`partition_rule`] caches its read in a `OnceLock` and consults a real
+/// process environment, so one test binary can never exercise two outcomes.
+///
+/// Falling safe to [`PartitionRule::Live`] is not the silent fallback
+/// [`partition_rule_from_env`] refuses — the refusal is not discarded, it is
+/// retained by [`partition_switch_startup_error`] for a caller with somewhere to
+/// return it. What would be silent is dropping it on the floor, and the two are
+/// only the same if nobody asks.
+fn partition_rule_from_outcome(
+    outcome: &Result<PartitionRule, String>,
+    may_abort: bool,
+) -> PartitionRule {
+    match outcome {
+        Ok(rule) => *rule,
+        Err(message) if may_abort => panic!("{message}"),
+        Err(_) => PartitionRule::Live,
+    }
+}
+
+/// How `FERRO_PARTITION` parsed in this process, computed once.
+///
+/// The `Result` is cached rather than the [`PartitionRule`], so the refusal
+/// survives to be reported by [`partition_switch_startup_error`] instead of
+/// being consumed by the first caller.
+fn partition_rule_outcome() -> &'static Result<PartitionRule, String> {
+    static OUTCOME: std::sync::OnceLock<Result<PartitionRule, String>> = std::sync::OnceLock::new();
+    OUTCOME.get_or_init(|| {
+        let value = partition_rule_env_value(std::env::var("FERRO_PARTITION"));
+        partition_rule_from_env(value.as_deref())
+    })
+}
+
+/// The refusal a binary should print and exit on before doing any work, if any.
+///
+/// `Some(message)` exactly when `FERRO_PARTITION` named an arm this build has
+/// not got. Call it once from an entry point — which, unlike
+/// [`canonicalize_from_sequence`], has somewhere to return a failure to — so
+/// that a release build refuses a misspelled bake-off *without* the library
+/// aborting the process to say so.
+///
+/// **Unstable, like the switch it serves.** `FERRO_PARTITION` is an evaluation
+/// switch outside semantic versioning and expected to be removed once the
+/// normalization rule is settled; this accessor goes with it. It is `pub` because
+/// a binary in another crate — or an embedder running its own bake-off — cannot
+/// otherwise ask, not because it is a supported API.
+///
+/// # The residual, stated rather than hidden
+///
+/// An embedder that neither calls this nor runs a debug build gets
+/// [`PartitionRule::Live`] for a refused value. That is the shipped rule under
+/// no name at all rather than under a candidate's, and it is strictly safer than
+/// the abort it replaces — but it is only *reported* if somebody asks. Every
+/// binary in this repository asks, and
+/// `it::partition_switch_wiring::every_binary_target_reports_a_refused_partition_switch`
+/// fails if a new one does not; a third-party embedder running a bake-off through
+/// a release library should too.
+pub fn partition_switch_startup_error() -> Option<String> {
+    partition_rule_outcome().as_ref().err().cloned()
+}
+
 /// Which partitioner this process cuts blocks with, from `FERRO_PARTITION`.
 ///
 /// A **development-only bake-off switch**. Read once and cached, like
@@ -2280,23 +2365,27 @@ fn partition_rule_env_value(read: Result<String, std::env::VarError>) -> Option<
 /// per canonicalized block and nothing else; with the variable unset the result
 /// is byte-identical to having no switch at all.
 ///
+/// Every arm is honoured in every build — see [`PARTITION_SWITCH_MAY_ABORT`] for
+/// why the gate is on the *refusal* and not on the switch.
+///
 /// # Panics
 ///
-/// If `FERRO_PARTITION` names an arm this build does not have. Both call sites
-/// are inside `canonicalize_from_sequence`, which is infallible and sits deep
-/// under every public normalization entry point, so there is no `Result` to
-/// return the rejection through without threading one the length of the
-/// pipeline. A panic here is the honest alternative: it fires once, at the first
-/// normalized variant, before any output exists to be mistaken for a
-/// measurement. See [`partition_rule_from_env`] for why silence was not an
-/// option, and [`partition_rule_env_value`] for why the raw read is matched
-/// rather than `.ok()`-ed.
+/// In a **debug** build, if `FERRO_PARTITION` names an arm this build does not
+/// have. Both call sites are inside [`canonicalize_from_sequence`], which is
+/// infallible and sits deep under every public normalization entry point, so
+/// there is no `Result` to return the rejection through without threading one
+/// the length of the pipeline. A panic there is the honest alternative for a
+/// build somebody is measuring in: it fires once, at the first normalized
+/// variant, before any output exists to be mistaken for a measurement. See
+/// [`partition_rule_from_env`] for why silence was not an option, and
+/// [`partition_rule_env_value`] for why the raw read is matched rather than
+/// `.ok()`-ed.
+///
+/// A **release** build cannot reach that panic. It falls safe to
+/// [`PartitionRule::Live`] and keeps the refusal for
+/// [`partition_switch_startup_error`] to deliver.
 fn partition_rule() -> PartitionRule {
-    static RULE: std::sync::OnceLock<PartitionRule> = std::sync::OnceLock::new();
-    *RULE.get_or_init(|| {
-        let value = partition_rule_env_value(std::env::var("FERRO_PARTITION"));
-        partition_rule_from_env(value.as_deref()).unwrap_or_else(|message| panic!("{message}"))
-    })
+    partition_rule_from_outcome(partition_rule_outcome(), PARTITION_SWITCH_MAY_ABORT)
 }
 
 /// How often a sequence-first arm was asked to partition a block, and how often
@@ -12860,6 +12949,70 @@ mod tests {
                 "the spec's own published inversion must survive the canonical \
                  partition as one piece, not five members"
             );
+        }
+
+        /// A release build **cannot** be aborted by this switch.
+        ///
+        /// Until #1636 `partition_rule()` panicked on an unrecognised value in
+        /// every build, from inside `canonicalize_from_sequence` — infallible,
+        /// under every public entry point, and reached across the FFI boundary
+        /// by the Python bindings. A development-only bake-off switch must not
+        /// be able to abort a production process from the environment.
+        ///
+        /// Exercised through `partition_rule_from_outcome` rather than
+        /// `partition_rule()`: the latter caches in a `OnceLock` and consults a
+        /// real environment, so one test binary can never see two outcomes.
+        #[test]
+        fn a_refused_value_does_not_abort_a_build_that_may_not_abort() {
+            let refused = partition_rule_from_env(Some("preserve"));
+            assert!(refused.is_err(), "`preserve` is not an arm on this build");
+            assert_eq!(
+                partition_rule_from_outcome(&refused, false),
+                PartitionRule::Live,
+                "a release build must fall safe to the shipped rule, not abort"
+            );
+            // …and a value that *is* an arm is still served, in either build.
+            let accepted = partition_rule_from_env(Some("canonical"));
+            for may_abort in [false, true] {
+                assert_eq!(
+                    partition_rule_from_outcome(&accepted, may_abort),
+                    PartitionRule::Canonical
+                );
+            }
+        }
+
+        /// …while a build that may abort still does, so falling safe above did
+        /// not quietly retire the refusal in the configuration that measures.
+        #[test]
+        #[should_panic(expected = "is not a partitioner this build has")]
+        fn a_refused_value_still_aborts_a_build_that_may_abort() {
+            let refused = partition_rule_from_env(Some("preserve"));
+            let _ = partition_rule_from_outcome(&refused, true);
+        }
+
+        /// Falling safe must not mean falling **silent**: the refusal survives
+        /// the read, so an entry point can deliver it.
+        ///
+        /// This is the difference between the fix and the fallback
+        /// `partition_rule_from_env`'s doc refuses. A discarded rejection and a
+        /// retained one produce the same `PartitionRule`; only one of them can
+        /// be reported.
+        #[test]
+        fn the_refusal_survives_the_read_so_an_entry_point_can_report_it() {
+            // The process this suite runs in has the variable unset — pinned by
+            // `the_suite_runs_on_the_live_rule` — so the accessor is `None`
+            // here, and that is the production reading it must give.
+            assert_eq!(
+                partition_switch_startup_error(),
+                None,
+                "an unset FERRO_PARTITION is not something to refuse at startup"
+            );
+            // The mapping the accessor reports is the parser's own `Err`, which
+            // is the half a test in this process can reach.
+            let message = partition_rule_from_env(Some("canonicl"))
+                .expect_err("a misspelling must be refused");
+            assert!(message.contains("canonicl"));
+            assert!(message.contains("live"));
         }
 
         /// This suite's expectations are the live rule's, and the cached read

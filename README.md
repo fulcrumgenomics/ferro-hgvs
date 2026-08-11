@@ -367,7 +367,7 @@ This works on a **stock release build** — the switch is not behind a build fea
 
 ### Two traps worth knowing
 
-**A misspelled value is refused, loudly.** `FERRO_PARTITION=canonicl` aborts at the first variant ferro normalizes, naming the value you gave and the arms this build has:
+**A misspelled value is refused, loudly.** `FERRO_PARTITION=canonicl` makes `ferro` exit with an error before it reads any input, naming the value you gave and the arms this build has:
 
 ```
 FERRO_PARTITION="canonicl" is not a partitioner this build has. This build's arms
@@ -377,6 +377,8 @@ name reports that the candidate changes nothing.
 ```
 
 Naming *this build's* arms is the point: a value that exists on some other branch, or that used to exist, is reported as absent here rather than quietly answered as `live`.
+
+The refusal comes from the CLI, not from the normalizer. Up to and including v0.14.0 it was a panic raised deep inside normalization, which meant a development-only switch could abort any process — a long-running service, or a Python caller, across the FFI boundary — that merely happened to have the variable set. A release build of the *library* now falls safe to `live` for a value that names no arm and keeps the refusal for its caller to report. Every binary in this repository reports it — `ferro`, `ferro-web`, `ferro-benchmark`, both spec generators, and the `dump_normalized_corpus` bake-off harness — and that is pinned by a test rather than by this sentence, so a binary added later cannot quietly skip it. If you embed ferro as a library and run bake-offs through it, read `ferro_hgvs::normalize::partition_switch_startup_error()` at startup and do the same.
 
 Builds up to and including v0.13.1 fell back to `live` instead, and produced a clean, empty diff that read as "the candidate changes nothing". The fallback emitted a warning through the `log` facade, but the `ferro` CLI installs no logger, so that warning reached no stream and `RUST_LOG` could not surface it — there was no signal at all. If you are on an older build, treat every empty diff as unproven.
 

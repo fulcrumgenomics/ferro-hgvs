@@ -409,6 +409,7 @@ mod normalize_warning_seam;
 mod oracle_exclude_invariant;
 mod paraphase_exhaustive_tests;
 mod parser_tests;
+mod partition_switch_wiring;
 mod pastcds_star_canonicalization;
 mod perf_table;
 mod predicted_cis_allele;
