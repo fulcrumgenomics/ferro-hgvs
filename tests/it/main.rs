@@ -433,6 +433,7 @@ mod protein_predicted_trans;
 mod protein_render_policy;
 mod protein_shift_created_adjacency;
 mod protein_silent_eq;
+mod protein_split_decline_reparse;
 mod protein_stop_codon_canonicalization;
 mod protein_substitution_alternatives;
 mod protein_unknown_roundtrip;
