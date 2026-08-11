@@ -1114,7 +1114,7 @@ before re-deriving the same argument:
 
 | record | what is open |
 |---|---|
-| `rna-repeat-range-plus-unit-redundancy` | `RNA/repeated.md:22` calls range-plus-unit invalid, `:27` publishes exactly that shape as valid. Upstream's conflict (#466); ferro answers both ways depending on input-hygiene mode |
+| `rna-repeat-range-plus-unit-redundancy` | `RNA/repeated.md:22` calls range-plus-unit invalid, `:27` publishes exactly that shape as valid. Upstream's conflict (#466). Since #1631 every path that answers at all emits `:27`'s form and strict refuses the input — but that is **not** the record being decided for `:27`: the lenient repair emits the anchored `r.-6g[6]` and the *normalizer's* tract maximization widens it back, so the agreement is an artifact of two independent passes |
 | `ring-telomere-anchoring` | Must a ring's first `::` segment start at `pter` and its last end at `qter`, so a ring naming only interior coordinates is refused? Ferro currently **accepts** an unanchored ring (pinned by `a_ring_with_no_telomere_anchor_is_still_accepted`) — that is the status quo, not a ruling. Enforcing is not simply "is the first endpoint `pter`": `:28`'s `(pter)_#` / `#_(qter)` forms and `cen` complicate the predicate, and `cen`-anchored segments do not parse at all today |
 | `delins-recommendation-reach-when-the-input-arrives-split` | Not the question it looks like: whether `:47` reaches an input that arrives already split is ANSWERED by `canonical-form-choice-when-both-legal`, which derives from the resulting sequence and does not preserve the input's spelling. What is open is the residue that survives that answer — see the record, which states it rather than restating the settled part |
 

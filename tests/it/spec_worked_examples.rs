@@ -36,13 +36,21 @@
 //! produces which answer is the finding:
 //!
 //! - `NM_024312.4:r.-6_-3g[6]` — the plain library path leaves the spec's
-//!   published form alone, lenient strips the redundant unit label (W3013) and
-//!   emits `r.-6_-3[6]`, strict rejects the input. The divergence therefore
-//!   belongs to the **preprocessor's repair**, not to the normalizer. It is a
-//!   spec self-conflict either way: `RNA/repeated.md:22` calls range-plus-unit
-//!   redundant and invalid, `:27` publishes exactly that shape as valid. All
-//!   three answers are pinned rather than reconciled — see the undecided ruling
-//!   `rna-repeat-range-plus-unit-redundancy`.
+//!   published form alone, strict rejects the input, and lenient now lands back
+//!   on the published form too. It is a spec self-conflict either way:
+//!   `RNA/repeated.md:22` calls range-plus-unit redundant and invalid, `:27`
+//!   publishes exactly that shape as valid. All three answers are pinned rather
+//!   than reconciled — see the ruling `rna-repeat-range-plus-unit-redundancy`.
+//!
+//!   **Lenient used to emit `r.-6_-3[6]` and that was a different variant**
+//!   (#1631): by `:20` a bare range denotes one unit of the range's length, so
+//!   that string is a four-nucleotide unit six times where the input is a single
+//!   `g` six times. The W3013 repair now keeps the unit and hands the normalizer
+//!   `r.-6g[6]`; the normalizer's tract maximization then widens it back onto
+//!   the `gggg` tract at `r.-6`, which is what puts the range back. Do not read
+//!   the resulting agreement with `:27` as a conformance verdict on the string —
+//!   `:22` still calls it invalid, and the widening is the #1618 family on the
+//!   RNA axis. `tests/it/issue_1631_repeat_label_repair.rs` pins both halves.
 //! - `NM_024312.4:c.1738TA[6]` / `r.1738ua[6]` — **strict mode rejects two of
 //!   the spec's own published inputs**, because the reference tract is not a
 //!   whole number of `TA` copies. Recorded, not endorsed.
@@ -228,7 +236,12 @@ fn the_lenient_path_reproduces_the_spec_where_the_spec_is_self_consistent() {
             ));
         }
     }
-    assert_eq!(compared, 10, "the set of spec-conformant rows changed size");
+    assert_eq!(
+        compared, 11,
+        "the set of spec-conformant rows changed size. It was 10 until #1631 fixed the W3013 \
+         repair: `NM_024312.4:r.-6_-3g[6]`'s lenient answer moved onto the spec's published \
+         string and the row stopped being a divergence"
+    );
     assert!(
         mismatched.is_empty(),
         "{} spec worked example(s) no longer produce the spec's published answer:\n{}",
@@ -317,11 +330,10 @@ fn the_divergence_set_is_exactly_the_one_recorded_conflict() {
          input three times over (`DNA/duplication.md:26`, `:60`, `:148`)."
     );
 
-    // Sorted, and the expected literal sorted to match: this set has two members
-    // as of the exon-junction ruling, so an ordered comparison would key on row
-    // order in the fixture. Inserting an unrelated row between these two would
-    // then fail with a message about the *set* having changed when only the
-    // order did — the misleading diagnostic every other message here avoids.
+    // Sorted, and the expected literal sorted to match, so the comparison does
+    // not key on row order in the fixture. Inserting an unrelated row would
+    // otherwise fail with a message about the *set* having changed when only
+    // the order did — the misleading diagnostic every other message here avoids.
     let mut diverging: Vec<&str> = cases
         .cases
         .iter()
@@ -331,11 +343,14 @@ fn the_divergence_set_is_exactly_the_one_recorded_conflict() {
     diverging.sort_unstable();
     assert_eq!(
         diverging,
-        ["LRG_199t1:c.3922dup", "NM_024312.4:r.-6_-3g[6]"],
-        "the set of rows diverging from the spec changed. Two are recorded: the \
-         RNA/repeated.md:22-vs-:27 self-conflict, and the exon-junction row that the \
-         `exon-junction-dup-converge-from-the-far-side` ruling decided against ferro's current \
-         output (#1621). A third is a defect, not a fixture edit."
+        ["LRG_199t1:c.3922dup"],
+        "the set of rows diverging from the spec changed. One is recorded: the exon-junction \
+         row that the `exon-junction-dup-converge-from-the-far-side` ruling decided against \
+         ferro's current output (#1621). A second is a defect, not a fixture edit. It held two \
+         until #1631: `NM_024312.4:r.-6_-3g[6]` diverged because the W3013 repair emitted \
+         `r.-6_-3[6]`, which by `RNA/repeated.md:20` is a different variant. That row is now \
+         conformant with `:27` — which does NOT settle the `:22`-vs-`:27` conflict, only what \
+         ferro emits."
     );
 }
 

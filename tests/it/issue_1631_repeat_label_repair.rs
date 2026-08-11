@@ -27,8 +27,13 @@
 //! Both arms stay W3013 — the input defect is the same, only the surviving half
 //! differs.
 
+use std::path::Path;
+
+use ferro_hgvs::conformance::reference_window::WindowFixture;
+use ferro_hgvs::conformance::spec_worked_examples::WINDOWS_PATH;
 use ferro_hgvs::error_handling::{ErrorConfig, ErrorType};
 use ferro_hgvs::hgvs::parser::{parse_hgvs_lenient, parse_hgvs_silent, parse_hgvs_with_config};
+use ferro_hgvs::{NormalizeConfig, Normalizer, ShuffleDirection};
 
 /// The reported case: range 4 nt, unit 1 nt. The unit wins and the range is
 /// reduced to its anchor, which is the issue's suggested acceptance.
@@ -103,6 +108,42 @@ fn strict_still_refuses_both_shapes() {
             "strict accepted {input}"
         );
     }
+}
+
+/// What the repair hands the normalizer, and what the normalizer does with it.
+///
+/// Against real bases this is the whole story of the row, and it is easy to
+/// read backwards. `NM_024312.4` carries `gggg` at `r.-6` to `r.-3`, so the
+/// repaired `r.-6g[6]` is widened straight back to `r.-6_-3g[6]` by
+/// `normalize_repeat`'s tract maximization. The lenient answer therefore agrees
+/// with `RNA/repeated.md:27` again — but by way of the normalizer re-adding the
+/// range, not by the repair leaving it there, and on a string `:22` calls
+/// invalid. The re-widening is the #1618 family (what a repeat's copy count is
+/// counted against) showing up on the RNA axis; pinned here so a change to
+/// either half is attributable to the right half.
+#[test]
+fn the_lenient_repair_hands_the_normalizer_the_anchored_form() {
+    let parsed = parse_hgvs_lenient("NM_024312.4:r.-6_-3g[6]").unwrap();
+    assert_eq!(
+        parsed.preprocessed_input, "NM_024312.4:r.-6g[6]",
+        "the repair's output, before any normalization"
+    );
+
+    let provider =
+        WindowFixture::from_json_path(&Path::new(env!("CARGO_MANIFEST_DIR")).join(WINDOWS_PATH))
+            .expect("load the committed spec worked-example reference slice")
+            .to_provider();
+    let normalized = Normalizer::with_config(
+        provider,
+        NormalizeConfig::for_entry_point(ShuffleDirection::ThreePrime, ErrorConfig::lenient()),
+    )
+    .normalize(&parsed.result)
+    .expect("normalize the repaired description");
+    assert_eq!(
+        normalized.to_string(),
+        "NM_024312.4:r.-6_-3g[6]",
+        "the normalizer widens the anchor back onto the `gggg` tract"
+    );
 }
 
 /// The repaired string is a fixed point of the repair: re-running the lenient
