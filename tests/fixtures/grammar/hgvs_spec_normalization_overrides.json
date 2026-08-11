@@ -672,6 +672,101 @@
       ],
       "governing": "docs/recommendations/DNA/complex.md:130",
       "rationale": "It does not. `general.md:58` is a four-space-indented sub-bullet of `general.md:56`, the **prioritisation** bullet, and its sibling `:57` is unambiguously a prioritisation rule (\"when a variant can be described as a duplication or an insertion, prioritisation determines it should be described as a duplication\"). `:58` therefore inherits `:56`'s antecedent: it applies *when a description is possible according to several types*, and it works by redirecting to the preferred one — for its own example `NM_004006.2:c.[762_768del;767_774dup]`, the `delins` over the union span. It is a redirection clause, not a hygiene clause.\n\nThat antecedent cannot hold for a ring. `complex.md:5` defines complex as a range of changes that *cannot* be described as one of the basic variant types, so there is no competing single-type description to prioritise toward: a `delins` over the union span describes a **linear** product and silently discards the join, which is the whole content of the ring description. A clause that can only reject, never redirect, is not doing the job `:56` assigns it.\n\n`complex.md:130` settles the operators directly, and on identical member content: \"'::' is used to indicate the join, instead of ';' to describe two not connected deletions.\" The same two deletions spelled with `;` denote a linear chromosome missing both ends; spelled with `::` they denote a ring. The `::` composite is therefore not reducible to its member set — it carries a topological assertion the members do not — so reading ring segments as cis-allele members is the one reading the spec explicitly forecloses.\n\nTwo corollaries make the question nearly moot in practice, and both are worth recording because they explain why extending the check would *look* free. A same-chromosome ring has exactly two breakpoints, so its segments are telomere-anchored and disjoint by construction: that is the shape of both ring examples the spec publishes (`complex.md:127` and the supernumerary form at `:161`), and `detect_self_cancelling_pair` would never fire on either. And the spec spells rearrangement-plus-local-edit composites as `;` cis alleles rather than as extra `::` segments (`complex.md:113`, `:117`), where `:58` governs them normally. So this ruling exempts no edit from `:58`; it only declines to read `::` as `;`.\n\n**What this ruling does NOT settle, and must not be read as blessing.** ferro currently accepts `g.100_200del::150_250dup`, `g.100_200del::300_400dup` and `g.150_250dup::100_200del`. None is a well-formed ring: a `dup` contributes no break junction (`complex.md:39`), neither segment is telomere-anchored, and the third also violates the `pter`-to-`qter` segment ordering `complex.md:51`/`:53`/`:55` requires. Those are ring **well-formedness** defects and need their own rule; `:58` is the wrong instrument for them, which the non-overlapping case (`del::300_400dup`) proves — an `:58`-based check would accept it. Rejecting them via `:58` would also emit E3006's repair hint (\"rewrite as a single delins\"), which `complex.md:5` makes actively wrong advice for a ring.\n\nIndependently adjudicated twice, reaching the same verdict by different routes; the prioritisation-sub-bullet argument above is the stronger one and is what the ruling rests on. Note that `for_each_leaf`'s doc comment already excludes this validator from the ring walker, but for a *mechanical* reason (it inspects allele siblings, which a per-leaf view cannot express) rather than a semantic one — so the code did not previously adjudicate this question."
+    },
+    {
+      "id": "alignment-only-symbol-in-a-description",
+      "question": "`background/standards.md` lists `X` and `-` in the DNA symbol table and daggers both, footnoting them at `:39` as used in alignment only. May a description state one of them, and if not, is refusing it a conformance requirement or a style preference?",
+      "status": "decided",
+      "clauses": [
+        {
+          "clause": "docs/background/standards.md:36",
+          "quote": "masked nucleotide"
+        },
+        {
+          "clause": "docs/background/standards.md:37",
+          "quote": "gap of indeterminate length"
+        },
+        {
+          "clause": "docs/background/standards.md:39",
+          "quote": "used in alignment only"
+        },
+        {
+          "clause": "docs/recommendations/general.md:48",
+          "quote": "nucleotides in CAPITALS using [IUPAC-IUBMB assigned nucleotide symbols]"
+        }
+      ],
+      "governing": "docs/background/standards.md:39",
+      "rationale": "DECIDED for `:39`: neither symbol may appear in a description, and ferro must refuse both.\n\nTHE APPARENT CONFLICT, AND WHY IT IS NOT ONE. `:36` and `:37` list `X` and `-` in the DNA symbol table, which reads as admitting them; `:39` scopes them to alignment. The dagger settles it: it is printed INSIDE the symbol cell (`X†`, `-†`), so `:39` is that row's own annotation rather than a competing clause elsewhere in the document. Reading `:36` without its dagger is reading half a table row.\n\nTHE RULING DOES NOT DEPEND ON HOW STRONGLY `:39` IS WORDED, WHICH MATTERS BECAUSE THE REPOSITORY HOLDS TWO READINGS OF IT. `conformance::spec_corpus` classifies an `X` input `Strength::Conditional` (the footnote states a scope, not a prohibition); `tests/it/spec_conformance_axis.rs`'s `violated_prohibition` counts an `X` OUTPUT as an absolute violation. Both survive because the alphabet half of rank-1 validity decides the case on its own: `general.md:48` requires \"nucleotides in CAPITALS using [IUPAC-IUBMB assigned nucleotide symbols]\", `X` is not one of the fifteen IUPAC-IUBMB nucleotide symbols, and the corpus's own `DNA_SYMBOLS` excludes it for that reason. So the shape fails the grammar whichever way the prohibition is graded.\n\nMEASURED, NOT ASSUMED. `NM_TEST.1:c.10delinsX` denotes NO sequence under the corpus's independent applier, so there is nothing for a lenient mode to be lenient toward — the same argument that disposes of `c.10_11ins6`. Ferro currently accepts it in BOTH input-hygiene modes, on every reference shape, in both shuffle directions, and re-emits it: 24 of the census's 40 conditional acceptances and 24 of its 32 prohibition-violating outputs are this one shape. Its footnote-sibling `-` is already refused at parse, so the ruling asks for consistency with behaviour ferro already has rather than for new machinery.\n\nSCOPE. This settles WHAT (refuse) and not WHERE — parse or strict-mode normalize is `absolute-prohibition-enforcement-stage`, which is undecided. Pinned by `tests/it/corpus_prohibited_inputs.rs::an_alignment_only_symbol_is_refused_for_dash_and_accepted_for_x`.\n\nREPRESENTATION IMPACT: none. No input that is currently normalized to a legal description changes its output; the only rows affected are ones whose output is invalid today."
+    },
+    {
+      "id": "bare-transcript-intronic-position",
+      "question": "`checklist.md:20` says an `NM_` reference can describe an intronic position only when a genomic reference sequence is given. Must ferro refuse a bare `NM_…:c.20+2del`, and in which input-hygiene mode?",
+      "status": "decided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/checklist.md:20",
+          "quote": "can only be used to describe variants in introns using a `c.` prefix when a genomic reference sequence is given"
+        },
+        {
+          "clause": "docs/recommendations/checklist.md:45",
+          "quote": "this describes a deletion of nucleotide -14 in the intron directly 5' of nucleotide `c.12`"
+        },
+        {
+          "clause": "docs/recommendations/general.md:44",
+          "quote": "**exception**: deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences"
+        }
+      ],
+      "governing": "docs/recommendations/checklist.md:20",
+      "rationale": "DECIDED for `:20`, as a CONDITIONAL clause: strict input hygiene refuses the bare form (ferro reports `IntronicOnBareTranscript` / `W4007`), lenient accepts it. That is ferro's current behaviour; this record makes it an adjudication rather than an accident, because the split was never argued anywhere.\n\nWHY CONDITIONAL AND NOT ABSOLUTE. `:20` is phrased \"can only be used … when\", which states a condition on the REFERENCE SEQUENCE rather than prohibiting a shape; it does not use the checklist's prohibitive vocabulary (\"is not allowed\", \"Not correct\") that `:24`, `:26`, `:31`, `:33`, `:45` and `:49` all do, four items on either side of it. The corpus grades it `Strength::Conditional` for the same reason.\n\nTHE SPEC READS A BARE-`c.` INTRONIC DESCRIPTION ITSELF, TWENTY-FIVE LINES LATER. `:45` glosses `c.12-14del` as \"a deletion of nucleotide -14 in the intron directly 5' of nucleotide `c.12`\" — a bare `c.` prefix, no genomic wrapper, and the sentence's whole purpose is to explain what the string MEANS. A clause the spec does not apply to its own worked gloss cannot be read as an absolute bar on the spelling. This is the conflict the record exists to name.\n\n`general.md:44` IS CITED AS THE THIRD SIDE, NOT AS SUPPORT. It exempts \"deletions/duplications around exon/exon junctions using **c.**, **r.** or **n.** reference sequences\" from the 3' rule — i.e. it contemplates junction-adjacent variants on a bare `c.` axis and legislates for them, which cuts against reading `:20` as making that axis unusable near an intron.\n\nWHAT THIS DOES NOT SETTLE, AND IT IS THE MORE SERIOUS HALF. Ferro's normalizer EMITS bare-`NM_` intronic descriptions: the axis census counts 371 `outputs_leaving_the_transcript` in the 3' direction and 0 in the 5', all minus-strand. So lenient mode manufactures a description strict mode refuses — the reverse of the laundering `#1406` legislated against, and a defect in the junction clamp rather than in this clause's enforcement. Nothing here excuses it.\n\nMEASURED. 16 of the census's 40 conditional acceptances are this shape, and all 16 are refused by strict mode, so that counter is a lenient-mode figure. Pinned by `tests/it/corpus_prohibited_inputs.rs::a_bare_transcript_intronic_position_is_refused_in_strict_only`.\n\nREPRESENTATION IMPACT: none. Ratifies shipped behaviour in both modes."
+    },
+    {
+      "id": "conflicting-member-geometry-refusal-scope",
+      "question": "`general.md:58` prohibits one member-vs-member geometry outright and illustrates it with a `del` beside an overlapping `dup`. Does the prohibition reach the CLASS of alleles whose members claim intersecting reference territory — nested, partially overlapping, and two insertions at one interbase — or only the edit-type pair it names?",
+      "status": "decided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/DNA/alleles.md:5",
+          "quote": "Allele: a series of variants on one chromosome."
+        },
+        {
+          "clause": "docs/recommendations/general.md:58",
+          "quote": "descriptions removing part of a reference sequence and replacing it with part of the same sequence are not allowed"
+        },
+        {
+          "clause": "docs/recommendations/general.md:56",
+          "quote": "the preferred description is: (1) substitution, (2) deletion, (3) inversion, (4) duplication, (5) insertion"
+        },
+        {
+          "clause": "docs/background/basics.md:38",
+          "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+        }
+      ],
+      "governing": "docs/recommendations/DNA/alleles.md:5",
+      "rationale": "DECIDED for `alleles.md:5`: two members of one allele may not claim intersecting reference territory, whatever edit types they render as, and such a description is refused. Rank-1 validity under `adjudication-precedence-order`, so it is not tradeable against a representation.\n\nWHY THE GOVERNING CLAUSE IS THE DEFINITION AND NOT `:58`. `:58` is the spec's ONLY member-vs-member prohibition and it is absolute (\"are not allowed\"), but its stated ground — \"removing part of a reference sequence and replacing it with part of the same sequence\" — literally describes a deletion beside a duplication, which is the pair in its example `NM_004006.2:c.[762_768del;767_774dup]`. Read strictly it does not reach two nested deletions, and stretching it to would be reading a general rule out of a worked instance. The rule that does reach the class is definitional: an allele is \"a series of variants on one chromosome\", and two members writing to one reference interval describe no single chromosome sequence for the series to be read off. `basics.md:38` names the value at stake — \"unequivocal\".\n\n`general.md:56` IS CITED TO RECORD THAT IT DOES NOT REACH THIS. `:56` ranks competing descriptions of ONE span; it says nothing about two members of one allele. Citing `:56` against a multi-member allele is this repository's recorded cautionary error, and `:56`/`:58` are adjacent lines, so the record names it explicitly rather than leaving the next reader to re-make the mistake.\n\nPER GEOMETRY, BECAUSE THE ARGUMENTS DIFFER. (1) OVERLAPPING is `:58`'s own geometry — `767_774` reaches into `762_768` — so the clause is direct evidence that the intersection, not the edit types, is what is prohibited. (2) COINCIDENT INSERTIONS are un-denotable for a reason `:58` does not cover: two zero-width members at one interbase have no order, and the two orders give different sequences. With IDENTICAL payloads the ambiguity does not disappear, it moves to multiplicity — `c.[8_9insAT;8_9insAT]` reads either as two insertions (`ATAT`) or as one stated twice (`AT`) — so a rule keyed on \"the two orders disagree\" would wrongly admit it. (3) NESTED is the weakest and has a real counter-argument: the inner member of `c.[9_12del;10_11del]` is entailed by the outer, so it could be called redundant and absorbed. That reading is REFUTED, not merely rejected: `c.[9_12del;10_11delinsGG]` has identical geometry with nothing redundant about it, so an absorbing rule would have to inspect payloads and give two spellings four characters apart opposite verdicts, with no clause to key on. The rule has to be geometric.\n\nFERRO ALREADY CONFORMS, IN STRICT MODE, AND THE CENSUS DID NOT SAY SO. All 72 alleles `spec_conformance_axis` reports as `conflicts_accepted` are refused under `ErrorMode::Strict` as `OverlapConflictingEdits` / `W5002`; the census normalizes with `NormalizeConfig::default()`, which is lenient. The 24 self-replacement rows — `:58`'s own spelling — are refused earlier still, at parse, in both modes. Lenient mode preserving the conflict verbatim is `#1406`'s deliberate contract and is not reopened here.\n\nWHAT REMAINS OPEN. `:58`'s instance is refused at parse while the rest of the class is refused only under strict hygiene, so one clause is enforced at two different stages; that is `absolute-prohibition-enforcement-stage`. Pinned by `tests/it/corpus_prohibited_inputs.rs`.\n\nREPRESENTATION IMPACT: none. Ratifies shipped behaviour in both modes."
+    },
+    {
+      "id": "absolute-prohibition-enforcement-stage",
+      "question": "The checklist enumerates the spec's absolute prohibitions. Is a violation to be refused at PARSE — unconditionally, in every mode — or at strict-mode normalize, where a caller can opt out of it?",
+      "status": "undecided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/checklist.md:5",
+          "quote": "**do not correctly follow HGVS nomenclature**"
+        },
+        {
+          "clause": "docs/recommendations/checklist.md:16",
+          "quote": "can not have nucleotides with additions like a `+`, `-`, or `*`"
+        },
+        {
+          "clause": "docs/recommendations/checklist.md:31",
+          "quote": "is **ambiguous**, and not allowed"
+        },
+        {
+          "clause": "docs/recommendations/checklist.md:33",
+          "quote": "is not allowed, the inserted sequence"
+        }
+      ],
+      "rationale": "NO RULING. The question is which STAGE an absolute prohibition is enforced at, and the spec does not address stages at all — it addresses descriptions. Recorded because ferro currently answers it three different ways for clauses of identical strength, and nothing distinguishes them.\n\nTHE INCONSISTENCY, MEASURED over the corpus's 164 prohibited rows (`tests/it/corpus_prohibited_inputs.rs`). Refused at PARSE, hence in every mode: `checklist.md:31` (`c.10insT`), `:49` (`del3`), `:26` (`c.20+2_+5del`), `general.md:96` (an internal space), `general.md:58` (a `del` beside an overlapping `dup`), and `checklist.md:16` for the `*` symbol. Refused at STRICT-MODE NORMALIZE only: `checklist.md:20`, and the conflicting-geometry class. Refused NOWHERE: `checklist.md:33` (`ins6`, 24 rows), `checklist.md:16` for `+` and `-` (8 rows), `standards.md:39` (`X`, 24 rows).\n\nTHE SHARPEST INSTANCE IS INTERNAL TO ONE CLAUSE. `checklist.md:16` names three symbols in one sentence — \"`+`, `-`, or `*`\" — and ferro refuses `g.*10del` at parse while accepting `g.266+2del` and `g.266-268del` in both modes. The second sharpest is internal to one numbered ITEM: item 3 (\"Insertions\") states `:31` and `:33` four lines apart, and only `:31` is enforced.\n\nTHE TWO SIDES, NEITHER OF WHICH THE SPEC PICKS. (A) PARSE. The clauses say \"is not allowed\" without qualification, and `adjudication-precedence-order` ranks validity first and says it is never traded; a mode flag that turns a validity check off is a trade. (B) STRICT-MODE NORMALIZE. `checklist.md:5` frames the whole list as \"the most frequently offended rules\", offered to an author \"while preparing a publication\" — an author-facing style guide, not a machine-readable grammar; software that refuses at parse cannot round-trip real-world corpora full of these spellings, and ferro already has an input-hygiene mode built precisely for clauses it wants to enforce without breaking such callers.\n\nWHY IT IS NOT COSMETIC. The stage is user-visible and irreversible in one direction: a parse-stage refusal cannot be opted out of, and every caller that stores or forwards such a description is affected on upgrade, whereas a strict-stage refusal is opt-in. Choosing (A) for the three currently-unenforced clauses would newly refuse inputs ferro accepts today.\n\nWHAT IS ALREADY SETTLED AND MUST NOT BE RE-ARGUED HERE. WHETHER each of those shapes is invalid — it is; see `alignment-only-symbol-in-a-description`, `conflicting-member-geometry-refusal-scope`, and the quoted clauses above. This record is only about where the refusal lives."
     }
   ]
 }

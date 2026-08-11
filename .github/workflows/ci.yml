@@ -44,9 +44,52 @@ env:
   # passes `--no-tests=fail`. So a rename that made the filter match nothing
   # reddens CI there instead of quietly emptying that job — while `test` and
   # `test-oracle`, which negate it, would just widen by 30 tests.
+  #
+  # NOTE: that partition is over `test` + `sweeps`. `test-oracle` additionally
+  # negates `ORACLE_EXCLUDE` below, so it runs a strict SUBSET of `test` rather
+  # than the same selection. Every test still runs somewhere unarmed.
   SWEEP_FILTER: >-
     test(cis_junction_crossing_shift) + test(repeat_span_sibling_overlap)
     + test(issue_1254_sibling_crossing_shift)
+  # The spec-corpus modules, excluded from `test-oracle` ONLY. They run in full
+  # in the plain `test` job; this is not a coverage exemption, it is a statement
+  # about which instrument may be armed while another is measuring.
+  #
+  # WHY: the corpus COUNTS non-idempotent outputs (7 at 3', 4 at 5' as pinned in
+  # `spec_conformance_axis.rs`) as a burn-down figure. `FERRO_ASSERT_IDEMPOTENT` PANICS
+  # on exactly that condition. The two agree perfectly about ferro — the oracle
+  # fires on precisely the rows the corpus classifies — but a panic returns no
+  # value, so the harness's `catch_unwind` files the row under `declined` and its
+  # output never reaches the family's output set.
+  #
+  # That does not merely re-bucket a counter, it DESTROYS EVIDENCE, and in the
+  # flattering direction. Measured directly on `main` @ 35de96c8, where the
+  # figures were 7 at 3' and 4 at 5': in all 11 cases the non-idempotent output
+  # is the one that disagreed with its siblings, so removing it makes the family
+  # look unanimous. Confluence read 9147 converged / 2428 split-2 under the
+  # oracle against a true 9140 / 2435 — CI would have reported seven more
+  # converged families than actually converge. Those are still the pinned
+  # figures, re-measured unchanged on `main` @ 5b54b2b6.
+  #
+  # The corpus loses nothing by running un-armed: it measures idempotency itself,
+  # and more precisely than the oracle does (a count and a classification, versus
+  # a panic). `tests/it/oracle_exclude_invariant.rs` keeps this list honest in
+  # both directions.
+  #
+  # `corpus_prohibited_inputs` is here for a related but NOT identical reason,
+  # and the difference is worth stating rather than letting the comment above be
+  # read as covering it. That module measures REFUSAL over the corpus's
+  # prohibited and conflicting strata, and it does not wrap normalization in
+  # `catch_unwind` — so an armed oracle firing on one of its rows reddens the
+  # module rather than flattering it. What it would redden is a claim about
+  # whether ferro refuses a shape, decided by an assertion about idempotency at
+  # a seam the module is not measuring. Excluded so the two instruments stay
+  # separate, in the same spirit; it still runs in full in the plain `test` job.
+  ORACLE_EXCLUDE: >-
+    test(spec_conformance_axis) + test(spec_corpus_regressions)
+    + test(corpus_alphabet_and_intronic_validity) + test(corpus_prohibited_inputs)
+    + test(lenient_overlap_and_projection_split)
+    + test(defect_non_idempotent_outputs)
 
 jobs:
   abi3-floor-consistency:
@@ -525,6 +568,31 @@ jobs:
       - name: Perf tables up to date
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         run: cargo run --features dev --example generate_perf_tables -- --check
+      # The exhaustive spec-derived conformance corpus is enumerated at TEST time
+      # (`tests/it/spec_conformance_axis.rs` calls the library directly), so it
+      # needs no artifact and runs in the sharded `test` job with no wiring. What
+      # runs here is the other half of the job: re-deriving the committed rule
+      # inventory's citations and per-file clause-unit counts from the spec
+      # checkout, which is the ONLY place in CI the submodule is present. It
+      # refuses on a moved quote, a moved clause-unit count, a `generatable`
+      # clause no corpus row exercises, and a rule tag no clause claims — so a
+      # submodule bump that invalidates a coverage claim fails the build instead
+      # of leaving the claim standing.
+      #
+      # Deliberately a step in THIS job rather than a new one: a new job would
+      # need its own `actions/cache` entry, and the repository's Actions cache
+      # sits near its 10 GiB cap (#1218 records an earlier rotation reaching
+      # 13.61 GiB, evicting by LRU and destroying the nightly's 3.25 GiB
+      # `ferro-manifest-v3` as collateral). Adding a step reuses the existing
+      # `spec-fixtures` rust-cache key and adds no entry at all.
+      #
+      # Gated on the same cache key as the steps above: the restored entry exists
+      # only for a commit on which every check already passed, and the tree is
+      # byte-identical, so re-deriving the inventory can only reach the same
+      # verdict.
+      - name: Check the spec conformance corpus rule inventory
+        if: steps.generated-fixtures.outputs.cache-hit != 'true'
+        run: cargo run --features dev --example generate_spec_conformance_corpus
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
         if: steps.generated-fixtures.outputs.cache-hit != 'true'
         with:
@@ -921,7 +989,7 @@ jobs:
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
             --partition hash:${{ matrix.shard }}/3 \
-            -E "not test(proptest) and not ($SWEEP_FILTER)"
+            -E "not test(proptest) and not ($SWEEP_FILTER) and not ($ORACLE_EXCLUDE)"
 
   # 1,000,000-case idempotency soak on every PR, split 8 ways.
   #

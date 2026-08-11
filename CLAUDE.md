@@ -66,6 +66,81 @@ cargo test --features dev            # Alternative
 cargo nextest run -E 'test(parse)'   # Run specific tests by name pattern
 ```
 
+#### Fast local iteration — two knobs, both measured
+
+A one-line test edit costing two minutes is not the crate being big; it is two
+settings. Measured on an M2 Max (12 core), interleaved A/B reps, `user` CPU
+seconds quoted because wall clock on a shared machine is not reproducible:
+
+| after editing… | default setup | both knobs | speedup |
+|---|---|---|---|
+| one `tests/it/*.rs` file | 16.8–18.0 s wall / 30.7–32.4 s CPU | 5.2–5.9 s / 4.0–4.4 s | **3.1× wall, 7.4× CPU** |
+| `src/lib.rs` | 38.0–38.7 s wall / 133–136 s CPU | 9.5 s / 15.1–15.2 s | **4.0× wall, 8.9× CPU** |
+
+**Knob 1 — do not export `CARGO_INCREMENTAL=0`.** This is the big one. If your
+shell sets it (a common sccache incantation), incremental compilation is off, so
+a one-line edit to any of the 428 files in `tests/it/` recompiles all ~139 k
+lines of that crate from scratch. Confirm with `du -sh target/debug/incremental`
+— `0B` means it is off, and rustc emitting 16 codegen units instead of 256 is
+the same tell.
+
+The premise the setting rests on does not hold for this crate anyway. **sccache
+never caches any `ferro-hgvs` unit**, incremental or not: a rebuild's 35 compile
+requests were classified `Non-cacheable calls`, reason **`crate-type`**, with
+zero hits and zero misses (`sccache --show-stats` diffed either side of one
+run). sccache is earning its keep on the ~400 dependency crates only, and those
+are unaffected by this knob. So there is no cache benefit being traded away.
+
+You cannot simply set it to `1`: sccache 0.16 **hard-errors**
+(`sccache: incremental compilation is prohibited: Unset CARGO_INCREMENTAL to
+continue.`) and the build dies on a dependency build script. **Unset** it
+instead — cargo passes `-C incremental` only to workspace members, so sccache
+never sees the flag on a dependency and keeps caching the whole dependency tree;
+it soft-skips only this crate's own units, which are the ones you are
+invalidating anyway.
+
+```bash
+env -u CARGO_INCREMENTAL CARGO_TARGET_DIR=$PWD/target-incr cargo t -E 'test(my_test)'
+```
+
+Two costs, both real: `target-incr/debug/incremental` reaches **2.0 GB**, and
+flipping `CARGO_INCREMENTAL` **re-fingerprints every dependency** (measured: 318
+crates recompiled), so the incremental and non-incremental builds cannot share
+one `target/`. Use a separate `CARGO_TARGET_DIR` (`/target-*/` is gitignored) or
+pick one mode and stay in it.
+
+**Knob 2 — narrow the target set: `cargo t`.** A bare `cargo nextest run` builds
+19 test binaries plus every `[[example]]` and `[[bin]]`, so a `src/` edit relinks
+`ferro`, `ferro-web`, `ferro-benchmark`, both spec generators, ~20 examples and
+11 example-test harnesses. The `cargo t` alias (`.cargo/config.toml`) is
+`nextest run --features dev --lib --test it`, which halves the work
+(37.3 → 18.1 CPU s on a `src/lib.rs` edit). It skips the two standalone
+integration targets and the examples' own unit tests, so run `cargo ta` (the
+full suite) before pushing.
+
+**Measured and NOT worth doing** — recorded so nobody repeats them:
+
+- `[profile.test] debug = 0` / `debug = "line-tables-only"`, with or without the
+  same on `[profile.dev]`. Three-way interleaved, no effect outside noise (4.95 /
+  5.08 / 4.49 CPU s). On macOS `split-debuginfo` already defaults to `unpacked`,
+  so debuginfo lives in the `.o` files and is never copied into the binary — the
+  linker only writes a debug map. `line-tables-only` did shrink objects 270 MB →
+  164 MB and bought nothing. It is also not free to try: it re-fingerprints the
+  whole dependency tree, which is what `ci.yml` means when it says
+  `CARGO_PROFILE_TEST_DEBUG=0` "re-fingerprints every dependency" (confirmed:
+  318 crates).
+- `split-debuginfo = "unpacked"` — already the default here. No `.dSYM` bundle is
+  produced, so there is no `dsymutil` step to remove.
+- **lld.** `ld64.lld` ships inside the rustc sysroot (no Homebrew needed) and does
+  link this crate on macOS arm64, via
+  `RUSTFLAGS="-C link-arg=-fuse-ld=$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/gcc-ld/ld64.lld"`.
+  It is **not** a win: ~14 % less CPU but consistently *worse* wall clock than
+  Apple's `ld-1267`, which is already fast.
+- **Splitting the `it` binary.** Unnecessary once knob 1 is on: with incremental
+  compilation, editing one of 428 test modules costs 3.9 s of cargo time across a
+  139 k-line crate. A split would add a second full link for every change to
+  `tests/it/common/`.
+
 #### Normalization idempotency oracle
 
 `FERRO_ASSERT_IDEMPOTENT=1` turns every `Normalizer::normalize` call into an
@@ -188,17 +263,46 @@ uploaded xfail artifact as a FAILing case instead of failing the workflow. That
 applies equally to all three flags, and it is why a red oracle in the nightly must
 be read out of the xfail report rather than from the workflow conclusion.
 
-Red is not the same as blocked, though: `main`'s ruleset requires only a subset
-of the jobs CI runs, and neither `Test oracle` nor `Exhaustive sweeps` is among
-them. So an oracle fire shows up as a failed job that a human must not merge
-past, not as a ruleset-enforced merge block.
+**An oracle fire DOES block the merge — corrected 2026-08-09.** This section used
+to say the opposite: that the ruleset requires only a subset of the jobs CI runs,
+that neither `Test oracle` nor `Exhaustive sweeps` is among them, and so a fire
+"shows up as a failed job that a human must not merge past, not as a
+ruleset-enforced merge block." The premise is right and the conclusion does not
+follow, because it reads the ruleset's context names as job names.
 
-Read the required set from the ruleset rather than from a count written down
-here — it grows (`Representation change declared` and `zizmor + actionlint` were
-both added after this paragraph was first written), so any number quoted in prose
-is stale by the next contexts change:
+`Test` is not the sharded test job. It is the `test-required` job in
+`.github/workflows/ci.yml` — cited by name because a line number goes stale on
+the next insertion above it — a **rollup**:
+
+```yaml
+  test-required:
+    name: Test
+    needs: [test, test-oracle, soak, sweeps]
+```
+
+whose script echoes each result and exits 1 if any is not `success`. So the
+required `Test` context transitively gates on `test-oracle`, `soak` and `sweeps`.
+
+**`generated-docs` is NOT in that list, and still gates** — it is one hop further
+out, so do not read its absence as a gap. The doc generators run inside
+`spec-fixtures`, and `test`/`test-oracle` both `needs:` that job, so a generator
+failure *skips* them; `test-required` demands `result == "success"` from each and
+a skip is not a success, so the required `Test` context still goes red. The
+comment at `ci.yml`'s "Gating is unchanged" step records the move — and it is the
+reason to read the `needs:` array from the workflow rather than from prose, since
+a job named there can be retired without the gate it provided going away.
+
+Both halves of the claim are checkable from the tree rather than from prose, and
+should be re-checked rather than trusted — the `needs:` list above and the
+required-context list below have each changed at least once already:
 
 ```bash
+# is `Test` really a rollup, and over which jobs?
+grep -A4 '^  test-required:' .github/workflows/ci.yml
+
+# is `Test` really required on main?  (the set grows — `Representation change
+# declared` and `zizmor + actionlint` were both added after this was written,
+# so any count quoted in prose is stale by the next contexts change)
 gh api --paginate repos/fulcrumgenomics/ferro-hgvs/rulesets \
   --jq '.[] | select(.target=="branch") | .id' \
 | xargs -I{} gh api repos/fulcrumgenomics/ferro-hgvs/rulesets/{} \
@@ -208,6 +312,15 @@ gh api --paginate repos/fulcrumgenomics/ferro-hgvs/rulesets \
         | .rules[] | select(.type=="required_status_checks")
         | .parameters.required_status_checks[].context'
 ```
+
+Two practical consequences. A red oracle is a hard merge block, not an advisory
+one. And `gh pr checks` showing `Test` red while every `Test (n/6)` row is green
+is not a contradiction — look at the rollup's log to find which upstream job
+actually failed, rather than re-running the shards. Note the second consequence
+is the *mechanism*, not a claim that any particular PR is in that state: an
+earlier draft of this paragraph cited PR #1572 as having six green shards and two
+red oracle shards, and by 2026-08-10 that PR read three red shards and three red
+oracle shards. Re-running CI moves the anecdote; it does not move the rollup.
 
 #### Exhaustive cis sweeps: `FERRO_SWEEP_SEEDS`
 
@@ -709,6 +822,58 @@ permitting the two-member spelling was *removed* by the committee. `:79-84` like
 spec's own discriminator — "the two variants may have been reported (or might occur)
 individually" — which is **provenance**, recoverable only from the input's spelling.
 
+### A forward-looking note is a suggestion, and may describe a proposal that FAILED
+
+`general.md:36-39` reads as forward guidance — "the SVD-WG is preparing a proposal… The new
+recommendation will be: two variants separated by less than two nucleotides should be described
+as a `delins`" — and it is tempting to treat it as the direction of travel and discount the
+current rule accordingly.
+
+**That proposal is SVD-WG010, and it was rejected.** Word for word, including its rationale.
+So the note is stale text describing a change that never happened, and three conclusions drawn
+from reading it as guidance are all withdrawn: the codon exception is *not* going away, the
+proposal to replace it having failed; it *strengthens* `codon-carve-out-shape-restriction`
+rather than undercutting it; and the "spec-admitted instability" argument built on it does not
+stand.
+
+So a rejected proposal earns a **negative guard**, not an expectation. The spec corpus builds
+210 rows whose only purpose is to catch a frameless separation floor of two — what implementing
+SVD-WG010 looks like from the outside — and asserts `guard_violations == 0` over them, with the
+denominator asserted non-zero so `0 of 0` cannot pass as a result. See
+`spec_conformance_axis.rs`.
+
+**So: cross-check every forward-looking statement in `recommendations/` against the
+`consultation/` dispositions before citing it.** "is preparing", "will be", "the new
+recommendation" are all flags. The disposition table is inventoried in the consultation slice:
+9 accepted, 3 rejected, 8 open, 3 unclear — a rejected proposal is generated as a NEGATIVE
+guard, never as an expectation.
+
+### Comparing `c.` positions across numbering zones is OUR policy, not compliance
+
+`c.` has three numbering zones — `-n` upstream of the ATG, plain `n` in the CDS, `*n` downstream
+of the stop — and a cis allele's members can sit in different ones. Ferro therefore needs an
+endpoint ordering that spans zones, to sort members, detect overlap and decide separation.
+
+**The spec does not give one.** `background/numbering.md` defines each zone but states no rule
+for comparing positions across them, and it never speaks about alleles at all: it contains zero
+occurrences of "allele" and zero of "member". `refseq.md` contains "allele" twice (`:264-265`),
+but both are the population-genetics sense — the wild-type "major allele present in the human
+population" — not cis-allele membership. (An earlier version of this note claimed *neither* file
+contained the word; that overstated it, and the two hits are worth knowing about so the check is
+not re-run and read as a contradiction.)
+
+So ferro's cross-zone ordering is a house rule. **Never cite the spec for it.** Argue it from the
+underlying transcript coordinate, which is unambiguous, and say plainly that the `c.` spelling is
+a presentation of that.
+
+This is not theoretical. The sequence-changing and denotes-no-sequence classes the spec corpus
+found both localise to the `c.72`/`c.*1` transition and to nothing else: the same flush
+deletion-plus-insertion shape collapses correctly at all 22 other homopolymer runs in the test
+transcript and mis-normalizes only where the pair straddles the CDS/3'UTR zone boundary. See
+`the_cds_end_flush_pair_is_its_two_members_normalized_separately` and
+`the_five_prime_boundary_masks_the_same_per_member_defect` in `tests/it/spec_corpus_regressions.rs`
+— the second is the reminder that the 5' boundary is not a working case, only a masked one.
+
 ## Adjudication records: where the open questions live
 
 The `rulings` section of `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json` is the
@@ -729,7 +894,8 @@ python3 -c "import json;d=json.load(open('tests/fixtures/grammar/hgvs_spec_norma
 
 The table below lists the records that are **open**, with what each leaves unsettled. It is a
 description of the open questions, not a census — when a record is ruled on it moves out of this
-table, and the authority for which rows belong here is the ledger, not this list:
+table, and the authority for which rows belong here is the ledger, not this list. Read them before
+re-deriving the same argument; the first is an operator decision that blocks other work:
 
 | record | what is open |
 |---|---|
@@ -737,6 +903,7 @@ table, and the authority for which rows belong here is the ledger, not this list
 | `exon-junction-dup-converge-from-the-far-side` | `LRG_199t1:c.3921dup` and `c.3922dup` denote one transcript sequence but are two fixed points, projecting 2,790 bp apart. `duplication.md:26` argues for converging them, `general.md:44` does not prescribe the 5' shift that would |
 | `rna-repeat-range-plus-unit-redundancy` | `RNA/repeated.md:22` calls range-plus-unit invalid, `:27` publishes exactly that shape as valid. Upstream's conflict (#466); ferro answers both ways depending on input-hygiene mode |
 | `separation-is-a-property-of-the-spelling-not-of-the-variant` | The separation rule keys on unchanged nucleotides "between two variants", which presupposes a decomposition a normalizer does not receive. Two spellings of one variant can present different separations, so the rule as written is not evaluable on what a normalizer knows |
+| `absolute-prohibition-enforcement-stage` | Whether an absolute prohibition is refused at PARSE (unconditional) or at strict-mode normalize (opt-outable). Recorded because ferro answers it three ways for clauses of identical strength — within `checklist.md:16` alone, `g.*10del` is refused at parse while `g.266+2del` is refused nowhere |
 
 The `decided` records, and the scope each was decided **at** — read the record before citing it,
 because several of these rulings are narrower than their one-line summary:
@@ -744,6 +911,9 @@ because several of these rulings are narrower than their one-line summary:
 | record | ruling |
 |---|---|
 | `delins-codon-carve-out-gap-one` | `delins.md:18` governs |
+| `alignment-only-symbol-in-a-description` | `standards.md:39` governs: neither `X` nor `-` may appear in a description. The dagger sits inside the symbol cell, so `:39` annotates the row rather than competing with `:36`/`:37`, and the strength grading is moot either way — `general.md:48` admits only IUPAC-IUBMB symbols |
+| `bare-transcript-intronic-position` | `checklist.md:20` governs, **as a conditional clause**: strict input hygiene refuses a bare `NM_…:c.20+2del` (`W4007`), lenient accepts. Does not excuse the 371 bare-`NM_` intronic descriptions ferro's own junction clamp emits |
+| `conflicting-member-geometry-refusal-scope` | `DNA/alleles.md:5` governs — the *definition*, not `general.md:58`, is what reaches nested and coincident-insertion geometries; `:58`'s stated ground literally describes only its own `del`+`dup` example. `general.md:56` is cited to record that it does **not** reach a multi-member allele |
 | `delins-merge-vs-individual-gap-two-or-more` | `DNA/delins.md:44-47` governs `:17`, **scoped** to the alignment-coincidence shape `:44-47` describes. Where a separation of two or more arises from anything else, `general.md:34` still governs; unscoped the reading reaches roughly fifteen times the row set the argument was made on |
 | `inversion-vs-two-delins-76-83` | `inversion.md:5` governs: a whole-block reverse complement is one `inv` when the members it competes with are `delins`, since `general.md:56` ranks substitution but not `delins`. #1230's substitution case is untouched and still splits |
 | `adjudication-precedence-order` | What ranks next where the spec is silent. The order is (1) the spec where it speaks, (2) confluence, (3) re-derivation from the resulting sequence, (4) disclosure of any resulting move, (5) stability toward the already-shipped form, as a last-resort tiebreaker only. Mutalyzer appears nowhere in it |

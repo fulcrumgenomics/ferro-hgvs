@@ -56,24 +56,48 @@
 //!
 //! # Counts measured on this base
 //!
-//! **10 records, 6 decided / 4 undecided.** Note the repo's own `CLAUDE.md`
-//! says "Five of its eight records are `undecided`" — stale in both figures, on
-//! this base. That is a known outstanding task and is deliberately not fixed
-//! here; [`the_index_is_not_vacuous`] pins the real figures so the next reader
-//! has a measured number to trust.
+//! **Read them off the generated index below, not from this paragraph.** The
+//! header line of that block is regenerated from the ledger, and
+//! [`the_index_is_not_vacuous`] pins the same figures, so both move together and
+//! neither can be quietly restated.
+//!
+//! This paragraph used to carry the numbers itself — "14 records, 9 decided /
+//! 5 undecided … was 10 / 6 / 4" — and went stale the moment the branch rebased
+//! onto a `main` that had gained a record, while the generated block three
+//! screens down regenerated correctly and disagreed with it. That is the exact
+//! failure the pin was added to prevent, reproduced in the prose that describes
+//! the pin: the repo's own `CLAUDE.md` carried "five of its eight" long after
+//! the ledger passed eight. A number worth trusting is a measured one, so the
+//! fix is to stop keeping a second copy rather than to pin the copy.
+//!
+//! What this branch contributes is four records for the refusal classes the
+//! spec conformance corpus found — a delta, which does not go stale when the
+//! base moves:
+//!
+//! - `alignment-only-symbol-in-a-description` — decided
+//! - `bare-transcript-intronic-position` — decided
+//! - `conflicting-member-geometry-refusal-scope` — decided
+//! - `absolute-prohibition-enforcement-stage` — undecided
 //!
 //! # The index
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 11 records, 7 decided / 4 undecided
-//! 47 clause lines, of which 7 are named by more than one record
+//! 15 records, 10 decided / 5 undecided
+//! 58 clause lines, of which 10 are named by more than one record
 //!
 //! == every clause line ==
 //!
-//! docs/background/basics.md:38
+//! docs/background/basics.md:38  [MULTI]
 //!     `adjudication-precedence-order` — decided (cited)
+//!     `conflicting-member-geometry-refusal-scope` — decided (cited)
+//! docs/background/standards.md:36
+//!     `alignment-only-symbol-in-a-description` — decided (cited)
+//! docs/background/standards.md:37
+//!     `alignment-only-symbol-in-a-description` — decided (cited)
+//! docs/background/standards.md:39
+//!     `alignment-only-symbol-in-a-description` — decided (governing)
 //! docs/consultation/SVD-WG010.md:5
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
 //! docs/consultation/open-issues.md:77
@@ -81,6 +105,8 @@
 //! docs/consultation/open-issues.md:78  [MULTI]
 //!     `adjudication-precedence-order` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited, via docs/consultation/open-issues.md:77-78)
+//! docs/recommendations/DNA/alleles.md:5
+//!     `conflicting-member-geometry-refusal-scope` — decided (governing)
 //! docs/recommendations/DNA/complex.md:5
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/DNA/complex.md:39
@@ -152,6 +178,18 @@
 //!     `rna-repeat-range-plus-unit-redundancy` — undecided (cited)
 //! docs/recommendations/RNA/repeated.md:27
 //!     `rna-repeat-range-plus-unit-redundancy` — undecided (cited)
+//! docs/recommendations/checklist.md:5
+//!     `absolute-prohibition-enforcement-stage` — undecided (cited)
+//! docs/recommendations/checklist.md:16
+//!     `absolute-prohibition-enforcement-stage` — undecided (cited)
+//! docs/recommendations/checklist.md:20
+//!     `bare-transcript-intronic-position` — decided (governing)
+//! docs/recommendations/checklist.md:31
+//!     `absolute-prohibition-enforcement-stage` — undecided (cited)
+//! docs/recommendations/checklist.md:33
+//!     `absolute-prohibition-enforcement-stage` — undecided (cited)
+//! docs/recommendations/checklist.md:45
+//!     `bare-transcript-intronic-position` — decided (cited)
 //! docs/recommendations/general.md:34  [MULTI]
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
@@ -161,14 +199,19 @@
 //!     `codon-carve-out-shape-restriction` — undecided (cited)
 //! docs/recommendations/general.md:39
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
-//! docs/recommendations/general.md:44
+//! docs/recommendations/general.md:44  [MULTI]
+//!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — undecided (cited)
+//! docs/recommendations/general.md:48
+//!     `alignment-only-symbol-in-a-description` — decided (cited)
 //! docs/recommendations/general.md:56  [MULTI]
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
+//!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
-//! docs/recommendations/general.md:58
+//! docs/recommendations/general.md:58  [MULTI]
+//!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/general.md:157
 //!     `canonical-form-choice-when-both-legal` — decided (governing)
@@ -201,13 +244,23 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — undecided (cited)
+//! docs/recommendations/general.md:44
+//!     `bare-transcript-intronic-position` — decided (cited)
+//!     `exon-junction-dup-converge-from-the-far-side` — undecided (cited)
 //!
 //! -- same verdict across every record naming the line --
 //!
+//! docs/background/basics.md:38
+//!     `adjudication-precedence-order` — decided (cited)
+//!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //! docs/recommendations/general.md:56
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
+//!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (deviates-from)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
+//!     `self-cancelling-across-ring-junctions` — decided (cited)
+//! docs/recommendations/general.md:58
+//!     `conflicting-member-geometry-refusal-scope` — decided (cited)
 //!     `self-cancelling-across-ring-junctions` — decided (cited)
 //! docs/recommendations/style.md:9
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
@@ -217,16 +270,25 @@
 //!
 //! # Reading the mixed-verdict block
 //!
-//! Five of the seven multiply-named clause lines carry mixed verdicts, and the
-//! `delins.md:17` row is the one this project keeps tripping over: a settled
-//! record and an unanswered one name the same line, so reading either alone
-//! gives a confident and half-wrong picture. The index does not adjudicate
-//! anything — it only tells you that more than one record is in play, which is
-//! the fact that was missing.
+//! **Most multiply-named lines carry mixed verdicts** — the counts are in the
+//! generated block above and pinned by [`clauses_named_by_several_records_are_flagged`],
+//! and are deliberately not restated here. They were, as "six of the nine", and
+//! the rebase that added a record made that wrong in both halves while the
+//! generated block regenerated correctly; the test's own failure message even
+//! says "update the module docs with it", which is a rule that only fires when
+//! the measured number moves *and* someone re-reads prose the test does not
+//! check.
 //!
-//! `general.md:56` and `style.md:9` are multiply-named without mixed verdicts,
-//! which is a much weaker signal: they are the two clauses that get cited as
-//! background in nearly every conflict.
+//! What is worth saying in prose is which row matters. `delins.md:17` is the one
+//! this project keeps tripping over: a settled record and an unanswered one name
+//! the same line, so reading either alone gives a confident and half-wrong
+//! picture. The index does not adjudicate anything — it only tells you that more
+//! than one record is in play, which is the fact that was missing.
+//!
+//! The same-verdict lines are a much weaker signal: they are the clauses cited
+//! as background in nearly every conflict — `basics.md:38`, `general.md:56`,
+//! `general.md:58` and `style.md:9`. (That list is a *set*, not a count, so it
+//! stays checkable by inspection; it previously omitted `general.md:58`.)
 //!
 //! # Sibling
 //!
@@ -486,7 +548,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (11, 7, 4),
+        (15, 10, 5),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -650,7 +712,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        7,
+        10,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
@@ -668,7 +730,7 @@ fn clauses_named_by_several_records_are_flagged() {
         .collect();
     assert_eq!(
         mixed.len(),
-        5,
+        6,
         "measured count of mixed-verdict clause lines changed: {mixed:?}"
     );
 
