@@ -100,9 +100,26 @@ jobs:
           # interpolating it into the jq program: a title containing a quote
           # would otherwise produce a malformed filter, and the value is
           # workflow-supplied input.
-          EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
+          #
+          # The lookup must not be able to abort the step. It runs under
+          # `set -e` and is the FIRST thing this job does, so any transient
+          # failure — a rate limit, a search-API blip — kills the reporter
+          # before the `gh issue create` fallback below is ever reached, and
+          # the alerting path fails silently underneath the failure it exists
+          # to announce. That is the exact shape of the defect that left this
+          # job broken. Filing a duplicate is strictly better than filing
+          # nothing, so a failed lookup degrades to "no rolling issue found"
+          # and says so in the log.
+          #
+          # Only the LOOKUP is forgiving. If `gh issue comment` or `gh issue
+          # create` fails, nothing was recorded anywhere and the step must go
+          # red — that is the last remaining signal.
+          if ! EXISTING=$(gh issue list --state open --search "$TITLE in:title" \
             --json number,title \
-            --jq '[.[] | select(.title == env.TITLE)] | .[0].number // empty')
+            --jq '[.[] | select(.title == env.TITLE)] | .[0].number // empty'); then
+            echo "::warning::rolling-issue lookup failed; filing a new issue instead of commenting"
+            EXISTING=""
+          fi
           BODY=$(printf '%s\n' \
             "$SUMMARY" \
             "" \
