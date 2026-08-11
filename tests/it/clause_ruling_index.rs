@@ -77,14 +77,15 @@
 //! - `alignment-only-symbol-in-a-description` — decided
 //! - `bare-transcript-intronic-position` — decided
 //! - `conflicting-member-geometry-refusal-scope` — decided
-//! - `absolute-prohibition-enforcement-stage` — undecided
+//! - `absolute-prohibition-enforcement-stage` — decided by operator ruling,
+//!   2026-08-10: the stage is mode-dependent
 //!
 //! # The index
 //!
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 16 records, 13 decided / 3 undecided
+//! 16 records, 14 decided / 2 undecided
 //! 62 clause lines, of which 13 are named by more than one record
 //!
 //! == every clause line ==
@@ -188,15 +189,15 @@
 //! docs/recommendations/RNA/repeated.md:27
 //!     `rna-repeat-range-plus-unit-redundancy` — undecided (cited)
 //! docs/recommendations/checklist.md:5
-//!     `absolute-prohibition-enforcement-stage` — undecided (cited)
+//!     `absolute-prohibition-enforcement-stage` — decided (governing)
 //! docs/recommendations/checklist.md:16
-//!     `absolute-prohibition-enforcement-stage` — undecided (cited)
+//!     `absolute-prohibition-enforcement-stage` — decided (cited)
 //! docs/recommendations/checklist.md:20
 //!     `bare-transcript-intronic-position` — decided (governing)
 //! docs/recommendations/checklist.md:31
-//!     `absolute-prohibition-enforcement-stage` — undecided (cited)
+//!     `absolute-prohibition-enforcement-stage` — decided (cited)
 //! docs/recommendations/checklist.md:33
-//!     `absolute-prohibition-enforcement-stage` — undecided (cited)
+//!     `absolute-prohibition-enforcement-stage` — decided (cited)
 //! docs/recommendations/checklist.md:45
 //!     `bare-transcript-intronic-position` — decided (cited)
 //! docs/recommendations/general.md:34  [MULTI]
@@ -584,7 +585,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (16, 13, 3),
+        (16, 14, 2),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"

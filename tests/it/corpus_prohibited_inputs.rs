@@ -115,8 +115,30 @@
 //!   **not** reach a multi-member allele.
 //! - `absolute-prohibition-enforcement-stage` — whether an absolute prohibition
 //!   is refused at parse (unconditional) or at strict-mode normalize
-//!   (opt-outable). The spec addresses descriptions, not stages.
-//!   **Undecided.**
+//!   (opt-outable). The spec addresses descriptions, not stages, so this is a
+//!   project decision. **Decided**: the stage is **mode-dependent** — strict
+//!   fails at parse, lenient does not validate input conformance and fails only
+//!   when it cannot normalize, silent is lenient without messages. See
+//!   [`the_decided_target_is_a_mode_gated_refusal`], which is `#[ignore]`d
+//!   because ferro does not do this yet (#1630).
+//!
+//! # One measurement in this file was taken through the wrong door
+//!
+//! Every `parse_hgvs` call below — and every one in `conformance::spec_corpus`
+//! — is the **config-less** entry point. Its own doc comment claims "Uses
+//! strict error handling mode by default", and it does not: it applies no
+//! `ErrorConfig` at all, which is #1632. So `parse_hgvs(x).is_err()` answers
+//! "the grammar refuses `x`", not "every mode refuses `x`", and the assertions
+//! here that read as the latter are the former.
+//!
+//! Re-measured through `parse_hgvs_with_config`, two of the five prohibitions
+//! [`the_absolute_prohibitions_ferro_refuses_at_parse`] groups together are in
+//! fact already mode-gated exactly as the ruling asks — `g.266del3` is refused
+//! in strict and **repaired** to `g.266_268del` in lenient and silent, and
+//! `c.10_12 del` is refused in strict and repaired to `c.10_12del`. The other
+//! three (`c.10insT`, `c.20+2_+5del`, `g.*10del`) are refused in every mode
+//! because no production exists for the shape. That distinction is what the
+//! ruling turns on, so it is stated here rather than left in a PR body.
 
 use std::collections::BTreeMap;
 
@@ -124,7 +146,8 @@ use ferro_hgvs::conformance::spec_corpus::{
     corpus, corpus_cores, denotation_of, CorpusBounds, Denotation, Frame, RefShape, RowKind,
     SpecCorpus, DENSE_CORE_LEN,
 };
-use ferro_hgvs::error_handling::ErrorMode;
+use ferro_hgvs::error_handling::{ErrorConfig, ErrorMode};
+use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
 use ferro_hgvs::reference::transcript::Strand;
 use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer, ShuffleDirection};
 
@@ -170,6 +193,27 @@ fn strict(frame: &Frame, input: &str, direction: ShuffleDirection) -> Result<Str
     .map_err(|e| e.to_string())
 }
 
+/// Silent-mode normalization — the third arm of the enforcement-stage ruling.
+///
+/// Used only by [`the_decided_target_is_a_mode_gated_refusal`], because the
+/// three modes are byte-identical on every row this file pins: measured over
+/// all 164 prohibited rows in both directions, strict, lenient and silent
+/// produce the same string with zero disagreements. That is worth having a
+/// helper for rather than a comment, so the ruling's third arm is asserted
+/// rather than assumed.
+fn silent(frame: &Frame, input: &str, direction: ShuffleDirection) -> Result<String, String> {
+    let parsed = parse_hgvs(input).map_err(|e| e.to_string())?;
+    Normalizer::with_config(
+        frame.provider().clone(),
+        NormalizeConfig::default()
+            .with_direction(direction)
+            .with_error_mode(ErrorMode::Silent),
+    )
+    .normalize(&parsed)
+    .map(|v| v.to_string())
+    .map_err(|e| e.to_string())
+}
+
 /// Whether `output` violates a prohibition the spec states in as many words.
 ///
 /// A deliberate duplicate of `spec_conformance_axis::violated_prohibition`, kept
@@ -208,12 +252,21 @@ fn built() -> SpecCorpus {
 /// **Question.** Which of the checklist's absolute prohibitions does ferro
 /// already enforce, and where?
 ///
-/// **Five, all at parse — so in both input-hygiene modes, and inside an allele
-/// as well as alone.** This is the adjudicated-correct half, pinned as a guard:
-/// each of these is rank-1 validity under the operator's precedence order
+/// **Five, all at the `parse_hgvs` entry, and inside an allele as well as
+/// alone.** This is the adjudicated-correct half, pinned as a guard: each of
+/// these is rank-1 validity under the operator's precedence order
 /// (`rulings[adjudication-precedence-order]`, "the spec where it speaks"), so a
 /// later relaxation to accept-and-warn would be a rank-1 regression, not a
 /// representation choice.
+///
+/// **This assertion does NOT say "in every mode", and it used to.** `parse_hgvs`
+/// applies no `ErrorConfig` (#1632), so it answers for the grammar and not for a
+/// mode. Measured through `parse_hgvs_with_config`, two of the five are already
+/// mode-gated as `rulings[absolute-prohibition-enforcement-stage]` decided:
+/// `NC_TEST.1:g.266del3` is refused in strict and repaired to
+/// `NC_TEST.1:g.266_268del` in lenient and silent, and `NM_TEST.1:c.10_12 del`
+/// is refused in strict and repaired to `NM_TEST.1:c.10_12del`. See the module
+/// docs and [`the_decided_target_is_a_mode_gated_refusal`].
 ///
 /// The clauses, verbatim from spec checkout `6f85311`:
 ///
@@ -913,6 +966,119 @@ fn every_prohibition_violating_output_is_a_re_emitted_prohibited_input() {
             !by_clause.contains_key("general.md:96"),
             "no output should carry a space; general.md:96 is refused at parse"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The DECIDED TARGET, asserted directly
+// ---------------------------------------------------------------------------
+
+/// Whether `output` still carries the prohibited token of `clause`.
+///
+/// Deliberately separate from [`violated_prohibition`], which is a literal
+/// duplicate of the axis test's three-entry list and must stay that way. This
+/// one is keyed per clause and covers `checklist.md:33`'s `ins<n>`, which the
+/// axis list does not — the axis counts *output* violations it can recognise
+/// textually, and a numeric insertion payload is a shape its list predates.
+fn output_still_violates(clause: &str, output: &str) -> bool {
+    match clause {
+        "checklist.md:33" => output.contains("ins6"),
+        "standards.md:39" => output.contains('X'),
+        "checklist.md:16" | "checklist.md:45" => output
+            .split_once(":g.")
+            .is_some_and(|(_, body)| body.contains('+') || body.contains('-')),
+        other => panic!("no output check for {other}"),
+    }
+}
+
+/// **The decided target**, asserted directly: an absolute prohibition is
+/// refused at **parse in strict mode**, and no mode may ever *emit* the
+/// prohibited spelling.
+///
+/// **Authority.** The `OPERATOR RULING, 2026-08-10` paragraph of
+/// `rulings[absolute-prohibition-enforcement-stage]`. The stage is
+/// mode-dependent: strict fails at parse because strict validates input
+/// conformance rather than merely parseability; lenient does not validate input
+/// conformance and fails only when it cannot normalize; silent is lenient
+/// without messages.
+///
+/// **The second half is not a mode question and is asserted in all three.**
+/// Rule 1 of the README ruleset — "Output follows the HGVS recommendations.
+/// Absolute — never traded." — is about OUTPUT, so it has no mode escape. That
+/// is precisely why the ruling's mode gate costs nothing: accepting a
+/// non-conformant input and *normalizing it to a conformant output* trades
+/// nothing away, while re-emitting the prohibited spelling is a rule-1
+/// violation whatever mode produced it.
+///
+/// **`#[ignore]`d because ferro does not do this yet**, not because the answer
+/// is in doubt. Today all four clauses below are accepted in all three modes and
+/// re-emitted verbatim, with an empty warning vector — measured over the 56
+/// corpus rows they account for. Closing that is **#1630** for the strict gate,
+/// **#1627** for the `ins6`/`X` pass-through and **#1628** for the `g.` offsets,
+/// and this test is their shared acceptance criterion: delete the `#[ignore]`
+/// and move the pinned expectations in the three tests above.
+///
+/// Note the `g.` offset rows are the ones no un-normalizability argument
+/// reaches. `ins6` and `delinsX` denote nothing (`Denotation::Inexpressible`,
+/// and `to_spdi` refuses both by name), so a lenient mode that failed when it
+/// could not normalize would refuse them for that reason alone. `g.266+2del`
+/// does denote a sequence — because `to_spdi` silently **discards** the offset
+/// and answers for `g.266del` — so it needs a real check, and the disagreement
+/// between the two halves of ferro is a confluence defect on its own (#1628).
+#[test]
+#[ignore = "decided target, not yet implemented — see #1630, #1627, #1628"]
+fn the_decided_target_is_a_mode_gated_refusal() {
+    let core = at_core();
+    let coding = Frame::build(RefShape::CodingSingleExon, &core);
+    let genomic = Frame::build(RefShape::Genomic, &core);
+
+    for (frame, input, clause) in [
+        (
+            &coding,
+            "NM_TEST.1:c.10_11ins6",
+            "checklist.md:33", // "is not allowed, the inserted sequence"
+        ),
+        (
+            &coding,
+            "NM_TEST.1:c.10delinsX",
+            "standards.md:39", // "used in alignment only"
+        ),
+        (
+            &genomic,
+            "NC_TEST.1:g.266+2del",
+            "checklist.md:16", // "can not have nucleotides with additions"
+        ),
+        (
+            &genomic,
+            "NC_TEST.1:g.266-268del",
+            "checklist.md:45", // and checklist.md:16 on a `g.` axis
+        ),
+    ] {
+        // STRICT — refused at parse, because strict validates input conformance.
+        assert!(
+            parse_hgvs_with_config(input, ErrorConfig::strict()).is_err(),
+            "`{input}` must be refused at parse in STRICT mode ({clause})"
+        );
+
+        // LENIENT and SILENT — free not to judge the input, never free to emit
+        // the prohibited spelling. Either outcome below is conformant; what is
+        // not is an `Ok` still carrying the token.
+        for direction in DIRECTIONS {
+            for (mode, produced) in [
+                ("lenient", lenient(frame, input, direction)),
+                ("silent", silent(frame, input, direction)),
+            ] {
+                if let Ok(output) = produced {
+                    assert!(
+                        !output_still_violates(clause, &output),
+                        "{mode} mode emitted `{output}`, which still violates {clause}. Rule 1 \
+                         of the README ruleset is about OUTPUT and has no mode escape: lenient \
+                         may decline to validate the input, but it must then either normalize \
+                         it to a conformant description or fail because it cannot."
+                    );
+                }
+            }
+        }
     }
 }
 

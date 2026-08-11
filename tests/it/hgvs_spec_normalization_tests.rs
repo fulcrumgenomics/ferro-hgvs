@@ -935,13 +935,18 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // question: it ranks descriptions of ONE span, and citing it against a
     // multi-member allele is this repository's recorded cautionary error.
     ("conflicting-member-geometry-refusal-scope", "decided"),
-    // WHERE an absolute prohibition is refused — at parse (unconditional) or at
-    // strict-mode normalize (opt-outable). The spec addresses descriptions, not
-    // stages, so there is nothing to defer to. Undecided, and recorded because
-    // ferro answers it three ways for clauses of identical strength: within
-    // `checklist.md:16` alone, `g.*10del` is refused at parse while `g.266+2del`
-    // is refused nowhere.
-    ("absolute-prohibition-enforcement-stage", "undecided"),
+    // WHERE an absolute prohibition is refused. The spec addresses descriptions,
+    // not stages, so there is nothing to defer to and this is a project
+    // decision. **Decided by operator ruling (2026-08-10): MODE-DEPENDENT** —
+    // strict fails at PARSE, lenient does not validate input conformance and
+    // fails only when it cannot NORMALIZE, silent is lenient without messages.
+    // That is a third option the record did not enumerate, and it answers the
+    // record's own objection to unconditional parse refusal: rule 1 of the
+    // README ruleset is about OUTPUT conformance, so accepting a non-conformant
+    // input and normalizing it to a conformant output trades nothing.
+    // Implementation is #1630; the rule-1 output bugs it does not cover are
+    // #1627 and #1628, and the silent arm needs #1629.
+    ("absolute-prohibition-enforcement-stage", "decided"),
     // Must a ring's first `::` segment start at `pter` and its last end at
     // `qter`? **Undecided on purpose.** A ring loses both telomeres, and both
     // published ring shapes are anchored (`complex.md:127`, `:161`) — but that is
