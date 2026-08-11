@@ -26,6 +26,7 @@ use crate::error_handling::{
     CorrectionWarning, ErrorConfig, ErrorType, InputPreprocessor, ParseResultWithWarnings,
     ResolvedAction,
 };
+use crate::hgvs::alignment_symbols::alignment_only_symbol;
 use crate::hgvs::HgvsVariant;
 
 /// Parse an HGVS string into a variant
@@ -170,6 +171,8 @@ pub fn parse_hgvs_with_config(
     // Resolve the bracket-cardinality action before `config` is consumed by the
     // preprocessor; the rule itself is applied post-parse on the AST below.
     let cardinality_action = config.action_for(ErrorType::NonConformantBracketCardinality);
+    // Same, for the alignment-only-symbol rule (#1627).
+    let alignment_symbol_action = config.action_for(ErrorType::AlignmentOnlySymbolInDescription);
 
     // Create preprocessor and preprocess input
     let preprocessor = InputPreprocessor::new(config);
@@ -204,6 +207,18 @@ pub fn parse_hgvs_with_config(
         &mut warnings,
     )?;
 
+    // Apply the alignment-only-symbol conformance rule on the parsed AST
+    // (#1627). Like the cardinality rule this is structural and axis-independent,
+    // so it is enforced once here rather than per-axis in the grammar — which is
+    // also what keeps it out of the grammar, where it would refuse in every mode
+    // and contradict `rulings[absolute-prohibition-enforcement-stage]`.
+    apply_alignment_only_symbol_rule(
+        &variant,
+        alignment_symbol_action,
+        &preprocess_result.preprocessed,
+        &mut warnings,
+    )?;
+
     // Return result with warnings
     Ok(ParseResultWithWarnings::new(
         variant,
@@ -211,6 +226,76 @@ pub fn parse_hgvs_with_config(
         preprocess_result.original,
         preprocess_result.preprocessed,
     ))
+}
+
+/// Enforce `background/standards.md:39` on a parsed variant (#1627).
+///
+/// The table's two daggered symbols — `X` ("masked nucleotide", `:36`) and `-`
+/// ("gap of indeterminate length", `:37`) — are footnoted "used in alignment
+/// only", and `general.md:48` admits only IUPAC-IUBMB nucleotide symbols, of
+/// which neither is one. The decided
+/// `rulings[alignment-only-symbol-in-a-description]` rules that ferro must
+/// refuse both.
+///
+/// **The stage is mode-dependent**, per the decided
+/// `rulings[absolute-prohibition-enforcement-stage]`: strict validates input
+/// conformance and so fails here, at parse; lenient and silent do not validate
+/// input conformance and accept, and fail later at *normalize*, because a
+/// masked base cannot be resolved to a sequence (see
+/// `Normalizer::normalize_core_checked`). Lenient carries a `W3028` warning
+/// saying so; silent is the same acceptance with no message.
+///
+/// There is no repair arm: `WarnCorrect` and `SilentCorrect` accept rather than
+/// correct, since `X` names a base the alignment did not resolve and ferro will
+/// not invent one. That is why this returns `Result<(), _>` rather than a
+/// rewritten variant, unlike [`apply_bracket_cardinality_rule`].
+fn apply_alignment_only_symbol_rule(
+    variant: &HgvsVariant,
+    action: ResolvedAction,
+    source: &str,
+    warnings: &mut Vec<CorrectionWarning>,
+) -> Result<(), FerroError> {
+    let Some(found) = alignment_only_symbol(variant) else {
+        return Ok(());
+    };
+
+    match action {
+        ResolvedAction::Accept | ResolvedAction::SilentCorrect => Ok(()),
+        ResolvedAction::WarnCorrect => {
+            warnings.push(CorrectionWarning::new(
+                ErrorType::AlignmentOnlySymbolInDescription,
+                format!(
+                    "`{}` states `{}` ({}), which {} lists as used in alignment only; \
+                     a description may not state it, and normalization will refuse it",
+                    found.stated,
+                    found.symbol,
+                    found.meaning(),
+                    found.clause(),
+                ),
+                None,
+                source.to_string(),
+                // No correction is derivable, so the "corrected" text is the
+                // input itself; the refusal comes at normalize.
+                source.to_string(),
+            ));
+            Ok(())
+        }
+        ResolvedAction::Reject => Err(FerroError::Parse {
+            pos: 0,
+            msg: format!(
+                "[{}] `{}` states `{}` ({}), which {} lists as used in alignment only: \
+                 it is not one of the IUPAC-IUBMB nucleotide symbols `general.md:48` admits, \
+                 so the description denotes no sequence. State the resolved bases instead \
+                 (`N` is the IUPAC symbol for an unknown base).",
+                ErrorType::AlignmentOnlySymbolInDescription.code(),
+                found.stated,
+                found.symbol,
+                found.meaning(),
+                found.clause(),
+            ),
+            diagnostic: None,
+        }),
+    }
 }
 
 /// Restore the reference run stated by a deprecated `<ref>><alt>` description

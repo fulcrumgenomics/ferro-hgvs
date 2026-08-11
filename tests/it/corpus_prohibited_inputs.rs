@@ -631,37 +631,66 @@ fn the_hyphen_range_is_a_legal_intronic_description_on_a_coding_axis() {
 /// symbol table and daggers both, footnoting at `:39` "† used in alignment
 /// only." Are they treated alike?
 ///
-/// **No: `-` is refused at parse on every axis, `X` is accepted in both modes on
-/// every axis.** One clause, two symbols, two behaviours — and the repository
-/// itself holds two incompatible readings of that clause: the corpus classifies
-/// an `X` input `Strength::Conditional`, while `spec_conformance_axis`'s
-/// `violated_prohibition` counts an `X` output as an **absolute** violation.
+/// **Ruling: refuse both — and the STAGE is mode-dependent.** Two decided
+/// records settle the two halves. `rulings[alignment-only-symbol-in-a-description]`
+/// settles *what*: neither symbol may appear in a description. The strength
+/// label is moot, because the alphabet half of rank-1 validity settles it
+/// without the prohibition half — `general.md:48` requires "nucleotides in
+/// CAPITALS using IUPAC-IUBMB assigned nucleotide symbols", and `X` is not one
+/// of the fifteen (the corpus's own `DNA_SYMBOLS` excludes it for exactly this
+/// reason). `rulings[absolute-prohibition-enforcement-stage]` settles *where*:
+/// strict fails at PARSE, lenient does not validate input conformance and fails
+/// only when it cannot NORMALIZE, silent is lenient without messages.
 ///
-/// **Ruling: refuse, as `-` already is.** Recorded as
-/// `rulings[alignment-only-symbol-in-a-description]`, decided for
-/// `standards.md:39`. The strength label is moot, because the alphabet half of
-/// rank-1 validity settles it without the prohibition half: `general.md:48`
-/// requires "nucleotides in CAPITALS using IUPAC-IUBMB assigned nucleotide
-/// symbols", and `X` is not one of the fifteen (the corpus's own `DNA_SYMBOLS`
-/// excludes it for exactly this reason). A `delins` whose inserted sequence is
-/// `X` therefore denotes no sequence, asserted below.
+/// **This test was a pinned defect and is now an adjudicated-correct guard**
+/// (#1627). Before the fix all three modes accepted every shape below and
+/// re-emitted it verbatim with an *empty* warning vector — normalization was
+/// not impossible, it was vacuous, which is worse, because the output looked
+/// normalized while carrying a spelling the recommendations prohibit.
 ///
-/// 24 of the census's 40 conditional acceptances, and 24 of its 32
-/// prohibition-violating outputs, are this shape.
+/// **The two symbols are NOT symmetric, and that is the finding worth keeping.**
+/// `X` reaches the AST (as `InsertedSequence::Named`) and needed a rule. `-`
+/// reaches it in no position whatsoever — leading, trailing or interior, `ins`
+/// or `delins` — because it matches no arm of `parse_inserted_sequence` and the
+/// variant-level trailing-character check refuses what is left unconsumed. That
+/// is a *grammar* accident rather than a conformance rule, so it is asserted
+/// below as a standing fact and not as the template the `X` fix copied.
 #[test]
-fn an_alignment_only_symbol_is_refused_for_dash_and_accepted_for_x() {
+fn an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash() {
     let core = at_core();
     let coding = Frame::build(RefShape::CodingSingleExon, &core);
     let genomic = Frame::build(RefShape::Genomic, &core);
     let multi = Frame::build(RefShape::CodingMultiExon(Strand::Plus), &core);
 
-    // `-` — refused at parse, so in both modes.
-    assert!(
-        parse_hgvs("NM_TEST.1:c.10delins-").is_err(),
-        "`-` is footnoted identically to `X` at standards.md:39"
-    );
+    // `-` — the grammar refuses it in every position, so in every mode. No
+    // conformance rule is reached and none is needed.
+    for input in [
+        "NM_TEST.1:c.10delins-",
+        "NM_TEST.1:c.10delins-ACGT",
+        "NM_TEST.1:c.10delinsACGT-",
+        "NM_TEST.1:c.10delinsAC-GT",
+        "NM_TEST.1:c.10_11ins-",
+    ] {
+        assert!(
+            parse_hgvs(input).is_err(),
+            "{input}: `-` is footnoted identically to `X` at standards.md:39"
+        );
+        for config in [
+            ErrorConfig::strict(),
+            ErrorConfig::lenient(),
+            ErrorConfig::silent(),
+        ] {
+            assert!(
+                parse_hgvs_with_config(input, config).is_err(),
+                "{input}: `-` must be refused in every mode"
+            );
+        }
+    }
 
-    // `X` — accepted everywhere.
+    // `X` — refused everywhere too, now, but at the stage the ruling names.
+    // The list carries the EMBEDDED shapes as well as the lone symbol: one
+    // stray `X` reclassifies an otherwise-literal run wholesale, so a guard
+    // covering only `delinsX` would reproduce the undercount the census had.
     for (frame, input, allele) in [
         (
             &coding,
@@ -669,36 +698,146 @@ fn an_alignment_only_symbol_is_refused_for_dash_and_accepted_for_x() {
             "NM_TEST.1:c.[10delinsX;9del]",
         ),
         (
+            &coding,
+            "NM_TEST.1:c.10delinsACGTX",
+            "NM_TEST.1:c.[10delinsACGTX;9del]",
+        ),
+        (
+            &coding,
+            "NM_TEST.1:c.10delinsXACGT",
+            "NM_TEST.1:c.[10delinsXACGT;9del]",
+        ),
+        (
+            &coding,
+            "NM_TEST.1:c.10delinsACXGT",
+            "NM_TEST.1:c.[10delinsACXGT;9del]",
+        ),
+        (
             &genomic,
             "NC_TEST.1:g.266delinsX",
             "NC_TEST.1:g.[266delinsX;265del]",
+        ),
+        (
+            &genomic,
+            "NC_TEST.1:g.266delinsACGTX",
+            "NC_TEST.1:g.[266delinsACGTX;265del]",
         ),
         (
             &multi,
             "NM_TEST.1:c.10delinsX",
             "NM_TEST.1:c.[10delinsX;9del]",
         ),
+        (
+            &multi,
+            "NM_TEST.1:c.10delinsACGTX",
+            "NM_TEST.1:c.[10delinsACGTX;9del]",
+        ),
     ] {
+        // STRICT — refused at PARSE. Strict validates input conformance, not
+        // merely parseability, so the refusal is reached before the AST is
+        // handed to any consumer.
+        for probe in [input, allele] {
+            let err = parse_hgvs_with_config(probe, ErrorConfig::strict())
+                .expect_err("strict refuses an alignment-only symbol at parse")
+                .to_string();
+            assert!(
+                err.contains("W3028"),
+                "{probe}: strict must refuse with W3028; got: {err}"
+            );
+        }
+
+        // LENIENT and SILENT — accepted at parse, because neither validates
+        // input conformance, and both then fail at NORMALIZE. That is the
+        // ruling's own ground for lenient: it fails only when it cannot
+        // normalize, and a masked base names no nucleotide to normalize.
+        for config in [ErrorConfig::lenient(), ErrorConfig::silent()] {
+            for probe in [input, allele] {
+                assert!(
+                    parse_hgvs_with_config(probe, config.clone()).is_ok(),
+                    "{probe}: lenient/silent do not validate input conformance"
+                );
+            }
+        }
+
+        // The parse-stage difference between lenient and silent is the message,
+        // not the verdict: lenient carries W3028, silent is quiet.
+        let lenient_parse = parse_hgvs_with_config(input, ErrorConfig::lenient())
+            .expect("lenient accepts at parse");
+        assert!(
+            lenient_parse
+                .warnings
+                .iter()
+                .any(|w| w.error_type.code() == "W3028"),
+            "{input}: lenient must say why it will fail later"
+        );
+        let silent_parse =
+            parse_hgvs_with_config(input, ErrorConfig::silent()).expect("silent accepts at parse");
+        assert!(
+            !silent_parse
+                .warnings
+                .iter()
+                .any(|w| w.error_type.code() == "W3028"),
+            "{input}: silent is lenient without messages"
+        );
+
         for direction in DIRECTIONS {
-            assert_eq!(
-                lenient(frame, input, direction).as_deref(),
-                Ok(input),
-                "PINNED DEFECT — standards.md:39 footnotes `X` as `used in alignment only`, \
-                 and general.md:48 admits only IUPAC-IUBMB symbols. Correct behaviour: refuse, \
-                 as `-` already is."
+            for probe in [input, allele] {
+                // All three modes refuse at normalize. Output conformance is
+                // rule 1 of the README ruleset and has no mode escape, so this
+                // rung is deliberately NOT mode-gated.
+                for (label, outcome) in [
+                    ("strict", strict(frame, probe, direction)),
+                    ("lenient", lenient(frame, probe, direction)),
+                    ("silent", silent(frame, probe, direction)),
+                ] {
+                    let err = outcome.expect_err(&format!(
+                        "{probe}: {label} must refuse to normalize an alignment-only symbol"
+                    ));
+                    assert!(
+                        err.contains("W3028"),
+                        "{probe}: {label} refusal must name W3028; got: {err}"
+                    );
+                }
+            }
+        }
+    }
+
+    // The constraint on the narrowing: the named-element arm exists for these,
+    // none carries a daggered symbol, and all three modes must leave them
+    // exactly as they were.
+    for input in [
+        "NC_TEST.1:g.266delinsAluYb8",
+        "NC_TEST.1:g.266delinsLINE1",
+        "NC_TEST.1:g.266delinsL1",
+        "NC_TEST.1:g.266delinsAlu",
+    ] {
+        for config in [
+            ErrorConfig::strict(),
+            ErrorConfig::lenient(),
+            ErrorConfig::silent(),
+        ] {
+            assert!(
+                parse_hgvs_with_config(input, config).is_ok(),
+                "{input} is a legitimate mobile-element name"
             );
-            assert_eq!(
-                strict(frame, input, direction).as_deref(),
-                Ok(input),
-                "PINNED DEFECT — strict mode does not catch it either"
-            );
-            // The output-side half: `X` survives into the emitted description.
-            let out = lenient(frame, allele, direction).expect("the allele form is accepted");
-            assert_eq!(
-                violated_prohibition(&out),
-                Some("standards.md:39"),
-                "the re-emitted allele must still carry `X`"
-            );
+        }
+        // Across all three modes, like the positive block above. Checking only
+        // lenient here would leave the negative control weaker than the thing
+        // it is controlling for: the normalize-stage refusal is deliberately
+        // NOT mode-gated, so a predicate that over-matched would redden strict
+        // and silent while this assertion stayed green.
+        for direction in DIRECTIONS {
+            for (label, outcome) in [
+                ("strict", strict(&genomic, input, direction)),
+                ("lenient", lenient(&genomic, input, direction)),
+                ("silent", silent(&genomic, input, direction)),
+            ] {
+                assert_eq!(
+                    outcome.as_deref(),
+                    Ok(input),
+                    "{input} must still round-trip in {label} mode"
+                );
+            }
         }
     }
 
@@ -783,11 +922,11 @@ fn a_bare_transcript_intronic_position_is_refused_in_strict_only() {
 // The decomposition, measured over the corpus
 // ---------------------------------------------------------------------------
 
-/// **Question.** The census pins 32 absolute and 40 conditional acceptances.
+/// **Question.** The census pins 32 absolute and 16 conditional acceptances.
 /// *Which clauses*, and does either figure change under strict mode?
 ///
 /// **Three clauses hold the whole absolute figure, and strict mode does not move
-/// it at all.** The conditional figure halves under strict, because
+/// it at all.** The conditional figure drops to zero under strict, because
 /// `checklist.md:20` is enforced there.
 ///
 /// This is the test that turns two totals into an adjudication: a fix that
@@ -795,6 +934,15 @@ fn a_bare_transcript_intronic_position_is_refused_in_strict_only() {
 /// the remaining 8. Nothing else contributes, so nothing else needs a ruling —
 /// and if a new clause ever appears in this map, the corpus has grown a shape
 /// nobody has adjudicated.
+///
+/// **The conditional figure was 40 and is now 16 (#1627).**
+/// `standards.md:39`'s 24 rows have left BOTH maps: strict refuses them at
+/// parse, lenient and silent at normalize. That is the shape of a
+/// mode-dependent enforcement stage as seen from here — a clause that is gone
+/// from the strict map but present in the lenient one is refused *only* by
+/// strict input hygiene (`checklist.md:20`); a clause gone from both is refused
+/// in every mode, either by the grammar or, as here, because normalization
+/// cannot proceed.
 ///
 /// Measured over the 164 `RowKind::Prohibited` rows only, so it costs ~0.3 s
 /// rather than the full census's 37 s.
@@ -843,12 +991,12 @@ fn the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others() {
                     24
                 ),
                 (("checklist.md:45-range-is-underscore", "absolute"), 4),
-                (
-                    ("standards.md:39-alignment-only-symbols", "conditional"),
-                    24
-                ),
+                // `standards.md:39`'s 24 rows used to sit here and no longer do
+                // (#1627): every mode now refuses them. Strict at parse, lenient
+                // and silent at normalize. See
+                // `an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash`.
             ]),
-            "the per-clause decomposition of the census's 32 absolute + 40 conditional \
+            "the per-clause decomposition of the census's 32 absolute + 16 conditional \
              acceptances moved ({direction:?}). Every entry is adjudicated in this file; a NEW \
              clause here is a shape nobody has ruled on."
         );
@@ -887,14 +1035,15 @@ fn the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others() {
                     24
                 ),
                 (("checklist.md:45-range-is-underscore", "absolute"), 4),
-                (
-                    ("standards.md:39-alignment-only-symbols", "conditional"),
-                    24
-                ),
+                // `standards.md:39` used to survive strict mode too, and no
+                // longer does (#1627): strict refuses it at PARSE, which is
+                // where the enforcement-stage ruling puts an input-conformance
+                // check. It is now absent from BOTH maps rather than only this
+                // one, because lenient and silent refuse it at normalize.
             ]),
-            "strict mode must refuse checklist.md:20 and only checklist.md:20 ({direction:?}). \
-             The 32 ABSOLUTE acceptances survive strict mode, which is why they are the residue \
-             a fix has to reach."
+            "strict mode must refuse checklist.md:20 and standards.md:39 and nothing else \
+             ({direction:?}). The 32 ABSOLUTE acceptances survive strict mode, which is why \
+             they are the residue a fix has to reach."
         );
     }
 }
@@ -951,7 +1100,10 @@ fn every_prohibition_violating_output_is_a_re_emitted_prohibited_input() {
         }
         assert_eq!(
             by_clause,
-            BTreeMap::from([("checklist.md:16", 8), ("standards.md:39", 24)]),
+            // `standards.md:39`'s 24 dropped out in #1627 — those rows no longer
+            // produce an output at all, in any mode, so there is nothing left to
+            // violate. `checklist.md:16`'s 8 are #1628's.
+            BTreeMap::from([("checklist.md:16", 8)]),
             "the clause decomposition of the violating outputs moved ({direction:?})"
         );
         assert_eq!(

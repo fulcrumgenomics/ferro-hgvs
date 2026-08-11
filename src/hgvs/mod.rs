@@ -3,6 +3,7 @@
 //! This module contains the complete type system for representing HGVS variants
 //! and a nom-based parser for parsing HGVS strings.
 
+pub mod alignment_symbols;
 pub mod edit;
 pub mod interval;
 pub mod location;

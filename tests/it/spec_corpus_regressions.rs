@@ -294,30 +294,47 @@ fn a_prohibited_member_inside_an_allele_is_also_accepted() {
 
 /// **Question.** Is `X` a nucleotide?
 ///
-/// **No.** `background/standards.md` lists it in the DNA symbol table and then
-/// footnotes it at `:39` — "† used in alignment only" — alongside `-`. So neither
-/// is a base a description may state. Ferro rejects `-` (the parser stops at it)
-/// and accepts `X`.
+/// **No, and ferro now refuses it (#1627).** `background/standards.md` lists it
+/// in the DNA symbol table and then footnotes it at `:39` — "† used in alignment
+/// only" — alongside `-`. Neither is a base a description may state, which is
+/// the decided `rulings[alignment-only-symbol-in-a-description]`; `X` is not one
+/// of the 15 symbols `general.md:48` admits.
 ///
-/// Classified `conditional` rather than `absolute` in the corpus, because the
-/// footnote states a scope rather than using prohibitive words. It is pinned as a
-/// finding to adjudicate, not asserted as a regression.
+/// **This was a PINNED FINDING and is now an adjudicated-correct guard.** The
+/// corpus grades the row `conditional` rather than `absolute` because the
+/// footnote states a scope rather than using prohibitive words, and the ruling
+/// records that the grading is moot either way — the alphabet half of rank-1
+/// validity settles it on its own.
+///
+/// The full three-mode, two-stage guard (including the embedded shapes this
+/// corpus does not generate) lives in `corpus_prohibited_inputs::`
+/// `an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash`.
+/// What is asserted here is the corpus row itself, in the file that owns the
+/// corpus's named regressions.
 #[test]
-fn an_alignment_only_x_base_is_accepted_as_a_nucleotide() {
+fn an_alignment_only_x_base_is_refused_rather_than_re_emitted() {
     let core = at_core();
     let coding = Frame::build(RefShape::CodingSingleExon, &core);
-    assert_eq!(
-        normalize_3prime(&coding, "NM_TEST.1:c.10delinsX"),
-        "NM_TEST.1:c.10delinsX",
-        "PINNED FINDING — standards.md:39 footnotes `X` as 'used in alignment only'. Whether \
-         that is a refusal is an adjudication; what is not in doubt is that `X` is not one of \
-         the 15 symbols a description may state."
+    let variant = parse_hgvs("NM_TEST.1:c.10delinsX").expect("lenient parse accepts it");
+    let err = Normalizer::with_config(
+        coding.provider().clone(),
+        NormalizeConfig::default().with_direction(ShuffleDirection::ThreePrime),
+    )
+    .normalize(&variant)
+    .expect_err("standards.md:39 — normalization cannot resolve a masked base")
+    .to_string();
+    assert!(
+        err.contains("W3028"),
+        "the refusal must name the alignment-only-symbol finding; got: {err}"
     );
-    // The sibling symbol IS rejected, which is what makes the pair worth pinning
-    // together: the two are footnoted identically and treated differently.
+
+    // The sibling symbol is refused by the GRAMMAR rather than by that rule, and
+    // the pair is still worth pinning together: they are footnoted identically
+    // and reach the refusal by different routes, so `-` is not the template the
+    // `X` fix copied.
     assert!(
         parse_hgvs("NM_TEST.1:c.10delins-").is_err(),
-        "`-` is rejected while `X` is accepted, though standards.md:39 footnotes both"
+        "`-` is refused by the grammar, though standards.md:39 footnotes both"
     );
 }
 

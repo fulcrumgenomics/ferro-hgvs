@@ -1352,6 +1352,45 @@ fn build_registry() -> HashMap<&'static str, CodeInfo> {
         },
     );
 
+    map.insert(
+        "W3028",
+        CodeInfo {
+            code: "W3028",
+            name: "AlignmentOnlySymbolInDescription",
+            summary: "Description states an alignment-only symbol (`X` or `-`).",
+            explanation: "background/standards.md's DNA symbol table daggers two of its rows \
+                — `X` (\"masked nucleotide\", :36) and `-` (\"gap of indeterminate length\", \
+                :37) — and footnotes the dagger at :39: \"used in alignment only\". The \
+                dagger is printed inside the symbol cell, so :39 annotates those rows \
+                rather than competing with them, and general.md:48 independently admits \
+                only \"nucleotides in CAPITALS using [IUPAC-IUBMB assigned nucleotide \
+                symbols]\", of which neither is one. A description stating one therefore \
+                denotes no sequence: `g.10delinsX` says the inserted base is masked, \
+                which is a statement about an alignment column and not about a variant. \
+                Strict rejects at parse; lenient and silent accept at parse (lenient \
+                warns) and then fail at normalize, because a masked base cannot be \
+                resolved. There is no auto-correction — ferro cannot invent the base the \
+                alignment masked. Note the symbol need not be alone: one stray `X` \
+                reclassifies an otherwise-literal run wholesale, so `delinsACGTX`, \
+                `delinsXACGT` and `delinsACXGT` are all this code. Genuine mobile-element \
+                names (`AluYb8`, `LINE1`) contain no daggered symbol and are not flagged.",
+            category: CodeCategory::Format,
+            bad_examples: &[
+                "NC_000001.11:g.10delinsX",
+                "NC_000001.11:g.10delinsACGTX",
+                "NC_000001.11:g.10_11insXACGT",
+            ],
+            good_examples: &[
+                "NC_000001.11:g.10delinsA",
+                "NC_000001.11:g.10delinsACGT",
+                "NC_000001.11:g.10delinsN",
+            ],
+            mode_behavior: Some(ModeBehavior::warn_accept()),
+            hgvs_spec_url: Some("https://hgvs-nomenclature.org/stable/background/standards/"),
+            related_codes: &["W3027", "W3012"],
+        },
+    );
+
     // --- Position/Range Warnings (W4xxx) ---
 
     map.insert(

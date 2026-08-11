@@ -4173,6 +4173,13 @@ pub enum PyErrorType {
     // insertion with no inserted sequence); rejected in every mode, since the
     // missing bases are not recoverable from the description (#1162).
     InsertionWithoutInsertedSequence = 45,
+    // 47 is W3028 AlignmentOnlySymbolInDescription — the description states one
+    // of `background/standards.md`'s daggered "used in alignment only" symbols
+    // (`X` masked nucleotide, `-` gap of indeterminate length). Strict rejects
+    // at parse; lenient warns and silent is quiet, and both then fail at
+    // normalize since a masked base cannot be resolved (#1627). Numbered after
+    // 46 so the existing discriminants are unchanged.
+    AlignmentOnlySymbolInDescription = 47,
     // 46 is W5005 MembersCoalescedFromReportedForm — normalization returned
     // fewer cis members than the input described. Purely informational: the
     // normalized string is identical whether or not it is emitted. It carries
@@ -4232,6 +4239,7 @@ native_enum_pymethods! {
         44 => IncompleteCdsStartReference,
         45 => InsertionWithoutInsertedSequence,
         46 => MembersCoalescedFromReportedForm,
+        47 => AlignmentOnlySymbolInDescription,
     },
 }
 
@@ -4289,6 +4297,9 @@ impl From<ErrorType> for PyErrorType {
             }
             ErrorType::InsertionWithoutInsertedSequence => {
                 PyErrorType::InsertionWithoutInsertedSequence
+            }
+            ErrorType::AlignmentOnlySymbolInDescription => {
+                PyErrorType::AlignmentOnlySymbolInDescription
             }
         }
     }
@@ -4348,6 +4359,9 @@ impl From<PyErrorType> for ErrorType {
             }
             PyErrorType::InsertionWithoutInsertedSequence => {
                 ErrorType::InsertionWithoutInsertedSequence
+            }
+            PyErrorType::AlignmentOnlySymbolInDescription => {
+                ErrorType::AlignmentOnlySymbolInDescription
             }
         }
     }

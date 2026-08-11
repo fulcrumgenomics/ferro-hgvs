@@ -131,78 +131,128 @@ fn normalize_5prime(frame: &Frame, input: &str) -> String {
     normalize(frame, input, ShuffleDirection::FivePrime)
 }
 
+/// The message normalization refuses `input` with, for a shape that must be
+/// refused rather than emitted.
+///
+/// **Panics if `input` is accepted**, naming the string that was emitted. A
+/// helper that returned the output on success would let a regression back to
+/// acceptance fail as a bare `contains(..)` mismatch, which reads as a changed
+/// message rather than as a lost refusal.
+fn refusal(frame: &Frame, input: &str, direction: ShuffleDirection) -> String {
+    let variant = parse_hgvs(input).unwrap_or_else(|e| panic!("{input} must parse: {e}"));
+    match Normalizer::with_config(
+        frame.provider().clone(),
+        NormalizeConfig::default().with_direction(direction),
+    )
+    .normalize(&variant)
+    {
+        Ok(output) => panic!("{input} must be REFUSED, but normalized to {output}"),
+        Err(e) => e.to_string(),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // #51 — `X` inside an allele member
 // ---------------------------------------------------------------------------
 
-/// **Question.** Does the alignment-only `X` finding
-/// (`an_alignment_only_x_base_is_accepted_as_a_nucleotide` in
-/// `spec_corpus_regressions.rs`) hold when `X` sits in one member of a
-/// multi-member allele, after the 3' rule has reordered the members?
+/// **Question.** Does the alignment-only `X` finding hold when `X` sits in one
+/// member of a multi-member allele, after the 3' rule has reordered the members?
 ///
-/// **Yes.** `NM_TEST.1:c.[10delinsX;9del]` normalizes (3') to
-/// `NM_TEST.1:c.[9del;10delinsX]` — the members are reordered by position (the
-/// 3' rule doing its job, not the defect), and `X` survives inside the moved
-/// member exactly as it did standalone. `standards.md:19-37` lists the DNA
-/// symbol table; `standards.md:39` footnotes `X` (row 36) "used in alignment
-/// only" — so it is not a base a description may state, in an allele member
-/// or otherwise.
+/// **It used to. It is now refused, in every mode (#1627).** These two tests
+/// were PINNED FINDINGS recording that `NM_TEST.1:c.[10delinsX;9del]`
+/// normalized to `NM_TEST.1:c.[9del;10delinsX]` — the members reordered by
+/// position (the 3' rule doing its job, not the defect) with `X` surviving
+/// inside the moved member. `standards.md:39` footnotes `X` (row 36) "used in
+/// alignment only", so it is not a base a description may state, in an allele
+/// member or otherwise; the decided
+/// `rulings[alignment-only-symbol-in-a-description]` settles that, and
+/// `rulings[absolute-prohibition-enforcement-stage]` puts the refusal at strict
+/// parse and at lenient/silent normalize.
+///
+/// **The allele form is still pinned separately, for the reason it always was:**
+/// a hygiene check that runs once per description rather than once per member
+/// has its own signature, and a fix that reached the standalone form only would
+/// pass the sibling test in `spec_corpus_regressions.rs` while failing here.
+/// The direction is kept as a parameter because validity cannot depend on which
+/// way an ambiguous edit is shifted — and because the 5' row used to have its
+/// own recorded output (`[1del;10delinsX]`, the `del` member sliding left on
+/// this repetitive `AT` core), so the two directions genuinely differed in
+/// what they emitted while agreeing that they emitted something.
 #[test]
-fn an_allele_member_x_survives_a_3prime_reorder() {
+fn an_allele_member_x_is_refused_after_a_3prime_reorder() {
     let core = at_core();
     let coding = Frame::build(RefShape::CodingSingleExon, &core);
-    assert_eq!(
-        normalize_3prime(&coding, "NM_TEST.1:c.[10delinsX;9del]"),
-        "NM_TEST.1:c.[9del;10delinsX]",
-        "PINNED FINDING — standards.md:39 footnotes `X` as 'used in alignment only'; ferro \
-         accepts it as sequence content on the DNA axis (root cause: the mobile-element-name \
-         parser fallback, not nucleotide-alphabet inclusion — see module doc comment), and the \
-         allele form is no different from the standalone form."
+    assert!(
+        refusal(
+            &coding,
+            "NM_TEST.1:c.[10delinsX;9del]",
+            ShuffleDirection::ThreePrime
+        )
+        .contains("W3028"),
+        "standards.md:39 — the allele form must be refused like the standalone one"
     );
 }
 
-/// **Question.** Does the same allele survive `X` in the 5' direction too?
-///
-/// **Yes**, though the `del` member additionally slides left on this
-/// repetitive `AT`-alphabet core (5' shifting is free to walk a plain
-/// deletion across identical bases, which is unrelated to the defect): the
-/// output is `NM_TEST.1:c.[1del;10delinsX]` rather than the 3' direction's
-/// `[9del;10delinsX]`. What matters for this test is the part the 5' shift
-/// cannot touch — `X` still survives, unchanged, in the `delinsX` member.
+/// The 5' half of the pair directly above. See its doc comment.
 #[test]
-fn an_allele_member_x_survives_a_5prime_reorder() {
+fn an_allele_member_x_is_refused_after_a_5prime_reorder() {
     let core = at_core();
     let coding = Frame::build(RefShape::CodingSingleExon, &core);
-    assert_eq!(
-        normalize_5prime(&coding, "NM_TEST.1:c.[10delinsX;9del]"),
-        "NM_TEST.1:c.[1del;10delinsX]",
-        "PINNED FINDING (measured) — same defect, 5' direction; the corpus counts this class in \
-         both directions (24 outputs total). The `del` member also slides to `1del` on this \
-         repetitive core (an unrelated 5'-shift effect), but `X` survives in `delinsX` either way."
+    assert!(
+        refusal(
+            &coding,
+            "NM_TEST.1:c.[10delinsX;9del]",
+            ShuffleDirection::FivePrime
+        )
+        .contains("W3028"),
+        "standards.md:39 — validity does not depend on the shuffle direction"
     );
 }
 
 /// **Question.** Is `X`'s acceptance an `X`-specific carve-out, or does *any*
 /// lone uppercase letter hit the same code path?
 ///
-/// **Any lone uppercase letter.** `parse_inserted_sequence`'s named/mobile-
-/// element fallback arm (`edit.rs:450-468`) matches any bare uppercase letter
-/// with nothing alphanumeric following — it has no knowledge of `X`
-/// specifically. `Z` is not in the IUPAC table either (`standards.md:19-37`
-/// lists none of `E,F,I,J,L,O,P,Q,U,X,Z`), and it survives identically. This
-/// matters for whoever fixes #51: the fix cannot be "special-case reject the
-/// letter X", because the same fallback would still accept every other
-/// non-IUPAC uppercase letter as a fake "named element" of length one.
+/// **Any lone uppercase letter reaches the code path**, and this test still
+/// passes unchanged after #1627 — which is the point of keeping it.
+/// `parse_inserted_sequence`'s named/mobile-element fallback arm matches any
+/// bare uppercase letter with nothing alphanumeric following; it has no
+/// knowledge of `X`. `Z` is not in the IUPAC table either
+/// (`standards.md:19-37` lists none of `E,F,I,J,L,O,P,Q,U,X,Z`).
+///
+/// **CORRECTED, 2026-08-11.** This doc used to tell a future fixer that "the
+/// fix cannot be 'special-case reject the letter X'". The decided
+/// `rulings[alignment-only-symbol-in-a-description]` says the opposite: it is
+/// scoped to `standards.md:39`'s **two daggered rows**, `X` and `-`, and #1627
+/// implements exactly that. `Z` is a different question and **nobody has ruled
+/// on it** — refusing it would mean refusing every `InsertedSequence::Named`
+/// that is not a recognised mobile element, which reaches `AluYb8` and `LINE1`
+/// and is the un-adjudicated territory `DNA/complex.md:169` gestures at ("No,
+/// not really, it is not exact", about `insL1.603bp`). So this test is now an
+/// **adjudicated-scope guard**: it fails if a later change widens the `X` rule
+/// into an alphabet rule without a ruling to stand on.
+///
+/// **If you are here because this test went red, do not re-bless it.** Going
+/// red means the refusal has widened past `standards.md:39`'s two daggered
+/// rows, and the prerequisite is a **new `decided` record in
+/// `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`** — not a
+/// judgement call in a PR. The cost the record has to price is concrete and is
+/// the reason this is not a free tightening: the only predicate that catches
+/// `Z` is "the insert is an `InsertedSequence::Named` that is not a recognised
+/// mobile element", and ferro has no such recogniser, so the same widening
+/// **refuses `AluYb8`, `LINE1`, `L1` and `Alu`** — the shapes the named-element
+/// arm exists to serve, and which
+/// `genuine_mobile_element_names_state_no_alignment_symbol` pins as untouched.
 #[test]
-fn any_lone_uppercase_non_iupac_letter_survives_the_same_way_as_x() {
+fn a_lone_non_daggered_uppercase_letter_is_still_accepted() {
     let core = at_core();
     let coding = Frame::build(RefShape::CodingSingleExon, &core);
     assert_eq!(
         normalize_3prime(&coding, "NM_TEST.1:c.[10delinsZ;9del]"),
         "NM_TEST.1:c.[9del;10delinsZ]",
-        "PINNED FINDING — `Z` is not an IUPAC DNA symbol either (standards.md:19-37) and hits \
-         the identical named-mobile-element fallback arm as `X`; the defect is 'any lone \
-         uppercase letter is accepted as sequence content', not 'X is special-cased'."
+        "SCOPE GUARD — `Z` is not an IUPAC DNA symbol (standards.md:19-37) but it is not one \
+         of :39's two DAGGERED symbols either, and no ruling covers it. If this fails, the \
+         #1627 refusal has widened from `standards.md:39` into a general alphabet rule; that \
+         needs an adjudication first, because the same widening reaches `AluYb8` and `LINE1`."
     );
 }
 
@@ -224,53 +274,44 @@ fn the_alignment_only_gap_symbol_is_still_rejected_inside_an_allele() {
     );
 }
 
-/// **Question.** Does `X`'s acceptance-as-sequence-content differ by axis —
-/// genomic (`g.`), coding (`c.`), non-coding (`n.`), or RNA (`r.`)?
+/// **Question.** Does `X`'s treatment differ by axis — genomic (`g.`), coding
+/// (`c.`), non-coding (`n.`), or RNA (`r.`)?
 ///
-/// **No — identical on every DNA/RNA axis.** `parse_na_edit` (c./n./r.) and
-/// `parse_genome_na_edit` (g./m./o.) both dispatch to the single shared
-/// `parse_na_edit_inner` (`edit.rs:1716-1761`); there is no axis-specific
-/// nucleotide alphabet. Each case below is an allele with the reorder the 3'
-/// rule performs, so this also confirms axis-parity holds at the allele level.
+/// **No — identical on every DNA/RNA axis, before and after #1627.**
+/// `parse_na_edit` (c./n./r.) and `parse_genome_na_edit` (g./m./o.) both
+/// dispatch to the single shared `parse_na_edit_inner`, so there is no
+/// axis-specific nucleotide alphabet; the refusal is applied on the AST and is
+/// likewise axis-independent. The parity claim is what this test is for, and it
+/// is worth just as much now that the parity is "all four refuse" as it was
+/// when it was "all four accept" — an axis that quietly kept accepting would be
+/// a partial fix that no single-axis test could see.
 #[test]
-fn dna_and_rna_axes_accept_x_identically_inside_an_allele() {
+fn dna_and_rna_axes_refuse_x_identically_inside_an_allele() {
     let core = at_core();
 
     let genomic = Frame::build(RefShape::Genomic, &core);
     let coding = Frame::build(RefShape::CodingSingleExon, &core);
     let noncoding = Frame::build(RefShape::NonCodingMultiExon(Strand::Plus), &core);
 
-    // g. — genomic axis.
-    assert!(
-        normalize_3prime(&genomic, "NC_TEST.1:g.[266delinsX;264del]").contains('X'),
-        "genomic axis must retain X exactly as the coding axis does"
-    );
+    for (frame, input, axis) in [
+        (&genomic, "NC_TEST.1:g.[266delinsX;264del]", "g."),
+        (&coding, "NM_TEST.1:c.[10delinsX;9del]", "c."),
+        (&noncoding, "NR_TEST.1:n.[10delinsX;9del]", "n."),
+        (&coding, "NM_TEST.1:r.[10delinsX;9del]", "r."),
+    ] {
+        assert!(
+            refusal(frame, input, ShuffleDirection::ThreePrime).contains("W3028"),
+            "the {axis} axis must refuse X exactly as the others do"
+        );
+    }
 
-    // c. — coding axis (the exemplar axis, re-asserted here for the loop's sake).
-    assert!(
-        normalize_3prime(&coding, "NM_TEST.1:c.[10delinsX;9del]").contains('X'),
-        "coding axis must retain X"
-    );
-
-    // n. — non-coding axis.
-    let noncoding_output = normalize_3prime(&noncoding, "NR_TEST.1:n.[10delinsX;9del]");
-    assert!(
-        noncoding_output.contains('X'),
-        "non-coding axis must retain X, got {noncoding_output}"
-    );
-
-    // r. — RNA axis, same NM_ accession as coding but the `r.` prefix.
+    // Lowercase `x` is refused on every axis too, but by the GRAMMAR and for an
+    // unrelated reason — the fallback arm requires an ASCII-uppercase first
+    // byte. Pinned so the two routes are not conflated: `standards.md:39`'s
+    // table is uppercase, and #1627 deliberately does not rule on lowercase.
     assert!(
         parse_hgvs("NM_TEST.1:r.[10delinsx;9del]").is_err(),
-        "lowercase `x` (the RNA-case-convention spelling) is rejected on every axis — the \
-         mobile-element fallback arm requires an ASCII-uppercase letter"
-    );
-    let rna_variant = parse_hgvs("NM_TEST.1:r.[10delinsX;9del]")
-        .unwrap_or_else(|e| panic!("uppercase X must parse on the r. axis too: {e}"));
-    assert!(
-        rna_variant.to_string().contains('X'),
-        "uppercase X survives on the r. axis exactly as on g./c./n., because the parser has no \
-         axis-specific nucleotide alphabet at all"
+        "lowercase `x` (the RNA-case-convention spelling) is refused by the grammar"
     );
 }
 

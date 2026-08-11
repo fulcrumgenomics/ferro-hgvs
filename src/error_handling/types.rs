@@ -541,6 +541,40 @@ pub enum ErrorType {
     /// error; this code (#1162) gives that rejection a named diagnosis in
     /// place of the generic nom fall-through.
     InsertionWithoutInsertedSequence,
+
+    /// A description states one of `background/standards.md`'s two **daggered**
+    /// DNA symbols — `X` ("masked nucleotide", `:36`) or `-` ("gap of
+    /// indeterminate length", `:37`) — which `:39` footnotes as "used in
+    /// alignment only".
+    ///
+    /// Neither is one of the fifteen IUPAC-IUBMB nucleotide symbols
+    /// `general.md:48` admits, so a description stating one denotes no
+    /// sequence: `g.10delinsX` says the inserted base is masked, which is a
+    /// statement about an alignment column and not about a variant. The decided
+    /// `rulings[alignment-only-symbol-in-a-description]` rules that ferro must
+    /// refuse both.
+    ///
+    /// Enforcement follows the decided
+    /// `rulings[absolute-prohibition-enforcement-stage]`: **strict rejects at
+    /// parse** (strict validates input conformance, not merely parseability);
+    /// lenient and silent accept at parse — lenient with this warning, silent
+    /// without — and then **fail at normalize**, because a masked base cannot
+    /// be resolved to a sequence. There is no auto-correction: ferro cannot
+    /// invent the base the alignment masked.
+    ///
+    /// The check is AST-keyed, on the inserted sequence, never a scan of the
+    /// rendered description — an `XM_`/`XR_`/`XP_` accession carries an `X`
+    /// that has nothing to do with the symbol table. See #1627.
+    ///
+    /// **An override on this code moves the PARSE stage only.** `--ignore
+    /// W3028` (or `--reject` it on a lenient config) is consulted by
+    /// `apply_alignment_only_symbol_rule`, so it decides whether parse refuses
+    /// or merely warns; `Normalizer::normalize_core_checked` refuses
+    /// **unconditionally** and consults no config at all. So ignoring the code
+    /// suppresses the diagnostic without making the description normalizable —
+    /// which is the intended asymmetry, not a gap: rule 1 of the README ruleset
+    /// is about *output* conformance, and no per-code override may trade it.
+    AlignmentOnlySymbolInDescription,
 }
 
 impl ErrorType {
@@ -592,6 +626,7 @@ impl ErrorType {
             ErrorType::IntronicOnBareTranscript => "W4007",
             ErrorType::IncompleteCdsStartReference => "W5004",
             ErrorType::InsertionWithoutInsertedSequence => "W3027",
+            ErrorType::AlignmentOnlySymbolInDescription => "W3028",
             ErrorType::MembersCoalescedFromReportedForm => "W5005",
         }
     }
@@ -640,6 +675,7 @@ impl ErrorType {
         ErrorType::DelExplicitSeq,
         ErrorType::NonConformantBracketCardinality,
         ErrorType::InsertionWithoutInsertedSequence,
+        ErrorType::AlignmentOnlySymbolInDescription,
         ErrorType::SwappedPositions,
         ErrorType::SinglePositionRange,
         ErrorType::PositionPastEnd,
@@ -753,6 +789,10 @@ impl ErrorType {
             ErrorType::InsertionWithoutInsertedSequence => {
                 "insertion with no inserted sequence (a bare `ins`)"
             }
+            ErrorType::AlignmentOnlySymbolInDescription => {
+                "description states an alignment-only symbol (`X` or `-`), which is not an \
+                 IUPAC-IUBMB nucleotide"
+            }
             ErrorType::MembersCoalescedFromReportedForm => {
                 "separately-reported variants were coalesced into fewer members"
             }
@@ -856,6 +896,10 @@ impl ErrorType {
             // The inserted bases are simply absent; ferro cannot invent them,
             // and an insertion of nothing is not a variant. All modes reject.
             ErrorType::InsertionWithoutInsertedSequence => false,
+            // `X` masks a base the alignment did not resolve and `-` a gap of
+            // indeterminate length; neither names bases ferro could substitute,
+            // so there is nothing to correct to.
+            ErrorType::AlignmentOnlySymbolInDescription => false,
             // Nothing to correct: the coalesced form is the canonical one. This
             // records provenance the string deliberately does not carry.
             ErrorType::MembersCoalescedFromReportedForm => false,
@@ -949,6 +993,7 @@ impl ErrorType {
             | ErrorType::IntronicOnBareTranscript
             | ErrorType::IncompleteCdsStartReference
             | ErrorType::InsertionWithoutInsertedSequence
+            | ErrorType::AlignmentOnlySymbolInDescription
             | ErrorType::MembersCoalescedFromReportedForm => true,
         }
     }
@@ -1048,6 +1093,10 @@ impl ErrorType {
             ErrorType::InsertionWithoutInsertedSequence => (
                 "c.100_101ins",
                 "c.100_101insA (or a range: c.849_850ins858_895)",
+            ),
+            ErrorType::AlignmentOnlySymbolInDescription => (
+                "NC_000001.11:g.10delinsACGTX (X is alignment-only, standards.md:39)",
+                "(no auto-correct; state the resolved bases)",
             ),
         }
     }
@@ -1508,6 +1557,7 @@ mod tests {
             ErrorType::IntronicOnBareTranscript,
             ErrorType::IncompleteCdsStartReference,
             ErrorType::InsertionWithoutInsertedSequence,
+            ErrorType::AlignmentOnlySymbolInDescription,
             ErrorType::MembersCoalescedFromReportedForm,
         ];
         // Exhaustiveness probe: if a new variant is added to the enum,
@@ -1561,6 +1611,7 @@ mod tests {
                 | ErrorType::IntronicOnBareTranscript
                 | ErrorType::IncompleteCdsStartReference
                 | ErrorType::InsertionWithoutInsertedSequence
+                | ErrorType::AlignmentOnlySymbolInDescription
                 | ErrorType::MembersCoalescedFromReportedForm => {}
             }
             assert!(
