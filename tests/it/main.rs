@@ -474,6 +474,7 @@ mod uta_loader_tests;
 mod variantvalidator_tests;
 mod web_service_tests;
 mod weight_bound_worked_examples;
+mod workflow_gh_repo_context;
 
 mod reported_confluence_pairs;
 mod ring_segment_wellformedness;

@@ -71,6 +71,17 @@ jobs:
       - name: Open or update the tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
+          # `gh issue list|comment|create` are repo-scoped commands: with no
+          # `--repo`, `gh` resolves the target by shelling out to `git` in the
+          # working directory. This job has no `actions/checkout` — it only
+          # touches the API — so that lookup died on every invocation with
+          #
+          #     failed to run git: fatal: not a git repository
+          #
+          # and the reporter exited 1 without filing anything. `GH_REPO` supplies
+          # the target directly and skips the git lookup, which is cheaper than
+          # adding a checkout for a job that never reads the tree.
+          GH_REPO: ${{ github.repository }}
           TITLE: ${{ inputs.title }}
           SUMMARY: ${{ inputs.summary }}
           HINT: ${{ inputs.hint }}
