@@ -526,8 +526,10 @@ one governs, which is deviated from, and why. `undecided` is a first-class state
 — either implies a side was chosen, and an unsettled question must not be able to smuggle in a
 ruling nobody made. It equally refuses an `undecided` record citing fewer than two clauses: such a
 record states no conflict, only a position it declines to name as one. Every citation carries a
-verbatim quote that the generator checks against the spec checkout, so a submodule bump that moves
-a clause fails the build instead of leaving the citation pointing at unrelated prose.
+quote that the generator checks against the spec checkout, so a submodule bump that moves a clause
+fails the build instead of leaving the citation pointing at unrelated prose. That check is a
+whitespace-collapsed substring match rather than a byte-for-byte one; what it does and does not
+guarantee is spelled out under **Cite the clause exactly, and quote it** below.
 
 Requires the `assets/hgvs-nomenclature` submodule (`git submodule update --init assets/hgvs-nomenclature`); without it the generator fails with `no HGVS strings harvested from …`, naming that command.
 
@@ -721,10 +723,23 @@ stale-local-artifact detectors). What makes a record an adjudication is the *aut
 "undecided, and here is why". Without one, you have frozen the current behaviour including
 whatever is wrong with it.
 
-**Cite the clause exactly, and quote it.** `rulings` citations carry a verbatim quote the
-generator checks against the spec checkout, so a submodule bump that moves a clause fails the
-build instead of leaving the citation pointing at unrelated prose. Do the same in prose comments:
-`general.md:34`, not "the separation rule".
+**Cite the clause exactly, and quote it.** `rulings` citations carry a quote the generator checks
+against the spec checkout, so a submodule bump that moves a clause fails the build instead of
+leaving the citation pointing at unrelated prose. Do the same in prose comments: `general.md:34`,
+not "the separation rule". A clause's directory is its jurisdiction: a claim about an `r.` axis
+needs a clause under `RNA/` because a `DNA/` one cannot scope `r.`, while `general.md` is not
+molecule-specific.
+
+**That check is a whitespace-collapsed substring match, not a byte-for-byte one.** The generator
+joins the cited line range with spaces and collapses runs of whitespace on both sides before
+testing containment. Two consequences follow, and only the first is usually noticed. A quote may
+**span** the cited lines — which is what makes a multi-line range work at all — and re-wrapping the
+spec's prose leaves a citation valid while the clause moving out from under it still fails the
+build. That much is the deliberate trade. What the guard does **not** buy is that a quote is
+reproduced byte-for-byte: one whose only difference from the spec is spacing or a line break
+passes, and citations in this ledger do exactly that. So do not offer the guard as evidence that a
+quote is exact — if a claim rests on exactness, measure it against the spec file rather than
+inferring it from a green build.
 
 **Record what was refuted, not only what was decided.** Measurements that killed a plausible
 belief are worth as much as the ruling itself, because the belief will recur. Existing examples
