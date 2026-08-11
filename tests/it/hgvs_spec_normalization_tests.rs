@@ -799,6 +799,19 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // strength" argument was withdrawn, because a census of
     // `docs/recommendations/` finds an uppercase keyword in exactly one place
     // outside `style.md` (`RNA/adjoined_transcript.md:21`).
+    //
+    // **Scoped by DIRECTION as well, 2026-08-11.** It reaches the NET-DELETION
+    // case — payload shorter than the span it replaces — and does NOT reach net
+    // insertions, where the split form stays canonical. That is what
+    // `merge::coalesce_payload_alignment_split`'s `payload.len() < span.len()`
+    // gate has always implemented; the record was silent and the code was not,
+    // so the ruling documents the code rather than moving it. Grounds:
+    // SVD-WG010 was REJECTED (`:5`) and its own `:16` example
+    // (`g.3_4delinsGGT`, a 2-nt span for a 3-nt payload) is a net-insertion
+    // merge, which earns a negative guard and never an expectation;
+    // `DNA/duplication.md:90-92` publishes a net insertion as a `[dup;ins]`
+    // split (weak — the alternative it rejects is `dupins`, not a `delins`);
+    // and the ruling's whole evidence base is net-deletion.
     ("delins-merge-vs-individual-gap-two-or-more", "decided"),
     // `general.md:34` against `general.md:56` on `c.76_83inv`, whose reverse
     // complement coincides with the reference at its 4 interior columns.
@@ -826,7 +839,10 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // tie-breaks. The spec's own model (`general.md:157-160`), and the method
     // the filer asked for — though the spec contradicts itself, conditioning
     // some preferences on provenance and allele frequency, which ferro cannot
-    // see. See the record.
+    // see. A fourth piece of counter-evidence was added 2026-08-11 and is the
+    // sharpest, because it is a sequence-identity case rather than a provenance
+    // one: `protein/delins.md:50` states that two changes give identical
+    // proteins and keeps their descriptions apart anyway. See the record.
     ("canonical-form-choice-when-both-legal", "decided"),
     // `delins.md:18` names no edit type; ferro applied it only to
     // sub/unchanged/sub. **Decided by operator ruling (2026-08-10): WIDEN.**
@@ -870,6 +886,11 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // more nucleotides, not by none. Ferro CONFORMS as of #1537, which closed
     // #1524; `cis_confluence_adjudication.rs` pins the spec's form as a
     // regression guard, not the deviation the record was first written against.
+    // The `ins` half of the record's carve-out was CLOSED 2026-08-11 on the
+    // `c.2077delinsATA` triple (`DNA/delins.md:86-89`, `DNA/substitution.md:93-96`,
+    // `RNA/delins.md:68-71`), whose `delins.md:89` records that the passage
+    // permitting the split was removed; ferro already emits it, so it moves no
+    // row. The `dup` half and the repeat-expansion shape are still open.
     (
         "delins-adjacent-members-when-both-consume-reference",
         "decided",
