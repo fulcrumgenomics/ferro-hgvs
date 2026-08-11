@@ -34,21 +34,28 @@
 //! `reported_partition_verdicts` now pins what each of the eighteen spellings
 //! prints — under 3' *and* under 5' — together with the form its issue asks for
 //! and what backs that form under the project's precedence policy
-//! (**spec-explicit > Mutalyzer > our judgement**). Twelve of the eighteen rows
-//! have a spec line that answers them outright; #1419's six do not, because
-//! `delins.md:44-47` recommends the merged delins for the very alignment
-//! coincidence `general.md:56` is being used to split — so those stay recorded
-//! rather than targeted.
+//! (**spec-explicit > Mutalyzer > our judgement**). Six of those eighteen
+//! spellings — three pairs — have a spec line that answers them outright, which
+//! is the split `the_spec_authority_census_holds` pins next door as `(6, 12)`
+//! rows; #1419's six and #1421's six do not, because `delins.md:44-47`
+//! recommends the merged delins for the same alignment coincidence each pair's
+//! split relies on (`general.md:56` for #1419, the unchanged interior
+//! reappearing in the payload for #1421) — so those stay recorded rather than
+//! targeted.
 //!
-//! So this module keeps exactly one job: the **ratchet**. [`CONVERGING_PAIRS`]
-//! is the number that must only ever go up, and it is deliberately a count and
-//! not nine strings, because the goal is total convergence and partial progress
-//! should read as one number moving.
+//! So this module keeps exactly one job: the **ratchet**.
+//! [`CONVERGING_PAIRS_THREE_PRIME`] and [`CONVERGING_PAIRS_FIVE_PRIME`] are the
+//! numbers that must only ever go up, and each is deliberately a count and not
+//! nine strings, because the goal is total convergence and partial progress
+//! should read as one number moving. They are tracked separately per direction
+//! rather than as one shared constant, since the two directions are not
+//! guaranteed to converge the same rows.
 //!
 //! # Current status
 //!
-//! [`CONVERGING_PAIRS`] records how many converge today. Both spellings of every
-//! row are well-formed and sequence-preserving, so a split row is a pure
+//! [`CONVERGING_PAIRS_THREE_PRIME`] and [`CONVERGING_PAIRS_FIVE_PRIME`] record
+//! how many converge today (currently 0 under both directions). Both spellings
+//! of every row are well-formed and sequence-preserving, so a split row is a pure
 //! representation difference rather than a correctness bug — which is precisely
 //! why it is damaging downstream: key-based aggregation silently files one
 //! variant under two keys and halves its count.
@@ -123,11 +130,26 @@ pub(crate) const REPORTED_PAIRS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// How many reported pairs converge today, in each shuffle direction.
+/// How many reported pairs converge today under `ShuffleDirection::ThreePrime`.
 ///
 /// **This may only ever go up.** A drop means a change has regressed a defect
 /// somebody outside the project reported, and must not be re-blessed silently.
-const CONVERGING_PAIRS: usize = 0;
+///
+/// Kept as a separate constant from [`CONVERGING_PAIRS_FIVE_PRIME`] — the two
+/// directions reach the same partitioner but are not guaranteed to converge the
+/// same rows, and one shared constant cannot state two different true counts:
+/// whichever direction differed would have to be re-blessed against the other's
+/// number. Not because sharing would *hide* a single-direction regression — it
+/// would not. [`the_reported_pair_census_is_unchanged`] asserts inside the
+/// per-direction loop, so each direction is already compared against the
+/// constant on its own and no sum is ever taken. Measured: both are currently 0.
+const CONVERGING_PAIRS_THREE_PRIME: usize = 0;
+
+/// How many reported pairs converge today under `ShuffleDirection::FivePrime`.
+///
+/// See [`CONVERGING_PAIRS_THREE_PRIME`] for why this is tracked separately
+/// rather than shared. Measured: currently 0, same as 3'.
+const CONVERGING_PAIRS_FIVE_PRIME: usize = 0;
 
 /// Both directions, because a rule that converges only under the default 3'
 /// direction has not solved the problem: 5' is a supported option and reaches
@@ -195,6 +217,21 @@ fn no_reported_pair_normalizes_to_a_different_sequence() {
 #[test]
 fn the_reported_pair_census_is_unchanged() {
     for direction in DIRECTIONS {
+        // The catch-all arm is required, not defensive padding, and deleting it
+        // for "compile-time exhaustiveness" does not compile: `ShuffleDirection`
+        // is `#[non_exhaustive]` (see its own doc comment), so from outside the
+        // defining crate — which `tests/it` is — a `match` on it must carry a
+        // wildcard however many variants it has today. A runtime panic is
+        // therefore the strongest check available here, and it is reachable only
+        // via `DIRECTIONS`, so a new variant must be added there too before this
+        // fires. Prefer widening both together over relying on the panic.
+        let expected = match direction {
+            ShuffleDirection::ThreePrime => CONVERGING_PAIRS_THREE_PRIME,
+            ShuffleDirection::FivePrime => CONVERGING_PAIRS_FIVE_PRIME,
+            _ => panic!(
+                "unhandled shuffle direction {direction:?} — add a per-direction census constant"
+            ),
+        };
         let mut converged: Vec<String> = Vec::new();
         let mut split: Vec<String> = Vec::new();
         for (label, a, b) in REPORTED_PAIRS {
@@ -210,12 +247,13 @@ fn the_reported_pair_census_is_unchanged() {
         }
         assert_eq!(
             converged.len(),
-            CONVERGING_PAIRS,
+            expected,
             "reported-pair convergence moved under {direction:?}.\n\n\
              converged ({}):\n    {}\n\nstill split ({}):\n    {}\n\n\
-             If this went UP, raise CONVERGING_PAIRS and say so in the PR — it is \
-             a representation change for anyone storing the losing spelling. If it \
-             went DOWN, a change has regressed an externally-reported defect.",
+             If this went UP, raise CONVERGING_PAIRS_THREE_PRIME/CONVERGING_PAIRS_FIVE_PRIME \
+             (whichever direction moved) and say so in the PR — it is a representation \
+             change for anyone storing the losing spelling. If it went DOWN, a change has \
+             regressed an externally-reported defect.",
             converged.len(),
             converged.join("\n    "),
             split.len(),

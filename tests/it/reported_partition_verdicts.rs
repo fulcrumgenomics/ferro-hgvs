@@ -731,10 +731,10 @@ fn every_canonical_row_already_prints_its_wanted_form() {
 ///
 /// Pinned because the authority is what decides whether a row's `wanted` is a
 /// *target* or merely a *record*, and that is the single most consequential
-/// judgement in this file. Six pairs rest on a spec line nothing contradicts;
-/// three (#1419's) rest on a spec that answers both ways, where the precedence
-/// policy hands the tie-break to Mutalyzer and Mutalyzer picks neither ferro's
-/// answer nor the issue's.
+/// judgement in this file. Three pairs (#1420's) rest on a spec line nothing
+/// contradicts; six (#1419's and #1421's) rest on a spec that answers both
+/// ways, where the precedence policy hands the tie-break to Mutalyzer and
+/// Mutalyzer picks neither ferro's answer nor the issue's.
 #[test]
 fn the_spec_authority_census_holds() {
     for (a, b) in reported_pairs() {
