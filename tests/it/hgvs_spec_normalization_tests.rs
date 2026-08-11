@@ -979,6 +979,29 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // operator — a materially stronger argument, which is exactly why this one is
     // not decided by analogy to it. Ferro accepts an unanchored ring today.
     ("ring-telomere-anchoring", "undecided"),
+    // `delins.md:47`'s payload-coincidence carve-out is scoped to the coding DNA
+    // axis (`c.`) and nothing else. **Decided by operator ruling (2026-08-11).**
+    // `r.` is excluded in both directions: `DNA/delins.md` has no jurisdiction
+    // over the RNA axis, and `RNA/delins.md` states no `:47` counterpart of its
+    // own, so `RNA/delins.md:17`'s separation rule stands unqualified there.
+    // It answers a question that its sibling record
+    // `delins-merge-vs-individual-gap-two-or-more` deliberately did not reach:
+    // that record scoped its own ruling to the payload-coincidence *shape* and
+    // said rows on an axis with no reading frame "remain violations", without
+    // saying whether the carve-out could still reach them. It cannot, and both
+    // records are decided. `:47`'s stated reason is
+    // preventing "incorrect predictions for the consequences on protein level",
+    // and off a translated axis there is no such consequence. It is the only
+    // reading under which this record and
+    // `separation-is-a-property-of-the-spelling-not-of-the-variant` both hold.
+    // Moves no shipped row: the default arm (`live`) never runs the pass. On the
+    // `FERRO_PARTITION=canonical-coalesced` arm it removes 380 genomic-axis
+    // merges over the designed cis corpus, and it deliberately PRESERVES the
+    // 193-member re-derivation of a stored 723-base `g.` `delins`.
+    (
+        "delins-payload-coincidence-carve-out-is-coding-dna-scoped",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the
