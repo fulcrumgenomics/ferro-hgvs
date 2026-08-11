@@ -419,6 +419,7 @@ mod network_benchmark_tests;
 mod normalization_transcripts_exon_contract;
 mod normalize_axis_preserving;
 mod normalize_config_disambiguation;
+mod normalize_frame_free_axis_independence;
 mod normalize_idempotency_proptest;
 mod normalize_property_tests;
 mod normalize_reparse_invariant;
