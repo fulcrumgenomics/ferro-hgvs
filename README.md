@@ -229,17 +229,36 @@ Rules 2 and 3 depend on the spec **determining an answer**, and sometimes it doe
   variant. For an unequal-length block there is no correspondence — recovering one means *choosing*
   an alignment, and the spec does not say which. There is no derivable form to converge on.
 - **The preference keys on information a normalizer does not hold.** A "frequently occurring
-  variant" (`RNA/delins.md`); a repeat "variable in the population" (`RNA/repeated.md`,
-  `protein/repeated.md`); two variants "reported (or might occur) individually" (`DNA/delins.md`).
+  variant" (`RNA/delins.md:41`); a repeat "variable in the population" (`RNA/repeated.md:33`,
+  `protein/repeated.md:22`); two variants "reported (or might occur) individually" (`DNA/delins.md:83`).
   The spec determines an answer; ferro cannot see what it keys on.
 
 **"Best effort" is bounded by the spec's determinacy and by what a normalizer's inputs can decide —
 not by ferro's implementation quality.** A failure of rule 2 or 3 caused by ferro's code is a
 **bug** under rule 7; one caused by the spec not determining an answer triggers rule 5; one caused
-by a clause keying on provenance or population data is a **declared deviation** — permanent, and
-recorded in the ruling ledger's `deviates_from`. Where such a clause also contradicts one forbidding
-provenance — `general.md` says knowledge of the DNA-level change "should not be used" — that
-contradiction is a defect and rule 5 applies to it.
+by a clause keying on provenance or population data is a **declared deviation**, and a permanent
+one — no upstream answer can put that information into a normalizer's hands.
+
+Permanent is the only thing the last case adds, and it does **not** exempt the question from rule
+5. The grain matters, because the two grains give opposite answers. Read **on its own**, such a
+clause is not silent, ambiguous or self-contradictory — it determines an answer perfectly well, and
+ferro is the one that cannot see what the answer keys on. Read **against the spec's own
+re-derivation mandate** — `general.md:157-160`, which has a protein description derived by
+comparing the variant and reference protein sequences and says knowledge of the underlying DNA
+change "should not be used", with `general.md:13` extending the method to RNA — it is one half of a
+pair that cannot both hold. That is rule 5's self-contradiction limb exactly, and the ruling ledger
+says so in those words. What the carve-out states is that rule 5's escalation cannot *end*
+the matter here: a choice made under rule 5 is provisional pending an upstream ruling, and no
+ruling upstream makes provenance visible, so the deviation outlives the filing.
+
+Where it is recorded is worth stating precisely, because the obvious pointer does not resolve.
+`canonical-form-choice-when-both-legal` has **no `deviates_from` field**: it carries all four
+clauses in its rationale as the recorded counter-evidence to re-derivation, opens that paragraph
+with "The spec contradicts itself here", and adopts re-derivation over them deliberately. The one
+of the four that is recorded *as* a deviation is `DNA/delins.md:83`, through the
+`deviates_from: ["docs/recommendations/DNA/delins.md:79-84"]` on
+`separation-is-a-property-of-the-spelling-not-of-the-variant` — the record whose ruling the rule 3
+example below turns on.
 
 ### A worked example of reading force from prose
 
@@ -260,7 +279,7 @@ Reading the force without the scope inverts the rule.
 | Cis against trans (`[a;b]` against `[a];[b]`) | **Used** — different variants, not two spellings of one |
 | Type label (`dup` against `ins`, `inv` against `delins`) | **Re-derived**, then ranked by `general.md` |
 | How the edit set is cut into members | **Excluded** — a property of who wrote the string |
-| Which copy in a run of identical residues a member names | **Excluded** — the 3' rule assigns this *"arbitrarily"* |
+| Which copy in a run of identical residues a member names | **Excluded** — the 3' rule assigns this *"arbitrarily"* (`general.md:41`) |
 | Repeat unit and phase, where several are equivalent | **Excluded** |
 
 So three rows read **Excluded**, and they are three spellings of the one thing the input does not
@@ -276,7 +295,7 @@ g.[1001009del;1001010del;1001013del]     written gaps of 0 and 2
 g.[1001009del;1001011del;1001013del]     written gaps of 1 and 1
 ```
 
-`general.md`'s "two variants separated by one or more nucleotides should be described individually"
+`general.md:34`'s "two variants separated by one or more nucleotides should be described individually"
 reads those gaps, so it answers twice for one variant. Rule 3 reads them off the partition ferro
 derives instead: both give `g.[1001009_1001010del;1001013del]`. Rule 2 then keeps that over the
 spanning `g.1001009_1001013delinsCA`, which merges across two unchanged nucleotides. Pinned in
