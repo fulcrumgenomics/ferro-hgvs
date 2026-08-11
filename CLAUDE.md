@@ -632,6 +632,22 @@ Contributor-facing guidance is in `CONTRIBUTING.md`. The checker is
 `tests/python/test_representation_change_trailer.py`, because three copies of one list drift
 silently.
 
+### Never hand-edit `tests/it/clause_ruling_index.rs` — it embeds a GENERATED block
+
+The file is committed, so it looks hand-maintainable. It is not: it carries a rendered index of
+every clause the ruling records cite, and `the_rendered_index_is_current` compares that block
+against what the code generates. Editing it by hand is transcription, and transcription of a
+~100-row block is lossy in a way that reads as a small diff — two attempts at it were made here
+and both dropped rows silently.
+
+Capture what the test prints **programmatically** instead. The pattern that works: add a throwaway
+test that writes `render_index()` to a file, run it, restore the source byte-for-byte from a
+pre-edit copy, then splice the generated text in on its `BEGIN`/`END` markers. Nothing is retyped.
+
+Note this is a *different* trap from the gitignored spec artifacts above. Those regenerate on
+demand and a stale one fails loudly. This one is committed, so a lossy edit survives review as an
+ordinary diff and only fails on the one assertion that re-renders it.
+
 ### Record every adjudication as a committed test or ruling record, in the same change
 
 **Policy.** When you decide what the *correct* normalization behaviour is — not how to
@@ -1011,6 +1027,20 @@ The `rulings` section of `tests/fixtures/grammar/hgvs_spec_normalization_overrid
 decision log, pinned by `ruling_records_are_intact` (ids **and** statuses; keep `RULING_STATUSES`
 in sync).
 
+**Read the ledger before adjudicating anything from spec text.** The records answer most of what
+gets re-argued, and re-deriving a settled decision is this project's most repeated failure. Two
+traps make it worse than simply forgetting to look:
+
+- **A record's id states its QUESTION, not its ruling, and the two can be opposites.**
+  `separation-is-a-property-of-the-spelling-not-of-the-variant` rules that separation is read off
+  the partition **re-derived from the resulting sequence** — the negation of its own name. Reading
+  the id and stopping gets the answer exactly backwards.
+- **A record's own instructions can be stale.** `delins-merge-vs-individual-gap-two-or-more` says
+  "Re-run the census before citing it" and then publishes a grep whose alternation omits
+  `REQUIRES`, so following it reproduces the wrong count — one uppercase RFC 2119 keyword outside
+  `style.md` when there are two (`RNA/adjoined_transcript.md:20` and `:21`, at spec checkout
+  `6f85311`). Re-run the command *and* sanity-check the command.
+
 **Do not trust a count of decided/undecided records written down here, and do not trust which
 side of the line a record is on either.** Both failures have happened: the sentence this replaces
 said "five of its eight records are `undecided`" long after the ledger had grown and four of those
@@ -1028,18 +1058,23 @@ python3 -c "import json;d=json.load(open('tests/fixtures/grammar/hgvs_spec_norma
 [print(f\"{r['status']:<10} {r['id']}\") for r in d['rulings']]"
 ```
 
-The table below lists the records that are **open**, with what each leaves unsettled. It is a
-description of the open questions, not a census — when a record is ruled on it moves out of this
-table, and the authority for which rows belong here is the ledger, not this list. Read them before
-re-deriving the same argument; the first is an operator decision that blocks other work:
+**Both tables below are now enforced against the ledger**, by
+`claude_md_adjudication_tables::the_two_tables_partition_the_ledger_by_status`. Moving a record
+between them is part of deciding it, and the build fails otherwise. That guard exists because this
+section had drifted three records deep and the existing currency scan could not see it: that scan is
+line-based over `.rs` files under `src/` and `tests/`, so a Markdown table at the repository root was
+outside it twice over, and the word "open" sits in this paragraph while the ids sit in table rows —
+so no line carries both. Widening the scan would not have caught it; the check had to be
+section-aware.
+
+The table below lists the records that are **open**, with what each leaves unsettled. Read them
+before re-deriving the same argument:
 
 | record | what is open |
 |---|---|
-| `codon-carve-out-shape-restriction` | `delins.md:18` names no edit type; ferro applies it only to sub/unchanged/sub |
-| `exon-junction-dup-converge-from-the-far-side` | `LRG_199t1:c.3921dup` and `c.3922dup` denote one transcript sequence but are two fixed points, projecting 2,790 bp apart. `duplication.md:26` argues for converging them, `general.md:44` does not prescribe the 5' shift that would |
 | `rna-repeat-range-plus-unit-redundancy` | `RNA/repeated.md:22` calls range-plus-unit invalid, `:27` publishes exactly that shape as valid. Upstream's conflict (#466); ferro answers both ways depending on input-hygiene mode |
-| `separation-is-a-property-of-the-spelling-not-of-the-variant` | `general.md:34` is stated over "two variants", so the separation it keys on is read off a decomposition a normalizer never sees. Which spelling the rule is evaluated on is unanswered; the spec's own discriminator (`delins.md:79-84`) is provenance, which makes it unfixable as stated |
 | `absolute-prohibition-enforcement-stage` | Whether an absolute prohibition is refused at PARSE (unconditional) or at strict-mode normalize (opt-outable). Recorded because ferro answers it three ways for clauses of identical strength — within `checklist.md:16` alone, `g.*10del` is refused at parse while `g.266+2del` is refused nowhere |
+| `ring-telomere-anchoring` | Must a ring's first `::` segment start at `pter` and its last end at `qter`, so a ring naming only interior coordinates is refused? Ferro currently **accepts** an unanchored ring (pinned by `a_ring_with_no_telomere_anchor_is_still_accepted`) — that is the status quo, not a ruling. Enforcing is not simply "is the first endpoint `pter`": `:28`'s `(pter)_#` / `#_(qter)` forms and `cen` complicate the predicate, and `cen`-anchored segments do not parse at all today |
 
 The `decided` records, and the scope each was decided **at** — read the record before citing it,
 because several of these rulings are narrower than their one-line summary:
@@ -1056,6 +1091,9 @@ because several of these rulings are narrower than their one-line summary:
 | `conflicting-member-geometry-refusal-scope` | `DNA/alleles.md:5` governs — the *definition*, not `general.md:58`, is what reaches nested and coincident-insertion geometries; `:58`'s stated ground literally describes only its own `del`+`dup` example. `general.md:56` is cited to record that it does **not** reach a multi-member allele |
 | `delins-merge-vs-individual-gap-two-or-more` | `DNA/delins.md:44-47` governs `:17`, **scoped** to the alignment-coincidence shape `:44-47` describes. Where a separation of two or more arises from anything else, `general.md:34` still governs; unscoped the reading reaches roughly fifteen times the row set the argument was made on |
 | `inversion-vs-two-delins-76-83` | `inversion.md:5` governs: a whole-block reverse complement is one `inv` when the members it competes with are `delins`, since `general.md:56` ranks substitution but not `delins`. #1230's substitution case is untouched and still splits |
+| `separation-is-a-property-of-the-spelling-not-of-the-variant` | **Read the ruling, not the id** — the title states the *question*, and the answer is the opposite of it. The separation `general.md:34` keys on is read off the partition **re-derived from the resulting sequence**, never off the input's spelling. On its own case both spellings converge on `g.[1001009_1001010del;1001013del]`. Deviates from `delins.md:79-84`, whose provenance rationale ferro cannot honour |
+| `codon-carve-out-shape-restriction` | **WIDEN.** The `delins.md:18` / `general.md:35` exception applies wherever its stated precondition holds — two variants separated by one nucleotide, together affecting one amino acid — **regardless of edit type**. Ferro's restriction to a sub/unchanged/sub shape is dropped, on the ground that edit type is a property of the spelling while "together affecting one amino acid" is a property of the resulting sequence |
+| `exon-junction-dup-converge-from-the-far-side` | **CONVERGE.** `LRG_199t1:c.3922dup` normalizes to `c.3921dup`. The canonical position is the most 3' position that does **not** cross an exon/exon junction, reached from **either** side — a description approaching the junction stops at it, one already spelled past it is pulled back. Grounded three times in `DNA/duplication.md` (`:26`, `:60`, `:148`), which is what carries it past the RFC 2119 census's lesson about single lowercase-prose clauses |
 
 Two things follow for representation-stability work specifically. The repository's doctrine once
 read as "do not move a normalized output", while the downstream filer has said instability is
