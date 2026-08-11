@@ -414,6 +414,7 @@ mod predicted_cis_allele;
 mod projection;
 mod projection_coverage;
 mod property_tests;
+mod protein_axis_split_move;
 mod protein_cis_delins_decomposition;
 mod protein_construct_boundaries;
 mod protein_frameshift_alternatives;
@@ -456,6 +457,7 @@ mod spec_enumeration_tests;
 // target rather than merely skipping these tests.
 #[cfg(feature = "dev")]
 mod spec_generator_preconditions;
+mod spec_worked_example_rules;
 mod spec_worked_examples;
 mod strict_del_size_suffix_mode;
 mod strict_explicit_seq_size_modes;
