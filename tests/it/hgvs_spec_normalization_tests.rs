@@ -860,12 +860,19 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // The separation `general.md:34` keys on is read off a decomposition, and
     // two spellings of one variant can present different ones — demonstrated,
     // not argued, in `cis_confluence_adjudication.rs`. #1537 settled the
-    // separation-ZERO half and left this untouched: both pinned spellings still
-    // reach two outputs. Undecided as to which partition should then be
-    // canonical; that is `canonical-form-choice-when-both-legal`.
+    // separation-ZERO half and left this untouched. **Decided by operator
+    // ruling (2026-08-10)**: the separation is read off the partition
+    // RE-DERIVED FROM THE RESULTING SEQUENCE, never off the input's spelling —
+    // rule 3 of the README ruleset — which on the record's genomic case makes
+    // `g.[1001009_1001010del;1001013del]` the answer from both spellings. The
+    // sequence-first arms (`FERRO_PARTITION=shadow`/`canonical`) already
+    // produce it; the shipping path does not, and that gap is #1617, so the
+    // pinned assertions still show today's divergent `live` output alongside an
+    // `#[ignore]`d guard for the decided target. Which partition is canonical
+    // in general remains `canonical-form-choice-when-both-legal`.
     (
         "separation-is-a-property-of-the-spelling-not-of-the-variant",
-        "undecided",
+        "decided",
     ),
     // `general.md:58` (removing and replacing part of the same reference
     // sequence "are not allowed") against `DNA/complex.md:130` ("'::' is used to

@@ -41,7 +41,7 @@
 //! those the disagreeing spellings have the same member count — a placement
 //! disagreement, not a partitioning one.
 //!
-//! Four records live here, in **three kinds**. They are not interchangeable
+//! Four records live here, in **four kinds**. They are not interchangeable
 //! (see the repository `CLAUDE.md`), so each test states its own:
 //!
 //!  - **One adjudicated-correct.**
@@ -51,15 +51,18 @@
 //!  - **One scope carve-out.** `a_dup_flush_against_a_del_is_left_alone` pins
 //!    the limit of that same ruling. Ferro's output there is not adjudicated
 //!    right; it is adjudicated *out of scope*, which is a third thing.
-//!  - **Two pinned open disagreements.**
-//!    `the_separation_two_members_present_is_not_a_property_of_the_variant`
-//!    demonstrates a question its record leaves `undecided`, and
+//!  - **One decided-but-not-yet-implemented.** Record 1's ruling is `decided`
+//!    and ferro does **not** produce its answer yet, so the record needs both
+//!    halves: the two `the_separation_…` tests pin today's divergent output as
+//!    pre-fix behaviour, and `the_decided_target_is_the_re_derived_form` is
+//!    `#[ignore]`d and asserts the decided answer. #1617 is the gap.
+//!  - **One pinned open disagreement.**
 //!    `a_spanning_delins_and_its_aligned_split_are_two_fixed_points` pins the
 //!    largest family with the ruling it waits on named, so a future session does
 //!    not re-derive it.
 //!
-//! Nothing in this module asserts a behaviour change: every expectation below
-//! is ferro's output on `main` today.
+//! **One assertion here is not ferro's output on `main` today**, and it is the
+//! `#[ignore]`d one. Every other expectation below is.
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::reference::MockProvider;
@@ -163,6 +166,41 @@ fn denotes(provider: &MockProvider, description: &str) -> String {
     String::from_utf8(edited).expect("ascii")
 }
 
+/// [`denotes`] for the genomic window, which is a slice of a much longer contig
+/// rather than the whole served sequence: the same apply oracle, with the SPDI
+/// triples' contig-absolute 0-based positions rebased onto
+/// [`GENOMIC_WINDOW`].
+fn denotes_genomic(provider: &MockProvider, description: &str) -> String {
+    let members: Vec<HgvsVariant> = match parse_hgvs(description).expect("parses") {
+        HgvsVariant::Allele(allele) => allele.variants.clone(),
+        single => vec![single],
+    };
+    let mut triples: Vec<(usize, String, String)> = members
+        .iter()
+        .map(|member| {
+            let triple = hgvs_to_spdi(member, provider).expect("applies");
+            let absolute = usize::try_from(triple.position).expect("non-negative");
+            (
+                absolute - (GENOMIC_WINDOW_START - 1),
+                triple.deletion.clone(),
+                triple.insertion.clone(),
+            )
+        })
+        .collect();
+    triples.sort_by_key(|t| (std::cmp::Reverse(t.0), std::cmp::Reverse(t.1.len())));
+    let mut edited = GENOMIC_WINDOW.as_bytes().to_vec();
+    for (position, deletion, insertion) in &triples {
+        let end = position + deletion.len();
+        assert_eq!(
+            &GENOMIC_WINDOW.as_bytes()[*position..end],
+            deletion.as_bytes(),
+            "{description}: stated bases disagree with the reference"
+        );
+        edited.splice(*position..end, insertion.bytes());
+    }
+    String::from_utf8(edited).expect("ascii")
+}
+
 // ---------------------------------------------------------------------------
 // Record 1 — settled: separation is a property of the spelling
 // ---------------------------------------------------------------------------
@@ -174,9 +212,12 @@ fn denotes(provider: &MockProvider, description: &str) -> String {
 /// returns two answers for one variant and cannot be evaluated confluently.
 ///
 /// **Authority.** Ruling record
-/// `separation-is-a-property-of-the-spelling-not-of-the-variant`, status
-/// `undecided` as to which partition should be canonical — this test pins the
-/// *demonstration*, which is settled, not the choice, which is not.
+/// `separation-is-a-property-of-the-spelling-not-of-the-variant`, now
+/// `decided`: the separation is read off the partition **re-derived from the
+/// resulting sequence**, never off the input's spelling. This test pins the
+/// *demonstration*, which was settled all along; the decided answer is asserted
+/// by `the_decided_target_is_the_re_derived_form`, which is `#[ignore]`d
+/// because ferro does not produce it yet (#1617).
 ///
 /// The case: `c.10` and `c.11` are both `A`, so deleting one or the other is the
 /// same edit. `c.[9del;10del;13del]` therefore denotes exactly what
@@ -184,6 +225,11 @@ fn denotes(provider: &MockProvider, description: &str) -> String {
 /// assumed. But the first spells its members at separations 0 and 2 and the
 /// second at 1 and 1, and `general.md:34` merges a separation-0 pair while
 /// splitting a separation-1 pair. Ferro follows it, and produces two outputs.
+///
+/// **These assertions are pre-fix behaviour against a now-decided target.** The
+/// `apart` spelling's answer is form B, which the ruling names as the bug; it is
+/// pinned here as an observation so the fix is visible when it lands, not as an
+/// endorsement.
 #[test]
 fn the_separation_two_members_present_is_not_a_property_of_the_variant() {
     let provider = provider();
@@ -213,6 +259,128 @@ fn the_separation_two_members_present_is_not_a_property_of_the_variant() {
         "NM_TEST.1:c.9_13delinsAT",
         "no members at all, so no separation to read: the spanning form survives"
     );
+}
+
+/// The window the record's ruling is stated on, reproduced synthetically.
+///
+/// **Provenance.** These fifteen bases are `NC_000001.11:g.1001002-1001016` on
+/// GRCh38 — a `GGGG` run at `g.1001006-1001009`, a `CC` run at
+/// `g.1001010-1001011`, and a lone `C` at `g.1001013`. They are laid down on a
+/// contig of that name at those offsets so the descriptions below read exactly
+/// as the ruling states them, while everything outside the window is filler:
+/// the test is hermetic and needs no `FERRO_MANIFEST`.
+///
+/// Nothing in this case depends on the filler. Every member's 3' shift is
+/// bounded inside the window — `g.1001009del` is already the 3' end of the
+/// `GGGG` run, `g.1001011del` the 3' end of the `CC` run, and `g.1001013`'s
+/// neighbours are `A` and `T` — so no shuffle can reach an edge.
+const GENOMIC_WINDOW: &str = "ATGAGGGGCCACTGT";
+const GENOMIC_WINDOW_START: usize = 1_001_002;
+const GENOMIC_CONTIG: &str = "NC_000001.11";
+
+fn genomic_provider() -> MockProvider {
+    let mut provider = MockProvider::new();
+    let mut sequence = "ACGT".repeat(GENOMIC_WINDOW_START.div_ceil(4)).into_bytes();
+    sequence.truncate(GENOMIC_WINDOW_START - 1);
+    sequence.extend_from_slice(GENOMIC_WINDOW.as_bytes());
+    sequence.extend_from_slice(b"ACGTACGTAC");
+    provider.add_genomic_sequence(
+        GENOMIC_CONTIG,
+        String::from_utf8(sequence).expect("ascii filler"),
+    );
+    provider
+}
+
+/// The same disagreement as the test above, on the real coordinates the ruling
+/// is written against — and on the `g.` axis, where `general.md:35`'s codon
+/// exception cannot apply, so no reading frame can be blamed for the split.
+///
+/// **Authority.** Ruling record
+/// `separation-is-a-property-of-the-spelling-not-of-the-variant`, `decided`
+/// for the re-derived form (A below).
+///
+/// **These assertions pin PRE-FIX behaviour against a now-decided target.**
+/// They are not adjudicated correct. `live` sends the two spellings to two
+/// different answers, one of which is the decided one and one of which is not;
+/// the decided answer for *both* is asserted by
+/// `the_decided_target_is_the_re_derived_form`, which is `#[ignore]`d until
+/// #1617 lands. When it does, both expectations here move to form A.
+#[test]
+fn the_separation_two_members_present_is_not_a_property_of_the_variant_on_real_coordinates() {
+    let provider = genomic_provider();
+    let adjacent = "NC_000001.11:g.[1001009del;1001010del;1001013del]";
+    let apart = "NC_000001.11:g.[1001009del;1001011del;1001013del]";
+
+    // One variant, verified by application rather than asserted. `g.1001010`
+    // and `g.1001011` are both `C`, so deleting either is the same edit.
+    assert_eq!(
+        denotes_genomic(&provider, adjacent),
+        "ATGAGGGCATGT",
+        "the sequence both spellings denote, read off the window"
+    );
+    assert_eq!(
+        denotes_genomic(&provider, apart),
+        denotes_genomic(&provider, adjacent)
+    );
+
+    // Two outputs, selected by the separation each spelling happens to present.
+    assert_eq!(
+        normalized(&provider, adjacent),
+        "NC_000001.11:g.[1001009_1001010del;1001013del]",
+        "separations 0 and 2 as written: the adjacent pair is merged. This is \
+         form A, the decided answer — reached here for the wrong reason, off \
+         the spelling rather than off the resulting sequence"
+    );
+    assert_eq!(
+        normalized(&provider, apart),
+        "NC_000001.11:g.[1001009del;1001011del;1001013del]",
+        "separations 1 and 1 as written: all three kept individual. This is \
+         form B, which the ruling names as the bug — pinned as pre-fix \
+         behaviour, not endorsed (#1617)"
+    );
+}
+
+/// **The decided target**, asserted directly: both spellings of the one variant
+/// normalize to form A, `g.[1001009_1001010del;1001013del]`.
+///
+/// **Authority.** The `OPERATOR RULING, 2026-08-10` paragraph of ruling record
+/// `separation-is-a-property-of-the-spelling-not-of-the-variant`. The
+/// separation `general.md:34` keys on is read off the partition re-derived from
+/// the resulting sequence, never off the input's spelling — rule 3 of the
+/// README ruleset.
+///
+/// **`#[ignore]`d because ferro does not do this yet**, not because the answer
+/// is in doubt. `FERRO_PARTITION=shadow` and `FERRO_PARTITION=canonical` — the
+/// sequence-first arms — already take both spellings here to form A; the
+/// default `live` partitioner takes the second to form B. Closing that gap is
+/// **#1617**, and this test is its acceptance criterion: delete the `#[ignore]`
+/// and move the two `apart` expectations above.
+///
+/// Form C, `g.1001009_1001013delinsCA`, is what `FERRO_PARTITION=
+/// canonical-coalesced` gives and what Mutalyzer and VariantValidator produce.
+/// It is **not** the target: A's members are two unchanged nucleotides apart
+/// (`g.1001011`, `g.1001012`) and `general.md:34` asks for individual
+/// description at separation ≥ 1, while `DNA/delins.md:47` cannot reach this
+/// row — see the `delins-merge-vs-individual-gap-two-or-more` record, which
+/// scopes itself to a minimal single `delins` split on payload coincidence and
+/// says in as many words that it is not a general licence to merge at gap ≥ 2.
+#[test]
+#[ignore = "decided target, not yet implemented — see #1617"]
+fn the_decided_target_is_the_re_derived_form() {
+    let provider = genomic_provider();
+    let form_a = "NC_000001.11:g.[1001009_1001010del;1001013del]";
+
+    for spelling in [
+        "NC_000001.11:g.[1001009del;1001010del;1001013del]",
+        "NC_000001.11:g.[1001009del;1001011del;1001013del]",
+        form_a,
+    ] {
+        assert_eq!(
+            normalized(&provider, spelling),
+            form_a,
+            "{spelling}: the separation is read off the re-derived partition"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +430,8 @@ fn two_adjacent_members_that_both_consume_reference_are_one_delins() {
     );
     // The other spelling of the same variant still keeps its own partition, so
     // the class remains divergent. That residue is not this record's — it is
-    // `separation-is-a-property-of-the-spelling-not-of-the-variant`, undecided.
+    // `separation-is-a-property-of-the-spelling-not-of-the-variant`, whose
+    // ruling is decided and whose implementation is #1617.
     assert_eq!(normalized(&provider, authored), "NM_TEST.1:c.[9dup;13del]");
 }
 
