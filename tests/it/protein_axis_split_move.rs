@@ -53,7 +53,8 @@
 //!   would emit a description ferro cannot read back. Unlike the three above,
 //!   this illegality is *created* by the split — the range input parses fine.
 
-use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
+use ferro_hgvs::hgvs::location::AminoAcid;
+use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer, ReferenceProvider};
 
 /// The accession every case is written against.
 const NP: &str = "NP_003997.1";
@@ -236,8 +237,24 @@ fn a_provider_with_no_protein_data_declines_rather_than_guessing() {
 /// `has_protein_data()` is a **provider-wide** flag (#1131), so a provider that
 /// carries some other protein still cannot answer for this accession. The fetch,
 /// not the flag, is what decides.
+///
+/// That last sentence is the whole content of this case, and `must_not_split`
+/// cannot see it: the decline one gate earlier — `!has_protein_data()` — renders
+/// the input unchanged too, which is what the test two above already asserts on
+/// the *same* input and the *same* forbidden string. So the two assertions below
+/// pin which gate fires: the flag is true, and `NP` itself is unservable.
 #[test]
 fn a_provider_missing_this_accession_declines_rather_than_guessing() {
+    let probe = provider_without_the_accession();
+    assert!(
+        probe.has_protein_data(),
+        "the flag must be true, or this is the no-protein-data case again rather than \
+         a fetch that fails for this accession"
+    );
+    assert!(
+        probe.get_protein_sequence(NP, 43, 46).is_err(),
+        "residues 44..=46 of {NP} must be unservable, so the decline is the fetch"
+    );
     must_not_split(
         provider_without_the_accession(),
         &format!("{NP}:p.Ser44_Trp46delinsArgLeuArg"),
@@ -298,6 +315,9 @@ fn an_interior_stop_is_refused_by_the_parser() {
 /// wrong consequence: it spells a stop-loss as an ordinary substitution and
 /// silently drops the extension. The payload guard cannot catch it — the payload
 /// here carries no `Ter` at all — which is why the reference span needs its own.
+///
+/// The control that makes this test measure the stop-loss guard rather than any
+/// decline is `residue_forty_six_is_a_stop_the_reference_decodes_as_ter` below.
 #[test]
 fn a_reference_stop_is_not_split_into_a_substitution() {
     must_not_split(
@@ -305,6 +325,63 @@ fn a_reference_stop_is_not_split_into_a_substitution() {
         &format!("{NP}:p.Ser44_Ter46delinsAlaLeuHis"),
         &format!("{NP}:p.[Ser44Ala;Ter46His]"),
         "protein/extension.md:18 — a stop-loss is an extension, not a substitution",
+    );
+}
+
+/// The control the reference-stop decline rests on: the span really does carry a
+/// `Ter` at residue 46, decoded the way the split move itself decodes it.
+///
+/// `must_not_split` inspects only the rendered output, and **every** reason the
+/// split declines renders identically — the input, preserved. So on its own it
+/// cannot tell the stop-loss guard from a reference the normalizer never managed
+/// to read. Concretely: `Normalizer::fetch_protein_window` decodes each byte with
+/// `AminoAcid::from_one_letter` and returns `None` on the first byte that is not a
+/// one-letter code, and `try_protein_delins_split` propagates that `None` as a
+/// decline via `?` — one line *above* the `ref_aas.contains(&AminoAcid::Ter)`
+/// guard. If `'*'` ever stopped decoding to `AminoAcid::Ter` the window would
+/// fail to decode, the split would decline for that reason instead, and the test
+/// above would still pass while the guard it names went untested.
+///
+/// The decoded window is the assertion that carries the coverage: it pins that the
+/// provider serves that span *and* that `'*'` reaches `AminoAcid::Ter`, i.e. that
+/// what the guard inspects is `[Ser, Leu, Ter]` rather than an unread `None`.
+///
+/// The two assertions on the fixture itself are not independent of it in the same
+/// way, and it would overstate them to say so. `[45] == b'*'` is *implied* by the
+/// decoded window — bytes 43..46 must be `S`, `L`, `*` for it to hold — and earns
+/// its place by localising a failure instead: asserted on the fixture string, it
+/// separates a fixture whose stop moved from a `MockProvider` slicing the wrong
+/// window. The length is genuinely independent, and pins that residue 46 is the
+/// *last* residue rather than a stop with residues listed after it.
+#[test]
+fn residue_forty_six_is_a_stop_the_reference_decodes_as_ter() {
+    let seq = stop_at_46_protein();
+    assert_eq!(
+        seq.len(),
+        46,
+        "the span the decline names ends at residue 46"
+    );
+    assert_eq!(
+        seq.as_bytes()[45],
+        b'*',
+        "residue 46 of the reference-stop fixture must be the stop codon"
+    );
+
+    // The decode `Normalizer::fetch_protein_window` performs, byte for byte, over
+    // the same window the split move fetches: residues 44..=46, 0-based [43, 46).
+    let window = provider_with_a_reference_stop()
+        .get_protein_sequence(NP, 43, 46)
+        .expect("the provider must serve the span the split move fetches");
+    let decoded: Option<Vec<AminoAcid>> = window
+        .as_bytes()
+        .iter()
+        .map(|&b| AminoAcid::from_one_letter(b as char))
+        .collect();
+    assert_eq!(
+        decoded,
+        Some(vec![AminoAcid::Ser, AminoAcid::Leu, AminoAcid::Ter]),
+        "the window must decode, and residue 46 must decode to `AminoAcid::Ter` — \
+         otherwise the decline above is a failed fetch, not the stop-loss guard"
     );
 }
 
