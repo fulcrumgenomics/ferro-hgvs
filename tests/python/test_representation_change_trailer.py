@@ -431,6 +431,114 @@ def test_a_real_disclosure_is_not_a_contradiction() -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# #1647: the count is the count, never the denominator
+#
+# The guard used to read "the number immediately before `rows`" as the moving
+# count. In `0 of 950 rows move` that number is the DENOMINATOR, so the form
+# both `CONTRIBUTING.md` and `CLAUDE.md` publish as the way to quantify a zero
+# — and both state passes — failed the build instead. The documented form was a
+# merge blocker.
+#
+# These are separated from the parametrized declines above because they pin a
+# specific past defect rather than the general "declines are numerate" rule.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # `CONTRIBUTING.md` and `CLAUDE.md`, verbatim. The whole of #1647.
+        "none. 0 of 950 rows move",
+        "none. 0 of 950 rows move.",
+        # A grouped denominator. `(?<!of\\s)` alone does NOT rescue this one: the
+        # comma opens a word boundary, so the scan restarts at `298` — nonzero,
+        # immediately before `rows`, not preceded by `of `. Measured; it is why
+        # the second `(?<![\\d,])` lookbehind exists.
+        "none. 0 of 78,298 rows move",
+        "none. 0 of 5,761,302 rows respell",
+        # Both orders of the same honest zero.
+        "none. 0 rows of 78,298 move",
+        # A noun phrase between the denominator and `rows`, which the repository
+        # uses freely -- #1547's own exemplary decline is this shape.
+        "none. 0 of 950 real cis-allele rows move",
+        "none. 0 of 78,298 corpus rows move",
+    ],
+)
+def test_a_quantified_zero_in_either_order_passes(value: str) -> None:
+    """The documented way to quantify a zero must not be a merge blocker."""
+    assert check_representation_change.contradicted_decline(value) is None, (
+        f"{value!r} is the documented quantified-zero form and must pass"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Count first, denominator between the count and `rows`. The tripwire has
+        # to reach this order too, or a real disclosure vanishes from the
+        # changelog behind a decline — the one direction this mechanism must
+        # never fail in.
+        "no. 3 of 500,004 rows move",
+        "none. 1,826 of 78,298 rows move",
+        # A noun phrase before `rows`. This is #1651's ACTUAL trailer wording with
+        # the verdict flipped to a decline, and the two-lookbehind pattern let it
+        # through -- a real 1826-row move hidden behind `none`, which is the one
+        # direction this mechanism must never fail in. Measured, then fixed.
+        "none. 1826 of 78298 corpus rows move",
+        "none. 3 of 500,004 real cis-allele rows move",
+        # The order the guard already caught, kept here as the control.
+        "no. 3 rows move",
+        "none. 2 rows of 500,004 respell",
+    ],
+)
+def test_a_nonzero_count_in_either_order_is_still_a_contradiction(value: str) -> None:
+    """Rescuing the zero must not blunt the tripwire for a real move."""
+    assert check_representation_change.contradicted_decline(value) is not None, (
+        f"{value!r} declines while disclosing a move and must be refused"
+    )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Punctuation must stop the intervening-word run, or the leading count of
+        # an unrelated clause gets read as the moving count. Without that, `1` here
+        # would pair with the `rows move` three words later and this honest decline
+        # would fail the build.
+        "none. 1 issue filed, 0 rows move",
+        "none. 12 clauses cited; 0 rows move",
+        "none. 4 tests added, no rows move",
+        # No number at all, and the ordinary shape of most declines.
+        "none. Tests only; no watched file is touched.",
+    ],
+)
+def test_allowing_words_before_rows_did_not_blunt_the_decline_path(value: str) -> None:
+    """The control on the widening: three words, not any distance.
+
+    Reaching a noun phrase before `rows` means a nonzero count elsewhere in the
+    sentence could pair with a *different* clause's `rows move`. Punctuation is
+    what prevents it, so these pin the boundary rather than the capability.
+    """
+    assert check_representation_change.contradicted_decline(value) is None, (
+        f"{value!r} is an honest decline and must not be read as a disclosure"
+    )
+
+
+def test_the_documented_zero_passes_the_whole_check_not_only_the_predicate() -> None:
+    """End-to-end, because #1647 was reported against the CLI's exit code.
+
+    `contradicted_decline` returning `None` is necessary but not sufficient —
+    the reported symptom was `check_representation_change.py` exiting 1 on a
+    watched change, which is what actually blocks the merge.
+    """
+    ok, _message = check(
+        ["src/normalize/merge.rs"],
+        "Representation-Change: none. 0 of 950 rows move.",
+    )
+    assert ok, "the documented quantified-zero trailer must pass the full check"
+
+
 def test_the_two_decline_rules_agree_value_by_value() -> None:
     """The vocabulary test above compares word lists; this one compares *verdicts*.
 
