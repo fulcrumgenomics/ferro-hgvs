@@ -2734,6 +2734,46 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     //
     // Pinned by `issue_1040_inv_overrecognition_probes::
     // a_derived_whole_block_inversion_outranks_the_codon_exception`.
+    //
+    // `coalesce_compensating_gap_split` runs first: a split whose boundaries the
+    // alignment manufactured is put back together as one span, which then
+    // arrives below as a single piece and is typed by
+    // `crate::normalize::rules` rather than needing the inversion gate at all.
+    // It is placed here, after the weight bound, for the same reason the call
+    // below is — it widens.
+    //
+    // Scoped to the two `partition_block_canonical` arms, and the scoping is a
+    // **measurement boundary, not a belief**: the defect is that partitioner's,
+    // and whether the same rule is right for `partition_block` is a question
+    // with its own blast radius that this change does not answer. Left unscoped
+    // it does fire on the live arm — measured, once, on a 164 nt `n.` block that
+    // `partition_block` splits into eighteen members and this merges into one
+    // spanning `delins`. That may well be the better description; it is not one
+    // to ship as a side effect of fixing a different arm, and the shipped output
+    // must not move in a pre-flip change. Remove the scoping when `live` goes.
+    //
+    // Written as a positive match over the arms it argues for, like the call
+    // above, and **not** as `!= Live`. That negation also selects
+    // [`PartitionRule::Shadow`], whose pieces come from
+    // `partition_block_sequence_first` — boundaries taken from the alignment
+    // steps common to *every* minimal alignment, which is precisely the set no
+    // alignment can have manufactured. Applying a "your boundaries are a shifted
+    // coincidence" rule there contradicts its own premise, and nothing below
+    // measures or pins that arm.
+    //
+    // The limit this scoping does **not** reach, stated rather than implied:
+    // every non-`Live` arm falls back to `partition_block` when its own splitter
+    // declines, so on a `canonical` bake-off run a declining block still reaches
+    // this rule with live pieces. The gate keys on the arm, not on which
+    // partitioner produced the pieces. Shipped output is unaffected either way —
+    // `FERRO_PARTITION` unset is `Live` — but a bake-off column can carry a
+    // widening the arm it is labelled with did not cause.
+    if matches!(
+        partition_rule(),
+        PartitionRule::Canonical | PartitionRule::CanonicalCoalesced
+    ) {
+        coalesce_compensating_gap_split(&mut pieces, &ref_bytes);
+    }
     coalesce_whole_block_inversion(&mut pieces, &ref_bytes);
 
     // Applied *after* the weight bound, deliberately. The bound is a statement
@@ -4661,6 +4701,179 @@ fn split_concealed_separations(
         }
     }
     *pieces = split;
+}
+
+/// Fewest members a split must have before it can be read as manufactured.
+///
+/// **Three**, and the boundary is a real distinction rather than a tuning knob.
+/// A split with exactly two members has exactly one gap, and one gap between a
+/// growing member and a shrinking one is equally the signature of a genuine
+/// indel pair — which this repository has adjudicated in both directions at
+/// that arity and found nothing in the sequence that separates them:
+///
+/// | block | pieces | verdict | authority |
+/// |---|---|---|---|
+/// | `A -> CAC` (#1260) | two insertions | **split** | PR #1285 exists to make it split |
+/// | `GC -> CGA` (#999) | insertion + substitution | **split** | `#999-neg-split` |
+/// | `NR_TEST.1:n.[8del;10_11insA]` | deletion + insertion | **split** | `general.md:34` |
+/// | `GCT -> AGC` (#1034) | insertion + deletion | **merge** | it is an inversion |
+///
+/// The last row is the one that looks like a counterexample and is not: it is
+/// merged by [`coalesce_whole_block_inversion`] on the strength of
+/// `inversion.md:5`, a *sequence* relation over the whole span, not by anything
+/// this rule could see. So two members are left to the rules that have a clause
+/// for them.
+///
+/// At three or more, the alignment has carried one shift across **several**
+/// boundaries. Two independent variants cannot do that: each opens and closes
+/// its own gap. `delins.md:44-47`'s own worked example is a four-member
+/// alternative, which is the arity the passage is written about.
+///
+/// Measured: without this floor the rule merges `NR_TEST.1:n.[8del;10_11insA]`
+/// and `NC_TEST.1:g.[261del;263_264insA]`, both of which `general.md:34` keeps
+/// individual and both of which are pinned by name.
+const MIN_MANUFACTURED_SPLIT_MEMBERS: usize = 3;
+
+/// Merge a split whose member boundaries rest on matches the alignment
+/// **manufactured**, by inserting somewhere and deleting somewhere else.
+///
+/// # The defect
+///
+/// [`partition_block_canonical`] picks a member-count-minimal *minimal*
+/// alignment, and it is free to place gaps anywhere. So it will shift the
+/// alignment and shift it back to make reference bases coincide with payload
+/// bases, then cut at those coincidences. [`partition_block`] cannot: its
+/// single-gap search exists precisely "because letting it place compensating
+/// gaps lets it manufacture matches from coincidence and shred a genuinely
+/// contiguous replacement (#1034/#1040/#182)" — the argument
+/// [`canonicalize_from_sequence`] already makes for that restriction. This rule
+/// is that same argument, stated on the derived pieces instead of on the search.
+///
+/// Measured over the committed 65-row reproducer corpus with
+/// `examples/dump_partitions --min-separation 1`, `canonical` differs from
+/// `live` on 8 blocks and every difference is an over-split:
+///
+/// ```text
+/// #1040            CAGTGACTAG -> TGTCACGACT   live 1   canonical 0:2/T|4:5/C|7:8/G|9:10/CT
+/// #160-1099        TGCTC      -> AAGCT        live 1   canonical 0:1/AA|4:5/
+/// #1034-guard-3nt  GCT        -> AGC          live 1   canonical 0:0/A|2:3/
+/// long-delins-40nt 40 nt      -> 40 nt        live 2   canonical 21 members
+/// ```
+///
+/// # The property, and why it is not a threshold
+///
+/// Walk the members and track the **cumulative reference-to-alternate offset**.
+/// Every block above is *non-monotone*: the offset goes negative and returns, or
+/// positive and returns, because the alignment both inserted and deleted. The
+/// matched runs between the members are matched only *at that shift* — align the
+/// block without the compensating gap and they are not matches at all.
+///
+/// Every block the corpus requires to **split** is monotone: `#182-a..e`,
+/// `#1230`, `#1231`, `#1233`, `#1235-n`, `#1241`, `#1157-A-padded`,
+/// `#1157-A-template`, `#1232`, `#1040-two-invs`, `#422-two-member`,
+/// `#999-neg-split`, `#1262b-split`, and — the ones that matter most, because
+/// they are *pairs of insertions* one base apart and look superficially like the
+/// shape above — `#1260a-split`, `#1260b-split`, `#1260-window` and `#1000`.
+/// (The `-split` / `-two-member` ids are deliberate: each of those blocks is a
+/// collision the corpus pins twice, and it is the two-member row that "requires
+/// to split" names. Its `-spanning` sibling records one member for the same
+/// block, so a bare `#422` / `#999-neg` / `#1262b` / `#1260a` / `#1260b` cites
+/// neither row and is not an id in `CORPUS`.) Those four have offsets `+1, +2`: strictly
+/// increasing, never returning, so the base between the two insertions is
+/// genuinely unchanged reference rather than a shifted coincidence, and
+/// `general.md:34` keeps them individual. **There are no counterexamples in the
+/// 65 rows.**
+///
+/// So this takes no threshold and no constant, which is deliberate: the live
+/// path's [`MAX_SINGLE_BASE_SEPARATION_CHANGE`] records that its own value is
+/// "under-determined", constrained only to `[2, 15)`, and that "no threshold at
+/// all satisfies #1157 and #1232 simultaneously". Porting a number from there
+/// would import that unresolved calibration; this asks a different question.
+///
+/// # The second condition, and the case that forces it
+///
+/// Non-monotonicity alone over-merges a genuinely separated allele. A `10_12del`
+/// plus a lone substitution plus a 3 nt insertion nine bases further on is also
+/// non-monotone — offsets `-3, -3, 0` — and must stay three separate members. So
+/// the columns the members claim must be at least the unchanged reference bases
+/// lying between them: `7 >= 9` is false for the fixture
+/// `a_separated_deletion_and_insertion_are_not_merged` builds and it is refused,
+/// while `#1040`'s `6 >= 5` holds. (Plain backticks, not an intra-doc link: that
+/// function is `#[cfg(test)]`, so a link to it cannot resolve in a doc build.)
+///
+/// The claimed columns are [`changed_columns_of_pieces`]' quantity — per member,
+/// the greater of its reference width and its payload length — so a pure
+/// insertion, which has no reference width at all, still counts the columns it
+/// adds. This is the same *reading* [`changed_columns_dominate_the_span`] applies
+/// to inversions, but not the same measure: that predicate sums reference width
+/// only and compares strictly (`changed * 2 > span`, i.e. changed > unchanged),
+/// whereas this one counts payload and admits equality. Do not treat the two as
+/// interchangeable.
+///
+/// # Placement
+///
+/// **After the changed-columns weight bound**, like every other rule here that
+/// widens, and for the reason [`coalesce_whole_block_inversion`] states in full:
+/// the bound compares the derived weight against *the input's*, so a widening
+/// judged before it is accepted for one spelling of a variant and refused for
+/// another — which is the non-confluence the pass exists to remove.
+///
+/// **Before [`coalesce_whole_block_inversion`]**, so a merged reverse complement
+/// arrives there as a single span and is typed `inv` by
+/// [`crate::normalize::rules`]' single-span typing rather than needing the
+/// admission gate at all.
+///
+/// # Confluence
+///
+/// It reads the pieces and the reference and never the input spelling, and under
+/// the canonical rule the pieces are a function of the denoted sequence. A
+/// deterministic function of a spelling-independent object is spelling
+/// independent, so two spellings that converged still converge.
+fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
+    if pieces.len() < MIN_MANUFACTURED_SPLIT_MEMBERS {
+        return;
+    }
+    let (start, end) = (pieces[0].ref_start, pieces[pieces.len() - 1].ref_end);
+    // Defensive: a malformed piece list is a bug upstream, not something to
+    // re-spell. Declining leaves the derived answer untouched, which the
+    // downstream round-trip guard can still refuse.
+    if start >= end || end > ref_bytes.len() {
+        return;
+    }
+    let mut cursor = start;
+    let (mut inserted, mut deleted) = (false, false);
+    let mut unchanged = 0usize;
+    for piece in pieces.iter() {
+        if piece.ref_start < cursor || piece.ref_end < piece.ref_start || piece.ref_end > end {
+            return;
+        }
+        unchanged += piece.ref_start - cursor;
+        let width = piece.ref_end - piece.ref_start;
+        // The cumulative offset is non-monotone exactly when one member grows
+        // the alternate and another shrinks it, so the *steps* are what is
+        // examined. Reading the sign of the running total instead is wrong and
+        // the test caught it: #1040's offsets are `-1, -1, -1, 0`, which never
+        // go positive even though the alignment plainly deleted and then
+        // inserted back.
+        match piece.alt.len().cmp(&width) {
+            std::cmp::Ordering::Greater => inserted = true,
+            std::cmp::Ordering::Less => deleted = true,
+            std::cmp::Ordering::Equal => {}
+        }
+        cursor = piece.ref_end;
+    }
+    // One definition of the claimed-column count, not a second inline copy of the
+    // formula — the drift `whole_block_inversion` was split out to prevent. Safe
+    // to call only here: the loop above has already refused any piece whose
+    // `ref_end` precedes its `ref_start`, which this helper subtracts unchecked.
+    if !(inserted && deleted) || changed_columns_of_pieces(pieces) < unchanged {
+        return;
+    }
+    *pieces = vec![Piece {
+        ref_start: start,
+        ref_end: end,
+        alt: denoted_by(pieces, start, end, ref_bytes),
+    }];
 }
 
 /// Merge a run of pieces that together span one inversion back into that single
@@ -12794,6 +13007,226 @@ mod tests {
             assert!(!payload_embeds_as_subsequence(b"A", b"AA"));
             // vacuous for an empty payload; the caller's member gate declines it
             assert!(payload_embeds_as_subsequence(b"ACGT", b""));
+        }
+    }
+
+    /// `coalesce_compensating_gap_split` — the `delins.md:44-47` re-spelling of
+    /// a split whose member boundaries the alignment manufactured.
+    ///
+    /// Its own module rather than `partition_rule_knob`'s: these pin the rule,
+    /// not the `FERRO_PARTITION` knob that scopes which arms reach it.
+    mod compensating_gap_split {
+        use super::*;
+
+        /// A canonical partition whose boundaries the alignment manufactured is
+        /// put back together; one whose boundaries are genuine is not.
+        ///
+        /// Both halves matter and they are asserted over the same corpus rows,
+        /// because a rule that merged everything would pass the first half
+        /// alone. The discriminator is the **cumulative reference-to-alternate
+        /// offset**: non-monotone means the alignment inserted somewhere and
+        /// deleted somewhere else, so the matched runs between the members exist
+        /// only at that shift.
+        ///
+        /// Rows and expected counts are the committed reproducer corpus's, read
+        /// through `partition_block_canonical` — the arm the rule is for.
+        #[test]
+        fn a_manufactured_split_is_merged_and_a_genuine_one_is_not() {
+            // MERGE: every one of these is a block `partition_block` keeps whole
+            // and the canonical rule shreds. The offsets are given because they
+            // are the property under test.
+            for (name, reference, alt, canonical_members) in [
+                // offsets -1, -1, -1, 0 — deleted then inserted back
+                ("#1040", &b"CAGTGACTAG"[..], &b"TGTCACGACT"[..], 4),
+                // a 21-member shredding of an equal-length 40 nt delins
+                (
+                    "long-delins-40nt",
+                    &b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT"[..],
+                    &b"CATGCATGCATGCATGCATTCATGCATGCATGCATGCATG"[..],
+                    21,
+                ),
+            ] {
+                let mut pieces =
+                    partition_block_canonical(reference, alt).expect("grid is far below the bound");
+                assert_eq!(
+                    pieces.len(),
+                    canonical_members,
+                    "{name}: the canonical partition changed; this row now measures something else"
+                );
+                coalesce_compensating_gap_split(&mut pieces, reference);
+                assert_eq!(
+                    pieces,
+                    vec![Piece {
+                        ref_start: 0,
+                        ref_end: reference.len(),
+                        alt: alt.to_vec(),
+                    }],
+                    "{name}: a split resting on manufactured matches must be one member"
+                );
+            }
+
+            // KEEP SPLIT. The first group is monotone at zero — every member is
+            // length-preserving, so no gap was placed at all and nothing was
+            // manufactured. The second is the shape that looks most like a merge
+            // candidate and is not: two insertions one base apart, offsets
+            // `+1, +2`, strictly increasing, so the base between them is
+            // genuinely unchanged reference and `general.md:34` keeps them
+            // individual. #1260 is the issue that exists to make that split
+            // happen, so merging it would undo PR #1285.
+            for (name, reference, alt, expected) in [
+                ("#182-a", &b"GATCC"[..], &b"TCTAA"[..], 2),
+                ("#1230", &b"GATG"[..], &b"CATC"[..], 2),
+                ("#1231", &b"AAT"[..], &b"CAA"[..], 2),
+                ("#1157-A-padded", &b"AGTCAGT"[..], &b"GATTA"[..], 3),
+                ("#1232", &b"CAATT"[..], &b"TA"[..], 2),
+                ("#1040-two-invs", &b"TGACA"[..], &b"CAATG"[..], 2),
+                ("#1260a-split", &b"A"[..], &b"CAC"[..], 2),
+                ("#1260b-split", &b"AA"[..], &b"CAAC"[..], 2),
+                ("#1000", &b"C"[..], &b"GCA"[..], 2),
+                ("#422-spanning", &b"CTATAG"[..], &b"AAACCCC"[..], 2),
+                // Two members, so below `MIN_MANUFACTURED_SPLIT_MEMBERS` even
+                // though both are non-monotone and dense. `#1034-guard-3nt` is
+                // an inversion and is merged by `coalesce_whole_block_inversion`
+                // instead; `#160-1099` has three unchanged bases between its
+                // members, which `general.md:34` describes individually.
+                ("#1034-guard-3nt", &b"GCT"[..], &b"AGC"[..], 2),
+                ("#160-1099", &b"TGCTC"[..], &b"AAGCT"[..], 2),
+            ] {
+                let mut pieces =
+                    partition_block_canonical(reference, alt).expect("grid is far below the bound");
+                assert_eq!(pieces.len(), expected, "{name}: canonical partition moved");
+                // The whole partition, not just its arity — the contract is that
+                // these pieces are left alone, and a count survives a rule that
+                // merged one pair and split another. Same form as
+                // `a_separated_deletion_and_insertion_are_not_merged` below.
+                let before = pieces.clone();
+                coalesce_compensating_gap_split(&mut pieces, reference);
+                assert_eq!(
+                    pieces, before,
+                    "{name}: a genuine separation must survive untouched"
+                );
+            }
+        }
+
+        /// The density condition, and the case that forces it to exist.
+        ///
+        /// Non-monotonicity alone is not enough: a genuinely separated allele —
+        /// a deletion and an insertion far apart — is non-monotone too, and must
+        /// stay two members. What separates it is that the unchanged bases
+        /// between the members outnumber the columns the members claim.
+        ///
+        /// Asserted on constructed pieces rather than on a partitioned block,
+        /// because the point is the predicate's boundary and a block would also
+        /// be exercising the partitioner's choice of alignment.
+        #[test]
+        fn a_separated_deletion_and_insertion_are_not_merged() {
+            let reference = b"ACGTACGTACGTACGTACGTACGT";
+            // A deletion, a substitution and an insertion: offsets -3, -3, 0, so
+            // non-monotone. Three members and not two, because two would stop at
+            // `MIN_MANUFACTURED_SPLIT_MEMBERS` and never reach the density test
+            // this pins — the middle substitution is what makes the case
+            // reachable at all.
+            //
+            // Claimed columns max(3,0) + max(1,1) + max(0,3) = 7; unchanged bases
+            // between the members (16-13) + (23-17) = 9. So 7 < 9 and it refuses.
+            let mut separated = vec![
+                Piece {
+                    ref_start: 10,
+                    ref_end: 13,
+                    alt: Vec::new(),
+                },
+                Piece {
+                    ref_start: 16,
+                    ref_end: 17,
+                    alt: b"G".to_vec(),
+                },
+                Piece {
+                    ref_start: 23,
+                    ref_end: 23,
+                    alt: b"ACC".to_vec(),
+                },
+            ];
+            let before = separated.clone();
+            coalesce_compensating_gap_split(&mut separated, reference);
+            assert_eq!(
+                separated, before,
+                "9 unchanged bases outnumber 7 claimed columns; these are separate variants"
+            );
+
+            // Bring them together and the same shape does merge: with the
+            // substitution one base past the deletion and the insertion flush
+            // against it, 7 claimed columns against 1 unchanged base.
+            let mut adjacent = vec![
+                Piece {
+                    ref_start: 10,
+                    ref_end: 13,
+                    alt: Vec::new(),
+                },
+                Piece {
+                    ref_start: 14,
+                    ref_end: 15,
+                    alt: b"G".to_vec(),
+                },
+                Piece {
+                    ref_start: 15,
+                    ref_end: 15,
+                    alt: b"ACC".to_vec(),
+                },
+            ];
+            coalesce_compensating_gap_split(&mut adjacent, reference);
+            assert_eq!(adjacent.len(), 1, "got {adjacent:?}");
+            assert_eq!(adjacent[0].ref_start, 10);
+            assert_eq!(adjacent[0].ref_end, 15);
+        }
+
+        /// Merging must never change what the pieces denote.
+        ///
+        /// Exhaustive over `{A, C}` up to length 6 both sides, through the
+        /// canonical partitioner and then this pass — the regime where
+        /// alternative minimal alignments are dense, so a rule that reconstructs
+        /// the span wrongly shows up here and nowhere cheaper.
+        #[test]
+        fn merging_a_manufactured_split_preserves_the_denoted_sequence() {
+            fn words(len: u32) -> Vec<Vec<u8>> {
+                if len == 0 {
+                    return vec![Vec::new()];
+                }
+                let mut out = Vec::new();
+                for shorter in words(len - 1) {
+                    for base in *b"AC" {
+                        let mut w = shorter.clone();
+                        w.push(base);
+                        out.push(w);
+                    }
+                }
+                out
+            }
+            let all: Vec<Vec<u8>> = (0..=6).flat_map(words).collect();
+            let mut merged = 0usize;
+            for reference in &all {
+                for alt in &all {
+                    let Some(partition) = partition_block_canonical(reference, alt) else {
+                        continue;
+                    };
+                    let mut pieces = partition.clone();
+                    coalesce_compensating_gap_split(&mut pieces, reference);
+                    if pieces != partition {
+                        merged += 1;
+                    }
+                    assert_eq!(
+                        denoted_by(&pieces, 0, reference.len(), reference),
+                        *alt,
+                        "{} -> {} stopped denoting its own block",
+                        String::from_utf8_lossy(reference),
+                        String::from_utf8_lossy(alt)
+                    );
+                }
+            }
+            assert!(
+                merged > 100,
+                "only {merged} blocks merged; a sweep that never fires the rule \
+                 proves nothing about it"
+            );
         }
     }
 
