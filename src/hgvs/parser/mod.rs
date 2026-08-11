@@ -6,11 +6,14 @@
 //!
 //! The parser supports three error handling modes:
 //!
-//! - **Strict** (default): Reject all non-standard input
+//! - **Strict**: Reject all non-standard input
 //! - **Lenient**: Auto-correct common errors with warnings
 //! - **Silent**: Auto-correct common errors without warnings
 //!
-//! Use [`parse_hgvs_with_config`] to specify the error handling mode.
+//! A mode is applied only by [`parse_hgvs_with_config`]; strict is
+//! [`ErrorConfig::default`], so `parse_hgvs_with_config(input,
+//! ErrorConfig::default())` is the strict entry. [`parse_hgvs`] applies **no**
+//! mode at all — see its own documentation (#1632).
 
 pub mod accession;
 pub mod edit;
@@ -27,8 +30,41 @@ use crate::hgvs::HgvsVariant;
 
 /// Parse an HGVS string into a variant
 ///
-/// Uses strict error handling mode by default. For configurable error handling,
-/// use [`parse_hgvs_with_config`] instead.
+/// # Error handling: this entry applies the grammar only
+///
+/// `parse_hgvs` applies **no [`ErrorConfig`]**. It trims surrounding
+/// whitespace, runs the fast path, and falls back to the grammar; the
+/// input-hygiene ladder — both the repairs
+/// lenient mode performs and the parse-stage refusals that make strict strict —
+/// runs only in [`parse_hgvs_with_config`]. So this is not "strict mode": it is
+/// a third behaviour that is neither mode, and it accepts inputs strict rejects.
+/// For example `NM_024312.4:r.-6_-3g[6]` states a base label the range already
+/// determines; `parse_hgvs` returns it unchanged, while
+/// `parse_hgvs_with_config(_, ErrorConfig::strict())` refuses it by name.
+///
+/// Note the scope of that claim: it is the ladder that runs at the *parse*
+/// stage. Strict mode also refuses at **normalize** — a bare-transcript
+/// intronic position (`W4007`) is one, and no parse-stage entry rejects it in
+/// any mode — so switching to [`parse_hgvs_with_config`] buys the parse-stage
+/// half only.
+///
+/// Call [`parse_hgvs_with_config`] when the mode matters — validating untrusted
+/// input, or matching what the CLI does with the same string. `ferro normalize`,
+/// `ferro parse` and `ferro project` each take `--error-mode`, and all three
+/// default to `strict`.
+///
+/// Do not generalise that default to the whole crate: it runs the other way one
+/// layer down. [`ErrorConfig::default`] is strict, but `NormalizeConfig::default`
+/// sets `ErrorConfig::lenient` for backwards compatibility, so a
+/// `Normalizer::new(provider)` normalizes in **lenient** mode. Two `default()`s
+/// pointing opposite ways is the reason to name the mode you want rather than
+/// infer it.
+///
+/// This doc previously claimed strict handling "by default" (#1632). Whether
+/// the function should be routed through `ErrorConfig::strict()` to make that
+/// claim true is open; it would newly refuse inputs the crate's headline entry
+/// point accepts today. `tests/it/issue_1632_parse_entry_applies_no_mode.rs`
+/// pins the current behaviour so the two cannot drift apart again.
 ///
 /// # Performance
 ///
