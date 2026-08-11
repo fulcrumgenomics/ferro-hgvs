@@ -147,12 +147,21 @@ const DIFFERENTIAL_CASES: &[&str] = &[
     // deferral — if fast-path eligibility ever widened to reach a ring, the fast path
     // would mint a variant that skipped the validator, and `divergence` would catch it
     // here rather than in whatever consumer first failed to re-parse the result. The
-    // rejected rows agree by both-reject; the accepted rows agree by equal ASTs. ---
-    "NC_000022.11:g.100_101insATG::200_201insG", // valid ring: both accept, must agree
+    // rejected rows agree by both-reject; the `del::del` rows agree by equal ASTs.
+    //
+    // Every *insertion* row below now rejects: `validate_ring_segments_are_wellformed`
+    // requires each segment to designate a break point junction, i.e. to be a deletion
+    // (`DNA/complex.md:39`). They previously split accept/reject, so the `del::del`
+    // pair is not decoration — without it no ring reaches `divergence`'s
+    // `(Ok(a), Ok(b))` arm, and a fast path that accepted a ring while building a
+    // *different* `HgvsVariant` would agree-by-both-reject with nothing to compare. ---
+    "NC_000022.11:g.100_101insATG::200_201insG", // insertion segment: both reject
     "NC_000022.11:g.100_102insATG::200_201insG", // ring, non-adjacent anchor: both reject
     "NC_000022.11:g.100insATG::200_201insG",     // ring, single-position anchor: both reject
-    "NC_000022.11:g.[100_101insATG::200_201insG]sup", // valid `sup`-wrapped ring
+    "NC_000022.11:g.[100_101insATG::200_201insG]sup", // `sup`-wrapped insertion: both reject
     "NC_000022.11:g.[100_102insATG::200_201insG]sup", // `sup` recursion reaches the ring
+    "NC_000022.11:g.100_200del::300_400del",     // well-formed ring: both accept, equal ASTs
+    "NC_000022.11:g.[100_200del::300_400del]sup", // ditto, `sup`-wrapped
     // --- whitespace / trimming edges (ASCII and Unicode) ---
     "  NC_000001.11:g.12345A>G  ",
     "\tNM_000088.3:c.459A>G\n",

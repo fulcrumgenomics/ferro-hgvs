@@ -300,11 +300,30 @@ fn a_multi_member_allele_reports_the_first_member_in_error() {
 /// The control: a ring of legal edits stays valid and round-trips, in both
 /// spellings. Without this, tightening the ring path could pass by
 /// rejecting every ring.
+///
+/// **The control inputs changed from `g.100_101dup::200_201insG` to `del::del`**
+/// when `validate_ring_segments_are_wellformed` landed, and the reason is worth
+/// recording because the original pair is the one #1578's body names as its
+/// "legal-edit control".
+///
+/// It is still a legal-*edit* control — `dup` and `insG` violate none of the
+/// per-leaf edit-form rules this file is about, which is what it was chosen for.
+/// It is not a well-formed *ring*: `DNA/complex.md:60-64` records that the
+/// committee withdrew `::` as a general join operator precisely because it gave
+/// "one identical derivative chromosome … two different descriptions", and
+/// "recommends to describe translocations exclusively using a `delins` format".
+/// In current HGVS, `::` survives only for the ring chromosome (`:127`, `:161`),
+/// where `:130` says it marks two deletions as *connected*. So a non-deletion
+/// segment is withdrawn ISCN2016 syntax — the same ground on which
+/// `try_parse_genome_ring` already refuses a cross-accession segment.
+///
+/// The substitution preserves this test's whole purpose: `del::del` is a
+/// genuine ring, so a tightening that rejected every ring still fails here.
 #[test]
 fn a_ring_of_legal_edits_still_parses() {
     for input in [
-        "NC_000022.11:g.100_101dup::200_201insG",
-        "NC_000022.11:g.[100_101dup::200_201insG]sup",
+        "NC_000022.11:g.100_101del::200_201del",
+        "NC_000022.11:g.[100_101del::200_201del]sup",
     ] {
         let variant =
             parse_hgvs(input).unwrap_or_else(|e| panic!("`{input}` must stay valid: {e}"));

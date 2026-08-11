@@ -7304,6 +7304,22 @@ pub fn parse_variant(input: &str) -> Result<HgvsVariant, FerroError> {
         Ok(())
     })?;
 
+    // Ring-level checks, LAST of the post-parse suite. Two placements matter:
+    //
+    // - Outside `for_each_leaf`, because that walk re-wraps each segment as a
+    //   standalone `g.` leaf, which erases both the segment *order* and the fact
+    //   that the leaves belong to one ring — the two things these rules are
+    //   about. Same reason `validate_no_self_cancelling` sits outside it.
+    // - *After* the per-leaf rules, so a segment that is both an illegal edit
+    //   form and a non-deletion reports the edit-form error. That is the more
+    //   specific and more actionable diagnostic, and it is what #1578's
+    //   error-parity tests pin: a ring segment must fail exactly like its
+    //   standalone spelling. Running the ring rules first would replace those
+    //   messages wholesale (measured: it turned 7 of
+    //   `issue_1578_ring_validator_escapes`'s tests red, since their fixtures
+    //   pair an illegal edit form with an `insG` segment).
+    validate_ring_segments_are_wellformed(&variant)?;
+
     Ok(variant)
 }
 
@@ -8603,6 +8619,175 @@ fn reject_insertion_without_inserted_sequence(input: &str) -> Result<(), FerroEr
 /// reported `pos: 0`.
 fn validate_no_self_cancelling(variant: &HgvsVariant, source: &str) -> Result<(), FerroError> {
     walk_self_cancelling(variant, source, 0)
+}
+
+/// Reject a `::`-join whose segments do not describe a ring chromosome.
+///
+/// Two rules, each with its own citation:
+///
+/// - **Ordering.** `DNA/complex.md:51` — "Break point location is determined by
+///   the first break point encountered, i.e. `pter` of the chromosome is to be
+///   listed first"; `:53` — "multiple breakpoints in one chromosome are listed
+///   in order of occurrence from `pter` to `qter`"; `:55` — "variant
+///   descriptions are always in the forward orientation".
+/// - **Junction-contributing segments.** `DNA/complex.md:39` — "a double colon
+///   is used to designate break point junctions creating a ring chromosome". A
+///   `dup`, `inv`, substitution or identity segment designates no junction, so
+///   there is nothing for `::` to join. The spec spells
+///   rearrangement-plus-local-edit composites as `;` cis alleles instead
+///   (`:113`, `:117`).
+///
+/// This is the rule `rulings[self-cancelling-across-ring-junctions]` said was
+/// needed and deliberately did not write. It is emphatically **not** an overlap
+/// check: overlap between `del` segments stays legal, because that ruling
+/// decided `general.md:58` does not cross `::`. Rejecting overlap here would
+/// re-open a decided ruling through the back door.
+///
+/// **Telomere anchoring is not enforced** — see
+/// `rulings[ring-telomere-anchoring]`, `undecided`. A ring loses both telomeres,
+/// so a well-formed ring is anchored at `pter` and `qter`, and both published
+/// ring shapes are (`:127`, `:161`) — but no clause says so, and enforcing it
+/// would legislate from two examples plus biology.
+///
+/// Both rules reject only what is **definitely** wrong; see
+/// [`ring_segment_start_bounds`] for why that matters for ordering.
+fn validate_ring_segments_are_wellformed(variant: &HgvsVariant) -> Result<(), FerroError> {
+    let ring = match variant {
+        HgvsVariant::GenomeRing(ring) => ring,
+        // A `sup`-wrapped ring is still a ring (`complex.md:161`).
+        HgvsVariant::Supernumerary(inner) => match inner.as_ref() {
+            HgvsVariant::GenomeRing(ring) => ring,
+            _ => return Ok(()),
+        },
+        _ => return Ok(()),
+    };
+
+    for segment in &ring.segments {
+        if !ring_segment_designates_a_junction(segment) {
+            return Err(ring_no_junction_error());
+        }
+    }
+
+    // Compare each segment against its predecessor rather than sorting: the
+    // rule is about the order they are *listed* in, so the first descending
+    // step is the one to report.
+    for pair in ring.segments.windows(2) {
+        let (earlier, later) = (&pair[0], &pair[1]);
+        let earlier_lower = ring_segment_start_bounds(&earlier.location).map(|(lower, _)| lower);
+        let later_upper = ring_segment_start_bounds(&later.location).map(|(_, upper)| upper);
+        if let (Some(earlier_lower), Some(later_upper)) = (earlier_lower, later_upper) {
+            if later_upper < earlier_lower {
+                return Err(ring_order_error());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Whether a ring segment's edit designates a break point junction, i.e. is a
+/// deletion (`DNA/complex.md:39`).
+///
+/// `Mu::Unknown` (`?`) carries no edit to judge, so it is accepted — the same
+/// "uncertainty is not grounds to reject" stance the ordering check takes.
+fn ring_segment_designates_a_junction(
+    segment: &LocEdit<GenomeInterval, crate::hgvs::edit::NaEdit>,
+) -> bool {
+    use crate::hgvs::edit::NaEdit;
+    match segment.edit.inner() {
+        Some(edit) => matches!(
+            edit,
+            // A plain deletion, and the N-padded form whose removed size is given
+            // as a count of unknown bases (`delN[15]`). The second is not an
+            // afterthought: both ring shapes the spec publishes are annotated
+            // "breakpoint not sequenced" (`DNA/complex.md:128`, `:163`), which is
+            // exactly what `delN[]` spells — so omitting it rejected the form the
+            // spec's own examples describe in prose. An earlier revision did.
+            NaEdit::Deletion { .. } | NaEdit::NPaddedDeletion { .. }
+        ),
+        // `Mu::Unknown` carries no edit to judge. Not reachable through the ring
+        // grammar (a `?` edit fails to parse inside a `::`-join), so this arm
+        // exists for programmatically constructed rings and is deliberately
+        // permissive: it declines to call something a non-deletion when there is
+        // nothing there to read.
+        None => true,
+    }
+}
+
+/// Lower and upper bounds on where a ring segment *starts*, as positions on the
+/// `pter`→`qter` axis, or `None` when the boundary carries no comparable
+/// position.
+///
+/// **Why bounds rather than a position.** `complex.md:127` — the spec's own ring
+/// — spells both segments with uncertain boundaries
+/// (`pter_(12200001_14700000)del::(37600001_410000000)_qterdel`), so a naive
+/// integer compare either has to pick an arbitrary representative or reject the
+/// spec's own example. Returning an interval lets the caller reject only when the
+/// later segment's start is *definitely* below the earlier one's, which no amount
+/// of uncertainty can trigger by accident.
+///
+/// `pter` is the axis minimum and `qter` the maximum. `cen` is `None`: the
+/// centromere's coordinate is not derivable from the description, so its order
+/// relative to a numbered position is undecidable here.
+fn ring_segment_start_bounds(location: &GenomeInterval) -> Option<(u64, u64)> {
+    use crate::hgvs::location::{GenomePos, SpecialPosition};
+    fn axis_position(pos: &GenomePos) -> Option<u64> {
+        match pos.special {
+            Some(SpecialPosition::Pter) => Some(u64::MIN),
+            Some(SpecialPosition::Qter) => Some(u64::MAX),
+            // `cen` has no coordinate in the description itself.
+            Some(_) => None,
+            None => Some(pos.base),
+        }
+    }
+    match &location.start {
+        UncertainBoundary::Single(mu) => {
+            let pos = axis_position(mu.inner()?)?;
+            Some((pos, pos))
+        }
+        // `(a_b)` — the boundary is somewhere in `a..=b`, so those are the
+        // bounds. A missing side widens to the axis limit rather than
+        // collapsing, which keeps the comparison conservative.
+        UncertainBoundary::Range { start, end } => {
+            let lower = start.inner().and_then(axis_position).unwrap_or(u64::MIN);
+            let upper = end.inner().and_then(axis_position).unwrap_or(u64::MAX);
+            Some((lower, upper))
+        }
+    }
+}
+
+/// `DNA/complex.md:39` — a segment that designates no break junction.
+fn ring_no_junction_error() -> FerroError {
+    use crate::error::{Diagnostic, ErrorCode};
+    FerroError::parse_with_diagnostic(
+        0,
+        "every segment of a `::`-join must designate a break point junction, so \
+         each must be a deletion (`del`, or `delN[..]` for an unsequenced \
+         breakpoint); this segment describes no junction for `::` to join \
+         (DNA/complex.md:39). A segment with no edit at all is the ISCN2016 form \
+         in which the deletion was implied by the coupling, withdrawn in ISCN2020 \
+         (DNA/complex.md:60-64, :72, :84)",
+        Diagnostic::new()
+            .with_code(ErrorCode::InvalidEdit)
+            .with_hint(
+                "describe a rearrangement plus a local edit as a cis allele \
+             (`g.[<rearrangement>;<edit>]`, DNA/complex.md:113) rather than as an \
+             extra `::` segment",
+            ),
+    )
+}
+
+/// `DNA/complex.md:51`/`:53`/`:55` — segments listed out of `pter`→`qter` order.
+fn ring_order_error() -> FerroError {
+    use crate::error::{Diagnostic, ErrorCode};
+    FerroError::parse_with_diagnostic(
+        0,
+        "the segments of a `::`-join must be listed in order of occurrence from \
+         pter to qter, with pter listed first (DNA/complex.md:51, :53, :55)",
+        Diagnostic::new()
+            .with_code(ErrorCode::InvalidEdit)
+            .with_hint("list the `::` segments in ascending genomic order"),
+    )
 }
 
 /// Inner helper: `search_from` is the byte offset within `source` at

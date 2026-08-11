@@ -771,6 +771,30 @@
         }
       ],
       "rationale": "NO RULING. The question is which STAGE an absolute prohibition is enforced at, and the spec does not address stages at all — it addresses descriptions. Recorded because ferro currently answers it three different ways for clauses of identical strength, and nothing distinguishes them.\n\nTHE INCONSISTENCY, MEASURED over the corpus's 164 prohibited rows (`tests/it/corpus_prohibited_inputs.rs`). Refused at PARSE, hence in every mode: `checklist.md:31` (`c.10insT`), `:49` (`del3`), `:26` (`c.20+2_+5del`), `general.md:96` (an internal space), `general.md:58` (a `del` beside an overlapping `dup`), and `checklist.md:16` for the `*` symbol. Refused at STRICT-MODE NORMALIZE only: `checklist.md:20`, and the conflicting-geometry class. Refused NOWHERE: `checklist.md:33` (`ins6`, 24 rows), `checklist.md:16` for `+` and `-` (8 rows), `standards.md:39` (`X`, 24 rows).\n\nTHE SHARPEST INSTANCE IS INTERNAL TO ONE CLAUSE. `checklist.md:16` names three symbols in one sentence — \"`+`, `-`, or `*`\" — and ferro refuses `g.*10del` at parse while accepting `g.266+2del` and `g.266-268del` in both modes. The second sharpest is internal to one numbered ITEM: item 3 (\"Insertions\") states `:31` and `:33` four lines apart, and only `:31` is enforced.\n\nTHE TWO SIDES, NEITHER OF WHICH THE SPEC PICKS. (A) PARSE. The clauses say \"is not allowed\" without qualification, and `adjudication-precedence-order` ranks validity first and says it is never traded; a mode flag that turns a validity check off is a trade. (B) STRICT-MODE NORMALIZE. `checklist.md:5` frames the whole list as \"the most frequently offended rules\", offered to an author \"while preparing a publication\" — an author-facing style guide, not a machine-readable grammar; software that refuses at parse cannot round-trip real-world corpora full of these spellings, and ferro already has an input-hygiene mode built precisely for clauses it wants to enforce without breaking such callers.\n\nWHY IT IS NOT COSMETIC. The stage is user-visible and irreversible in one direction: a parse-stage refusal cannot be opted out of, and every caller that stores or forwards such a description is affected on upgrade, whereas a strict-stage refusal is opt-in. Choosing (A) for the three currently-unenforced clauses would newly refuse inputs ferro accepts today.\n\nWHAT IS ALREADY SETTLED AND MUST NOT BE RE-ARGUED HERE. WHETHER each of those shapes is invalid — it is; see `alignment-only-symbol-in-a-description`, `conflicting-member-geometry-refusal-scope`, and the quoted clauses above. This record is only about where the refusal lives."
+    },
+    {
+      "id": "ring-telomere-anchoring",
+      "question": "Must a ring chromosome's first `::` segment start at `pter` and its last end at `qter`, so that a ring whose segments name only interior coordinates is refused?",
+      "status": "undecided",
+      "clauses": [
+        {
+          "clause": "docs/recommendations/DNA/complex.md:28",
+          "quote": "the start of the chromosome is described as `pter`, the end as `qter`, and the centromere as `cen`"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:127",
+          "quote": "NC_000022.11:g.pter_(12200001_14700000)del::(37600001_410000000)_qterdel"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:161",
+          "quote": "NC_000022.11:g.[pter_(12200001_14700000)del::(37600001_410000000)_qterdel]sup"
+        },
+        {
+          "clause": "docs/recommendations/DNA/complex.md:13",
+          "quote": "the description of complex changes can become rather complicated and at some point, although literally correct, becomes effectively meaningless"
+        }
+      ],
+      "rationale": "**Undecided, and the reason it is not `decided` is the whole record.** A ring chromosome forms from two breaks whose ends fuse, so it loses both telomeres; a well-formed ring is therefore anchored at `pter` and `qter`, and both ring shapes the spec publishes are (`:127`, `:161`). That is an argument from biology plus two worked examples.\n\n**No clause states it.** `complex.md:28` defines what `pter`/`qter` *mean* and says nothing about requiring them, and `:13` warns that complex descriptions can be \"literally correct\" yet meaningless — which cuts against inventing a structural requirement the text does not carry. Two examples are a thin basis for a rejection rule: exactly the over-reach that a sibling rule in the same change was caught committing, when a junction rule generalised from `:39` alone and broke #1578's own published legal-edit control before the withdrawal argument at `:60-64` was found to support it. Only the argument's *strength* separated those two outcomes, which is why this one stays open rather than being decided by analogy.\n\n**What ferro does meanwhile, measured 2026-08-10:** accepts an unanchored ring. `g.100_200del::300_400del`, `g.pter_14700000del::37600001_40000000del` and `g.100_14700000del::37600001_qterdel` all parse and round-trip, pinned by `a_ring_with_no_telomere_anchor_is_still_accepted` in `tests/it/ring_segment_wellformedness.rs`. That is the status quo, not a ruling.\n\n**What would settle it.** Either a clause requiring the anchors, or a real description in which an unanchored `::` join is meaningful. A practical complication to weigh first: `:28`'s `(pter)_#` / `#_(qter)` forms and `cen` mean the predicate is not a simple \"is the first endpoint `pter`\" test, and `cen`-anchored segments do not currently parse at all — so the cost of enforcing is not only the risk of a false rejection."
     }
   ]
 }
