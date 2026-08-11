@@ -415,6 +415,7 @@ mod protein_silent_eq;
 mod protein_stop_codon_canonicalization;
 mod protein_substitution_alternatives;
 mod protein_unknown_roundtrip;
+mod readme_normalization_rules;
 mod real_data_normalization_tests;
 mod reject_coord_system_mismatch;
 mod reject_dupins;
