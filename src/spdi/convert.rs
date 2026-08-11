@@ -20,8 +20,8 @@
 //! | Deletion `g.100_102delATG` | `seq:99:ATG:` | not required (explicit form) |
 //! | Insertion `g.100_101insATG` | `seq:100::ATG` | not required |
 //! | Delins `g.100_102delinsATG` | `seq:99:ATG:ATG` | required |
-//! | Duplication `g.100_102dup` | `seq:101::ATG` | required (short form) |
-//! | Duplication `g.100_102dupATG` | `seq:101::ATG` | not required (explicit form) |
+//! | Duplication `g.100_102dup` | `seq:102::ATG` | required (short form) |
+//! | Duplication `g.100_102dupATG` | `seq:102::ATG` | not required (explicit form) |
 //! | Inversion `g.100_102inv` | `seq:99:ATG:CAT` | required (short form) |
 //! | Inversion `g.100_102invATG` | `seq:99:ATG:CAT` | not required (explicit form) |
 //! | Repeat `g.100_105AT[5]` | `seq:99:ATATAT:ATATATATAT` | required |
@@ -224,28 +224,49 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
     interval.end.inner().map(|p| p.base)
 }
 
-/// Refuse a genomic interval whose start or end carries a `+`/`-` offset (#1628).
+/// Refuse a genomic interval whose start or end holds something SPDI cannot be
+/// given a coordinate for: a `+`/`-` offset (#1628) or a `pter`/`qter`/`cen`
+/// special position (#1643).
 ///
-/// `GenomePos` can hold an offset because the parser accepts one, but neither
-/// half of the conversion can honour it: a genomic accession has no exon
-/// structure to measure an offset against — `checklist.md:16` prohibits an
-/// offset on a genomic position outright — and SPDI is purely positional, with
-/// no offset notation.
+/// The two are the same defect in two fields of one struct. `GenomePos` can
+/// hold either because the parser accepts both, and neither half of the
+/// conversion can honour them:
 ///
-/// What the conversion did instead was drop it, which is the one answer that is
-/// worse than either honest option. `g.266+2del`, `g.266-268del` and `g.266del`
-/// all flattened onto the same triple while `normalize` keeps them as three
-/// distinct descriptions, so ferro's two halves disagreed about what a variant
-/// is: descriptions the SPDI path called identical normalized to three
-/// different strings.
+/// - an **offset** has nothing on a genomic accession to be measured against —
+///   there is no exon structure, and `checklist.md:16` prohibits an offset on a
+///   genomic position outright — and SPDI has no offset notation;
+/// - a **special position** names a landmark of the assembled chromosome
+///   (`pter`, `qter`) or of its centromere annotation (`cen`), none of which a
+///   sequence accession carries. `GenomePos` stores `base: 0` beside the
+///   `special` marker precisely because there is no coordinate to store.
+///
+/// What the conversion did instead was drop both, which is the one answer worse
+/// than either honest option, and it produced the same confluence failure
+/// twice. `g.266+2del`, `g.266-268del` and `g.266del` flattened onto one triple
+/// while `normalize` keeps them as three distinct descriptions. So did
+/// `g.10_qterdelACGTACGTAC`, `g.10_cendelACGTACGTAC` and
+/// `g.10_19delACGTACGTAC` — a deletion to the q-arm telomere, one to the
+/// centromere and a literal ten-base deletion, all `NC_000001.11:9:ACGTACGTAC:`.
+///
+/// **The special-position half was reachable only when the description spells
+/// its own bases**, which is why it survived #1641 and why the guard is what
+/// closes it rather than the checks that appear to. Every other shape happened
+/// to be refused *incidentally*, by a check asking a different question:
+/// `g.pter_10del` by the 1-based position check ("position 0 is not valid in
+/// HGVS"), `g.10_qterdel` by the reference fetch (`invalid 1-based interval
+/// [10, 0]`), and the `m.`/`o.` forms by the circular-wraparound check, which
+/// reads `start > end` and reports a wraparound that is not there. Those
+/// messages diagnose the wrong thing and none of them is a guarantee — a
+/// description carrying its own bases needs no fetch and no position check, and
+/// so converted.
 ///
 /// Refusing is also what the other axes already do with the offsets that *are*
 /// legitimate there — see [`resolve_cds_to_tx`], [`resolve_tx_pos`] and
 /// [`require_simple_tx_pos`], each of which declines an intronic `c.`/`n.`/`r.`
 /// position for want of an SPDI representation. Those decline because the
-/// offset cannot be projected onto the transcript accession; this one declines
+/// position cannot be projected onto the transcript accession; this one declines
 /// because there is nothing on a genomic accession to project it against.
-fn reject_genomic_offset(
+fn reject_unresolvable_genomic_position(
     interval: &Interval<GenomePos>,
     coord: &str,
 ) -> Result<(), ConversionError> {
@@ -260,6 +281,16 @@ fn reject_genomic_offset(
                      cannot have one and SPDI has no offset notation to express it. Drop the \
                      offset, or describe the variant on a transcript accession where an offset \
                      is meaningful"
+                ),
+            });
+        }
+        if let Some(special) = endpoint.special {
+            return Err(ConversionError::InvalidPosition {
+                description: format!(
+                    "{coord}. position `{special}` names no numeric coordinate: `pter`, `qter` \
+                     and `cen` are landmarks of the assembled chromosome, not positions on the \
+                     sequence, and SPDI has no notation for them. Give the position a number, \
+                     or keep the description in HGVS"
                 ),
             });
         }
@@ -290,10 +321,11 @@ fn reject_genomic_offset(
 /// by either entry point — SPDI has no offset notation, and genomic
 /// projection is future work; both functions return
 /// [`ConversionError::MissingReferenceData`]. A `g.`/`m.`/`o.` position
-/// carrying an offset is refused outright by both entry points with
-/// [`ConversionError::InvalidPosition`]: there is no exon structure on a
-/// genomic accession to resolve it against, and dropping it made distinct
-/// descriptions share one triple (#1628).
+/// carrying an offset (#1628) or a `pter`/`qter`/`cen` special position
+/// (#1643) is refused outright by both entry points with
+/// [`ConversionError::InvalidPosition`]: neither has anything on a genomic
+/// accession to resolve it against, and dropping either made distinct
+/// descriptions share one triple.
 ///
 /// # Arguments
 ///
@@ -366,9 +398,10 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 /// `g.100_102dupATG`, `g.100A=`, etc.) emits the user-supplied bases as-is
 /// and does not consult the provider. Intronic `n.`/`r.` positions remain
 /// unsupported (SPDI has no offset notation) and return
-/// [`ConversionError::MissingReferenceData`]. An offset on a `g.`/`m.`/`o.`
-/// position is refused with [`ConversionError::InvalidPosition`] — see
-/// [`reject_genomic_offset`].
+/// [`ConversionError::MissingReferenceData`]. An offset or a `pter`/`qter`/`cen`
+/// special position on a `g.`/`m.`/`o.` position is refused with
+/// [`ConversionError::InvalidPosition`] — see
+/// [`reject_unresolvable_genomic_position`].
 ///
 /// An **unspelled identity** (`g.100=`, `g.100_102=`) therefore needs a
 /// provider: on [`hgvs_to_spdi_simple`] it returns
@@ -442,7 +475,7 @@ pub fn hgvs_to_spdi<P: ReferenceProvider + ?Sized>(
 
 /// Convert a genomic variant to SPDI (simple conversion).
 fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, ConversionError> {
-    reject_genomic_offset(&variant.loc_edit.location, "g")?;
+    reject_unresolvable_genomic_position(&variant.loc_edit.location, "g")?;
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
     let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
         ConversionError::InvalidPosition {
@@ -470,7 +503,7 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
 /// single-edit format with no native representation for circular-contig
 /// wraparound.
 fn mt_to_spdi_simple(variant: &MtVariant) -> Result<SpdiVariant, ConversionError> {
-    reject_genomic_offset(&variant.loc_edit.location, "m")?;
+    reject_unresolvable_genomic_position(&variant.loc_edit.location, "m")?;
     if let (Some(s), Some(e)) = (
         get_start_pos(&variant.loc_edit.location),
         get_end_pos(&variant.loc_edit.location),
@@ -551,7 +584,7 @@ fn genome_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &GenomeVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
-    reject_genomic_offset(&variant.loc_edit.location, "g")?;
+    reject_unresolvable_genomic_position(&variant.loc_edit.location, "g")?;
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
     let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
         ConversionError::InvalidPosition {
@@ -581,7 +614,7 @@ fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &MtVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
-    reject_genomic_offset(&variant.loc_edit.location, "m")?;
+    reject_unresolvable_genomic_position(&variant.loc_edit.location, "m")?;
     if let (Some(s), Some(e)) = (
         get_start_pos(&variant.loc_edit.location),
         get_end_pos(&variant.loc_edit.location),
@@ -622,7 +655,7 @@ fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
 /// single-edit format with no native representation for circular-contig
 /// wraparound.
 fn circular_to_spdi_simple(variant: &CircularVariant) -> Result<SpdiVariant, ConversionError> {
-    reject_genomic_offset(&variant.loc_edit.location, "o")?;
+    reject_unresolvable_genomic_position(&variant.loc_edit.location, "o")?;
     if let (Some(s), Some(e)) = (
         get_start_pos(&variant.loc_edit.location),
         get_end_pos(&variant.loc_edit.location),
@@ -666,7 +699,7 @@ fn circular_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &CircularVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
-    reject_genomic_offset(&variant.loc_edit.location, "o")?;
+    reject_unresolvable_genomic_position(&variant.loc_edit.location, "o")?;
     if let (Some(s), Some(e)) = (
         get_start_pos(&variant.loc_edit.location),
         get_end_pos(&variant.loc_edit.location),
@@ -5303,6 +5336,143 @@ mod tests {
                  only its intronic positions are unrepresentable"
             );
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Genomic special positions (#1643)
+    // ------------------------------------------------------------------
+
+    /// `pter`, `qter` and `cen` name no numeric coordinate, and `GenomePos`
+    /// stores `base: 0` for all three. `hgvs_to_spdi` read `base` and never
+    /// looked at `special`, so every special position resolved to base 0 — the
+    /// sibling of the dropped `offset` of #1628, in the same helper and with
+    /// the same consequence: descriptions of different variants collapse onto
+    /// one triple.
+    ///
+    /// **Every descriptor here spells its own bases, and that is the whole
+    /// reason the class survived #1641.** A description carrying its bases
+    /// needs no provider fetch and no position resolution, so none of the
+    /// checks that appear to cover this ever runs. The shapes that do not spell
+    /// their bases were refused *incidentally* and for the wrong reason —
+    /// `g.pter_10del` by the 1-based check ("position 0 is not valid in HGVS"),
+    /// `g.10_qterdel` by the fetch (`invalid 1-based interval [10, 0]`), the
+    /// `m.`/`o.` forms by the circular-wraparound check reporting a wraparound
+    /// that is not there — which is exactly why reading those refusals as
+    /// coverage was wrong.
+    ///
+    /// The verdict is `InvalidPosition` for the reason #1641 established for
+    /// the offset case: a special position cannot be *resolved* on a bare
+    /// genomic accession — `pter` and `qter` are landmarks of the assembled
+    /// chromosome, and `cen` of its centromere annotation, neither of which a
+    /// sequence accession carries — so refusing is the only honest answer, and
+    /// it differs from the transcript axes' `MissingReferenceData` because
+    /// those decline a *well-formed* position SPDI cannot carry.
+    ///
+    /// Both entry points and every genomic axis, so all six guard call sites
+    /// are covered, and the message is asserted rather than a bare `is_err()`:
+    /// "failed somehow" is what every one of those incidental refusals already
+    /// satisfied.
+    #[test]
+    fn a_genomic_special_position_is_refused_rather_than_flattened() {
+        let provider = identity_provider();
+        for (descriptor, coord) in [
+            ("NC_000001.11:g.10_qterdelACGTACGTAC", "g"),
+            ("NC_000001.11:g.10_cendelACGTACGTAC", "g"),
+            ("NC_000001.11:g.10_qterdupACGTACGTAC", "g"),
+            ("NC_000001.11:g.10_qterinvACGTACGTAC", "g"),
+            ("NC_000001.11:g.pter_10delACGTACGTAC", "g"),
+            ("NC_012920.1:m.10_qterdelACGTACGTAC", "m"),
+            ("NC_012920.1:m.pter_10delACGTACGTAC", "m"),
+            ("NC_001416.1:o.10_qterdelACGTACGTAC", "o"),
+            ("NC_001416.1:o.pter_10delACGTACGTAC", "o"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            for (path, converted) in [
+                ("without a provider", hgvs_to_spdi_simple(&variant)),
+                ("with a provider", hgvs_to_spdi(&variant, &provider)),
+            ] {
+                let err = match converted {
+                    Err(err) => err,
+                    Ok(spdi) => panic!(
+                        "`{descriptor}` converted {path} to `{spdi}`; the special position \
+                         was flattened onto base 0"
+                    ),
+                };
+                assert!(
+                    matches!(err, ConversionError::InvalidPosition { .. }),
+                    "`{descriptor}` {path} must be refused as InvalidPosition, got {err:?}"
+                );
+                let message = err.to_string();
+                assert!(
+                    message.contains("names no numeric coordinate"),
+                    "`{descriptor}` {path} was refused for some other reason: {message}"
+                );
+                assert!(
+                    message.contains(&format!("{coord}. position")),
+                    "`{descriptor}` {path} named the wrong coordinate axis: {message}"
+                );
+            }
+        }
+    }
+
+    /// The confluence failure the flattening produced, measured on `main`
+    /// before the guard: a deletion running to the q-arm telomere, one running
+    /// to the centromere, and a literal ten-base deletion all converted to
+    /// `NC_000001.11:9:ACGTACGTAC:`. Three descriptions of three different
+    /// things, one triple.
+    ///
+    /// Stated as the invariant rather than as three pinned errors, so it keeps
+    /// meaning something if a future change makes any of these resolvable: what
+    /// must never happen is two of them sharing an answer.
+    ///
+    /// **The denominator is asserted, because with the guard in place the
+    /// `panic!` above is unreachable.** Two of the three descriptors are now
+    /// refused and skipped by the `if let Ok`, so `seen` holds one triple and
+    /// there is no pair left to collide — exactly the `0 of 0` shape this
+    /// repository asserts denominators against. The census below is therefore
+    /// what carries the meaning today, and it is written to fail the moment a
+    /// special position becomes convertible again: that is precisely when the
+    /// collision check goes live and has to be re-read rather than trusted.
+    #[test]
+    fn special_positions_do_not_collapse_onto_one_another() {
+        /// Refused by the #1643 guard today, so they never reach `seen`.
+        const CONVERTIBLE_TODAY: usize = 1;
+
+        let provider = identity_provider();
+        let descriptors = [
+            "NC_000001.11:g.10_qterdelACGTACGTAC",
+            "NC_000001.11:g.10_cendelACGTACGTAC",
+            "NC_000001.11:g.10_19delACGTACGTAC",
+        ];
+        let mut seen: Vec<(String, String)> = Vec::new();
+        for descriptor in descriptors {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            if let Ok(spdi) = hgvs_to_spdi(&variant, &provider) {
+                let triple = spdi.to_string();
+                if let Some((other, _)) = seen.iter().find(|(_, t)| *t == triple) {
+                    panic!(
+                        "`{descriptor}` and `{other}` are different variants but share the \
+                         triple `{triple}`"
+                    );
+                }
+                seen.push((descriptor.to_string(), triple));
+            }
+        }
+
+        assert_eq!(
+            seen.len(),
+            CONVERTIBLE_TODAY,
+            "{} of {} descriptors converted, expected {CONVERTIBLE_TODAY}: {seen:?}. \
+             If this grew, a special position is convertible again and the collision check \
+             above has just become live — read what it now compares before re-pinning this \
+             number. If it shrank, the loop is comparing nothing at all",
+            seen.len(),
+            descriptors.len()
+        );
+        assert!(
+            seen.len() < descriptors.len(),
+            "every descriptor converted, so the #1643 guard is refusing nothing"
+        );
     }
 
     /// The invariant the drop breaks, stated directly: two descriptions that
