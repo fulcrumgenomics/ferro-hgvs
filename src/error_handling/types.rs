@@ -8,6 +8,38 @@ use std::fmt;
 /// Error handling mode.
 ///
 /// Controls how the parser handles common input errors.
+///
+/// # The mode is the *base* of a per-code decision, not the decision
+///
+/// The three variants below describe what happens to a code the caller has not
+/// spoken about. What actually happens to a given [`ErrorType`] is
+/// [`ErrorOverride::resolve`] applied to that code's override, and the result is
+/// a [`ResolvedAction`] read through
+/// [`ErrorConfig::should_reject`](crate::error_handling::ErrorConfig::should_reject)
+/// / [`should_correct`](crate::error_handling::ErrorConfig::should_correct) /
+/// [`should_warn`](crate::error_handling::ErrorConfig::should_warn). `--ignore
+/// W2001` on a lenient config, or `--reject W5002` on a silent one, moves that
+/// code off its mode's default in either direction.
+///
+/// **So "does this mode warn?" and "does this mode correct?" have no
+/// mode-level answer**, and this type deliberately offers no predicate that
+/// claims otherwise. Two such predicates — `emits_warnings()` and
+/// `allows_correction()` — existed here from the initial commit with no call
+/// site anywhere in the crate, and both were removed in #1629 rather than
+/// wired, because wiring either as a gate would have overruled the very
+/// overrides that exist to move a code off its mode's default. Their
+/// counter-examples are pinned by
+/// `error_handling::types::tests::warning_emission_is_per_code_not_per_mode` and
+/// by `tests/it/issue_1629_error_mode_is_not_a_warning_gate.rs`; read those
+/// before adding a predicate of that shape back.
+///
+/// [`Self::is_strict`] survives because it is not that shape: it reports the
+/// mode itself, for the handful of environmental decisions (see
+/// [`NormalizeConfig::should_reject_reduced_capability`]) that are deliberately
+/// not on the per-code errors axis at all.
+///
+/// [`ErrorType`]: crate::error_handling::ErrorType
+/// [`NormalizeConfig::should_reject_reduced_capability`]: crate::NormalizeConfig::should_reject_reduced_capability
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum ErrorMode {
     /// Reject all non-standard input.
@@ -32,19 +64,22 @@ pub enum ErrorMode {
 }
 
 impl ErrorMode {
-    /// Returns true if this mode should reject non-standard input.
+    /// Whether this is the strict mode.
+    ///
+    /// The one mode-level question with a mode-level answer, because it asks
+    /// about the mode rather than about a code's fate. Use it only where the
+    /// decision is genuinely *not* on the per-code errors axis — an
+    /// environmental limitation the caller cannot override, which is why
+    /// [`NormalizeConfig::should_reject_reduced_capability`] is its one caller.
+    /// For anything a `--ignore`/`--reject` override may legitimately move, ask
+    /// [`ErrorConfig`] about the specific [`ErrorType`] instead; see the type
+    /// docs above.
+    ///
+    /// [`ErrorConfig`]: crate::error_handling::ErrorConfig
+    /// [`ErrorType`]: crate::error_handling::ErrorType
+    /// [`NormalizeConfig::should_reject_reduced_capability`]: crate::NormalizeConfig::should_reject_reduced_capability
     pub fn is_strict(&self) -> bool {
         matches!(self, ErrorMode::Strict)
-    }
-
-    /// Returns true if this mode allows auto-correction.
-    pub fn allows_correction(&self) -> bool {
-        matches!(self, ErrorMode::Lenient | ErrorMode::Silent)
-    }
-
-    /// Returns true if this mode should emit warnings.
-    pub fn emits_warnings(&self) -> bool {
-        matches!(self, ErrorMode::Lenient)
     }
 }
 
@@ -1125,18 +1160,52 @@ mod tests {
         assert!(!ErrorMode::Silent.is_strict());
     }
 
+    /// **Why [`ErrorMode`] has no `emits_warnings` / `allows_correction`.**
+    ///
+    /// Both existed as `matches!` over the mode, from the initial commit, with
+    /// no call site in the crate (#1629). The tempting repair — "give the
+    /// predicate a call site, one gate where warnings are collected" — is what
+    /// this test refutes: an override moves a code off its mode's default in
+    /// **both** directions, so any such gate would silence a code the operator
+    /// explicitly asked to be warned about, and would speak for a code the
+    /// operator explicitly silenced.
+    ///
+    /// Asserted through the resolution machinery rather than restated, so that
+    /// re-introducing a mode-level predicate cannot be done without this test
+    /// contradicting it.
     #[test]
-    fn test_error_mode_allows_correction() {
-        assert!(!ErrorMode::Strict.allows_correction());
-        assert!(ErrorMode::Lenient.allows_correction());
-        assert!(ErrorMode::Silent.allows_correction());
-    }
+    fn warning_emission_is_per_code_not_per_mode() {
+        let code = ErrorType::WrongDashCharacter;
 
-    #[test]
-    fn test_error_mode_emits_warnings() {
-        assert!(!ErrorMode::Strict.emits_warnings());
-        assert!(ErrorMode::Lenient.emits_warnings());
-        assert!(!ErrorMode::Silent.emits_warnings());
+        // Silent is the mode a deleted `emits_warnings()` called `false`…
+        assert!(!ErrorOverride::Default
+            .resolve(ErrorMode::Silent)
+            .should_warn());
+        // …and an override on one code makes it warn anyway.
+        assert!(ErrorOverride::WarnCorrect
+            .resolve(ErrorMode::Silent)
+            .should_warn());
+
+        // Lenient is the mode it called `true`…
+        assert!(ErrorOverride::Default
+            .resolve(ErrorMode::Lenient)
+            .should_warn());
+        // …and an override on one code silences it.
+        assert!(!ErrorOverride::SilentCorrect
+            .resolve(ErrorMode::Lenient)
+            .should_warn());
+
+        // The same both ways for correction, which `allows_correction()` claimed.
+        assert!(!ErrorOverride::Accept
+            .resolve(ErrorMode::Lenient)
+            .should_correct());
+        assert!(ErrorOverride::WarnCorrect
+            .resolve(ErrorMode::Strict)
+            .should_correct());
+
+        // And the code that carried the two predicates is a real, overridable one,
+        // so none of the above is a statement about a variant nothing consults.
+        assert!(code.consults_error_config());
     }
 
     #[test]

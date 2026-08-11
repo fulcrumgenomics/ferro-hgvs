@@ -27,10 +27,19 @@
 //! warning channel (`src/normalize/mod.rs:1764`) — so a lenient caller receives
 //! `Ok(<a description denoting no sequence>)` and nothing else. Measured through
 //! the CLI, `--error-mode lenient` and `--error-mode silent` are byte-identical:
-//! the description on stdout, empty stderr, exit 0. Yet `ErrorMode` itself says
-//! they differ — `emits_warnings()` is `true` for `Lenient` and `false` for
-//! `Silent` (`src/error_handling/types.rs:46-48`), and `Lenient`'s own doc says
-//! "warnings will be generated" (`:20-24`).
+//! the description on stdout, empty stderr, exit 0. Yet the two modes are
+//! declared to differ on exactly this: `Lenient`'s own doc says "warnings will
+//! be generated", `Silent`'s says "without generating any warnings", and
+//! `ErrorOverride::Default.resolve(..)` turns that into `WarnCorrect` against
+//! `SilentCorrect`.
+//!
+//! **The mode's half of that claim is not a blanket, and #1629 removed the
+//! predicate that read like one.** `ErrorMode::emits_warnings()` used to state
+//! it at mode level with no call site anywhere; a per-code override moves a code
+//! off its mode's default in both directions, so the authority is
+//! `ErrorConfig::should_warn(code)`. What is asserted below is therefore the
+//! *default* resolution for a code nobody overrode, which is what the two doc
+//! sentences describe.
 //!
 //! So the laundering is not in the normalizer's algorithm. It is at the seam:
 //! **the mode that promises a diagnostic has no channel to deliver one through
@@ -83,7 +92,7 @@
 use ferro_hgvs::conformance::spec_corpus::{
     corpus_cores, denotation_of, Denotation, Frame, RefShape, DENSE_CORE_LEN,
 };
-use ferro_hgvs::error_handling::ErrorMode;
+use ferro_hgvs::error_handling::{ErrorMode, ErrorOverride};
 use ferro_hgvs::reference::MockProvider;
 use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};
 
@@ -211,9 +220,10 @@ fn lenient_hands_back_a_conflicting_allele_that_denotes_no_sequence() {
 ///
 /// **PINNED DEFECT.** The consequence, asserted rather than described: through
 /// `normalize`, `ErrorMode::Lenient` and `ErrorMode::Silent` are
-/// indistinguishable — same `Ok`, same string — while `ErrorMode` itself
-/// declares they differ (`emits_warnings()`, `src/error_handling/types.rs:46-48`)
-/// and `Lenient`'s doc promises "warnings will be generated" (`:20-24`).
+/// indistinguishable — same `Ok`, same string — while the two modes' default
+/// resolution declares they differ (`ErrorOverride::Default.resolve(..)` gives
+/// `WarnCorrect` against `SilentCorrect`) and `Lenient`'s doc promises
+/// "warnings will be generated".
 /// Confirmed end-to-end at the CLI: `ferro normalize --error-mode lenient` and
 /// `--error-mode silent` both print the description on stdout with empty stderr
 /// and exit 0.
@@ -245,9 +255,20 @@ fn the_conflict_is_dropped_by_the_entry_point_that_returns_the_output() {
             "{geometry}: strict must reject `{input}` AS a conflict; got: {strict}"
         );
 
-        // The defect. `ErrorMode` says these two modes differ...
+        // The defect. The two modes' DEFAULT resolution says they differ...
+        //
+        // Asked of `ErrorOverride::Default.resolve(..)` rather than of the mode:
+        // #1629 removed `ErrorMode::emits_warnings()` precisely because a
+        // mode-level predicate cannot answer this for a code that carries an
+        // override. `W5002` here carries none, so the default resolution is the
+        // authority for it, and this is the same claim the prose above makes.
         assert!(
-            ErrorMode::Lenient.emits_warnings() && !ErrorMode::Silent.emits_warnings(),
+            ErrorOverride::Default
+                .resolve(ErrorMode::Lenient)
+                .should_warn()
+                && !ErrorOverride::Default
+                    .resolve(ErrorMode::Silent)
+                    .should_warn(),
             "the modes must claim to differ for the pin below to be a contradiction"
         );
         // ...and through `normalize` they do not.

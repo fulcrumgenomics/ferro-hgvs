@@ -975,11 +975,27 @@ mod builder {
     use ferro_hgvs::error_handling::ErrorConfig;
     use ferro_hgvs::hgvs::parser::parse_hgvs_with_config;
     use ferro_hgvs::reference::mock::MockProvider;
-    use ferro_hgvs::{parse_hgvs, Normalizer};
+    use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};
 
     pub struct Build {
         pub rows: Vec<Row>,
         pub census: Census,
+    }
+
+    /// The error configuration the `default`-stamped rows are measured under (#1629).
+    ///
+    /// Named rather than implied. `Normalizer::new` takes `NormalizeConfig::default()`,
+    /// which substitutes **`ErrorConfig::lenient()`** — while `ErrorConfig::default()`
+    /// is `strict()`. So the per-row `error_mode: "default"` this generator stamps on
+    /// every normalize/invariant row means *lenient*, not strict, and nothing in the
+    /// artifact said which. `render` derives the document's `generated_under` stamp
+    /// from this same value, so the two cannot drift.
+    ///
+    /// The `error-mode` dimension is the exception and enumerates all three modes
+    /// explicitly; those rows carry their own `error_mode` and are not covered by the
+    /// document-level stamp.
+    pub fn measurement_config() -> NormalizeConfig {
+        NormalizeConfig::default()
     }
 
     /// Resolve the string ferro is actually run against.
@@ -1003,7 +1019,7 @@ mod builder {
         windows: Option<&WindowFixture>,
         sha: &str,
     ) -> anyhow::Result<Build> {
-        let normalizer = Normalizer::new(MockProvider::new());
+        let normalizer = Normalizer::with_config(MockProvider::new(), measurement_config());
         let mut rows: Vec<Row> = Vec::new();
         let mut cens = Census::default();
 
@@ -1969,12 +1985,19 @@ mod builder {
 
 mod render {
     use super::*;
+    use ferro_hgvs::conformance::error_mode_stamp::ErrorModeStamp;
 
     #[derive(Serialize)]
     struct Document<'a> {
         description: &'a str,
         spec: SpecBlock<'a>,
         dedup_rule: &'a str,
+        /// The error-handling precondition behind every row stamped
+        /// `error_mode: "default"` (#1629). Derived from
+        /// `builder::measurement_config`, so it cannot disagree with the
+        /// normalizer that produced those rows. Rows in the `error-mode`
+        /// dimension name their own mode and are not covered by it.
+        generated_under: ErrorModeStamp,
         census: &'a census::Census,
         summary: Summary,
         rows: &'a [Row],
@@ -2030,6 +2053,7 @@ mod render {
                  an existing test. hgvs_spec_normalization.json + idempotency_tests saturate \
                  (normalize|display-roundtrip|idempotency|reject, default, <every harvested \
                  target>); those tuples are never re-emitted here.",
+            generated_under: ErrorModeStamp::of(&builder::measurement_config().error_config),
             census: &build.census,
             summary,
             rows: &build.rows,
