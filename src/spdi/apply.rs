@@ -428,11 +428,49 @@ fn triples_are_disjoint(ordered: &[&SpdiVariant]) -> bool {
 /// accession they act on.
 ///
 /// `None` when a single resulting sequence is undefined or cannot be derived —
-/// see [`apply_to_reference`]'s error list, which this decides.
+/// see [`apply_to_reference`]'s error list, which this decides. Use
+/// [`variant_edit_triples_reason`] when the *cause* matters.
 pub(crate) fn variant_edit_triples<P: ReferenceProvider + ?Sized>(
     variant: &HgvsVariant,
     provider: &P,
 ) -> Option<(String, Vec<SpdiVariant>)> {
+    variant_edit_triples_reason(variant, provider).ok()
+}
+
+/// Why a description yields no SPDI triple set.
+///
+/// The split exists because the two are **not equally severe**, and a caller
+/// that cannot tell them apart draws the wrong conclusion from a decline. See
+/// [`compare_denoted_sequences`], where reading every decline as
+/// [`Self::SelfContradictory`] produced 328 false alarms across the test suite
+/// in a single run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NoTriples {
+    /// The applier could not transliterate it: a shape with no single resulting
+    /// sequence by construction (a trans allele, a null allele, members on
+    /// different accessions), an edit SPDI cannot carry, a position it cannot
+    /// resolve, or reference data the provider does not hold.
+    ///
+    /// **A limit of the applier or of the shape, never a verdict on the
+    /// description.** The last cause is the common one and the one that misleads:
+    /// `g.1000delC` states its deleted base and so converts with no provider at
+    /// all, while the `g.1000del` a normalizer emits for it must read the
+    /// reference — so on a provider holding no bases the input converts and the
+    /// output does not, through no fault of the normalization.
+    Untransliterable,
+    /// The description states an edit set with no defined result **whatever the
+    /// reference says** — members claiming the same base, or two insertions at
+    /// one interbase with no stated order.
+    ///
+    /// A real fault in a description that claims to denote one sequence.
+    SelfContradictory,
+}
+
+/// [`variant_edit_triples`], reporting why it declined.
+pub(crate) fn variant_edit_triples_reason<P: ReferenceProvider + ?Sized>(
+    variant: &HgvsVariant,
+    provider: &P,
+) -> Result<(String, Vec<SpdiVariant>), NoTriples> {
     use crate::hgvs::variant::AllelePhase;
 
     let members: Vec<&HgvsVariant> = match variant {
@@ -440,24 +478,27 @@ pub(crate) fn variant_edit_triples<P: ReferenceProvider + ?Sized>(
             // A single resulting sequence is only well-defined for a cis allele —
             // every edit applied to the same molecule.
             if allele.phase != AllelePhase::Cis {
-                return None;
+                return Err(NoTriples::Untransliterable);
             }
             allele.variants.iter().collect()
         }
-        HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => return None,
+        HgvsVariant::NullAllele | HgvsVariant::UnknownAllele => {
+            return Err(NoTriples::Untransliterable)
+        }
         single => vec![single],
     };
     if members.is_empty() {
-        return None;
+        return Err(NoTriples::Untransliterable);
     }
 
     let mut accession: Option<String> = None;
     let mut triples = Vec::with_capacity(members.len());
     for member in members {
-        let spdi = crate::spdi::hgvs_to_spdi(member, provider).ok()?;
+        let spdi =
+            crate::spdi::hgvs_to_spdi(member, provider).map_err(|_| NoTriples::Untransliterable)?;
         match &accession {
             None => accession = Some(spdi.sequence.clone()),
-            Some(acc) if *acc != spdi.sequence => return None,
+            Some(acc) if *acc != spdi.sequence => return Err(NoTriples::Untransliterable),
             Some(_) => {}
         }
         triples.push(spdi);
@@ -488,10 +529,402 @@ pub(crate) fn variant_edit_triples<P: ReferenceProvider + ?Sized>(
         .collect();
     zero_width.sort_unstable();
     if zero_width.windows(2).any(|pair| pair[0] == pair[1]) {
-        return None;
+        return Err(NoTriples::SelfContradictory);
     }
 
-    accession.map(|acc| (acc, triples))
+    accession
+        .map(|acc| (acc, triples))
+        .ok_or(NoTriples::Untransliterable)
+}
+
+/// Why two descriptions' denoted sequences could not be compared (#1615).
+///
+/// Every variant here is a limit of the *comparison*, not a verdict on either
+/// description. They are enumerated rather than collapsed to one "skip" because
+/// a skip that reads as a pass is the failure mode the denoted-sequence oracle
+/// exists to remove: a caller that cannot say which of these it hit cannot tell
+/// a clean run from a run that compared nothing.
+///
+/// Marked `#[non_exhaustive]` so a new decline reason is additive rather than a
+/// breaking change, matching `SpdiParseError` and `ConversionError` in this
+/// module. The set is demonstrably still growing:
+/// [`Self::UnresolvableSpecialPosition`] exists only until `hgvs_to_spdi` stops
+/// resolving `pter` silently, and #1618/#1619 are two more disagreements in
+/// flight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NotComparable {
+    /// The **input** denotes no single sequence, so there is no baseline to
+    /// compare the output against.
+    ///
+    /// A multi-molecule or null allele, members on different accessions, an edit
+    /// SPDI cannot represent, a self-contradictory member set, or a stated
+    /// reference base that disagrees with the reference (the `REFSEQ_MISMATCH`
+    /// inputs normalization exists to correct). Blaming normalization for any of
+    /// those would make a fire mean two different things — the discipline
+    /// `assert_reparseable` and `assert_in_bounds` already apply.
+    InputDenotesNoSequence,
+    /// The **output** cannot be transliterated, though it is not
+    /// self-contradictory. A limit of the applier or of the provider, not of the
+    /// description — see [`NoTriples::Untransliterable`], which is exactly the
+    /// asymmetry that makes this its own verdict rather than a fire.
+    OutputUntransliterable,
+    /// One side is an allele wrapped in the predicted marker `[(…)]`, whose
+    /// members are uncertain by construction.
+    UncertainAllele,
+    /// One side names `pter`/`qter`/`cen`.
+    ///
+    /// Those carry no numeric coordinate — `GenomePos::pter()` and
+    /// `CdsPos::pter()` both set `base: 0` — and `hgvs_to_spdi` reads the `base`
+    /// field, so it resolves them *silently* to a position that is not the one
+    /// meant. Measured: `NM_003002.2:c.pterdel` transliterates to a deletion of
+    /// the sequence's LAST base. Comparing against that would report every
+    /// correct `pter` normalization as a corruption, so the pair is declined
+    /// until the transliteration is fixed.
+    UnresolvableSpecialPosition,
+    /// The two descriptions name different accessions, so their sequences are
+    /// not comparable at all. Normalization can do this legitimately (the #785
+    /// transcript-version substitution).
+    AccessionChanged,
+    /// The union of the two descriptions' spans is wider than
+    /// [`MAX_APPLY_WINDOW`].
+    WindowTooWide,
+    /// The provider could not serve the union window.
+    ReferenceUnreadable,
+}
+
+impl std::fmt::Display for NotComparable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let reason = match self {
+            Self::InputDenotesNoSequence => "the input denotes no single sequence",
+            Self::OutputUntransliterable => "the output cannot be transliterated to SPDI",
+            Self::UncertainAllele => "one side is a predicted `[(…)]` allele",
+            Self::UnresolvableSpecialPosition => "one side names pter/qter/cen",
+            Self::AccessionChanged => "the two descriptions name different accessions",
+            Self::WindowTooWide => "their union spans more than MAX_APPLY_WINDOW bases",
+            Self::ReferenceUnreadable => "the provider could not serve the union window",
+        };
+        f.write_str(reason)
+    }
+}
+
+/// The outcome of comparing the sequences two descriptions denote (#1615).
+///
+/// Deliberately **not** `#[non_exhaustive]`, unlike its
+/// [`NotComparable`] payload: `issue_1615_denoted_sequence_oracle::
+/// the_oracle_fires_on_every_recorded_defect` matches this enum exhaustively
+/// from outside the crate, which is what makes a new verdict fail to compile
+/// rather than be swallowed by a wildcard arm. A new *decline reason* is
+/// additive and belongs in `NotComparable`; a new *verdict* is a change to what
+/// the oracle can say, and every caller should have to answer for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DenotedSequenceComparison {
+    /// Both descriptions apply, and to the same bases.
+    Agree,
+    /// Both apply, and to **different** bases.
+    Differ {
+        /// The accession both descriptions act on.
+        accession: String,
+        /// 0-based start of the window both strings cover.
+        start: u64,
+        /// The reference bases over that window.
+        reference: String,
+        /// The window after applying the first description.
+        from_input: String,
+        /// The window after applying the second.
+        from_output: String,
+    },
+    /// The **output** is self-contradictory although the input denotes a
+    /// sequence: its members claim the same base, or two of its insertions share
+    /// one interbase with no stated order.
+    ///
+    /// Deliberately *not* a [`NotComparable`] variant. #1281's `g.[1del;1del]`
+    /// denotes nothing at all, which is strictly worse than denoting the wrong
+    /// thing, so folding it in with the skips would hide the more severe defect
+    /// behind the milder one. Equally deliberately, it is **narrower** than "the
+    /// output produced no triples" — see [`NotComparable::OutputUntransliterable`].
+    OutputContradictsItself,
+    /// Neither verdict is available, for a stated reason.
+    NotComparable(NotComparable),
+}
+
+/// Whether `variant` is an allele wrapped in the predicted marker `[(…)]`.
+fn is_uncertain_allele(variant: &HgvsVariant) -> bool {
+    matches!(variant, HgvsVariant::Allele(allele) if allele.uncertain)
+}
+
+/// Whether `variant` names a chromosome-arm or centromere special position.
+///
+/// Only [`crate::hgvs::location::GenomePos`] and
+/// [`crate::hgvs::location::CdsPos`] carry the marker, so only the axes built on
+/// those are walked; the rest cannot express one. See
+/// [`NotComparable::UnresolvableSpecialPosition`] for why the answer matters.
+fn names_a_special_position(variant: &HgvsVariant) -> bool {
+    use crate::hgvs::interval::{Interval, UncertainBoundary};
+    use crate::hgvs::location::{CdsPos, GenomePos};
+
+    fn boundary_is_special<T>(boundary: &UncertainBoundary<T>, special: fn(&T) -> bool) -> bool {
+        match boundary {
+            UncertainBoundary::Single(mu) => mu.inner().is_some_and(special),
+            UncertainBoundary::Range { start, end } => {
+                start.inner().is_some_and(special) || end.inner().is_some_and(special)
+            }
+        }
+    }
+    fn interval_is_special<T>(interval: &Interval<T>, special: fn(&T) -> bool) -> bool {
+        boundary_is_special(&interval.start, special) || boundary_is_special(&interval.end, special)
+    }
+    fn genomic(interval: &Interval<GenomePos>) -> bool {
+        interval_is_special(interval, |p| p.special.is_some())
+    }
+
+    match variant {
+        HgvsVariant::Allele(allele) => allele.variants.iter().any(names_a_special_position),
+        HgvsVariant::Genome(v) => genomic(&v.loc_edit.location),
+        HgvsVariant::Mt(v) => genomic(&v.loc_edit.location),
+        HgvsVariant::Circular(v) => genomic(&v.loc_edit.location),
+        HgvsVariant::Cds(v) => {
+            interval_is_special(&v.loc_edit.location, |p: &CdsPos| p.special.is_some())
+        }
+        _ => false,
+    }
+}
+
+/// Compare the sequences `input` and `output` denote against one reference
+/// window (#1615).
+///
+/// This is the primitive behind the denoted-sequence seam oracle, and it is
+/// **independent of the normalizer**: it reaches the bases through
+/// [`variant_edit_triples_reason`] and [`apply_triples`], the same SPDI-splicing
+/// walk [`apply_to_reference`] uses, so nothing here can agree with
+/// normalization merely because normalization produced it. (`EquivalenceChecker`
+/// cannot serve this role — it normalizes both sides, which is circular.)
+///
+/// Both descriptions are applied over the **union** of their two spans, one
+/// fetch, so a 3'-shift is compared where it belongs: `g.3_4del` and `g.7_8del`
+/// in a tract denote the same bases over any window containing both, and a
+/// per-description window would give each its own frame and make them look
+/// different. The comparison is ASCII-case-insensitive for the reason
+/// [`trim_common_flanks`] gives — reference FASTAs are often soft-masked and
+/// case carries no biological meaning, while one side's payload may be
+/// reference-derived (a `dup`) and the other's a literal.
+///
+/// # Declining is the default; only two outcomes are faults
+///
+/// [`DenotedSequenceComparison::Differ`] and
+/// [`DenotedSequenceComparison::OutputContradictsItself`] are the faults.
+/// Everything else the applier cannot do is a [`NotComparable`] with a stated
+/// reason, and that asymmetry is load-bearing rather than cautious: an earlier
+/// revision reported *any* untranslatable output as a fault and raised **328**
+/// false alarms over the test suite, essentially all of them one shape — an
+/// input that states its own deleted bases (`g.1000delC`, `g.[1000G>A;1001A>C]`)
+/// against an output that does not (`g.1000del`, `g.1000_1001delinsAC`), on a
+/// provider holding no reference at that locus. The input converted with no
+/// provider and the output could not, and nothing was wrong with either.
+pub fn compare_denoted_sequences<P: ReferenceProvider + ?Sized>(
+    input: &HgvsVariant,
+    output: &HgvsVariant,
+    provider: &P,
+) -> DenotedSequenceComparison {
+    use DenotedSequenceComparison as Outcome;
+
+    if names_a_special_position(input) || names_a_special_position(output) {
+        return Outcome::NotComparable(NotComparable::UnresolvableSpecialPosition);
+    }
+    // An allele wrapped in the predicted marker `[(…)]` states that its members
+    // are *uncertain*, so "which bases does it denote" is not a question it
+    // answers. `normalize` agrees and leaves such members where the caller put
+    // them — `sort_cis_members_by_genomic_order` and the sibling clamps all gate
+    // on cis-and-not-uncertain — so its output may legitimately still overlap.
+    //
+    // Checked here rather than in `variant_edit_triples_reason` on purpose: that
+    // function also backs the public `apply_to_reference` and `canonical_spdi`,
+    // and narrowing what *they* accept is a separate decision from what this
+    // comparison is willing to adjudicate.
+    if is_uncertain_allele(input) || is_uncertain_allele(output) {
+        return Outcome::NotComparable(NotComparable::UncertainAllele);
+    }
+
+    let Ok((accession, input_triples)) = variant_edit_triples_reason(input, provider) else {
+        return Outcome::NotComparable(NotComparable::InputDenotesNoSequence);
+    };
+    let (output_accession, output_triples) = match variant_edit_triples_reason(output, provider) {
+        Ok(pair) => pair,
+        Err(NoTriples::SelfContradictory) => return Outcome::OutputContradictsItself,
+        Err(NoTriples::Untransliterable) => {
+            return Outcome::NotComparable(NotComparable::OutputUntransliterable)
+        }
+    };
+    if accession != output_accession {
+        return Outcome::NotComparable(NotComparable::AccessionChanged);
+    }
+
+    let (mut start, mut end) = (u64::MAX, u64::MIN);
+    for triple in input_triples.iter().chain(&output_triples) {
+        start = start.min(triple.position);
+        // Checked for the same reason `apply_to_reference_padded` checks it: a
+        // wrap would silently shrink the window and compare the wrong bases.
+        let Some(triple_end) = triple.position.checked_add(triple.deletion.len() as u64) else {
+            return Outcome::NotComparable(NotComparable::WindowTooWide);
+        };
+        end = end.max(triple_end);
+    }
+    if start > end || end - start > MAX_APPLY_WINDOW {
+        return Outcome::NotComparable(NotComparable::WindowTooWide);
+    }
+
+    let Some(reference) = fetch_window(provider, &accession, start, end) else {
+        return Outcome::NotComparable(NotComparable::ReferenceUnreadable);
+    };
+    let from_input = match splice_denoted_sequence(&reference, start, &input_triples) {
+        Ok(bases) => bases,
+        Err(_) => return Outcome::NotComparable(NotComparable::InputDenotesNoSequence),
+    };
+    let from_output = match splice_denoted_sequence(&reference, start, &output_triples) {
+        Ok(bases) => bases,
+        // Only one of the two refusals is the description's own fault.
+        // Overlapping members claim the same base whatever the reference holds;
+        // a stated base that disagrees with the reference is a claim this
+        // comparison cannot adjudicate — and is exactly what an input carrying a
+        // `REFSEQ_MISMATCH` looks like.
+        Err(SpliceFailure::Overlapping) => return Outcome::OutputContradictsItself,
+        Err(SpliceFailure::StatedBasesMismatch) => {
+            return Outcome::NotComparable(NotComparable::OutputUntransliterable)
+        }
+    };
+
+    if same_bases(&from_input, &from_output) {
+        Outcome::Agree
+    } else {
+        Outcome::Differ {
+            accession,
+            start,
+            reference,
+            from_input,
+            from_output,
+        }
+    }
+}
+
+/// Why [`splice_denoted_sequence`] refused a triple set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SpliceFailure {
+    /// Two members claim the same reference base, so the result depends on an
+    /// order the description does not state. A fault in the description itself.
+    Overlapping,
+    /// A member's stated deleted bases disagree with the reference.
+    StatedBasesMismatch,
+}
+
+/// Splice `triples` into `reference` — the bases beginning at interbase
+/// `win_start` — and return the resulting sequence.
+///
+/// Deliberately **not** [`apply_triples`], which is shared with
+/// `EquivalenceChecker` and whose [`triples_are_disjoint`] guard reports a pure
+/// insertion flush against the 5' end of a deletion as an overlap. That
+/// combination is well defined — the payload lands at the junction, then the
+/// span is removed — and it is a shape cis alleles reach constantly: measured
+/// over one suite run, reading it as an overlap produced **233** false alarms,
+/// nearly all of them `g.[…;261_262insA;262_264A[5]]`-shaped. (Its verdict there
+/// is also input-order dependent, since the sort breaks position ties by input
+/// order.) Changing that predicate is out of scope — two pinned tests depend on
+/// its permissiveness in the other direction — so this walk is the one used for
+/// the comparison.
+///
+/// The walk is `tests/it/common/cis_apply_oracle.rs`'s, the applier every
+/// sibling-crossing test already rests on: 3'→5' so an applied splice never
+/// moves a later one's coordinates, with **longer deletions first** among
+/// members at one position so a span-claiming member is always applied before
+/// the zero-length one flush against it. Coincident insertions are refused
+/// upstream, by [`variant_edit_triples_reason`].
+fn splice_denoted_sequence(
+    reference: &str,
+    win_start: u64,
+    triples: &[SpdiVariant],
+) -> Result<String, SpliceFailure> {
+    let reference = reference.as_bytes();
+    let mut ordered: Vec<&SpdiVariant> = triples.iter().collect();
+    ordered.sort_by_key(|t| {
+        (
+            std::cmp::Reverse(t.position),
+            std::cmp::Reverse(t.deletion.len()),
+        )
+    });
+
+    let mut edited = reference.to_vec();
+    let mut claimed_from = reference.len();
+    for triple in ordered {
+        // The caller builds the window from these very triples, so an
+        // out-of-window position is unreachable; treat it defensively as a
+        // stated-bases problem rather than panicking on the slice.
+        let Some(start) = triple
+            .position
+            .checked_sub(win_start)
+            .and_then(|offset| usize::try_from(offset).ok())
+        else {
+            return Err(SpliceFailure::StatedBasesMismatch);
+        };
+        let Some(end) = start.checked_add(triple.deletion.len()) else {
+            return Err(SpliceFailure::StatedBasesMismatch);
+        };
+        if end > reference.len() {
+            return Err(SpliceFailure::StatedBasesMismatch);
+        }
+        if end > claimed_from {
+            return Err(SpliceFailure::Overlapping);
+        }
+        if !same_bases_bytes(&reference[start..end], triple.deletion.as_bytes()) {
+            return Err(SpliceFailure::StatedBasesMismatch);
+        }
+        // The splice targets the mutated buffer, whose length no longer matches
+        // the reference once a length-changing edit has been applied. The
+        // descending walk and the overlap check above already make
+        // `end <= edited.len()` hold — every applied splice sits at or past
+        // `claimed_from`, so the prefix this indexes into is untouched — but bound
+        // it explicitly anyway, so a future change cannot turn a logic slip back
+        // into the out-of-bounds panic of #1244.
+        if end > edited.len() {
+            return Err(SpliceFailure::StatedBasesMismatch);
+        }
+        edited.splice(start..end, triple.insertion.bytes());
+        // Unconditionally, including for a pure insertion — an insertion
+        // *interior* to a member 5' of it is an overlap even though it claims no
+        // base of its own, and that is precisely the overlap-conflicting allele
+        // (`g.[2_3del;2_3insAA]`) this repository declines to canonicalize. The
+        // flush case the tie-break above exists for is already safe: the
+        // span-claiming member is applied first, so the zero-length one sits
+        // exactly *at* `claimed_from` rather than past it.
+        claimed_from = start;
+    }
+    String::from_utf8(edited).map_err(|_| SpliceFailure::StatedBasesMismatch)
+}
+
+/// The base `b` is compared as, folding case and the RNA alphabet.
+///
+/// Case, for the reason [`trim_common_flanks`] gives: reference FASTAs are often
+/// soft-masked and case carries no biological meaning. `U` to `T` because the
+/// two sides of a comparison need not agree on the alphabet — an `r.` payload is
+/// transliterated to RNA by `hgvs_to_spdi` while the reference window it is
+/// spliced into is served as DNA, so `r.6_8dupugc` and `r.6_8dup` denote one
+/// sequence and would otherwise read as `UGC` against `TGC`.
+fn canonical_base(b: u8) -> u8 {
+    match b.to_ascii_uppercase() {
+        b'U' => b'T',
+        other => other,
+    }
+}
+
+/// Whether two base strings denote the same sequence under [`canonical_base`].
+fn same_bases(left: &str, right: &str) -> bool {
+    same_bases_bytes(left.as_bytes(), right.as_bytes())
+}
+
+fn same_bases_bytes(left: &[u8], right: &[u8]) -> bool {
+    left.len() == right.len()
+        && left
+            .iter()
+            .zip(right)
+            .all(|(l, r)| canonical_base(*l) == canonical_base(*r))
 }
 
 /// Read `[start, end)` from `accession`, or `None` if the provider cannot serve
