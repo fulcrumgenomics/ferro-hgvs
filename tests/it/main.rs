@@ -28,6 +28,7 @@ mod issue_1632_parse_entry_applies_no_mode;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
 mod residual_above_cap_confluence;
+mod stranded_identity_member;
 
 mod allele_grammar_corners;
 mod allele_trans_phase;
