@@ -102,8 +102,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 20 records, 17 decided / 3 undecided
-//! 77 clause lines, of which 17 are named by more than one record
+//! 21 records, 18 decided / 3 undecided
+//! 79 clause lines, of which 19 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -194,7 +194,8 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:82
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
-//! docs/recommendations/DNA/delins.md:83
+//! docs/recommendations/DNA/delins.md:83  [MULTI]
+//!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:84
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
@@ -218,7 +219,8 @@
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:92
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
-//! docs/recommendations/DNA/duplication.md:148
+//! docs/recommendations/DNA/duplication.md:148  [MULTI]
+//!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //! docs/recommendations/DNA/inversion.md:5
 //!     `inversion-vs-two-delins-76-83` — decided (governing)
@@ -236,6 +238,10 @@
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //! docs/recommendations/RNA/delins.md:70
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//! docs/recommendations/RNA/repeated.md:20
+//!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited, via docs/recommendations/RNA/repeated.md:20-21)
+//! docs/recommendations/RNA/repeated.md:21
+//!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited, via docs/recommendations/RNA/repeated.md:20-21)
 //! docs/recommendations/RNA/repeated.md:22
 //!     `rna-repeat-range-plus-unit-redundancy` — undecided (cited)
 //! docs/recommendations/RNA/repeated.md:27
@@ -272,6 +278,7 @@
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/general.md:43  [MULTI]
+//!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:44  [MULTI]
@@ -355,14 +362,21 @@
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/DNA/delins.md:83
+//!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/duplication.md:18
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//! docs/recommendations/DNA/duplication.md:148
+//!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
+//!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
 //! docs/recommendations/general.md:41
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/general.md:43
+//!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
 //! docs/recommendations/general.md:44
@@ -692,7 +706,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (20, 17, 3),
+        (21, 18, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -856,7 +870,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        17,
+        19,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 
