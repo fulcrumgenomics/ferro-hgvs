@@ -292,6 +292,25 @@ jobs:
         with:
           python-version: "3.12"
       - uses: taiki-e/install-action@a8fb21b85430c7a58551cf7ea87b03f355b826d9  # git-cliff
+      - name: Require each Representation changes entry to carry its disclosure
+        # The audit below asks whether the right commits are in the section. This asks
+        # whether each entry in the *committed* changelog says what it moved (#1556): the
+        # bullet is the commit subject and nothing else, so the rejected-vs-accepted fact
+        # the release checklist asks for had to be read out of every linked PR.
+        #
+        # A no-op on an ordinary PR, because `CHANGELOG.md` holds only released sections
+        # and release-plz has not written a pending one. It becomes the gate on the
+        # release PR, where the fix is the one command it names.
+        #
+        # It runs BEFORE the synthesis step on purpose, and moving it after would be a
+        # latent red. `squash_commits()` resolves each linked PR by walking `git log`, and
+        # synthesis ends in `git reset --soft "$PR_BASE_SHA"` — which rewinds HEAD's
+        # ancestry to the base tip as of the last PR event while leaving the worktree on
+        # the merge ref. On a PR whose base has since moved, a changelog entry can then
+        # cite a PR whose commit is no longer reachable, the lookup fails, and the script
+        # exits 2 for a cause no author can fix. Same hazard the synthesis step already
+        # documents for `git describe`.
+        run: python scripts/inject_representation_disclosure.py --check
       - name: Synthesize the squash commit this PR will become
         # Without this the audit cannot see the commit it exists to judge. GitHub builds
         # the squash subject from the PR title and the body from the PR description, and

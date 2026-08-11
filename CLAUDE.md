@@ -561,11 +561,38 @@ which is filed as a real change. This was the #1555 defect: the value used to be
 declining *with a reason* was read as a disclosure. It is not a corner case — in the v0.13.1
 cycle 8 of the 14 declines gave a reason, and the section listed 10 entries of which 2 were real.
 
-**Two limits of the section itself.** It carries the commit subject only — the trailer's text is
-unreachable from the changelog template (#1556), so the rejected-vs-accepted fact lives in the PR
-description. And a declining commit is filed under **Other** whatever its type, so a declining
-`fix:` is missing from **Fixed** (#1557); git-cliff evaluates a parser's fields as OR, not AND, so
-this cannot be repaired by adding `message` to the exclusion rule.
+**One limit of the section itself, and one that is now closed.** A declining commit is filed
+under **Other** whatever its type, so a declining `fix:` is missing from **Fixed** (#1557);
+git-cliff evaluates a parser's fields as OR, not AND, so this cannot be repaired by adding
+`message` to the exclusion rule.
+
+The other — the bullet carrying the commit subject and nothing else, so the
+rejected-vs-accepted fact had to be read out of every linked PR — is #1556, and it is closed by
+`scripts/inject_representation_disclosure.py`, which attaches each trailer's own text under its
+bullet. **It is deliberately not a git-cliff template**, and the three template routes measured
+dead in #1556 should not be re-walked: `commit.footers` is mis-parsed by git_conventional (any
+`word:` line is a footer token, so a prose body shreds it), `commit.body` has the trailer split
+out of it entirely (0 occurrences for both real v0.13.1 disclosures), and splitting on the
+unanchored literal finds only the prose *mentions* — which is worse than nothing, because it
+produces plausible output for some commits and quoted prose for others.
+
+The route that works is not through the template: read the trailer from the raw commit message
+with `git log`, and attach it to the rendered bullet afterwards — which is what
+`check_changelog_grouping.py` already does to attribute trailers, so the script imports its
+`trailer_value` rather than keeping a fourth copy of the column-0 rule.
+
+Two things it measured that contradict what `CONTRIBUTING.md` asks for, and that any future work
+here will hit again. **The trailer is not the last thing in the squash body**: GitHub appends
+CodeRabbit's auto-generated summary after it, so reading to end-of-message quotes three
+paragraphs of "Summary by CodeRabbit" as the author's disclosure. And **the trailers are not
+well-formed**, their continuation lines being unindented, so indentation cannot delimit the
+value — which is also why `git interpret-trailers --parse` reports *no* trailers at all for
+#1537, #1535 or #1547. The script stops at the next column-0 trailer token, Markdown heading or
+HTML comment instead.
+
+CI runs it as `--check` in the `Changelog grouping audit` job: a no-op on an ordinary PR, and the
+gate on the release PR, where the fix is the one command it names. It is idempotent, so re-run it
+after any push that makes release-plz regenerate the pending section.
 
 **It must be in the PR description, not only in a commit message.** GitHub builds the squash
 commit body from the description, and `release-plz.toml`'s parsers match the commit *footer*; a

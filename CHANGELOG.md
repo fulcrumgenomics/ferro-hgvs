@@ -41,7 +41,25 @@ violations.
 [#1537]: https://github.com/fulcrumgenomics/ferro-hgvs/pull/1537
 
 - *(normalize)* never split a delins into members on consecutive nucleotides ([#1537](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1537))
+  > 3 rows of 500,004 move (0.0006%) — 2 respell, 1
+  > merge toward the submitted form. Confluence drops by 6 classes of
+  > 11,272, deliberately and by operator ruling: those classes agreed only
+  > through a spec-illegal intermediate, `sequence_changed` stays 0, and the
+  > surviving form is the better-formed one. 58 separation-0 violations of
+  > `delins.md:16` are fixed.
 - *(normalize)* type the whole-block inversion by what it competes with ([#1535](https://github.com/fulcrumgenomics/ferro-hgvs/pull/1535))
+  > 0 rows move over 5,761,302 real expressions
+  > (ClinVar 500,004 / Paraphase 435,235 / CMRG 4,826,063), diffed row by
+  > row between this branch and its base on both binaries. That zero is
+  > structural for the direction that could move: a cis-allele of >=2
+  > `delins` members forming a whole-block reverse complement has **0**
+  > instances in those corpora, so the corpus cannot build the input this
+  > change converts. It is not vacuous either — 2,639 `inv` rows (897 of
+  > them genomic) and 38,190 multi-base spanning `delins` rows do reach the
+  > typing path and are byte-identical across the change, so the gate
+  > demonstrably does not over-fire. Where the shape does occur, the split
+  > spelling moves onto `inv`; the `inv` and spanning-`delins` spellings do
+  > not move on `c.`, and on a frameless axis all three converge on `inv`.
 
 ### Other
 
