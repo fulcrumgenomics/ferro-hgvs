@@ -592,9 +592,16 @@ as a repo-wide figure — for consumer impact, normalize a real corpus through b
 first word wins — so the disclosure would vanish silently, which is the worst direction this
 mechanism can fail in. The checker fails a declining trailer that also claims `<n> rows
 move|merge|split|respell` for non-zero `n`. Quantifying a *zero* is encouraged and passes
-(`none. 0 of 950 rows move`); the pattern requires the count to sit immediately before `rows`,
-which is what keeps #1547's `0 of 950 real cis-allele rows move` from tripping on the 950. It is a
-tripwire for the phrasing this repo actually uses, not a general contradiction detector.
+(`none. 0 of 950 rows move`). **The number that counts is the count, never the denominator** —
+`3 rows of 500,004 move`, `3 of 500,004 rows move` and `3 of 500,004 corpus rows move` all disclose
+three moved rows, and the rule reads three from each. It is a tripwire for the phrasing this repo
+actually uses, not a general contradiction detector — the enumerated forms live on
+`MOVEMENT_CLAIM_RE`, and that docstring is the one to extend when a new phrasing appears.
+
+This sentence used to say "the pattern requires the count to sit immediately before `rows`", and
+that was the #1647 defect rather than a description of it: in `0 of 950 rows move` the number
+immediately before `rows` is the **denominator**, so the very example offered here as passing was
+rejected, and the documented form was a merge blocker. Do not restate the rule positionally.
 
 **The section itself is audited, not just each PR's trailer.** `Changelog grouping audit` renders
 the changelog with the real `release-plz.toml` over `<latest tag>..HEAD` and checks the result

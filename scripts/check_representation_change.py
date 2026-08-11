@@ -119,17 +119,48 @@ def declines(declaration: str) -> bool:
 #: good decline often quantifies its zero, and `0 rows move over 5,761,302 real
 #: expressions` (#1535) must not trip. Excluded by requiring a nonzero digit *somewhere in
 #: the count* rather than by rejecting a bare `0`, so `0,000` and `000` are zero here too —
-#: an anchored `(?!0\b)` read them as nonzero and failed the decline. **The count must sit
-#: immediately before `rows`**,
-#: which is what keeps `0 of 950 real cis-allele rows move their normalized string`
-#: (#1547) from tripping on the 950 -- a looser pattern fires on that exemplary decline,
-#: measured.
+#: an anchored `(?!0\b)` read them as nonzero and failed the decline.
 #:
-#: It catches the phrasing this repository actually uses -- every quantified disclosure in
-#: the corpus takes this shape -- and it is not a general contradiction detector. Spelled
-#: out numbers and unquantified claims pass. It is a tripwire, not a proof.
+#: **The number that matters is the COUNT, never the denominator** (#1647). Both orders
+#: occur in this repository's own trailers and both must be read the same way:
+#:
+#:     3 rows of 500,004 move          <- count first, denominator trailing
+#:     3 of 500,004 rows move          <- count first, denominator between count and `rows`
+#:     3 of 500,004 corpus rows move   <- and a noun phrase before `rows`
+#:
+#: This used to be written as "the count must sit immediately before `rows`", which reads
+#: the second form's *denominator* as the count. That made `none. 0 of 950 rows move` --
+#: the form `CONTRIBUTING.md` and `CLAUDE.md` both offer as the way to quantify a zero, and
+#: both state passes -- fire on the 950 and fail the build. The documented form was a merge
+#: blocker.
+#:
+#: Two lookbehinds carry the distinction, and the second is not redundant:
+#:
+#: * `(?<!of\s)` refuses to read a denominator as a count, which is what rescues
+#:   `0 of 950 rows move`.
+#: * `(?<![\d,])` stops the match restarting in the MIDDLE of a grouped number. Without it
+#:   `0 of 78,298 rows move` still fires -- the comma opens a word boundary, so the scan
+#:   resumes at `298`, which is nonzero, sits immediately before `rows`, and is not preceded
+#:   by `of `. Measured; the first lookbehind alone leaves that decline failing.
+#:
+#: The third form is here because a version of this comment claiming "every quantified
+#: disclosure in the corpus takes one of the two shapes above" was refuted by a trailer that
+#: was already on `main`: #1651's `1826 of 78298 corpus rows move`. One word between the
+#: denominator and `rows` and the tripwire went silent -- with the verdict flipped to a
+#: decline that is a real move hidden behind `none`, the one direction this mechanism must
+#: never fail in. Measured, not reasoned: the two-lookbehind pattern passed that string.
+#: So up to three intervening words are allowed. Punctuation still stops the run, which is
+#: what keeps `1 issue filed, 0 rows move` from reading `1` as the moving count.
+#:
+#: It catches the phrasing this repository actually uses -- and it is not a general
+#: contradiction detector. Spelled out numbers and unquantified claims pass, as does a
+#: nonzero count separated from `rows` by more than three words. It is a tripwire, not a
+#: proof, and the way to find the next gap is to run a real trailer through it rather than
+#: to read the pattern.
 MOVEMENT_CLAIM_RE = re.compile(
-    r"\b(?=[\d,]*[1-9])\d[\d,]*\s+rows?(?:\s+of\s+[\d,]+)?\s+"
+    r"\b(?<!of\s)(?<![\d,])(?=[\d,]*[1-9])\d[\d,]*\s+(?:of\s+[\d,]+\s+)?"
+    r"(?:[A-Za-z][\w-]*\s+){0,3}rows?"
+    r"(?:\s+of\s+[\d,]+)?\s+"
     r"(?:move|moves|moved|merge|merges|merged|split|splits|"
     r"respell|respells|respelled)\b",
     re.IGNORECASE,
