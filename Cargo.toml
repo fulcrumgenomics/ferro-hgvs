@@ -402,6 +402,14 @@ name = "dump_confluence_divergences"
 required-features = ["dev"]
 test = true
 
+# `test = true` because the target carries `#[cfg(test)]` unit tests pinning the
+# three verdicts and the vacuity guard — the parts that decide whether a printed
+# figure means anything. Cargo does not build a target's tests unless it opts in.
+[[example]]
+name = "measure_spdi_key_grouping"
+required-features = ["dev"]
+test = true
+
 [[bin]]
 name = "ferro"
 path = "src/bin/ferro.rs"

@@ -809,8 +809,12 @@ fn rna_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
 
 /// Whether to rewrite RNA bases (`u/U`) to DNA (`T`) in the emitted SPDI
 /// deletion/insertion strings.
+///
+/// `pub(crate)` for [`crate::spdi::apply`], which reads a key's bases back out
+/// of the reference window and so has to fold them in the same convention this
+/// module's triples already use.
 #[derive(Debug, Clone, Copy)]
-enum AlphabetMode {
+pub(crate) enum AlphabetMode {
     Dna,
     Rna,
 }
@@ -2100,7 +2104,7 @@ where
 /// sequences as DNA even on `NR_*` and `NM_*` accessions), so RNA `u`/`U`
 /// must become `T`. Other characters are returned unchanged. The output is
 /// always uppercase to match SPDI's standard form.
-fn apply_alphabet(s: &str, alphabet: AlphabetMode) -> String {
+pub(crate) fn apply_alphabet(s: &str, alphabet: AlphabetMode) -> String {
     match alphabet {
         AlphabetMode::Dna => s.to_ascii_uppercase(),
         AlphabetMode::Rna => s

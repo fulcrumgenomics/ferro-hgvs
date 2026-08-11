@@ -77,7 +77,17 @@ use std::str::FromStr;
 /// the fields stay `pub`, so they remain readable and individually assignable.
 /// Mirrors the attribute on [`crate::project::VariantProjection`], the
 /// analogous all-`pub`-field output type #1033 marked.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// `Ord` is **derived**, so it is lexicographic over the fields in declaration
+/// order — `(sequence, position, deletion, insertion)`. That is the order
+/// [`crate::equivalence::SpdiKey`] documents and delegates to, and deriving it is
+/// what keeps a future field inside the comparison automatically: a hand-written
+/// `cmp` naming four fields silently stops being total the moment a fifth is
+/// added, while still type-checking and still agreeing with `Eq` on every value
+/// that predates it. Derived alongside the derived `Eq`, so the two cannot
+/// disagree — an `Ord` that called two unequal values equal would merge them into
+/// one `BTreeMap` bucket.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct SpdiVariant {
     /// Reference sequence identifier (e.g., "NC_000001.11").

@@ -41,6 +41,14 @@
 //! Before the window was padded they did not, and that was the defect: the
 //! window was exactly the members' own span, leaving the trim no room to move.
 //!
+//! **Also guaranteed, as of the alphabet fold:** the key does not depend on the
+//! provider's spelling conventions. Its bases are emitted uppercase, and `U` is
+//! folded to `T` on the `r.` axis, so a soft-masked FASTA and an uppercase one
+//! key the same locus identically. Stated here because it is a guarantee a
+//! *caller* has, while the mechanism is a private helper (`key_alphabet`) that
+//! rustdoc does not publish — read that helper for the one boundary the fold
+//! does not reach, a provider serving a uracil-spelled transcript.
+//!
 //! **Still not claimed:** byte-compatibility with the SPDI specification's own
 //! canonical form. The form targeted here is **3'-maximal**, per `general.md:34`;
 //! NCBI's is extended in *both* directions over the repeat, so the two differ on
@@ -54,6 +62,7 @@
 use crate::error::FerroError;
 use crate::hgvs::variant::HgvsVariant;
 use crate::reference::ReferenceProvider;
+use crate::spdi::convert::{apply_alphabet, AlphabetMode};
 use crate::spdi::SpdiVariant;
 
 /// A variant applied to its reference.
@@ -253,6 +262,7 @@ pub fn canonical_spdi<P: ReferenceProvider + ?Sized>(
     /// covers every non-repeat case in one.
     const FIRST_PAD: u64 = 64;
 
+    let alphabet = key_alphabet(variant);
     let mut pad = 0u64;
     loop {
         let (applied, window_is_final) = apply_to_reference_padded(variant, provider, pad)?;
@@ -281,11 +291,14 @@ pub fn canonical_spdi<P: ReferenceProvider + ?Sized>(
         let reaches_edge = offset + deletion.len() == applied.reference.len();
 
         if is_no_op || !reaches_edge || !window_is_final {
+            // Folded through `apply_alphabet`, not emitted raw: see
+            // `key_alphabet` for why a raw window makes the key depend on the
+            // provider's case convention rather than on the bases.
             return Ok(SpdiVariant {
                 sequence: applied.accession,
                 position: applied.start + offset as u64,
-                deletion: String::from_utf8_lossy(deletion).into_owned(),
-                insertion: String::from_utf8_lossy(insertion).into_owned(),
+                deletion: apply_alphabet(&String::from_utf8_lossy(deletion), alphabet),
+                insertion: apply_alphabet(&String::from_utf8_lossy(insertion), alphabet),
             });
         }
 
@@ -307,6 +320,86 @@ pub fn canonical_spdi<P: ReferenceProvider + ?Sized>(
         } else {
             pad.saturating_mul(2)
         };
+    }
+}
+
+/// The alphabet convention [`canonical_spdi`] renders a key's bases in.
+///
+/// **A key must not depend on the provider's spelling conventions**, and without
+/// this fold it did. The two halves of a key come from two places: the inserted
+/// payload is carried in by the triples, which [`crate::spdi::hgvs_to_spdi`] has
+/// already run through [`apply_alphabet`] with the member's own axis, while the
+/// deleted bases — and any inserted bases a `dup` or `inv` reads *out of* the
+/// reference — come from the fetched window verbatim. So one key could hold two
+/// conventions at once, and two providers serving the same sequence could key it
+/// differently.
+///
+/// Measured before this fold, on a soft-masked copy of the module's own fixture
+/// contig: `g.3_7delinsGGCTA` keyed as `2:ATTAC:GGCTA` against the uppercase
+/// contig and as `2:attac:GGCTA` against the lowercase one. Real genomic FASTAs
+/// lowercase repeat tracts, so that is the common case rather than a corner:
+/// `SpdiKey`'s whole contract is that equal keys mean equal bases, and case
+/// carries no biological meaning. `trim_common_flanks` was already
+/// case-insensitive, so only the *emitted* strings were affected — the position
+/// and the block boundaries were right all along, which is what made this
+/// invisible to every test using an uppercase fixture.
+/// `a_soft_masked_reference_keys_the_same_as_an_uppercase_one` pins it.
+///
+/// [`AlphabetMode::Rna`] additionally rewrites `U` to `T`, the same convention
+/// the `r.` axis's triples already carry. **That reconciles a uracil-spelled
+/// provider only where the U-bearing reference bases reach the emitted block
+/// through [`trim_common_flanks`], and the boundary is worth stating rather than
+/// generalising from** — the fold runs *after* both comparisons that decide the
+/// block, and each is `eq_ignore_ascii_case` only, which does not relate `U` to
+/// `T`. Measured on one 40-base transcript served both ways:
+///
+/// ```text
+///                        T-spelled provider   U-spelled provider
+///   r.[3a>g;7c>a]        2:ATTAC:GTTAA        2:ATTAC:GTTAA   agrees — the fold
+///   r.3a>g               2:A:G                2:A:G           agrees
+///   r.14dup              14::T                14::T           agrees
+///   r.13_14insu          14::T                13::T           position shifts
+///   r.3_5del             3:TTA:               declined        apply_triples
+///   r.3_7delinsggcua     2:ATTAC:GGCTA        declined        apply_triples
+/// ```
+///
+/// The two failing shapes are bounded by named code, not by luck. A **stated**
+/// deletion is validated against the reference in [`apply_triples`] before any
+/// fold, so `T` against `U` reads as a ref-mismatch and the variant is declined
+/// outright. An insertion or `dup` rolling 3' has its common-prefix scan stopped
+/// at the first `U`/`T` disagreement, so the roll is cut short and the *position*
+/// moves. Neither is reachable from a RefSeq-spelled provider — `refseq.md` and
+/// [`apply_alphabet`] both record that transcript sequences are stored as DNA —
+/// which is why this is left stated rather than fixed here: making the two
+/// comparisons alphabet-aware is a change to the `n.`/`c.` paths as well.
+/// `the_alphabet_fold_reconciles_case_and_bounds_the_uracil_case` pins every row
+/// above.
+///
+/// Note this deliberately does **not** fold [`AppliedVariant`], whose whole
+/// point is to hand back the reference window as it was served; a caller
+/// inspecting soft-masking there is asking a legitimate question. Nothing
+/// compares a folded key against an unfolded window: [`EquivalenceChecker`]
+/// compares two [`apply_triples`] results with each other, and
+/// `examples/dump_normalized_corpus.rs` compares `reference` against the frame
+/// it generated — neither reads a [`SpdiVariant`] field.
+///
+/// [`EquivalenceChecker`]: crate::equivalence::EquivalenceChecker
+fn key_alphabet(variant: &HgvsVariant) -> AlphabetMode {
+    fn is_rna(variant: &HgvsVariant) -> bool {
+        matches!(variant, HgvsVariant::Rna(_))
+    }
+    match variant {
+        // `any` rather than `all`, and the distinction is **reachable** — not, as
+        // this comment once claimed, ruled out by the members sharing one
+        // accession. `[NR_X.1:r.3a>g;NR_X.1:n.7C>A]` parses, is one cis allele on
+        // one accession, and keys; measured on a U-spelled provider it keys
+        // `2:ATTAC:GTTAA` under `any` and `2:AUUAC:GUUAA` under `all`. So `any`
+        // is what stops one key from carrying two alphabets, which is the whole
+        // point of the fold. Pinned by
+        // `a_mixed_axis_cis_allele_folds_on_any_rna_member`.
+        HgvsVariant::Allele(allele) if allele.variants.iter().any(is_rna) => AlphabetMode::Rna,
+        single if is_rna(single) => AlphabetMode::Rna,
+        _ => AlphabetMode::Dna,
     }
 }
 
@@ -1228,5 +1321,183 @@ mod tests {
     fn an_unreadable_reference_declines() {
         let variant = parse_hgvs("NC_ABSENT.1:g.3A>G").unwrap();
         assert!(apply_to_reference(&variant, &provider()).is_err());
+    }
+
+    /// The 40-base fixture served as a transcript, so the `r.` axis is reachable;
+    /// `spell` chooses the DNA or the uracil spelling of the same molecule.
+    fn transcript_provider(spell_uracil: bool) -> MockProvider {
+        use crate::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+
+        const DNA: &str = "GGATTACAGGCATTAGCCTGAGGATTACAGGCATTAGCCT";
+        let sequence = if spell_uracil {
+            DNA.replace('T', "U")
+        } else {
+            DNA.to_string()
+        };
+        let length = sequence.len() as u64;
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript::new(
+            "NR_KEY.1".to_string(),
+            Some("SYNTH".to_string()),
+            Strand::Plus,
+            sequence.clone(),
+            None,
+            None,
+            vec![Exon::with_genomic(1, 1, length, 1, length)],
+            Some("chr_key".to_string()),
+            Some(1),
+            Some(length),
+            GenomeBuild::GRCh38,
+            ManeStatus::None,
+            None,
+            None,
+        ));
+        provider.add_genomic_sequence("chr_key", sequence);
+        provider
+    }
+
+    /// The alphabet fold, in both directions: what it reconciles, and the
+    /// boundary it does not reach.
+    ///
+    /// **Case is reconciled unconditionally.** Real genomic FASTAs lowercase
+    /// repeat tracts, so the same accession can be served soft-masked by one
+    /// provider and uppercase by another; case carries no biological meaning, so
+    /// the key must not move. Every shape whose key can carry reference-derived
+    /// bases is covered — a stated deletion, an unspelled one, a `dup` and an
+    /// `inv` (both of which read their inserted bases *out of* the reference),
+    /// and a `delins` mixing both directions.
+    ///
+    /// **`U`/`T` is reconciled only part of the way, and that is the point of
+    /// asserting it.** [`key_alphabet`] folds *after* the two comparisons that
+    /// decide the emitted block, and both are `eq_ignore_ascii_case`, which does
+    /// not relate `U` to `T`. So a uracil-spelled provider agrees with a
+    /// DNA-spelled one exactly when the U-bearing bases reach the block through
+    /// [`trim_common_flanks`]; where a `U` sits in a **stated** deletion
+    /// [`apply_triples`] reads a ref-mismatch and declines, and where it stops an
+    /// insertion's common-prefix scan the roll is cut short and the position
+    /// moves. Both rows are pinned as the current answer rather than left to be
+    /// rediscovered as a surprise — a uracil-spelled transcript provider is not a
+    /// RefSeq spelling, so neither is a defect on any supported path, but a doc
+    /// claiming blanket reconciliation would be wrong and this is what keeps it
+    /// honest.
+    #[test]
+    fn the_alphabet_fold_reconciles_case_and_bounds_the_uracil_case() {
+        for descriptor in [
+            "NC_KEY.1:g.3_7delinsGGCTA",
+            "NC_KEY.1:g.3_5del",
+            "NC_KEY.1:g.3_5dup",
+            "NC_KEY.1:g.3_7inv",
+            "NC_KEY.1:g.3A>G",
+            "NC_KEY.1:g.5_6insAC",
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            let mut masked = MockProvider::new();
+            masked.add_genomic_sequence(
+                "NC_KEY.1",
+                "GGATTACAGGCATTAGCCTGAGGATTACAGGCATTAGCCT".to_ascii_lowercase(),
+            );
+            let upper =
+                canonical_spdi(&variant, &provider()).expect("the uppercase reference keys");
+            let lower = canonical_spdi(&variant, &masked).expect("the soft-masked reference keys");
+            assert_eq!(
+                upper, lower,
+                "`{descriptor}` must key identically on a soft-masked reference"
+            );
+            assert!(
+                upper.deletion.chars().all(|c| !c.is_ascii_lowercase())
+                    && upper.insertion.chars().all(|c| !c.is_ascii_lowercase()),
+                "`{descriptor}` emitted lowercase bases: {upper}"
+            );
+        }
+
+        let dna = transcript_provider(false);
+        let uracil = transcript_provider(true);
+        let keyed = |descriptor: &str, provider: &MockProvider| {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            canonical_spdi(&variant, provider)
+                .ok()
+                .map(|spdi| spdi.to_string())
+        };
+
+        // Reconciled: the U-bearing bases reach the block through the trim.
+        for descriptor in [
+            "NR_KEY.1:r.[3a>g;7c>a]",
+            "NR_KEY.1:r.3a>g",
+            "NR_KEY.1:r.14dup",
+        ] {
+            assert_eq!(
+                keyed(descriptor, &dna),
+                keyed(descriptor, &uracil),
+                "`{descriptor}` is a shape the fold does reconcile"
+            );
+        }
+        assert_eq!(
+            keyed("NR_KEY.1:r.[3a>g;7c>a]", &uracil).as_deref(),
+            Some("NR_KEY.1:2:ATTAC:GTTAA"),
+            "and it reconciles by folding, not by refusing both sides"
+        );
+
+        // Not reconciled: a stated deletion is validated before the fold.
+        for descriptor in [
+            "NR_KEY.1:r.3_5del",
+            "NR_KEY.1:r.3_7delinsggcua",
+            "NR_KEY.1:r.3_7inv",
+        ] {
+            assert!(
+                keyed(descriptor, &dna).is_some(),
+                "`{descriptor}` keys on the RefSeq spelling"
+            );
+            assert_eq!(
+                keyed(descriptor, &uracil),
+                None,
+                "`{descriptor}` is declined on a uracil provider — `apply_triples` \
+                 validates the stated deletion case-insensitively, not alphabet-insensitively"
+            );
+        }
+
+        // Not reconciled: the roll's common-prefix scan stops at the first U/T
+        // disagreement, so the position moves rather than the bases.
+        assert_eq!(
+            (
+                keyed("NR_KEY.1:r.13_14insu", &dna).as_deref(),
+                keyed("NR_KEY.1:r.13_14insu", &uracil).as_deref()
+            ),
+            (Some("NR_KEY.1:14::T"), Some("NR_KEY.1:13::T")),
+            "the 3' roll is cut short on a uracil provider"
+        );
+    }
+
+    /// A cis allele mixing an `r.` member with an `n.` one on a single accession
+    /// is reachable, so [`key_alphabet`]'s `any`-versus-`all` choice is a real
+    /// decision and not a formality.
+    ///
+    /// The comment on that arm used to say the members "must share one accession
+    /// to key at all, so in practice they share one axis". They need not: the
+    /// description below parses, is one cis allele on one accession, and keys.
+    /// With `any` the whole key is folded and agrees with the DNA-spelled
+    /// provider; with `all` it would emit `2:AUUAC:GUUAA`, one key carrying two
+    /// alphabets, which is exactly what the fold exists to prevent. The `n.`-only
+    /// spelling is asserted alongside as the control that the `r.` member is what
+    /// selects the fold.
+    #[test]
+    fn a_mixed_axis_cis_allele_folds_on_any_rna_member() {
+        let uracil = transcript_provider(true);
+        let keyed = |descriptor: &str| {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            canonical_spdi(&variant, &uracil)
+                .unwrap_or_else(|e| panic!("`{descriptor}` must key: {e}"))
+                .to_string()
+        };
+        assert_eq!(
+            keyed("[NR_KEY.1:r.3a>g;NR_KEY.1:n.7C>A]"),
+            "NR_KEY.1:2:ATTAC:GTTAA",
+            "one `r.` member folds the whole key"
+        );
+        assert_eq!(
+            keyed("NR_KEY.1:n.[3A>G;7C>A]"),
+            "NR_KEY.1:2:AUUAC:GUUAA",
+            "the same allele with no `r.` member is not folded — the control that \
+             the `r.` member is what selects `AlphabetMode::Rna`"
+        );
     }
 }
