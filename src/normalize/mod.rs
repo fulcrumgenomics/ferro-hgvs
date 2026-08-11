@@ -4864,6 +4864,54 @@ impl<P: ReferenceProvider> Normalizer<P> {
             && matches!(edit, NaEdit::Deletion { .. } | NaEdit::Duplication { .. })
             && matches!(start_axis, boundary::AxisRegion::FiveUtr)
             && matches!(end_axis, boundary::AxisRegion::ThreeUtr);
+        // **Span-preserving re-typing exception (#1536).** The bail's stated
+        // ground is that *the shuffle* has no defined semantics across an axis
+        // boundary — and it then throws away the whole per-member pipeline,
+        // canonicalization included. Re-typing a `delins` against the bases it
+        // denotes (`canonicalize_delins`: `inv`, `del`, `ins`, `dup`, `sub`,
+        // plus the shared-affix trim) is not a shuffle. It reads the reference
+        // under the member's own span and moves nothing, and the `c.` reference
+        // is a single contiguous string (`refseq.md`) whose axis labels change
+        // at `cds_start`/`cds_end` while the sequence does not — the argument
+        // #918 already makes verbatim for a whole-CDS del/dup.
+        //
+        // Discarding it is what made `c.9_*1delinsTGTGCATT` and `c.9_*1inv` two
+        // fixed points for one variant, discriminated by nothing but where the
+        // stop codon falls (#1536). Measured on a 40-mer with a real UTR at both
+        // ends: over the 33 placements of one 8-base whole-block reverse
+        // complement, the 14 that cross a CDS boundary all diverged and the 19
+        // that do not all converged — including the three that sit wholly in a
+        // UTR and the one that runs to the transcript end, so the discriminator
+        // is the boundary and not the sequence end.
+        //
+        // `Delins` and `Inversion` together, not `Delins` alone. Confluence is a
+        // property of the *pair*: the `delins` spelling reaches `inv` only if the
+        // `inv` spelling reaches the same string, and the `inv` spelling is
+        // subject to the same shared-affix trim (`c.3_10inv` -> `c.4_9inv`).
+        // Letting one through and not the other trades one non-confluence for
+        // another.
+        //
+        // Every other edit kind keeps the bail. For a `del`/`dup` the
+        // canonicalization *is* the shuffle, so admitting them would be the
+        // cross-axis shift #350 refuses and #918 carves out only for a
+        // whole-CDS span; a `sub` cannot straddle a boundary; an `ins` is
+        // already carved out by #402.
+        let is_span_preserving_retype =
+            matches!(edit, NaEdit::Delins { .. } | NaEdit::Inversion { .. });
+        // Warnings raised before `normalize_na_edit` runs, so they survive the
+        // carve-out below rather than being dropped with the early return.
+        let mut pre_warnings: Vec<NormalizationWarning> = Vec::new();
+        // Whether the span-preserving re-type carve-out below was actually
+        // taken. Recorded explicitly rather than inferred from
+        // `!pre_warnings.is_empty()`, even though the two agree today: the
+        // recursion gate near the end of this function is a control-flow
+        // decision about *this* path, and keying it on whether some vector
+        // happens to be non-empty makes it fire for any future warning pushed
+        // before `normalize_na_edit` — which the name `pre_warnings` positively
+        // invites. That is the same mistake, one level up, as deciding which
+        // warnings to drop by what the vector happened to hold; see the note on
+        // the gate itself.
+        let mut took_span_preserving_retype = false;
         if start_axis != end_axis
             && !matches!(start_axis, boundary::AxisRegion::None)
             && !matches!(end_axis, boundary::AxisRegion::None)
@@ -4876,10 +4924,23 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 start_axis: start_axis.label().to_string(),
                 end_axis: end_axis.label().to_string(),
             };
-            return Ok((
-                HV::Cds(self.canonicalize_cds_variant(variant)),
-                vec![warning],
-            ));
+            if !is_span_preserving_retype {
+                return Ok((
+                    HV::Cds(self.canonicalize_cds_variant(variant)),
+                    vec![warning],
+                ));
+            }
+            // The warning still stands, and is still true: nothing below may
+            // move this member off the footprint it arrived on. Pinning the
+            // shuffle bound to the input span is what enforces that — the
+            // re-typing runs, and a derived piece may settle anywhere inside the
+            // member's own hull, but no shift can carry it into a region the
+            // input did not already occupy. `axis_info.clamped` cannot serve
+            // here: it is clamped to the *start* endpoint's region, which for a
+            // straddling member is narrower than the member itself.
+            pre_warnings.push(warning);
+            took_span_preserving_retype = true;
+            boundaries = Boundaries::new(tx_start.saturating_sub(1), tx_end);
         }
 
         // #918: relax the CDS↔3'UTR axis clamp for a CDS-resident del/dup so
@@ -5456,6 +5517,99 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 variant.loc_edit.edit.with_same_certainty(new_edit),
             ),
         };
+
+        // #1536: the span-preserving carve-out above pinned the shuffle to the
+        // input's own span, because a straddling member has no defined 3'-most
+        // position. Re-typing can *resolve* that — the shared-affix trim moves
+        // both endpoints inward, so `c.72_*3delins…` comes back as `c.*1_*4del`,
+        // which straddles nothing. At that point the pin has no ground left and
+        // the ordinary 3' rule applies again.
+        //
+        // Not cosmetic. Without this the pass emits an output that is not its
+        // own fixed point: `c.*1_*4del` sits wholly in the 3'UTR, so normalizing
+        // it a second time shuffles it on to `c.*2_*5del`. Measured by forcing the
+        // gate below closed and re-running, on the branch as rebased:
+        // `spec_conformance_axis`'s 3' `non_idempotent_outputs` reads **6** instead
+        // of **4** — the two extra rows being exactly
+        // `s00-c3{m,p}-cds-end-del-del-p2-sep1` — and confluence degrades with it,
+        // 3' `split_three`/`split_more` reading 246/55 instead of 248/53. That is a
+        // rank-1 conformance regression rather than a representation choice.
+        //
+        // (An earlier form of this comment quoted "rose from 7 to 9". That was
+        // measured against the pre-#1599 baseline of 7; the baseline is now 4, and
+        // 4 -> 6 is re-measured rather than the old figure rebased by arithmetic.)
+        //
+        // Recursion depth is one. The re-entry is gated on the new span sitting
+        // in a single axis region, and a single-region member cannot reach the
+        // carve-out; it is gated on the variant having actually changed, so a
+        // fixed point cannot re-enter either.
+        //
+        // Only the warnings the recursion *invalidates* are dropped. Which ones
+        // those are is decided by what each warning asserts, not by what happens
+        // to be in the vector:
+        //
+        // - `pre_warnings` holds exactly one warning, pushed at exactly one site
+        //   above — `CrossAxisVariantNotShuffled`. Invalidated: the member *is*
+        //   shuffled, by the recursive call.
+        // - `AxisClampApplied` is invalidated too. Its contract is to say *why
+        //   the position did not shift further*, and on this path it did shift
+        //   further (`c.*1_*4del` -> `c.*2_*5del`), so keeping it would misreport
+        //   the result.
+        // - **Everything else is carried forward**, because nothing about
+        //   re-typing the span makes it untrue. `warnings` comes from
+        //   `normalize_na_edit`, which validates the reference and pushes
+        //   `RefSeqMismatch`; `NormalizeResult::has_ref_mismatch` is what strict
+        //   mode rejects on. Dropping that one would silently stop strict
+        //   `normalize()` refusing a straddling delins whose stated deleted bases
+        //   do not match the reference. `ReducedCapabilityNoGenome` is the same
+        //   shape — a statement about the *provider*, which a re-type cannot fix.
+        //
+        // **This is a correction, and the measurement that preceded it is why the
+        // correction was needed.** An assertion at this line over the whole
+        // `--lib --test it` suite fired on exactly one of 9 956 tests, carrying
+        // only `AxisClampApplied` — and that was read as licence to drop the lot.
+        // It is a claim about the corpus, not about the code: no corpus row builds
+        // a straddling retype whose explicit deleted bases mismatch, so
+        // `RefSeqMismatch` never reached the line and its loss was invisible.
+        // Filter on the predicate, never on what the corpus happened to produce.
+        //
+        // Carried warnings are prepended without de-duplication. The re-typed edit
+        // usually no longer states its deleted bases, so the recursive call cannot
+        // re-derive the mismatch — which is exactly why carrying is necessary; and
+        // `NormalizationWarning` is not `PartialEq`, while de-duplicating on
+        // `code()` would conflate two `RefSeqMismatch` warnings at different
+        // positions (position is the whole key — see the merge-time comment that
+        // says so). A duplicated warning is strictly preferable to a lost one.
+        // The gate reads the explicit `took_span_preserving_retype` flag rather
+        // than `!pre_warnings.is_empty()`. The two are equivalent today, since
+        // that vector has exactly one push site and it is the carve-out — but
+        // equivalent-today is what this whole comment is about: the flag says
+        // *the carve-out ran*, which is the fact the recursion depends on, while
+        // emptiness is an observable that a second push site would silently
+        // decouple from it.
+        if took_span_preserving_retype && new_variant != *variant {
+            let new_start_axis = boundary::axis_region_of(&transcript, new_tx_start);
+            let new_end_axis = boundary::axis_region_of(&transcript, new_tx_end);
+            if new_start_axis == new_end_axis
+                && !matches!(new_start_axis, boundary::AxisRegion::None)
+            {
+                let mut carried: Vec<NormalizationWarning> = warnings
+                    .into_iter()
+                    .filter(|w| !matches!(w, NormalizationWarning::AxisClampApplied { .. }))
+                    .collect();
+                let (inner, inner_warnings) = self.normalize_cds(&new_variant)?;
+                carried.extend(inner_warnings);
+                return Ok((inner, carried));
+            }
+        }
+        // Prepended, not appended: `pre_warnings` describes a decision taken
+        // before the edit was touched, so it reads first — and on the
+        // early-return path above it was the only warning, which keeps the two
+        // paths' ordering comparable.
+        if !pre_warnings.is_empty() {
+            pre_warnings.append(&mut warnings);
+            warnings = pre_warnings;
+        }
 
         // Issue #160 + #165 post-canonicalization split. The codon-frame
         // exception applies only to CDS-proper positions, which the
