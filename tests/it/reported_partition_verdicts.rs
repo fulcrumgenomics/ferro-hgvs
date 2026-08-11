@@ -239,38 +239,41 @@ const REPORTED_ROWS: &[Row] = &[
         output: "TEMPLATE:g.[19_23del;27_33del]",
         five_prime: "TEMPLATE:g.[19_23del;27_33del]",
         verdict: Verdict::Gap,
-        wanted: "TEMPLATE:g.[19_30del;33T>G]",
+        wanted: "TEMPLATE:g.19_33delinsCGG",
         authority: Authority::SpecSelfConflicting,
-        argument: "Wanted `[19_30del;33T>G]`. general.md:56 prioritises \
-                   (1) substitution over (2) deletion, so the change at 33 \
-                   should be exposed as a substitution rather than absorbed \
-                   into a deletion. The cis spelling hides it; the equivalent \
-                   span reaches it (see `1419-r1/span`), so the partition is \
-                   reachable and simply is not reached from here. \
-                   BUT the spec also answers this shape the other way: the \
-                   wanted form is a deletion plus a substitution arising from \
-                   payload bases that align with the reference, which is the \
-                   case delins.md:44-47 covers and calls out — `The \"delins\" \
-                   format is recommended`. So the spec conflicts with itself \
-                   and this row is recorded, not targeted.",
+        argument: "CORRECTED. This row wanted `[19_30del;33T>G]`, the form \
+                   #1419 asks for, on the ground that general.md:56 \
+                   prioritises (1) substitution over (2) deletion so the \
+                   change at 33 should be exposed rather than absorbed. \
+                   The decided chain, applied. `adjudication-precedence-order` records that general.md:56 \"ranks single-variant TYPE LABELS FOR ONE SPAN — it never ranks a multi-member allele against a spanning description\", and that an earlier attempt to use it that way was refuted on exactly that ground, so :56 cannot settle a merge-versus-split question at all. :56 was the whole of the argument this row used to carry. `canonical-form-choice-when-both-legal` supplies what to do instead: derive from the resulting sequence, then apply every explicit spec tie-break. :56 does not apply; delins.md:46-47 does, this being precisely the alignment-coincidence shape it constructs and then declines — `The \"delins\" format is recommended`. So the wanted form is the SPANNING delins. Ferro prints \
+                   neither form, so the verdict stays Gap.",
     },
     Row {
         label: "1419-r1/span",
         input: "TEMPLATE:g.19_33delinsCGG",
+        // Measured, unchanged by this change: ferro still prints the
+        // general.md:56 form. What moved is `wanted`, and with it `verdict` —
+        // see the `# The three #1419 spans are Gap rows that do not retain
+        // their input` section of the module docs.
         output: "TEMPLATE:g.[19_30del;33T>G]",
         five_prime: "TEMPLATE:g.[19_30del;33T>G]",
-        verdict: Verdict::Canonical,
-        wanted: "TEMPLATE:g.[19_30del;33T>G]",
+        verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.19_33delinsCGG",
         authority: Authority::SpecSelfConflicting,
-        argument: "The form #1419 names canonical: re-derived from the \
-                   resulting sequence, exposing the substitution at 33 per \
-                   general.md:56, with the retained bases placed as 3' as \
-                   possible per general.md:41. Note ferro is *leaving* the \
-                   spanning delins to reach it, and delins.md:44-47 recommends \
-                   the spanning delins for exactly this alignment coincidence \
-                   — a tension ferro's own coalesce pass encodes (see \
-                   `merge::the_coalesce_pass_reaches_the_spec_worked_example`, \
-                   which restores the single delins on the spec's own example).",
+        argument: "CORRECTED, and the verdict flipped Canonical -> Gap. This \
+                   row was marked Canonical for printing `[19_30del;33T>G]`, \
+                   argued from general.md:56 plus a general.md:41 reading that \
+                   placed the RETAINED bases as 3' as possible — which is the \
+                   3' rule inverted, since :41 assigns the most 3' position to \
+                   have been CHANGED. Both grounds are withdrawn. \
+                   The decided chain, applied. `adjudication-precedence-order` records that general.md:56 \"ranks single-variant TYPE LABELS FOR ONE SPAN — it never ranks a multi-member allele against a spanning description\", and that an earlier attempt to use it that way was refuted on exactly that ground, so :56 cannot settle a merge-versus-split question at all. :56 was the whole of the argument this row used to carry. `canonical-form-choice-when-both-legal` supplies what to do instead: derive from the resulting sequence, then apply every explicit spec tie-break. :56 does not apply; delins.md:46-47 does, this being precisely the alignment-coincidence shape it constructs and then declines — `The \"delins\" format is recommended`. So the wanted form is the SPANNING delins. That is this row's own \
+                   input, so the wanted form is what it arrived as — and ferro \
+                   splits it to `[19_30del;33T>G]` instead, which is why this is \
+                   a Gap row that does NOT retain its input. Ferro's own \
+                   coalesce pass encodes the same recommendation on the spec's \
+                   worked example (see \
+                   `merge::the_coalesce_pass_reaches_the_spec_worked_example`) \
+                   and does not reach this block.",
     },
     Row {
         label: "1419-r2/cis",
@@ -278,21 +281,26 @@ const REPORTED_ROWS: &[Row] = &[
         output: "TEMPLATE:g.[19_22del;26_36del]",
         five_prime: "TEMPLATE:g.[19_22del;26_36del]",
         verdict: Verdict::Gap,
-        wanted: "TEMPLATE:g.[19_33del;36A>G]",
+        wanted: "TEMPLATE:g.19_36delinsGCG",
         authority: Authority::SpecSelfConflicting,
-        argument: "Wanted `[19_33del;36A>G]`, for the same general.md:56 \
-                   reason as `1419-r1/cis`, one locus over — and subject to \
-                   the same delins.md:44-47 counter-reading.",
+        argument: "CORRECTED, one locus over from `1419-r1/cis` and for the \
+                   same reason: the general.md:56 ground it wanted \
+                   `[19_33del;36A>G]` on is refuted for merge-versus-split, \
+                   and the decided chain lands on the spanning delins. See \
+                   `1419-r1/cis` for the argument in full.",
     },
     Row {
         label: "1419-r2/span",
         input: "TEMPLATE:g.19_36delinsGCG",
+        // Measured, unchanged — see `1419-r1/span`.
         output: "TEMPLATE:g.[19_33del;36A>G]",
         five_prime: "TEMPLATE:g.[19_33del;36A>G]",
-        verdict: Verdict::Canonical,
-        wanted: "TEMPLATE:g.[19_33del;36A>G]",
+        verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.19_36delinsGCG",
         authority: Authority::SpecSelfConflicting,
-        argument: "The form #1419 names canonical for row 2.",
+        argument: "CORRECTED, verdict flipped Canonical -> Gap, for the same \
+                   reason as `1419-r1/span` one locus over. The wanted form is \
+                   this row's own input; ferro splits it instead.",
     },
     Row {
         label: "1419-r3/cis",
@@ -305,7 +313,7 @@ const REPORTED_ROWS: &[Row] = &[
         // different_sequence`, which sweeps both directions).
         five_prime: "TEMPLATE:g.[18_23del;28_33del]",
         verdict: Verdict::Gap,
-        wanted: "TEMPLATE:g.[19T>G;22_33del]",
+        wanted: "TEMPLATE:g.19_33delinsGGA",
         authority: Authority::SpecSelfConflicting,
         // TRAP, see OPEN_GAPS. The wanted form here is ALSO what a
         // re-partitioning of the block from the sequence produces: two
@@ -314,21 +322,29 @@ const REPORTED_ROWS: &[Row] = &[
         // wrong reason, and closing it for the wrong reason looks identical to
         // closing it for the right one. Do not flip the verdict without naming
         // the clause that licensed the merge.
-        argument: "Wanted `[19T>G;22_33del]`. Same general.md:56 reason, but \
-                   note the exposed substitution lands at the 5' end here \
-                   rather than the 3' end — which is why #1419 argues no \
-                   per-end rule fixes the family. Same delins.md:44-47 \
-                   counter-reading as the other two rows.",
+        argument: "CORRECTED. This row wanted `[19T>G;22_33del]` on the same \
+                   general.md:56 ground, with the exposed substitution landing \
+                   at the 5' end rather than the 3' end — which is why #1419 \
+                   argues no per-end rule fixes the family. That observation \
+                   survives the correction: it is an argument against a \
+                   per-end rule, not for :56. The ground is refuted for \
+                   merge-versus-split all the same, and the decided chain \
+                   lands on the spanning delins. See `1419-r1/cis`.",
     },
     Row {
         label: "1419-r3/span",
         input: "TEMPLATE:g.19_33delinsGGA",
+        // Measured, unchanged — see `1419-r1/span`.
         output: "TEMPLATE:g.[19T>G;22_33del]",
         five_prime: "TEMPLATE:g.[19T>G;22_33del]",
-        verdict: Verdict::Canonical,
-        wanted: "TEMPLATE:g.[19T>G;22_33del]",
+        verdict: Verdict::Gap,
+        wanted: "TEMPLATE:g.19_33delinsGGA",
         authority: Authority::SpecSelfConflicting,
-        argument: "The form #1419 names canonical for row 3.",
+        argument: "CORRECTED, verdict flipped Canonical -> Gap, for the same \
+                   reason as `1419-r1/span`. The wanted form is this row's own \
+                   input; ferro splits it to `[19T>G;22_33del]` instead, in both \
+                   directions — unlike its `1419-r3/cis` sibling, which is a 5' \
+                   mover.",
     },
     // -- #1420 -- one row per member type. v2/v3 must reduce, v4 must coalesce:
     // the corrections point in opposite directions, which is the issue's
@@ -534,12 +550,28 @@ const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1420-v2/cis"];
 
 /// How many of [`REPORTED_ROWS`] print something their issue argues against.
 ///
-/// Nine of eighteen — exactly one per reported pair, which is the family's
-/// shape rather than a coincidence; see
+/// Twelve of eighteen. It was nine — exactly one per pair — and #1419's three
+/// pairs now contribute **two** each, because neither of their spellings prints
+/// the wanted form any more. See
 /// [`each_pair_reaches_its_canonical_form_from_exactly_one_spelling`].
 ///
 /// **This may only go down.** Up means a change has moved a row *away* from the
-/// cited recommendation.
+/// cited recommendation — with one exception, taken here and named so it cannot
+/// be taken again silently: the rise from nine to twelve is a **correction of
+/// the target**, not a regression of the output. #1419's six `wanted` fields
+/// rested entirely on `general.md:56`, which `adjudication-precedence-order`
+/// records as refuted for merge-versus-split, and the decided chain lands them
+/// on the spanning `delins` instead. Ferro prints neither the old target nor
+/// the new one, so three rows that were `Canonical` against the withdrawn
+/// target are `Gap` against the standing one.
+///
+/// **No output moved in this change, and that is checkable rather than
+/// asserted in prose**: every `output` and `five_prime` field in
+/// [`REPORTED_ROWS`] is byte-identical to what it was before, and
+/// [`every_reported_spelling_still_normalizes_as_the_reports_recorded`] plus
+/// [`every_reported_spelling_normalizes_as_recorded_under_five_prime`] measure
+/// them. The rise is entirely in `wanted`, which is an adjudication, and in
+/// `verdict`, which is derived from the two.
 ///
 /// # Going down is not automatically progress either
 ///
@@ -552,21 +584,55 @@ const FIVE_PRIME_MOVERS: &[&str] = &["1419-r3/cis", "1420-v2/cis"];
 ///    bases the input left unchanged, landing on a form *neither* spelling
 ///    asserted and which happens to equal the issue's ask.
 ///
-/// The second has been observed, on an experimental partitioner arm, on exactly
-/// the two rows below whose `wanted` form is reachable that way: `1419-r3/cis`
-/// (`g.[19_24del;28_33del]` -> `g.[19T>G;22_33del]`, two deletions three
-/// unchanged nucleotides apart coming back as a substitution plus a deletion)
-/// and `1420-v2/cis` (`g.[37dup;41del]` -> `g.[38T>A;40_41delinsTG]`, likewise
-/// three unchanged nucleotides apart). Both are `general.md:34` violations that
-/// land on an issue's wanted string, which is precisely how a defect gets banked
-/// as a fix.
+/// The second has been observed, on an experimental partitioner arm. It was
+/// recorded against two rows: `1419-r3/cis` (`g.[19_24del;28_33del]` ->
+/// `g.[19T>G;22_33del]`, two deletions three unchanged nucleotides apart coming
+/// back as a substitution plus a deletion) and `1420-v2/cis`
+/// (`g.[37dup;41del]` -> `g.[38T>A;40_41delinsTG]`, likewise three unchanged
+/// nucleotides apart). Both are `general.md:34` violations that landed on an
+/// issue's wanted string, which is precisely how a defect gets banked as a fix.
+///
+/// `1419-r3/cis` is no longer one of them — its `wanted` is now the spanning
+/// `delins`, which that arm does not produce — so the hazard is live on
+/// `1420-v2/cis` alone. The `1419-r3/cis` half is kept because the mechanism is
+/// what recurs, not the row.
 ///
 /// So lowering this constant requires naming, in the PR, **which clause carried
 /// the move** — not merely that the row now prints its wanted form. A row that
 /// converged with no clause behind it is a re-derivation and the count must not
 /// move. `reported_confluence_pairs::the_1420_v2_pair_does_not_converge_by_re_derivation`
 /// pins the `1420-v2` half of that as a forbidden string.
-const OPEN_GAPS: usize = 9;
+const OPEN_GAPS: usize = 12;
+
+/// Pairs where NEITHER spelling reaches the form the decided chain requires.
+///
+/// The `Row` model otherwise assumes every reported pair has exactly one working
+/// spelling — [`each_pair_reaches_its_canonical_form_from_exactly_one_spelling`]
+/// asserts the two verdicts differ, and
+/// [`the_wanted_form_of_every_gap_row_is_its_siblings_output`] assumes the gap
+/// row's `wanted` string is what its sibling prints. Both were true while the
+/// `1419-r*` rows wanted the del-plus-sub form, which the spanning spelling did
+/// reach.
+///
+/// Applying the decided chain moved `wanted` to the **spanning delins**, and
+/// ferro prints that for neither spelling: the cis spelling is returned verbatim
+/// as its own two-deletion form, and the span spelling is *split* into the
+/// del-plus-sub form. So both rows of each `1419-r*` pair are `Gap`, and one of
+/// them is a `Gap` row that does not retain its input — a combination the model
+/// could not express, since it read "a pair is one canonical spelling and one
+/// gap" as a structural fact rather than as a consequence of what `wanted` was.
+///
+/// Note this is a statement about `wanted`, **not** about convergence. These
+/// pairs have not converged: `reported_confluence_pairs`'
+/// `CONVERGING_PAIRS_THREE_PRIME`/`_FIVE_PRIME` are both still 0, and
+/// [`every_reported_pair_is_still_one_variant_by_equivalence`] still pins
+/// `SequenceMatch` for all nine pairs. A pair that genuinely converged would be
+/// a different event and would move that ratchet, which is where it belongs.
+///
+/// Listed explicitly rather than inferred, so the honestly-unfixed set is
+/// census-pinned and cannot grow in silence. Removing an entry means a spelling
+/// started reaching the wanted form — name the clause that carried it.
+const PAIRS_NO_SPELLING_REACHES: &[&str] = &["1419-r1", "1419-r2", "1419-r3"];
 
 /// The `<issue>-<row>` half of an `<issue>-<row>/<spelling>` label.
 fn pair_of(label: &'static str) -> &'static str {
@@ -727,6 +793,10 @@ fn only_the_named_rows_answer_differently_in_the_two_directions() {
 #[test]
 fn the_wanted_form_of_every_gap_row_is_its_siblings_output() {
     for (a, b) in reported_pairs() {
+        if PAIRS_NO_SPELLING_REACHES.contains(&pair_of(a.label)) {
+            // Converged, but not on the wanted form, so no sibling prints it.
+            continue;
+        }
         let (canonical, gap) = match a.verdict {
             Verdict::Canonical => (a, b),
             Verdict::Gap => (b, a),
@@ -841,6 +911,28 @@ fn the_spec_authority_census_holds() {
 #[test]
 fn each_pair_reaches_its_canonical_form_from_exactly_one_spelling() {
     for (a, b) in reported_pairs() {
+        if PAIRS_NO_SPELLING_REACHES.contains(&pair_of(a.label)) {
+            // Neither spelling reaches the wanted form. Assert that, so the
+            // exception cannot quietly become "one of them does".
+            assert_eq!(
+                (a.verdict, b.verdict),
+                (Verdict::Gap, Verdict::Gap),
+                "{}: listed in PAIRS_NO_SPELLING_REACHES, so both spellings \
+                 must be gaps",
+                pair_of(a.label)
+            );
+            for row in [a, b] {
+                assert_ne!(
+                    normalized(row.input),
+                    row.wanted,
+                    "{} now reaches its wanted form; drop this pair from \
+                     PAIRS_NO_SPELLING_REACHES, flip the verdict, and name the \
+                     clause that carried the move",
+                    row.label
+                );
+            }
+            continue;
+        }
         assert_ne!(
             a.verdict, b.verdict,
             "{} and {} have the same verdict; a pair is one canonical spelling \
@@ -886,15 +978,43 @@ fn each_pair_reaches_its_canonical_form_from_exactly_one_spelling() {
 /// returned untouched is a second canonical form, and a second canonical form is
 /// what splits a consumer's counts across two keys.
 ///
-/// **This is a 3'-direction claim and does not generalize.** Two of the nine gap
-/// rows do move under 5' ([`FIVE_PRIME_MOVERS`]), so under that option the
-/// argument above holds for seven of nine, not nine of nine — which is exactly
-/// why the 5' answers are now pinned per row rather than left to a convergence
-/// count.
+/// **This is a 3'-direction claim and does not generalize.** Two gap rows do
+/// move under 5' ([`FIVE_PRIME_MOVERS`]), so under that option the argument
+/// above holds for seven of the nine rows it reaches, not nine of nine — which
+/// is exactly why the 5' answers are now pinned per row rather than left to a
+/// convergence count.
+///
+/// **And it does not reach every gap row even under 3'.** There are twelve gap
+/// rows now ([`OPEN_GAPS`]), and the three `1419-r*/span` rows are gap rows that
+/// ferro *splits* rather than returns — see [`PAIRS_NO_SPELLING_REACHES`], which
+/// this test exempts from the retention claim while still pinning each row's
+/// measured output.
 #[test]
 fn every_gap_row_is_returned_exactly_as_authored() {
     for row in REPORTED_ROWS {
         if row.verdict != Verdict::Gap {
+            continue;
+        }
+        if PAIRS_NO_SPELLING_REACHES.contains(&pair_of(row.label)) {
+            // A gap row in one of these pairs may also MOVE: the span spelling
+            // leaves its input for the del-plus-sub form, which is not the
+            // wanted one. Retention is therefore not the property to assert for
+            // the whole pair — but exempting the pair must not silently drop the
+            // pin from the `/cis` half, which DOES still retain its input. So
+            // pin the MEASURED output, which holds either way, and keep the
+            // wanted-form check that would close the pair.
+            let output = normalized(row.input);
+            assert_eq!(
+                output, row.output,
+                "{}: measured output moved off its pinned value (`{}` -> `{}`)",
+                row.label, row.output, output
+            );
+            assert_ne!(
+                output, row.wanted,
+                "{}: now reaches its wanted form; drop this pair from \
+                 PAIRS_NO_SPELLING_REACHES and name the clause that carried it",
+                row.label
+            );
             continue;
         }
         let output = normalized(row.input);
@@ -924,21 +1044,24 @@ fn every_gap_row_is_returned_exactly_as_authored() {
 fn every_reported_pair_is_still_one_variant_by_equivalence() {
     let checker = EquivalenceChecker::new(provider(TEMPLATE));
     for (a, b) in reported_pairs() {
+        // Every pair, including the `PAIRS_NO_SPELLING_REACHES` ones: that
+        // constant says neither spelling reaches `wanted`, which is a claim
+        // about the target and not about convergence. The two spellings still
+        // normalize to different strings, so `SequenceMatch` is still the level
+        // and there is no exemption to take here.
+        let expected = EquivalenceLevel::SequenceMatch;
         let left = parse_hgvs(a.input).unwrap_or_else(|e| panic!("{}: {e}", a.label));
         let right = parse_hgvs(b.input).unwrap_or_else(|e| panic!("{}: {e}", b.label));
         let result = checker
             .check(&left, &right)
             .unwrap_or_else(|e| panic!("{} vs {}: {e}", a.label, b.label));
         assert_eq!(
-            result.level,
-            EquivalenceLevel::SequenceMatch,
-            "{} vs {}: expected SequenceMatch, got {:?}. If this is now \
+            result.level, expected,
+            "{} vs {}: expected {expected:?}, got {:?}. If this is now \
              NormalizedMatch the pair has converged and the pinned rows are \
              stale; anything else is a regression in the fallback the reports \
              direct consumers to.",
-            a.label,
-            b.label,
-            result.level
+            a.label, b.label, result.level
         );
     }
 }
