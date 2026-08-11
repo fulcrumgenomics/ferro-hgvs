@@ -282,9 +282,9 @@ fn the_separation_two_members_present_is_not_a_property_of_the_variant() {
 
 /// The window the record's ruling is stated on, reproduced synthetically.
 ///
-/// **Provenance.** These fifteen bases are `NC_000001.11:g.1001002-1001016` on
-/// GRCh38 — a `GGGG` run at `g.1001006-1001009`, a `CC` run at
-/// `g.1001010-1001011`, and a lone `C` at `g.1001013`. They are laid down on a
+/// **Provenance.** These fifteen bases are `NC_000001.11:g.1001002_1001016` on
+/// GRCh38 — a `GGGG` run at `g.1001006_1001009`, a `CC` run at
+/// `g.1001010_1001011`, and a lone `C` at `g.1001013`. They are laid down on a
 /// contig of that name at those offsets so the descriptions below read exactly
 /// as the ruling states them, while everything outside the window is filler:
 /// the test is hermetic and needs no `FERRO_MANIFEST`.
