@@ -176,6 +176,13 @@ jobs:
           # ci.yml's `test-oracle` and `sweeps` jobs, which set the same flag and
           # carry no `continue-on-error`.
           FERRO_ASSERT_IN_BOUNDS: "1"
+          # And that the normalized description denotes the same bases the input
+          # does (#1615). Worth setting here for the same reason as the one above
+          # it: the conformance corpora are real transcripts and contigs, so this
+          # is the only place the comparison runs over reference geometry a
+          # fixture cannot build — real exon structure, real 5'UTRs, real
+          # soft-masked bases. Non-gating here like the other three.
+          FERRO_ASSERT_SEQUENCE: "1"
         run: |
           cargo nextest run --features dev \
             -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/) | test(/hgvs_rs_projection_tests::/)'

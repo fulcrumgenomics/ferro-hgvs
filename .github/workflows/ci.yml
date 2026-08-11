@@ -48,6 +48,14 @@ env:
   # NOTE: that partition is over `test` + `sweeps`. `test-oracle` additionally
   # negates `ORACLE_EXCLUDE` below, so it runs a strict SUBSET of `test` rather
   # than the same selection. Every test still runs somewhere unarmed.
+  #
+  # NOTE also: `sweeps` selects on this filter PLUS one module it deliberately
+  # re-runs — `issue_1615_denoted_sequence_oracle`, the only test that reads the
+  # denoted-sequence oracle's counters, which are meaningless unless
+  # `FERRO_ASSERT_SEQUENCE` is set and `sweeps` is the only job that sets it. So
+  # "nothing is run twice" holds of this filter and is one module short of
+  # holding of that job's `-E`; the reason it is appended there rather than added
+  # here is on the job itself.
   SWEEP_FILTER: >-
     test(cis_junction_crossing_shift) + test(repeat_span_sibling_overlap)
     + test(issue_1254_sibling_crossing_shift)
@@ -980,7 +988,27 @@ jobs:
         # perturbs idempotency it need not. The class had been found by hand three
         # times (#1274, #1343, #1307) before it was asserted here.
         #
-        # All three sit at the same seam, `normalize_core_checked`'s single exit.
+        # `FERRO_ASSERT_SEQUENCE` — the fourth oracle at this same seam (#1615) —
+        # is deliberately **not** set here, and this job is the one place the set
+        # is incomplete. It fires on two rows of this job's own selection, and
+        # both are real disagreements rather than noise to be suppressed:
+        #
+        #   * #1618 — `NC_TEST.1:g.262TG[6]` -> `g.259_262GT[6]`
+        #     (`repeat_tract_maximization`). `hgvs_to_spdi` reads the anchored
+        #     spelling as 6 copies replacing a 1-copy tract and the normalizer's
+        #     output as 6 copies replacing a 2-copy tract — 14 bases against 12.
+        #   * #1619 — `NM_000492.4:c.1520_1522del` -> `c.1521_1523del`
+        #     (`normalize_tests`). The two forms are genuinely equivalent on the
+        #     flat transcript; `hgvs_to_spdi` resolves the c. position by walking
+        #     the fixture's exon list, whose 1-base synthetic introns put it 10
+        #     bases 3' of where the normalizer reads.
+        #
+        # Turning the flag on here before those are settled would make the job
+        # red for a reason that is not the PR's; suppressing them would hollow out
+        # the oracle. So it runs in `sweeps` below — the cis-allele space every
+        # one of the eight defects it was built for came from, and where it is
+        # measured green — and non-gating in the nightly. Move it here once both
+        # rows are closed.
         env:
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
@@ -1142,13 +1170,45 @@ jobs:
           # class so far has come from. See the note on the pair in the `test`
           # job above.
           FERRO_ASSERT_IN_BOUNDS: "1"
+          # The denoted-sequence oracle (#1615): does the normalized description
+          # denote the same bases the input does? This job is its gating home
+          # rather than `test-oracle` — see the note there for the two rows that
+          # keep it out of the wider selection for now. The sweeps are also where
+          # it has the most to say: every one of the eight defects it was built
+          # for is a cis member crossing a sibling, which is exactly the space
+          # these three modules enumerate. They already assert sequence
+          # preservation case by case through `common::cis_apply_oracle`; this
+          # extends the same question to every intermediate normalization the
+          # sweeps perform rather than only the ones a test asserts on. Measured
+          # green over the full corpus before it was set here.
+          FERRO_ASSERT_SEQUENCE: "1"
         # `--no-tests=fail` for the reason spelled out on `soak`, and it matters
         # more here: `SWEEP_FILTER` names three modules explicitly, so renaming
         # one is exactly the edit that would drop a sweep from CI silently.
+        #
+        # `issue_1615_denoted_sequence_oracle` is appended to the selection
+        # because this job is the only one that sets `FERRO_ASSERT_SEQUENCE`, and
+        # that module holds the one test which reads the oracle's counters —
+        # `the_seam_compares_when_the_flag_is_set`, the guard that a green run
+        # actually compared something rather than the seam call having been
+        # deleted. Without it here that guard would run only in jobs where the
+        # flag is unset, where it skips by design, so the wiring would be
+        # unverified everywhere.
+        #
+        # Appended here rather than added to `SWEEP_FILTER` for two reasons.
+        # `tests/it/sweep_filter_invariant.rs`'s
+        # `every_module_named_in_the_sweep_filter_consumes_the_seed_knob` fails
+        # on a module in that filter which does not draw through `sweep_seeds(`,
+        # and this one does not — the filter is a claim about the seed knob, not
+        # a list of what this job runs. And `SWEEP_FILTER` is negated by `test`
+        # and `test-oracle`, so naming it there would REMOVE the module from both
+        # — trading the armed run for the unarmed one instead of adding it. The
+        # module is therefore run twice on purpose: unarmed in `test`, armed
+        # here. It is ~10 cheap unit tests, no sweep and no provider corpus.
         run: |
           cargo nextest run --archive-file nextest-soak.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite --no-tests=fail \
-            -E "$SWEEP_FILTER"
+            -E "$SWEEP_FILTER + test(issue_1615_denoted_sequence_oracle)"
 
   # The generated-doc `--check` gates. Split out of the old monolithic Test job
   # so they no longer sit behind the whole suite on the critical path.
