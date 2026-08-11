@@ -5,7 +5,9 @@ use ferro_hgvs::hgvs::location::{CdsPos, TxPos};
 use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
 
 fn make_test_transcript() -> Transcript {
-    // Structure: 5bp 5'UTR + 30bp CDS + 5bp 3'UTR = 40bp
+    // Structure: 5bp 5'UTR + 30bp CDS + 3bp 3'UTR = 38bp.
+    // (cds_start 6, cds_end 35, exon tx 1..38 — the 38 is pinned by the
+    // `sequence_length()` assertion in `test_cds_to_tx_basic` below.)
     Transcript::new(
         "NM_TEST.1".to_string(),
         Some("TEST".to_string()),
@@ -28,6 +30,19 @@ fn make_test_transcript() -> Transcript {
 fn test_cds_to_tx_basic() {
     let tx = make_test_transcript();
     let mapper = CoordinateMapper::new(&tx);
+
+    // Pins `make_test_transcript`'s length (5bp 5'UTR + 30bp CDS + 3bp
+    // 3'UTR = 38bp) against the hardcoded `38` literal below — that catches
+    // the sequence literal changing size, not the comment drifting from it
+    // (both copies once said `= 40bp` while the sequence stayed 38bp, and
+    // this assertion would not have caught that). The fixture is duplicated
+    // with the same data but different code in `src/convert/mapper.rs` (a
+    // `Transcript::new(..)` call here vs. a `Transcript { .. }` literal
+    // there). It is also not sequence-specific: `sequence_length()` falls
+    // back to summing exon lengths when `sequence` is `None`, and this
+    // fixture's `Exon::new(1, 1, 38)` sums to 38 too, so dropping the
+    // sequence would still pass.
+    assert_eq!(tx.sequence_length(), 38, "make_test_transcript is 38bp");
 
     // c.1 should map to tx position 6 (first CDS base)
     let result = mapper.cds_to_tx(&CdsPos::new(1)).unwrap();
