@@ -71,6 +71,15 @@ jobs:
       - name: Open or update the tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
+          # `gh issue` resolves the repository from the git remotes of the
+          # working directory, and this job deliberately does not check out the
+          # repository — it only calls the API. Without a repository the very
+          # first `gh` call dies with `failed to run git: fatal: not a git
+          # repository`, which is what every run of this reusable workflow has
+          # done since it was added. `GH_REPO` supplies the repository directly,
+          # so `gh` never shells out to git; a checkout would also work but
+          # clones the tree solely to let `gh` read a remote URL.
+          GH_REPO: ${{ github.repository }}
           TITLE: ${{ inputs.title }}
           SUMMARY: ${{ inputs.summary }}
           HINT: ${{ inputs.hint }}
