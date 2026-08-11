@@ -717,8 +717,9 @@ const AXIS_CENSUS: AxisCensus = AxisCensus {
 /// (`src/normalize/merge.rs`), which cites `general.md:35` — "two variants
 /// separated by one nucleotide, **together affecting one amino acid**" — but
 /// drops the amino-acid half for length-changing blocks. All four are
-/// frameshifts, and the `codon-carve-out-shape-restriction` record (undecided)
-/// states the bound in as many words: *"`general.md:35`'s 'together affecting
+/// frameshifts, and the `codon-carve-out-shape-restriction` record — `decided`
+/// for widening the carve-out, and preserving this bound as it does so —
+/// states it in as many words: *"`general.md:35`'s 'together affecting
 /// one amino acid' cannot cover a frameshift pair, because a frameshift does not
 /// affect one amino acid."* The fourth also merges a `dup` away, which the
 /// decided `delins-adjacent-members-when-both-consume-reference` record

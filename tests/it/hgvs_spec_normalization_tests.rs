@@ -828,19 +828,36 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // some preferences on provenance and allele frequency, which ferro cannot
     // see. See the record.
     ("canonical-form-choice-when-both-legal", "decided"),
-    // `delins.md:18` names no edit type; ferro applies it only to
-    // sub/unchanged/sub. Measured inert over 5.76M rows, never adjudicated.
-    ("codon-carve-out-shape-restriction", "undecided"),
+    // `delins.md:18` names no edit type; ferro applied it only to
+    // sub/unchanged/sub. **Decided by operator ruling (2026-08-10): WIDEN.**
+    // The exception applies wherever its stated precondition holds — two
+    // variants one nucleotide apart, together affecting one amino acid —
+    // regardless of edit type, because edit type is a property of the SPELLING
+    // and the precondition is a property of the RESULTING SEQUENCE (rule 3 of
+    // the README ruleset; the same argument that decided
+    // `separation-is-a-property-of-the-spelling-not-of-the-variant`). The two
+    // limits survive: a frameshift pair fails the precondition, and
+    // `duplication.md:18` still forbids merging a describable duplication
+    // away. The 5.76M-row inertness measurement is kept in the record as a
+    // measurement, not as support. #1599 is the implementation.
+    ("codon-carve-out-shape-restriction", "decided"),
     // The one the spec does settle: `delins.md:18`'s explicit exception for two
     // variants one nucleotide apart affecting one amino acid.
     ("delins-codon-carve-out-gap-one", "decided"),
     // `DNA/duplication.md:26` names `c.3921dup` as *the* description "and not
-    // `c.3922dup`", which argues for converging them; `general.md:44` only
-    // suspends the 3'rule around the junction and never prescribes a 5' shift
-    // back, so `c.3922dup` may describe a different genomic event yielding the
-    // same transcript. Measured: both are fixed points, projecting 2,790 bp
-    // apart. Undecided, and a representation change either way.
-    ("exon-junction-dup-converge-from-the-far-side", "undecided"),
+    // `c.3922dup`", and `:60` and `:148` say the same thing independently —
+    // `:148` calling the far-side position "the wrong nucleotide, in the wrong
+    // exon", which refutes the reading that `c.3922dup` is a different
+    // legitimate genomic event. **Decided by operator ruling (2026-08-10):
+    // CONVERGE.** The canonical position is the most 3' position that does not
+    // cross an exon/exon junction, reached from EITHER side — `general.md:44`
+    // is directional, and ferro leaving both spellings alone is that exception
+    // half-applied. Measured: both are fixed points, projecting 2,790 bp
+    // apart, and cdot puts the junction exactly between `c.3921` (last base of
+    // exon 27) and `c.3922` (first base of exon 28). This MOVES OUTPUT; the
+    // implementation is #1621 and the guard for it is `#[ignore]`d in
+    // `spec_worked_examples.rs`.
+    ("exon-junction-dup-converge-from-the-far-side", "decided"),
     // `RNA/repeated.md:22` marks range-plus-unit invalid as redundant while
     // `:27` publishes exactly that shape as valid, five lines later. Ferro
     // answers both ways depending on input-hygiene mode. Upstream's conflict to

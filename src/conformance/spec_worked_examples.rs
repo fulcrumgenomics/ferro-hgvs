@@ -72,8 +72,12 @@ pub struct Case {
     /// The HGVS description handed to `normalize`.
     pub input: String,
     /// The spec's own published answer for this input. `None` only where the
-    /// spec publishes none — see the `LRG_199t1:c.3922dup` row, where whether
-    /// an answer exists at all is the open question.
+    /// spec publishes none — a state no row is currently in, and one that is
+    /// harder to be in than it looks: the `LRG_199t1:c.3922dup` row sat here
+    /// for exactly that reason until the
+    /// `exon-junction-dup-converge-from-the-far-side` ruling found the spec
+    /// answering it three times over (`DNA/duplication.md:26`, `:60`, `:148`).
+    /// Setting this to `None` is an adjudication, not a fixture edit.
     pub spec_expected: Option<String>,
     /// What ferro produces through the plain library API (`parse_hgvs` +
     /// `Normalizer::new`) — no input-hygiene preprocessing, lenient

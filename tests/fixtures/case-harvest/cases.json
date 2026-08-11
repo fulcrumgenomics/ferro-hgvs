@@ -257,7 +257,7 @@
         "clause": "docs/recommendations/DNA/duplication.md:25-26",
         "quote": "the variant is described as `LRG_199t1:c.3921dup`"
       },
-      "note": "PRESERVATION ONLY. The exon/exon-junction carve-out from the 3'rule (the rule itself is background/numbering.md:22-24). What is pinned is that this row does not move -- NOT that it converges with c.3922dup. Whether the pair should converge is explicitly undecided (ruling exon-junction-dup-converge-from-the-far-side), and converging them is a representation change that needs a decision behind it rather than arriving as a side effect. Cited at :25-26 because that is where the LRG_199t1 spelling of the worked example lives; :58 states the same example as NC_000023.11(NM_004006.2) and is the wrong citation for this row."
+      "note": "PRESERVATION ONLY. The exon/exon-junction carve-out from the 3'rule (the rule itself is background/numbering.md:22-24). What is pinned is that this row does not move. It is the near side of the clamp, and it stays put under the now-DECIDED ruling exon-junction-dup-converge-from-the-far-side as well: that ruling moves the SIBLING c.3922dup onto this row's answer (#1621), it does not move this one. Cited at :25-26 because that is where the LRG_199t1 spelling of the worked example lives; :58 states the same example as NC_000023.11(NM_004006.2) and is the wrong citation for this row."
     },
     {
       "input": "LRG_199t1:c.3922dup",
@@ -266,7 +266,7 @@
         "clause": "docs/recommendations/DNA/duplication.md:25-26",
         "quote": "the variant is described as `LRG_199t1:c.3921dup`"
       },
-      "note": "PRESERVATION ONLY, as for c.3921dup. Both positions carry the same base, so the two spellings denote one transcript sequence and are nonetheless two fixed points, projecting 2,790 bp apart. This row pins only that it stays where it is."
+      "note": "PRE-FIX BEHAVIOUR, NOT PRESERVATION-BY-DESIGN. Both positions carry the same base, so the two spellings denote one transcript sequence and are nonetheless two fixed points, projecting 2,790 bp apart. The ruling `exon-junction-dup-converge-from-the-far-side` is now DECIDED: CONVERGE — c.3922dup must normalize to c.3921dup, because the 3'rule's exon-junction clamp binds from both sides. This row pins where ferro leaves it TODAY; when #1621 lands, `expected` becomes `LRG_199t1:c.3921dup`."
     },
     {
       "input": "NM_006420.3:c.[242C>A;247_249delinsTT]",
