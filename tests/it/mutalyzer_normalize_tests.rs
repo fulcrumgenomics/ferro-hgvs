@@ -4320,6 +4320,33 @@ fn axis_normalized_idempotent() {
     );
 }
 
+/// Inputs whose **projected** genomic axis is deliberately not a fixed point of
+/// **bare** normalization, with the reason (#1664).
+///
+/// The two steps this test chains answer different questions once the
+/// codon-frame exception is decided per projection. `project_variant(v, tx)`
+/// renders the genomic axis against `tx`, so `delins.md:18`'s "together
+/// affecting one amino acid" is answerable and `LRG_199t1:c.235_237delinsTAT`
+/// comes back as `LRG_199:g.499798_499800delinsTAT` — one member, which is what
+/// `delins.md:42` requires and what `:19` says the split would mispredict.
+/// Handing that string to `Normalizer::normalize` names **no** transcript, and
+/// closed issue #79 scoped the exception out of exactly that case, so it splits
+/// again.
+///
+/// **This is a real cost, not a technicality**, and it is recorded here rather
+/// than buried: `ferro project` output piped into `ferro normalize` is no longer
+/// a fixed point for this family. The alternative was to keep emitting, on the
+/// spec's own worked example, the string the spec renders `class="invalid"` —
+/// or to reopen #79 and give every bare `g.` description a reading frame it does
+/// not name, which is a far larger representation change. Neither the ledger nor
+/// any committed record settles which of the two ferro should prefer, so the
+/// tension is stated and left for adjudication.
+///
+/// **Asserted, not skipped.** A row listed here must still be non-idempotent;
+/// if one becomes a fixed point, the exemption has stopped describing reality
+/// and must be removed rather than left to rot.
+const GENOMIC_FIXPOINT_NEEDS_THE_TRANSCRIPT: &[&str] = &["LRG_199t1:c.235_237delinsTAT"];
+
 #[test]
 fn axis_genomic_idempotent() {
     let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
@@ -4328,6 +4355,7 @@ fn axis_genomic_idempotent() {
     };
     let mut tested = 0usize;
     let mut failures = Vec::new();
+    let mut stale_exemptions = Vec::new();
     for case in &fixture().cases {
         if !case.to_test {
             continue;
@@ -4337,7 +4365,11 @@ fn axis_genomic_idempotent() {
         // (#870), compound alleles kept on the raw `project_to_genomic` pivot
         // (#851 cis-sort; #894), pure g./m. rows normalized only. Only
         // successfully-projected-and-normalized inputs participate. The fixpoint
-        // still holds because `project_variant` normalizes internally.
+        // held, before #1664, because `project_variant` normalized internally and
+        // the normalizer had no context the projector was withholding. It now
+        // does — the reading frame — so see
+        // `GENOMIC_FIXPOINT_NEEDS_THE_TRANSCRIPT` for the rows where the two
+        // steps answer different questions.
         let projected = (|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let g = project_genomic_userfacing(&projector, &normalizer, &v)?;
@@ -4345,10 +4377,17 @@ fn axis_genomic_idempotent() {
         })();
         let Ok(g1) = projected else { continue };
         tested += 1;
-        match renormalize_once(&normalizer, &g1) {
-            Ok(g2) if g2 != g1 => failures.push(format!("{} : {g1} -> {g2}", case.input)),
-            Err(e) => failures.push(format!("{} : {g1} -> {e}", case.input)),
-            _ => {}
+        let exempt = GENOMIC_FIXPOINT_NEEDS_THE_TRANSCRIPT.contains(&case.input.as_str());
+        let moved = match renormalize_once(&normalizer, &g1) {
+            Ok(g2) if g2 != g1 => Some(format!("{} : {g1} -> {g2}", case.input)),
+            Err(e) => Some(format!("{} : {g1} -> {e}", case.input)),
+            _ => None,
+        };
+        match (exempt, moved) {
+            (false, Some(failure)) => failures.push(failure),
+            // The exemption must keep describing reality; see the constant.
+            (true, None) => stale_exemptions.push(case.input.clone()),
+            (true, Some(_)) | (false, None) => {}
         }
     }
     eprintln!(
@@ -4356,6 +4395,12 @@ fn axis_genomic_idempotent() {
         failures.len()
     );
     assert!(tested > 0, "exercised no cases");
+    assert!(
+        stale_exemptions.is_empty(),
+        "GENOMIC_FIXPOINT_NEEDS_THE_TRANSCRIPT lists inputs that ARE fixed points now; \
+         remove them rather than leave a dead exemption:\n{}",
+        stale_exemptions.join("\n")
+    );
     assert!(
         failures.is_empty(),
         "normalize is not idempotent on the genomic axis:\n{}",

@@ -3283,6 +3283,11 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             }
             _ => self.project_single_inner(variant, transcript_id)?,
         };
+        // Re-decide the codon-frame exception against the transcript this
+        // projection names, rather than inheriting whatever the authoring axis
+        // chose (#1664). Runs on the assembled projection so it can compare the
+        // axis that carries the reading frame against the ones that do not.
+        projection = self.apply_codon_frame_exception(projection, variant, transcript_id)?;
         // Withhold a genomic axis that came out as a non-flanking insertion
         // (#1264). Done here, on the assembled projection, so only the genomic
         // axis declines: the same variant's c./n./r./p. forms are unaffected by
@@ -3296,6 +3301,133 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             projection.axis_decline_reasons.genomic = Some(reason);
         }
         Ok(projection)
+    }
+
+    /// Re-decide `DNA/delins.md:18`'s one-amino-acid exception against the
+    /// transcript the projection names, instead of inheriting the partition the
+    /// authoring axis happened to choose (#1664).
+    ///
+    /// The exception — "two variants separated by one nucleotide, together
+    /// affecting one amino acid, should be described as a 'delins'" — is settled
+    /// for this project (`rulings[delins-codon-carve-out-gap-one]`, `decided`),
+    /// and the normalizer applies it wherever the *axis being written* carries a
+    /// reading frame. In a projection that gate asks the wrong question: every
+    /// axis here is rendered against one transcript, so the frame is available
+    /// on all of them, and letting each axis answer for itself made one variant
+    /// render as one member or two depending on which spelling the caller
+    /// happened to hand in.
+    ///
+    /// Two halves, one rule:
+    ///
+    /// * **the transcript axes.** A genomic input arrives already partitioned by
+    ///   a frameless normalization, and `c.`/`n.`/`r.`/`p.` inherit it verbatim.
+    ///   Merging the coding allele and re-projecting from it puts every
+    ///   transcript axis back on the partition the frame licenses.
+    /// * **the genomic axis.** A transcript input keeps its merged form on
+    ///   `c.`/`n.`/`r.`/`p.` and loses it on `g.`, where the derived form is
+    ///   re-normalized in a frame-free axis and splits back apart. The pair is
+    ///   re-merged from the coding axis's own answer.
+    ///
+    /// # The #79 boundary
+    ///
+    /// Closed issue #79 scoped this exception out of the bare genomic axis: a
+    /// `g.` description names no transcript, so there is no frame to consult.
+    /// That is preserved twice over. Nothing here runs outside a projection, so
+    /// plain `Normalizer::normalize` of a `g.` description is untouched; and the
+    /// genomic half is applied only to a genomic axis this projector *derived*,
+    /// never to one that is a genomic input's own normalization — which is why
+    /// `is_genomic_description` gates it.
+    fn apply_codon_frame_exception(
+        &self,
+        mut projection: VariantProjection,
+        original: &HgvsVariant,
+        transcript_id: &str,
+    ) -> Result<VariantProjection, FerroError> {
+        use crate::project::codon_exception as codon;
+
+        // Half one: a partition decided without a frame, inherited by axes that
+        // have one. Re-normalizing the coding allele is what performs the merge
+        // — the `c.` axis is CDS-relative, so the normalizer's own
+        // `apply_coding_codon_exception` fires there — which keeps exactly one
+        // implementation of the rule in the tree.
+        if let Some(coding) = projection.coding.clone() {
+            // The transcript is fetched only once a candidate pair exists, so a
+            // projection this rule never touches pays no extra lookup.
+            if let Some((left, right)) = codon::coding_codon_pair(&coding) {
+                if self.codon_pair_is_within_one_exon(original, transcript_id, left, right) {
+                    if let Ok(merged) = self.normalizer.normalize(&coding) {
+                        if codon::member_count(&merged) < codon::member_count(&coding) {
+                            // The reported genomic axis is not re-derived from
+                            // the merged form: for a genomic input it is that
+                            // input's own normalization, which is #79's answer
+                            // and stays.
+                            let genomic = projection.genomic.clone();
+                            let decline_reasons = projection.axis_decline_reasons.clone();
+                            let warnings = std::mem::take(&mut projection.normalization_warnings);
+                            // Terminates: `merged` has strictly fewer members,
+                            // so the re-projection's coding axis cannot re-enter
+                            // here.
+                            let mut reprojected =
+                                self.project_variant_inner(&merged, transcript_id)?;
+                            reprojected.genomic = genomic;
+                            reprojected.axis_decline_reasons = decline_reasons;
+                            reprojected.normalization_warnings = warnings;
+                            projection = reprojected;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Half two: a frame-bearing partition lost on the derived genomic axis.
+        if !codon::is_genomic_description(original) {
+            if let (Some(coding), Some(genomic)) =
+                (projection.coding.as_ref(), projection.genomic.as_ref())
+            {
+                // `get_sequence` is 0-based and end-exclusive, so the 1-based
+                // HGVS position `at` is the half-open window `[at - 1, at)`.
+                let merged = codon::merge_genomic_codon_split(genomic, coding, |accession, at| {
+                    self.provider
+                        .get_sequence(&accession.to_string(), at.checked_sub(1)?, at)
+                        .ok()
+                        .and_then(|bases| bases.chars().next())
+                        .and_then(crate::hgvs::edit::Base::from_char)
+                });
+                if let Some(merged) = merged {
+                    projection.genomic = Some(merged);
+                }
+            }
+        }
+
+        Ok(projection)
+    }
+
+    /// Do CDS positions `left` and `right` sit inside one exon of
+    /// `transcript_id`?
+    ///
+    /// `false` for an unservable transcript or one with no CDS: without an exon
+    /// table there is no basis to claim the pair does not cross a junction, and
+    /// the codon exception's caller declines on `false`.
+    fn codon_pair_is_within_one_exon(
+        &self,
+        variant: &HgvsVariant,
+        transcript_id: &str,
+        left: i64,
+        right: i64,
+    ) -> bool {
+        let Ok(transcript) = self.cached_get_transcript_for_variant(variant, transcript_id) else {
+            return false;
+        };
+        let Some(cds_start) = transcript.cds_start.and_then(|s| i64::try_from(s).ok()) else {
+            return false;
+        };
+        // `Exon::start`/`end` are 1-based inclusive TRANSCRIPT coordinates, and
+        // `c.n` is `cds_start + n - 1` on that axis.
+        let (lo, hi) = (cds_start + left - 1, cds_start + right - 1);
+        transcript.exons.iter().any(|exon| {
+            i64::try_from(exon.start).is_ok_and(|start| start <= lo)
+                && i64::try_from(exon.end).is_ok_and(|end| hi <= end)
+        })
     }
 
     /// Project an RNA-only effect (`r.spl`, `r.spl?`, `r.0`): the `r.` axis is

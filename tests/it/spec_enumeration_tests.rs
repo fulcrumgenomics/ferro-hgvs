@@ -353,7 +353,23 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // against a stale recording, and the movement in both directions went
     // unseen. That is exactly why these are the guards that judge behaviour and
     // `enumeration_replays_recorded_behavior` is not.
-    (Status::ProjectionSplitsSingleMember, 9),
+    //
+    // **9 -> 7 in #1664**, and the two rows that left are the only two that were
+    // ever a defect. `LRG_199t1:c.145_147delinsTGG` (`delins.md:37`) and
+    // `LRG_199t1:c.235_237delinsTAT` (`delins.md:19`) each rendered one member on
+    // `c.`/`n.`/`r.`/`p.` and the split `delins.md:42` calls "not correct" on
+    // `g.`; the codon-frame exception is now re-decided against the transcript
+    // the projection names rather than inherited from the authoring axis. The
+    // seven that remain are the shape doing its job — `NM_000797.3:c.812_829delins908_925`
+    // over four axes and `c.235_238delinsTAGT` over three, whose members end up
+    // two or more bases apart, where `general.md:34` asks for the split.
+    //
+    // **Driving this to zero is not the goal.** A change that takes it below 7
+    // has merged something `general.md:34` wanted split. Read it with its mirror
+    // in `PASSING_CENSUS` (`ProjectionPinned`, 1168 -> 1170): equal and opposite
+    // deltas mean the rows moved between statuses rather than leaving the
+    // enumeration.
+    (Status::ProjectionSplitsSingleMember, 7),
 ];
 
 /// Census of the **conformant** statuses — the counting half of
@@ -428,7 +444,7 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // net is zero and the total is again unchanged. The analysis of those rows,
     // and the reason the two constants must always be read as a pair, are with
     // `ProjectionSplitsSingleMember` in `DIVERGENCE_BUDGET`.
-    (Status::ProjectionPinned, 1168),
+    (Status::ProjectionPinned, 1170),
     (Status::ProjectionUnavailablePinned, 487),
     (Status::ProjectionErrorPinned, 210),
     // 132 -> 120 (#1498). The 12 rows are all LRG — `LRG_199:c.357+1G>A`,
