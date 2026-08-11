@@ -224,6 +224,49 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
     interval.end.inner().map(|p| p.base)
 }
 
+/// Refuse a genomic interval whose start or end carries a `+`/`-` offset (#1628).
+///
+/// `GenomePos` can hold an offset because the parser accepts one, but neither
+/// half of the conversion can honour it: a genomic accession has no exon
+/// structure to measure an offset against — `checklist.md:16` prohibits an
+/// offset on a genomic position outright — and SPDI is purely positional, with
+/// no offset notation.
+///
+/// What the conversion did instead was drop it, which is the one answer that is
+/// worse than either honest option. `g.266+2del`, `g.266-268del` and `g.266del`
+/// all flattened onto the same triple while `normalize` keeps them as three
+/// distinct descriptions, so ferro's two halves disagreed about what a variant
+/// is: descriptions the SPDI path called identical normalized to three
+/// different strings.
+///
+/// Refusing is also what the other axes already do with the offsets that *are*
+/// legitimate there — see [`resolve_cds_to_tx`], [`resolve_tx_pos`] and
+/// [`require_simple_tx_pos`], each of which declines an intronic `c.`/`n.`/`r.`
+/// position for want of an SPDI representation. Those decline because the
+/// offset cannot be projected onto the transcript accession; this one declines
+/// because there is nothing on a genomic accession to project it against.
+fn reject_genomic_offset(
+    interval: &Interval<GenomePos>,
+    coord: &str,
+) -> Result<(), ConversionError> {
+    for endpoint in [interval.start.inner(), interval.end.inner()]
+        .into_iter()
+        .flatten()
+    {
+        if endpoint.offset.is_some() {
+            return Err(ConversionError::InvalidPosition {
+                description: format!(
+                    "{coord}. position {endpoint} carries a +/- offset: a genomic position \
+                     cannot have one and SPDI has no offset notation to express it. Drop the \
+                     offset, or describe the variant on a transcript accession where an offset \
+                     is meaningful"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
 /// Convert an HGVS variant to SPDI format without consulting a reference provider.
 ///
 /// This is the "simple" conversion path: the SPDI is emitted on the same
@@ -233,7 +276,7 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
 ///
 /// | HGVS coord | Supported here | Notes |
 /// |------------|----------------|-------|
-/// | `g.` (genomic) | yes | direct 1→0-based conversion |
+/// | `g.` (genomic) | yes | direct 1→0-based conversion; a `+`/`-` offset is refused |
 /// | `m.` (mito) | yes | mito accession is genomic; same as `g.`; wraparound rejected |
 /// | `o.` (circular) | yes | same path as `g.`/`m.`; wraparound rejected |
 /// | `n.` (non-coding tx) | exonic, positive base | SPDI sits on the transcript accession |
@@ -246,7 +289,11 @@ fn get_end_pos(interval: &Interval<GenomePos>) -> Option<u64> {
 /// [`ReferenceProvider`]. Intronic `n.`/`r.` positions are not supported
 /// by either entry point — SPDI has no offset notation, and genomic
 /// projection is future work; both functions return
-/// [`ConversionError::MissingReferenceData`].
+/// [`ConversionError::MissingReferenceData`]. A `g.`/`m.`/`o.` position
+/// carrying an offset is refused outright by both entry points with
+/// [`ConversionError::InvalidPosition`]: there is no exon structure on a
+/// genomic accession to resolve it against, and dropping it made distinct
+/// descriptions share one triple (#1628).
 ///
 /// # Arguments
 ///
@@ -319,7 +366,9 @@ pub fn hgvs_to_spdi_simple(variant: &HgvsVariant) -> Result<SpdiVariant, Convers
 /// `g.100_102dupATG`, `g.100A=`, etc.) emits the user-supplied bases as-is
 /// and does not consult the provider. Intronic `n.`/`r.` positions remain
 /// unsupported (SPDI has no offset notation) and return
-/// [`ConversionError::MissingReferenceData`].
+/// [`ConversionError::MissingReferenceData`]. An offset on a `g.`/`m.`/`o.`
+/// position is refused with [`ConversionError::InvalidPosition`] — see
+/// [`reject_genomic_offset`].
 ///
 /// An **unspelled identity** (`g.100=`, `g.100_102=`) therefore needs a
 /// provider: on [`hgvs_to_spdi_simple`] it returns
@@ -393,6 +442,7 @@ pub fn hgvs_to_spdi<P: ReferenceProvider + ?Sized>(
 
 /// Convert a genomic variant to SPDI (simple conversion).
 fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, ConversionError> {
+    reject_genomic_offset(&variant.loc_edit.location, "g")?;
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
     let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
         ConversionError::InvalidPosition {
@@ -420,6 +470,7 @@ fn genome_to_spdi_simple(variant: &GenomeVariant) -> Result<SpdiVariant, Convers
 /// single-edit format with no native representation for circular-contig
 /// wraparound.
 fn mt_to_spdi_simple(variant: &MtVariant) -> Result<SpdiVariant, ConversionError> {
+    reject_genomic_offset(&variant.loc_edit.location, "m")?;
     if let (Some(s), Some(e)) = (
         get_start_pos(&variant.loc_edit.location),
         get_end_pos(&variant.loc_edit.location),
@@ -500,6 +551,7 @@ fn genome_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &GenomeVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
+    reject_genomic_offset(&variant.loc_edit.location, "g")?;
     let edit = unwrap_edit(&variant.loc_edit.edit)?;
     let start_pos = get_start_pos(&variant.loc_edit.location).ok_or_else(|| {
         ConversionError::InvalidPosition {
@@ -529,6 +581,7 @@ fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &MtVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
+    reject_genomic_offset(&variant.loc_edit.location, "m")?;
     if let (Some(s), Some(e)) = (
         get_start_pos(&variant.loc_edit.location),
         get_end_pos(&variant.loc_edit.location),
@@ -569,6 +622,7 @@ fn mt_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
 /// single-edit format with no native representation for circular-contig
 /// wraparound.
 fn circular_to_spdi_simple(variant: &CircularVariant) -> Result<SpdiVariant, ConversionError> {
+    reject_genomic_offset(&variant.loc_edit.location, "o")?;
     if let (Some(s), Some(e)) = (
         get_start_pos(&variant.loc_edit.location),
         get_end_pos(&variant.loc_edit.location),
@@ -612,6 +666,7 @@ fn circular_to_spdi_with_provider<P: ReferenceProvider + ?Sized>(
     variant: &CircularVariant,
     provider: &P,
 ) -> Result<SpdiVariant, ConversionError> {
+    reject_genomic_offset(&variant.loc_edit.location, "o")?;
     if let (Some(s), Some(e)) = (
         get_start_pos(&variant.loc_edit.location),
         get_end_pos(&variant.loc_edit.location),
@@ -5140,5 +5195,131 @@ mod tests {
         assert_eq!(spdi.sequence, "NC_012920.1");
         assert_eq!(spdi.deletion, "ATATAT");
         assert_eq!(spdi.insertion, "ATATATATAT");
+    }
+
+    // ------------------------------------------------------------------
+    // Genomic offsets (#1628)
+    // ------------------------------------------------------------------
+
+    /// A `g.` position carrying a `+`/`-` offset must not be silently
+    /// flattened onto its base. `checklist.md:16` prohibits an offset on a
+    /// genomic position and SPDI has no offset notation, so the only two
+    /// honest answers are "refuse" and "resolve"; there is nothing to
+    /// resolve against on a bare genomic accession, so the answer is refuse.
+    ///
+    /// Dropping the offset is the third, dishonest answer: it makes
+    /// `g.266+2del`, `g.266-268del` and `g.266del` — which `normalize`
+    /// treats as three different variants — collapse onto one triple.
+    ///
+    /// All three genomic axes are exercised, on both public entry points, so
+    /// each of the six guard call sites is covered: `m.` and `o.` hold the
+    /// same `Interval<GenomePos>` as `g.` and are equally able to carry an
+    /// offset the parser accepts. The verdict is asserted rather than a bare
+    /// `is_err()` — the contract is *refused as an invalid position, naming
+    /// the offset*, and "failed somehow" would also be satisfied by an
+    /// unrelated error on a path where the guard had been removed. The
+    /// message's coordinate prefix is asserted too, since the axis label is
+    /// passed in per call site and a copy-paste is otherwise invisible.
+    #[test]
+    fn a_genomic_offset_is_refused_rather_than_dropped() {
+        let provider = identity_provider();
+        for (descriptor, coord) in [
+            ("NC_000001.11:g.10+2delC", "g"),
+            ("NC_000001.11:g.10-2delC", "g"),
+            ("NC_000001.11:g.10+2_12delCGT", "g"),
+            ("NC_000001.11:g.10_12+2delCGT", "g"),
+            ("NC_012920.1:m.10+2delC", "m"),
+            ("NC_012920.1:m.10_12+2delCGT", "m"),
+            ("NC_001416.1:o.10+2delC", "o"),
+            ("NC_001416.1:o.10_12+2delCGT", "o"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            for (path, converted) in [
+                ("without a provider", hgvs_to_spdi_simple(&variant)),
+                ("with a provider", hgvs_to_spdi(&variant, &provider)),
+            ] {
+                let err = match converted {
+                    Err(err) => err,
+                    Ok(spdi) => {
+                        panic!(
+                            "`{descriptor}` converted {path} to `{spdi}`; the offset was dropped"
+                        )
+                    }
+                };
+                assert!(
+                    matches!(err, ConversionError::InvalidPosition { .. }),
+                    "`{descriptor}` {path} must be refused as InvalidPosition, got {err:?}"
+                );
+                let message = err.to_string();
+                assert!(
+                    message.contains("carries a +/- offset"),
+                    "`{descriptor}` {path} was refused for some other reason: {message}"
+                );
+                assert!(
+                    message.contains(&format!("{coord}. position")),
+                    "`{descriptor}` {path} named the wrong coordinate axis: {message}"
+                );
+            }
+        }
+    }
+
+    /// The transcript axes are where a `+`/`-` offset is legitimate HGVS, and
+    /// the genomic guard must not reach them. Each still declines for its own,
+    /// unchanged reason — `MissingReferenceData`, "cannot be expressed in SPDI
+    /// without genomic projection" — which is a different verdict from the
+    /// genomic `InvalidPosition`, and the difference is the point: `c.10+5` is
+    /// a well-formed position SPDI cannot carry, `g.10+2` is not a well-formed
+    /// position at all.
+    ///
+    /// Their exonic siblings on the same providers still convert, so this pins
+    /// that the axes are working rather than merely erroring.
+    #[test]
+    fn a_transcript_axis_offset_declines_for_its_own_reason() {
+        let provider = make_intronic_provider();
+        for (descriptor, exonic_sibling) in [
+            ("NM_INTRON.1:c.10+5A>G", "NM_INTRON.1:c.10A>G"),
+            ("NM_INTRON.1:n.10+5A>G", "NM_INTRON.1:n.10A>G"),
+            ("NM_INTRON.1:r.10+5a>g", "NM_INTRON.1:r.10a>g"),
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            let err = hgvs_to_spdi(&variant, &provider)
+                .expect_err("an intronic transcript position has no SPDI representation");
+            assert!(
+                matches!(err, ConversionError::MissingReferenceData { .. }),
+                "`{descriptor}` must still decline as MissingReferenceData, got {err:?}"
+            );
+            assert!(
+                err.to_string().contains("genomic projection"),
+                "`{descriptor}` lost its own reason: {err}"
+            );
+            let exonic = parse_hgvs(exonic_sibling).expect("fixture must parse");
+            assert!(
+                hgvs_to_spdi(&exonic, &provider).is_ok(),
+                "`{exonic_sibling}` must still convert — the axis is not broken, \
+                 only its intronic positions are unrepresentable"
+            );
+        }
+    }
+
+    /// The invariant the drop breaks, stated directly: two descriptions that
+    /// `to_spdi` maps to the same triple must be the same variant. Here the
+    /// offset-free sibling is the one legal spelling, so the offset-carrying
+    /// ones must not share its triple.
+    #[test]
+    fn distinct_genomic_descriptions_do_not_share_one_triple() {
+        let provider = identity_provider();
+        let plain = hgvs_to_spdi(&parse_hgvs("NC_000001.11:g.10delC").unwrap(), &provider)
+            .expect("the offset-free spelling is legal and must convert")
+            .to_string();
+        for descriptor in ["NC_000001.11:g.10+2delC", "NC_000001.11:g.10-2delC"] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            let got = hgvs_to_spdi(&variant, &provider).map(|s| s.to_string());
+            assert_ne!(
+                got.as_deref().ok(),
+                Some(plain.as_str()),
+                "`{descriptor}` and `NC_000001.11:g.10delC` are different variants \
+                 to `normalize` but one triple to `to_spdi`"
+            );
+        }
     }
 }
