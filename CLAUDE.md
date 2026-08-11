@@ -156,7 +156,7 @@ into a `OnceLock`, so a disabled run pays only one atomic load. CI runs the suit
 a second time with it set; the nightly reference-aware job sets it too, which is
 where the manifest-backed conformance corpora are actually covered.
 
-The check runs from `Normalizer::assert_seam_oracles`, which all three oracles
+The check runs from `Normalizer::assert_seam_oracles`, which all four oracles
 share, at the single exit of `normalize_core_checked`. That covers every public
 normalization: `normalize()`, `normalize_with_diagnostics()`, and every
 `VariantProjector` path (the projection-driven genomic/coding/protein axes).
@@ -166,7 +166,7 @@ It is one call site again as of #1382. `normalize_with_diagnostics` used to reac
 actual defect — the strict-mode rejection ladder, so #1366 had to call
 `assert_seam_oracles` from it separately. Routing it through
 `normalize_core_checked` fixes both at once, and the extra call would now just
-re-run all three oracles on that path.
+re-run all four oracles on that path.
 
 The idempotency oracle's verification pass re-enters normalization, so a
 thread-local `IN_IDEMPOTENCY_CHECK` guard breaks the recursion — the inner call
@@ -207,7 +207,10 @@ Kept separate from `FERRO_ASSERT_IDEMPOTENT` because neither subsumes the other,
 and the idempotency oracle has a blind spot this one covers: it verifies by
 *re-normalizing* its own output, which it cannot do for an output that fails to
 parse, so an unparseable result is invisible to it. Both run from
-`assert_seam_oracles` alongside the in-bounds check, and CI sets all three together.
+`assert_seam_oracles` alongside the in-bounds and denoted-sequence checks, and CI
+sets these two and the in-bounds check together. The **denoted-sequence** flag is
+the exception and is not set everywhere they are — see
+[Where it runs, and the one place it deliberately does not](#normalization-denoted-sequence-oracle).
 
 #### Normalization in-bounds oracle
 
@@ -249,10 +252,121 @@ on `merge::first_out_of_bounds_coordinate`. In brief:
   (`g.10_11ins[20_30]`).
 
 Like the two above it, compiled out in release (`#[cfg(debug_assertions)]`) and
-read once into a `OnceLock`. CI sets all three together, in the sharded
+read once into a `OnceLock`. CI sets **these three** together, in the sharded
 `test-oracle` job and the `sweeps` job (those two and nowhere else — the plain
 `test` and `soak` jobs run without the flags); the nightly sets it too, where it
 is the only place the check runs against true transcript and contig lengths.
+
+**The fourth flag is not set in all of those places, so do not read "all four"
+off this paragraph.** `FERRO_ASSERT_SEQUENCE` runs in `sweeps` and in the
+nightly, and deliberately not in `test-oracle` — the reason, and the two rows
+that keep it out, are under
+[Where it runs, and the one place it deliberately does not](#normalization-denoted-sequence-oracle)
+below and in `ci.yml`'s comment on the `test-oracle` job.
+
+#### Normalization denoted-sequence oracle
+
+`FERRO_ASSERT_SEQUENCE=1` is the fourth at the same seam, and the only one that
+asks what the output **means** rather than how it is written: apply the input to
+the reference, apply the output, and assert the bases agree.
+
+```bash
+FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev
+```
+
+**The other three are all form questions, and a wrong sequence passes all of
+them.** It is a fixed point, so `FERRO_ASSERT_IDEMPOTENT` is satisfied; it
+parses, and `parse_hgvs` holds no provider so it could not know either way; and
+its coordinates exist, so `FERRO_ASSERT_IN_BOUNDS` is satisfied. #1592 and #1600
+each record all three passing on their own reproducer. The class had been found
+by hand six times before those two — **#1254** (`g.[3_4del;9del]` → `g.12_14del`),
+**#1281** (→ `g.[1del;1del]`), **#1290**, **#1304**, **#1308**, **#1312** — each
+filed, fixed and regression-tested separately. Eight instances is the same
+argument #1353 made for the in-bounds oracle after three.
+
+**The applier is not the normalizer.** `spdi::compare_denoted_sequences` reaches
+the bases through `hgvs_to_spdi` and an SPDI splice — the same walk
+`apply_to_reference` and `tests/it/common/cis_apply_oracle.rs` use — so nothing
+here can agree with the output merely because normalization produced it.
+`EquivalenceChecker` is **not** usable for this: it normalizes both sides, which
+is circular (`tests/it/issue_1234_sibling_clamped_shift.rs:198`).
+
+Both descriptions are applied over the **union** of their spans, in one fetch. A
+per-description window would give each its own frame and report every 3'-shift as
+a difference; over a window containing both, `g.3_4del` and `g.7_8del` in a tract
+denote the same bases, which is what makes shifting sequence-preserving in the
+first place.
+
+**A side that cannot be applied is counted, not silently passed** — a skip that
+reads as a pass is the exact failure mode this oracle exists to remove:
+
+| case | verdict |
+|---|---|
+| both apply, bases agree | pass, counted in `compared` |
+| both apply, bases differ | **fire** |
+| the **output** denotes no sequence while the input does | **fire** — #1281's `g.[1del;1del]`, two members claiming one base. Worse than a wrong sequence, so it must not be filed under the skip exemption |
+| the **input** denotes no sequence (trans allele, `REFSEQ_MISMATCH`, an edit SPDI cannot carry) | skip, counted in `skipped` — there is no baseline, the same discipline the other two apply to already-broken inputs |
+| the two name different accessions (#785 version substitution) | skip, counted |
+| the union window exceeds `MAX_APPLY_WINDOW`, or the provider cannot serve it | skip, counted |
+
+`normalize::denoted_sequence_oracle_counts()` returns `(compared, skipped)`
+process-wide, so a run can say how much it actually compared. **Read it before
+trusting a green oracle run**: zero comparisons and zero faults look identical
+from the outside.
+
+`tests/it/issue_1615_denoted_sequence_oracle.rs` is the oracle's own regression
+guard. It pins the recorded `(reference, input, wrong output)` triple from each
+of the eight issues and asserts the predicate fires — deliberately *not* by
+re-normalizing, since a test that ran the normalizer would go green as each
+defect is fixed and stop saying anything about the oracle. Its other half is the
+negative control: legitimate re-spellings (a 3'-shift, a merge, a decomposition,
+a dup/ins equivalence) must stay silent.
+
+Compiled out in release like the three beside it, and the most expensive of the
+four when on — one provider fetch and two splices per normalization — so it runs
+last in `assert_seam_oracles`, after the cheaper and more specific checks have
+had their chance to name the fault more precisely.
+
+**Where it runs, and the one place it deliberately does not.** `sweeps` sets it
+(gating, measured green over the full corpus) and the nightly sets it
+(non-gating). `test-oracle` does **not**, which makes it the only job where the
+set of four is incomplete. Two rows in that job's selection fire, and both are
+real disagreements inside ferro rather than noise:
+
+| row | what disagrees |
+|---|---|
+| #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` reads the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 |
+| #1619 — `NM_000492.4:c.1520_1522del` → `c.1521_1523del` | the two forms are equivalent on the flat transcript; `hgvs_to_spdi` resolves the `c.` position by walking `normalization_transcripts.json`'s exon list, whose 1-base synthetic introns land it **10 bases** 3' of where the normalizer reads |
+
+Suppressing either would hollow out the oracle, and turning the flag on before
+they are settled would redden the job for a reason no PR caused. Move it into
+`test-oracle` once both are closed.
+
+**Measured false-positive classes, and what closed each.** The first run of this
+oracle over the suite raised **344** fires, all but 16 of them false. Each fix
+below is a class, not a case, and the reasoning is on the code.
+
+**Do not sum the `fires` column, and do not read it as a partition of the 344.**
+Only the 344 and the 16 come from one run. Each row's count was measured on the
+run that isolated *that* class, after the rows above it had been closed — closing
+one class changes which normalizations reach the comparison at all, so the same
+normalization can be counted in more than one row and the column adds up to well
+over 344. Read each figure as the size of the class at the point it was diagnosed,
+which is what makes it an argument for the fix beside it:
+
+| class | fires | why it was not a defect |
+|---|---|---|
+| output cannot be transliterated | 328 | the input states its own deleted bases (`g.1000delC`) and converts with no provider; the output (`g.1000del`) must read the reference, which the fixture does not hold |
+| insertion flush against a deletion | 233 | `triples_are_disjoint` calls it an overlap; `cis_apply_oracle`'s tie-break does not, and it is well defined |
+| overlap-conflicting input | ~12 | an insertion *interior* to a deletion — the input denotes nothing, so there is no baseline |
+| `pter`/`qter` | 6 | carry no numeric coordinate (`base: 0`); `hgvs_to_spdi` reads `base` and silently resolves `c.pterdel` to the sequence's **last** base |
+| corrected `REFSEQ_MISMATCH` | 5 | `c.10dupA` where the reference reads `C`: normalization is *supposed* to change the denoted sequence here |
+| `r.` payload vs DNA reference | 1 | `UGC` against `TGC` — the same bases in two alphabets |
+| uncertain allele `[(…)]` | 1 | the normalizer deliberately does not clamp those |
+
+The lesson generalizes past this oracle: **the two sides of a comparison do not
+need the reference equally**, and any check that treats "I could not derive it"
+as "it is wrong" will fire hardest on the shapes where that asymmetry is largest.
 
 **An oracle failure is visible in PR CI and silent in the nightly.** In PR CI,
 `test-oracle` and `sweeps` carry no `continue-on-error`, so a fire turns the job
@@ -260,7 +374,7 @@ red. The nightly reference-aware job does carry it, deliberately — its purpose
 to surface drift in the xfail report rather than to gate, and the corpus runner
 wraps normalization in `catch_panics`, so an oracle panic there lands in the
 uploaded xfail artifact as a FAILing case instead of failing the workflow. That
-applies equally to all three flags, and it is why a red oracle in the nightly must
+applies equally to all four flags, and it is why a red oracle in the nightly must
 be read out of the xfail report rather than from the workflow conclusion.
 
 **An oracle fire DOES block the merge — corrected 2026-08-09.** This section used

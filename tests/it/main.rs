@@ -250,6 +250,7 @@ mod issue_1578_followup_equivalence_rungs;
 mod issue_1578_followup_ring_declines;
 mod issue_1578_followup_self_cancelling_rings;
 mod issue_1578_ring_validator_escapes;
+mod issue_1615_denoted_sequence_oracle;
 mod issue_163_rna_utr3_flag;
 mod issue_165_delins_sub_only_decompose;
 mod issue_180_allele_3prime_shift;

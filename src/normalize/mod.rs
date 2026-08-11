@@ -1648,14 +1648,86 @@ fn in_bounds_self_check_enabled() -> bool {
     })
 }
 
+/// Whether the opt-in denoted-sequence self-check is active.
+///
+/// Enabled when `FERRO_ASSERT_SEQUENCE` is set to anything other than
+/// `0`/empty. Read once and cached, like the three gates above it.
+///
+/// The fourth at the same seam (#1615), and the only one that asks what the
+/// output *means* rather than how it is written. The three before it are all
+/// well-formedness questions — is it a fixed point, does it parse, is it in
+/// bounds — and a description denoting entirely different bases can satisfy all
+/// three at once. That is not hypothetical: #1592 and #1600 were both live on
+/// `main`, both emitted different bases than their input, and both issues record
+/// all three oracles passing on the reproducer.
+///
+/// The most expensive of the four when enabled — a provider fetch of the union
+/// window plus two splices per normalization — which is why it runs last in
+/// [`Normalizer::assert_seam_oracles`] and why it is its own flag rather than
+/// being folded into one of the others.
+#[cfg(debug_assertions)]
+fn denoted_sequence_self_check_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("FERRO_ASSERT_SEQUENCE")
+            .map(|v| !v.is_empty() && v != "0")
+            .unwrap_or(false)
+    })
+}
+
+/// Normalizations the denoted-sequence oracle looked at but could not compare.
+///
+/// A skip that reads as a pass is the exact failure mode a sequence oracle
+/// exists to remove, so the skips are *counted* rather than being silent. A run
+/// that reports zero comparisons made is a run that checked nothing, however
+/// green it looks. See [`denoted_sequence_oracle_counts`].
+#[cfg(debug_assertions)]
+static DENOTED_SEQUENCE_SKIPPED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Normalizations the denoted-sequence oracle compared and found to agree.
+#[cfg(debug_assertions)]
+static DENOTED_SEQUENCE_COMPARED: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// `(compared, skipped)` for the denoted-sequence oracle, process-wide.
+///
+/// `compared` counts the normalizations whose input and output sequences were
+/// actually derived and found equal; `skipped` counts those the comparison
+/// declined, for any of the [`crate::spdi::NotComparable`] reasons. A mismatch
+/// panics rather than being counted, so there is no third figure.
+///
+/// Exposed so a caller can assert its run made comparisons at all. Both counters
+/// stay at zero when `FERRO_ASSERT_SEQUENCE` is unset — the oracle returns before
+/// touching them — so a nonzero `compared` also witnesses that the flag is on.
+///
+/// Compiled out in release, like the oracle itself.
+#[cfg(debug_assertions)]
+pub fn denoted_sequence_oracle_counts() -> (u64, u64) {
+    use std::sync::atomic::Ordering;
+    (
+        DENOTED_SEQUENCE_COMPARED.load(Ordering::Relaxed),
+        DENOTED_SEQUENCE_SKIPPED.load(Ordering::Relaxed),
+    )
+}
+
 #[cfg(debug_assertions)]
 thread_local! {
-    /// Re-entrancy guard for the idempotency self-check.
+    /// Re-entrancy guard for the idempotency self-check's verification pass.
     ///
     /// The check lives in `normalize_core_checked` so it covers the projector
     /// too, but its verification pass re-enters that very method — without this
     /// flag each check would recurse forever. Thread-local (not a global) so
     /// concurrent normalizations on other threads stay checked.
+    ///
+    /// Read by **two** oracles, for different reasons. `assert_idempotent` must
+    /// honour it or it recurses; `assert_denoted_sequence` honours it because the
+    /// re-entrant pass asks a question the outer call already asked, at the price
+    /// of a second provider fetch and a counter the outer call did not ask for.
+    /// `assert_reparseable` and `assert_in_bounds` deliberately do not: they are
+    /// pure predicates over one description, hold no counters, and re-running
+    /// them on the verification pass costs nothing worth naming.
     static IN_IDEMPOTENCY_CHECK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
@@ -1989,6 +2061,144 @@ impl<P: ReferenceProvider> Normalizer<P> {
              have\n  input:  {variant}\n  output: {normalized}\n  member: {member}\n  names \
              position {position} on {accession}, which has {length} bases",
         );
+    }
+
+    /// Assert that a normalized description denotes the same bases its input
+    /// does.
+    ///
+    /// The fourth seam oracle (#1615), and the first that asks about *meaning*
+    /// rather than form. Normalization may re-spell a variant however the
+    /// canonical form requires; what it may never do is change the sequence the
+    /// description resolves to. Nothing else at this seam checks that:
+    ///
+    /// * `FERRO_ASSERT_IDEMPOTENT` asks whether the output is a fixed point. A
+    ///   wrong sequence normalizes to itself perfectly well — #1592, #1600,
+    ///   #1304, #1308 and #1312 are all fixed points.
+    /// * `FERRO_ASSERT_REPARSE` asks whether it parses. `parse_hgvs` holds no
+    ///   provider, so it cannot know what any description denotes.
+    /// * `FERRO_ASSERT_IN_BOUNDS` asks whether its coordinates exist. Every one
+    ///   of the eight defects below names positions that do exist.
+    ///
+    /// The class had been found by hand six times — #1254, #1281, #1290, #1304,
+    /// #1308, #1312 — each filed, fixed and regression-tested separately, before
+    /// #1592 and #1600 made it eight. That is the same argument #1353 made for
+    /// the in-bounds oracle after three.
+    ///
+    /// # The applier is not the normalizer
+    ///
+    /// [`crate::spdi::compare_denoted_sequences`] reaches the bases through
+    /// `hgvs_to_spdi` and an SPDI splice, with no normalization anywhere in the
+    /// path — otherwise the check would agree with the output merely because
+    /// normalization produced it. `EquivalenceChecker` is *not* usable here for
+    /// exactly that reason.
+    ///
+    /// # Skipping is counted, and an inapplicable output is not a skip
+    ///
+    /// Whenever the input itself denotes no single sequence — a trans allele, a
+    /// `REFSEQ_MISMATCH` whose stated base is wrong, an edit SPDI cannot carry —
+    /// there is no baseline, and the comparison declines. That is the same
+    /// discipline `assert_reparseable` and `assert_in_bounds` apply, and it is
+    /// deliberately *counted* ([`denoted_sequence_oracle_counts`]) rather than
+    /// silent: a run that compared nothing looks identical to a run that
+    /// compared everything and found no fault.
+    ///
+    /// An output that is **self-contradictory** while its input denotes a
+    /// sequence is the opposite case and fires. #1281's `g.[1del;9_10delinsA]`
+    /// normalized to `g.[1del;1del]`, two members claiming one base: the
+    /// description has no resulting sequence at all, which is worse than having
+    /// the wrong one. Treating it as a skip would file the more severe defect
+    /// under the milder one's exemption.
+    ///
+    /// That fire is deliberately narrower than "the output produced no triples".
+    /// An output the applier merely cannot *transliterate* is a skip, because
+    /// the two sides do not need the reference equally: `g.1000delC` states its
+    /// deleted base and converts with no provider at all, while the `g.1000del`
+    /// normalization emits for it must read one. Reading that asymmetry as a
+    /// fault raised 328 false alarms across the suite in a single measured run,
+    /// against 16 genuine ones.
+    ///
+    /// # It does not run on the idempotency oracle's verification pass
+    ///
+    /// `assert_idempotent` re-enters `normalize_core_checked`, so this seam is
+    /// reached a second time with `(normalized, again)` — a pair the outer call
+    /// has already asked about, since the outer comparison covers
+    /// `(input, normalized)` and the idempotency assertion covers
+    /// `normalized == again`. Honouring `IN_IDEMPOTENCY_CHECK` therefore costs no
+    /// coverage and buys three things: it halves the provider fetches when both
+    /// flags are set (`sweeps` sets both), it keeps
+    /// [`denoted_sequence_oracle_counts`] a count of *normalizations the caller
+    /// asked for* rather than a mixture of those and re-entrant verification
+    /// passes, and it stops a non-idempotent output being reported as a sequence
+    /// fault by the inner call before `assert_idempotent` can name it as the
+    /// non-idempotency it is.
+    ///
+    /// The return is before either counter, like the flag-off path: a re-entrant
+    /// pass is not a skip the oracle declined, so counting it as one would put
+    /// the same inflation into `skipped` that it removes from `compared`.
+    ///
+    /// Compiled out in release, like the three beside it, and the most expensive
+    /// of the four when on — one provider fetch and two splices per
+    /// normalization — so it runs last.
+    #[cfg(debug_assertions)]
+    fn assert_denoted_sequence(
+        &self,
+        variant: &HgvsVariant,
+        normalized: &HgvsVariant,
+        warnings: &[NormalizationWarning],
+    ) {
+        use crate::spdi::DenotedSequenceComparison as Outcome;
+        use std::sync::atomic::Ordering;
+
+        if !denoted_sequence_self_check_enabled() || IN_IDEMPOTENCY_CHECK.with(|f| f.get()) {
+            return;
+        }
+        // A corrected `REFSEQ_MISMATCH` is a sequence change the normalizer is
+        // *supposed* to make, and the only one there is. The input stated a base
+        // the reference does not have — `c.10dupA` where the reference reads `C`
+        // — and canonicalization drops the wrong bases, so the two descriptions
+        // legitimately denote different sequences. Counted as a skip rather than
+        // exempted silently, and kept narrow: only the `corrected` half, since a
+        // mismatch the normalizer declines to rewrite leaves both sides denoting
+        // whatever the input said.
+        if warnings.iter().any(|w| {
+            matches!(
+                w,
+                NormalizationWarning::RefSeqMismatch {
+                    corrected: true,
+                    ..
+                }
+            )
+        }) {
+            DENOTED_SEQUENCE_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        match crate::spdi::compare_denoted_sequences(variant, normalized, &self.provider) {
+            Outcome::Agree => {
+                DENOTED_SEQUENCE_COMPARED.fetch_add(1, Ordering::Relaxed);
+            }
+            Outcome::NotComparable(_) => {
+                DENOTED_SEQUENCE_SKIPPED.fetch_add(1, Ordering::Relaxed);
+            }
+            Outcome::OutputContradictsItself => panic!(
+                "FERRO_ASSERT_SEQUENCE: normalization produced a description that denotes no \
+                 sequence at all, from an input that denotes one\n  input:  {variant}\n  output: \
+                 {normalized}\n  its members claim the same base, or two of its insertions share \
+                 one interbase with no stated order",
+            ),
+            Outcome::Differ {
+                accession,
+                start,
+                reference,
+                from_input,
+                from_output,
+            } => panic!(
+                "FERRO_ASSERT_SEQUENCE: normalization changed the sequence the description \
+                 denotes\n  input:  {variant}\n  output: {normalized}\n  over {accession} \
+                 [{start}, {}):\n    reference       {reference}\n    input applies   \
+                 {from_input}\n    output applies  {from_output}",
+                start + reference.len() as u64,
+            ),
+        }
     }
 
     /// Whether a lone (non-allele) member is a shape the sequence-first pass
@@ -2655,7 +2865,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             }
         }
 
-        self.assert_seam_oracles(variant, &result.result);
+        self.assert_seam_oracles(variant, &result.result, &result.warnings);
 
         // Provenance (#1235, `DNA/delins.md:79-84`). If the input described more
         // cis members than the normalized form does, two or more separately
@@ -2691,7 +2901,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         Ok((result.result, result.warnings))
     }
 
-    /// The three seam oracles, run on a normalized result before it is returned.
+    /// The four seam oracles, run on a normalized result before it is returned.
     ///
     /// Ordered cheapest-and-most-specific first, so the failure a run reports is
     /// the most precise one available: a bad coordinate is a bad coordinate
@@ -2699,6 +2909,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// `assert_idempotent` would otherwise report an out-of-range output as a
     /// non-idempotency, which is the symptom rather than the fault. See
     /// `assert_idempotent` for the re-entrancy guard.
+    ///
+    /// `assert_denoted_sequence` (#1615) is last for the same reason: it is the
+    /// only one that reads the reference, and an output that is out of bounds or
+    /// unparseable should be reported as *that* rather than as a sequence it
+    /// could not be applied to. It is also the most expensive.
     ///
     /// A method rather than an inline block because there is more than one public
     /// exit to cover. `normalize_core_checked` is the seam for `normalize()` and
@@ -2710,17 +2925,24 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///
     /// Each call stays individually `#[cfg(debug_assertions)]`-gated, so the whole
     /// body compiles away in release exactly as the inline block did.
-    fn assert_seam_oracles(&self, variant: &HgvsVariant, normalized: &HgvsVariant) {
+    fn assert_seam_oracles(
+        &self,
+        variant: &HgvsVariant,
+        normalized: &HgvsVariant,
+        warnings: &[NormalizationWarning],
+    ) {
         #[cfg(debug_assertions)]
         self.assert_in_bounds(variant, normalized);
         #[cfg(debug_assertions)]
         self.assert_reparseable(variant, normalized);
         #[cfg(debug_assertions)]
         self.assert_idempotent(variant, normalized);
-        // Release builds read neither parameter once the three calls above are
-        // compiled out.
+        #[cfg(debug_assertions)]
+        self.assert_denoted_sequence(variant, normalized, warnings);
+        // Release builds read none of the parameters once the four calls above
+        // are compiled out.
         #[cfg(not(debug_assertions))]
-        let _ = (variant, normalized);
+        let _ = (variant, normalized, warnings);
     }
 
     /// Normalize a variant with detailed warnings
