@@ -84,17 +84,20 @@
 //!   one place outside `style.md` (see the repository `CLAUDE.md`). So neither
 //!   side *requires* anything, and which recommendation ferro honours on a
 //!   frameshifting block is a house-style question the spec leaves open.
-//! * **Nothing has ruled on it.** The nearest record is
-//!   `codon-carve-out-shape-restriction`, which is `undecided` and whose
-//!   rationale says as much in terms: "WHETHER THAT NARROWING IS WRONG HAS NOT
-//!   BEEN DEMONSTRATED". It does supply the constraint this file rests on —
+//! * **The nearest record now rules the other way, and it does not reach this
+//!   file.** `codon-carve-out-shape-restriction` is `decided`: WIDEN — the
+//!   `delins.md:18` exception applies regardless of edit type, because edit
+//!   type is a property of the spelling. That ruling *widens* the carve-out and
+//!   so cannot license the merge this file is about; the constraint this file
+//!   rests on is one the ruling explicitly preserves —
 //!
 //!   > `general.md:35`'s "together affecting one amino acid" cannot cover a
 //!   > frameshift pair, because a frameshift does not affect one amino acid.
 //!
-//!   — but a constraint recorded *inside* an unsettled question is not a
-//!   verdict, and reading it as one is how a record that decides nothing
-//!   smuggles in a decision nobody made.
+//!   — and a frameshift block fails that precondition under the widened rule
+//!   exactly as it did under the narrow one. What is still unruled is what
+//!   ferro should do on a frameshifting block, which is a different question
+//!   from the one that record settles — so nothing below may be read as ruled.
 //!
 //! So the table below pins **observed behaviour on this base**, together with
 //! the two checks that rule out the reading which would rescue the `c.` output —

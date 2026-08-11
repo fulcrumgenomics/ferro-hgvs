@@ -828,9 +828,19 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // some preferences on provenance and allele frequency, which ferro cannot
     // see. See the record.
     ("canonical-form-choice-when-both-legal", "decided"),
-    // `delins.md:18` names no edit type; ferro applies it only to
-    // sub/unchanged/sub. Measured inert over 5.76M rows, never adjudicated.
-    ("codon-carve-out-shape-restriction", "undecided"),
+    // `delins.md:18` names no edit type; ferro applied it only to
+    // sub/unchanged/sub. **Decided by operator ruling (2026-08-10): WIDEN.**
+    // The exception applies wherever its stated precondition holds — two
+    // variants one nucleotide apart, together affecting one amino acid —
+    // regardless of edit type, because edit type is a property of the SPELLING
+    // and the precondition is a property of the RESULTING SEQUENCE (rule 3 of
+    // the README ruleset; the same argument that decided
+    // `separation-is-a-property-of-the-spelling-not-of-the-variant`). The two
+    // limits survive: a frameshift pair fails the precondition, and
+    // `duplication.md:18` still forbids merging a describable duplication
+    // away. The 5.76M-row inertness measurement is kept in the record as a
+    // measurement, not as support. #1599 is the implementation.
+    ("codon-carve-out-shape-restriction", "decided"),
     // The one the spec does settle: `delins.md:18`'s explicit exception for two
     // variants one nucleotide apart affecting one amino acid.
     ("delins-codon-carve-out-gap-one", "decided"),

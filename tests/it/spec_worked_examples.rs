@@ -317,15 +317,21 @@ fn the_divergence_set_is_exactly_the_one_recorded_conflict() {
          input three times over (`DNA/duplication.md:26`, `:60`, `:148`)."
     );
 
-    let diverging: Vec<&str> = cases
+    // Sorted, and the expected literal sorted to match: this set has two members
+    // as of the exon-junction ruling, so an ordered comparison would key on row
+    // order in the fixture. Inserting an unrelated row between these two would
+    // then fail with a message about the *set* having changed when only the
+    // order did — the misleading diagnostic every other message here avoids.
+    let mut diverging: Vec<&str> = cases
         .cases
         .iter()
         .filter(|c| c.spec_expected.is_some() && !c.lenient_matches_spec())
         .map(|c| c.input.as_str())
         .collect();
+    diverging.sort_unstable();
     assert_eq!(
         diverging,
-        ["NM_024312.4:r.-6_-3g[6]", "LRG_199t1:c.3922dup"],
+        ["LRG_199t1:c.3922dup", "NM_024312.4:r.-6_-3g[6]"],
         "the set of rows diverging from the spec changed. Two are recorded: the \
          RNA/repeated.md:22-vs-:27 self-conflict, and the exon-junction row that the \
          `exon-junction-dup-converge-from-the-far-side` ruling decided against ferro's current \
