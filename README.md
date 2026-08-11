@@ -203,7 +203,9 @@ ferro's normalizer follows four rules about its output, and three about how it h
       feature request, worth making but never a reason to hold a release.
 
 6. **Among multiple conformant forms:** the maintainers choose. **There are no user options for
-   normalization form.** Options remain available for orthogonal axes — error mode, 3'/5' direction.
+   normalization form.** Error mode is an orthogonal axis and stays available. The 3'/5' knob is
+   **not** orthogonal — it selects the frame every rule is evaluated in, so rules 2 and 3 are
+   claimed *per direction* rather than across the two.
 
 7. **Disclosure.** Any change to these rules, and any different choice made under 5 or 6, is
    disclosed: in the changelog before v1, by a major version bump after. Output that *violates*
