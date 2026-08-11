@@ -144,12 +144,12 @@
     },
     {
       "input": "NC_000020.11:g.45891619_45891622delinsC",
-      "expected": "NC_000020.11:g.45891619_45891622delinsC",
+      "expected": "NC_000020.11:g.[45891619del;45891621_45891622del]",
       "citation": {
-        "clause": "docs/background/basics.md:38",
-        "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
+        "clause": "docs/recommendations/general.md:34",
+        "quote": "two variants separated by one or more nucleotides should be described individually and **not** as a \"delins\""
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. The governing ruling (delins-merge-vs-individual-gap-two-or-more) is open, so what is asserted is only that this shipped form does not move. Verified a fixed point on both a pre-#1535 binary and the main tip, so the pin records a form that has already survived a normalizer change. Stability is the value the spec itself leads with, which is the authority cited; it is not authority for this particular spelling."
+      "note": "MOVED 2026-08-10 by `two_gap_deletion_alignment`, from the spanning `g.45891619_45891622delinsC` to the two-member split. NOT a re-bless of a spec-correctness claim: this row was a STABILITY PIN and stability is a tiebreaker, not a veto — the project bar is confluence plus disclosure. The two members are separated by ONE unchanged nucleotide (g.45891620), so the decided ruling `delins-merge-vs-individual-gap-two-or-more` does not reach it: that ruling is scoped by its own terms to a gap of two or more, and the row is `g.`, where `general.md:35`'s codon exception cannot apply either. What does reach it is `general.md:34` (\"two variants separated by one or more nucleotides should be described individually and **not** as a 'delins'\"), which asks for exactly this split. The earlier note said the governing ruling was open; it was decided 2026-08-07, and scoped away from this row. The pin now records the split as the form `general.md:34` states, and the citation moves with it."
     },
     {
       "input": "NG_008660.1:g.58604_58617delinsC",
