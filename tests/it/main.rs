@@ -49,6 +49,7 @@ mod cds_utr3_crossing_shift_idempotency;
 mod cis_allele_confluence_proptest;
 mod cis_confluence_adjudication;
 mod cis_confluence_axis;
+mod cis_confluence_nr_axis;
 mod cis_junction_crossing_shift;
 mod cis_spelling_confluence_gap;
 mod civic_validation;

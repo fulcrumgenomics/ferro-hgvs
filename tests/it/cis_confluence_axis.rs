@@ -331,6 +331,10 @@ fn corpus() -> &'static Corpus {
         fixture_gen::ensure_generated_example_fixture(
             &path,
             "generate_cis_confluence_corpus",
+            // The generator's own default is `g,c`, but naming it here keeps the
+            // corpus these pins are measured over independent of that default:
+            // widening it would otherwise silently re-roll every number below.
+            &["--axes", "g,c"],
             ".cis_confluence_corpus",
             "cis confluence corpus",
             || {},
