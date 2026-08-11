@@ -235,12 +235,19 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
                canonical, plus the delins.md:44-47 merge -- a split whose
                payload realigns as one block becomes a single delins
 
-  An unrecognised value is REFUSED: the process aborts at the first variant it
-  normalizes, naming the value you gave and the arms this build has. It does not
-  fall back to `live`. It used to, which made a misspelling look exactly like
-  'the candidate changes nothing' -- and the warning that fallback logged went
-  through the `log` facade, which this CLI installs no logger for, so it reached
-  no stream and RUST_LOG could not surface it.
+  An unrecognised value is REFUSED: this command exits with an error BEFORE it
+  reads any input, naming the value you gave and the arms this build has. It
+  does not fall back to `live`. It used to, which made a misspelling look
+  exactly like 'the candidate changes nothing' -- and the warning that fallback
+  logged went through the `log` facade, which this CLI installs no logger for,
+  so it reached no stream and RUST_LOG could not surface it.
+
+  The refusal is delivered here, at the entry point, rather than by panicking
+  from inside the normalizer. A development-only switch must not be able to
+  abort a process that merely happens to have the variable set, so in a release
+  build the library itself falls safe to `live` and leaves the refusal for a
+  binary to report. Every arm is still honoured in every build -- it is only the
+  handling of a value that names NO arm that differs.
 
   It is read once per process and cached, so it cannot be changed after the
   first variant is normalized. That is also why this is an environment variable
@@ -731,6 +738,22 @@ UNSTABLE EVALUATION SWITCH: FERRO_PARTITION
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
+
+    // Before any input is read or normalized: this build may have been asked for
+    // a partitioner it does not carry. A library cannot refuse that from
+    // `canonicalize_from_sequence` -- it is infallible -- and ignoring it would
+    // serve the shipped `live` rule under a candidate's name, which is a
+    // bake-off that reports the candidate changes nothing. A binary has
+    // somewhere to fail to, so it fails here.
+    //
+    // After `Cli::parse()` on purpose: clap answers `--help` and `--version` by
+    // exiting from inside `parse`, and those must keep working for somebody who
+    // has a stale `FERRO_PARTITION` exported -- reading the help is how they
+    // find out what the arms are. Nothing has been read or normalized yet
+    // either way, so the refusal still precedes any work.
+    if let Some(message) = ferro_hgvs::normalize::partition_switch_startup_error() {
+        return Err(message.into());
+    }
 
     match cli.command {
         Commands::AnnotateVcf {

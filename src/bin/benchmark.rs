@@ -50,6 +50,15 @@ use ferro_hgvs::benchmark::{check_hgvs_rs_available, check_seqrepo_path, HgvsRsC
 fn main() {
     let cli = Cli::parse();
 
+    // This binary normalizes with ferro to compare it against other tools, so a
+    // `FERRO_PARTITION` value naming no arm would have it measure the shipped
+    // rule under a candidate's name. The library falls safe to `live` in a
+    // release build rather than aborting, and leaves the refusal here.
+    if let Some(message) = ferro_hgvs::normalize::partition_switch_startup_error() {
+        eprintln!("Error: {message}");
+        std::process::exit(1);
+    }
+
     let result = match cli.command {
         // =========================================================================
         // GROUPED SUBCOMMAND HANDLERS (Phase 2)

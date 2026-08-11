@@ -50,6 +50,18 @@ pub mod validate;
 #[cfg(feature = "dev")]
 pub use merge::dev_partitioners;
 
+// How often a sequence-first partitioner declined and `partition_block` answered
+// under its name. Not gated on `dev`: a bake-off is run from whatever build the
+// measurement uses, and a census that exists only in some builds is one a run can
+// forget to read. See `PartitionDeclineCounts`.
+pub use merge::{partition_decline_counts, PartitionDeclineCounts};
+
+// The refusal a binary should print and exit on when `FERRO_PARTITION` named an
+// arm this build has not got. A library cannot refuse from
+// `canonicalize_from_sequence` -- it is infallible -- so the refusal is offered
+// to entry points that can return a failure.
+pub use merge::partition_switch_startup_error;
+
 use crate::coords::{hgvs_pos_to_index, index_to_hgvs_pos};
 use crate::error::FerroError;
 use crate::hgvs::edit::{

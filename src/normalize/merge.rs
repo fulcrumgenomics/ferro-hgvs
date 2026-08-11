@@ -1960,24 +1960,65 @@ const MAX_TWO_GAP_PLACEMENTS: usize = 65_536;
 
 /// Largest alignment grid the sequence-first splitter will build, in cells.
 ///
-/// `AlignmentDag::build` is `Θ(n·m)` in **space** as well as time, and it
-/// allocates four grids of that size: two `u32` edit grids, the on-path flags,
-/// and the adjacency mask. Only the reference side is bounded upstream
-/// ([`MAX_CANONICAL_WINDOW`]); the alternate side is whatever the members
-/// produce, and a duplication over the whole window doubles it. A 4096 x 8192
-/// grid is 33.5 M cells, or roughly 340 MB across the four — enough to matter,
-/// and reachable from a single description rather than from a pathological
-/// corpus.
+/// Every pass over the DAG is `Θ(n·m)` in **space** as well as time. Only the
+/// reference side is bounded upstream ([`MAX_CANONICAL_WINDOW`]); the alternate
+/// side is whatever the members produce, and a duplication over the whole window
+/// doubles it.
 ///
-/// Derived from [`MAX_CANONICAL_WINDOW`] rather than picked: the budget is a
-/// *square* grid at that bound, so it admits any block whose alternate side is
-/// within the same limit already imposed on the reference side, and refuses one
-/// where the alternate side runs past it. The 4096 x 8192 duplication above is
-/// 33.5 M cells against this 16.8 M, so it is declined.
+/// # What the budget actually pays for
 ///
-/// The honest cost of stating it this way: at the very top of the reference range
-/// an alternate side even slightly longer than the reference is declined too.
-/// That is a cost bound, not a policy — above it
+/// An earlier revision of this comment counted only the four grids inside
+/// `AlignmentDag::build` and put the peak at "roughly 340 MB" for a 4096 x 8192
+/// grid. That understates it, because the sweep that runs over the built DAG
+/// allocates more than the DAG it walks, and both arms run one. Per cell:
+///
+/// | allocation | where | bytes/cell | survives `build`? |
+/// |---|---|---|---|
+/// | two `u32` edit grids | `AlignmentDag::build` | 8 | no |
+/// | `on_optimal_path` flags | `AlignmentDag::build` | 1 | yes |
+/// | `out` adjacency mask | `AlignmentDag::build` | 1 | yes |
+/// | `in_degree` (`u32`) | `AlignmentDag::dominators` (the `shadow` arm) | 4 | — |
+/// | `order: Vec<(u32, u32)>` | `AlignmentDag::dominators` | up to 8 | — |
+/// | `to_go` (two `u32` planes) | `CanonicalAlignment::of` (the `canonical` arms) | 8 | — |
+/// | `cells: Vec<(u32, u32)>` | `CanonicalAlignment::of` | up to 8 | — |
+///
+/// The last column is what makes this arithmetic addition rather than a sum:
+/// `prefix` and `suffix_grid` are locals of `build` and are dropped when it
+/// returns, so the 8 bytes/cell they cost never coexists with a sweep. The peak
+/// is therefore `max(build, retained + sweep)` — `max(10, 2 + 12)` = **~14
+/// bytes/cell** on the `shadow` arm and `max(10, 2 + 16)` = **~18** on the
+/// `canonical` arms — not the ~10 the old figure implied, and not the sum of the
+/// two columns either.
+///
+/// At the accepted boundary (a 4096 x 4096 block, `cells == MAX_SEQFIRST_GRID_CELLS`)
+/// ~18 bytes/cell over 16,785,409 cells is 302 MB, which is what the measured
+/// peak RSS of **~310 MB and 5–9 s** in a debug build says it is; adding the
+/// columns instead would predict 369 MB and disagree with the measurement. A
+/// release build cuts the time and not the memory.
+///
+/// # Is the bound itself defensible?
+///
+/// As a *cost* bound, yes, and it is deliberately conservative in the direction
+/// that matters: it is derived from [`MAX_CANONICAL_WINDOW`] rather than picked,
+/// being a *square* grid at that bound, so it admits any block whose alternate
+/// side stays within the limit already imposed on the reference side. The
+/// 4096 x 8192 duplication is 33.5 M cells against this 16.8 M and is declined.
+///
+/// What it is **not** is a bound anybody would choose for a per-description
+/// budget. 310 MB and seconds of CPU is reachable from a single equal-length
+/// 4 kb `delins`, and [`MAX_SPLIT_BLOCK`] deliberately does not bound that case
+/// (it is scoped to length-changing blocks). Lowering it is not free either:
+/// every block it newly refuses is one the sequence-first arm stops answering,
+/// and under a promoted arm that is a silent handover to [`partition_block`]
+/// (counted, since [`PartitionDeclineCounts`], but still a different rule). So
+/// the number is left where it is and the cost is written down instead — the
+/// decision worth making is whether a promoted arm should *refuse* past the cap
+/// rather than fall back, and that is a policy question this constant cannot
+/// answer.
+///
+/// The honest cost of stating it as a square: at the very top of the reference
+/// range an alternate side even slightly longer than the reference is declined
+/// too. That is a cost bound, not a policy — above it
 /// [`partition_block_sequence_first`] returns `None` and the caller keeps the
 /// per-member result, the same fallback every other bound here takes.
 const MAX_SEQFIRST_GRID_CELLS: usize =
@@ -2232,6 +2273,91 @@ fn partition_rule_env_value(read: Result<String, std::env::VarError>) -> Option<
     }
 }
 
+/// Whether a refused `FERRO_PARTITION` value may abort the process where it is
+/// read, rather than being reported at a boundary that can return a failure.
+///
+/// `debug_assertions`, the same gate the three assertion oracles at this seam
+/// take. A debug build is one somebody is measuring in, and there aborting at
+/// the first normalized variant is the honest answer. A release build is one
+/// somebody is *shipping*, and a development-only switch must not be able to
+/// abort a production process from the environment — least of all from inside
+/// [`canonicalize_from_sequence`], which is infallible, sits under every public
+/// entry point, and is reached across the FFI boundary by the Python bindings.
+///
+/// # What this deliberately does **not** do
+///
+/// It does not compile the switch out of release builds. That was tried first
+/// and it is wrong here: `README.md` documents the A/B recipe as working on a
+/// **stock release build**, which is also the only way to normalize a real
+/// corpus at size, so compiling it out would delete the measurement this whole
+/// switch exists for. Release builds still honour every arm; what changes is
+/// only what happens to a value that names no arm.
+const PARTITION_SWITCH_MAY_ABORT: bool = cfg!(debug_assertions);
+
+/// The rule to cut with, given how `FERRO_PARTITION` parsed and whether this
+/// build may abort on a refusal.
+///
+/// Split out of [`partition_rule`] so both halves of the contract are testable:
+/// [`partition_rule`] caches its read in a `OnceLock` and consults a real
+/// process environment, so one test binary can never exercise two outcomes.
+///
+/// Falling safe to [`PartitionRule::Live`] is not the silent fallback
+/// [`partition_rule_from_env`] refuses — the refusal is not discarded, it is
+/// retained by [`partition_switch_startup_error`] for a caller with somewhere to
+/// return it. What would be silent is dropping it on the floor, and the two are
+/// only the same if nobody asks.
+fn partition_rule_from_outcome(
+    outcome: &Result<PartitionRule, String>,
+    may_abort: bool,
+) -> PartitionRule {
+    match outcome {
+        Ok(rule) => *rule,
+        Err(message) if may_abort => panic!("{message}"),
+        Err(_) => PartitionRule::Live,
+    }
+}
+
+/// How `FERRO_PARTITION` parsed in this process, computed once.
+///
+/// The `Result` is cached rather than the [`PartitionRule`], so the refusal
+/// survives to be reported by [`partition_switch_startup_error`] instead of
+/// being consumed by the first caller.
+fn partition_rule_outcome() -> &'static Result<PartitionRule, String> {
+    static OUTCOME: std::sync::OnceLock<Result<PartitionRule, String>> = std::sync::OnceLock::new();
+    OUTCOME.get_or_init(|| {
+        let value = partition_rule_env_value(std::env::var("FERRO_PARTITION"));
+        partition_rule_from_env(value.as_deref())
+    })
+}
+
+/// The refusal a binary should print and exit on before doing any work, if any.
+///
+/// `Some(message)` exactly when `FERRO_PARTITION` named an arm this build has
+/// not got. Call it once from an entry point — which, unlike
+/// [`canonicalize_from_sequence`], has somewhere to return a failure to — so
+/// that a release build refuses a misspelled bake-off *without* the library
+/// aborting the process to say so.
+///
+/// **Unstable, like the switch it serves.** `FERRO_PARTITION` is an evaluation
+/// switch outside semantic versioning and expected to be removed once the
+/// normalization rule is settled; this accessor goes with it. It is `pub` because
+/// a binary in another crate — or an embedder running its own bake-off — cannot
+/// otherwise ask, not because it is a supported API.
+///
+/// # The residual, stated rather than hidden
+///
+/// An embedder that neither calls this nor runs a debug build gets
+/// [`PartitionRule::Live`] for a refused value. That is the shipped rule under
+/// no name at all rather than under a candidate's, and it is strictly safer than
+/// the abort it replaces — but it is only *reported* if somebody asks. Every
+/// binary in this repository asks, and
+/// `it::partition_switch_wiring::every_binary_target_reports_a_refused_partition_switch`
+/// fails if a new one does not; a third-party embedder running a bake-off through
+/// a release library should too.
+pub fn partition_switch_startup_error() -> Option<String> {
+    partition_rule_outcome().as_ref().err().cloned()
+}
+
 /// Which partitioner this process cuts blocks with, from `FERRO_PARTITION`.
 ///
 /// A **development-only bake-off switch**. Read once and cached, like
@@ -2239,22 +2365,113 @@ fn partition_rule_env_value(read: Result<String, std::env::VarError>) -> Option<
 /// per canonicalized block and nothing else; with the variable unset the result
 /// is byte-identical to having no switch at all.
 ///
+/// Every arm is honoured in every build — see [`PARTITION_SWITCH_MAY_ABORT`] for
+/// why the gate is on the *refusal* and not on the switch.
+///
 /// # Panics
 ///
-/// If `FERRO_PARTITION` names an arm this build does not have. Both call sites
-/// are inside `canonicalize_from_sequence`, which is infallible and sits deep
-/// under every public normalization entry point, so there is no `Result` to
-/// return the rejection through without threading one the length of the
-/// pipeline. A panic here is the honest alternative: it fires once, at the first
-/// normalized variant, before any output exists to be mistaken for a
-/// measurement. See [`partition_rule_from_env`] for why silence was not an
-/// option, and [`partition_rule_env_value`] for why the raw read is matched
-/// rather than `.ok()`-ed.
+/// In a **debug** build, if `FERRO_PARTITION` names an arm this build does not
+/// have. Both call sites are inside [`canonicalize_from_sequence`], which is
+/// infallible and sits deep under every public normalization entry point, so
+/// there is no `Result` to return the rejection through without threading one
+/// the length of the pipeline. A panic there is the honest alternative for a
+/// build somebody is measuring in: it fires once, at the first normalized
+/// variant, before any output exists to be mistaken for a measurement. See
+/// [`partition_rule_from_env`] for why silence was not an option, and
+/// [`partition_rule_env_value`] for why the raw read is matched rather than
+/// `.ok()`-ed.
+///
+/// A **release** build cannot reach that panic. It falls safe to
+/// [`PartitionRule::Live`] and keeps the refusal for
+/// [`partition_switch_startup_error`] to deliver.
 fn partition_rule() -> PartitionRule {
-    static RULE: std::sync::OnceLock<PartitionRule> = std::sync::OnceLock::new();
-    *RULE.get_or_init(|| {
-        let value = partition_rule_env_value(std::env::var("FERRO_PARTITION"));
-        partition_rule_from_env(value.as_deref()).unwrap_or_else(|message| panic!("{message}"))
+    partition_rule_from_outcome(partition_rule_outcome(), PARTITION_SWITCH_MAY_ABORT)
+}
+
+/// How often a sequence-first arm was asked to partition a block, and how often
+/// it declined and the caller served [`partition_block`] instead.
+///
+/// A decline is not an error and not a different answer to the same question: it
+/// is the **shipped** rule answering under the candidate rule's name. Over a
+/// bake-off that is indistinguishable from the candidate agreeing with `live` on
+/// every block it declined, so a run in which the candidate declined throughout
+/// reports that the candidate changes nothing — the same failure
+/// [`partition_rule_from_env`] refuses an unrecognised arm name to avoid,
+/// reached through a different door.
+///
+/// `attempted` counts only the sequence-first arms *the environment selected*.
+/// [`PartitionRule::Live`] cannot decline, so counting it would add a per-block
+/// atomic to the shipped path to record a number that is structurally zero — and
+/// the `FERRO_SEQFIRST_SHADOW` audit's own sequence-first call is out of scope
+/// too: it cannot reach the emitted pieces, so a decline there is not a handover
+/// to anything.
+///
+/// **Unstable, like the switch it measures.** `FERRO_PARTITION` sits outside
+/// semantic versioning and is expected to be removed once the normalization rule
+/// is settled; this census goes with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PartitionDeclineCounts {
+    /// Blocks handed to a sequence-first partitioner.
+    pub attempted: u64,
+    /// Of those, blocks it declined — answered by [`partition_block`] instead.
+    pub declined: u64,
+}
+
+/// Blocks handed to a sequence-first partitioner so far in this process.
+static SEQFIRST_ATTEMPTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Of those, the ones it declined.
+static SEQFIRST_DECLINED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// This process's census of sequence-first partition attempts and declines.
+///
+/// Process-wide and monotone, like the arm selection itself: there is one
+/// `FERRO_PARTITION` per process, so a per-call return value would have nothing
+/// to attach to. Read it at the end of a bake-off and quote it beside the
+/// diff — a non-zero `declined` says how much of that diff was produced by
+/// [`partition_block`].
+///
+/// Relaxed ordering: the two counters are a census, never a happens-before
+/// edge, and no reader draws a conclusion from their relative order.
+pub fn partition_decline_counts() -> PartitionDeclineCounts {
+    use std::sync::atomic::Ordering;
+    PartitionDeclineCounts {
+        attempted: SEQFIRST_ATTEMPTED.load(Ordering::Relaxed),
+        declined: SEQFIRST_DECLINED.load(Ordering::Relaxed),
+    }
+}
+
+/// Cut a trimmed block with `rule`, falling back to [`partition_block`] when a
+/// sequence-first arm declines — and **counting** the fallback.
+///
+/// Split out of [`canonicalize_from_sequence`] so the decline path is reachable
+/// without a process-global environment variable: [`partition_rule`] caches its
+/// read in a `OnceLock`, so a test that wants a non-`Live` arm can only get one
+/// by passing it. See [`PartitionDeclineCounts`] for why the fallback has to be
+/// observable at all.
+fn partition_block_for_rule(
+    rule: PartitionRule,
+    reference: &[u8],
+    result: &[u8],
+    min_separation: u32,
+) -> Vec<Piece> {
+    use std::sync::atomic::Ordering;
+
+    let attempt = match rule {
+        // The shipped rule, and the only configuration that ships. It has no
+        // decline path, so it is not counted.
+        PartitionRule::Live => return partition_block(reference, result),
+        PartitionRule::Shadow => partition_block_sequence_first(reference, result, min_separation),
+        // `CanonicalCoalesced` is identical to `Canonical` here on purpose: the
+        // `delins.md:44-47` merge is applied *after* the downstream passes, not
+        // as part of partitioning — see `coalesce_payload_alignment_split`.
+        PartitionRule::Canonical | PartitionRule::CanonicalCoalesced => {
+            partition_block_canonical(reference, result)
+        }
+    };
+    SEQFIRST_ATTEMPTED.fetch_add(1, Ordering::Relaxed);
+    attempt.unwrap_or_else(|| {
+        SEQFIRST_DECLINED.fetch_add(1, Ordering::Relaxed);
+        partition_block(reference, result)
     })
 }
 
@@ -2481,29 +2698,17 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
 
     // Which rule cuts the block. `FERRO_PARTITION` unset — the only configuration
     // that ships — takes the `Live` arm, so this is `partition_block` and nothing
-    // else. The other two arms fall back to it when their splitter declines,
-    // rather than abandoning the canonicalization, so a bake-off run measures the
-    // partitioners and not their decline rates.
-    let mut pieces = match partition_rule() {
-        PartitionRule::Live => partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
-        PartitionRule::Shadow => partition_block_sequence_first(
-            &ref_bytes[lo..hi_ref],
-            &result[lo..hi_alt],
-            axis_min_separation(frame.reading_frame),
-        )
-        .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
-        PartitionRule::Canonical => {
-            partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
-                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
-        }
-        PartitionRule::CanonicalCoalesced => {
-            // Identical to `Canonical` here on purpose. The `delins.md:44-47`
-            // merge is applied *after* the downstream passes below, not as part
-            // of partitioning — see `coalesce_payload_alignment_split`.
-            partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
-                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
-        }
-    };
+    // else. The other arms fall back to it when their splitter declines, rather
+    // than abandoning the canonicalization, so a bake-off run measures the
+    // partitioners and not their decline rates — and every such fallback is
+    // counted, so the run can tell "the candidate agreed" from "the candidate
+    // was not asked" (see `PartitionDeclineCounts`).
+    let mut pieces = partition_block_for_rule(
+        partition_rule(),
+        &ref_bytes[lo..hi_ref],
+        &result[lo..hi_alt],
+        axis_min_separation(frame.reading_frame),
+    );
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
     // about the *split* and not about a downstream pass. Never affects `pieces`.
@@ -11958,6 +12163,96 @@ mod tests {
         );
     }
 
+    /// A declined sequence-first partition is **counted**, so a bake-off can
+    /// tell "the candidate agreed with `live`" from "the candidate was never
+    /// asked and `live` answered under its name".
+    ///
+    /// The block is the reachable one: a duplication of the whole canonical
+    /// window (`4096 -> 8192`) is 33.5 M cells against a 16.8 M budget, so both
+    /// sequence-first arms decline it and the caller serves `partition_block`.
+    /// The pieces that come back are byte-identical to `partition_block`'s,
+    /// which is exactly why nothing downstream can notice — the counter is the
+    /// only place the handover is visible.
+    ///
+    /// `partition_block_for_rule` is called with the rule rather than through
+    /// `partition_rule()` because that read is cached in a `OnceLock`: a test
+    /// cannot select a non-`Live` arm at all once any other test in the binary
+    /// has normalized something.
+    ///
+    /// Counters are process-global and monotone, so the assertions are on the
+    /// *delta* across the calls, never on an absolute value — another test in
+    /// this binary may legitimately have moved them first.
+    ///
+    /// A delta is only safe because this is the sole test that moves them: under
+    /// `cargo test` (as opposed to `cargo nextest`, which forks per test) the lib
+    /// tests share one process and run concurrently, so a second test calling
+    /// `partition_block_for_rule` on a non-`Live` arm would interleave and turn
+    /// these `== 1` deltas into a flake. Keep it that way, or take a mutex.
+    #[test]
+    fn a_declined_sequence_first_partition_is_counted() {
+        let reference = b"ACGT".repeat(1024);
+        let doubled = b"ACGT".repeat(2048);
+
+        let before = partition_decline_counts();
+        let pieces = partition_block_for_rule(
+            PartitionRule::Canonical,
+            &reference,
+            &doubled,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        );
+        let after = partition_decline_counts();
+
+        assert_eq!(
+            pieces,
+            partition_block(&reference, &doubled),
+            "the declined block is served by `partition_block`, byte for byte"
+        );
+        assert_eq!(
+            after.attempted - before.attempted,
+            1,
+            "the attempt is the denominator; without it a zero decline count \
+             cannot be told from an arm that never ran"
+        );
+        assert_eq!(
+            after.declined - before.declined,
+            1,
+            "the fallback to `partition_block` must be visible somewhere"
+        );
+
+        // A block the arm *answers* moves the denominator and not the
+        // numerator, so the two counters cannot both be a running total of
+        // "blocks seen".
+        let answered = partition_block_for_rule(
+            PartitionRule::Canonical,
+            b"ACGTACGT",
+            b"ATGTTCGT",
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        );
+        let served = partition_decline_counts();
+        assert!(!answered.is_empty());
+        assert_eq!(served.attempted - after.attempted, 1);
+        assert_eq!(
+            served.declined - after.declined,
+            0,
+            "an arm that answered must not be recorded as having declined"
+        );
+
+        // `Live` has no decline path, so it is not counted at all — the shipped
+        // configuration pays no atomic per block.
+        let live = partition_block_for_rule(
+            PartitionRule::Live,
+            b"ACGTACGT",
+            b"ATGTTCGT",
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        );
+        let unchanged = partition_decline_counts();
+        assert_eq!(live, partition_block(b"ACGTACGT", b"ATGTTCGT"));
+        assert_eq!(
+            unchanged, served,
+            "the `live` arm must not touch the census"
+        );
+    }
+
     /// Pieces must be disjoint and ascending — the property that makes the
     /// overlap and ordering repair passes unnecessary.
     #[test]
@@ -12654,6 +12949,70 @@ mod tests {
                 "the spec's own published inversion must survive the canonical \
                  partition as one piece, not five members"
             );
+        }
+
+        /// A release build **cannot** be aborted by this switch.
+        ///
+        /// Until #1636 `partition_rule()` panicked on an unrecognised value in
+        /// every build, from inside `canonicalize_from_sequence` — infallible,
+        /// under every public entry point, and reached across the FFI boundary
+        /// by the Python bindings. A development-only bake-off switch must not
+        /// be able to abort a production process from the environment.
+        ///
+        /// Exercised through `partition_rule_from_outcome` rather than
+        /// `partition_rule()`: the latter caches in a `OnceLock` and consults a
+        /// real environment, so one test binary can never see two outcomes.
+        #[test]
+        fn a_refused_value_does_not_abort_a_build_that_may_not_abort() {
+            let refused = partition_rule_from_env(Some("preserve"));
+            assert!(refused.is_err(), "`preserve` is not an arm on this build");
+            assert_eq!(
+                partition_rule_from_outcome(&refused, false),
+                PartitionRule::Live,
+                "a release build must fall safe to the shipped rule, not abort"
+            );
+            // …and a value that *is* an arm is still served, in either build.
+            let accepted = partition_rule_from_env(Some("canonical"));
+            for may_abort in [false, true] {
+                assert_eq!(
+                    partition_rule_from_outcome(&accepted, may_abort),
+                    PartitionRule::Canonical
+                );
+            }
+        }
+
+        /// …while a build that may abort still does, so falling safe above did
+        /// not quietly retire the refusal in the configuration that measures.
+        #[test]
+        #[should_panic(expected = "is not a partitioner this build has")]
+        fn a_refused_value_still_aborts_a_build_that_may_abort() {
+            let refused = partition_rule_from_env(Some("preserve"));
+            let _ = partition_rule_from_outcome(&refused, true);
+        }
+
+        /// Falling safe must not mean falling **silent**: the refusal survives
+        /// the read, so an entry point can deliver it.
+        ///
+        /// This is the difference between the fix and the fallback
+        /// `partition_rule_from_env`'s doc refuses. A discarded rejection and a
+        /// retained one produce the same `PartitionRule`; only one of them can
+        /// be reported.
+        #[test]
+        fn the_refusal_survives_the_read_so_an_entry_point_can_report_it() {
+            // The process this suite runs in has the variable unset — pinned by
+            // `the_suite_runs_on_the_live_rule` — so the accessor is `None`
+            // here, and that is the production reading it must give.
+            assert_eq!(
+                partition_switch_startup_error(),
+                None,
+                "an unset FERRO_PARTITION is not something to refuse at startup"
+            );
+            // The mapping the accessor reports is the parser's own `Err`, which
+            // is the half a test in this process can reach.
+            let message = partition_rule_from_env(Some("canonicl"))
+                .expect_err("a misspelling must be refused");
+            assert!(message.contains("canonicl"));
+            assert!(message.contains("live"));
         }
 
         /// This suite's expectations are the live rule's, and the cached read

@@ -96,6 +96,14 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // This enumeration replays recorded normalization behaviour, so a
+    // `FERRO_PARTITION` value naming no arm would record the shipped rule under
+    // a candidate's name. The library falls safe to `live` in a release build
+    // rather than aborting, and leaves the refusal to its entry point.
+    if let Some(message) = ferro_hgvs::normalize::partition_switch_startup_error() {
+        eprintln!("error: {message}");
+        return ExitCode::FAILURE;
+    }
     match run(&cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

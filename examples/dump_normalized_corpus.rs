@@ -288,6 +288,16 @@ fn verify_row(row: &Row) -> (SpdiVerdict, String, String) {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // This is the harness a bake-off runs through, so it is the entry point that
+    // can least afford to serve `live` under a candidate's name. In a release
+    // build the library falls safe rather than aborting, and the two silences
+    // compound: the dump would come back identical to the `live` dump, and
+    // `report_partition_declines` would print nothing at all, because a `live`
+    // run attempts no sequence-first partition. Refuse here instead.
+    if let Some(message) = ferro_hgvs::normalize::partition_switch_startup_error() {
+        eprintln!("error: {message}");
+        return ExitCode::FAILURE;
+    }
     if let (Some(before), Some(after)) = (&cli.compare, &cli.against) {
         return match compare(before, after) {
             Ok(report) => {
@@ -302,6 +312,7 @@ fn main() -> ExitCode {
     }
 
     let rows = dump(cli.seeds);
+    report_partition_declines();
     let mut out = String::new();
     out.push_str(HEADER);
     for row in &rows {
@@ -363,6 +374,38 @@ fn main() -> ExitCode {
         None => print!("{out}"),
     }
     ExitCode::SUCCESS
+}
+
+/// Say, on stderr, how much of this dump a sequence-first arm actually answered.
+///
+/// A `FERRO_PARTITION=canonical` dump that comes back identical to the `live`
+/// dump reads as *"the candidate changes nothing"*. It can equally mean the
+/// candidate declined every block and `partition_block` produced both columns,
+/// and no output distinguishes those — which is what makes the line below part
+/// of the measurement rather than decoration.
+///
+/// Printed **unconditionally when the arm ran at all**, including the zero:
+/// `0 declined of N` is the reading that licenses quoting the diff, and it is
+/// only worth anything if the same line would have shown a non-zero.
+fn report_partition_declines() {
+    let counts = ferro_hgvs::normalize::partition_decline_counts();
+    if counts.attempted == 0 {
+        // The selected arm was `live`, which has no decline path, so there is no
+        // census to report and a "0 of 0" line would read as a clean bill of
+        // health for an arm that did not run.
+        //
+        // "Selected" is the load-bearing word: the separate
+        // `FERRO_SEQFIRST_SHADOW` audit asks a sequence-first partitioner on
+        // every block whatever `FERRO_PARTITION` says, and those attempts are
+        // deliberately outside this census — they cannot reach the emitted
+        // pieces, and the audit reports its own outcomes through `log::debug!`.
+        return;
+    }
+    eprintln!(
+        "partitioner: {} of {} blocks declined and were served by `partition_block` \
+         (the shipped rule) instead",
+        counts.declined, counts.attempted
+    );
 }
 
 /// One measured row. `was_fixed_point` records whether the *input* was already its

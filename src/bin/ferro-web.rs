@@ -77,6 +77,17 @@ enum Commands {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
+    // `FERRO_PARTITION` naming an arm this build has not got is refused here,
+    // before a listener exists. The library cannot refuse it from
+    // `canonicalize_from_sequence` -- it is infallible -- and in a release build
+    // it falls safe to the shipped rule rather than aborting, so a service that
+    // never asked would serve `live` under a candidate's name. This service is
+    // also the reason the library stopped panicking: the panic fired inside a
+    // request handler, which takes the worker down.
+    if let Some(message) = ferro_hgvs::normalize::partition_switch_startup_error() {
+        return Err(message.into());
+    }
+
     match cli.command {
         Commands::Serve {
             config,
