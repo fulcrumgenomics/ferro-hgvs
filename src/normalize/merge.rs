@@ -1960,24 +1960,65 @@ const MAX_TWO_GAP_PLACEMENTS: usize = 65_536;
 
 /// Largest alignment grid the sequence-first splitter will build, in cells.
 ///
-/// `AlignmentDag::build` is `Θ(n·m)` in **space** as well as time, and it
-/// allocates four grids of that size: two `u32` edit grids, the on-path flags,
-/// and the adjacency mask. Only the reference side is bounded upstream
-/// ([`MAX_CANONICAL_WINDOW`]); the alternate side is whatever the members
-/// produce, and a duplication over the whole window doubles it. A 4096 x 8192
-/// grid is 33.5 M cells, or roughly 340 MB across the four — enough to matter,
-/// and reachable from a single description rather than from a pathological
-/// corpus.
+/// Every pass over the DAG is `Θ(n·m)` in **space** as well as time. Only the
+/// reference side is bounded upstream ([`MAX_CANONICAL_WINDOW`]); the alternate
+/// side is whatever the members produce, and a duplication over the whole window
+/// doubles it.
 ///
-/// Derived from [`MAX_CANONICAL_WINDOW`] rather than picked: the budget is a
-/// *square* grid at that bound, so it admits any block whose alternate side is
-/// within the same limit already imposed on the reference side, and refuses one
-/// where the alternate side runs past it. The 4096 x 8192 duplication above is
-/// 33.5 M cells against this 16.8 M, so it is declined.
+/// # What the budget actually pays for
 ///
-/// The honest cost of stating it this way: at the very top of the reference range
-/// an alternate side even slightly longer than the reference is declined too.
-/// That is a cost bound, not a policy — above it
+/// An earlier revision of this comment counted only the four grids inside
+/// `AlignmentDag::build` and put the peak at "roughly 340 MB" for a 4096 x 8192
+/// grid. That understates it, because the sweep that runs over the built DAG
+/// allocates more than the DAG it walks, and both arms run one. Per cell:
+///
+/// | allocation | where | bytes/cell | survives `build`? |
+/// |---|---|---|---|
+/// | two `u32` edit grids | `AlignmentDag::build` | 8 | no |
+/// | `on_optimal_path` flags | `AlignmentDag::build` | 1 | yes |
+/// | `out` adjacency mask | `AlignmentDag::build` | 1 | yes |
+/// | `in_degree` (`u32`) | `AlignmentDag::dominators` (the `shadow` arm) | 4 | — |
+/// | `order: Vec<(u32, u32)>` | `AlignmentDag::dominators` | up to 8 | — |
+/// | `to_go` (two `u32` planes) | `CanonicalAlignment::of` (the `canonical` arms) | 8 | — |
+/// | `cells: Vec<(u32, u32)>` | `CanonicalAlignment::of` | up to 8 | — |
+///
+/// The last column is what makes this arithmetic addition rather than a sum:
+/// `prefix` and `suffix_grid` are locals of `build` and are dropped when it
+/// returns, so the 8 bytes/cell they cost never coexists with a sweep. The peak
+/// is therefore `max(build, retained + sweep)` — `max(10, 2 + 12)` = **~14
+/// bytes/cell** on the `shadow` arm and `max(10, 2 + 16)` = **~18** on the
+/// `canonical` arms — not the ~10 the old figure implied, and not the sum of the
+/// two columns either.
+///
+/// At the accepted boundary (a 4096 x 4096 block, `cells == MAX_SEQFIRST_GRID_CELLS`)
+/// ~18 bytes/cell over 16,785,409 cells is 302 MB, which is what the measured
+/// peak RSS of **~310 MB and 5–9 s** in a debug build says it is; adding the
+/// columns instead would predict 369 MB and disagree with the measurement. A
+/// release build cuts the time and not the memory.
+///
+/// # Is the bound itself defensible?
+///
+/// As a *cost* bound, yes, and it is deliberately conservative in the direction
+/// that matters: it is derived from [`MAX_CANONICAL_WINDOW`] rather than picked,
+/// being a *square* grid at that bound, so it admits any block whose alternate
+/// side stays within the limit already imposed on the reference side. The
+/// 4096 x 8192 duplication is 33.5 M cells against this 16.8 M and is declined.
+///
+/// What it is **not** is a bound anybody would choose for a per-description
+/// budget. 310 MB and seconds of CPU is reachable from a single equal-length
+/// 4 kb `delins`, and [`MAX_SPLIT_BLOCK`] deliberately does not bound that case
+/// (it is scoped to length-changing blocks). Lowering it is not free either:
+/// every block it newly refuses is one the sequence-first arm stops answering,
+/// and under a promoted arm that is a silent handover to [`partition_block`]
+/// (counted, since [`PartitionDeclineCounts`], but still a different rule). So
+/// the number is left where it is and the cost is written down instead — the
+/// decision worth making is whether a promoted arm should *refuse* past the cap
+/// rather than fall back, and that is a policy question this constant cannot
+/// answer.
+///
+/// The honest cost of stating it as a square: at the very top of the reference
+/// range an alternate side even slightly longer than the reference is declined
+/// too. That is a cost bound, not a policy — above it
 /// [`partition_block_sequence_first`] returns `None` and the caller keeps the
 /// per-member result, the same fallback every other bound here takes.
 const MAX_SEQFIRST_GRID_CELLS: usize =
@@ -2258,6 +2299,93 @@ fn partition_rule() -> PartitionRule {
     })
 }
 
+/// How often a sequence-first arm was asked to partition a block, and how often
+/// it declined and the caller served [`partition_block`] instead.
+///
+/// A decline is not an error and not a different answer to the same question: it
+/// is the **shipped** rule answering under the candidate rule's name. Over a
+/// bake-off that is indistinguishable from the candidate agreeing with `live` on
+/// every block it declined, so a run in which the candidate declined throughout
+/// reports that the candidate changes nothing — the same failure
+/// [`partition_rule_from_env`] refuses an unrecognised arm name to avoid,
+/// reached through a different door.
+///
+/// `attempted` counts only the sequence-first arms *the environment selected*.
+/// [`PartitionRule::Live`] cannot decline, so counting it would add a per-block
+/// atomic to the shipped path to record a number that is structurally zero — and
+/// the `FERRO_SEQFIRST_SHADOW` audit's own sequence-first call is out of scope
+/// too: it cannot reach the emitted pieces, so a decline there is not a handover
+/// to anything.
+///
+/// **Unstable, like the switch it measures.** `FERRO_PARTITION` sits outside
+/// semantic versioning and is expected to be removed once the normalization rule
+/// is settled; this census goes with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PartitionDeclineCounts {
+    /// Blocks handed to a sequence-first partitioner.
+    pub attempted: u64,
+    /// Of those, blocks it declined — answered by [`partition_block`] instead.
+    pub declined: u64,
+}
+
+/// Blocks handed to a sequence-first partitioner so far in this process.
+static SEQFIRST_ATTEMPTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Of those, the ones it declined.
+static SEQFIRST_DECLINED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// This process's census of sequence-first partition attempts and declines.
+///
+/// Process-wide and monotone, like the arm selection itself: there is one
+/// `FERRO_PARTITION` per process, so a per-call return value would have nothing
+/// to attach to. Read it at the end of a bake-off and quote it beside the
+/// diff — a non-zero `declined` says how much of that diff was produced by
+/// [`partition_block`].
+///
+/// Relaxed ordering: the two counters are a census, never a happens-before
+/// edge, and no reader draws a conclusion from their relative order.
+pub fn partition_decline_counts() -> PartitionDeclineCounts {
+    use std::sync::atomic::Ordering;
+    PartitionDeclineCounts {
+        attempted: SEQFIRST_ATTEMPTED.load(Ordering::Relaxed),
+        declined: SEQFIRST_DECLINED.load(Ordering::Relaxed),
+    }
+}
+
+/// Cut a trimmed block with `rule`, falling back to [`partition_block`] when a
+/// sequence-first arm declines — and **counting** the fallback.
+///
+/// Split out of [`canonicalize_from_sequence`] so the decline path is reachable
+/// without a process-global environment variable: [`partition_rule`] caches its
+/// read in a `OnceLock`, so a test that wants a non-`Live` arm can only get one
+/// by passing it. See [`PartitionDeclineCounts`] for why the fallback has to be
+/// observable at all.
+fn partition_block_for_rule(
+    rule: PartitionRule,
+    reference: &[u8],
+    result: &[u8],
+    min_separation: u32,
+) -> Vec<Piece> {
+    use std::sync::atomic::Ordering;
+
+    let attempt = match rule {
+        // The shipped rule, and the only configuration that ships. It has no
+        // decline path, so it is not counted.
+        PartitionRule::Live => return partition_block(reference, result),
+        PartitionRule::Shadow => partition_block_sequence_first(reference, result, min_separation),
+        // `CanonicalCoalesced` is identical to `Canonical` here on purpose: the
+        // `delins.md:44-47` merge is applied *after* the downstream passes, not
+        // as part of partitioning — see `coalesce_payload_alignment_split`.
+        PartitionRule::Canonical | PartitionRule::CanonicalCoalesced => {
+            partition_block_canonical(reference, result)
+        }
+    };
+    SEQFIRST_ATTEMPTED.fetch_add(1, Ordering::Relaxed);
+    attempt.unwrap_or_else(|| {
+        SEQFIRST_DECLINED.fetch_add(1, Ordering::Relaxed);
+        partition_block(reference, result)
+    })
+}
+
 /// The unchanged-base separation threshold an axis merges runs below.
 ///
 /// A reading-frame axis gets `general.md:35`'s coding one-amino-acid exception
@@ -2481,29 +2609,17 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
 
     // Which rule cuts the block. `FERRO_PARTITION` unset — the only configuration
     // that ships — takes the `Live` arm, so this is `partition_block` and nothing
-    // else. The other two arms fall back to it when their splitter declines,
-    // rather than abandoning the canonicalization, so a bake-off run measures the
-    // partitioners and not their decline rates.
-    let mut pieces = match partition_rule() {
-        PartitionRule::Live => partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]),
-        PartitionRule::Shadow => partition_block_sequence_first(
-            &ref_bytes[lo..hi_ref],
-            &result[lo..hi_alt],
-            axis_min_separation(frame.reading_frame),
-        )
-        .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])),
-        PartitionRule::Canonical => {
-            partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
-                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
-        }
-        PartitionRule::CanonicalCoalesced => {
-            // Identical to `Canonical` here on purpose. The `delins.md:44-47`
-            // merge is applied *after* the downstream passes below, not as part
-            // of partitioning — see `coalesce_payload_alignment_split`.
-            partition_block_canonical(&ref_bytes[lo..hi_ref], &result[lo..hi_alt])
-                .unwrap_or_else(|| partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]))
-        }
-    };
+    // else. The other arms fall back to it when their splitter declines, rather
+    // than abandoning the canonicalization, so a bake-off run measures the
+    // partitioners and not their decline rates — and every such fallback is
+    // counted, so the run can tell "the candidate agreed" from "the candidate
+    // was not asked" (see `PartitionDeclineCounts`).
+    let mut pieces = partition_block_for_rule(
+        partition_rule(),
+        &ref_bytes[lo..hi_ref],
+        &result[lo..hi_alt],
+        axis_min_separation(frame.reading_frame),
+    );
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
     // about the *split* and not about a downstream pass. Never affects `pieces`.
@@ -11955,6 +12071,96 @@ mod tests {
             ),
             None,
             "a 4096 x 8192 grid is 33.5 M cells and must be declined, not allocated"
+        );
+    }
+
+    /// A declined sequence-first partition is **counted**, so a bake-off can
+    /// tell "the candidate agreed with `live`" from "the candidate was never
+    /// asked and `live` answered under its name".
+    ///
+    /// The block is the reachable one: a duplication of the whole canonical
+    /// window (`4096 -> 8192`) is 33.5 M cells against a 16.8 M budget, so both
+    /// sequence-first arms decline it and the caller serves `partition_block`.
+    /// The pieces that come back are byte-identical to `partition_block`'s,
+    /// which is exactly why nothing downstream can notice — the counter is the
+    /// only place the handover is visible.
+    ///
+    /// `partition_block_for_rule` is called with the rule rather than through
+    /// `partition_rule()` because that read is cached in a `OnceLock`: a test
+    /// cannot select a non-`Live` arm at all once any other test in the binary
+    /// has normalized something.
+    ///
+    /// Counters are process-global and monotone, so the assertions are on the
+    /// *delta* across the calls, never on an absolute value — another test in
+    /// this binary may legitimately have moved them first.
+    ///
+    /// A delta is only safe because this is the sole test that moves them: under
+    /// `cargo test` (as opposed to `cargo nextest`, which forks per test) the lib
+    /// tests share one process and run concurrently, so a second test calling
+    /// `partition_block_for_rule` on a non-`Live` arm would interleave and turn
+    /// these `== 1` deltas into a flake. Keep it that way, or take a mutex.
+    #[test]
+    fn a_declined_sequence_first_partition_is_counted() {
+        let reference = b"ACGT".repeat(1024);
+        let doubled = b"ACGT".repeat(2048);
+
+        let before = partition_decline_counts();
+        let pieces = partition_block_for_rule(
+            PartitionRule::Canonical,
+            &reference,
+            &doubled,
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        );
+        let after = partition_decline_counts();
+
+        assert_eq!(
+            pieces,
+            partition_block(&reference, &doubled),
+            "the declined block is served by `partition_block`, byte for byte"
+        );
+        assert_eq!(
+            after.attempted - before.attempted,
+            1,
+            "the attempt is the denominator; without it a zero decline count \
+             cannot be told from an arm that never ran"
+        );
+        assert_eq!(
+            after.declined - before.declined,
+            1,
+            "the fallback to `partition_block` must be visible somewhere"
+        );
+
+        // A block the arm *answers* moves the denominator and not the
+        // numerator, so the two counters cannot both be a running total of
+        // "blocks seen".
+        let answered = partition_block_for_rule(
+            PartitionRule::Canonical,
+            b"ACGTACGT",
+            b"ATGTTCGT",
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        );
+        let served = partition_decline_counts();
+        assert!(!answered.is_empty());
+        assert_eq!(served.attempted - after.attempted, 1);
+        assert_eq!(
+            served.declined - after.declined,
+            0,
+            "an arm that answered must not be recorded as having declined"
+        );
+
+        // `Live` has no decline path, so it is not counted at all — the shipped
+        // configuration pays no atomic per block.
+        let live = partition_block_for_rule(
+            PartitionRule::Live,
+            b"ACGTACGT",
+            b"ATGTTCGT",
+            crate::normalize::seqfirst::MIN_SEPARATION,
+        );
+        let unchanged = partition_decline_counts();
+        assert_eq!(live, partition_block(b"ACGTACGT", b"ATGTTCGT"));
+        assert_eq!(
+            unchanged, served,
+            "the `live` arm must not touch the census"
         );
     }
 
