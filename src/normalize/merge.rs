@@ -4762,10 +4762,16 @@ fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
 /// `a_dense_inversion_is_recognised_across_multi_base_separations`, which the
 /// first revision of that pass broke).
 fn whole_block_inversion(pieces: &[Piece], ref_bytes: &[u8]) -> Option<Piece> {
+    // Written in the order the four routes were added, which is the order their
+    // own docs number themselves ("the second admission route", "the third
+    // alternative", "the fourth admission route"). All four are pure, so the
+    // order is not observable — but a chain that disagrees with the ordinals
+    // makes every one of those doc lines read as stale.
     if pieces.len() < 2
         || !(every_separation_is_a_single_base(pieces)
             || changed_columns_dominate_the_span(pieces)
-            || no_piece_is_a_lone_substitution(pieces))
+            || no_piece_is_a_lone_substitution(pieces)
+            || payload_columns_dominate_the_span(pieces))
     {
         return None;
     }
@@ -4902,6 +4908,115 @@ fn changed_columns_dominate_the_span(pieces: &[Piece]) -> bool {
     let changed: usize = pieces
         .iter()
         .map(|piece| piece.ref_end.saturating_sub(piece.ref_start))
+        .sum();
+    changed * 2 > span
+}
+
+/// Whether the columns the pieces **change** dominate the span — counting each
+/// piece's payload, not only the reference it consumes.
+///
+/// The fourth admission route into [`coalesce_whole_block_inversion`], and the
+/// one that lets it reach a partition derived from the *sequence* rather than
+/// from a single-gap search (#1637).
+///
+/// # Why the sibling predicate cannot see these
+///
+/// [`changed_columns_dominate_the_span`] measures `ref_end - ref_start` summed.
+/// A pure insertion consumes **no** reference, so it contributes zero — and a
+/// partitioner free to place compensating gaps expresses change as insertions
+/// and deletions routinely, where the single-gap search almost never does. The
+/// smallest instance is a textbook 3 nt inversion:
+///
+/// ```text
+/// GCT -> AGC          revcomp(GCT) = AGC
+///   partition_block           0:3/AGC          one piece; nothing to coalesce
+///   partition_block_canonical 0:0/A | 2:3/     an insertion and a deletion
+/// ```
+///
+/// Both denote `AGC` and both are distance-minimal. On the second, all three
+/// earlier routes refuse: the gap is `2 - 0 = 2` so it is not a single base; the
+/// reference widths total `0 + 1 = 1` against a span of `3`; and the insertion's
+/// reference width is `0`, so it reads as narrower than a lone substitution. The
+/// block is an inversion and the gate says nothing about it — which is the
+/// defect, since the pass exists precisely to keep `inversion.md:5`'s
+/// whole-span reverse complement from being shredded into its columns.
+///
+/// The density argument in [`changed_columns_dominate_the_span`]'s own doc is
+/// about **columns**, not reference width, so counting `max(ref_width, payload)`
+/// is that argument stated on the quantity it was always about.
+///
+/// # It cannot admit what the other routes were calibrated to refuse
+///
+/// Additive by construction — an `||` alternative — so every block that
+/// coalesces today still coalesces, and only a currently-*refused* block can
+/// change. The two pairs the earlier routes exist to keep apart are both
+/// length-preserving, where this predicate reduces to its sibling and is
+/// therefore equally refusing:
+///
+/// | block | pieces | changed | span | verdict |
+/// |---|---|---|---|---|
+/// | `AAGCTA -> TAGCTT` (the #1040 control) | `0:1/T`, `5:6/T` | 2 | 6 | refused |
+/// | `GATG -> CATC` (#1230, two substitutions) | `0:1/C`, `3:4/C` | 2 | 4 | refused |
+///
+/// And every admission still has to survive [`is_inversion`] on the
+/// reconstructed span, which requires an exact, equal-length reverse
+/// complement — so a pair of insertions whose payload dominates a one-base span
+/// (`A -> CAC`) passes this predicate and is refused there.
+///
+/// # It *supersedes* [`changed_columns_dominate_the_span`] rather than joining it
+///
+/// Stated plainly because "a fourth alternative" understates the relation, and
+/// an understatement about which predicate decides is the kind that gets cited
+/// later as though it were a measurement. This function computes the **same**
+/// `span` and takes the **same** early return as its sibling, and
+/// `max(ref_width, payload) >= ref_width` holds piecewise — so it returns `true`
+/// for *every* input the sibling does. The
+/// `|| changed_columns_dominate_the_span(pieces)` disjunct in
+/// [`whole_block_inversion`] can therefore no longer be the one that decides.
+///
+/// The sibling is kept anyway, for two reasons that are not stylistic. Its doc
+/// carries the mirror-pair density argument this one leans on, and
+/// [`the_unchanged_column_moments_reproduce_the_tabulated_z_scores`] pins that
+/// argument's numbers against it. And dropping the disjunct would leave the
+/// function reachable only from `#[cfg(test)]`, which is a `dead_code` warning
+/// in a non-test build — so removing it is a real change, not a tidy-up.
+///
+/// One consequence to carry forward: a test that names
+/// [`changed_columns_dominate_the_span`] as *the reason* a block coalesces now
+/// pins the gate rather than that predicate.
+/// `a_dense_inversion_is_recognised_across_multi_base_separations` (#1461) is in
+/// exactly that position, and
+/// [`density_separates_the_inversion_from_the_over_recognition_control`] is what
+/// still pins the predicate itself.
+///
+/// # The other consumer of this gate, where widening means *less* work
+///
+/// [`whole_block_inversion`] has a second caller, and there its verdict is a
+/// refusal rather than an admission: [`split_concealed_separations`] returns
+/// early when `whole_block_inversion(..).is_some()`, so a partition this route
+/// admits **suppresses** an audit that would otherwise run. "Additive" above is
+/// a statement about [`coalesce_whole_block_inversion`] only.
+///
+/// That widening is inert, by an argument worth writing down rather than
+/// re-deriving: the guard is reached only when `length_changing`, the pieces
+/// partition the whole trimmed block, so the reconstruction's length is the span
+/// plus the block's net length change — non-zero exactly when the block is
+/// length-changing — while [`is_inversion`] requires the two to be equal. So the
+/// `is_some()` disjunct cannot fire on the branch that reaches it, whichever
+/// routes the gate carries.
+fn payload_columns_dominate_the_span(pieces: &[Piece]) -> bool {
+    let (start, end) = (pieces[0].ref_start, pieces[pieces.len() - 1].ref_end);
+    let Some(span) = end.checked_sub(start).filter(|span| *span > 0) else {
+        return false;
+    };
+    let changed: usize = pieces
+        .iter()
+        .map(|piece| {
+            piece
+                .ref_end
+                .saturating_sub(piece.ref_start)
+                .max(piece.alt.len())
+        })
         .sum();
     changed * 2 > span
 }
@@ -11934,6 +12049,241 @@ mod tests {
                      can see what this build has, got: {message}"
                 );
             }
+        }
+
+        /// The inversion coalesce must reach a partition the *canonical* arm
+        /// produced, not only one `partition_block` produced.
+        ///
+        /// `GCT -> AGC` is a textbook 3 nt inversion — `AGC` is the reverse
+        /// complement of `GCT` — and the two partitioners describe it
+        /// differently while denoting the same bases:
+        ///
+        /// ```text
+        /// partition_block           0:3/AGC        one piece
+        /// partition_block_canonical 0:0/A | 2:3/   an insertion and a deletion
+        /// ```
+        ///
+        /// The second must be put back together, or `inversion.md:5`'s whole-span
+        /// reverse complement is emitted as its columns. Under
+        /// `FERRO_PARTITION=canonical` that is what happened to the spec's own
+        /// published 16 nt example (`DNA/inversion.md:27-34`).
+        ///
+        /// # It fails to fire; it is not fired and undone
+        ///
+        /// Asserted here rather than described, because "the pass declines" and
+        /// "a later pass reverses it" call for opposite fixes. The
+        /// reconstruction is a valid inversion — `is_inversion` accepts it — so
+        /// nothing is wrong with what the pass would produce. What refused was
+        /// the admission gate, and each of the three routes that predate #1637
+        /// is asserted below to be the reason.
+        #[test]
+        fn the_inversion_coalesce_reaches_a_canonical_partition() {
+            let reference = b"GCT";
+            let mut pieces =
+                partition_block_canonical(reference, b"AGC").expect("grid is far below the bound");
+            assert_eq!(
+                pieces,
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 0,
+                        alt: b"A".to_vec()
+                    },
+                    Piece {
+                        ref_start: 2,
+                        ref_end: 3,
+                        alt: Vec::new()
+                    },
+                ],
+                "if the canonical partition of this block ever changes, the rest \
+                 of this test is measuring something else"
+            );
+
+            // The diagnosis: the block IS an inversion and the reconstruction is
+            // sound. Only the gate refused.
+            let reconstructed = Piece {
+                ref_start: 0,
+                ref_end: 3,
+                alt: b"AGC".to_vec(),
+            };
+            assert!(
+                is_inversion(&reconstructed, reference),
+                "the span these pieces denote is a whole reverse complement"
+            );
+            assert!(
+                !every_separation_is_a_single_base(&pieces),
+                "the gap is 2, so the single-base route cannot admit it"
+            );
+            assert!(
+                !changed_columns_dominate_the_span(&pieces),
+                "the insertion consumes no reference, so reference width \
+                 under-reads this partition's density"
+            );
+            assert!(
+                !no_piece_is_a_lone_substitution(&pieces),
+                "the insertion's reference width is 0, narrower than a lone substitution"
+            );
+            assert!(
+                payload_columns_dominate_the_span(&pieces),
+                "counting the payload is what makes this partition's density visible"
+            );
+
+            coalesce_whole_block_inversion(&mut pieces, reference);
+            assert_eq!(
+                pieces,
+                vec![reconstructed],
+                "a whole-block inversion must survive the canonical partition as one piece"
+            );
+        }
+
+        /// The new route does not admit the pairs the earlier routes were
+        /// calibrated to refuse.
+        ///
+        /// Both are length-preserving, where counting payload columns is
+        /// identical to counting reference width — so widening the *measure*
+        /// cannot widen the *verdict* for them. Asserted rather than argued,
+        /// because `a_whole_span_reverse_complement_is_not_merged_across_a_multi_base_separation`
+        /// and #1230's guard are integration tests, and a predicate is cheaper
+        /// to bisect than a pipeline.
+        #[test]
+        fn payload_columns_still_refuse_the_pairs_that_must_stay_split() {
+            // `AAGCTA -> TAGCTT`: a whole reverse complement whose first and
+            // last bases change, four unchanged bases between them.
+            let separated = vec![
+                Piece {
+                    ref_start: 0,
+                    ref_end: 1,
+                    alt: b"T".to_vec(),
+                },
+                Piece {
+                    ref_start: 5,
+                    ref_end: 6,
+                    alt: b"T".to_vec(),
+                },
+            ];
+            assert!(!payload_columns_dominate_the_span(&separated));
+
+            // #1230's `GATG -> CATC`: two substitutions two bases apart, which
+            // `general.md:56` ranks above the spanning inversion.
+            let two_subs = vec![
+                Piece {
+                    ref_start: 0,
+                    ref_end: 1,
+                    alt: b"C".to_vec(),
+                },
+                Piece {
+                    ref_start: 3,
+                    ref_end: 4,
+                    alt: b"C".to_vec(),
+                },
+            ];
+            assert!(!payload_columns_dominate_the_span(&two_subs));
+
+            // And a payload-dominant pair that is not a reverse complement is
+            // caught by `is_inversion`, not by the gate: `A -> CAC` passes the
+            // predicate and must still not coalesce.
+            let mut insertions = vec![
+                Piece {
+                    ref_start: 0,
+                    ref_end: 0,
+                    alt: b"C".to_vec(),
+                },
+                Piece {
+                    ref_start: 1,
+                    ref_end: 1,
+                    alt: b"C".to_vec(),
+                },
+            ];
+            assert!(payload_columns_dominate_the_span(&insertions));
+            let untouched = insertions.clone();
+            coalesce_whole_block_inversion(&mut insertions, b"A");
+            assert_eq!(
+                insertions, untouched,
+                "two insertions are not an inversion, so the pass must leave them \
+                 exactly as they were -- a length check alone would also pass if \
+                 the pass rewrote them into two different pieces"
+            );
+        }
+
+        /// The spec's own published 16 nt inversion, which is the case #1637 is
+        /// about — pinned here rather than only described.
+        ///
+        /// `inversion.md:33-34` publishes `NM_004006.2:c.4145_4160inv` as a
+        /// worked example. It prints no bases, but the transcript does, and they
+        /// are already committed in this repository: `c.4145_4160` is
+        /// `TCCAGGAGTCCCTCAC` and its reverse complement is `GTGAGGGACTCCTGGA`
+        /// (`hgvs_spec_normalization_overrides.json`, the
+        /// `inversion-vs-two-delins-76-83` rationale, where they were derived
+        /// against the prepared reference). So the spec's own inversion can be
+        /// pinned hermetically, with no reference data and no `NM_` lookup.
+        ///
+        /// # Why this and not only the 3 nt case above
+        ///
+        /// `GCT -> AGC` is the *smallest* instance and the clearest one to
+        /// reason about; it is not the case that motivated the change. Under
+        /// `FERRO_PARTITION=canonical` this 16-mer is what came apart, and it
+        /// comes apart differently: the canonical partition places two
+        /// compensating gaps in the interior, so three of the four routes refuse
+        /// it for three *different* reasons, each asserted below. A guard on the
+        /// 3-mer alone would keep passing under a fix that only handled a
+        /// two-piece partition.
+        #[test]
+        fn the_inversion_coalesce_reaches_the_spec_published_sixteen_nt_example() {
+            let reference = b"TCCAGGAGTCCCTCAC";
+            let inverted = b"GTGAGGGACTCCTGGA";
+            let mut pieces = partition_block_canonical(reference, inverted)
+                .expect("grid is far below the bound");
+            let piece = |ref_start: usize, ref_end: usize, alt: &[u8]| Piece {
+                ref_start,
+                ref_end,
+                alt: alt.to_vec(),
+            };
+            assert_eq!(
+                pieces,
+                vec![
+                    piece(0, 3, b"GTG"),
+                    piece(6, 7, b""),
+                    piece(8, 9, b"A"),
+                    piece(10, 10, b"T"),
+                    piece(13, 16, b"GGA"),
+                ],
+                "if the canonical partition of the spec's example ever changes, \
+                 the rest of this test is measuring something else"
+            );
+
+            let reconstructed = piece(0, 16, inverted);
+            assert!(
+                is_inversion(&reconstructed, reference),
+                "the spec publishes this span as an `inv`, so the reconstruction \
+                 must be an exact reverse complement"
+            );
+            assert!(
+                !every_separation_is_a_single_base(&pieces),
+                "the widest gap is 3, so the single-base route cannot admit it"
+            );
+            assert!(
+                !changed_columns_dominate_the_span(&pieces),
+                "reference widths total 3 + 1 + 1 + 0 + 3 = 8 against a span of \
+                 16, so the density route reads it as exactly not dominant"
+            );
+            assert!(
+                !no_piece_is_a_lone_substitution(&pieces),
+                "`8:9/A` is a lone substitution and `10:10/T` is narrower still"
+            );
+            assert!(
+                payload_columns_dominate_the_span(&pieces),
+                "counting the payload lifts the deletion and the insertion above \
+                 their reference widths, which is what makes this partition's \
+                 density visible"
+            );
+
+            coalesce_whole_block_inversion(&mut pieces, reference);
+            assert_eq!(
+                pieces,
+                vec![reconstructed],
+                "the spec's own published inversion must survive the canonical \
+                 partition as one piece, not five members"
+            );
         }
 
         /// This suite's expectations are the live rule's, and the cached read
