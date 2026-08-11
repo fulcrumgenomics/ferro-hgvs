@@ -28,7 +28,7 @@ pub(crate) use helpers::{
 pub(crate) use identity::{codon_residues, group_consecutive_by, render_silent_identity};
 pub(crate) use indel::{
     combined_cis_residue_changes, predict_indel_protein, predict_stop_region_extension,
-    try_project_cis_combined_inframe, CisCombined,
+    try_project_cis_combined, CisCombined,
 };
 pub(crate) use substitution::predict_substitution_protein;
 // `apply_substitution` / `read_ref_codon` / `translate` are the position-level

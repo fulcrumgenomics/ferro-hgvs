@@ -19,7 +19,7 @@ use crate::project::protein::{
     cds_has_valid_start, codon_residues, combined_cis_residue_changes,
     edit_reaches_initiation_codon, edit_spans_cds_into_3utr, group_consecutive_by,
     predict_indel_protein, predict_stop_region_extension, predict_substitution_protein,
-    read_cds_start_codon, render_silent_identity, try_project_cis_combined_inframe,
+    read_cds_start_codon, render_silent_identity, try_project_cis_combined,
     whole_exon_deletion_span, CisCombined, RefProteinBundle,
 };
 use crate::project::result::{AxisDeclineReasons, VariantProjection};
@@ -506,7 +506,7 @@ fn cis_substitution_members(
 /// - a codon's reference bases cannot be read;
 /// - two members hit the **same CDS base** (contradictory in cis: two alts on one
 ///   molecule), mirroring the overlap rejection in
-///   [`try_project_cis_combined_inframe`];
+///   [`try_project_cis_combined`];
 /// - a combined codon turns a reference **stop** into a sense codon (stop-loss),
 ///   which the spec describes as a C-terminal extension built by reading through
 ///   the 3'UTR — plumbing this codon-local function does not have.
@@ -537,7 +537,7 @@ fn combine_cis_substitutions_by_codon(
         // one molecule) — an overlap the combined codon cannot represent. Bail so
         // the caller keeps the bracketed all-or-nothing form rather than silently
         // apply one alt (last-write-wins), matching the overlap rejection in
-        // `try_project_cis_combined_inframe`.
+        // `try_project_cis_combined`.
         if codon.iter().any(|(f, _)| *f == frame) {
             return None;
         }
@@ -3663,12 +3663,20 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
     /// compose and can cancel before the stop. The flag and the whole-allele
     /// protein are therefore both derived from the translated combined product
     /// rather than a per-member OR. Members are classified
-    /// ([`classify_cis_member`]); when the CDS-frame net is in-frame, at least
-    /// one member individually frameshifts, and every member is trustworthy, the
-    /// combined product is translated ([`try_project_cis_combined_inframe`]) to a
-    /// bounded in-frame delins (or, if the shifted frame hit a stop first, the
-    /// #855 `p.?`). Everything else keeps today's behavior:
-    /// - a genuine frameshift (net%3≠0, or an Opaque-member fallback) → `p.?` (#855);
+    /// ([`classify_cis_member`]); the combined product is translated
+    /// ([`try_project_cis_combined`]) when every member is trustworthy **and**
+    /// either the members net a frameshift, or they net in frame with at least one
+    /// individually-frameshifting member — a trustworthy net-in-frame allele with
+    /// no such member stays on the per-residue paths below. The result is either a
+    /// bounded in-frame delins or — when the composed members net a genuine
+    /// frameshift — the `p.(Xxx{N}Yyyfs Ter{K})` that same product implies
+    /// (#1588), whose flag is read off the built consequence rather than off the
+    /// arm, since that builder also emits nonsense and extension forms. That
+    /// second case used to collapse to `p.?` (#855) purely because the allele had
+    /// more than one member, even though the sequence determined the answer.
+    /// Everything else keeps today's behavior:
+    /// - an untrustworthy (`Opaque`) member, or a combined build the guards
+    ///   decline, → `p.?` — the honest whole-protein-unknown (#855);
     /// - an initiation-codon member → `p.(Met1?)`/`p.?` (#771), which wins first;
     /// - a plain in-frame allele → the all-or-nothing / combined-substitution form.
     #[allow(clippy::too_many_arguments)]
@@ -3766,11 +3774,67 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             return Ok((base_flag, Some(init)));
         }
 
-        // Combined-translation gate: net in-frame, ≥1 member individually
-        // frameshifts, and every member trustworthy (no Opaque). Only here can a
-        // net-in-frame cis compound become a bounded in-frame delins (#1070).
+        // Combined-translation gate. Every member must be trustworthy (no
+        // Opaque), which is also what makes `cds_frame_net` determinate. Two
+        // arms reach the combined build:
+        //
+        // - **net in-frame** (#1070), and ≥1 member individually frameshifts:
+        //   the members' shifts cancel, so the allele can become a bounded
+        //   in-frame delins. The individually-frameshifting requirement keeps
+        //   pure-substitution and length-preserving alleles on the per-residue
+        //   paths below, which already render those correctly.
+        // - **net frameshift** (#1588): the members compose to a genuine
+        //   frameshift, whose consequence is computable from the same combined
+        //   product — `p.(Xxx{N}Yyyfs Ter{K})`, byte-identical to what a
+        //   single-member spelling of the same sequence change yields. Ferro
+        //   used to answer `p.?` here purely because the allele had more than
+        //   one member; see the note on the `base_flag` fallback below for what
+        //   still legitimately collapses.
+        //
+        //   What decides it is the evidence, not a clause. The equivalence is
+        //   asserted at the builder seam, by
+        //   `cis_combined_frameshift_arm_matches_the_single_member_builder` and
+        //   `cis_combined_frameshift_stopping_in_the_3utr_matches_the_single_member_builder`
+        //   (`protein::indel`), which run `try_project_cis_combined` and
+        //   `predict_indel_protein` over the same product and compare byte for
+        //   byte. Note the projector-level test cannot carry that claim:
+        //   normalization re-partitions any equivalent single delins back into
+        //   the same members, so both of its sides take one code path (measured;
+        //   see that test's own doc). Over the committed multi-member cis
+        //   fixture, 62 rows
+        //   move off `p.?` onto a concrete consequence — 59 onto a `p.(…fs…)`
+        //   and 3 onto the nonsense substitution the immediate-stop rule
+        //   requires instead of an illegal `fsTer1` (those same 3 are the only
+        //   rows whose `is_frameshift` moves, true → false, agreeing with their
+        //   single-member spelling). A strictly more informative answer for the
+        //   same sequence, in every case.
+        //
+        //   `protein/frameshift.md:24` is supporting context, not the deciding
+        //   authority: it is lowercase prose, not an RFC 2119 requirement (see
+        //   `CLAUDE.md`, "Almost nothing in the recommendations is normative").
+        //   It reads "the (predicted) amino acid changes of additional variants
+        //   on the same allele (in cis) downstream of the frameshift are not
+        //   described unless they change the amino acid sequence or length of
+        //   the shifted reading frame" — so the spec at least contemplates this
+        //   shape, a frameshift with further cis members, and describes *one*
+        //   shifted product with downstream members folded in only where they
+        //   move it. Translating the combined CDS is what implements that: a
+        //   downstream member that does not alter the shifted product cannot
+        //   alter the description, and one that does is already in the product.
+        //
+        // `any_simple_fs` is deliberately NOT conjoined onto the net-frameshift
+        // arm, and the reason is not the tempting one. A net%3≠0 does require a
+        // member whose `indel_len % 3 != 0`, but `any_simple_fs` does not test
+        // that: `is_fs` is the member's own `proj.is_frameshift`, i.e. its
+        // *protein consequence* flag via `frameshift_flag_from_consequence`, which
+        // is `false` for a member whose shifted frame stops immediately (on
+        // `NM_FSSTOP.1`, `c.4del` yields `p.(Val2Ter)` — `is_fs == false` with
+        // `indel_len == -1`). So conjoining it here would silently drop exactly
+        // the population this arm exists to describe. Do not "tidy" this to
+        // `net_frameshift && any_simple_fs`.
         let net_in_frame = matches!(cds_frame_net, Some(n) if n % 3 == 0);
-        if net_in_frame && any_simple_fs && !has_opaque {
+        let net_frameshift = matches!(cds_frame_net, Some(n) if n % 3 != 0);
+        if !has_opaque && (net_frameshift || (net_in_frame && any_simple_fs)) {
             let members: Vec<(i64, i64, &NaEdit)> = classes
                 .iter()
                 .filter_map(|c| match c {
@@ -3779,9 +3843,22 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                 })
                 .collect();
             let prot_acc = cis_member_protein_accession(inner_projections, transcript_id);
-            match try_project_cis_combined_inframe(&tx, &bundle, &members, &prot_acc) {
-                Ok(CisCombined::InFrame(pv)) => return Ok((false, Some(*pv))),
-                Ok(CisCombined::Frameshift) => return Ok((true, build_cis_frameshift_unknown())),
+            match try_project_cis_combined(&tx, &bundle, &members, &prot_acc) {
+                // Read the flag off the built consequence, exactly as the
+                // single-member path does (`frameshift_flag_from_consequence`),
+                // rather than off which arm we landed in. `build_frameshift_variant`
+                // does not always yield a frameshift form: an immediate stop in the
+                // shifted frame is the nonsense substitution `p.(<aa><pos>Ter)`
+                // (`fsTer1` is illegal, frameshift.md:22) and a divergence at or past
+                // the reference terminator is a C-terminal extension. Hardcoding
+                // `true` here would make `is_frameshift` disagree with the
+                // single-member spelling of the same sequence change — reintroducing
+                // on the flag the member-arity dependence #1588 removes from the
+                // protein string.
+                Ok(CisCombined::InFrame(pv)) | Ok(CisCombined::Frameshift(pv)) => {
+                    let flag = protein_consequence_is_frameshift(&pv);
+                    return Ok((flag, Some(*pv)));
+                }
                 // Expected degradation (overlap / unreadable CDS): bundle IS in
                 // hand, so use the net%3 base flag (NOT `any()`), decoupling the
                 // flag from protein-buildability, and collapse the protein to
@@ -3836,7 +3913,7 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
         // Declines (keeping the existing bracket) when the changed residues are
         // separated by an unchanged residue — those are described individually
         // (delins.md, #855) — or when the combined product changes length, which
-        // `try_project_cis_combined_inframe` above already describes.
+        // `try_project_cis_combined` above already describes.
         if !base_flag && !has_opaque {
             let members: Vec<(i64, i64, &NaEdit)> = classes
                 .iter()
@@ -3854,8 +3931,19 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
             }
         }
 
-        // No combined path: a genuine frameshift collapses to `p.?` (#855); a
-        // plain in-frame allele uses the all-or-nothing / combined-subs form.
+        // No combined path. The two halves arrive here for different reasons, so
+        // read them separately:
+        //
+        // - `base_flag == true` now implies an `Opaque` member. With no Opaque
+        //   member `cds_frame_net` is `Some(n)`, and a `true` flag means
+        //   `n % 3 != 0`, which the gate above admits and always returns from. So
+        //   the CDS-frame net is indeterminate and no combined CDS can be spliced:
+        //   nothing establishes *where* the frame breaks, and `p.?` (#855) is the
+        //   honest answer.
+        // - `base_flag == false` is reached constantly with NO Opaque member —
+        //   `cds_frame_net == Some(0)`, or net-in-frame with no individually
+        //   frameshifting member, or the residue/codon paths above declining — and
+        //   uses the all-or-nothing / combined-subs form.
         if base_flag {
             Ok((true, build_cis_frameshift_unknown()))
         } else {
@@ -13328,7 +13416,7 @@ mod tests {
     }
 
     /// #1079 (unit): a length-changing combination is out of scope — the in-frame
-    /// indel path (`try_project_cis_combined_inframe`) owns those forms.
+    /// indel path (`try_project_cis_combined`) owns those forms.
     #[test]
     fn combine_by_residue_length_change_declines() {
         let s = combine_by_residue_str("ATGGATTATTGCTAA", &[(4, 6, ""), (8, 8, "G")]);
@@ -13349,14 +13437,48 @@ mod tests {
         );
     }
 
-    /// #855: an in-cis frameshift allele collapses to the whole-protein-unknown
-    /// `p.?` (uncertain.md). Mirrors the corpus row `c.[41A>C;250del]` → `p.?`.
-    /// Uses NON-adjacent members (`c.[4G>T;11del]`) so the allele is not merged
-    /// into a single delins before the allele path runs; the `c.11del` member
-    /// frameshifts the product. Output is bare `p.?` (single ProteinVariant).
+    /// #1588: a cis allele whose members compose to a **net frameshift** has a
+    /// computable protein consequence, and it must be the same one the
+    /// single-member spelling of that identical sequence change gets. Ferro used
+    /// to answer `p.?` here (#855) purely because the allele had more than one
+    /// member, which made the protein axis a function of member arity rather
+    /// than of the sequence.
+    ///
+    /// `NM_SEP.1` CDS is `ATGGATTATTGCTAA` (Met-Asp-Tyr-Cys-Ter). The two
+    /// spellings below both denote `ATGTATTATTCTAA`:
+    /// - `c.[4G>T;11del]` — NON-adjacent members, so normalization does not merge
+    ///   them and the cis-allele path is what answers;
+    /// - `c.4_12delinsTATTATTC` — the same nine reference bases replaced wholesale.
+    ///
+    /// **This is a same-path pin, NOT an equivalence proof — measured, do not
+    /// read the equality assertions below as comparing two implementations.**
+    /// `project_variant` normalizes before projecting, and the delins re-partitions
+    /// straight back into `c.[4G>T;11del]`: probed, both sides report
+    /// `single.coding == multi.coding == "NM_SEP.1:c.[4G>T;11del]"`. The two
+    /// `assert_eq!`s are therefore self-comparisons, and only the pinned strings
+    /// do work here. That is unavoidable at this layer rather than a defect in the
+    /// test — any single delins denoting this sequence normalizes to the same two
+    /// members — so the genuine cross-implementation equivalence is asserted at
+    /// the builder seam instead, by
+    /// `cis_combined_frameshift_arm_matches_the_single_member_builder` and
+    /// `cis_combined_frameshift_stopping_in_the_3utr_matches_the_single_member_builder`
+    /// in `protein::indel`. The equalities are kept because they cost nothing and
+    /// would catch the two sides diverging if normalization ever stopped
+    /// re-partitioning.
+    ///
+    /// The pinned terminus is `Ter?` because `NM_SEP.1` has `cds_end == 15 ==
+    /// sequence.len()` — there is **no 3'UTR at all**, so the read-through scan
+    /// has nothing to read and no downstream stop exists (`frameshift.md:44`).
+    ///
+    /// Adjudicated-correct, authority `protein/frameshift.md:24`: "the
+    /// (predicted) amino acid changes of additional variants on the same allele
+    /// (in cis) downstream of the frameshift are not described unless they change
+    /// the amino acid sequence or length of the shifted reading frame". The spec
+    /// names this exact shape and prescribes one description of the shifted
+    /// product — not a whole-protein unknown.
     #[test]
-    fn project_cis_frameshift_allele_collapses_to_unknown() {
-        use crate::hgvs::edit::{Base, NaEdit};
+    fn project_cis_net_frameshift_agrees_with_the_single_member_spelling() {
+        use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
         use crate::hgvs::variant::{CdsVariant, LocEdit};
         let (projector, provider) = make_multicodon_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
@@ -13383,13 +13505,60 @@ mod tests {
             ),
         });
         let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![sub, del]));
-        let proj = vp
+        let multi_member = vp
             .project_variant(&allele, "NM_SEP.1")
             .expect("projection should succeed");
-        let protein = proj
+        let multi_member_protein = multi_member
             .protein
             .expect("an in-cis frameshift allele must report a protein consequence");
-        assert_eq!(format!("{protein}"), "NP_SEP.1:p.?");
+
+        let single_member = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_SEP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(4), CdsPos::new(12)),
+                NaEdit::Delins {
+                    sequence: InsertedSequence::Literal(Sequence::new(vec![
+                        Base::T,
+                        Base::A,
+                        Base::T,
+                        Base::T,
+                        Base::A,
+                        Base::T,
+                        Base::T,
+                        Base::C,
+                    ])),
+                    deleted: None,
+                    deleted_length: None,
+                    substitution_reference: None,
+                },
+            ),
+        });
+        let single = vp
+            .project_variant(&single_member, "NM_SEP.1")
+            .expect("projection should succeed");
+        let single_protein = single
+            .protein
+            .expect("a single-member frameshift must report a protein consequence");
+
+        assert_eq!(
+            format!("{multi_member_protein}"),
+            format!("{single_protein}"),
+            "the same sequence change must get the same protein consequence \
+             whether it is spelled as one member or as two"
+        );
+        assert_eq!(
+            format!("{multi_member_protein}"),
+            "NP_SEP.1:p.(Asp2TyrfsTer?)"
+        );
+        // The flag is part of the same arity-independence invariant: both
+        // spellings derive it from the consequence they built, so neither may
+        // read it off the number of members.
+        assert_eq!(
+            multi_member.is_frameshift, single.is_frameshift,
+            "the two spellings must also agree on the frameshift flag"
+        );
+        assert!(multi_member.is_frameshift, "net -1 over the members");
     }
 
     /// #1070: an in-cis compound whose members individually shift the frame but
@@ -13535,7 +13704,7 @@ mod tests {
 
     /// #1070: overlapping cis members that individually frameshift
     /// (`c.[4del;4_5del]`, −1 and −2, net −3) hit the overlap guard in
-    /// `try_project_cis_combined_inframe` → `Err` → conservative fallback. The
+    /// `try_project_cis_combined` → `Err` → conservative fallback. The
     /// flag is decoupled from protein-buildability: base net%3 (`−3 → false`),
     /// protein `p.?`. No panic.
     #[test]
@@ -13703,16 +13872,35 @@ mod tests {
         );
     }
 
-    /// #1070 B2: a cis pair that nets in-frame (`c.[4del;10dup]`, −1 and +1,
-    /// net 0) but whose −1 shift hits an *early* stop before the +1 restores the
-    /// frame is a genuine frameshift, NOT an in-frame delins. `net%3 == 0` alone
-    /// would wrongly call it in-frame; the combined translation detects the
-    /// shifted-window stop (`stop_base < window_end`) and returns `Frameshift`.
-    /// Result: `is_frameshift == true`, protein `p.?` (#855). On NM_FSSTOP.1
-    /// (CDS `ATGGTAAAAGGGCCCTAA`) the combined product is `ATGTAA…` = Met-Ter.
+    /// #1070 B2 / #1588: a cis pair that nets in-frame (`c.[4del;10dup]`, −1 and
+    /// +1, net 0) but whose −1 shift hits an *early* stop before the +1 restores
+    /// the frame is NOT an in-frame delins. `net%3 == 0` alone would wrongly call
+    /// it in-frame; the combined translation detects the shifted-window stop
+    /// (`stop_base < window_end`) and takes the `Frameshift` arm. On NM_FSSTOP.1
+    /// (CDS `ATGGTAAAAGGGCCCTAA`) the combined product is `ATGTAA…` = Met-Ter, so
+    /// the first changed residue is itself the terminator — which
+    /// `frameshift.md:22` forbids spelling `fsTer1` and requires as the nonsense
+    /// substitution `p.(Val2Ter)`.
+    ///
+    /// That is the case where taking the `Frameshift` arm does **not** imply a
+    /// frameshift *consequence*, so this is also the regression guard for reading
+    /// `is_frameshift` off the built consequence rather than off the arm.
+    ///
+    /// The single-variant spelling of the identical sequence change
+    /// (`c.4_12delinsTAAAAGGGG`) is projected here too, but the two are asserted
+    /// **not** to be byte-identical, because measured they are not: the projector
+    /// normalizes first, which re-partitions that delins into three same-codon
+    /// substitutions (`c.4G>T`, `c.5T>A`, `c.9A>G`), and the substitution-
+    /// combination path answers `p.[(Val2Ter);(Lys3=)]` — carrying a silent
+    /// residue downstream of a terminator. This divergence is present on `main`,
+    /// is unrelated to the combined build, and is deliberately left alone here;
+    /// the builder-level equivalence this change *does* own is asserted by
+    /// `cis_combined_frameshift_arm_matches_the_single_member_builder` in
+    /// `protein::indel`. Pinning it means a fix to the substitution path has to
+    /// come past this test rather than silently changing one side.
     #[test]
-    fn project_cis_net_in_frame_but_mid_shift_stop_is_frameshift() {
-        use crate::hgvs::edit::NaEdit;
+    fn project_cis_net_in_frame_but_mid_shift_stop_takes_the_frameshift_arm() {
+        use crate::hgvs::edit::{Base, InsertedSequence, NaEdit, Sequence};
         use crate::hgvs::variant::{CdsVariant, LocEdit};
         let (projector, provider) = make_frameshift_stop_provider_and_projector();
         let vp = VariantProjector::new(projector, provider);
@@ -13733,13 +13921,63 @@ mod tests {
         let proj = vp
             .project_variant(&allele, "NM_FSSTOP.1")
             .expect("projection should succeed");
-        assert!(
-            proj.is_frameshift,
-            "shifted frame terminates before reconvergence → genuine frameshift"
-        );
+
+        // The single-variant spelling of the identical sequence change:
+        // `c.4_12delinsTAAAAGGGG` replaces `GTAAAAGGG` with `TAAAAGGGG`, giving
+        // the same `ATGTAAAAGGGGCCCTAA` the two members compose to.
+        let single_member = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_FSSTOP.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(4), CdsPos::new(12)),
+                NaEdit::Delins {
+                    sequence: InsertedSequence::Literal(Sequence::new(vec![
+                        Base::T,
+                        Base::A,
+                        Base::A,
+                        Base::A,
+                        Base::A,
+                        Base::G,
+                        Base::G,
+                        Base::G,
+                        Base::G,
+                    ])),
+                    deleted: None,
+                    deleted_length: None,
+                    substitution_reference: None,
+                },
+            ),
+        });
+        let single = vp
+            .project_variant(&single_member, "NM_FSSTOP.1")
+            .expect("projection should succeed");
+
+        // #1588: the consequence is described from the combined product, not
+        // collapsed to `p.?`.
+        let multi_protein = format!("{}", proj.protein.expect("protein expected"));
+        assert_eq!(multi_protein, "NP_FSSTOP.1:p.(Val2Ter)");
+
+        // The measured, pre-existing divergence described above. Pinned as a
+        // divergence — NOT adjudicated correct — so that closing it is a
+        // deliberate act rather than a silent one.
+        let single_protein = format!("{}", single.protein.expect("protein expected"));
+        assert_eq!(single_protein, "NP_FSSTOP.1:p.[(Val2Ter);(Lys3=)]");
+
+        // `build_frameshift_variant` emitted a NONSENSE substitution here, not a
+        // frameshift form, so `is_frameshift` must be `false` — derived from the
+        // consequence exactly as the single-member path derives it
+        // (`frameshift_flag_from_consequence`). Hardcoding `true` on the
+        // `Frameshift` arm made the flag depend on member arity, which is the
+        // defect #1588 removes from the protein string.
         assert_eq!(
-            format!("{}", proj.protein.expect("protein expected")),
-            "NP_FSSTOP.1:p.?"
+            proj.is_frameshift, single.is_frameshift,
+            "the two spellings must agree on the frameshift flag even where \
+             they still disagree on the string"
+        );
+        assert!(
+            !proj.is_frameshift,
+            "an immediate stop in the shifted frame is a nonsense substitution, \
+             not a frameshift consequence (frameshift.md:22 forbids `fsTer1`)"
         );
     }
 
@@ -13780,6 +14018,52 @@ mod tests {
         assert_eq!(
             format!("{}", proj.protein.expect("protein expected")),
             "NP_INTR.1:p.?"
+        );
+    }
+
+    /// #1588 guard: widening the combined gate to net-frameshift alleles must NOT
+    /// widen it past an `Opaque` member. `c.[4del;10_10+2del]` on NM_INTR.1 pairs
+    /// a plain −1 deletion with an exon-boundary member whose offset-dropping
+    /// length is untrustworthy, so the CDS-frame net is indeterminate and no
+    /// combined CDS can be spliced. There is no honest `p.(…fs…)` to emit — the
+    /// frame breaks somewhere the classifier cannot locate — so the whole-protein
+    /// unknown `p.?` (#855) is still the right answer.
+    ///
+    /// Scope, so this is not over-read: it is an end-to-end pin, not a guard on
+    /// the `!has_opaque` conjunct specifically. An `Opaque` member makes
+    /// `cds_frame_net` `None`, so both `net_in_frame` and `net_frameshift` are
+    /// already `false` and the gate is closed by the `matches!(…, Some(n) …)`
+    /// shape alone — deleting `!has_opaque` would not fail this test. That
+    /// redundancy predates this change and is kept as defence in depth.
+    #[test]
+    fn project_cis_net_frameshift_with_opaque_member_still_collapses_to_unknown() {
+        use crate::hgvs::edit::NaEdit;
+        use crate::hgvs::variant::{CdsVariant, LocEdit};
+        let (projector, provider) = make_intronic_test_data();
+        let vp = VariantProjector::new(projector, provider);
+        let boundary = HgvsVariant::Cds(CdsVariant {
+            accession: parse_accession("NM_INTR.1"),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                CdsInterval::new(CdsPos::new(10), CdsPos::with_offset(10, 2)),
+                NaEdit::Deletion {
+                    sequence: None,
+                    length: None,
+                },
+            ),
+        });
+        let allele = HgvsVariant::Allele(AlleleVariant::cis(vec![
+            cds_del("NM_INTR.1", 4, 4),
+            boundary,
+        ]));
+        let proj = vp
+            .project_variant(&allele, "NM_INTR.1")
+            .expect("projection should succeed (no panic on the Opaque member)");
+        assert!(proj.is_frameshift, "the c.4del member frameshifts");
+        assert_eq!(
+            format!("{}", proj.protein.expect("protein expected")),
+            "NP_INTR.1:p.?",
+            "an Opaque member must still collapse to the whole-protein unknown"
         );
     }
 
