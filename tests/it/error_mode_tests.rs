@@ -1912,3 +1912,129 @@ mod spec_mandated_rejections {
         assert!(get_code_info("W3015").is_some());
     }
 }
+
+// ============================================================================
+// W1001 codon alignment across the three modes (#1591)
+// ============================================================================
+
+/// The amino-acid case detector reads codon-aligned windows only, so a legal
+/// multi-codon payload is accepted identically in every mode.
+///
+/// Before the fix the detector matched `alA` across the `Val|Ala` boundary of
+/// `delinsValAlaAla`: strict **rejected** a valid description (suggesting the
+/// corrupted `delinsVAlalaAla`), and lenient/silent **applied** that rewrite
+/// and then failed to parse their own output with "Unexpected trailing
+/// characters: 'laAla'". Lenient turning a legal input into a parse failure is
+/// the worst of the three outcomes, which is why all three are pinned here.
+mod w1001_codon_alignment {
+    use super::*;
+
+    /// The reported input, plus the control from the same report.
+    const CANONICAL_INPUTS: [&str; 2] = [
+        "NP_003997.1:p.Met1_Ala3delinsValAlaAla",
+        "NP_003997.1:p.Met1_Ala3delinsArgLeuArg",
+    ];
+
+    #[test]
+    fn canonical_codon_runs_are_accepted_unchanged_in_every_mode() {
+        for config in [
+            ErrorConfig::strict(),
+            ErrorConfig::lenient(),
+            ErrorConfig::silent(),
+        ] {
+            let preprocessor = config.preprocessor();
+            for input in CANONICAL_INPUTS {
+                let result = preprocessor.preprocess(input);
+                assert!(
+                    result.success,
+                    "{input} must be accepted; got {:?}",
+                    result.error.as_ref().map(|e| e.to_string())
+                );
+                assert_eq!(result.preprocessed, input, "{input} must not be rewritten");
+                assert!(
+                    !result
+                        .warnings
+                        .iter()
+                        .any(|w| w.error_type == ErrorType::LowercaseAminoAcid),
+                    "{input} must not raise W1001"
+                );
+            }
+        }
+    }
+
+    /// Whatever the modes do with it, the preprocessor's output must parse —
+    /// the concrete failure was lenient emitting a string it could not parse.
+    #[test]
+    fn preprocessed_output_parses_in_every_mode() {
+        for config in [
+            ErrorConfig::strict(),
+            ErrorConfig::lenient(),
+            ErrorConfig::silent(),
+        ] {
+            let preprocessor = config.preprocessor();
+            for input in CANONICAL_INPUTS {
+                let result = preprocessor.preprocess(input);
+                assert!(result.success, "{input} must be accepted");
+                assert!(
+                    ferro_hgvs::parse_hgvs(&result.preprocessed).is_ok(),
+                    "preprocessor emitted an unparseable string for {input}: {}",
+                    result.preprocessed
+                );
+            }
+        }
+    }
+
+    /// Alignment must not cost the detector its real job: a genuinely
+    /// mis-cased run is still rejected by strict and still corrected (with a
+    /// W1001 per codon) by lenient.
+    #[test]
+    fn genuinely_miscased_runs_are_still_caught() {
+        let miscased = "NP_003997.1:p.Met1_Ala3delinsvalalaala";
+        let canonical = "NP_003997.1:p.Met1_Ala3delinsValAlaAla";
+
+        let strict = ErrorConfig::strict().preprocessor().preprocess(miscased);
+        assert!(!strict.success, "strict must still reject {miscased}");
+        // …and rejects it for the CASING, not for something incidental.
+        //
+        // `!success` alone passes for any rejection at all — an unparseable
+        // accession, a position out of range, a change to what `preprocess`
+        // rejects that has nothing to do with amino-acid case. The claim this
+        // test makes is that the alignment work did not cost the detector its
+        // real job, and only the code names which detector fired. Note the
+        // lenient half three lines down already keys on
+        // `ErrorType::LowercaseAminoAcid`; this was the weaker of two adjacent
+        // assertions about one behaviour.
+        //
+        // The strict ERROR and the lenient WARNING are different enumerations of
+        // the same finding — `ErrorCode::InvalidAminoAcid` (1008) on the refusal,
+        // `ErrorType::LowercaseAminoAcid` on the correction — so both are pinned
+        // rather than assuming one implies the other.
+        assert_eq!(
+            strict.error.as_ref().and_then(ferro_hgvs::FerroError::code),
+            Some(ferro_hgvs::error::ErrorCode::InvalidAminoAcid),
+            "strict rejected {miscased}, but not as a mis-cased amino acid: {:?}",
+            strict.error
+        );
+
+        let lenient = ErrorConfig::lenient().preprocessor().preprocess(miscased);
+        assert!(lenient.success, "lenient must correct {miscased}");
+        assert_eq!(lenient.preprocessed, canonical);
+        assert_eq!(
+            lenient
+                .warnings
+                .iter()
+                .filter(|w| w.error_type == ErrorType::LowercaseAminoAcid)
+                .count(),
+            3,
+            "one W1001 per mis-cased codon"
+        );
+
+        let silent = ErrorConfig::silent().preprocessor().preprocess(miscased);
+        assert!(silent.success);
+        assert_eq!(silent.preprocessed, canonical);
+        assert!(silent
+            .warnings
+            .iter()
+            .all(|w| w.error_type != ErrorType::LowercaseAminoAcid));
+    }
+}

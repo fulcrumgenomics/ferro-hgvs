@@ -525,48 +525,69 @@ fn is_amino_acid_like(s: &str) -> bool {
         && bytes[2].is_ascii_alphabetic()
 }
 
+/// Three-letter amino-acid codes, as (lowercase probe, canonical spelling).
+const AMINO_ACID_CODES: [(&str, &str); 23] = [
+    ("ala", "Ala"),
+    ("arg", "Arg"),
+    ("asn", "Asn"),
+    ("asp", "Asp"),
+    ("cys", "Cys"),
+    ("gln", "Gln"),
+    ("glu", "Glu"),
+    ("gly", "Gly"),
+    ("his", "His"),
+    ("ile", "Ile"),
+    ("leu", "Leu"),
+    ("lys", "Lys"),
+    ("met", "Met"),
+    ("phe", "Phe"),
+    ("pro", "Pro"),
+    ("sec", "Sec"),
+    ("ser", "Ser"),
+    ("thr", "Thr"),
+    ("trp", "Trp"),
+    ("tyr", "Tyr"),
+    ("val", "Val"),
+    ("ter", "Ter"),
+    ("xaa", "Xaa"),
+];
+
+/// Resolve a three-letter token to its canonical amino-acid spelling,
+/// ignoring case. Returns `None` when the token is not an amino-acid code.
+///
+/// Unlike [`correct_amino_acid_case`] this also answers for tokens that are
+/// *already* canonical (`Val` -> `Val`). That distinction is what lets
+/// [`correct_amino_acid_case_in_protein`] stay codon-aligned: a correctly
+/// spelled codon must still consume three bytes, or the scan slips out of
+/// frame and reads the next window across a codon boundary.
+fn canonical_amino_acid_code(token: &str) -> Option<&'static str> {
+    if token.len() != 3 || !token.is_char_boundary(3) {
+        return None;
+    }
+    let lower = token.to_lowercase();
+    AMINO_ACID_CODES
+        .iter()
+        .find(|(probe, _)| lower == *probe)
+        .map(|(_, canonical)| *canonical)
+}
+
 /// Correct lowercase amino acid codes to proper case.
 ///
 /// Converts `val` to `Val`, `GLU` to `Glu`, etc.
 ///
+/// Returns `None` for a token that is already canonical, so a caller that
+/// needs to know "is this an amino-acid code at all" should use
+/// [`canonical_amino_acid_code`] instead.
+///
 /// Used by `correct_amino_acid_case_in_protein` to classify individual
 /// three-letter tokens.
 pub fn correct_amino_acid_case(token: &str) -> Option<(String, ErrorType)> {
-    // Three-letter amino acid codes (case-insensitive check)
-    let amino_acids = [
-        ("ala", "Ala"),
-        ("arg", "Arg"),
-        ("asn", "Asn"),
-        ("asp", "Asp"),
-        ("cys", "Cys"),
-        ("gln", "Gln"),
-        ("glu", "Glu"),
-        ("gly", "Gly"),
-        ("his", "His"),
-        ("ile", "Ile"),
-        ("leu", "Leu"),
-        ("lys", "Lys"),
-        ("met", "Met"),
-        ("phe", "Phe"),
-        ("pro", "Pro"),
-        ("sec", "Sec"),
-        ("ser", "Ser"),
-        ("thr", "Thr"),
-        ("trp", "Trp"),
-        ("tyr", "Tyr"),
-        ("val", "Val"),
-        ("ter", "Ter"),
-        ("xaa", "Xaa"),
-    ];
-
-    let lower = token.to_lowercase();
-    for (pattern, correct) in amino_acids {
-        if lower == pattern && token != correct {
-            return Some((correct.to_string(), ErrorType::LowercaseAminoAcid));
+    match canonical_amino_acid_code(token) {
+        Some(canonical) if token != canonical => {
+            Some((canonical.to_string(), ErrorType::LowercaseAminoAcid))
         }
+        _ => None,
     }
-
-    None
 }
 
 /// Scan only the `p.` segment of an HGVS expression and rewrite three-letter
@@ -604,22 +625,39 @@ pub fn correct_amino_acid_case_in_protein(input: &str) -> (Cow<'_, str>, Vec<Det
             while run_end < len && bytes[run_end].is_ascii_alphabetic() {
                 run_end += 1;
             }
+            // Probe 3-letter windows, but only ever *accept* a window on a
+            // codon boundary. Once a window resolves to an amino-acid code the
+            // scan consumes all three of its bytes — whether or not the code
+            // needed correcting — so every subsequent window in this run stays
+            // in frame at offsets 0, 3, 6, ... from that codon.
+            //
+            // Advancing by 1 over an already-canonical code (the pre-#1591
+            // behaviour) let the scan read the *next* window across a codon
+            // boundary: in `delinsValAlaAla` it matched `alA` spanning
+            // `V|al|A`, "corrected" it to `Ala`, and rewrote a legal input into
+            // the unparseable `delinsVAlalaAla`. Strict mode rejected a valid
+            // description and lenient mode applied that rewrite and then failed
+            // to parse its own output.
             let mut j = i;
             while j + 3 <= run_end {
                 let token = &body[j..j + 3];
-                if let Some((canonical, error_type)) = correct_amino_acid_case(token) {
-                    let abs_start = start + j;
-                    corrections.push(DetectedCorrection::new(
-                        error_type,
-                        token.to_string(),
-                        canonical.clone(),
-                        abs_start,
-                        abs_start + 3,
-                    ));
-                    out.push_str(&canonical);
+                if let Some(canonical) = canonical_amino_acid_code(token) {
+                    if token != canonical {
+                        let abs_start = start + j;
+                        corrections.push(DetectedCorrection::new(
+                            ErrorType::LowercaseAminoAcid,
+                            token.to_string(),
+                            canonical.to_string(),
+                            abs_start,
+                            abs_start + 3,
+                        ));
+                    }
+                    // Consume the whole codon either way, keeping the frame.
+                    out.push_str(canonical);
                     j += 3;
                 } else {
-                    // Push one ASCII letter and advance.
+                    // Not an amino-acid code: push one ASCII letter and
+                    // advance, still hunting for the start of the codon run.
                     out.push(bytes[j] as char);
                     j += 1;
                 }
@@ -4429,6 +4467,149 @@ mod tests {
         let (twice, corrections) = correct_amino_acid_case_in_protein(&once);
         assert_eq!(twice, once);
         assert!(corrections.is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // Codon alignment (#1591)
+    //
+    // A multi-codon run must be read at offsets 0, 3, 6, ... from the first
+    // recognised codon. Reading arbitrary 3-character substrings finds codes
+    // that straddle a codon boundary — `V|al|A` in `ValAla` reads as `alA` —
+    // and "correcting" one rewrites a legal description into an unparseable
+    // one.
+    // ------------------------------------------------------------------
+
+    /// The reported case: a correctly-cased multi-codon `delins` payload must
+    /// be left completely alone.
+    #[test]
+    fn canonical_multi_codon_delins_run_is_not_rewritten() {
+        let input = "NP_003997.1:p.Met1_Ala3delinsValAlaAla";
+        let (corrected, corrections) = correct_amino_acid_case_in_protein(input);
+        assert_eq!(
+            corrected, input,
+            "a canonical codon run must survive untouched; \
+             reading `alA` across the Val|Ala boundary produced `delinsVAlalaAla`"
+        );
+        assert!(corrections.is_empty(), "no correction is warranted");
+    }
+
+    /// The control from the same report — a run whose codon boundaries admit
+    /// no cross-boundary reading — must keep working.
+    #[test]
+    fn canonical_multi_codon_control_run_is_not_rewritten() {
+        let input = "NP_003997.1:p.Met1_Ala3delinsArgLeuArg";
+        let (corrected, corrections) = correct_amino_acid_case_in_protein(input);
+        assert_eq!(corrected, input);
+        assert!(corrections.is_empty());
+    }
+
+    /// Codon alignment must not cost the detector its real job: a genuinely
+    /// mis-cased run is still caught, with one correction per codon.
+    #[test]
+    fn miscased_multi_codon_run_is_still_corrected() {
+        for input in [
+            "NP_003997.1:p.Met1_Ala3delinsvalalaala",
+            "NP_003997.1:p.Met1_Ala3delinsVALALAALA",
+            "NP_003997.1:p.Met1_Ala3delinsVaLaLaAlA",
+        ] {
+            let (corrected, corrections) = correct_amino_acid_case_in_protein(input);
+            assert_eq!(
+                corrected, "NP_003997.1:p.Met1_Ala3delinsValAlaAla",
+                "mis-cased run {input} must be corrected"
+            );
+            assert_eq!(
+                corrections.len(),
+                3,
+                "one correction per mis-cased codon in {input}"
+            );
+        }
+    }
+
+    /// Exhaustive over the whole code table: every adjacent pair of canonical
+    /// codons must round-trip untouched, and every all-lower / all-upper
+    /// spelling of that pair must correct back to it.
+    ///
+    /// Pre-fix this failed on 7 of the 529 pairs — Arg|Lys, Gly|Sec, Gly|Ser,
+    /// Val|Ala, Val|Arg, Val|Asn and Val|Asp — each of which hides a further
+    /// code across its codon boundary.
+    #[test]
+    fn every_adjacent_canonical_codon_pair_is_stable() {
+        for (_, first) in AMINO_ACID_CODES {
+            for (_, second) in AMINO_ACID_CODES {
+                let run = format!("{first}{second}");
+                let canonical = format!("NP_000001.1:p.Met1_Ala3delins{run}");
+
+                let (out, corrections) = correct_amino_acid_case_in_protein(&canonical);
+                assert_eq!(
+                    out, canonical,
+                    "canonical pair {first}|{second} was rewritten"
+                );
+                assert!(
+                    corrections.is_empty(),
+                    "canonical pair {first}|{second} produced a spurious correction"
+                );
+
+                for spelling in [run.to_lowercase(), run.to_uppercase()] {
+                    let input = format!("NP_000001.1:p.Met1_Ala3delins{spelling}");
+                    let (out, corrections) = correct_amino_acid_case_in_protein(&input);
+                    assert_eq!(
+                        out, canonical,
+                        "mis-cased pair {spelling} must correct to {first}{second}"
+                    );
+                    assert_eq!(
+                        corrections.len(),
+                        2,
+                        "expected one correction per codon in {spelling}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A canonical codon run of any length is a fixed point, and correcting a
+    /// mis-cased run of any length lands on it.
+    #[test]
+    fn canonical_codon_runs_of_every_length_are_stable() {
+        for len in 1..=8 {
+            let run: String = AMINO_ACID_CODES
+                .iter()
+                .cycle()
+                .take(len)
+                .map(|(_, c)| *c)
+                .collect();
+            let canonical = format!("NP_000001.1:p.Met1_Ala3delins{run}");
+
+            let (out, corrections) = correct_amino_acid_case_in_protein(&canonical);
+            assert_eq!(
+                out, canonical,
+                "canonical run of {len} codons was rewritten"
+            );
+            assert!(corrections.is_empty());
+
+            let input = format!("NP_000001.1:p.Met1_Ala3delins{}", run.to_lowercase());
+            let (out, corrections) = correct_amino_acid_case_in_protein(&input);
+            assert_eq!(out, canonical);
+            assert_eq!(corrections.len(), len);
+        }
+    }
+
+    /// `canonical_amino_acid_code` answers for already-canonical tokens (which
+    /// is what keeps the frame), while `correct_amino_acid_case` still reports
+    /// only tokens that need changing.
+    #[test]
+    fn canonical_lookup_answers_for_already_canonical_codes() {
+        assert_eq!(canonical_amino_acid_code("Val"), Some("Val"));
+        assert_eq!(canonical_amino_acid_code("val"), Some("Val"));
+        assert_eq!(canonical_amino_acid_code("VAL"), Some("Val"));
+        assert_eq!(canonical_amino_acid_code("del"), None);
+        assert_eq!(canonical_amino_acid_code("Va"), None);
+        assert_eq!(canonical_amino_acid_code("Vall"), None);
+
+        assert!(correct_amino_acid_case("Val").is_none());
+        assert_eq!(
+            correct_amino_acid_case("val").map(|(s, _)| s),
+            Some("Val".to_string())
+        );
     }
 
     // Protein-scoped single-letter AA expansion (W1002) tests
