@@ -2175,6 +2175,19 @@ pub fn normalize_repeat(
     // behavior change is preferring a genuinely larger tract.
     let mut working_unit = canonical_unit.to_vec();
     let literal_tract = count_tandem_repeats(ref_seq, pos, &working_unit);
+    // Reference copies the maximization swallows when it displaces the literal
+    // tract with a longer one. `[N]` counts copies of the unit the caller
+    // SPELLED, against that unit's own tract; re-phasing to a rotation that
+    // tiles a wider tract changes what the count counts, so the copies now
+    // inside the window but outside the literal tract have to be carried or
+    // they are silently deleted (#1618).
+    //
+    // `DNA/repeated.md:97-99` is the spec's own worked case: re-spelling 11 `TG`
+    // copies as `GT` slides the tract one base 3', swallowing the first `T` of
+    // the neighbouring run, and the spec decrements that run `T[7]` -> `T[6]` so
+    // the total is conserved. Same principle, applied to a widening rather than
+    // a slide.
+    let mut maximization_absorbed: u64 = 0;
     let tract = match literal_tract {
         _ if end_pos == pos && working_unit.len() >= 2 => {
             // Hold the literal seed to the SAME span test the rotations below
@@ -2205,6 +2218,19 @@ pub fn normalize_repeat(
             }
             match best {
                 Some((c, s, e, u)) => {
+                    // Carry the reference copies this window gained over the
+                    // tract the spelled unit actually names. The literal tract
+                    // is the baseline even when it does not span the anchor —
+                    // that is the #1618 shape exactly (`GTGT` at g.259..262 is 2
+                    // copies of `GT` but only 1 of `TG`, whose tract ends AT the
+                    // anchor and so was filtered out of `best` above). Measured
+                    // in bases and divided by the unit length, mirroring the
+                    // explicit-range absorption below; a rotation is the same
+                    // length as the unit it rotates, so the divisor is shared.
+                    if let Some((_, ls, le)) = literal_tract {
+                        let gained = ls.saturating_sub(s) + e.saturating_sub(le);
+                        maximization_absorbed = (gained / u.len()) as u64;
+                    }
                     working_unit = u;
                     Some((c, s, e))
                 }
@@ -2238,6 +2264,12 @@ pub fn normalize_repeat(
         let five_prime_bases = pos.saturating_sub(ref_start);
         let absorbed = ((three_prime_bases + five_prime_bases) / unit_len) as u64;
         specified_count += absorbed;
+    } else {
+        // Single anchor: the same conservation, for the copies the rotation
+        // search swallowed rather than the ones an under-specified range left
+        // out. Zero unless the maximization actually widened the tract, so a
+        // pure re-phase (`repeated.md:97`'s 11 `TG` -> 11 `GT`) is untouched.
+        specified_count += maximization_absorbed;
     }
 
     // Direction-aware unit rotation. For `ThreePrime`, repeated.md L44 ("applying

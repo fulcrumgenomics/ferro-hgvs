@@ -26,6 +26,24 @@
 //! The core below reproduces that shape on the genomic axis: `GTGT` at
 //! g.259..262 is 2 copies of `GT`, and the anchor g.262 is the tract's last
 //! base, where literal `TG` tiles only 1 copy.
+//!
+//! # #1618: reaching the maximal tract is only half of it
+//!
+//! Maximizing in one pass fixed idempotency and **broke the denoted sequence**.
+//! `[6]` counts copies of the unit the caller spelled; widening from the 1-copy
+//! `TG` tract to the 2-copy `GT` tract swallows a reference copy, so holding the
+//! count fixed deletes two bases. Three of the four seam oracles pass on that
+//! output — it is well-formed, in bounds, re-parses and is a fixed point — which
+//! is why it survived; only `FERRO_ASSERT_SEQUENCE` sees it.
+//!
+//! The absorption the two-pass behaviour above performed by accident is now done
+//! deliberately in one pass, so the count carries the copies the window gains:
+//! `g.262TG[6]` -> `g.259_262GT[7]`, denoting the same 14 bases as its input. A
+//! pure re-phase absorbs nothing and keeps its count, which is what
+//! `DNA/repeated.md:97`'s 11 `TG` -> 11 `GT` requires.
+//!
+//! `tests/it/issue_1618_anchored_repeat_semantics.rs` holds the sequence-level
+//! guards and the spec's own worked cases.
 
 use crate::common::synthetic::SyntheticBuilder;
 use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer, ShuffleDirection};
@@ -44,16 +62,24 @@ fn norm(input: &str, dir: ShuffleDirection) -> String {
     .to_string()
 }
 
-/// The one canonical form every spelling and direction must reach.
+/// The canonical form the **anchored** spelling must reach.
 ///
 /// The maximal tract is the 2-copy `GT` at g.259..262. Neither direction can
 /// slide it — the flanking `A` (g.258) and `T` (g.263) break the `GT` phase on
-/// both sides — so the window is identical under 3' and 5', and the count is the
-/// requested 6. Asserting this value, and not merely that the spellings agree,
-/// is what distinguishes "both found the maximal tract" from "both found the
-/// same NON-maximal tract" (the pre-fix 1-copy `TG` window would satisfy a bare
-/// equality check).
-const CANONICAL: &str = "NC_TEST.1:g.259_262GT[6]";
+/// both sides — so the window is identical under 3' and 5'. Asserting this
+/// value, and not merely that a spelling is stable, is what distinguishes "found
+/// the maximal tract" from "found the same NON-maximal tract" (the pre-fix
+/// 1-copy `TG` window would satisfy a bare equality check).
+///
+/// **The count is 7, not the requested 6 (#1618).** `[6]` counts copies of the
+/// unit the caller spelled, `TG`, whose tract here is a single copy; widening to
+/// the 2-copy `GT` tract swallows one reference copy, and it has to be carried
+/// or it is silently deleted. `g.262TG[6]` denotes `GT`×7 = 14 bases, and
+/// `GT[7]` is that sequence on the maximal tract. `DNA/repeated.md:97-99` is the
+/// spec's own instance of the same conservation: re-spelling 11 `TG` copies as
+/// `GT` slides the tract one base 3' and the spec decrements the neighbouring
+/// run `T[7]` -> `T[6]` to keep the total intact.
+const CANONICAL: &str = "NC_TEST.1:g.259_262GT[7]";
 
 /// An expansion spelled on a single anchor whose literal unit tiles the shorter
 /// phase must still be a fixed point — and must land on the maximal tract.
@@ -82,18 +108,35 @@ fn single_anchor_repeat_expansion_is_idempotent_five_prime() {
     );
 }
 
-/// The anchored and range spellings of the same tract must agree, which is the
-/// property whose violation produced the drift: the single anchor found 1 copy
-/// where the explicit range found 2.
+/// Both spellings must land on the maximal tract — and must NOT converge,
+/// because they do not denote the same variant.
+///
+/// **This assertion was inverted until #1618.** It required `g.262TG[6]` and
+/// `g.259_262GT[6]` to normalize identically, which reads as confluence but is
+/// not: `TG[6]` against the 1-copy `TG` tract denotes 14 bases, `GT[6]` against
+/// the 2-copy `GT` tract denotes 12. Converging them is not two spellings of one
+/// variant agreeing — it is one of them losing two bases. Confluence is a claim
+/// about descriptions of the SAME variant, and these are descriptions of
+/// different ones.
+///
+/// What both must share is the canonical *window*: the maximal 2-copy tract.
+/// They differ only in the count each denotes.
 #[test]
-fn anchored_and_range_spellings_agree_on_the_maximal_tract() {
+fn both_spellings_reach_the_maximal_tract_without_converging() {
     let anchored = norm("NC_TEST.1:g.262TG[6]", ShuffleDirection::ThreePrime);
     let ranged = norm("NC_TEST.1:g.259_262GT[6]", ShuffleDirection::ThreePrime);
     assert_eq!(anchored, CANONICAL, "anchored spelling");
-    assert_eq!(ranged, CANONICAL, "ranged spelling");
     assert_eq!(
+        ranged, "NC_TEST.1:g.259_262GT[6]",
+        "the ranged spelling states its own tract, so it is already canonical"
+    );
+    assert!(
+        anchored.starts_with("NC_TEST.1:g.259_262GT[")
+            && ranged.starts_with("NC_TEST.1:g.259_262GT["),
+        "both must land on the maximal 2-copy tract\n  anchored={anchored}\n  ranged  ={ranged}"
+    );
+    assert_ne!(
         anchored, ranged,
-        "a single anchor and an explicit range over the same tract must \
-         normalize identically\n  anchored={anchored}\n  ranged  ={ranged}"
+        "these denote 14 and 12 bases respectively; converging them destroys one"
     );
 }
