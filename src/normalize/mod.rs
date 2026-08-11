@@ -3634,6 +3634,66 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 &self.provider,
             );
 
+            // And last for the protein axis specifically: the coalesce above
+            // this loop runs on the *authored* members, so it only ever sees
+            // adjacency the input already had. The per-member 3' shift can
+            // *create* it — `p.[Gly13del;Gly16Ala]` shifts the deletion down
+            // its Gly run to `Gly17del`, which lands flush against `Gly16Ala`
+            // — and the nucleotide `merge_consecutive_edits` at the top of the
+            // pass never fires on protein members, so nothing closed that gap.
+            // The result was that pass one emitted `p.[Gly16Ala;Gly17del]` and
+            // pass two merged it to `p.Gly16_Gly17delinsAla`, i.e. `normalize`
+            // was not idempotent (found by #1614's protein corpus axis under
+            // `FERRO_ASSERT_IDEMPOTENT`).
+            //
+            // `substitution.md:32` is why the merged form is the right answer
+            // rather than a matter of taste: at separation zero the split
+            // spelling is marked `class="invalid"`, which the decided
+            // `rulings[delins-adjacent-members-when-both-consume-reference]`
+            // record scopes to members that both consume reference bases — a
+            // substitution and a single-residue deletion both do.
+            //
+            // `general.md:157-160` is the authority for the other half — the
+            // shift that *creates* the adjacency — and it is easy to miss
+            // because it is stated as a Q&A rather than as a rule: "protein
+            // variant descriptions should be derived from comparing the variant
+            // protein sequence with the reference protein sequence. Knowledge on
+            // the underlying change on the DNA level should not be used." Its
+            // worked example is a 3'-rule application at the protein level: a
+            // `Ser` lost from a `SerSer` run is `p.Ser5del`, and the passage
+            // says in as many words that placing it at the deleted *codon* —
+            // `p.Ser4del` — "is not correct". So carrying `Gly13del` down its
+            // Gly run to `Gly17del` is required rather than incidental, and
+            // `substitution.md:32` governs what is then made of the result. Both
+            // halves are published clauses; neither rests on judgement.
+            //
+            // Inside the loop for the same reason `respell_colliding_duplications`
+            // is: the coalesced allele is a new variant that must go back through
+            // the per-member pipeline. Termination is unchanged — a coalesce
+            // strictly reduces the member count, and the helper is a no-op once
+            // no adjacent run remains.
+            // Gated on the helper's *own* preconditions rather than on `is_cis`
+            // alone. It declines an allele with fewer than two members or with
+            // any non-protein member, so building the candidate under a bare
+            // `is_cis` clones the member vector on every pass of every
+            // nucleotide cis allele only to have the helper return `None`.
+            let coalescible = is_cis
+                && result.len() >= 2
+                && result.iter().all(|v| matches!(v, HgvsVariant::Protein(_)));
+            if coalescible {
+                let mut candidate = crate::hgvs::variant::AlleleVariant::new(
+                    result.clone(),
+                    crate::hgvs::variant::AllelePhase::Cis,
+                );
+                candidate.uncertain = allele.uncertain;
+                if let Some(coalesced) = merge::coalesce_protein_adjacent_changes(&candidate) {
+                    result = match coalesced {
+                        HgvsVariant::Allele(inner) => inner.variants,
+                        single => vec![single],
+                    };
+                }
+            }
+
             pass += 1;
             // Stable once a full pass leaves the member set unchanged.
             // `max_passes == 1` (non-cis) forces the original single-pass

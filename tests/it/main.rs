@@ -425,6 +425,7 @@ mod protein_insertion_special;
 mod protein_no_protein_roundtrip;
 mod protein_predicted_trans;
 mod protein_render_policy;
+mod protein_shift_created_adjacency;
 mod protein_silent_eq;
 mod protein_stop_codon_canonicalization;
 mod protein_substitution_alternatives;
