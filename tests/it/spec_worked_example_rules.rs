@@ -469,8 +469,9 @@ const WORKED: &[Worked] = &[
         rebase: Rebase::Same,
         fixture: Fixture::Slice,
         why: "the spanning delins is kept, not decomposed into the aligning split \
-              `:46` names as its alternative — see \
-              `the_spanning_delins_and_its_published_split_are_two_fixed_points`",
+              `:46` names as its alternative — and as of the 2026-08-11 ruling the \
+              split now converges onto it too, see \
+              `the_spanning_delins_and_its_published_split_converge_on_the_recommended_form`",
     },
     Worked {
         id: "W51",
@@ -1004,13 +1005,17 @@ const PARTITIONS: &[Partition] = &[
     },
     Partition {
         id: "W49",
-        clause: "recommendations/DNA/delins.md:46",
-        quote: "giving an alternative description like `c.[850_869del;874_881del;887_897del;901_902insG]`",
+        clause: "recommendations/DNA/delins.md:47",
+        quote: "**The \"delins\" format is recommended**",
         input: "LRG_199t1:c.[850_869del;874_881del;887_897del;901_902insG]",
-        members: &[(850, 869), (874, 881), (887, 897), (901, 902)],
+        members: &[(850, 901)],
         fixture: Fixture::Slice,
-        why: "the split the spec names as legal survives with all four members and \
-              their gaps of 4, 5 and 3 nt intact — nothing is merged into the hull",
+        why: "the split the spec names as legal re-derives to the spanning form \
+              `:47` recommends — operator ruling 2026-08-11, which chose `:47` over \
+              `general.md:34` for the `:44-47` alignment-coincidence shape. This row \
+              asserted four members with gaps of 4, 5 and 3 nt intact until then; the \
+              clause it cites moved from `:46` to `:47` with the ruling, because `:46` \
+              names the split as legal and `:47` is what selects between them",
     },
     Partition {
         id: "W49",
@@ -1732,6 +1737,76 @@ fn the_synthetic_fixtures_carry_the_sequence_the_spec_prints() {
 }
 
 // ---------------------------------------------------------------------------
+// Accepted deviations — the spec explicit, ferro wrong, and known to be
+// ---------------------------------------------------------------------------
+
+/// Rows where the spec is explicit, ferro disagrees, and **no clause competes**
+/// — so this is not a contested reading, it is ferro being wrong on purpose for
+/// a bounded period, with the operator's acceptance on the record.
+///
+/// This is the `FERRO_IS_WRONG` table the module header describes as retired.
+/// It was retired empty because "a test iterating an empty table passes
+/// vacuously", with the instruction: *"Re-create it only for a row that is
+/// genuinely wrong."* This is that row.
+///
+/// **W58 — `LRG_199t1:c.[992_1002del;1004T>C]` emits `c.992_1004delinsAC`.**
+/// That string is what SVD-WG010 proposed and it appears verbatim at
+/// `docs/consultation/SVD-WG010.md:50`; the file's own status line reads *"The
+/// proposal has been **rejected**"*, so `general.md:34` governs and the pair
+/// must stay split. An 11-nt deletion and a substitution one nucleotide apart,
+/// on a frameless axis where `general.md:35`'s codon exception cannot apply.
+///
+/// **Why it is accepted rather than fixed here.** Deleting the input-relative
+/// weight bound removed the only mechanism holding the split, and the real cause
+/// is that `best_alignment` searches single-gap alignments only, so the two-gap
+/// partition is not in its search space at all. That is #1617's rewrite. The
+/// operator accepted the regression on 2026-08-11 on the explicit basis that
+/// follow-on work closes it and **no release ships before it does**.
+///
+/// **This list is a tripwire, not an exemption.**
+/// [`no_accepted_deviation_has_quietly_started_conforming`] fails when a listed
+/// row *starts* producing the spec's answer, so the acceptance cannot outlive
+/// its fix unnoticed — the same discipline `KNOWN_DIVERGENT_INPUTS` applies. If
+/// it goes red, delete the row from here rather than re-blessing anything.
+const FERRO_IS_WRONG: &[&str] = &["W58"];
+
+/// Is this row an accepted deviation rather than a live expectation?
+fn is_accepted_deviation(id: &str) -> bool {
+    FERRO_IS_WRONG.contains(&id)
+}
+
+/// The accepted deviations are still wrong — and this fails when one is fixed.
+///
+/// Without it, [`FERRO_IS_WRONG`] would be a permanent exemption: a row could be
+/// repaired by #1617 and go on being skipped by three tests, so the guard the
+/// spec earns would never come back. Listing a row that already conforms is
+/// equally an error, and fails here too.
+#[test]
+fn no_accepted_deviation_has_quietly_started_conforming() {
+    let mut conforming = Vec::new();
+    for id in FERRO_IS_WRONG {
+        let Some(row) = WORKED.iter().find(|row| row.id == *id) else {
+            panic!("{id} is listed as an accepted deviation but is in no WORKED row");
+        };
+        if let Ok(actual) = run(row.fixture, row.input) {
+            if actual == row.answer {
+                conforming.push(format!(
+                    "  [{}] {} -> {actual}\n    now produces the spec's answer",
+                    row.id, row.input
+                ));
+            }
+        }
+    }
+    assert!(
+        conforming.is_empty(),
+        "{} accepted deviation(s) now conform. Delete them from FERRO_IS_WRONG so the \
+         spec's guard applies again — do not re-bless anything:\n{}",
+        conforming.len(),
+        conforming.join("\n")
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Tests — the answers
 // ---------------------------------------------------------------------------
 
@@ -1743,6 +1818,9 @@ fn the_synthetic_fixtures_carry_the_sequence_the_spec_prints() {
 fn every_worked_example_produces_the_spec_published_answer() {
     let mut failures = Vec::new();
     for row in WORKED {
+        if is_accepted_deviation(row.id) {
+            continue;
+        }
         match run(row.fixture, row.input) {
             Ok(actual) if actual == row.answer => {}
             Ok(actual) => failures.push(format!(
@@ -1894,6 +1972,9 @@ fn every_answer_is_a_fixed_point() {
 fn the_forbidden_description_is_never_what_ferro_emits() {
     let mut violations = Vec::new();
     for row in NEGATIVE {
+        if is_accepted_deviation(row.id) {
+            continue;
+        }
         match run(row.fixture, row.input) {
             Ok(actual) if actual == row.forbidden => violations.push(format!(
                 "  [{}] {} -> {}\n    forbidden by {} — {}",
@@ -1949,6 +2030,9 @@ fn the_banned_spellings_are_refused_by_the_parser() {
 fn the_normal_forms_assert_the_partitions_the_spec_asserts() {
     let mut failures = Vec::new();
     for row in PARTITIONS {
+        if is_accepted_deviation(row.id) {
+            continue;
+        }
         let normalized = normalized_variant(row.fixture, row.input);
         let spans = member_spans(&normalized);
         if spans.len() != row.members.len() {
@@ -2061,29 +2145,37 @@ fn the_recorded_parse_gaps_are_still_gaps() {
 // Tests — non-confluence the spec's own examples expose
 // ---------------------------------------------------------------------------
 
-/// `DNA/delins.md:44-47`'s two descriptions of one variant are two fixed points.
+/// `DNA/delins.md:44-47`'s two descriptions of one variant converge on the
+/// spanning `delins`, by operator ruling of 2026-08-11.
 ///
-/// Stated as an observation, not a requirement. `:44` gives the spanning
-/// `c.850_901delinsTTCCTCGATGCCTG`, `:46` names
+/// `:44` gives the spanning `c.850_901delinsTTCCTCGATGCCTG`, `:46` names
 /// `c.[850_869del;874_881del;887_897del;901_902insG]` as an "alternative
-/// description" of the *same* variant, and `:47` recommends the delins. Ferro
-/// preserves both, so the pair is non-confluent — the spec's own worked example
-/// of the problem #1235 is about.
+/// description" of the *same* variant, and `:47` recommends the delins.
 ///
-/// `canonical-form-choice-when-both-legal` is **decided** and directs ferro to
-/// derive from the resulting sequence "subject to every explicit spec
-/// tie-break". It does not settle this pair, because here there are *two*
-/// explicit tie-breaks and they point opposite ways: `:47` recommends the
-/// spanning form, `general.md:34` requires members separated by unchanged
-/// nucleotides to stay individual. The derivation therefore selects neither, and
-/// the pair stays two fixed points.
+/// **This test previously asserted the pair were two fixed points** and required
+/// that any change converging them "name which of the two clauses it is now
+/// reading, rather than land as a side effect". This is that naming. The two
+/// tie-breaks point opposite ways — `:47` recommends the spanning form,
+/// `general.md:34` requires members separated by unchanged nucleotides to stay
+/// individual — and the operator ruled for **`:47`**, whose words are that the
+/// delins format "**is recommended**".
 ///
-/// So this test is an observation, not a requirement. If a change *does*
-/// converge them, it fails — not because converging is wrong, but because it is
-/// a representation change that has to name which of the two clauses it is now
-/// reading, rather than landing as a side effect.
+/// Note the authority deliberately, because the weaker one was available and is
+/// not what this rests on: converging also improves confluence, but confluence
+/// is ferro's policy rather than the spec's, and under the README ruleset
+/// spec-explicit conformance outranks it. Resting this on confluence would have
+/// left it outranked by the next clause argument. It rests on `:47`.
+///
+/// **Scope — this does NOT generalise to any separation of two or more.** The
+/// governing record, `delins-merge-vs-individual-gap-two-or-more`, is scoped to
+/// the `:44-47` alignment-coincidence shape: an interior that survives the split
+/// only because payload bases coincide with reference bases. `general.md:34`
+/// still governs a separation arising any other way, and the frameless
+/// separation-of-one shape is a *rejected* committee proposal (SVD-WG010) that
+/// `spec_conformance_axis` guards against by name. Merging here and refusing
+/// there is one position, not a carve-out.
 #[test]
-fn the_spanning_delins_and_its_published_split_are_two_fixed_points() {
+fn the_spanning_delins_and_its_published_split_converge_on_the_recommended_form() {
     let delins = run(Fixture::Slice, "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG")
         .expect("the spanning delins normalizes");
     let split = run(
@@ -2091,16 +2183,20 @@ fn the_spanning_delins_and_its_published_split_are_two_fixed_points() {
         "LRG_199t1:c.[850_869del;874_881del;887_897del;901_902insG]",
     )
     .expect("the published alternative normalizes");
-    assert_eq!(delins, "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG");
     assert_eq!(
-        split,
-        "LRG_199t1:c.[850_869del;874_881del;887_897del;901_902insG]"
+        delins, "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG",
+        "the spanning form is a fixed point, as it was before"
     );
-    assert_ne!(
+    assert_eq!(
+        split, "LRG_199t1:c.850_901delinsTTCCTCGATGCCTG",
+        "the published split now re-derives to `:47`'s recommended form. This is \
+         the row the ruling moves, and the only one: a consumer holding the \
+         four-member spelling gets the spanning delins back"
+    );
+    assert_eq!(
         delins, split,
-        "the spec's own non-confluent pair converged. That may well be right — but \
-         `:47` and `general.md:34` point opposite ways here, so a change that \
-         picks one must say which, rather than land as a side effect."
+        "one variant, one output — the confluence the pair lacked, on the form \
+         `:47` recommends rather than on whichever spelling arrived"
     );
 }
 
@@ -2119,13 +2215,17 @@ fn the_spanning_delins_and_its_published_split_are_two_fixed_points() {
 /// SEQUENCE and emit the form that falls out, subject to every explicit spec
 /// tie-break", and here the explicit tie-break is `general.md:34`.
 ///
-/// **Contrast [`the_spanning_delins_and_its_published_split_are_two_fixed_points`]**,
-/// which is `DNA/delins.md:44-47`'s pair and does **not** converge. The
-/// difference is that `:47` recommends the *spanning* form while `general.md:34`
-/// requires the *split* one, so the two pairs are pulled in opposite directions
-/// by different clauses. Both are pinned, so a change that converges the second
-/// pair — or that un-converges this one — fails and has to say which clause it
-/// is now reading.
+/// **Contrast [`the_spanning_delins_and_its_published_split_converge_on_the_recommended_form`]**,
+/// which is `DNA/delins.md:44-47`'s pair. Both pairs converge, and that is the
+/// point of reading them together — they converge on **opposite** forms, because
+/// different clauses govern them. Here `general.md:34` requires the *split*,
+/// since SVD-WG010's merge proposal was rejected and the separation is one
+/// nucleotide on a frameless axis. There `:47` recommends the *spanning* form,
+/// for an interior that survives the split only as an alignment coincidence.
+///
+/// So "did it converge?" is not the question either test asks; "onto which
+/// form, and under which clause?" is. Both are pinned, so a change that flips
+/// either target fails and has to name the clause it is now reading.
 #[test]
 fn the_two_svd_wg010_spellings_converge_on_the_conformant_split() {
     const CONFORMANT: &str = "SPEC_W57.1:g.[3C>G;7dup]";
