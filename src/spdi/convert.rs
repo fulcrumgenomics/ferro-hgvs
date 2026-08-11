@@ -3863,22 +3863,22 @@ mod tests {
         assert_eq!(c_spdi.position, 35);
     }
 
-    /// Build a transcript whose 3'UTR lives in a *separate exon across a
-    /// tx-coordinate gap*, so the exon-aware mapper and the old
-    /// `cds_end + base` short-circuit DISAGREE:
+    /// Build a transcript whose 3'UTR sits in a second exon behind a *claimed*
+    /// tx-coordinate gap:
     ///
     /// - Exon 1: tx 1..35 (5'UTR tx 1-5, CDS tx 6-35; `cds_end` = 35 is the
     ///   last base of exon 1).
-    /// - Gap in tx coordinates: tx 36..39 do not exist (cdot-style alignment
-    ///   gap — `exon1.end + 1 (36) != exon2.start (40)`).
-    /// - Exon 2: tx 40..44 — the entire 3'UTR.
+    /// - A gap the exon list claims at tx 36..39 (`exon1.end + 1 (36) !=
+    ///   exon2.start (40)`).
+    /// - Exon 2: tx 40..44 — the 3'UTR.
     ///
-    /// For `*1`, `CoordinateMapper::cds_to_tx` walks forward from `cds_end`
-    /// (35), finds it is the last base of exon 1, skips the tx 36-39 gap, and
-    /// lands on `exon2.start` = tx 40. The reverted `cds_end + base` path would
-    /// instead land on tx 36 (a nonexistent coordinate inside the gap). Thus
-    /// r.*1 and c.*1 only agree here if r.*N routes through the exon-aware
-    /// mapper — this is the fixture that makes the #944 test non-vacuous.
+    /// The doc this replaces called that "a cdot-style alignment gap". It is
+    /// not one: `Exon::start`/`end` are transcript coordinates, cdot's tx
+    /// intervals tile the transcript, and measured over 20 real prepared-
+    /// reference transcripts **none** has a transcript-coordinate gap (#1619).
+    /// The sequence here is 44 bases with a base at every one of tx 36..39, so
+    /// the "nonexistent coordinates" the old doc named are the ones
+    /// `get_sequence` actually serves.
     fn make_gapped_utr3_provider() -> MockProvider {
         let tx = Transcript::new(
             "NM_GAP.1".to_string(),
@@ -3901,18 +3901,17 @@ mod tests {
         provider
     }
 
-    /// #944 (non-vacuous): on a transcript whose 3'UTR sits in a separate exon
-    /// across a tx-coordinate gap, r.*1 and c.*1 must STILL resolve to the same
-    /// SPDI position. The only way they agree is if r.*N is mapped through the
-    /// exon-aware `CoordinateMapper::cds_to_tx` (tx 40 → SPDI 39). The reverted
-    /// `cds_end + base` short-circuit would put r.*1 at tx 36 → SPDI 35, so this
-    /// test fails if the fix is reverted (unlike the single-exon sibling test,
-    /// where old and new code coincide).
+    /// #944: `r.*1` and `c.*1` must resolve to the same SPDI position; #1619:
+    /// that position is the flat one, `cds_end + 1` = tx 36 → SPDI 35.
+    ///
+    /// The pinned value used to be 39 — exon 2's first base, reached by
+    /// skipping the claimed gap — and the doc argued the two axes could only
+    /// agree that way. They agree either way, because both route through the
+    /// same helper; #944's point is that `r.*N` must not get its own
+    /// short-circuit, and that still holds.
     #[test]
     fn r_star_c_star_agree_across_exon_gap() {
         let provider = make_gapped_utr3_provider();
-        // cds_end = tx 35 is the last base of exon 1; the 3'UTR resumes at
-        // exon 2 (tx 40) across the tx 36-39 gap. So *1 = tx 40 → SPDI 0-based 39.
         let c = parse_hgvs("NM_GAP.1:c.*1A>G").unwrap();
         let r = parse_hgvs("NM_GAP.1:r.*1a>g").unwrap();
         let c_spdi = hgvs_to_spdi(&c, &provider).unwrap();
@@ -3922,9 +3921,9 @@ mod tests {
             "c.*1 and r.*1 must resolve to the same SPDI position across the exon gap"
         );
         assert_eq!(
-            c_spdi.position, 39,
-            "*1 must map through the tx 36-39 gap to exon 2 (tx 40) → SPDI 39, \
-             not the reverted cds_end+base tx 36 → SPDI 35"
+            c_spdi.position, 35,
+            "*1 must map flat from cds_end (tx 35) to tx 36 → SPDI 35, which is \
+             the base the served sequence holds there"
         );
     }
 
@@ -3976,20 +3975,23 @@ mod tests {
         assert_eq!(c_spdi.position, 2);
     }
 
-    /// Build a transcript whose 5'UTR straddles a *tx-coordinate gap*, so the
-    /// exon-aware mapper and a plain `cds_start - base` short-circuit DISAGREE:
+    /// Build a transcript whose 5'UTR spans a *claimed* tx-coordinate gap:
     ///
     /// - Exon 1: tx 1..5 — the upstream part of the 5'UTR.
-    /// - Gap in tx coordinates: tx 6..9 do not exist (`exon1.end + 1 (6) !=
+    /// - A gap the exon list claims at tx 6..9 (`exon1.end + 1 (6) !=
     ///   exon2.start (10)`).
     /// - Exon 2: tx 10..44 — 5'UTR tx 10-11 then CDS from `cds_start` = tx 12.
     ///
-    /// For `c.-3`, `CoordinateMapper::cds_to_tx` walks backward from `cds_start`
-    /// (12): c.-1 = tx 11, c.-2 = tx 10 (start of exon 2), then skips the tx 6-9
-    /// gap and lands on `exon1.end` = tx 5. A plain `cds_start - 3` = tx 9 would
-    /// instead land inside the nonexistent gap. So r.-3 and c.-3 only agree here
-    /// if r.-N routes through the exon-aware mapper — the fixture that makes the
-    /// #960 test non-vacuous against a naive re-implementation.
+    /// **The gap is a claim the sequence contradicts, and #1619 is what that
+    /// cost.** The transcript is 44 bases with a base at every one of tx 6..9,
+    /// which is what `get_sequence` serves and what the normalizer reads. The
+    /// mapper used to walk the exon list and skip those four, so `c.-3` landed
+    /// on tx 5 instead of tx 9 — a base neither the normalizer nor any other
+    /// consumer of the sequence would have picked.
+    ///
+    /// The fixture is kept because the invariant it now pins is the one that
+    /// matters: `r.-N` and `c.-N` must agree, and both must agree with the flat
+    /// transcript, whatever the exon list claims.
     fn make_gapped_utr5_provider() -> MockProvider {
         let tx = Transcript::new(
             "NM_GAP5.1".to_string(),
@@ -4012,18 +4014,17 @@ mod tests {
         provider
     }
 
-    /// #960 (non-vacuous): on a transcript whose 5'UTR straddles a tx-coordinate
-    /// gap, r.-3 and c.-3 must STILL resolve to the same SPDI position. The only
-    /// way they agree is if r.-N is mapped through the exon-aware
-    /// `CoordinateMapper::cds_to_tx` (tx 5 → SPDI 4). A naive `cds_start - base`
-    /// would put r.-3 at tx 9 → SPDI 8, so this test fails against such a
-    /// re-implementation (unlike the single-exon sibling test, where the two
-    /// coincide).
+    /// #960: `r.-3` and `c.-3` must resolve to the same SPDI position; #1619:
+    /// that position is the flat one, `cds_start - 3` = tx 9 → SPDI 8.
+    ///
+    /// The pinned value used to be 4 — the base the exon walk reached after
+    /// skipping tx 6..9 — on the reasoning that only walking made the two axes
+    /// agree. They agree either way, because both route through the same
+    /// helper; what the walk did was make them agree on a base the rest of ferro
+    /// does not read.
     #[test]
     fn r_minus_c_minus_agree_across_exon_gap() {
         let provider = make_gapped_utr5_provider();
-        // cds_start = tx 12 (exon 2); counting 3 bases upstream skips the tx 6-9
-        // gap to exon 1's last base (tx 5). So c.-3 / r.-3 = tx 5 → SPDI 4.
         let c = parse_hgvs("NM_GAP5.1:c.-3A>G").unwrap();
         let r = parse_hgvs("NM_GAP5.1:r.-3a>g").unwrap();
         let c_spdi = hgvs_to_spdi(&c, &provider).unwrap();
@@ -4033,9 +4034,9 @@ mod tests {
             "c.-3 and r.-3 must resolve to the same SPDI position across the exon gap"
         );
         assert_eq!(
-            c_spdi.position, 4,
-            "-3 must map through the tx 6-9 gap to exon 1 (tx 5) → SPDI 4, \
-             not the naive cds_start-base tx 9 → SPDI 8"
+            c_spdi.position, 8,
+            "-3 must map flat from cds_start (tx 12) to tx 9 → SPDI 8, which is \
+             the base the served sequence holds there"
         );
     }
 

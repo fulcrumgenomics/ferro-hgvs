@@ -330,17 +330,30 @@ had their chance to name the fault more precisely.
 **Where it runs, and the one place it deliberately does not.** `sweeps` sets it
 (gating, measured green over the full corpus) and the nightly sets it
 (non-gating). `test-oracle` does **not**, which makes it the only job where the
-set of four is incomplete. Two rows in that job's selection fire, and both are
-real disagreements inside ferro rather than noise:
+set of four is incomplete. **One** row in that job's selection fires, and it is a
+real disagreement inside ferro rather than noise:
 
 | row | what disagrees |
 |---|---|
 | #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` reads the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 |
-| #1619 — `NM_000492.4:c.1520_1522del` → `c.1521_1523del` | the two forms are equivalent on the flat transcript; `hgvs_to_spdi` resolves the `c.` position by walking `normalization_transcripts.json`'s exon list, whose 1-base synthetic introns land it **10 bases** 3' of where the normalizer reads |
 
-Suppressing either would hollow out the oracle, and turning the flag on before
-they are settled would redden the job for a reason no PR caused. Move it into
-`test-oracle` once both are closed.
+**This was two rows until #1619 landed**, and the second is worth keeping on
+record because it is the only one of the pair that had an answer:
+`NM_000492.4:c.1520_1522del` → `c.1521_1523del` fired because `hgvs_to_spdi`
+resolved the `c.` position by walking `normalization_transcripts.json`'s exon
+list, whose one-base gaps in *transcript* coordinates landed it ten bases 3' of
+where the normalizer reads. Those gaps are malformed fixture data — measured
+over 20 real prepared-reference transcripts, none has one — so the walk was
+removed rather than the fixture patched. Measured with all four flags on: **25
+failing tests before, 22 after, the three fewer being exactly that row and its
+two siblings, and nothing added.**
+
+What is left is #1618, and it is *not* the same kind of thing: it needs a ruling
+on what a single-anchor repeat's copy count is counted against, which is why no
+PR has closed it. Suppressing it would hollow out the oracle, and turning the
+flag on before it is settled would redden the job for a reason no PR caused.
+Move `FERRO_ASSERT_SEQUENCE` into `test-oracle` once #1618 is closed — it is now
+the only thing in the way.
 
 **Measured false-positive classes, and what closed each.** The first run of this
 oracle over the suite raised **344** fires, all but 16 of them false. Each fix
