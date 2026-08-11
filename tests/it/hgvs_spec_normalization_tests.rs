@@ -1049,6 +1049,26 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "delins-recommendation-reach-when-the-input-arrives-split",
         "undecided",
     ),
+    // What the release gate "equivalent inputs produce one canonical output"
+    // means, given that `normalize` cannot define the classes it is asserted
+    // over. **Decided by operator ruling (2026-08-10):** the gate stands and is
+    // restated as "`normalize` is constant on each equivalence class", where
+    // equivalence is apply-equality on every *determined* axis
+    // (`EquivalenceLevel::CrossAxisSequenceMatch`) and never `NormalizedMatch`,
+    // and confluence is asserted only over *decided* pairs. `general.md:43`
+    // governs as the spec's own statement that one variant's several
+    // descriptions are one object; `duplication.md:148` supplies the
+    // counterexample that makes single-axis apply-equality insufficient.
+    // Protein is excluded — translation is many-to-one and `p.` states a
+    // consequence, not a denotation. The record also states what it does *not*
+    // solve, citing `RNA/repeated.md:20-21` and `delins.md:83`: two
+    // descriptions can be apply-equal on every axis and still make different
+    // epistemic claims, which is a canonical-form question and must not be
+    // encoded as a rung.
+    (
+        "confluence-gate-is-apply-equality-on-every-determined-axis",
+        "decided",
+    ),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the

@@ -240,10 +240,14 @@ fn a_circular_pair_is_still_decided_by_the_sequence_rung() {
         .expect("`o.` is SPDI-representable, so the sequence rung can decide it");
     assert_eq!(
         result.level,
-        EquivalenceLevel::SequenceMatch,
+        EquivalenceLevel::CrossAxisSequenceMatch,
         "`o.` normalization is a pass-through, but the SPDI rung still decides \
-         the pair — this is why the decline must not key on the pass-through",
+         the pair — this is why the decline must not key on the pass-through. \
+         The rung is the cross-axis one because a circular genomic description \
+         determines exactly one axis, so apply-equality on it is the whole \
+         relation; anything at or above `SequenceMatch` proves the point here.",
     );
+    assert!(result.level.is_at_least(EquivalenceLevel::SequenceMatch));
 }
 
 /// A ring **inside a cis allele** must be declined too, and it was not.

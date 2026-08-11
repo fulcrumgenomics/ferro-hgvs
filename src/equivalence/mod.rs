@@ -21,17 +21,51 @@
 //! assert!(matches!(result.level, EquivalenceLevel::Identical));
 //! ```
 //!
+//! # The relation, stated without circularity
+//!
+//! `normalize` maps description → description, so it cannot define the
+//! equivalence relation it is supposed to respect. The relation is defined by
+//! `apply`, which maps description → **sequence**, where equality is byte
+//! equality on bases:
+//!
+//! ```text
+//! equivalent(a, b)  ≝  same accession
+//!                   ∧  determined(a) = determined(b)
+//!                   ∧  ∀ X ∈ determined(a) :  apply_X(a) = apply_X(b)
+//! ```
+//!
+//! An axis is **determined** when the description's coordinates can be carried
+//! to it by a mapping that is a function of reference data alone — exon
+//! alignments, CDS offsets — and never of normalization. A `c.`/`n.`/`r.`
+//! description determines two axes: the transcript, and the genome its exon
+//! alignment carries it to. A `g.`/`m.` description determines only the genome.
+//! Protein is excluded: translation is many-to-one, and `p.` states a
+//! consequence rather than a denotation.
+//!
 //! # Equivalence Levels
 //!
 //! The checker recognizes several levels of equivalence:
 //!
 //! - **Identical**: Same string representation
 //! - **NormalizedMatch**: Same after normalization (e.g., different positions in repeat region)
-//! - **SequenceMatch**: Different normalized strings, same resulting sequence when
-//!   applied to the reference (e.g. a length-changing `delins` vs a decomposed
-//!   cis allele of the same edit)
+//! - **CrossAxisSequenceMatch**: Same resulting sequence on **every** determined
+//!   axis. This is the rung that establishes variant identity, and the one a
+//!   confluence gate requires
+//! - **SequenceMatch**: Different normalized strings, same resulting sequence
+//!   on the description's own axis (e.g. a length-changing `delins` vs a
+//!   decomposed cis allele of the same edit). True, and *insufficient for
+//!   identity* — `LRG_199t1:c.3921dup` and `c.3922dup` reach it while denoting
+//!   genomic changes ~2,790 bp apart, in different exons
+//!   (`DNA/duplication.md:148`)
 //! - **AccessionVersionDifference**: Same variant, different accession versions
 //! - **NotEquivalent**: Represent different changes
+//! - **Indeterminate**: Neither — at least one side has no computable
+//!   denotation. Not a negative verdict; see [`EquivalenceLevel::is_decided`]
+//!
+//! [`EquivalenceLevel::is_at_least`] expresses the order over the denotational
+//! rungs, and deliberately makes **NormalizedMatch unusable as a gate**: that
+//! rung consults the normalizer, so gating on it would restore the circularity
+//! above.
 //!
 //! The list is open-ended — [`EquivalenceLevel`] is `#[non_exhaustive]`, so
 //! recognizing a new class of equivalence adds a level without breaking
@@ -55,6 +89,14 @@
 //! but a pair *at* one of them need not key at all: two identical `p.`
 //! descriptions are `Identical` and have no key, because [`spdi_key`] refuses
 //! rather than guess. [`spdi_key`] enumerates every such class.
+//!
+//! Where the two genuinely disagree is the **axis count**, and this module's
+//! own counterexample is the witness: [`spdi_key`] buckets `c.3921dup`
+//! **with** `c.3922dup` — they are transcript-apply-equal, so their canonical
+//! transcript SPDIs coincide — while
+//! [`EquivalenceLevel::CrossAxisSequenceMatch`] separates them. A grouping
+//! built on the key answers "how many distinct edits are in this call set?";
+//! only the cross-axis rung answers "are these the same variant?".
 //!
 //! # References
 //!
