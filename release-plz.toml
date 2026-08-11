@@ -34,7 +34,8 @@ pr_body = """
 
 Any PR that moves a normalized output should carry a `Representation-Change:`
 trailer (see CONTRIBUTING.md). Those are collected into the **Representation
-changes** section of the changelog below.
+changes** section of the changelog below, and each entry's trailer text is
+attached under its bullet by `scripts/inject_representation_disclosure.py`.
 
 Reviewer checklist:
 
@@ -43,11 +44,13 @@ Reviewer checklist:
 - [ ] Nothing in it merely *declined*. A decline reads `Representation-Change:
       none`, optionally followed by a reason, and belongs under its own type —
       not here. Spot-check two entries against their PR descriptions.
-- [ ] For each entry, that PR's description says whether the affected inputs
-      were previously **rejected** (no stored string, so free) or previously
-      **accepted** (a real migration for the consumer). The bullet below carries
-      only the commit subject: the trailer's own text cannot reach the changelog
-      (fulcrumgenomics/ferro-hgvs#1556), so this one has to be read from the PRs.
+- [ ] Every entry carries its trailer's own text, quoted under the bullet, and
+      that text says whether the affected inputs were previously **rejected**
+      (no stored string, so free) or previously **accepted** (a real migration
+      for the consumer). release-plz writes the bullet from the commit subject
+      alone; `python scripts/inject_representation_disclosure.py` attaches the
+      rest, and CI's `Changelog grouping audit` fails until it has been run.
+      Re-run it after any push that regenerates this section — it is idempotent.
 
 A commit under `src/normalize/`, `src/hgvs/`, `src/spdi/` or `src/project/` that
 moved output without declaring it means the trailer is missing. Fix that before

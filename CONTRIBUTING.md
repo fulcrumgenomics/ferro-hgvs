@@ -184,6 +184,17 @@ whatever its type, so a `fix:` that correctly declined is not listed under
 
 That it is generated is also why a `Representation-Change:` trailer is the way to get such a note into the changelog *at release time*: release-plz regenerates the pending section of an open release PR on every run, so an entry hand-written there is lost the next time the PR updates. `release-plz.toml`'s `commit_parsers` route trailered commits into a **Representation changes** group ahead of the usual ones, and its `pr_body` template surfaces that group on the release PR itself. The parsers match the commit **footer**, so the trailer must survive squashing — put it in the PR description as well, since that is what GitHub uses for the squash commit body.
 
+**The bullet release-plz writes is the commit subject and nothing else, so the trailer's own text is attached afterwards** (#1556). `scripts/inject_representation_disclosure.py` reads each trailer out of the raw commit message with `git log` and quotes it under its bullet, which is what makes the release checklist's "previously rejected or previously accepted?" question answerable from the changelog rather than from every linked PR. Run it on the release PR:
+
+```bash
+python scripts/inject_representation_disclosure.py          # attach; idempotent
+python scripts/inject_representation_disclosure.py --check   # what CI asks
+```
+
+CI runs the `--check` form in the `Changelog grouping audit` job, so a release PR stays red until it has been run. Re-run it after any push that makes release-plz regenerate the pending section — a second run over an already-attached section changes nothing.
+
+Two consequences for how you write the trailer. Keep it **at column 0** — an indented `Representation-Change:` is a continuation of the line above it to git, to release-plz and to both checkers. And know that "put it last" is advice the tooling cannot rely on: GitHub appends CodeRabbit's summary after your description, so the script stops the value at the next column-0 trailer token, Markdown heading or HTML comment rather than at the end of the message. Do not put a heading inside the disclosure.
+
 A section that has already been released is a different matter: a release only prepends to `CHANGELOG.md`, leaving earlier sections untouched, and the GitHub release body is never revisited once its tag exists. So a retrospective note — a consolidated representation summary for a release whose commits predate this convention, say — can be added afterwards, by editing the released section and `gh release edit <tag>`. That is the escape hatch for a cycle that shipped without trailers; it is not a substitute for declaring changes as you make them, because nobody can reconstruct the rejected-vs-accepted distinction after the fact.
 
 ### Submitting a Pull Request
