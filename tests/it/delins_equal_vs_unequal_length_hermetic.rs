@@ -119,11 +119,31 @@
 //! The flip is an output-moving change and owes the release a
 //! `Representation-Change:` trailer.
 //!
+//! # Both arms are also checked against the bases they denote
+//!
+//! Each arm now asserts that the pinned output and its input denote the same
+//! contig sequence, through `cis_apply_oracle` — `hgvs_to_spdi` plus an SPDI
+//! splice, with no normalization in the path, so it cannot agree with an output
+//! merely because normalization produced it (#1626).
+//!
+//! Without it a string equality cannot tell a **re-spelling** from a
+//! **corruption**: an output describing different bases that happened to render
+//! as the pinned string would satisfy it. Both arms pass, so both of today's
+//! answers are genuine re-spellings.
+//!
+//! It matters most on the unequal arm precisely *because* that expectation is
+//! assert-then-flip. A pin whose purpose is to record an answer we mean to
+//! change should at least be able to say that today's wrong answer is wrong
+//! about the **partition** and not about the bases — which is the difference
+//! between a representation change and a defect.
+//!
 //! Fully hermetic: a `JsonProvider` (the type the sibling hermetic tests still
 //! name by its `MockProvider` alias), no `FERRO_MANIFEST`, no fixtures, no LFS.
 
 use ferro_hgvs::reference::JsonProvider;
 use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};
+
+use crate::common::cis_apply_oracle::apply_reason;
 
 /// Padding on each side of [`CORE`], so the measured span sits far from either
 /// contig end and no boundary clamp is in play.
@@ -196,6 +216,49 @@ fn normalize(input: &str) -> String {
         .normalize(&parsed)
         .unwrap_or_else(|e| panic!("normalize {input}: {e}"))
         .to_string()
+}
+
+/// The contig sequence `description` denotes, reached **without** the
+/// normalizer (#1626).
+///
+/// `cis_apply_oracle` converts each member through `hgvs_to_spdi` and splices
+/// the reference, so nothing in this path can agree with an output merely
+/// because normalization produced it. A hand-rolled applier here would be a
+/// second thing to drift; this is the one the cis sweeps already rest on.
+///
+/// It panics rather than returning an `Option`. Every description this module
+/// feeds it is a two-member allele on disjoint columns of a synthetic contig,
+/// so a decline is a defect in the description and not a limit of the oracle —
+/// and a silently skipped comparison is the failure mode the whole check exists
+/// to remove.
+fn denotes(description: &str) -> String {
+    apply_reason(&provider(), &padded_contig(), description)
+        .unwrap_or_else(|why| panic!("{description} denotes no single sequence: {why:?}"))
+}
+
+/// Assert that `input` normalizes to `expected` **and** that the two denote the
+/// same contig sequence.
+///
+/// The second half is the one that is new. Both arms below are re-spellings —
+/// the pinned output is never the input — and a string equality cannot tell a
+/// re-spelling from a corruption: an output describing different bases that
+/// happened to render as the pinned string would satisfy it. That is not a
+/// hypothetical class in this repository; it is what #1615 exists for, and
+/// #1592 and #1600 are live instances where a well-formed, in-bounds,
+/// idempotent, re-parseable output denotes different bases.
+///
+/// It matters most on the unequal arm precisely *because* that expectation is
+/// assert-then-flip. A pin whose purpose is to record an answer we mean to
+/// change should at least be able to say that today's wrong answer is wrong
+/// about the partition and not about the bases.
+fn assert_normalizes_preserving(input: &str, expected: &str, whichever: &str) {
+    let actual = normalize(input);
+    assert_eq!(actual, expected, "{whichever}");
+    assert_eq!(
+        denotes(&actual),
+        denotes(input),
+        "{input} -> {actual} is not a re-spelling: it denotes different bases"
+    );
 }
 
 /// The payload of a `<accession>:g.<start>_<end>delins<payload>` input.
@@ -319,23 +382,27 @@ fn equal_and_unequal_length_delins_get_opposite_verdicts_hermetically() {
     // this shape meets: the equal-length span denotes an unchanged interior
     // column, and `delins.md:18`'s codon exception cannot reach a `g.`
     // description.
-    assert_eq!(
-        normalize(EQUAL_INPUT),
+    assert_normalizes_preserving(
+        EQUAL_INPUT,
         EQUAL_EXPECTED,
-        "equal-length {EQUAL_INPUT} is described individually, which is what `delins.md:17` \
-         recommends and the only clause of the three that reaches this shape"
+        &format!(
+            "equal-length {EQUAL_INPUT} is described individually, which is what \
+             `delins.md:17` recommends and the only clause of the three that reaches this shape"
+        ),
     );
 
     // UNEQUAL — WRONG, pinned deliberately. See "Assert-then-flip" above.
-    assert_eq!(
-        normalize(UNEQUAL_INPUT),
+    assert_normalizes_preserving(
+        UNEQUAL_INPUT,
         UNEQUAL_EXPECTED,
-        "unequal-length {UNEQUAL_INPUT} is currently split on a payload/reference coincidence at \
-         265, which is the alignment-driven split `delins.md:46` constructs and `delins.md:47` \
-         advises against. The decided ruling `delins-merge-vs-individual-gap-two-or-more` says \
-         the spanning form wins, i.e. {UNEQUAL_RULING_CONFORMANT}. If this assertion just failed \
-         with that string, the defect is FIXED — flip the expectation and declare the \
-         representation change"
+        &format!(
+            "unequal-length {UNEQUAL_INPUT} is currently split on a payload/reference \
+             coincidence at 265, which is the alignment-driven split `delins.md:46` constructs \
+             and `delins.md:47` advises against. The decided ruling \
+             `delins-merge-vs-individual-gap-two-or-more` says the spanning form wins, i.e. \
+             {UNEQUAL_RULING_CONFORMANT}. If this assertion just failed with that string, the \
+             defect is FIXED — flip the expectation and declare the representation change"
+        ),
     );
 
     // Guard the flip against being confused with a different move: state

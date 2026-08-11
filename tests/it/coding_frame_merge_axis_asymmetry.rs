@@ -136,11 +136,50 @@
 //! defect than a confluence failure — both spellings of the variant do reach one
 //! answer on every axis. Fact 1 below is what stops that regressing.
 //!
+//! # Every pinned output is also checked against the bases it denotes
+//!
+//! The strings above are change detectors, and a string equality cannot tell a
+//! **re-spelling** from a **corruption**: an output describing different bases
+//! that happened to render as the pinned string would satisfy it. That is not a
+//! hypothetical class here — it is what #1615 exists for, and #1592 and #1600
+//! are live instances on `main` where a well-formed, in-bounds, idempotent,
+//! re-parseable output denotes different bases.
+//!
+//! It bites hardest on this table because the outputs are `dup`s and `ins`s. A
+//! `dup` names no bases in its rendering, so a composition that duplicated the
+//! *wrong* base still prints the identical string.
+//!
+//! So each of the 42 comparisons — 14 rows x 3 axes — now also asserts that the
+//! output and the input denote the same sequence, through `cis_apply_oracle` —
+//! `hgvs_to_spdi` plus an SPDI splice, with no normalization in the path, so it
+//! cannot agree with an output merely because normalization produced it (#1626).
+//! All 42 pass.
+//!
+//! **28 of the 42 can fail; the `c.` 14 cannot, and saying which is which is the
+//! point.** The `n.` and `g.` answers are genuine re-spellings — a lone `delins`
+//! in, an insertion pair out — so a corrupted composition moves the applied
+//! sequence and the comparison catches it. The `c.` answer is the lone input
+//! *unchanged* (that non-split is the finding; [`ROWS`] records that the `c.`
+//! output is `c.{position}delinsATC` at every one of the fourteen, which is
+//! exactly the string [`spellings`] feeds in), so there `actual == input` and the
+//! comparison is an identity. That leaves the `c.` column pinned but not freshly:
+//! `CDS_START == 1`, so `c.p` and `n.p` are one position and the two axes' inputs
+//! denote the same bases of [`CORE`] — the `n.` row's assertion therefore already
+//! fixes what the `c.` answer denotes, transitively. What carries the `c.` row on
+//! its own is the string equality.
+//!
+//! Note what this does **not** buy. It cannot say the `c.` merge is the right
+//! form — the whole point of the assert-then-flip note above is that nothing has
+//! ruled on that — only that today's answer and tomorrow's flipped one are
+//! answers about the same bases.
+//!
 //! Fully hermetic: a `MockProvider`, no `FERRO_MANIFEST`, no fixtures.
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
 use ferro_hgvs::reference::MockProvider;
 use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};
+
+use crate::common::cis_apply_oracle::apply_reason;
 
 /// Padding on each side of the core on the genomic contig, so that transcript
 /// position `p` is genomic position `PAD_OFFSET + p`.
@@ -267,6 +306,61 @@ fn normalize(provider: MockProvider, input: &str) -> String {
         .to_string()
 }
 
+/// The sequence `description` denotes, reached **without** the normalizer
+/// (#1626).
+///
+/// `cis_apply_oracle` converts each member through `hgvs_to_spdi` and splices
+/// the reference, so nothing in this path can agree with an output merely
+/// because normalization produced it. Reusing it rather than hand-rolling a
+/// second applier is the point: a per-file copy is a per-file way to drift.
+///
+/// It panics rather than returning an `Option`. Every description this file
+/// feeds it is a lone `delins` or a two-member insertion pair on a synthetic
+/// reference, so a decline is a defect and not a limit of the oracle — and a
+/// comparison that silently skips is the failure mode this check exists to
+/// remove.
+fn denotes(provider: &MockProvider, reference: &str, description: &str) -> String {
+    apply_reason(provider, reference, description)
+        .unwrap_or_else(|why| panic!("{description} denotes no single sequence: {why:?}"))
+}
+
+/// Assert that `input` normalizes to `expected` on `provider` **and** that the
+/// two denote the same bases of `reference`.
+///
+/// The second half is what is new (#1626). On `n.` and `g.` the answer is a
+/// **re-spelling** — a one-base span with a three-base payload comes back as an
+/// insertion pair — and a string equality cannot tell a re-spelling from a
+/// corruption. It is especially blind on those outputs, since a `dup` names no
+/// bases in its rendering: a composition that duplicated the *wrong* base still
+/// prints the identical string.
+///
+/// On `c.` the answer is the lone input *unchanged*, so `actual == input` and the
+/// second assertion is an identity there — it cannot fail. It is applied
+/// uniformly rather than special-cased: the row is carried by the string
+/// equality, and what the `c.` answer denotes is fixed transitively by the `n.`
+/// row, whose input denotes the same bases (`CDS_START == 1`). See the module
+/// docs.
+///
+/// Nor does the sibling [`every_axis_is_self_confluent_across_both_spellings`]
+/// close it. Agreement between two spellings cannot distinguish "both correct"
+/// from "both wrong" — the argument `cis_allele_confluence_proptest.rs` makes
+/// about itself.
+fn assert_normalizes_preserving(
+    provider: &MockProvider,
+    reference: &str,
+    input: &str,
+    expected: &str,
+    context: &str,
+) {
+    let actual = normalize(provider.clone(), input);
+    assert_eq!(actual, expected, "{context}");
+    assert_eq!(
+        denotes(provider, reference, &actual),
+        denotes(provider, reference, input),
+        "{input} -> {actual} is not a re-spelling: it denotes different bases"
+    );
+}
+
 /// The two spellings of "replace the `T` at `position` with `ATC`", on one axis.
 fn spellings(accession: &str, axis: char, position: u64) -> (String, String) {
     (
@@ -351,36 +445,40 @@ fn the_coding_axis_merges_what_the_other_axes_split() {
     for &(p, same_codon, noncoding, genomic) in ROWS {
         // `n.` and `g.` — the same two-member answer, 256 apart.
         let (n_lone, _) = spellings(NONCODING_TX, 'n', p);
-        assert_eq!(
-            normalize(transcript_provider(NONCODING_TX, None), &n_lone),
+        assert_normalizes_preserving(
+            &transcript_provider(NONCODING_TX, None),
+            CORE,
+            &n_lone,
             noncoding,
-            "n. axis at {p}"
+            &format!("n. axis at {p}"),
         );
         let (g_lone, _) = spellings(GENOMIC_CONTIG, 'g', p + PAD_OFFSET as u64);
-        assert_eq!(
-            normalize(genomic_provider(), &g_lone),
+        assert_normalizes_preserving(
+            &genomic_provider(),
+            &padded(),
+            &g_lone,
             genomic,
-            "g. axis at {p}"
+            &format!("g. axis at {p}"),
         );
 
         // `c.` — the lone `delins`, at every position, in and out of frame.
         let (c_lone, _) = spellings(CODING_TX, 'c', p);
         let coding_n_parity = noncoding.replace("NR_TEST.1:n.", "NM_TEST.1:c.");
-        assert_eq!(
-            normalize(
-                transcript_provider(CODING_TX, Some((CDS_START, CDS_END))),
-                &c_lone
-            ),
-            format!("NM_TEST.1:c.{p}delinsATC"),
-            "c. axis at {p} (same_codon={}): `coalesce_coding_frame_separation` re-merges the \
+        assert_normalizes_preserving(
+            &transcript_provider(CODING_TX, Some((CDS_START, CDS_END))),
+            CORE,
+            &c_lone,
+            &format!("NM_TEST.1:c.{p}delinsATC"),
+            &format!(
+            "c. axis at {p} (same_codon={same_codon}): `coalesce_coding_frame_separation` re-merges the \
              two pieces because `axis_frame` gives `CisKind::Cds` a reading frame, without \
              checking `general.md:35`'s \"together affecting one amino acid\" precondition — \
              which a net +2 frameshift cannot meet. The `n.`-parity form is {coding_n_parity}. \
              If this assertion just failed with that string, the pass has stopped firing on this \
              shape: that is the candidate flip in this file's docs, so check that the house-style \
              question it names has actually been settled, then flip the expectation and declare \
-             the representation change",
-            same_codon
+             the representation change"
+            ),
         );
 
         // Stated explicitly so the flip cannot be mistaken for a no-op.
