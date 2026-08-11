@@ -3842,45 +3842,112 @@ pub fn correct_single_position_range(input: &str) -> (Cow<'_, str>, Vec<Detected
     }
 }
 
-/// If `bytes` starting at `i` matches `<sign?><digits>_<sign?><digits>`,
-/// return the byte index just past the second number; otherwise `None`. Does
-/// NOT require the two numbers to be equal — used to find candidate
-/// positions-pair shapes for the redundant-repeat-label detector.
-fn match_position_pair(bytes: &[u8], i: usize) -> Option<usize> {
-    let mut j = i;
-    if j < bytes.len() && bytes[j] == b'-' {
-        j += 1;
-    }
-    let num1_start = j;
-    while j < bytes.len() && bytes[j].is_ascii_digit() {
-        j += 1;
-    }
-    if j == num1_start {
-        return None;
-    }
-    if j >= bytes.len() || bytes[j] != b'_' {
-        return None;
-    }
-    j += 1;
-    if j < bytes.len() && bytes[j] == b'-' {
-        j += 1;
-    }
-    let num2_start = j;
-    while j < bytes.len() && bytes[j].is_ascii_digit() {
-        j += 1;
-    }
-    if j == num2_start {
-        return None;
-    }
-    Some(j)
+/// A `<sign?><digits>_<sign?><digits>` position pair located in an input.
+///
+/// Carries enough to rewrite either half of the pair, which is what the
+/// redundant-repeat-label repair needs: the byte index of the `_` separator
+/// (so the range can be reduced to its start position) and the number of
+/// positions the range spans (so the range can be compared against the length
+/// of the repeat unit beside it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PositionPair {
+    /// Byte index of the `_` separating the two positions.
+    underscore: usize,
+    /// Byte index just past the second number.
+    end: usize,
+    /// Number of positions the range covers, or `None` when the endpoints do
+    /// not describe a forward range on one axis.
+    span: Option<usize>,
 }
 
-/// Detect and strip redundant base labels in RNA repeat descriptions (W3013,
+/// If `bytes` starting at `i` matches `<sign?><digits>_<sign?><digits>`,
+/// describe the pair; otherwise `None`. Does NOT require the two numbers to be
+/// equal — used to find candidate positions-pair shapes for the
+/// redundant-repeat-label detector.
+///
+/// `span` counts positions inclusively, in the coordinate system a `c.`/`r.`
+/// description uses: there is no position zero, so `-1` is adjacent to `1` and
+/// a range that crosses the boundary spans `|start| + end` positions. Only
+/// bare `<sign?><digits>` endpoints are matched, so no intronic offset or `*`
+/// (3'UTR) position can reach this function.
+fn match_position_pair(bytes: &[u8], i: usize) -> Option<PositionPair> {
+    let (first, after_first) = match_signed_number(bytes, i)?;
+    if after_first >= bytes.len() || bytes[after_first] != b'_' {
+        return None;
+    }
+    let (second, end) = match_signed_number(bytes, after_first + 1)?;
+    Some(PositionPair {
+        underscore: after_first,
+        end,
+        span: position_span(first, second),
+    })
+}
+
+/// Match `<sign?><digits>` at `i`, returning the signed value and the byte
+/// index just past it.
+fn match_signed_number(bytes: &[u8], i: usize) -> Option<(i64, usize)> {
+    let mut j = i;
+    let negative = j < bytes.len() && bytes[j] == b'-';
+    if negative {
+        j += 1;
+    }
+    let digits_start = j;
+    let mut value: i64 = 0;
+    while j < bytes.len() && bytes[j].is_ascii_digit() {
+        value = value
+            .checked_mul(10)?
+            .checked_add(i64::from(bytes[j] - b'0'))?;
+        j += 1;
+    }
+    if j == digits_start {
+        return None;
+    }
+    Some((if negative { -value } else { value }, j))
+}
+
+/// Inclusive position count from `start` to `end` on a `c.`/`r.` axis, where
+/// position zero does not exist. `None` when the range runs backwards or
+/// either endpoint is zero (neither is a position a description can name).
+fn position_span(start: i64, end: i64) -> Option<usize> {
+    if start == 0 || end == 0 {
+        return None;
+    }
+    let span = if start < 0 && end > 0 {
+        // `-a` .. `-1` is `a` positions, `1` .. `b` is `b` more.
+        (-start).checked_add(end)?
+    } else {
+        end.checked_sub(start)?.checked_add(1)?
+    };
+    usize::try_from(span).ok().filter(|&n| n > 0)
+}
+
+/// Detect and repair redundant range-plus-unit RNA repeat descriptions (W3013,
 /// SVA-027).
 ///
 /// Matches `r.<num1>_<num2><rna-bases>[<digits>...]` where `<rna-bases>` is
 /// a run of one or more lowercase a/c/g/u characters between the second
-/// position and the `[` count. Rewrites to drop the base label.
+/// position and the `[` count. `RNA/repeated.md:22` calls that shape invalid
+/// because the range and the unit state the same fact twice.
+///
+/// **Which half is dropped depends on whether they really do state the same
+/// fact (#1631).** `:20` fixes the reading of a *bare* range — "`r.123_125[23]`
+/// describes a tri-nucleotide repeat of 23 units" — so a bare range denotes one
+/// unit whose length is the range's length. Dropping the unit therefore
+/// preserves the variant only while the range spans exactly as many positions
+/// as the unit has bases:
+///
+/// - **lengths agree** — `r.100_102cug[4]` → `r.100_102[4]`. The spec's own
+///   exemplar at `:22` (`r.-125_-123cug[4]`), and the redundancy it names.
+/// - **lengths differ** — `r.-6_-3g[6]` → `r.-6g[6]`. The unit is what carries
+///   the variant, because the range only pins the unit's *length*; dropping the
+///   unit instead would turn a `g` repeated six times (6 nt) into a
+///   four-nucleotide unit repeated six times (24 nt). The repair keeps the
+///   unit and reduces the range to its anchor, which ferro already parses and
+///   leaves alone in every mode.
+///
+/// The second arm is a repair of a self-contradictory description, so it is
+/// reported under the same W3013 code: the input defect is identical, only the
+/// half that survives differs.
 ///
 /// Scoped to `r.` (RNA) descriptions: the HGVS
 /// `recommendations/RNA/repeated.md` page is the only one that calls this
@@ -3924,21 +3991,42 @@ pub fn correct_redundant_repeat_label(input: &str) -> (Cow<'_, str>, Vec<Detecte
 
         let pair_start = p;
         let pair = match_position_pair(bytes, p);
-        if let Some(after_pair) = pair {
-            let bases_start = after_pair;
+        if let Some(pair) = pair {
+            let bases_start = pair.end;
             let mut bases_end = bases_start;
             while bases_end < bytes.len() && matches!(bytes[bases_end], b'a' | b'c' | b'g' | b'u') {
                 bases_end += 1;
             }
             if bases_end > bases_start && bytes.get(bases_end).copied() == Some(b'[') {
-                result.push_str(&input[pair_start..bases_start]);
-                hits.push(DetectedCorrection::new(
-                    ErrorType::RedundantRepeatLabel,
-                    &input[bases_start..bases_end],
-                    String::new(),
-                    bases_start,
-                    bases_end,
-                ));
+                let unit_len = bases_end - bases_start;
+                if pair.span == Some(unit_len) {
+                    // The range restates the unit's length: drop the unit.
+                    result.push_str(&input[pair_start..bases_start]);
+                    hits.push(DetectedCorrection::new(
+                        ErrorType::RedundantRepeatLabel,
+                        &input[bases_start..bases_end],
+                        String::new(),
+                        bases_start,
+                        bases_end,
+                    ));
+                } else {
+                    // The range and the unit disagree (or the range's span
+                    // cannot be read): keep the unit, which is what carries
+                    // the variant, and reduce the range to its anchor.
+                    let repaired = format!(
+                        "{}{}",
+                        &input[pair_start..pair.underscore],
+                        &input[bases_start..bases_end]
+                    );
+                    result.push_str(&repaired);
+                    hits.push(DetectedCorrection::new(
+                        ErrorType::RedundantRepeatLabel,
+                        &input[pair_start..bases_end],
+                        repaired,
+                        pair_start,
+                        bases_end,
+                    ));
+                }
                 p = bases_end;
                 continue;
             }
