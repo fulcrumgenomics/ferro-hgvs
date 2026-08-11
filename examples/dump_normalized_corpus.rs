@@ -242,6 +242,15 @@ enum SpdiVerdict {
 /// Wrapped in `catch_unwind` for the same reason [`normalize_one`] is: this runs
 /// over every row of a corpus built to contain the shapes that break things, and
 /// one panicking row must not take the whole dump with it.
+///
+/// The provider is built from [`Row::core`] and **not** from `Row::reference`
+/// (#1624). Those two are the same string for thirteen of the fifteen families,
+/// which is what made reading the wrong one survive review: the two families
+/// whose `reference` column is a *label* — `long_block_inversion` and
+/// `separated_revcomp_runs` — were verified against the label itself. On the
+/// `cx` axis that panicked, and on `g.`/`c.` it did something worse, reporting
+/// confident `SPDI-MISMATCH` findings whose keys were read out of the letters of
+/// `revcomp_sep0_at0`.
 fn verify_row(row: &Row) -> (SpdiVerdict, String, String) {
     let declined = |what: &str| format!("<{what}>");
     let (Ok(input), Ok(output)) = (parse_hgvs(&row.input), parse_hgvs(&row.output)) else {
@@ -256,7 +265,7 @@ fn verify_row(row: &Row) -> (SpdiVerdict, String, String) {
         _ => ShuffleDirection::ThreePrime,
     };
     let normalizer = Normalizer::with_config(
-        provider_for(row.axis, &row.reference),
+        provider_for(row.axis, &row.core),
         NormalizeConfig::default().with_direction(direction),
     );
     let key = |v: &_| match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -361,7 +370,24 @@ fn main() -> ExitCode {
 /// makes the cheap/expensive split derivable from the baseline dump alone, without
 /// re-running the old code.
 struct Row {
+    /// The dump's `reference` column, and part of the row's identity. For
+    /// thirteen of the fifteen families this **is** the reference sequence; for
+    /// the two that bring their own designed references it is a label, because a
+    /// kilobase core repeated on every row is not a column anyone can read.
     reference: String,
+    /// The reference **sequence** the row was drawn against.
+    ///
+    /// Equal to `reference` except on `long_block_inversion` and
+    /// `separated_revcomp_runs`, where that column is a label. Deliberately
+    /// **not** emitted: the dump's format is exact-matched on read, so adding a
+    /// column would stop every committed baseline from loading, and a row's
+    /// identity does not need the sequence when the label already determines it.
+    ///
+    /// It exists because a consumer that needs to *re-derive* the row — which is
+    /// what `--verify-spdi` does — cannot get the sequence back out of a label,
+    /// and reading the label as one is not an error either provider reports
+    /// (#1624).
+    core: String,
     axis: &'static str,
     direction: &'static str,
     family: &'static str,
@@ -866,6 +892,7 @@ fn dump(seeds: u32) -> Vec<Row> {
                 let output = normalize_through(&normalizer, &input);
                 rows.push(Row {
                     reference: label.clone(),
+                    core: core.clone(),
                     axis,
                     direction: dir_label,
                     family: LONG_FAMILY.0,
@@ -887,6 +914,7 @@ fn dump(seeds: u32) -> Vec<Row> {
                 let output = normalize_through(&normalizer, &input);
                 rows.push(Row {
                     reference: design.label.clone(),
+                    core: design.core.clone(),
                     axis,
                     direction: dir_label,
                     family: REVCOMP_FAMILY.0,
@@ -907,6 +935,7 @@ fn dump(seeds: u32) -> Vec<Row> {
                     let output = normalize_through(&normalizer, &input);
                     rows.push(Row {
                         reference: core.clone(),
+                        core: core.clone(),
                         axis,
                         direction: dir_label,
                         family,
@@ -1325,6 +1354,23 @@ fn genomic_provider(core: &str) -> MockProvider {
 /// ends at an exon boundary — which would make a shift's stopping point a property
 /// of the filler rather than of the exon edge.
 fn spliced_genomic(core: &str) -> String {
+    // `EXON_SPANS` maps a fixed-length core, and *both* directions of a mismatch
+    // are defects rather than data (#1624). A shorter core slices off the end —
+    // which is how a 16-byte label reached here and took the whole `--verify-spdi`
+    // pass with it, reported as `end byte index 20 is out of bounds`, a message
+    // that names neither the exon table nor the caller. A longer one is the
+    // silent direction: `multi_exon_provider` hands `Transcript::new` the whole
+    // core, so the transcript would declare bases the exon table does not map and
+    // the rows drawn against it would read as coverage while measuring nothing.
+    // That is why `dump` skips the `cx` axis for the long cores; this says so
+    // where the assumption actually lives.
+    let mapped = EXON_SPANS.last().expect("the exon table is not empty").1;
+    assert_eq!(
+        core.len(),
+        mapped,
+        "the multi-exon axis maps a {mapped}-base core; got {} bases ({core})",
+        core.len()
+    );
     let pad = "ACGT".repeat(PAD_OFFSET / 4);
     let mut out = String::with_capacity(2 * PAD_OFFSET + core.len() + 2 * INTRON_LEN);
     out.push_str(&pad);
@@ -1603,9 +1649,12 @@ fn compare(before: &PathBuf, after: &PathBuf) -> Result<String, String> {
 mod tests {
     use super::*;
 
+    /// A row of one of the thirteen sequence-keyed families, where the
+    /// `reference` column and the sequence are the same string.
     fn row(axis: &'static str, reference: &str, input: &str, output: &str) -> Row {
         Row {
             reference: reference.to_string(),
+            core: reference.to_string(),
             axis,
             direction: "3prime",
             family: "test",
@@ -1692,6 +1741,100 @@ mod tests {
         assert_ne!(
             single.1, multi.1,
             "the two axes place `c.1` at different transcript positions"
+        );
+    }
+
+    /// Every row carries the reference **sequence** it was drawn against, which
+    /// for two families is not what its `reference` column says (#1624).
+    ///
+    /// The two views agree on thirteen of the fifteen families, and that is
+    /// precisely what made the verify pass's confusion of them survive review —
+    /// a bug that only manifests on `long_block_inversion` and
+    /// `separated_revcomp_runs` is a bug in 286 rows out of 78,028. So this pins
+    /// the distinction itself, on both sides: where the column is a label the
+    /// sequence must be the design's, and where it is not the two must be equal.
+    #[test]
+    fn every_row_carries_the_sequence_it_was_drawn_against() {
+        let labelled: BTreeMap<String, String> = long_corpus_sequences()
+            .into_iter()
+            .chain(revcomp_designs().into_iter().map(|d| (d.label, d.core)))
+            .collect();
+        let mut label_keyed = 0usize;
+        for row in dump(2) {
+            // A label is not over `ACGT` — `revcomp_sep0_at0` and
+            // `nearpalindrome_1024` both fail this — so it is the one predicate
+            // that separates the two kinds of string without consulting the map.
+            assert!(
+                !row.core.is_empty() && row.core.bytes().all(|b| b"ACGT".contains(&b)),
+                "[{}] {} carries something that is not a sequence: {}",
+                row.family,
+                row.reference,
+                row.core
+            );
+            match labelled.get(&row.reference) {
+                Some(core) => {
+                    assert_eq!(
+                        &row.core, core,
+                        "[{}] {} carries the wrong design's sequence",
+                        row.family, row.reference
+                    );
+                    label_keyed += 1;
+                }
+                None => assert_eq!(
+                    row.core, row.reference,
+                    "[{}] a sequence-keyed family's two views must be the same string",
+                    row.family
+                ),
+            }
+        }
+        assert!(
+            label_keyed > 0,
+            "the label-keyed families must be in the corpus, or this test measures nothing"
+        );
+    }
+
+    /// A row whose `reference` column is a label is verified against its
+    /// **sequence** (#1624).
+    ///
+    /// `dump(0)` draws no random cores, so every row it returns belongs to one of
+    /// the two families that bring their own designed references — exactly the
+    /// population `--verify-spdi` could not handle. Before the fix this does not
+    /// merely fail: the `cx` rows *panic* inside `spliced_genomic`, because every
+    /// `separated_revcomp_runs` label is 16 bytes while the exon table maps 20,
+    /// and `verify_row` builds its provider outside its own `catch_unwind`. That
+    /// is why one row took the whole pass down instead of being reported as
+    /// `Unverifiable`.
+    ///
+    /// Restricted to `separated_revcomp_runs`. The long cores are the other
+    /// label-keyed family, their wiring is pinned by
+    /// `every_row_carries_the_sequence_it_was_drawn_against`, and keying two
+    /// canonical SPDIs off a kilobase near-palindrome per row is a cost this
+    /// test does not need to pay to make its point.
+    #[test]
+    fn a_label_keyed_row_is_verified_against_its_core() {
+        let rows: Vec<Row> = dump(0)
+            .into_iter()
+            .filter(|row| row.family == REVCOMP_FAMILY.0)
+            .collect();
+        assert!(!rows.is_empty(), "the revcomp designs must produce rows");
+        let mut same = 0usize;
+        for row in &rows {
+            assert_ne!(
+                row.reference, row.core,
+                "this family keys its rows by label, so the two views must differ"
+            );
+            if matches!(verify_row(row).0, SpdiVerdict::Same) {
+                same += 1;
+            }
+        }
+        // Not `== rows.len()`: this family is where #1517's separation question
+        // lives, and two of its three oracles are red against `main` today. What
+        // this asserts is that the verification *ran and answered*, which is the
+        // thing that was impossible; whether every row agrees is a different
+        // finding, owned by the oracles in this module.
+        assert!(
+            same > 0,
+            "no row verified as denoting the same bases — the pass answered nothing"
         );
     }
 
