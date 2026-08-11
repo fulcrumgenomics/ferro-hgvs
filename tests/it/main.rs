@@ -22,6 +22,7 @@ mod issue_1454_split_member_inversion_typing;
 mod issue_1472_zero_length_read;
 mod issue_1524_adjacent_split_members;
 mod issue_1539_split_member_separation;
+mod issue_1592_reduced_member_junction_clamp;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
 mod residual_above_cap_confluence;

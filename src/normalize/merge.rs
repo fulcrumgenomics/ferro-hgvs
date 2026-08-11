@@ -7828,7 +7828,19 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
         // on **sequence** coordinates (#1482); reading it from `cis_axis_parts`
         // instead yields the written axis number, which no longer compares
         // against `s.start`/`s.end`.
-        let (Some(before_junction), Some(after_junction)) = (b.junction, a.junction) else {
+        let Some(after_junction) = a.junction else {
+            continue;
+        };
+        // A member that arrived claiming bases has no stated junction, and used
+        // to be skipped here — which was #1592, because
+        // `clamp_sibling_crossing_shifts` has already declined it for growing
+        // (see there) and hands exactly this shape over. Falling through both
+        // passes let its junction sweep as far as the tract allowed, over any
+        // number of siblings' bases, changing what the allele denotes.
+        let Some(before_junction) = b
+            .junction
+            .or_else(|| reduced_before_junction(b, after_junction))
+        else {
             continue;
         };
         if before_junction == after_junction || b.region != a.region {
@@ -8039,6 +8051,80 @@ pub(crate) fn clamp_sibling_crossing_junctions<P: ReferenceProvider>(
         if delta != 0 {
             translate_junction_member(&mut after[i], delta, kind, a, provider);
         }
+    }
+}
+
+/// Where the shift started, for a member that arrived **claiming bases** and
+/// normalized into a junction-inserting form; `None` when there is nothing for
+/// [`clamp_sibling_crossing_junctions`] to bound.
+///
+/// A `delins` does not occupy a junction, which is why [`junction_of`] gives it
+/// none, and that is right about the *stated* form. It is wrong about the member:
+/// `g.264delinsGAT` on a `G` is one two-base insertion wearing a span, and once
+/// the per-member pipeline reduces it the payload lands at a junction and shifts
+/// like any other. Without a `before` value the clamp skipped such a member
+/// entirely (#1592) and — since `clamp_sibling_crossing_shifts` refuses a member
+/// that *grew*, deliberately, and defers this shape here — nothing bounded it at
+/// all:
+///
+/// ```text
+/// reference   ("ACGT" x 64) + "TCCAGCAGATAT" + ("ACGT" x 64)   core base 1 at g.257
+/// g.[262_263insAG;264G>T;266T>A]  ->  g.265A[3]
+///   intended  C A G A T A A A T
+///   emitted   C A G A A A T A T     <- the payload crossed the 266T>A
+/// ```
+///
+/// The junction is not stated, but it is **bounded**: reducing a span `[s, e]`
+/// to a pure insertion trims a common prefix or a common suffix, so the payload
+/// lands somewhere in `[s - 1, e]` — the member's own footprint. Take the edge
+/// of that footprint on the side the member travelled *from*, which is the
+/// weakest bound the clamp can be given:
+///
+/// * it is at or 3' of the true start under a 3' shift (at or 5' of it under a
+///   5' one), so the clamp never pulls a member back past where it began — the
+///   walk in `clamp_sibling_crossing_junctions` stops at `before_junction`;
+/// * a junction strictly inside the footprint therefore reports no crossing at
+///   all, which is the conservative answer for a member that never left its own
+///   span. Only a sibling **outside** the footprint can bound it, and such a
+///   sibling was genuinely swept over however the reduction trimmed.
+///
+/// Not restricted to `delins`: a repeat member re-spelled as a duplication
+/// reaches this the same way, and so would any future edit that reduces.
+///
+/// # Which clamp owns which shape
+///
+/// The two passes have to partition the space between them, or a shape falls
+/// through — which is the whole of #1592. After this, by the `before` form and
+/// the `after` form:
+///
+/// | before | after | [`clamp_sibling_crossing_shifts`] | [`clamp_sibling_crossing_junctions`] |
+/// |---|---|---|---|
+/// | claims bases | claims bases | **owns** (translated or shrank) | inert — `after` has no junction |
+/// | claims bases | pure `ins` | inert — `blocks_shift` is false for an insertion | **owns**, via this function |
+/// | claims bases | `dup`/`dupins`, grew | declines — the #1266/#1279 refusal | **owns**, via this function |
+/// | claims bases | `dup`/`dupins`, shrank | bounds the span | also bounds the junction |
+/// | `ins`/`dup` | `ins`/`dup` | bounds a `dup` that translated | **owns** |
+///
+/// Row four is the only one both act on, and they compose: each pass walks the
+/// member back **toward** where it started and neither may pass that point, so
+/// applying both cannot overshoot. The junction pass re-reads its `post` spans
+/// from `after` after the span pass has mutated it, so the second bound is
+/// measured against the first's result rather than against a stale snapshot.
+///
+/// Row two and row three are the ones that previously had no owner.
+fn reduced_before_junction(before: &MemberSpan, after_junction: i64) -> Option<i64> {
+    // An edit that claims no bases and states no junction — there is no
+    // footprint to read a starting junction off.
+    if !before.claims_bases {
+        return None;
+    }
+    if after_junction > before.end {
+        Some(before.end)
+    } else if after_junction < before.start - 1 {
+        Some(before.start - 1)
+    } else {
+        // Still inside its own footprint: nothing was crossed.
+        None
     }
 }
 
