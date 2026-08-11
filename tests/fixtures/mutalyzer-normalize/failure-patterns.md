@@ -6,6 +6,18 @@ Generated from `cases.json` — do not edit by hand; regenerate with the example
 
 ## Root-cause clusters
 
+### delins carve-out requires BOTH conjuncts of delins.md:18
+
+Spec: `recommendations/DNA/delins.md:17-18, :81; general.md:35`
+
+`:18` excepts `:17`'s split-by-default rule only for two variants separated by one nucleotide AND together affecting one amino acid. ferro tests both: it merges when the merged span lies in one codon and describes individually when it does not, whatever the edit type. The same verbatim precondition appears on the length-changing pages (deletion.md:19, insertion.md:20, duplication.md:23, inversion.md:21) with no relaxation. mutalyzer has no separation rule — it minimises a weighted description length — so it merges across the codon boundary; ferro's split is the spec-correct form (precedence: spec-explicit > mutalyzer).
+
+| input | axis | disposition | ferro output | tracking |
+|---|---|---|---|---|
+| `NM_000143.3:c.44_47del4insATC` | normalized | spec_citation | — | — |
+| `NM_000143.3:c.44_47delTGCGinsATC` | normalized | spec_citation | — | — |
+| `NM_000143.3:c.44_47delinsATC` | normalized | spec_citation | — | — |
+
 ### RefSeqGene transcript selector (gene-symbol → NM_)
 
 Spec: `background/refseq.md L38-42, L138-139`
@@ -336,6 +348,6 @@ An `<range>inv` segment in an ins/delins payload inserts the reverse complement 
 | genomic | 19 | 0 | 0 | 0 | 5 |
 | infos | 8 | 0 | 0 | 0 | 1 |
 | noncoding | 0 | 0 | 0 | 0 | 8 |
-| normalized | 28 | 0 | 1 | 0 | 15 |
+| normalized | 28 | 0 | 1 | 0 | 18 |
 | protein_description | 9 | 0 | 0 | 0 | 60 |
 | rna_description | 0 | 0 | 0 | 0 | 1 |

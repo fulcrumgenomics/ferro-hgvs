@@ -45,12 +45,17 @@
 //! so the census records `main`'s behaviour, not this PR's. The corpus is new;
 //! the defects it counts are not.
 //!
+//! **That paragraph is the CORPUS branch speaking, and it no longer holds.** The
+//! branch you are reading changes `coalesce_coding_frame_separation`, so three of
+//! the figures below are re-blessed against it rather than measured on `main`.
+//! See "RE-BLESSED" below before quoting any of them as a `main` baseline.
+//!
 //! | counter | 3' | 5' | what it is |
 //! |---|---|---|---|
 //! | `outputs_leaving_the_transcript` | **371** | 0 | a `c.`/`n.` output naming an INTRONIC position its input did not. `checklist.md:20` — a bare `NM_` cannot express an intronic position at all. See the correction below: the SHIFT is legal, the ACCESSION is not |
 //! | `outputs_denoting_no_sequence` | 10 | 18 | two members of the OUTPUT claim one territory, so it denotes nothing — rank-1 invalid |
 //! | `sequence_changed` | 4 | 0 | the output denotes different bases from the input; a member was dropped |
-//! | `non_idempotent_outputs` | 7 | 4 | the output is not its own fixed point |
+//! | `non_idempotent_outputs` | ~~7~~ **4** | 4 | the output is not its own fixed point. Re-blessed: see the note below |
 //! | `conflicts_accepted` | 72 | 72 | a conflicting allele was normalized instead of refused — nested, partially overlapping, and two insertions at one interbase |
 //! | `prohibited_absolute_accepted` | 32 | 32 | a shape the spec calls "not allowed" was accepted |
 //! | `prohibition_violating_outputs` | 32 | 32 | and then EMITTED, so the prohibition is not enforced on output either |
@@ -62,6 +67,44 @@
 //!
 //! The 3'/5' asymmetry is itself a finding: the transcript-leaving class is
 //! **371 to 0**, and 3' is the default direction.
+//!
+//! # RE-BLESSED — this branch DOES change `src/normalize/`, so the pins moved
+//!
+//! Everything above and in [`THREE_PRIME`]'s own doc was written on the corpus
+//! PR, which touched no normalizer file. **That is no longer the base.** This
+//! branch adds `general.md:35`'s amino-acid conjunct to
+//! `coalesce_coding_frame_separation`, so the pass now declines a merge whose
+//! span crosses a codon boundary, and five figures moved:
+//!
+//! | figure | was | now | direction |
+//! |---|---|---|---|
+//! | 3' `non_idempotent_outputs` | 7 | **4** | improves — the three `scale-c3p-sep{120,128,136}` rows became fixed points |
+//! | 3' `converged` | 9,140 | **9,139** | **regresses by one, net** — 6 classes lost convergence and 5 gained it |
+//! | 3' `split_two` | 2,435 | **2,436** | the same net one, on the other side of the ledger |
+//! | 5' `split_two` | 2,696 | **2,698** | improves — two 3-output classes became 2-output |
+//! | 5' `split_three` | 204 | **202** | the same two classes |
+//!
+//! **`converged` going DOWN is the disclosure this section exists for**, and the
+//! net figure hides the shape of it. Measured by dumping both directions' full
+//! divergence lists on `origin/main` and on this branch and diffing the row ids:
+//!
+//! - **6 rows lost convergence**, three designs on each of the plus and minus
+//!   coding multi-exon shapes: `s00-c3{p,m}-m3-all-del-p1-sep3`,
+//!   `s00-c3{p,m}-m4-all-del-p1-sep2` and `s00-c3{p,m}-pair-del-del-p1-sep8`.
+//!   In every one it is the **spanning-`delins` respelling** that moved; the
+//!   authored multi-member spellings are unchanged. They are promoted to
+//!   `spec_corpus_regressions::the_codon_gate_splits_a_spanning_delins_its_own_members_do_not`.
+//! - **5 rows gained convergence**: `s01-c1-pair-del-del-p2-sep5`,
+//!   `s01-c3{p,m}-m3-all-del-p1-sep2` (whose spanning `delins` used to be a
+//!   fixed point disagreeing with its own members) and
+//!   `scale-c3p-sep{120,128}-del-del` (which used to need a second pass to reach
+//!   the answer their members reach).
+//!
+//! Both counters therefore move for one reason — the pass no longer merges
+//! across a codon boundary — and neither direction of the move is a
+//! representation *choice* left open: `general.md:35`'s second conjunct is
+//! either met or it is not. `outputs_leaving_the_transcript` stays **371**, which
+//! is the pre-existing baseline and not a regression of this branch's.
 //!
 //! # CORRECTED — what the transcript-leaving class actually violates
 //!
@@ -178,6 +221,11 @@ const SHAPE: CorpusShape = CorpusShape {
 /// member geometry, transcript geometry and scale rather than holding all three
 /// fixed. Read the three asserted-zero counters before the headline, per the
 /// module docs.
+///
+/// **The "measures `main`" heading above is now historical** — this branch does
+/// change `src/normalize/`, and three of these figures are re-blessed against it.
+/// The module docs' "RE-BLESSED" section names each one, which way it moved and
+/// the six-against-five row diff behind the net `converged` figure.
 pub(crate) const THREE_PRIME: Census = Census {
     // -- validity (rank 1) --
     outputs: 58_552,
@@ -187,13 +235,20 @@ pub(crate) const THREE_PRIME: Census = Census {
     outputs_leaving_the_transcript: 371,
     prohibition_violating_outputs: 32,
     // -- confluence (rank 2) --
-    converged: 9_140,
-    split_two: 2_435,
+    //
+    // Re-blessed by the amino-acid precondition: 6 classes lost convergence and
+    // 5 gained it, for a net -1 here and +1 in `split_two`. See the module docs'
+    // RE-BLESSED section for the row ids and the promoted regression test.
+    converged: 9_139,
+    split_two: 2_436,
     split_three: 250,
     split_more: 57,
     underdetermined: 0,
     // -- idempotency --
-    non_idempotent_outputs: 7,
+    //
+    // Re-blessed DOWN: the three `scale-c3p-sep{120,128,136}-del-del` rows now
+    // settle in one pass. The four `cds-end` families remain.
+    non_idempotent_outputs: 4,
     // -- sequence preservation --
     sequence_changed: 4,
     // -- refusal --
@@ -228,8 +283,11 @@ pub(crate) const FIVE_PRIME: Census = Census {
     outputs_leaving_the_transcript: 0,
     prohibition_violating_outputs: 32,
     converged: 8_944,
-    split_two: 2_696,
-    split_three: 204,
+    // Re-blessed: the two `s01-c3{p,m}-m3-all-del-p1-sep2` classes fell from
+    // three outputs to two. `converged` is untouched, so no 5' class changed
+    // side; only the multiplicity of two that were already split moved.
+    split_two: 2_698,
+    split_three: 202,
     split_more: 38,
     underdetermined: 0,
     non_idempotent_outputs: 4,

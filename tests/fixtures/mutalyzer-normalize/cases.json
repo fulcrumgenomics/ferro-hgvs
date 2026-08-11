@@ -16,6 +16,12 @@
   },
   "clusters": [
     {
+      "id": "delins-one-amino-acid-precondition",
+      "title": "delins carve-out requires BOTH conjuncts of delins.md:18",
+      "spec_section": "recommendations/DNA/delins.md:17-18, :81; general.md:35",
+      "note": "`:18` excepts `:17`'s split-by-default rule only for two variants separated by one nucleotide AND together affecting one amino acid. ferro tests both: it merges when the merged span lies in one codon and describes individually when it does not, whatever the edit type. The same verbatim precondition appears on the length-changing pages (deletion.md:19, insertion.md:20, duplication.md:23, inversion.md:21) with no relaxation. mutalyzer has no separation rule — it minimises a weighted description length — so it merges across the codon boundary; ferro's split is the spec-correct form (precedence: spec-explicit > mutalyzer)."
+    },
+    {
       "id": "refseqgene-selector",
       "title": "RefSeqGene transcript selector (gene-symbol → NM_)",
       "spec_section": "background/refseq.md L38-42, L138-139",
@@ -2129,7 +2135,13 @@
       ],
       "input": "NM_000143.3:c.44_47delinsATC",
       "normalized": "NM_000143.3:c.44_47delinsATC",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §delins (one-amino-acid exception)",
+        "note": "ferro describes this as c.[44_45delinsAT;49del]; mutalyzer keeps the spanning c.44_47delinsATC. delins.md:17 says two variants separated by one or more nucleotides are described individually, and :18 excepts only the pair that is separated by one nucleotide AND together affects ONE AMINO ACID. Both conjuncts are required and the second is not met here: c.44_47 is four positions, spanning codon 15 (c.43_45) and codon 16 (c.46_48), and no codon holds four consecutive positions at any phase. So :18 does not reach this block and :17 governs. The precondition is stated identically on the length-changing pages (deletion.md:19, insertion.md:20, duplication.md:23, inversion.md:21), so being length-changing buys no relaxation, and delins.md:81 restates it as an exclusion ('unless they together affect one amino acid'). mutalyzer has no separation rule at all -- it minimises a weighted description length -- so its merge here is a different objective meeting, not evidence about the clause. Precedence is spec-explicit > mutalyzer, so ferro's split is the spec-correct form. Contrast LRG_199t1:c.235_237delinsTAT in this same fixture, where the span IS one codon and ferro merges while mutalyzer splits: one predicate, both directions. This row previously agreed with mutalyzer because the coding carve-out was gated on a length-changing proxy rather than on the amino-acid precondition.",
+        "cluster": "delins-one-amino-acid-precondition"
+      }
     },
     {
       "keywords": [
@@ -2138,7 +2150,13 @@
       ],
       "input": "NM_000143.3:c.44_47delTGCGinsATC",
       "normalized": "NM_000143.3:c.44_47delinsATC",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §delins (one-amino-acid exception)",
+        "note": "Second of three spellings of one variant; see NM_000143.3:c.44_47delinsATC in this fixture for the full citation. ferro describes it as c.[44_45delinsAT;49del] because the c.44_47 span is four positions and crosses the codon 15 / codon 16 boundary, so delins.md:18's 'together affecting one amino acid' conjunct is unmet and :17 governs.",
+        "cluster": "delins-one-amino-acid-precondition"
+      }
     },
     {
       "keywords": [
@@ -2169,7 +2187,13 @@
       ],
       "input": "NM_000143.3:c.44_47del4insATC",
       "normalized": "NM_000143.3:c.44_47delinsATC",
-      "to_test": true
+      "to_test": true,
+      "spec_citation": {
+        "axis": "normalized",
+        "section": "HGVS §delins (one-amino-acid exception)",
+        "note": "Third of three spellings of one variant; see NM_000143.3:c.44_47delinsATC in this fixture for the full citation. ferro describes it as c.[44_45delinsAT;49del] because the c.44_47 span is four positions and crosses the codon 15 / codon 16 boundary, so delins.md:18's 'together affecting one amino acid' conjunct is unmet and :17 governs.",
+        "cluster": "delins-one-amino-acid-precondition"
+      }
     },
     {
       "keywords": [

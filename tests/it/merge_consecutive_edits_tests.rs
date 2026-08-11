@@ -992,29 +992,40 @@ fn test_no_overlap_warning_for_adjacency() {
 // =====================================================================
 
 /// `c.2_5` is `TGCA` and the payload `AAC` aligns only at its last column
-/// (`C`), leaving a one-base gap between the two derived runs. On a reading
-/// frame that gap is `general.md:35`'s, so the block stays one `delins`.
+/// (`C`), leaving a one-base gap between the two derived runs — so the
+/// *distance* conjunct of `general.md:35` is met. The second conjunct is not:
+/// `c.2` is in codon 1 and `c.5` in codon 2, and no codon holds four
+/// consecutive positions, so the pair cannot together affect one amino acid at
+/// any phase. `:35` is an exception to `:34`, not a replacement for it, so `:34`
+/// governs and the block is described individually — the same answer the `n.`
+/// axis reaches, because on this block the reading frame changes nothing.
 ///
-/// Note the two runs are in *different* codons — `c.2` is in codon 1 and
-/// `c.5` in codon 2 — which is deliberate. `apply_coding_codon_exception`
-/// and `split_codon_incompatible_triplets` both apply the codon half of the
-/// exception, and both scope it to the three-column substitution triplet the
-/// spec's own wording describes. A wider merge is not "two variants" in that
-/// sense, so it is governed by the distance rule alone — the reading the
-/// SVD-WG states it is moving to outright (`general.md:39`).
-/// The assertion is `input == output`, which a *decline* satisfies as readily as
-/// the merge: if the sequence-first derivation refuses this block for some
-/// unrelated reason — a window clamp, the weight bound, the round-trip guard, a
-/// future `enclosing_exon` change — the coding answer is still its own input and
-/// the pass under test never ran (#1235 review). Two things stop that here:
+/// # This expectation was flipped, and the old rationale is the reason
 ///
-/// * the `n.` control below, on the same reference and the same block, whose
-///   expected string *differs* from its input, so a derivation that declined for
-///   any axis-blind reason would fail it; and
-/// * `merge::tests::coalesce_coding_frame_separation_merges_one_base_gap_only_in_frame`,
-///   which asserts the merge against the pass directly and is the airtight half.
+/// It previously read `c.2_5delinsAAC`, on the argument that a merge wider than
+/// the spec's substitution triplet "is governed by the distance rule alone — the
+/// reading the SVD-WG states it is moving to outright (`general.md:39`)". That
+/// citation is dead text. `general.md:36-39` is a future-tense description of
+/// proposal **SVD-WG010**, which `docs/consultation/SVD-WG010.md:5` records as
+/// **rejected**, and the decided ruling `delins-codon-carve-out-gap-one` says so
+/// in terms: "Do not cite it, and do not cite SVD-WG010 as a live rule either.
+/// The codon-conditioned exception at `:18` / `general.md:35` remains the law."
+/// That ruling also states the scope this file's expectation had dropped — "the
+/// carve-out is scoped to the coding sequence **and to one amino acid**".
+///
+/// So the flip is not a new policy. It is this test catching up with a
+/// correction already recorded against the clause it cites.
+///
+/// The `c.` assertion is now `input != output`, so unlike the old expectation it
+/// cannot be satisfied by an unrelated decline — a window clamp, the weight
+/// bound, the round-trip guard — and the `n.` control below is what pins that
+/// the derivation reaches the block at all.
+///
+/// The discriminating half stays in
+/// `merge::tests::coalesce_coding_frame_separation_declines_a_span_wider_than_a_codon`,
+/// which asserts against the pass directly and at every codon phase.
 #[test]
-fn coding_length_changing_block_merges_across_one_unchanged_base() {
+fn coding_length_changing_block_across_codons_is_described_individually() {
     assert_eq!(
         normalize_with_provider(
             provider_with_simple_transcript(),
@@ -1022,21 +1033,26 @@ fn coding_length_changing_block_merges_across_one_unchanged_base() {
         ),
         "NM_TEST.1:n.[2_3delinsAA;9del]",
         "the derivation must reach this block at all, else the coding assertion \
-         below is satisfied by a decline and proves nothing",
+         below proves nothing",
     );
     assert_eq!(
         normalize_with_provider(
             provider_with_simple_transcript(),
             "NM_TEST.1:c.2_5delinsAAC"
         ),
-        "NM_TEST.1:c.2_5delinsAAC",
+        "NM_TEST.1:c.[2_3delinsAA;9del]",
+        "`NM_TEST.1` has `cds_start = 1`, so `c.p` and `n.p` are the same base \
+         and the two axes agree here: the exception `general.md:35` states \
+         cannot reach a four-position span, so nothing distinguishes them",
     );
 }
 
-/// The same block on `n.`, which has no reading frame, splits — and the
-/// deletion 3'-shifts down the `A` run at `n.5-9`, which is also why the
-/// merge above has to run *before* the shift: afterwards the two runs are
-/// four bases apart and no one-base rule can rejoin them.
+/// The same block on `n.`, asserted on its own so the axis half of the rule
+/// keeps a test of its own rather than living only as the control above. The
+/// deletion 3'-shifts down the `A` run at `n.5-9`, which is why the coding
+/// exception has to be evaluated *before* the shift: afterwards the two runs
+/// are four bases apart and no one-base rule could rejoin them even where the
+/// codon test allows it.
 #[test]
 fn non_coding_length_changing_block_keeps_the_split() {
     let result = normalize_with_provider(
@@ -1047,4 +1063,154 @@ fn non_coding_length_changing_block_keeps_the_split() {
         result, "NM_TEST.1:n.[2_3delinsAA;9del]",
         "an axis with no reading frame gets `general.md:34`'s plain rule",
     );
+}
+
+// =====================================================================
+// The amino-acid half of `DNA/delins.md:18`, on a codon-designed core.
+//
+// `:17` says two variants separated by one or more nucleotides are
+// described individually. `:18` excepts the pair that is separated by
+// *one* nucleotide **and** together affects **one amino acid** — two
+// conjuncts, not one. The tests below vary only the second, on one
+// reference, one block shape and one pair of edit types, so the codon
+// boundary is the whole of the difference between them.
+//
+// The precondition is stated identically on the length-changing pages —
+// `DNA/deletion.md:19`, `DNA/insertion.md:20`, `DNA/duplication.md:23`,
+// `DNA/inversion.md:21` — so a deletion paired with a substitution gets
+// no relaxation for being length-changing. `DNA/delins.md:81` restates
+// it as an exclusion: two variants separated by one or more nucleotides
+// are described individually "(unless they together affect one amino
+// acid)".
+// =====================================================================
+
+/// A 30 nt coding transcript carrying the same `ACG` triplet at two codon
+/// phases, and nothing else that can move.
+///
+/// `CDS_START` is 1, so `c.p` is transcript position `p` and codon `k`
+/// spans `c.3k-2 ..= c.3k`.
+///
+/// * `c.10_12` is `ACG` and is codon 4 exactly — an aligned triplet.
+/// * `c.14_16` is `ACG` and straddles codon 5 (`c.13_15`) and codon 6
+///   (`c.16_18`).
+///
+/// The flanks are `GCT` repeats so that neither `A` sits in a run: `c.9`
+/// and `c.13` are `T`, `c.11` and `c.15` are `C`, so the deletion member
+/// has nowhere to 3'-shift and the two cases cannot differ by shuffling.
+fn provider_with_codon_designed_core() -> MockProvider {
+    use ferro_hgvs::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+    //                    c.1      c.10 c.13 c.17
+    //                    |        |    |    |
+    let sequence = "GCTGCTGCT".to_string() + "ACG" + "T" + "ACG" + "T" + "GCTGCTGCTGCTG";
+    let len = sequence.len() as u64;
+    assert_eq!(len, 30, "the codon arithmetic in this module assumes 30 nt");
+    assert_eq!(
+        &sequence[9..12],
+        "ACG",
+        "c.10_12 must be the aligned triplet"
+    );
+    assert_eq!(
+        &sequence[13..16],
+        "ACG",
+        "c.14_16 must be the straddling triplet"
+    );
+    let transcript = Transcript::new(
+        "NM_CODON.1".to_string(),
+        Some("TEST".to_string()),
+        Strand::Plus,
+        sequence,
+        Some(1),
+        Some(len),
+        vec![Exon::new(1, 1, len)],
+        None,
+        None,
+        None,
+        Default::default(),
+        ManeStatus::None,
+        None,
+        None,
+    );
+    let mut provider = MockProvider::new();
+    provider.add_transcript(transcript);
+    provider
+}
+
+/// **The exception applies.** `c.10del` and `c.12G>T` are separated by the
+/// unchanged `c.11`, and `c.10`, `c.11`, `c.12` are codon 4 — so they
+/// together affect one amino acid and `delins.md:18` asks for a `delins`.
+///
+/// The pair is length-changing (a deletion and a substitution, net -1),
+/// which is exactly the point: the clause names no edit type, and the
+/// length-changing pages state the same precondition without weakening it.
+#[test]
+fn one_base_gap_within_one_codon_merges() {
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_codon_designed_core(),
+            "NM_CODON.1:c.[10del;12G>T]"
+        ),
+        "NM_CODON.1:c.10_12delinsCT",
+    );
+}
+
+/// **The exception does not apply.** `c.14del` and `c.16G>T` are separated
+/// by the unchanged `c.15` — the *distance* conjunct is met, identically to
+/// the test above — but `c.14` is in codon 5 and `c.16` in codon 6, so the
+/// pair does not together affect one amino acid. `:18` is an exception to
+/// `:17`, not a replacement for it, so `:17` governs and the two variants
+/// are described individually.
+///
+/// The only difference from the merging case is the codon phase: same
+/// reference triplet, same two edit types, same one-base separation, same
+/// axis. That is what makes this pair a test of the precondition rather
+/// than of the shape.
+///
+/// # What this assertion does not establish
+///
+/// It is `input == output`, which — as the doc on
+/// `coding_length_changing_block_across_codons_is_described_individually`
+/// says of the expectation it replaced — *any* upstream decline satisfies as
+/// readily as the codon test: a window clamp, the weight bound, the
+/// round-trip guard. The `n.` control below is `input == output` at this
+/// position too, so the pair cannot discriminate at `c.14_16` on its own.
+/// What it does discriminate is the *reading-frame* half at the other
+/// position, where `one_base_gap_within_one_codon_merges` yields a string
+/// that differs from its input while the `n.` row does not.
+///
+/// The codon-phase half is pinned directly instead, by
+/// `merge::tests::coalesce_coding_frame_separation_merges_only_within_one_codon`,
+/// which calls the pass on one set of pieces at `w_lo` 1 and 2 — same
+/// payloads, same flags, one integer apart — so only the phase can account
+/// for the difference in its two answers.
+#[test]
+fn one_base_gap_across_a_codon_boundary_stays_split() {
+    assert_eq!(
+        normalize_with_provider(
+            provider_with_codon_designed_core(),
+            "NM_CODON.1:c.[14del;16G>T]"
+        ),
+        "NM_CODON.1:c.[14del;16G>T]",
+        "`c.14` is in codon 5 and `c.16` in codon 6, so `delins.md:18`'s \
+         second conjunct is unmet and `:17` governs — the two variants are \
+         described individually",
+    );
+}
+
+/// The control for the pair above: on `n.`, where there is no reading
+/// frame, *neither* position merges. Without it the split at `c.14_16`
+/// could be produced by any axis-blind decline — a window clamp, the
+/// weight bound, the round-trip guard — rather than by the codon test.
+///
+/// `NM_CODON.1` has `cds_start = 1`, so `n.p` and `c.p` address the same
+/// base and the four descriptions differ in nothing but their axis letter.
+#[test]
+fn without_a_reading_frame_neither_position_merges() {
+    for position in [10, 14] {
+        let input = format!("NM_CODON.1:n.[{position}del;{}G>T]", position + 2);
+        assert_eq!(
+            normalize_with_provider(provider_with_codon_designed_core(), &input),
+            input,
+            "`general.md:34`'s plain rule governs an axis with no amino acid to affect",
+        );
+    }
 }

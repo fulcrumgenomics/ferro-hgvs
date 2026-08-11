@@ -2051,6 +2051,21 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Mutalyzer snapshot, `cases.json` row or oracle baseline changed** — this
     /// branch touches no file under `tests/fixtures/`. So ferro agrees with the
     /// oracle again and there was no conformance decision left to take.
+    ///
+    /// **CORRECTION: they have since been adjudicated, the other way.** The
+    /// paragraph above reads "the exception applies here" off the *distance*
+    /// half of `general.md:35` alone. The clause has two conjuncts, and the
+    /// second — "together affecting one amino acid" — is not met: `c.44_47` is
+    /// four positions, spanning codon 15 (`c.43_45`) and codon 16 (`c.46_48`),
+    /// and no codon holds four consecutive positions at any phase. Once
+    /// `coalesce_coding_frame_separation` tests that conjunct, the three rows go
+    /// back to `c.[44_45delinsAT;49del]` permanently and they now carry a
+    /// `spec_citation` annotation in `cases.json` recording it as a deliberate
+    /// spec-over-Mutalyzer divergence. Precedence is **spec-explicit >
+    /// Mutalyzer**, and Mutalyzer has no separation rule at all — it minimises a
+    /// weighted description length — so its merge here is two objectives meeting
+    /// rather than evidence about the clause. Do not read this branch's
+    /// "0 fail" as still current.
     fn is_splittable_single_member(variant: &HgvsVariant) -> bool {
         let edit = match variant {
             HV::Genome(g) => &g.loc_edit.edit,
