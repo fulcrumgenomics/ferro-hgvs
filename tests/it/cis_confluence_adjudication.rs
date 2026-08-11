@@ -231,24 +231,28 @@ fn denotes_genomic(provider: &MockProvider, description: &str) -> String {
 /// returns two answers for one variant and cannot be evaluated confluently.
 ///
 /// **Authority.** Ruling record
-/// `separation-is-a-property-of-the-spelling-not-of-the-variant`, now
-/// `decided`: the separation is read off the partition **re-derived from the
-/// resulting sequence**, never off the input's spelling. This test pins the
+/// `separation-is-a-property-of-the-spelling-not-of-the-variant`, `decided`:
+/// the separation is read off the partition **re-derived from the resulting
+/// sequence**, never off the input's spelling. This test pins the
 /// *demonstration*, which was settled all along; the decided answer is asserted
-/// by `the_decided_target_is_the_re_derived_form`, which is `#[ignore]`d
-/// because ferro does not produce it yet (#1617).
+/// directly by `the_decided_target_is_the_re_derived_form`.
 ///
 /// The case: `c.10` and `c.11` are both `A`, so deleting one or the other is the
 /// same edit. `c.[9del;10del;13del]` therefore denotes exactly what
 /// `c.[9del;11del;13del]` denotes — checked here through the apply oracle, not
-/// assumed. But the first spells its members at separations 0 and 2 and the
-/// second at 1 and 1, and `general.md:34` merges a separation-0 pair while
-/// splitting a separation-1 pair. Ferro follows it, and produces two outputs.
+/// assumed. The first spells its members at separations 0 and 2 and the second
+/// at 1 and 1, so if `general.md:34` were evaluated on the spelling — merging a
+/// separation-0 pair, splitting a separation-1 pair — the two would part. They
+/// no longer do, which is what the record decided and what makes the presented
+/// separation demonstrably not a property of the variant.
 ///
-/// **These assertions are pre-fix behaviour against a now-decided target.** The
-/// `apart` spelling's answer is form B, which the ruling names as the bug; it is
-/// pinned here as an observation so the fix is visible when it lands, not as an
-/// endorsement.
+/// **The fix landed (#1617), and these assertions now pin the decided answer.**
+/// The `apart` spelling used to print form B — all three members kept individual
+/// — which the ruling names as the bug; it was pinned here as an observation, and
+/// this commit moves it to the decided form. `two_gap_deletion_alignment` lets
+/// the splitter express *deletion, retained reference, deletion*, so the block
+/// re-derived from the resulting sequence yields `c.[9_10del;13del]` from either
+/// spelling and the separation is no longer read off the input.
 #[test]
 fn the_separation_two_members_present_is_not_a_property_of_the_variant() {
     let provider = provider();
@@ -261,22 +265,28 @@ fn the_separation_two_members_present_is_not_a_property_of_the_variant() {
     assert_eq!(denotes(&provider, apart), sequence);
     assert_eq!(denotes(&provider, spanning), sequence);
 
-    // Three outputs. The separation each spelling presents is what selects them,
-    // and no two spellings present the same one.
+    // One output, not three. All three spellings — both member spellings and
+    // the spanning delins — now reach the form the record decides for, whatever
+    // separation each happens to present.
     assert_eq!(
         normalized(&provider, adjacent),
         "NM_TEST.1:c.[9_10del;13del]",
-        "separations 0 and 2: `delins.md:16` merges the adjacent pair"
+        "separations 0 and 2 as written: `delins.md:16` merges the adjacent pair"
     );
     assert_eq!(
         normalized(&provider, apart),
-        "NM_TEST.1:c.[9del;11del;13del]",
-        "separations 1 and 1: `general.md:34` keeps all three individual"
+        "NM_TEST.1:c.[9_10del;13del]",
+        "separations 1 and 1 as written, but the separation is read off the \
+         re-derived partition, not off this spelling — so it reaches the same \
+         answer the adjacent spelling does (#1617)"
     );
     assert_eq!(
         normalized(&provider, spanning),
-        "NM_TEST.1:c.9_13delinsAT",
-        "no members at all, so no separation to read: the spanning form survives"
+        "NM_TEST.1:c.[9_10del;13del]",
+        "no members at all, so no separation to read off the spelling — and now \
+         none is read off it: the block is re-derived and reaches the same \
+         answer the two member spellings do. This is the `c.` twin of the \
+         genomic form C -> form A move the record's own ruling settles"
     );
 }
 
@@ -318,12 +328,9 @@ fn genomic_provider() -> MockProvider {
 /// `separation-is-a-property-of-the-spelling-not-of-the-variant`, `decided`
 /// for the re-derived form (A below).
 ///
-/// **These assertions pin PRE-FIX behaviour against a now-decided target.**
-/// They are not adjudicated correct. `live` sends the two spellings to two
-/// different answers, one of which is the decided one and one of which is not;
-/// the decided answer for *both* is asserted by
-/// `the_decided_target_is_the_re_derived_form`, which is `#[ignore]`d until
-/// #1617 lands. When it does, both expectations here move to form A.
+/// **#1617 landed, so both expectations are now form A** — the decided answer,
+/// reached from both spellings. The second expectation used to be form B, the
+/// form the ruling names as the bug, pinned as an observation; it moved here.
 #[test]
 fn the_separation_two_members_present_is_not_a_property_of_the_variant_on_real_coordinates() {
     let provider = genomic_provider();
@@ -342,20 +349,18 @@ fn the_separation_two_members_present_is_not_a_property_of_the_variant_on_real_c
         denotes_genomic(&provider, adjacent)
     );
 
-    // Two outputs, selected by the separation each spelling happens to present.
+    // One output, no longer selected by the separation each spelling presents.
     assert_eq!(
         normalized(&provider, adjacent),
         "NC_000001.11:g.[1001009_1001010del;1001013del]",
-        "separations 0 and 2 as written: the adjacent pair is merged. This is \
-         form A, the decided answer — reached here for the wrong reason, off \
-         the spelling rather than off the resulting sequence"
+        "separations 0 and 2 as written: form A, the decided answer"
     );
     assert_eq!(
         normalized(&provider, apart),
-        "NC_000001.11:g.[1001009del;1001011del;1001013del]",
-        "separations 1 and 1 as written: all three kept individual. This is \
-         form B, which the ruling names as the bug — pinned as pre-fix \
-         behaviour, not endorsed (#1617)"
+        "NC_000001.11:g.[1001009_1001010del;1001013del]",
+        "separations 1 and 1 as written, and the same answer: form A. This used \
+         to be form B — all three kept individual, the form the ruling names as \
+         the bug — and #1617 closed it"
     );
 }
 
@@ -368,12 +373,14 @@ fn the_separation_two_members_present_is_not_a_property_of_the_variant_on_real_c
 /// the resulting sequence, never off the input's spelling — rule 3 of the
 /// README ruleset.
 ///
-/// **`#[ignore]`d because ferro does not do this yet**, not because the answer
-/// is in doubt. `FERRO_PARTITION=shadow` and `FERRO_PARTITION=canonical` — the
-/// sequence-first arms — already take both spellings here to form A; the
-/// default `live` partitioner takes the second to form B. Closing that gap is
-/// **#1617**, and this test is its acceptance criterion: delete the `#[ignore]`
-/// and move the two `apart` expectations above.
+/// **No longer `#[ignore]`d: #1617 is closed.** It was `#[ignore]`d because
+/// ferro did not do this yet, never because the answer was in doubt — the
+/// sequence-first arms (`FERRO_PARTITION=shadow`, `=canonical`) already took
+/// both spellings to form A while the default `live` partitioner took the second
+/// to form B. `two_gap_deletion_alignment` lets `live`'s splitter express
+/// *deletion, retained reference, deletion*, which is the shape form A needs, so
+/// `live` now agrees with them. This test was that fix's acceptance criterion,
+/// and the two `apart` expectations above moved with it.
 ///
 /// Form C, `g.1001009_1001013delinsCA`, is what `FERRO_PARTITION=
 /// canonical-coalesced` gives and what Mutalyzer and VariantValidator produce.
@@ -384,7 +391,6 @@ fn the_separation_two_members_present_is_not_a_property_of_the_variant_on_real_c
 /// scopes itself to a minimal single `delins` split on payload coincidence and
 /// says in as many words that it is not a general licence to merge at gap ≥ 2.
 #[test]
-#[ignore = "decided target, not yet implemented — see #1617"]
 fn the_decided_target_is_the_re_derived_form() {
     let provider = genomic_provider();
     let form_a = "NC_000001.11:g.[1001009_1001010del;1001013del]";
@@ -392,6 +398,13 @@ fn the_decided_target_is_the_re_derived_form() {
     for spelling in [
         "NC_000001.11:g.[1001009del;1001010del;1001013del]",
         "NC_000001.11:g.[1001009del;1001011del;1001013del]",
+        // Form C, added when the fix landed. The record's table names C as a
+        // conformant description that is **not** the target; it does not say
+        // what C itself should normalize to, and until now C was its own fixed
+        // point, so the ruling left one spelling of this variant reaching a
+        // fourth answer. It now reaches A like the rest, which is the same
+        // ruling applied to the one spelling it had not been applied to.
+        "NC_000001.11:g.1001009_1001013delinsCA",
         form_a,
     ] {
         assert_eq!(

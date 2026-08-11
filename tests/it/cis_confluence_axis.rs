@@ -126,7 +126,7 @@ const CDS_END: u64 = 63;
 /// figure is a baseline that must only ever go down, and `converged` a floor
 /// that must only ever go up.
 ///
-/// **71.2% of designed classes converge** (8 027 of 11 272). The 3 245 that do
+/// **74.2% of designed classes converge** (8 361 of 11 272). The 2 911 that do
 /// not are the measurement this module exists to make: nothing in the repo
 /// could state that number before, because only 650 real rows reach the
 /// partitioner at all — and `multi_member_cis_axis` measures 82% convergence
@@ -141,7 +141,7 @@ const CDS_END: u64 = 63;
 /// change that closed #1454 — and never again. So #1454 is the one movement it
 /// did track, and the ones it missed are #1524, the axis gate, #1539 and #1599.
 /// Each of those four is recorded in the chronology below, which terminates
-/// correctly at the pinned 8 027; only the headline was left behind. The one
+/// correctly at the pinned figure; only the headline was left behind. The one
 /// number a reader takes away was therefore the one number in the file that was
 /// wrong, and it was wrong by 1 394 classes — larger than any single movement the
 /// chronology records.
@@ -152,6 +152,13 @@ const CDS_END: u64 = 63;
 /// the drift this section is about, arriving once more during the change that
 /// documents it — and it is why the numbers below are asserted rather than
 /// written down.
+///
+/// It arrived a **third** time in #1649, which moved the pin to 8 361 while that
+/// very paragraph was on the branch. The headline moved with it because
+/// [`the_headline_matches_the_pin`] made it impossible not to — which is the
+/// first movement of this pin the prose has tracked without a human noticing it
+/// had to, and the argument for the guard stated as an outcome rather than as an
+/// intention.
 ///
 /// Restating a pinned constant in prose is the drift this repository names as
 /// its recurring failure mode, and prose cannot be derived from a `const`. The
@@ -269,14 +276,25 @@ const CDS_END: u64 = 63;
 /// generalises to the other, which is the whole reason two of them exist. The
 /// promoted rows are in
 /// `spec_corpus_regressions::the_codon_gate_splits_a_spanning_delins_its_own_members_do_not`.
+/// **Raised again by #1649's two-deletion alignment: 8 027 -> 8 361**, the
+/// largest movement this pin has taken since the axis gate. `merge`'s payload
+/// splitter could express *insertion, retained reference, insertion* but not the
+/// mirrored *deletion, retained reference, deletion*, so a payload whose
+/// alignment against its span carries two gaps was forced onto a coarser
+/// partition than the sequence supports — and which coarser partition it landed
+/// on depended on the spelling it started from, which is what a confluence
+/// failure is. `split_two` falls by 276, `split_three` by 48 and `split_more` by
+/// 10; the three sum to the 334 `converged` gains, so **every** moved class went
+/// straight to convergence and none merely dropped an arity. No divergence
+/// figure rises, so the ratchet is satisfied in the direction it was written for.
 const THREE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_027,
-    split_two: 3_111,
-    split_three: 115,
-    split_more: 19,
+    converged: 8_361,
+    split_two: 2_835,
+    split_three: 67,
+    split_more: 9,
     underdetermined: 0,
     sequence_changed: 0,
 };
@@ -323,14 +341,22 @@ const THREE_PRIME: Census = Census {
 /// start from, are historical and correctly labelled rather than stale figures.
 /// An earlier review of this file mistook the 3' side's equivalent entry for a
 /// second stale number; this side carries the same shape.
+/// **Raised again by #1649's two-deletion alignment: 8 023 -> 8 367**, with
+/// `split_two` down 309, `split_three` down 31 and `split_more` down 4 — again
+/// summing exactly to the 344 `converged` gains, so every moved class converged
+/// outright. The 5' direction gains 344 against the 3' direction's 334, the same
+/// ten-class asymmetry the entries above record and for the same reason: the
+/// finer partition is chosen before the shift, so the two members are then
+/// shuffled independently and only some of those landings coincide with the
+/// other spelling's.
 const FIVE_PRIME: Census = Census {
     classes: 11_272,
     spellings: 47_392,
     declined: 0,
-    converged: 8_023,
-    split_two: 3_135,
-    split_three: 105,
-    split_more: 9,
+    converged: 8_367,
+    split_two: 2_826,
+    split_three: 74,
+    split_more: 5,
     underdetermined: 0,
     sequence_changed: 0,
 };

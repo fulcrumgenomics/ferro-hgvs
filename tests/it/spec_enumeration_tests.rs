@@ -385,7 +385,43 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // its job — `NM_000797.3:c.812_829delins908_925` over four axes and
     // `c.235_238delinsTAGT` over three, whose members end up two or more bases
     // apart, where `general.md:34` asks for the split.
-    (Status::ProjectionSplitsSingleMember, 9),
+    //
+    // # 9 -> 12 (#1649), and why the paragraph directly above does not forbid it
+    //
+    // The warning above is one-directional: it forbids going **below** 9, on the
+    // ground that a row leaving this status has been merged where
+    // `DNA/delins.md:17` wanted it split. This move is the other way. Three rows
+    // enter, and they are three projections of **one input**:
+    //
+    // ```text
+    // project-c/NM_004006.3:r.123_127delinsag
+    // project-n/NM_004006.3:r.123_127delinsag
+    // project-r/NM_004006.3:r.123_127delinsag
+    // ```
+    //
+    // `PASSING_CENSUS`'s `ProjectionPinned` falls by the same three (1168 ->
+    // 1165), so the pair still moves in equal and opposite steps and no row left
+    // the enumeration — which is the check that paragraph asks for, applied.
+    //
+    // **OPERATOR RULING, 2026-08-11 — the three rows are accepted, and they are
+    // not one thing.** They were measured through `spdi::compare_denoted_sequences`
+    // against the real reference and denote the input's own bases, so this is a
+    // representation move and not a correctness regression.
+    //
+    // - The `n.` row is a **fix**. #1682's payload-coincidence carve-out is
+    //   `c.`-scoped by `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`,
+    //   so `general.md:34` governs the `n.` axis unopposed and the split is what
+    //   it asks for. This row was previously merged and should not have been.
+    // - The `r.` row is **unruled**. The same record puts `r.` out of the
+    //   carve-out in both directions — a DNA document has no jurisdiction over
+    //   the RNA axis — but `RNA/delins.md` states no counterpart clause either
+    //   way, so nothing selects between the two legal forms here.
+    // - The `c.` row is the **residue**, and the only one. Its real question is
+    //   whether `coalesce_payload_alignment_split` should be promoted onto the
+    //   shipping path: the pass is gated on `PartitionRule::CanonicalCoalesced`
+    //   while the shipped rule is `Live`. That is a separate change which #1649
+    //   neither makes nor blocks, and it is deliberately not made here.
+    (Status::ProjectionSplitsSingleMember, 12),
 ];
 
 /// Census of the **conformant** statuses — the counting half of
@@ -465,7 +501,12 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // to 1170 and `ProjectionSplitsSingleMember` to 7; the ruling declines it,
     // so both constants stand. See that status's note in `DIVERGENCE_BUDGET`
     // for why, and read the two as a pair either way.
-    (Status::ProjectionPinned, 1168),
+    // 1168 -> 1165 (#1649). The three rows are the `project-{c,n,r}` axes of
+    // `NM_004006.3:r.123_127delinsag`, moving to `ProjectionSplitsSingleMember`
+    // — equal and opposite, as this pair must always be read. The adjudication
+    // is recorded with that status in `DIVERGENCE_BUDGET`: sequence-preserving
+    // in all three, a fix on `n.`, unruled on `r.`, and one residue on `c.`.
+    (Status::ProjectionPinned, 1165),
     (Status::ProjectionUnavailablePinned, 487),
     (Status::ProjectionErrorPinned, 210),
     // 132 -> 120 (#1498). The 12 rows are all LRG — `LRG_199:c.357+1G>A`,
