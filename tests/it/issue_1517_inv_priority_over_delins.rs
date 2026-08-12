@@ -21,6 +21,12 @@
 //! |---|---|---|---|---|
 //! | #1230 | `GATG` -> `CATC` | two substitutions | 1 beats 3 | the split |
 //! | #179 / #1517 | `AATGCACA` -> `TGTGCATT` | two `delins` | 3 beats residual | `inv` |
+//! | #1706 | `GACAAGTG` -> `CACTTGTC` | one sub **and** one `delins` | `:56` ranks neither mixture | `inv` |
+//!
+//! The third row is a 2026-08-12 operator ruling and is the case the two
+//! candidate gates disagreed on — see
+//! `a_reverse_complement_competing_with_mixed_members_is_an_inversion`, which
+//! states both readings and why the wider one was taken.
 //!
 //! #1230 and #179 were filed as *contradictory* bug reports — #1230 says an
 //! inversion with an unchanged interior is over-recognized and should be
@@ -57,8 +63,10 @@ use std::io::Write;
 /// 15-24  GGTTCCAAGT   flank
 /// 25-32  AATGCACA     #1517's block; reverse complement TGTGCATT, 4 of 8 columns unchanged
 /// 33-42  GGTTCCAAGT   flank
+/// 43-50  GACAAGTG     the MIXED block; reverse complement CACTTGTC (see below)
+/// 51-60  GGTTCCAAGT   flank
 /// ```
-const SEQ: &str = "GGTTCCAAGTGATGGGTTCCAAGTAATGCACAGGTTCCAAGT";
+const SEQ: &str = "GGTTCCAAGTGATGGGTTCCAAGTAATGCACAGGTTCCAAGTGACAAGTGGGTTCCAAGT";
 
 fn provider() -> JsonProvider {
     let n = SEQ.len() as u64;
@@ -147,6 +155,58 @@ fn a_reverse_complement_competing_with_substitutions_stays_split() {
             "TEMPLATE:g.11_14inv",
             "TEMPLATE:g.11_14delinsCATC",
             "TEMPLATE:g.[11G>C;14G>C]",
+        ],
+    );
+}
+
+/// The competing members are **mixed** — one substitution and one `delins` — and
+/// the ruling is that a mixed competitor is not a substitution competitor, so
+/// inversion wins.
+///
+/// # This is the case the two candidate gates disagree on
+///
+/// Operator ruling, 2026-08-12. Two readings of `general.md:56` were live at
+/// once and no test discriminated them, which meant merge order would have
+/// settled the question silently:
+///
+/// | gate | admits an `inv` when | this block |
+/// |---|---|---|
+/// | narrow | **no** competing piece is a substitution | refused |
+/// | wide | **not every** competing piece is a substitution | **admitted** |
+///
+/// The wide reading is the one this project takes, and this test is that ruling.
+/// The ground is that `:56` ranks *substitution* above inversion — it says
+/// nothing about a description that is only partly substitutions, and a
+/// competitor holding a `delins` is not an alternative `:56` can rank, which is
+/// exactly `inversion-vs-two-delins-76-83`'s holding. Under the narrow reading a
+/// single coincidental substitution column vetoes the typing of the whole span,
+/// which makes the notation turn on a base coincidence rather than on the event.
+///
+/// # The block is built so that no other route can admit it
+///
+/// `GACAAGTG` -> `CACTTGTC` is an exact reverse complement. Its mirror pairs
+/// `(2,7)` and `(3,6)` are self-complementary and its pairs `(1,8)` and `(4,5)`
+/// are not, so the changed columns are `{1, 4, 5, 8}` — three runs, `[1]`,
+/// `[4,5]`, `[8]`, i.e. a substitution, a two-base `delins`, a substitution.
+/// Every other admission route is deliberately starved:
+///
+/// - separations are **2** and **2**, so the single-base route cannot fire;
+/// - changed columns are **4 of 8**, exactly half, so the density route reads it
+///   as not dominant;
+/// - payload columns are **4 of 8** too, so the payload route reads the same.
+///
+/// So this block is decided by the member-type route alone, and by which form of
+/// it is in force. If a future change makes another route admit this block, this
+/// test stops discriminating the two gates and should be rebuilt rather than
+/// re-blessed — check the geometry above before trusting a green run.
+#[test]
+fn a_reverse_complement_competing_with_mixed_members_is_an_inversion() {
+    converges_to(
+        "TEMPLATE:g.43_50inv",
+        &[
+            "TEMPLATE:g.43_50inv",
+            "TEMPLATE:g.43_50delinsCACTTGTC",
+            "TEMPLATE:g.[43G>C;46_47delinsTT;50G>C]",
         ],
     );
 }
@@ -255,5 +315,18 @@ fn both_choices_preserve_the_sequence_they_denote() {
         ],
         inverted(11, 14),
         "#1230",
+    );
+
+    // The mixed block: 43..50 inverts to CACTTGTC. The gate ruling decides how
+    // it is SPELLED; it must not decide what it denotes, and this is the half
+    // that would catch a widening that typed the wrong span as the inversion.
+    check(
+        &[
+            "TEMPLATE:g.43_50inv",
+            "TEMPLATE:g.43_50delinsCACTTGTC",
+            "TEMPLATE:g.[43G>C;46_47delinsTT;50G>C]",
+        ],
+        inverted(43, 50),
+        "mixed",
     );
 }

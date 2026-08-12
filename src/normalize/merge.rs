@@ -2162,6 +2162,33 @@ impl Piece {
             && !self.alt.is_empty()
             && (self.ref_start == 0 || self.ref_start == ref_bytes.len())
     }
+
+    /// Whether this piece is a **substitution**, in the spec's sense.
+    ///
+    /// `DNA/substitution.md:5` — "a sequence change where, compared to a
+    /// reference sequence, **one** nucleotide is replaced by **one** other
+    /// nucleotide". Both halves are load-bearing, which is the whole reason this
+    /// exists as a method rather than being open-coded as a width test.
+    ///
+    /// The distinction matters wherever `general.md:56`'s prioritisation is
+    /// consulted, because `:56` ranks **substitution** above inversion and says
+    /// nothing about a `delins`, a `del` or an `ins`. Asking "is the reference
+    /// span narrow" instead of "is this a substitution" therefore answers a
+    /// different question and answers it wrong in two directions:
+    ///
+    /// | piece | `ref_end - ref_start` | a substitution? |
+    /// |---|---:|---|
+    /// | `g.5A>T` | 1 | **yes** |
+    /// | `g.5del` | 1 | no — one nucleotide replaced by *none* |
+    /// | `g.5_6insC` | 0 | no — *no* nucleotide replaced |
+    /// | `g.5delinsTT` | 1 | no — one replaced by two |
+    ///
+    /// So a width test of `>= 2` reads all four bottom rows as substitutions,
+    /// and a width test of `== 1` reads two of them as substitutions. Only the
+    /// conjunction is the spec's definition.
+    fn is_substitution(&self) -> bool {
+        self.ref_end.saturating_sub(self.ref_start) == 1 && self.alt.len() == 1
+    }
 }
 
 /// Whether to run both block splitters and report their disagreements.
@@ -6504,9 +6531,32 @@ fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
 /// | #1517 | two `delins` | `delins` is absent from the list — **not above** |
 ///
 /// So `:44-47` licenses the widening for both, and `:56` withdraws it for #1230
-/// only. A run of one column is a substitution by `delins.md:15`; a run of two or
-/// more is a `delins` by `:16`. This predicate is that distinction, expressed on
-/// the pieces.
+/// only. A run of one column replaced by one other is a substitution by
+/// `delins.md:15` ("by definition, when **one** nucleotide is replaced by **one**
+/// other nucleotide, the change is a substitution"); a run of two or more is a
+/// `delins` by `:16`. This predicate is that distinction, expressed on the
+/// pieces, via [`Piece::is_substitution`].
+///
+/// # The reference-width test this replaced was not that distinction
+///
+/// Until 2026-08-12 the body read `all(|p| p.ref_end - p.ref_start >= 2)` — a
+/// test of how much reference a piece consumes, not of whether it is a
+/// substitution. The two agree on the shapes the record was argued from and
+/// disagree on every other narrow piece: a 1-base **deletion**, a **pure
+/// insertion** (width 0) and a 1-base **`delins`** all fail `>= 2` and so were
+/// counted as lone substitutions, withdrawing the `inv` in favour of an
+/// alternative that `general.md:56` cannot in fact rank — `:56` lists
+/// substitution, and none of those three is one.
+///
+/// The shape that exposed it is a whole-span reverse complement whose canonical
+/// partition is a 1-base deletion plus a pure insertion — `GTTAA -> TTAAC` cuts
+/// as `[0..1>""]` and `[5..5>"C"]`, zero substitutions among its pieces, and the
+/// width test refused it anyway. Filed as #1703 and diagnosed there; the
+/// admission gate, not the hull reconstruction, is where it declined.
+///
+/// The correction is strictly widening — every piece set the width test admitted
+/// is still admitted, since a piece of width `>= 2` cannot be a substitution —
+/// so it can only add inversions, never withdraw one.
 ///
 /// # This reading is contested, and the contest is recorded rather than hidden
 ///
@@ -6524,9 +6574,7 @@ fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
 /// compels. `tests/it/issue_1517_inv_priority_over_delins.rs` records the
 /// question, both readings, and the choice.
 fn no_piece_is_a_lone_substitution(pieces: &[Piece]) -> bool {
-    pieces
-        .iter()
-        .all(|piece| piece.ref_end.saturating_sub(piece.ref_start) >= 2)
+    pieces.iter().all(|piece| !piece.is_substitution())
 }
 
 /// Partition a changed block by deriving member boundaries from the **denoted
@@ -14977,9 +15025,22 @@ mod tests {
                 "the insertion consumes no reference, so reference width \
                  under-reads this partition's density"
             );
+            // Re-blessed 2026-08-12, and the flip is the point rather than an
+            // accommodation. This assertion used to read `!no_piece_…` with the
+            // reason "the insertion's reference width is 0, narrower than a lone
+            // substitution" — which was true of the predicate as it was then
+            // written (a `>= 2` width test) and false of the question it claims
+            // to ask. Neither piece here is a substitution by
+            // `DNA/delins.md:15`: `0:0/A` replaces no nucleotide and `2:3/`
+            // replaces one with none. So the route now admits, correctly.
+            //
+            // The pass's OUTCOME is unchanged — it reached the `inv` before this
+            // correction too, via `payload_columns_dominate_the_span` — so what
+            // moved is which route is the reason, not what ferro emits.
             assert!(
-                !no_piece_is_a_lone_substitution(&pieces),
-                "the insertion's reference width is 0, narrower than a lone substitution"
+                no_piece_is_a_lone_substitution(&pieces),
+                "an insertion and a deletion: `general.md:56` ranks substitution, \
+                 and neither of these is one"
             );
             assert!(
                 payload_columns_dominate_the_span(&pieces),
@@ -15258,7 +15319,11 @@ mod tests {
             );
             assert!(
                 !no_piece_is_a_lone_substitution(&pieces),
-                "`8:9/A` is a lone substitution and `10:10/T` is narrower still"
+                "`8:9/A` replaces one nucleotide with one other, so it is a \
+                 substitution by `DNA/delins.md:15` and the route refuses. \
+                 `10:10/T` is NOT a second reason — a pure insertion replaces no \
+                 nucleotide — and this message said it was while the predicate \
+                 measured reference width instead of substitution-hood"
             );
             assert!(
                 payload_columns_dominate_the_span(&pieces),
