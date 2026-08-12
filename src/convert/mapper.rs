@@ -1129,8 +1129,32 @@ mod tests {
         assert!(mapper.tx_to_genomic(&TxPos::new(1)).is_err());
     }
 
-    /// Create a transcript with gaps between exons (like cdot format)
-    /// This simulates how cdot encodes transcripts with virtual intron positions
+    /// A deliberately **malformed** transcript whose exons do not tile transcript
+    /// space: transcript positions 1, 95 and 194 fall in no exon.
+    ///
+    /// This is a synthetic stress case for `CoordinateMapper`'s exon-walking
+    /// arithmetic, not a model of any real annotation. The mapper must resolve
+    /// `c.`/`n.` positions by stepping through exonic bases rather than assuming
+    /// the flat `tx = cds_start + cds - 1`, and the holes below are what makes
+    /// the two answers differ — so the tests using it pin the walk, not the
+    /// shortcut.
+    ///
+    /// It does **not** describe cdot. This helper previously claimed to
+    /// "simulate how cdot encodes transcripts with virtual intron positions";
+    /// cdot has no such encoding. Its `cds_start_i`/`cds_end_i` are 1-based
+    /// inclusive coordinates on the *spliced* transcript, so consecutive exons
+    /// abut and introns occupy no transcript coordinate at all. Measured over
+    /// cdot-0.2.32.refseq.GRCh38, 474,818 multi-exon builds yield 58 with any
+    /// transcript-coordinate gap (0.012%), the smallest of them 23 bases, and
+    /// **none** with a one-base gap.
+    ///
+    /// The false claim was load-bearing: it was the stated justification for the
+    /// one-base-per-junction holes that
+    /// `tests/fixtures/sequences/normalization_transcripts.json` carried in every
+    /// multi-exon record, which drifted `NM_000492.4:c.1520` ten bases 3' (#1619).
+    /// `tests/it/normalization_transcripts_exon_contract.rs` now guards that
+    /// fixture; this helper stays malformed on purpose, and is scoped to the
+    /// seven tests below.
     fn make_transcript_with_gaps() -> Transcript {
         // Transcript with 3 exons and gaps between them
         // Exon 1: tx 2-94 (93 bases)
