@@ -46,16 +46,18 @@
 //! behaviour, not that PR's. The corpus is new; the defects it counts are not.
 //!
 //! **That paragraph is the CORPUS branch speaking, and it no longer holds.**
-//! Three normalizer changes have re-blessed figures here since, and there are
-//! three RE-BLESSED sections below — one per change, in the order they landed.
-//! Read all three before quoting any figure as a `main` baseline:
+//! Four changes have re-blessed figures here since, and there are four
+//! RE-BLESSED sections below — one per change, in the order they landed. Read
+//! all four before quoting any figure as a `main` baseline:
 //!
 //! 1. the amino-acid precondition on `coalesce_coding_frame_separation` (#1599),
 //!    which moved five figures, one of them a net regression in `converged`;
 //! 2. the span-preserving re-typing carve-out for a member that straddles a CDS
 //!    boundary (#1536), which moved seven and regressed none;
 //! 3. the two-deletion alignment in the payload splitter (#1649), which moved
-//!    eight and regressed none — the largest confluence move recorded here.
+//!    eight and regressed none — the largest confluence move recorded here;
+//! 4. the `standards.md:39` refusal (#1627), which moved two REFUSAL/validity
+//!    figures, both down, identically in both directions.
 //!
 //! **The second was measured on the first, not composed with it.** The two
 //! changes' affected row sets are disjoint — verified by diffing the row ids, not
@@ -72,7 +74,7 @@
 //! | `non_idempotent_outputs` | ~~7~~ **4** | 4 | the output is not its own fixed point. Re-blessed: see the note below |
 //! | `conflicts_accepted` | 72 | 72 | a conflicting allele was normalized instead of refused — nested, partially overlapping, and two insertions at one interbase |
 //! | `prohibited_absolute_accepted` | 32 | 32 | a shape the spec calls "not allowed" was accepted |
-//! | `prohibition_violating_outputs` | 32 | 32 | and then EMITTED, so the prohibition is not enforced on output either |
+//! | `prohibition_violating_outputs` | ~~32~~ **8** | ~~32~~ **8** | and then EMITTED, so the prohibition is not enforced on output either. Re-blessed by #1627: see the fourth section below |
 //!
 //! `guard_violations` is **0 of 210 guarded rows**, which is a real negative
 //! result rather than a vacuous one: ferro does not merge an irreducible frameless
@@ -82,7 +84,7 @@
 //! The 3'/5' asymmetry is itself a finding: the transcript-leaving class is
 //! **371 to 0**, and 3' is the default direction.
 //!
-//! # RE-BLESSED (1 of 3) — #1599, the amino-acid precondition
+//! # RE-BLESSED (1 of 4) — #1599, the amino-acid precondition
 //!
 //! Everything above and in [`THREE_PRIME`]'s own doc was written on the corpus
 //! PR, which touched no normalizer file. **That is no longer the base.** #1599
@@ -120,7 +122,7 @@
 //! either met or it is not. `outputs_leaving_the_transcript` stays **371**, which
 //! is the pre-existing baseline and not a regression of #1599's.
 //!
-//! # RE-BLESSED (2 of 3) — #1536, the cross-axis re-typing carve-out
+//! # RE-BLESSED (2 of 4) — #1536, the cross-axis re-typing carve-out
 //!
 //! This branch adds a third carve-out from the #350 cross-axis bail in
 //! `normalize_cds`, so a `delins`/`inv` whose span straddles a CDS boundary is
@@ -173,7 +175,7 @@
 //! measures **6** at 3', the two extra rows being
 //! `s00-c3{p,m}-cds-end-del-del-p2-sep1`. Every rank-1 counter is unchanged.
 //!
-//! # RE-BLESSED (3 of 3) — #1649, the two-deletion alignment
+//! # RE-BLESSED (3 of 4) — #1649, the two-deletion alignment
 //!
 //! `merge`'s payload splitter could express *insertion, retained reference,
 //! insertion* but not *deletion, retained reference, deletion*, so a payload
@@ -225,6 +227,61 @@
 //! 3', 3 at 5') and `s00-c3{p,m}-pair-del-del-p1-sep8` (arity 2 at both) are now
 //! converged. `s00-c3{p,m}-m4-all-del-p1-sep2` is untouched and stays pinned
 //! there — its spanning `delins` still stops where `general.md:34` puts it.
+//!
+//! # RE-BLESSED (4 of 4) — #1627, the alignment-only symbol
+//!
+//! `background/standards.md:39` footnotes the table's daggered `X` and `-` as
+//! "used in alignment only", and the decided
+//! `rulings[alignment-only-symbol-in-a-description]` rules that neither may
+//! appear in a description. Ferro accepted `X` in every mode and re-emitted it.
+//! It now refuses: strict at parse, lenient and silent at normalize, per the
+//! decided `rulings[absolute-prohibition-enforcement-stage]`.
+//!
+//! **Two figures moved, both DOWN, identically in both directions:**
+//!
+//! | figure | was | now | direction |
+//! |---|---|---|---|
+//! | 3' and 5' `prohibition_violating_outputs` | 32 | **8** | improves by 24 |
+//! | 3' and 5' `prohibited_conditional_accepted` | 40 | **16** | improves by 24 |
+//!
+//! **It is one population counted twice, not two.** All 24 rows are
+//! `standards.md:39-alignment-only-symbols`, and they were the only entry in
+//! either counter that this clause contributed:
+//! `the_absolute_prohibitions_ferro_accepts_are_three_clauses_and_no_others`
+//! and `every_prohibition_violating_output_is_a_re_emitted_prohibited_input`
+//! pin the per-clause decomposition of each, and both drop exactly that one
+//! entry. The residues are the shapes this change does not reach —
+//! `checklist.md:20`'s 16 conditional rows (correct as they stand; see
+//! `rulings[bare-transcript-intronic-position]`) and `checklist.md:16`'s 8
+//! violating outputs (that is #1628).
+//!
+//! **`prohibited_absolute_accepted` deliberately does NOT move**, and its
+//! staying at 32 is the useful half of the measurement. The corpus grades an
+//! `X` row `Strength::Conditional` — the footnote states a scope rather than
+//! using prohibitive words — while this axis counts an `X` *output* as an
+//! absolute violation. The decided ruling records that the grading is moot
+//! either way, because `general.md:48` admits only IUPAC-IUBMB symbols. So the
+//! two counters that moved are the two the clause was actually in, and the
+//! surviving 32 absolute acceptances are `checklist.md:32`'s `ins6` (24) plus
+//! `checklist.md:16`/`:45`'s genomic offset and hyphen range (4 + 4) — the
+//! other half of #1627 and #1628 respectively, neither touched here.
+//!
+//! **Every rank-2, idempotency and sequence-preservation figure is unchanged**,
+//! in both directions, which is what a refusal of un-denotable inputs should
+//! look like: the refused rows contributed no confluence family and no
+//! sequence, so nothing they leave behind can move. `converged`, `split_*`,
+//! `non_idempotent_outputs`, `sequence_changed`, `conflicts_accepted`,
+//! `outputs_denoting_no_sequence`, `outputs_leaving_the_transcript` and
+//! `guard_violations` all hold at their **#1649** values — this section was
+//! first written against #1536's and re-measured on top of #1649 when the
+//! branch was rebased, which is the only reason the sentence names a revision
+//! at all: "unchanged" is a claim about a baseline, and the baseline moved.
+//!
+//! **Nothing to promote to `spec_corpus_regressions.rs`** — no row newly fails.
+//! The row that stopped failing has an adjudicated-correct guard instead:
+//! `corpus_prohibited_inputs::an_alignment_only_symbol_is_refused_in_every_mode_for_both_x_and_dash`,
+//! which covers the embedded shapes (`delinsACGTX`, `delinsXACGT`,
+//! `delinsACXGT`) the corpus does not generate.
 //!
 //! # CORRECTED — what the transcript-leaving class actually violates
 //!
@@ -364,7 +421,10 @@ pub(crate) const THREE_PRIME: Census = Census {
     unparseable_outputs: 0,
     outputs_denoting_no_sequence: 10,
     outputs_leaving_the_transcript: 371,
-    prohibition_violating_outputs: 32,
+    // Re-blessed DOWN by #1627: `standards.md:39`'s 24 `X` rows are refused
+    // rather than re-emitted. The residual 8 are `checklist.md:16`'s genomic
+    // offsets, which is #1628. See the module docs' fourth RE-BLESSED section.
+    prohibition_violating_outputs: 8,
     // -- confluence (rank 2) --
     //
     // Re-blessed by #1649's two-deletion alignment, on top of #1536's re-bless
@@ -393,7 +453,11 @@ pub(crate) const THREE_PRIME: Census = Census {
     // -- refusal --
     conflicts_accepted: 72,
     prohibited_absolute_accepted: 32,
-    prohibited_conditional_accepted: 40,
+    // Re-blessed DOWN by #1627, same 24 rows as `prohibition_violating_outputs`
+    // above. The residual 16 are `checklist.md:20`'s bare-transcript intronic
+    // rows, which lenient is CORRECT to accept — see
+    // `rulings[bare-transcript-intronic-position]`.
+    prohibited_conditional_accepted: 16,
     // -- negative guards --
     guard_violations: 0,
 };
@@ -407,7 +471,7 @@ pub(crate) const THREE_PRIME: Census = Census {
 /// partitioner.
 ///
 /// Measured on the same base as [`THREE_PRIME`], and re-blessed by the same
-/// three changes — see the module docs' three RE-BLESSED sections.
+/// four changes — see the module docs' four RE-BLESSED sections.
 ///
 /// The two directions agreeing on every rank-1 counter except
 /// `outputs_leaving_the_transcript` is itself the cross-check the two-direction
@@ -422,11 +486,15 @@ pub(crate) const FIVE_PRIME: Census = Census {
     unparseable_outputs: 0,
     outputs_denoting_no_sequence: 18,
     outputs_leaving_the_transcript: 0,
-    prohibition_violating_outputs: 32,
+    // Re-blessed DOWN by #1627, by the same 24 rows as at 3'. Validity does not
+    // depend on shuffle direction, so the two directions moving identically is
+    // the cross-check rather than a coincidence.
+    prohibition_violating_outputs: 8,
     // Unmoved by #1599 or by #1536 — no 5' family changed which side of the
     // converged/split line it sat on in either. **#1649 moves it for the first
     // time**, by 284, and the same three measured zeros hold as at 3': no family
     // loses convergence, rises in arity, or becomes divergent that was not.
+    // #1627 does not move it either: a refused row contributes no family.
     converged: 9_228,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
@@ -446,7 +514,8 @@ pub(crate) const FIVE_PRIME: Census = Census {
     sequence_changed: 0,
     conflicts_accepted: 72,
     prohibited_absolute_accepted: 32,
-    prohibited_conditional_accepted: 40,
+    // Re-blessed DOWN by #1627, by the same 24 rows as at 3'.
+    prohibited_conditional_accepted: 16,
     guard_violations: 0,
 };
 
@@ -558,12 +627,16 @@ pub(crate) struct Census {
     pub(crate) outputs_leaving_the_transcript: usize,
     /// Outputs violating an absolute textual prohibition.
     ///
-    /// **Ratchet-pinned at 32, not asserted at zero** — this doc said the latter
-    /// while both censuses pinned 32, which reads as "ferro emits no prohibited
-    /// output" to anyone who does not go and check the pin. It emits 32, and
-    /// `corpus_prohibited_inputs` decomposes them: 8 × `checklist.md:16` and
-    /// 24 × `standards.md:39`, every one a re-emission of an input that already
+    /// **Ratchet-pinned at 8, not asserted at zero** — this doc once said the
+    /// latter while both censuses pinned a non-zero figure, which reads as
+    /// "ferro emits no prohibited output" to anyone who does not go and check
+    /// the pin. It emits 8, and `corpus_prohibited_inputs` decomposes them:
+    /// 8 × `checklist.md:16`, every one a re-emission of an input that already
     /// violated the clause rather than a violation ferro manufactured.
+    ///
+    /// It was 32 until #1627, whose 24 × `standards.md:39` rows are now refused
+    /// rather than re-emitted. Quote the pin, not this prose, if the two ever
+    /// disagree again — a count in a doc comment is the thing that goes stale.
     pub(crate) prohibition_violating_outputs: usize,
     /// Families whose spellings all reached ONE output. The goal is for this to
     /// equal `family_rows`.

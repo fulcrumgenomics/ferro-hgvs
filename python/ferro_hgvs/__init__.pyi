@@ -1866,6 +1866,7 @@ class ErrorType(_NativeEnum):
     IncompleteCdsStartReference: ErrorType  # 44
     InsertionWithoutInsertedSequence: ErrorType  # 45
     MembersCoalescedFromReportedForm: ErrorType  # 46
+    AlignmentOnlySymbolInDescription: ErrorType  # 47
 
 class ErrorOverride(_NativeEnum):
     """Override behavior for a specific error type."""

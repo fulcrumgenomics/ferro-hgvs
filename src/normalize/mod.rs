@@ -3002,6 +3002,46 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
+        // `standards.md:39` (#1627): a member stating an alignment-only symbol
+        // cannot be normalized, so this refuses BEFORE any work — and, unlike
+        // every rung of the ladder below, in EVERY mode.
+        //
+        // The mode gate belongs at parse, not here. Per the decided
+        // `rulings[absolute-prohibition-enforcement-stage]`, it governs whether
+        // the INPUT is judged; it "does not, and cannot, govern whether the
+        // output conforms", because rule 1 of the README ruleset — "Output
+        // follows the HGVS recommendations. Absolute — never traded." — is about
+        // output. `X` is a masked nucleotide: the base it stands for was not
+        // resolved, so there is no sequence to shuffle, no denotation to derive,
+        // and nothing a lenient mode could be lenient *toward*. Lenient
+        // therefore fails here on exactly the ground the ruling gives it — it
+        // cannot normalize — rather than on an input-conformance check it does
+        // not run.
+        //
+        // Before this, all three modes emitted the offending member back
+        // verbatim with an EMPTY warning vector: normalization was not
+        // impossible, it was VACUOUS, which is worse, because the output looks
+        // normalized while carrying a spelling the recommendations prohibit.
+        if let Some(found) = crate::hgvs::alignment_symbols::alignment_only_symbol(variant) {
+            // `InvalidCoordinates` is this function's existing carrier for a
+            // normalize-stage conformance refusal (W5004 and W3022 below both
+            // use it); the fault is in the stated bases rather than a position,
+            // and the `[W3028]` tag in the message is what names it.
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "[{}] cannot normalize `{}`: it states `{}` ({}), which {} lists as used \
+                     in alignment only. A masked base names no nucleotide, so the description \
+                     denotes no sequence and there is nothing to normalize. State the resolved \
+                     bases instead (`N` is the IUPAC symbol for an unknown base).",
+                    crate::error_handling::ErrorType::AlignmentOnlySymbolInDescription.code(),
+                    found.stated,
+                    found.symbol,
+                    found.meaning(),
+                    found.clause(),
+                ),
+            });
+        }
+
         // Call the canonical core directly (skipping the per-call
         // `detect_shuffle_infos` work `normalize_with_diagnostics` does) and wrap
         // with empty infos; the ladder below only inspects warnings.
