@@ -173,13 +173,41 @@ pub(crate) fn merge_consecutive_edits<P: ReferenceProvider>(
             //     share a codon-relative axis. `g.` / `n.` / UTR / intron
             //     are excluded.
             //   * `prev_a.end + 2 == next_start` (gap of exactly 1 nt).
-            //   * `same_codon(prev_a.end, next_start)` — both endpoints
-            //     fall in the same 1-indexed codon. The right edge of
-            //     `prev_a` is what matters, so a chain that has already
-            //     grown via earlier strict merges can still extend via
-            //     codon-frame (issue #275 item 2).
+            //   * `same_codon(prev_a.start, next_start)` — the two ends of
+            //     the span this merge authorises, `prev_a.start ..=
+            //     next_anchor.end`, fall in the same 1-indexed codon. That
+            //     is `general.md:35`'s **second** conjunct, "together
+            //     affecting one amino acid", and it has to be asked of the
+            //     whole merged span rather than of one endpoint: a codon is
+            //     three positions, so any span of four or more crosses a
+            //     boundary however its right edge lands.
+            //
+            //     It tested `prev_a.end` until #1716. Under #104's original
+            //     `prev_a.start == prev_a.end` the two were the same
+            //     position; #275/#292 relaxed that to `<=` for chain
+            //     extension and the endpoint choice stopped being
+            //     equivalent, so a left member wider than one base merged
+            //     across a codon boundary — `c.[18_19del;21A>C]` ->
+            //     `c.18_21delinsTC` on `NM_004006.2`, which no clause
+            //     licenses and `general.md:34` / `DNA/delins.md:17` then
+            //     govern. The two sibling passes always keyed on the span:
+            //     [`apply_coding_codon_exception`] tests the triplet from
+            //     the left piece's start, [`coalesce_coding_frame_separation`]
+            //     tests `pair[0].ref_start` against `pair[1].ref_end - 1`.
+            //
+            //     #275 item 2's chain extension is not lost by this. A chain
+            //     grown by strict adjacency is length-preserving, so the
+            //     sequence-first canonicalizer re-derives it and
+            //     `build_split_variants` puts it back on the codon boundary;
+            //     since #1524 re-blessed those outputs (`c.[3G>T;4C>G;6A>T]`
+            //     -> `c.[3_4delinsTG;6A>T]`) the merge and the decline emit
+            //     the same string. `issue_275_codon_frame_extensions` pins
+            //     both, unchanged.
             //   * `prev_a.start <= prev_a.end` — `prev_a` is not an
-            //     insertion anchor (those use `start == end + 1`).
+            //     insertion anchor (those use `start == end + 1`). Still
+            //     load-bearing after the change above: an insertion anchor
+            //     has `start == next_start - 1`, which lands in one codon
+            //     two thirds of the time.
             //   * `next_anchor` is a 1-position substitution OR deletion
             //     (checked below): `next_anchor.start == next_anchor.end`
             //     and `next_anchor.alt.len() <= 1`. Issue #275 item 3
@@ -189,7 +217,7 @@ pub(crate) fn merge_consecutive_edits<P: ReferenceProvider>(
                 && (prev_a.region == Region::Cds || prev_a.region == Region::Rna)
                 && prev_a.end.checked_add(2) == Some(next_start)
                 && prev_a.start <= prev_a.end
-                && same_codon(prev_a.end, next_start);
+                && same_codon(prev_a.start, next_start);
 
             if !strict_adjacent && !codon_frame_eligible {
                 break 'try_merge false;
@@ -12319,6 +12347,152 @@ mod tests {
         );
         assert_eq!(out[0], v1);
         assert_eq!(out[1], v2);
+    }
+
+    // ------------------------------------------------------------------
+    // The codon-frame arm's two CALL-SITE conjuncts (#1716)
+    // ------------------------------------------------------------------
+
+    /// The first 36 nt of the real DMD CDS as a `cds_start = 1` transcript, so
+    /// `c.N` indexes byte `N`: `c.19=G`, `c.20=T`, `c.21=A`, `c.22=G`.
+    ///
+    /// Deliberately the same bases as the integration module
+    /// `it::issue_1716_codon_frame_merged_span`, so the two describe one
+    /// fixture rather than two — but the tests below cannot live there, for the
+    /// reason each of them states.
+    fn codon_frame_transcript_provider() -> MockProvider {
+        use crate::reference::transcript::{Exon, ManeStatus, Strand, Transcript};
+        let sequence = "ATGCTTTGGTGGGAAGAAGTAGAGGACTGTTATGAA".to_string();
+        let len = sequence.len() as u64;
+        let mut provider = MockProvider::new();
+        provider.add_transcript(Transcript {
+            id: "NM_TEST.1".to_string(),
+            gene_symbol: Some("TEST".to_string()),
+            strand: Strand::Plus,
+            sequence: Some(sequence),
+            cds_start: Some(1),
+            cds_end: Some(len),
+            exons: vec![Exon::new(1, 1, len)],
+            chromosome: None,
+            genomic_start: None,
+            genomic_end: None,
+            genome_build: Default::default(),
+            mane_status: ManeStatus::Select,
+            refseq_match: None,
+            ensembl_match: None,
+            protein_id: None,
+            cds_start_incomplete: false,
+            exon_cigars: Vec::new(),
+            cached_introns: std::sync::OnceLock::new(),
+        });
+        provider
+    }
+
+    fn merged_members(inputs: [&str; 2]) -> Vec<HgvsVariant> {
+        let provider = codon_frame_transcript_provider();
+        let variants: Vec<HgvsVariant> = inputs
+            .iter()
+            .map(|s| parse_hgvs(s).expect("fixture must parse"))
+            .collect();
+        merge_consecutive_edits(variants, AllelePhase::Cis, &provider)
+    }
+
+    /// `prev_a.start <= prev_a.end` — the conjunct that keeps an **insertion
+    /// anchor** out of the codon-frame arm — is load-bearing, and #1716 made it
+    /// twice as load-bearing.
+    ///
+    /// An insertion's anchor is the empty range `[end, start]` with
+    /// `start == end + 1` (see [`simple_range_for_loc_edit`]), so for
+    /// `c.19_20insG` it is `start = 20`, `end = 19`. The arm's gap test then
+    /// reads `19 + 2 == 21`, and the *span* test this change introduced reads
+    /// `same_codon(20, 21)` — both true. Before #1716 the span test was
+    /// `same_codon(prev_a.end, next_start)` = `same_codon(19, 21)`, which is
+    /// also true here; the change is that the new form holds for **two frames
+    /// in three** rather than one, so the population this conjunct is the only
+    /// thing excluding roughly doubles.
+    ///
+    /// # Why this is a unit test and not an end-to-end one
+    ///
+    /// **Measured, not assumed.** Deleting the conjunct and re-running the whole
+    /// `issue_1716` / `issue_275` / `codon` / `merge` / `spec_corpus_regressions`
+    /// selection — 582 tests — leaves every one of them **green**, and a probe
+    /// of eighteen insertion-anchored descriptions through `Normalizer::normalize`
+    /// returns byte-identical output with and without it. The reason is that the
+    /// sequence-first canonicalizer re-derives the same string from the resulting
+    /// sequence: `c.[19_20insG;21A>C]` normalizes to `c.20_21delinsGTC` whether
+    /// or not `merge_consecutive_edits` merged it. So the conjunct is invisible
+    /// downstream by construction, and only a test at this call site can hold it.
+    #[test]
+    fn an_insertion_anchor_is_refused_by_the_codon_frame_arm() {
+        let out = merged_members(["NM_TEST.1:c.19_20insG", "NM_TEST.1:c.21A>C"]);
+        assert_eq!(
+            out.len(),
+            2,
+            "an insertion anchor must not enter the codon-frame arm, however its \
+             `start` lands in the codon: got {}",
+            out.iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>()
+                .join(";")
+        );
+        assert_eq!(out[0].to_string(), "NM_TEST.1:c.19_20insG");
+        assert_eq!(out[1].to_string(), "NM_TEST.1:c.21A>C");
+    }
+
+    /// The sibling conjunct: `next_anchor` must be a **1-position** substitution
+    /// or deletion, so a multi-position `next` and a multi-base payload are both
+    /// refused.
+    ///
+    /// Two cases because the check is a disjunction and each disjunct needs one:
+    /// `c.21_22del` fails `start == end`, `c.21delinsCC` fails `alt.len() <= 1`.
+    /// The first is the one that matters most — merging it would authorise the
+    /// span `c.19..c.22`, four positions, which cannot lie in one codon and so
+    /// fails `general.md:35`'s second conjunct outright.
+    ///
+    /// Same reason for being a unit test as
+    /// [`an_insertion_anchor_is_refused_by_the_codon_frame_arm`], measured the
+    /// same way: dropping the width check leaves all 582 selected tests green,
+    /// and `c.[19G>T;21delinsCC]` normalizes to `c.19_21delinsTTCC` either way.
+    #[test]
+    fn a_multi_position_next_anchor_is_refused_by_the_codon_frame_arm() {
+        for (next, why) in [
+            (
+                "NM_TEST.1:c.21_22del",
+                "a 2-position deletion (start != end)",
+            ),
+            ("NM_TEST.1:c.21delinsCC", "a 2-base payload (alt.len() > 1)"),
+        ] {
+            let out = merged_members(["NM_TEST.1:c.19G>T", next]);
+            assert_eq!(
+                out.len(),
+                2,
+                "{why} must not enter the codon-frame arm: got {}",
+                out.iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(";")
+            );
+            assert_eq!(out[0].to_string(), "NM_TEST.1:c.19G>T");
+            assert_eq!(out[1].to_string(), next);
+        }
+    }
+
+    /// The positive control for the two above: with a 1-position `next` and a
+    /// non-insertion `prev`, the very same arm **does** merge.
+    ///
+    /// Without this, both tests above are satisfied by a `merge_consecutive_edits`
+    /// that never merges anything — "refused for the documented reason" and
+    /// "refused because the arm is dead" are the same observation otherwise.
+    #[test]
+    fn the_codon_frame_arm_still_merges_the_shape_it_is_for() {
+        let out = merged_members(["NM_TEST.1:c.19G>T", "NM_TEST.1:c.21A>C"]);
+        assert_eq!(
+            out.len(),
+            1,
+            "two 1-position substitutions inside codon 7 are the exception's own \
+             shape and must still merge"
+        );
+        assert_eq!(out[0].to_string(), "NM_TEST.1:c.19_21delinsTTC");
     }
 
     /// `apply_edits_to_window` must not depend on the order its edits arrive in.

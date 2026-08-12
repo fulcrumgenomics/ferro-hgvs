@@ -862,6 +862,15 @@ fn a_repeat_typing_at_the_cds_end_overlaps_its_sibling_deletion() {
 /// Its spanning `delins` still stops where `general.md:34` puts it, so everything
 /// this test was promoted to say still holds for it.
 ///
+/// **The members' side moved once, in #1716, and it moved toward this test's own
+/// clause.** It used to read `c.[24del;30_33delinsA]`; that `delins` spans
+/// `c.30..c.33`, i.e. codon 10 (28-30) and codon 11 (31-33), so it was itself a
+/// merge `general.md:35` cannot license — the per-member codon-frame predicate in
+/// `merge::merge_consecutive_edits` was testing its left anchor's right edge
+/// rather than the span it authorised. With the span tested, the pair stays
+/// individual and the answer is `c.[24del;30_31del;33del]`. The two spellings
+/// still disagree, so the row stays; only the fifth column below changed.
+///
 /// What remains unanswered is whether the *members'* answer is reachable from the
 /// `delins` at all under the restored precondition. What is **not** unanswered is
 /// the neighbouring record: `codon-carve-out-shape-restriction` is `decided`, and
@@ -896,7 +905,8 @@ fn the_codon_gate_splits_a_spanning_delins_its_own_members_do_not() {
         "NM_TEST.1:c.24_33delinsAATTTA",
         "NM_TEST.1:c.[24T>A;26_29del;32_33delinsTA]",
         "NM_TEST.1:c.[24del;27del;30del;33del]",
-        "NM_TEST.1:c.[24del;30_33delinsA]",
+        // Was `c.[24del;30_33delinsA]` until #1716 — see the doc above.
+        "NM_TEST.1:c.[24del;30_31del;33del]",
     )];
 
     for strand in [Strand::Plus, Strand::Minus] {
@@ -907,9 +917,11 @@ fn the_codon_gate_splits_a_spanning_delins_its_own_members_do_not() {
             assert_eq!(
                 normalize_3prime(&frame, members),
                 members_output,
-                "{design} ({strand:?}): the authored member spelling's answer is unchanged by \
-                 the amino-acid precondition — if this moved, the divergence below has a \
-                 different cause than the one recorded here"
+                "{design} ({strand:?}): the authored member spelling's answer is the one #1716 \
+                 left it at, with every span the CODON-FRAME arm authorises inside one codon \
+                 — `c.30_31del` is a merged span and straddles codons 10/11, but it is the \
+                 strict-adjacency arm's, which `general.md:35` never gated — if this moved, \
+                 the divergence below has a different cause than the one recorded here"
             );
 
             let output = normalize_3prime(&frame, spanning);
