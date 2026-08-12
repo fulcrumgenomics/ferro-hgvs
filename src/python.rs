@@ -1314,6 +1314,406 @@ impl PyAppliedVariant {
     }
 }
 
+/// A reference/alternate pair over one window — the input `from_sequences`
+/// takes and the output `to_sequences` produces.
+#[pyclass(name = "SequencePair")]
+pub struct PySequencePair {
+    inner: crate::SequencePair,
+}
+
+#[pymethods]
+impl PySequencePair {
+    /// Build a pair from bases you already hold — a window out of a BAM, a VCF
+    /// row, an aligner's output.
+    ///
+    /// `position` is 1-based and names the first base of `reference`.
+    ///
+    /// `window_is_final` is False on a pair built this way, which is the only
+    /// honest answer: caller-supplied bases carry no evidence about whether
+    /// their 3' edge is where the sequence stops or where the read did.
+    ///
+    /// Args:
+    ///     accession: The sequence the window is on.
+    ///     position: 1-based position of the window's first base.
+    ///     reference: The reference bases over the window.
+    ///     alternate: The observed bases over the same window.
+    ///
+    /// Raises:
+    ///     NormalizationError: for a zero position, an empty reference, or a
+    ///         symbol outside the IUPAC-IUBMB nucleotide set (`general.md:48`),
+    ///         which `U` is excluded from here because this surface's axis is
+    ///         DNA — exactly what `from_sequences` refuses, so a pair that
+    ///         constructs is a pair that derives. The ambiguity codes (`Y`,
+    ///         `R`, `S`, …) are admitted; real ClinVar rows carry them.
+    ///         `X` and `-` are not, being alignment-only.
+    #[new]
+    #[pyo3(signature = (accession, position, reference, alternate))]
+    #[pyo3(text_signature = "(accession, position, reference, alternate)")]
+    fn new(
+        accession: String,
+        position: u64,
+        reference: String,
+        alternate: String,
+    ) -> PyResult<Self> {
+        crate::SequencePair::new(accession, position, reference, alternate)
+            .map(|inner| Self { inner })
+            .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
+    }
+
+    /// Narrow this window to `[start, end]`, trimming matching bases only.
+    ///
+    /// The reference-free half of re-anchoring: use it to hold a derivation
+    /// inside a region it must not leave. `None` leaves that edge where it is;
+    /// both bounds are 1-based inclusive.
+    ///
+    /// It can only narrow — widening needs bases this object does not hold, so
+    /// that is `Normalizer.reanchor`. And narrowing is not free: a bound that
+    /// cuts an ambiguous run pulls the placement back to the bound, which is the
+    /// point when the bound is a requirement and a footgun when it is
+    /// arbitrary. The derivation reports it as `placement_bounded_by_window`.
+    ///
+    /// Raises:
+    ///     NormalizationError: for a bound that would widen the window, cut into
+    ///         a base the two sequences disagree on, empty the reference, or put
+    ///         start past end. Refuses rather than clamping in every case.
+    #[pyo3(signature = (start=None, end=None))]
+    #[pyo3(text_signature = "(start=None, end=None)")]
+    fn trim_to(&self, start: Option<u64>, end: Option<u64>) -> PyResult<Self> {
+        self.inner
+            .trim_to(start, end)
+            .map(|inner| Self { inner })
+            .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
+    }
+
+    /// Derive an HGVS description from this window.
+    ///
+    /// `from_sequences` over the four values this pair already carries, so a
+    /// caller holding a pair — especially one just returned by `trim_to` or
+    /// `reanchor` — does not re-spread them and cannot accidentally pair a
+    /// pre-trim position with post-trim bases.
+    ///
+    /// Args:
+    ///     max_grid_cells: As the free `from_sequences`.
+    ///     direction: "3prime" (default) or "5prime".
+    ///
+    /// Returns:
+    ///     DerivedDescription
+    ///
+    /// Raises:
+    ///     ValueError: for an unrecognized direction, or a max_grid_cells of 0.
+    ///     NormalizationError: as the free `from_sequences`.
+    #[pyo3(signature = (*, max_grid_cells=None, direction="3prime"))]
+    #[pyo3(text_signature = "(*, max_grid_cells=None, direction='3prime')")]
+    fn derive(
+        &self,
+        py: Python<'_>,
+        max_grid_cells: Option<usize>,
+        direction: &str,
+    ) -> PyResult<PyDerivedDescription> {
+        let options = from_sequences_options(max_grid_cells, parse_direction_or_raise(direction)?)?;
+        let inner = self.inner.clone();
+        // Detached for the reason given on the free `from_sequences`: the grid
+        // is caller-tunable and unbounded by design.
+        py.detach(|| inner.derive(&options))
+            .map(|inner| PyDerivedDescription { inner })
+            .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
+    }
+
+    /// 1-based position of the last base of `reference`.
+    #[getter]
+    fn end(&self) -> u64 {
+        self.inner.end()
+    }
+
+    /// The accession the window is on.
+    #[getter]
+    fn accession(&self) -> &str {
+        &self.inner.accession
+    }
+
+    /// **1-based** position of the window's first base.
+    ///
+    /// Note this differs from `AppliedVariant.start`, which is 0-based. HGVS and
+    /// VCF are both 1-based and this pair is what you hand `from_sequences`, so
+    /// it is 1-based too.
+    #[getter]
+    fn position(&self) -> u64 {
+        self.inner.position
+    }
+
+    /// The reference bases over the window.
+    #[getter]
+    fn reference(&self) -> &str {
+        &self.inner.reference
+    }
+
+    /// The same window after the variant has been applied.
+    #[getter]
+    fn alternate(&self) -> &str {
+        &self.inner.alternate
+    }
+
+    /// Whether the window is as wide 3' as it can usefully be — it ends where
+    /// the pad asked, **or** where the sequence itself ends.
+    ///
+    /// So `True` is the ordinary answer, including for a variant near a sequence
+    /// end where the pad was clipped: there was nothing further to read, so the
+    /// roll is settled either way. `False` means the provider stopped short of
+    /// both and the window may have cut an ambiguous run in half.
+    ///
+    /// Not "the full pad was served", despite what a pad-shaped name would
+    /// suggest, and 3'-only — the 5' flank is prepended separately and is not
+    /// reflected here.
+    #[getter]
+    fn window_is_final(&self) -> bool {
+        self.inner.window_is_final
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "SequencePair(accession={:?}, position={}, reference={:?}, alternate={:?}, \
+             window_is_final={})",
+            self.inner.accession,
+            self.inner.position,
+            self.inner.reference,
+            self.inner.alternate,
+            if self.inner.window_is_final {
+                "True"
+            } else {
+                "False"
+            },
+        )
+    }
+
+    /// Equality over all five fields, matching the Rust type's derived
+    /// `PartialEq`.
+    ///
+    /// A `#[pyclass]` does not forward a derived `PartialEq`, so without this
+    /// two pairs holding the same window compared unequal — by identity, which
+    /// is the default and is never the answer a caller wants from a value
+    /// object. It is one an assertion silently passes over (`assert a != b`),
+    /// so it is pinned by a test rather than left to the `__repr__`.
+    fn __eq__(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+
+    /// Hash consistent with `__eq__`, making pairs usable as dict keys and set
+    /// members.
+    fn __hash__(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.inner.accession.hash(&mut hasher);
+        self.inner.position.hash(&mut hasher);
+        self.inner.reference.hash(&mut hasher);
+        self.inner.alternate.hash(&mut hasher);
+        self.inner.window_is_final.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// A derived description, plus the one caveat a window-local derivation owes
+/// its caller.
+#[pyclass(name = "DerivedDescription")]
+pub struct PyDerivedDescription {
+    inner: crate::DerivedDescription,
+}
+
+#[pymethods]
+impl PyDerivedDescription {
+    /// The description.
+    #[getter]
+    fn variant(&self) -> PyHgvsVariant {
+        PyHgvsVariant {
+            inner: self.inner.variant.clone(),
+        }
+    }
+
+    /// Whether any member rests on an edge of the supplied window.
+    ///
+    /// **A "could move" flag, not an "is wrong" flag**, and conservative in that
+    /// direction deliberately: the placement may lie against the edge of the
+    /// bases supplied, so a wider window — or a `Normalizer.normalize` pass,
+    /// which holds the reference — could move it.
+    ///
+    /// It is **not** "exactly and only when the answer is read-dependent". That
+    /// wording was here and is measurably false: over a 4-base run a window
+    /// flush with the tract is flagged and still gives the same answer a
+    /// whole-sequence derivation gives. Telling the two apart needs the
+    /// reference, which this derivation does not read, so it reports the
+    /// uncertainty instead of resolving it. A flagged answer is never *wrong* —
+    /// it denotes the same bases and carries the same canonical SPDI.
+    #[getter]
+    fn placement_bounded_by_window(&self) -> bool {
+        self.inner.placement_bounded_by_window
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "DerivedDescription(variant={:?}, placement_bounded_by_window={})",
+            self.inner.variant.to_string(),
+            if self.inner.placement_bounded_by_window {
+                "True"
+            } else {
+                "False"
+            },
+        )
+    }
+}
+
+/// Resolve the keyword arguments the two `from_sequences` entry points share.
+///
+/// Takes a resolved [`ShuffleDirection`] rather than the keyword string so that
+/// **both** callers can reach it: the free functions parse a string, while
+/// `Normalizer::from_sequences` takes the direction off its own config. Shaped
+/// around the first caller, the second forked it — and with it the refusal
+/// message, which two Python tests pin by text.
+///
+/// `max_grid_cells=None` means "the default", which is what an unset keyword
+/// should mean; `0` is rejected rather than silently admitting no grid at all,
+/// since every non-trivial pair needs at least one cell and a caller writing it
+/// has made a mistake this would otherwise hide behind an unrelated refusal.
+fn from_sequences_options(
+    max_grid_cells: Option<usize>,
+    direction: ShuffleDirection,
+) -> PyResult<crate::FromSequencesOptions> {
+    let mut options = crate::FromSequencesOptions::default().with_direction(direction);
+    if let Some(cells) = max_grid_cells {
+        if cells == 0 {
+            return Err(PyValueError::new_err(
+                "max_grid_cells must be positive; 0 admits no alignment grid at all",
+            ));
+        }
+        options = options.with_max_grid_cells(cells);
+    }
+    Ok(options)
+}
+
+/// Derive an HGVS description from a reference/alternate sequence pair.
+///
+/// The caller supplies the bases; this supplies the description. It reads **no
+/// reference sequence**, so its output is a pure function of its arguments —
+/// the same bases give the same description on any machine, against any
+/// reference build, with no hidden input.
+///
+/// **Case is not a refusal.** Both sequences are upper-cased before anything
+/// reads them, so a soft-masked (lower-case) window derives exactly what its
+/// upper-case twin derives, and a masked reference against an upper-case
+/// alternate is ordinary input rather than a mismatch.
+///
+/// This delivers the two normalization rules that are always achievable —
+/// **conformant** and **deterministic** — and deliberately not the two that
+/// need the reference, **recommended form** and **confluent**. So an output may
+/// be 3'-shiftable further than a window-local function could shift it, which
+/// is not a defect. Run `Normalizer.normalize` afterwards if you want it, or
+/// `Normalizer.from_sequences(..., normalize=True)` to do both in one call.
+///
+/// Args:
+///     accession: The sequence the window is on. A transcript or protein
+///         accession is refused — a `g.` description on an `NM_` denotes
+///         nothing.
+///     position: **1-based** position of the window's first base.
+///     reference: The reference bases over the window. Taken on trust and not
+///         verified — verifying it would need the reference and would make the
+///         provider a hidden input, costing exactly the determinism this
+///         function exists to provide. Pass bases that are not the reference
+///         and you get a faithful description of the pair you passed.
+///     alternate: The observed bases over the same window.
+///     max_grid_cells: Largest alignment grid, in cells, the partitioner will
+///         build. Defaults to (4096 + 1) ** 2, about 310 MB at roughly 18
+///         bytes a cell. Exceeding it raises rather than answering with a
+///         weaker rule.
+///     direction: Which end of an ambiguous run a pure indel is placed at —
+///         "3prime" (default) or "5prime".
+///
+/// Returns:
+///     HgvsVariant
+///
+/// Raises:
+///     ValueError: for an unrecognized `direction`, or a `max_grid_cells` of 0.
+///         These two are checked at the binding, before any derivation.
+///     NormalizationError: for everything the derivation itself refuses — a
+///         zero position, an empty reference, a non-nucleotide symbol, a
+///         transcript or protein accession, a grid over budget, or an inserted
+///         payload resting against the window's 5' edge with no anchor inside
+///         it. A subclass of `FerroError` and `RuntimeError`.
+///
+/// The two classes are **not** one hierarchy, and no single class catches
+/// both: the binding's `ValueError`s are raised by `PyValueError::new_err` and
+/// are deliberately outside `FerroError`, which is the repository-wide split
+/// between an argument-shape mistake and a variant-processing failure. To
+/// handle everything this function can raise in one clause, catch
+/// `(ValueError, ferro_hgvs.FerroError)` — or simply `Exception`. This doc said
+/// `ferro_hgvs.FerroError` alone covered both; it does not, and
+/// `test_the_two_refusal_classes_are_the_established_split` asserts it does
+/// not.
+///
+/// Example:
+///     >>> import ferro_hgvs
+///     >>> str(ferro_hgvs.from_sequences("NC_000001.11", 1000, "AGCG", "AG"))
+///     'NC_000001.11:g.1002_1003del'
+#[pyfunction]
+#[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None, direction="3prime"))]
+#[pyo3(
+    text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None, direction='3prime')"
+)]
+fn from_sequences(
+    py: Python<'_>,
+    accession: &str,
+    position: u64,
+    reference: &str,
+    alternate: &str,
+    max_grid_cells: Option<usize>,
+    direction: &str,
+) -> PyResult<PyHgvsVariant> {
+    let options = from_sequences_options(max_grid_cells, parse_direction_or_raise(direction)?)?;
+    // Detached even though no provider is touched: the work behind this call is
+    // unbounded by design — the default budget admits a 4097x4097 grid, ~310 MB
+    // and 16.8 M cells, and the docs invite raising it — so holding the GIL
+    // would block every other Python thread for its duration. The sibling
+    // `Normalizer::from_sequences` already detaches around the same derivation.
+    // The `&str` arguments borrow Python-owned memory, so they are owned first.
+    let (accession, reference, alternate) = (
+        accession.to_string(),
+        reference.to_string(),
+        alternate.to_string(),
+    );
+    py.detach(|| crate::from_sequences(&accession, position, &reference, &alternate, &options))
+        .map(|inner| PyHgvsVariant { inner })
+        .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
+}
+
+/// `from_sequences`, reporting also whether the derivation reached a window
+/// edge.
+///
+/// Returns:
+///     DerivedDescription with `variant` and `placement_bounded_by_window`.
+#[pyfunction]
+#[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None, direction="3prime"))]
+#[pyo3(
+    text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None, direction='3prime')"
+)]
+fn from_sequences_detailed(
+    py: Python<'_>,
+    accession: &str,
+    position: u64,
+    reference: &str,
+    alternate: &str,
+    max_grid_cells: Option<usize>,
+    direction: &str,
+) -> PyResult<PyDerivedDescription> {
+    let options = from_sequences_options(max_grid_cells, parse_direction_or_raise(direction)?)?;
+    // Detached for the reason given on `from_sequences` above.
+    let (accession, reference, alternate) = (
+        accession.to_string(),
+        reference.to_string(),
+        alternate.to_string(),
+    );
+    py.detach(|| {
+        crate::from_sequences_detailed(&accession, position, &reference, &alternate, &options)
+    })
+    .map(|inner| PyDerivedDescription { inner })
+    .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
+}
+
 #[pyclass(name = "Normalizer")]
 pub struct PyNormalizer {
     provider: PyProvider,
@@ -1547,6 +1947,217 @@ impl PyNormalizer {
         py.detach(|| normalizer.apply_to_reference(&inner_variant))
             .map(|inner| PyAppliedVariant { inner })
             .map_err(|e| ferro_typed("ProjectionError", format!("{e}"), &e))
+    }
+
+    /// Apply a variant to the reference and return the padded window as a
+    /// reference/alternate pair — the inverse of `from_sequences`.
+    ///
+    /// This is what turns any HGVS description into `from_sequences` input, so a
+    /// caller that already has descriptions needs no new plumbing to reach the
+    /// derivation. It differs from `apply_to_reference` in three ways that all
+    /// matter to that use: the position is **1-based**, both sides are padded,
+    /// and it reports whether the window's 3' edge is settled
+    /// (`window_is_final`).
+    ///
+    /// **That flag is not "the full pad was served"** — see its own doc. A
+    /// window clipped by the *sequence end* served less than the full pad and
+    /// is still settled, because there is nothing further to read. This
+    /// paragraph said "reports whether the full pad was served" while the
+    /// getter 500 lines below said it is not that, which is the literal reading
+    /// a Python test asserted and failed, and is what renamed the field off
+    /// `full_pad_served`.
+    ///
+    /// The pad is not decoration. `dup` typing reads the reference bases
+    /// immediately 5' of an insertion point, so a member flush with the window's
+    /// 5' edge comes back as an `ins` instead of a `dup` — measured over the cis
+    /// confluence corpus, ten classes reached both spellings purely from how
+    /// much flank their spans left them.
+    ///
+    /// Args:
+    ///     variant: The variant to express as sequences.
+    ///     pad: Flank in bases, on each side. Defaults to 128, matching the room
+    ///         the normalizer's own derivation gives its 3' placement.
+    ///
+    /// Returns:
+    ///     SequencePair with `accession`, `position` (1-based), `reference`,
+    ///     `alternate` and `window_is_final`.
+    ///
+    /// Raises:
+    ///     ProjectionError: as `apply_to_reference` — a variant with no single
+    ///         well-defined resulting sequence, or a span the provider cannot
+    ///         serve.
+    #[pyo3(signature = (variant, pad=128))]
+    #[pyo3(text_signature = "(variant, pad=128)")]
+    fn to_sequences(
+        &self,
+        py: Python<'_>,
+        variant: &PyHgvsVariant,
+        pad: u64,
+    ) -> PyResult<PySequencePair> {
+        let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
+        let inner_variant = variant.inner.clone();
+        py.detach(|| normalizer.to_sequences(&inner_variant, pad))
+            .map(|inner| PySequencePair { inner })
+            .map_err(|e| ferro_typed("ProjectionError", format!("{e}"), &e))
+    }
+
+    /// Move a window to `[start, end]`, padding from the reference or trimming,
+    /// whichever each side needs.
+    ///
+    /// The reference-holding half of re-anchoring; `SequencePair.trim_to` is the
+    /// pure half and can only narrow. `None` leaves that edge where it is; both
+    /// bounds are 1-based inclusive.
+    ///
+    /// Use it to hold a derivation inside a region it must not leave — a target
+    /// region, an amplicon, a tiling window — from whatever raw window each
+    /// caller happens to have, **provided every such window overlaps the
+    /// region**.
+    ///
+    /// **It moves a window's edges; it does not relocate the window.** Each edge
+    /// may go outwards (padded from the reference) or inwards (trimmed), in any
+    /// combination — but the requested window must overlap the pair's own, and
+    /// the overlap must still hold the bases the two sequences disagree on. The
+    /// changed bases exist only in the pair, so there is nothing to carry to a
+    /// region the pair does not cover.
+    ///
+    /// The bases come back **upper-cased**, as from `to_sequences`: the flank is
+    /// read from the provider and the rest is the caller's, so a soft-masked
+    /// region would otherwise return a mixed-case pair no caller wrote.
+    /// `SequencePair.trim_to`, which fetches nothing, leaves case alone.
+    ///
+    /// **Not the tool for making heterogeneous inputs agree in general.** That
+    /// is already available and better: `Normalizer.from_sequences(...,
+    /// normalize=True)`, or a round trip through `to_sequences`. Both reach the
+    /// reference-anchored placement, which shifts as far as the sequence allows
+    /// rather than as far as a chosen window allows. Anchoring to a window that
+    /// cuts an ambiguous run makes every caller using that window agree with
+    /// each other and disagree with the reference.
+    ///
+    /// Args:
+    ///     pair: The window to move.
+    ///     start: New 1-based first position, or None to leave it.
+    ///     end: New 1-based last position, or None to leave it.
+    ///
+    /// Raises:
+    ///     NormalizationError: for every refusal — a bound outside the sequence
+    ///         (a start of 0, or an end past the last base; refused rather than
+    ///         clamped back to the contig, because a caller who asked for bases
+    ///         that do not exist has a bug upstream a clamp would hide), a
+    ///         requested window disjoint from the pair's own, and anything
+    ///         `SequencePair.trim_to` refuses on the narrowing side.
+    ///
+    /// This method raises **one** class. It is not `ReferenceDataError`, which
+    /// this doc named until 2026-08-12 for the out-of-sequence bound: every
+    /// error here is mapped through one `ferro_typed("NormalizationError", …)`,
+    /// and `ferro_exception` resolves a class *name* rather than dispatching on
+    /// the `FerroError` variant, so no input could ever produce the documented
+    /// class. `ReferenceDataError` is this binding's class for failures loading
+    /// reference data (`Normalizer(...)`, `from_manifest`, `prepare`, `check`),
+    /// not for a per-call lookup — the sibling `normalize_variant` likewise
+    /// raises `NormalizationError` for an unknown accession. Documenting the
+    /// class that is raised keeps that convention; raising the documented one
+    /// would make these the only per-call sites in the file that vary their
+    /// class by error variant.
+    #[pyo3(signature = (pair, start=None, end=None))]
+    #[pyo3(text_signature = "(pair, start=None, end=None)")]
+    fn reanchor(
+        &self,
+        py: Python<'_>,
+        pair: &PySequencePair,
+        start: Option<u64>,
+        end: Option<u64>,
+    ) -> PyResult<PySequencePair> {
+        let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
+        let inner = pair.inner.clone();
+        py.detach(|| normalizer.reanchor(&inner, start, end))
+            .map(|inner| PySequencePair { inner })
+            .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
+    }
+
+    /// `from_sequences`, against this normalizer's reference.
+    ///
+    /// The free `ferro_hgvs.from_sequences` is a pure function of its arguments
+    /// and so cannot range-check `position` — doing that needs the reference,
+    /// which would make the provider a hidden input. This one holds a provider,
+    /// so it does check, and refuses an interval running past the end of the
+    /// sequence. It also offers `normalize`, which the free function cannot.
+    ///
+    /// The shuffle direction is this normalizer's own, set when it was
+    /// constructed, rather than a separate keyword — one direction per
+    /// normalizer is the contract every other method here follows.
+    ///
+    /// Args:
+    ///     accession: The sequence the window is on.
+    ///     position: **1-based** position of the window's first base.
+    ///     reference: The reference bases over the window.
+    ///     alternate: The observed bases over the same window.
+    ///     max_grid_cells: As the free function.
+    ///     normalize: Normalize the derived description before returning it.
+    ///         Defaults to False, but prefer True unless you have a reason not
+    ///         to: over a 6,000-shape sweep `normalize` moved 8.6% of derived
+    ///         descriptions (repeat notation, reference-anchored member
+    ///         re-derivation, and inversions spread across several members).
+    ///         All three are the recommended-form and confluence rules this
+    ///         design assigns to `normalize`, so False still yields a
+    ///         conformant, deterministic description.
+    ///
+    /// Returns:
+    ///     HgvsVariant
+    ///
+    /// Raises:
+    ///     ValueError: for a `max_grid_cells` of 0. Checked at the binding,
+    ///         before any derivation, and outside the `FerroError` hierarchy —
+    ///         see the free function.
+    ///     NormalizationError: everything else, including the two refusals this
+    ///         method adds over the free function: an unknown accession, and an
+    ///         interval running past the end of the sequence. Plus any refusal
+    ///         from `normalize` when `normalize=True`.
+    ///
+    /// Those last two were documented as `ReferenceDataError` until 2026-08-12
+    /// and never raised it — see `reanchor` for why this file maps a per-call
+    /// failure to the method's own class rather than dispatching on the
+    /// `FerroError` variant.
+    #[pyo3(signature = (accession, position, reference, alternate, *, max_grid_cells=None, normalize=false))]
+    #[pyo3(
+        text_signature = "(accession, position, reference, alternate, *, max_grid_cells=None, normalize=False)"
+    )]
+    // `wrong_self_convention`: the name is the point. It matches
+    // `ferro_hgvs.from_sequences`, the free function it is the reference-holding
+    // sibling of, and the repository's `from` convention for a constructor-like
+    // entry point. Renaming it to satisfy the lint would break the one
+    // correspondence a caller navigates by.
+    //
+    // `too_many_arguments`: four are the variant, two are options and one is the
+    // GIL token. The established handling in this file — three other bindings
+    // carry the same allow — since the argument list is fixed by the Python
+    // surface rather than chosen here.
+    #[allow(clippy::wrong_self_convention, clippy::too_many_arguments)]
+    fn from_sequences(
+        &self,
+        py: Python<'_>,
+        accession: &str,
+        position: u64,
+        reference: &str,
+        alternate: &str,
+        max_grid_cells: Option<usize>,
+        normalize: bool,
+    ) -> PyResult<PyHgvsVariant> {
+        let options = from_sequences_options(max_grid_cells, self.config.shuffle_direction)?;
+        let normalizer = Normalizer::with_config(self.provider.clone(), self.config.clone());
+        // Owned before detaching: `&str` borrows Python-owned memory and cannot
+        // cross into the closure. The same shape `VariantProjector` uses.
+        let (accession, reference, alternate) = (
+            accession.to_string(),
+            reference.to_string(),
+            alternate.to_string(),
+        );
+        py.detach(|| {
+            normalizer.from_sequences(
+                &accession, position, &reference, &alternate, &options, normalize,
+            )
+        })
+        .map(|inner| PyHgvsVariant { inner })
+        .map_err(|e| ferro_typed("NormalizationError", format!("{e}"), &e))
     }
 
     /// Normalize an HGVS variant
@@ -6262,6 +6873,8 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse, m)?)?;
     m.add_function(wrap_pyfunction!(normalize, m)?)?;
     m.add_function(wrap_pyfunction!(normalize_with_warnings, m)?)?;
+    m.add_function(wrap_pyfunction!(from_sequences, m)?)?;
+    m.add_function(wrap_pyfunction!(from_sequences_detailed, m)?)?;
 
     // SPDI functions
     m.add_function(wrap_pyfunction!(parse_spdi, m)?)?;
@@ -6326,6 +6939,8 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBatchProgress>()?;
     m.add_class::<PyBatchResult>()?;
     m.add_class::<PyAppliedVariant>()?;
+    m.add_class::<PySequencePair>()?;
+    m.add_class::<PyDerivedDescription>()?;
     m.add_class::<PyBatchProcessor>()?;
     m.add_class::<PyBatchStream>()?;
     m.add_class::<PyBatchItem>()?;

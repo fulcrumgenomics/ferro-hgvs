@@ -94,6 +94,93 @@ def normalize_with_warnings(
     ...
 
 # ============================================================================
+# Sequence-pair Functions
+# ============================================================================
+
+def from_sequences(
+    accession: str,
+    position: int,
+    reference: str,
+    alternate: str,
+    *,
+    max_grid_cells: int | None = None,
+    direction: str = "3prime",
+) -> HgvsVariant:
+    """Derive an HGVS description from a reference/alternate sequence pair.
+
+    The caller supplies the bases; this supplies the description. It reads **no
+    reference sequence**, so its output is a pure function of its arguments —
+    the same bases give the same description on any machine, against any
+    reference build, with no hidden input.
+
+    **Case is not a refusal.** Both sequences are upper-cased before anything
+    reads them, so a soft-masked (lower-case) window derives exactly what its
+    upper-case twin derives.
+
+    This delivers the two normalization rules that are always achievable —
+    conformant and deterministic — and deliberately not the two that need the
+    reference, recommended form and confluent. So an output may be 3'-shiftable
+    further than a window-local function could shift it, which is not a defect.
+    Run ``Normalizer.normalize`` afterwards if you want it, or
+    ``Normalizer.from_sequences(..., normalize=True)`` to do both in one call.
+
+    Args:
+        accession: The sequence the window is on. A transcript or protein
+            accession is refused — a ``g.`` description on an ``NM_`` denotes
+            nothing.
+        position: 1-based position of the window's first base.
+        reference: The reference bases over the window. Taken on trust and not
+            verified — verifying it would need the reference and would make the
+            provider a hidden input, costing exactly the determinism this
+            function exists to provide.
+        alternate: The observed bases over the same window.
+        max_grid_cells: Largest alignment grid, in cells, the partitioner will
+            build. Defaults to ``(4096 + 1) ** 2``, about 310 MB at roughly 18
+            bytes a cell. Exceeding it raises rather than answering with a
+            weaker rule.
+        direction: Which end of an ambiguous run a pure indel is placed at —
+            "3prime" (default) or "5prime".
+
+    Returns:
+        The derived HgvsVariant.
+
+    Raises:
+        ValueError: for an unrecognized ``direction``, or a ``max_grid_cells``
+            of 0. These two are checked at the binding, before any derivation.
+        NormalizationError: for everything the derivation itself refuses — a
+            zero position, an empty reference, a non-nucleotide symbol, a
+            transcript or protein accession, a grid over budget, or an inserted
+            payload resting against the window's 5' edge with no anchor inside
+            it. A subclass of ``FerroError`` and ``RuntimeError``.
+
+    The two classes are **not** one hierarchy, and no single class catches both:
+    the binding's ``ValueError``s are outside ``FerroError`` by design, which is
+    the repository-wide split between an argument-shape mistake and a
+    variant-processing failure. Catch ``(ValueError, ferro_hgvs.FerroError)`` —
+    or simply ``Exception`` — to handle everything this function can raise.
+
+    Example:
+        >>> str(from_sequences("NC_000001.11", 1000, "AGCG", "AG"))
+        'NC_000001.11:g.1002_1003del'
+    """
+    ...
+
+def from_sequences_detailed(
+    accession: str,
+    position: int,
+    reference: str,
+    alternate: str,
+    *,
+    max_grid_cells: int | None = None,
+    direction: str = "3prime",
+) -> DerivedDescription:
+    """:func:`from_sequences`, reporting also whether the derivation reached a window edge.
+
+    Same arguments and same refusals; see :func:`from_sequences`.
+    """
+    ...
+
+# ============================================================================
 # SPDI Functions
 # ============================================================================
 
@@ -794,6 +881,120 @@ class Normalizer:
         """Parse and normalize an HGVS string."""
         ...
 
+    def to_sequences(self, variant: HgvsVariant, pad: int = 128) -> SequencePair:
+        """Apply the variant and return the padded window as a sequence pair.
+
+        The inverse of :func:`from_sequences`, and what turns any HGVS
+        description into derivation input — so a caller that already has
+        descriptions needs no new plumbing to reach it. Differs from
+        `apply_to_reference` in three ways that all matter to that use: the
+        position is 1-based, both sides are padded, and it reports whether the
+        window's 3' edge is settled (``window_is_final``).
+
+        That flag is **not** "the full pad was served" — see its own doc. A
+        window clipped by the sequence end served less than the full pad and is
+        still settled, because there is nothing further to read.
+
+        The pad is not decoration. `dup` typing reads the reference bases
+        immediately 5' of an insertion point, so a member flush with the
+        window's 5' edge comes back as an `ins` rather than a `dup`.
+
+        Args:
+            variant: The variant to express as sequences.
+            pad: Flank in bases, on each side. Defaults to 128.
+
+        Raises:
+            ProjectionError: as `apply_to_reference`.
+        """
+        ...
+
+    def reanchor(
+        self,
+        pair: SequencePair,
+        start: int | None = None,
+        end: int | None = None,
+    ) -> SequencePair:
+        """Move a window to [start, end], padding from the reference or trimming.
+
+        The reference-holding half of re-anchoring; ``SequencePair.trim_to`` is
+        the pure half and can only narrow. ``None`` leaves that edge where it
+        is; both bounds are 1-based inclusive.
+
+        Use it to hold a derivation inside a region it must not leave — a target
+        region, an amplicon, a tiling window — provided every raw window
+        overlaps that region.
+
+        **It moves a window's edges; it does not relocate the window.** Each
+        edge may go outwards (padded from the reference) or inwards (trimmed),
+        in any combination — but the requested window must overlap the pair's
+        own, and the overlap must still hold the bases the two sequences
+        disagree on. The bases come back upper-cased, as from
+        ``to_sequences``; ``SequencePair.trim_to`` fetches nothing and leaves
+        case alone.
+
+        **Not the tool for making heterogeneous inputs agree in general.** That
+        is already available and better: ``from_sequences(..., normalize=True)``
+        or a round trip through ``to_sequences``, both of which reach the
+        reference-anchored placement.
+
+        Raises:
+            NormalizationError: for every refusal — a bound outside the sequence
+                (refused rather than clamped back to the contig), a requested
+                window disjoint from the pair's own, and anything
+                ``SequencePair.trim_to`` refuses. This method raises one class;
+                it is not ``ReferenceDataError``, which this stub named until
+                2026-08-12 and which no input could produce.
+        """
+        ...
+
+    def from_sequences(
+        self,
+        accession: str,
+        position: int,
+        reference: str,
+        alternate: str,
+        *,
+        max_grid_cells: int | None = None,
+        normalize: bool = False,
+    ) -> HgvsVariant:
+        """:func:`from_sequences`, against this normalizer's reference.
+
+        The free function is a pure function of its arguments and so cannot
+        range-check ``position`` — doing that needs the reference, which would
+        make the provider a hidden input. This one holds a provider, so it does
+        check, and refuses an interval running past the end of the sequence. It
+        also offers ``normalize``, which the free function cannot.
+
+        The shuffle direction is this normalizer's own, set when it was
+        constructed, rather than a separate keyword.
+
+        Args:
+            accession: The sequence the window is on.
+            position: 1-based position of the window's first base.
+            reference: The reference bases over the window.
+            alternate: The observed bases over the same window.
+            max_grid_cells: As the free function.
+            normalize: Normalize the derived description before returning it.
+                Defaults to False, but prefer True unless you have a reason not
+                to: over a 6,000-shape sweep ``normalize`` moved 8.6% of derived
+                descriptions (repeat notation, reference-anchored member
+                re-derivation, and inversions spread across several members).
+                All three are the recommended-form and confluence rules this
+                design assigns to ``normalize``, so False still yields a
+                conformant, deterministic description.
+
+        Raises:
+            ValueError: for a ``max_grid_cells`` of 0. Checked at the binding
+                and outside the ``FerroError`` hierarchy.
+            NormalizationError: everything else, including the two refusals this
+                method adds over the free function — an unknown accession, and
+                an interval running past the end of the sequence — plus any
+                refusal from ``normalize`` when ``normalize=True``. Those two
+                were documented as ``ReferenceDataError`` until 2026-08-12 and
+                never raised it.
+        """
+        ...
+
 # ============================================================================
 # SPDI Classes
 # ============================================================================
@@ -1256,6 +1457,148 @@ class AppliedVariant:
     @property
     def resulting(self) -> str:
         """The same window after every member has been applied."""
+        ...
+
+    def __repr__(self) -> str: ...
+
+class SequencePair:
+    """A reference/alternate pair over one window.
+
+    The input `from_sequences` takes and the output `to_sequences` produces.
+    """
+
+    def __init__(self, accession: str, position: int, reference: str, alternate: str) -> None:
+        """Build a pair from bases you already hold.
+
+        A window out of a BAM, a VCF row, an aligner's output. ``position`` is
+        1-based and names the first base of ``reference``.
+
+        ``window_is_final`` is False on a pair built this way: caller-supplied
+        bases carry no evidence about whether their 3' edge is where the
+        sequence stops or where the read did.
+
+        Raises:
+            NormalizationError: for a zero position, an empty reference, or a
+                symbol outside the IUPAC-IUBMB nucleotide set (``general.md:48``),
+                which ``U`` is excluded from here because this surface's axis is
+                DNA — exactly what :func:`from_sequences` refuses, so a pair that
+                constructs is a pair that derives. The ambiguity codes (``Y``,
+                ``R``, ``S``, …) are admitted; real ClinVar rows carry them.
+                ``X`` and ``-`` are not, being alignment-only.
+        """
+        ...
+
+    def trim_to(self, start: int | None = None, end: int | None = None) -> SequencePair:
+        """Narrow this window to [start, end], trimming matching bases only.
+
+        The reference-free half of re-anchoring: use it to hold a derivation
+        inside a region it must not leave. ``None`` leaves that edge where it
+        is; both bounds are 1-based inclusive.
+
+        It can only narrow — widening needs bases this object does not hold, so
+        that is ``Normalizer.reanchor``. Narrowing is not free: a bound that
+        cuts an ambiguous run pulls the placement back to the bound, which is
+        the point when the bound is a requirement and a footgun when it is
+        arbitrary. The derivation reports it as ``placement_bounded_by_window``.
+
+        Raises:
+            NormalizationError: for a bound that would widen the window, cut
+                into a base the two sequences disagree on, empty the reference,
+                or put start past end. Refuses rather than clamping.
+        """
+        ...
+
+    def derive(
+        self, *, max_grid_cells: int | None = None, direction: str = "3prime"
+    ) -> DerivedDescription:
+        """Derive an HGVS description from this window.
+
+        :func:`from_sequences` over the four values this pair already carries,
+        so a caller holding a pair — especially one just returned by
+        ``trim_to`` or ``reanchor`` — does not re-spread them and cannot
+        accidentally pair a pre-trim position with post-trim bases.
+
+        Raises:
+            ValueError: for an unrecognized ``direction``, or a
+                ``max_grid_cells`` of 0.
+            NormalizationError: as the free :func:`from_sequences`.
+        """
+        ...
+
+    @property
+    def end(self) -> int:
+        """1-based position of the last base of ``reference``."""
+        ...
+
+    @property
+    def accession(self) -> str:
+        """The accession the window is on."""
+        ...
+
+    @property
+    def position(self) -> int:
+        """1-based position of the window's first base.
+
+        Note this differs from `AppliedVariant.start`, which is 0-based.
+        """
+        ...
+
+    @property
+    def reference(self) -> str:
+        """The reference bases over the window."""
+        ...
+
+    @property
+    def alternate(self) -> str:
+        """The same window after the variant has been applied."""
+        ...
+
+    @property
+    def window_is_final(self) -> bool:
+        """Whether the window is as wide 3' as it can usefully be.
+
+        True when it ends where the pad asked *or* where the sequence itself
+        ends — so True is the ordinary answer, including near a sequence end
+        where the pad was clipped. False means the provider stopped short of
+        both and the window may have cut an ambiguous run in half.
+
+        Not "the full pad was served", and 3'-only: the 5' flank is prepended
+        separately and is not reflected here.
+        """
+        ...
+
+    def __repr__(self) -> str: ...
+    def __eq__(self, other: object) -> bool:
+        """Equality over all five fields, not by identity."""
+        ...
+
+    def __hash__(self) -> int:
+        """Hash consistent with :meth:`__eq__`."""
+        ...
+
+class DerivedDescription:
+    """A derived description, plus the one caveat a window-local derivation owes its caller."""
+
+    @property
+    def variant(self) -> HgvsVariant:
+        """The description."""
+        ...
+
+    @property
+    def placement_bounded_by_window(self) -> bool:
+        """Whether any member rests on an edge of the supplied window.
+
+        A "could move" flag, not an "is wrong" flag, and conservative in that
+        direction deliberately: the placement may lie against the edge of the
+        bases supplied, so a wider window — or a `Normalizer.normalize` pass,
+        which holds the reference — could move it.
+
+        It is *not* "exactly and only when the answer is read-dependent". That
+        wording was here and is measurably false: over a 4-base run a window
+        flush with the tract is flagged and still gives the same answer a
+        whole-sequence derivation gives. A flagged answer is never wrong — it
+        denotes the same bases and carries the same canonical SPDI.
+        """
         ...
 
     def __repr__(self) -> str: ...
