@@ -322,6 +322,11 @@ pub fn derive_transcript_structure(
         exon_cigars: vec![None; exons.len()],
         gene_id: None,
         protein: sibling.protein.clone(),
+        // Inert here, and deliberately not threaded from `sibling`: this probe
+        // is local and reaches only `reconstruct_spliced_mrna`, which reads
+        // `exons`/`contig`/`strand` and nothing else. The #972 flag is carried
+        // on the value that actually escapes — see the `DerivedTxStructure`
+        // built below, which takes `sibling.cds_start_incomplete`.
         cds_start_incomplete: false,
     };
     let frac = readback_mismatch_fraction(&probe, old_core, genome)?;
