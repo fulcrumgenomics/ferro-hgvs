@@ -2097,6 +2097,59 @@ fn five_prime_align_tract(
 
 /// Normalize a repeat variant
 ///
+/// Re-base an anchored repeat's count from the tract the caller spelled onto
+/// the tract the rotation search named — or decline the re-phase.
+///
+/// `[N]` counts copies of the unit the caller **spelled**, against that unit's
+/// own maximal tract; the emitted description counts against the winning
+/// rotation's tract, so the difference has to be carried or reference copies
+/// are silently created or deleted (#1618). `N + winner - literal` leaves the
+/// net base change unchanged, and a pure re-phase (`DNA/repeated.md:97`'s 11
+/// `TG` -> 11 `GT`) has the two counts equal and so is untouched.
+///
+/// `None` means **decline** — the honest answer for two shapes, neither of
+/// which any count on the winner's tract can express:
+///
+/// * **The tracts are disjoint.** The description's window has moved to a
+///   different stretch of reference, so re-basing conserves the net length and
+///   nothing else. On `AATGTGTGGTAA`, `g.265TG[6]` re-based onto the 1-copy
+///   `GT` tract is `g.265_266GT[4]`, which denotes `TGTGTGGTGTGTGT` where the
+///   input denotes `TGTGTGTGTGTGGT` — the same 14 bases in a different order,
+///   as `spdi::compare_denoted_sequences` reports.
+/// * **The re-based count would underflow.** `g.265TG[1]` on that same
+///   reference is `1 + 1 - 3`. The `saturating_sub` this replaces clamped it to
+///   `0` and routed to a two-base deletion, where the input denotes **four**
+///   bases fewer — a silent loss of two bases, in the arm the re-basing rule
+///   itself added. (The saturation's original comment justified it by the
+///   disjoint case, where `literal == winner` and nothing ever saturates.)
+///
+/// The caller answers a decline by keeping the spelled unit's own tract, which
+/// is what `[N]` was written against, so the output denotes exactly the input's
+/// bases.
+///
+/// A `None` literal tract takes **no** adjustment: the spelled unit tiles
+/// nowhere at or 5' of the anchor, so there are no copies to re-base against,
+/// and `hgvs_to_spdi` reads such an input as denoting no sequence at all — no
+/// baseline exists to conserve. `the_none_literal_arm_takes_no_adjustment` pins
+/// the asymmetry that leaves, as a limit rather than as a fix.
+fn rebase_count_onto_tract(
+    specified_count: u64,
+    literal_tract: Option<(u64, usize, usize)>,
+    winner: (u64, usize, usize),
+) -> Option<u64> {
+    let Some((literal_count, literal_start, literal_end)) = literal_tract else {
+        return Some(specified_count);
+    };
+    let (winner_count, winner_start, winner_end) = winner;
+    // Half-open spans, so touching-but-not-overlapping is disjoint.
+    if literal_end <= winner_start || winner_end <= literal_start {
+        return None;
+    }
+    specified_count
+        .checked_add(winner_count)?
+        .checked_sub(literal_count)
+}
+
 /// Given a repeat notation like CAT[1], determines the appropriate
 /// normalized representation by comparing to the reference.
 ///
@@ -2175,19 +2228,19 @@ pub fn normalize_repeat(
     // behavior change is preferring a genuinely larger tract.
     let mut working_unit = canonical_unit.to_vec();
     let literal_tract = count_tandem_repeats(ref_seq, pos, &working_unit);
-    // Reference copies the maximization swallows when it displaces the literal
-    // tract with a longer one. `[N]` counts copies of the unit the caller
-    // SPELLED, against that unit's own tract; re-phasing to a rotation that
-    // tiles a wider tract changes what the count counts, so the copies now
-    // inside the window but outside the literal tract have to be carried or
-    // they are silently deleted (#1618).
+    // Copies of the caller's own unit at the anchor, kept so the count can be
+    // re-based onto whatever tract the maximization below actually names.
+    //
+    // `[N]` counts copies of the unit the caller SPELLED, against that unit's
+    // own tract; re-phasing to a rotation that tiles a different tract changes
+    // what the count counts, so the difference has to be carried or reference
+    // copies are silently created or deleted (#1618).
     //
     // `DNA/repeated.md:97-99` is the spec's own worked case: re-spelling 11 `TG`
     // copies as `GT` slides the tract one base 3', swallowing the first `T` of
     // the neighbouring run, and the spec decrements that run `T[7]` -> `T[6]` so
-    // the total is conserved. Same principle, applied to a widening rather than
-    // a slide.
-    let mut maximization_absorbed: u64 = 0;
+    // the total is conserved. Same principle, applied to a re-phase that changes
+    // the tract's size rather than to a pure slide.
     let tract = match literal_tract {
         _ if end_pos == pos && working_unit.len() >= 2 => {
             // Hold the literal seed to the SAME span test the rotations below
@@ -2218,21 +2271,52 @@ pub fn normalize_repeat(
             }
             match best {
                 Some((c, s, e, u)) => {
-                    // Carry the reference copies this window gained over the
-                    // tract the spelled unit actually names. The literal tract
-                    // is the baseline even when it does not span the anchor —
-                    // that is the #1618 shape exactly (`GTGT` at g.259..262 is 2
-                    // copies of `GT` but only 1 of `TG`, whose tract ends AT the
-                    // anchor and so was filtered out of `best` above). Measured
-                    // in bases and divided by the unit length, mirroring the
-                    // explicit-range absorption below; a rotation is the same
-                    // length as the unit it rotates, so the divisor is shared.
-                    if let Some((_, ls, le)) = literal_tract {
-                        let gained = ls.saturating_sub(s) + e.saturating_sub(le);
-                        maximization_absorbed = (gained / u.len()) as u64;
+                    // Re-base the count onto the tract the maximization named,
+                    // or decline the re-phase when no count on that tract can
+                    // denote the input's bases. The literal tract is the
+                    // baseline even when it does not span the anchor — that is
+                    // the #1618 shape exactly (`GTGT` at g.259..262 is 2 copies
+                    // of `GT` but only 1 of `TG`, whose tract ends AT the anchor
+                    // and so was filtered out of `best` above).
+                    //
+                    // **Copies, not bases.** This was first written as a
+                    // per-edge base measurement,
+                    // `(ls.saturating_sub(s) + e.saturating_sub(le)) / u.len()`,
+                    // which reads the two edges independently and so cannot see
+                    // a tract that NARROWS. Where the literal tract spans the
+                    // anchor the two agree exactly — `best` is seeded with it,
+                    // so a winner must be strictly longer, and back/forward-scan
+                    // maximality bounds each edge's disagreement to under one
+                    // unit, which the truncating division then absorbs
+                    // (exhaustively checked: 0 disagreements over ~590k
+                    // (sequence, anchor, unit) triples). Where it does NOT span
+                    // the anchor there is no seed, so the winner may hold FEWER
+                    // copies than the literal tract, and the base form reports a
+                    // gain for a loss: on `AATGTGTGGTAA`, `g.265TG[6]` re-phases
+                    // a 3-copy `TG` tract onto a 1-copy `GT` one and the base
+                    // form added a copy instead of removing two.
+                    //
+                    // **Where the literal tract is `None`, nothing is re-based**
+                    // — see the note on `count_tandem_repeats` above and
+                    // `the_none_literal_arm_takes_no_adjustment`, which pins the
+                    // resulting asymmetry as a limit. The spelled unit tiles
+                    // nowhere at or 5' of the anchor, so there are no copies to
+                    // count the caller's `[N]` against and `hgvs_to_spdi` reads
+                    // such an input as denoting no sequence at all: there is no
+                    // baseline to conserve, which is why inventing one here
+                    // would be a ruling rather than a rescue.
+                    match rebase_count_onto_tract(specified_count, literal_tract, (c, s, e)) {
+                        Some(rebased) => {
+                            specified_count = rebased;
+                            working_unit = u;
+                            Some((c, s, e))
+                        }
+                        // The re-phase cannot carry the count. Keep the spelled
+                        // unit's own tract, which is what `[N]` was written
+                        // against, so the output denotes exactly the input's
+                        // bases.
+                        None => literal_tract,
                     }
-                    working_unit = u;
-                    Some((c, s, e))
                 }
                 None => None,
             }
@@ -2264,12 +2348,6 @@ pub fn normalize_repeat(
         let five_prime_bases = pos.saturating_sub(ref_start);
         let absorbed = ((three_prime_bases + five_prime_bases) / unit_len) as u64;
         specified_count += absorbed;
-    } else {
-        // Single anchor: the same conservation, for the copies the rotation
-        // search swallowed rather than the ones an under-specified range left
-        // out. Zero unless the maximization actually widened the tract, so a
-        // pure re-phase (`repeated.md:97`'s 11 `TG` -> 11 `GT`) is untouched.
-        specified_count += maximization_absorbed;
     }
 
     // Direction-aware unit rotation. For `ThreePrime`, repeated.md L44 ("applying
