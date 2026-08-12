@@ -398,19 +398,32 @@ had their chance to name the fault more precisely.
 **Where it runs, and the one place it deliberately does not.** `sweeps` sets it
 (gating, measured green over the full corpus) and the nightly sets it
 (non-gating). `test-oracle` does **not**, which makes it the only job where the
-set of four is incomplete. Two rows in that job's selection fire, and both are
-real disagreements inside ferro rather than noise:
+set of four is incomplete. Two rows in that job's selection used to fire, and
+both were real disagreements inside ferro rather than noise:
 
-| row | what disagrees |
-|---|---|
-| #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` reads the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 |
-| #1619 — `NM_033517.1:c.4818dupC` → `c.4818dup` | `hgvs_to_spdi` resolves the `c.` position by **walking** the exon list while the normalizer indexes the **flat** transcript, so the two disagree across any transcript-coordinate gap: the input applies `C`, the output applies `T`, at transcript position 4877. `NM_033517.1` carries a real 39-base cdot hole between exons 10 and 11 — see below, because this row **replaced** an earlier one on the same issue |
+| row | what disagreed | state |
+|---|---|---|
+| #1618 — `NC_TEST.1:g.262TG[6]` → `g.259_262GT[6]` | `hgvs_to_spdi` read the anchored spelling as 6 copies replacing a **1**-copy tract, the normalizer's output as 6 copies replacing a **2**-copy tract — 14 bases against 12 | closed before `6116f84a` |
+| #1619 — `NM_033517.1:c.4818dupC` → `c.4818dup` | `hgvs_to_spdi` resolved the `c.` position by **walking** the exon list while the normalizer indexes the **flat** transcript, so the two disagreed across any transcript-coordinate gap: the input applied `C`, the output `T`, at transcript position 4877. `NM_033517.1` carries a real 39-base cdot hole between exons 10 and 11 — see below, because this row **replaced** an earlier one on the same issue | closed by the flat-frame fix: `cds_to_tx`/`tx_to_cds` no longer read the exon table |
 
-Suppressing either would hollow out the oracle, and turning the flag on before
-they are settled would redden the job for a reason no PR caused. Move it into
-`test-oracle` once both are closed.
+**Both are now green, and the flag is still not set here — deliberately, for
+one measurement short of the claim.** Measured on the #1619 branch:
 
-**#1619's row was replaced, not closed, and the swap is the whole point.** The
+```bash
+FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev --test it \
+  -E 'test(test_explicit_base_removal)'          # 2 passed
+FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev --test it \
+  -E 'test(repeat_tract_maximization)'           # 3 passed
+```
+
+That is the two named rows, not `test-oracle`'s selection, which is the whole
+suite minus `ORACLE_EXCLUDE`, `test(proptest)` and `SWEEP_FILTER`. Arming the
+flag in that job is a CI change that needs a run over **that** selection before
+anyone can say it is green, so it is a follow-up rather than a rider on the fix.
+Suppressing a row would still hollow out the oracle; that has not changed.
+
+**#1619's row was replaced before it was closed, and the swap is the whole
+point.** The
 old row (`NM_000492.4:c.1520_1522del` → `c.1521_1523del`) rode on a **fixture
 defect**, not on annotation: `normalization_transcripts.json` was the real cdot
 exon table with every exon's `end` decremented by one, so all 22 of its
@@ -469,23 +482,35 @@ pre-existing oracle residue the whole time. A bare "25 / 22" quoted without its
 base is not reproducible, which is what this paragraph originally shipped.
 `tests/it/normalization_transcripts_exon_contract.rs` now guards the shape.
 
-**The defect the issue names is still live**, and losing the only corpus that
-exercised it is the hazard here. `hgvs_to_spdi` resolves a `c.` position by
-*walking* the exon list while the normalizer indexes the *flat* transcript, and
-those two readings disagree whenever the exon table has a transcript-coordinate
-gap. Real cdot has such gaps — measured over cdot-0.2.32.refseq.GRCh38,
-**58** of 474,818 multi-exon builds, sizes 23–2718 bases (none of them one base,
-which is why the fixture's shape was diagnostic of a generator bug rather than of
-real annotation).
+**The defect the issue named was live until the flat-frame fix**, and losing the
+only corpus that exercised it was the hazard. `hgvs_to_spdi` resolved a `c.`
+position by *walking* the exon list while the normalizer indexes the *flat*
+transcript, and those two readings disagree whenever the exon table has a
+transcript-coordinate gap. Real cdot has such gaps — measured over
+cdot-0.2.32.refseq.GRCh38, **58** of 474,818 multi-exon builds, sizes 23–2718
+bases (none of them one base, which is why the fixture's shape was diagnostic of
+a generator bug rather than of real annotation).
 
 **And the suite does exercise it, on real geometry.** `NM_033517.1`'s restored
 cdot table is that corpus: one record, one genuine gap, one existing case
-(`c.4818dupC`) that fires the denoted-sequence oracle. So closing #1619 does not
-need a corpus built from scratch — it needs the walk and the flat read to be
-reconciled, and this row is the regression guard for whichever way that is
-settled. Do **not** "fix" it by re-flattening the record or by widening
-`CDOT_GAP_JUNCTIONS`: the first destroys the reproducer, the second re-admits
-the synthetic one-base holes the contract guard exists to keep out.
+(`c.4818dupC`) that used to fire the denoted-sequence oracle. It is why the
+issue could be closed against measured geometry instead of a corpus built from
+scratch. **It is still the regression guard, so keep it that way** — do not
+"simplify" it by re-flattening the record or by widening `CDOT_GAP_JUNCTIONS`:
+the first destroys the reproducer, the second re-admits the synthetic one-base
+holes the contract guard exists to keep out.
+
+**Which side was wrong, and on what authority — the record is
+`c-and-n-positions-are-flat-transcript-offsets` in
+`hgvs_spec_normalization_overrides.json`.** In one line: the accession's own
+numbering is flat (`NP_277052.1` is 1731 aa, GenBank annotates
+`NM_033517.1` `CDS 1..5196`, and RefSeq's own exon table for it is contiguous),
+so cdot's hole is a fact about its **genome alignment**, not about the
+coordinate space a `c.` number is written in. The exon walk left
+`CoordinateMapper`; genome↔transcript mapping is untouched and stays exon- and
+CIGAR-aware. The second half of the defect — cdot's `start_codon`/`stop_codon`
+being gap-collapsed, so the live provider serves `NM_033517.1` `cds_end = 5157`
+where RefSeq says `5196` — is **not** fixed and is not what that record decides.
 
 **Measured false-positive classes, and what closed each.** The first run of this
 oracle over the suite raised **344** fires, all but 16 of them false. Each fix
@@ -1297,6 +1322,7 @@ because several of these rulings are narrower than their one-line summary:
 | `codon-carve-out-shape-restriction` | **WIDEN.** The `delins.md:18` / `general.md:35` exception applies wherever its stated precondition holds — two variants separated by one nucleotide, together affecting one amino acid — **regardless of edit type**. Ferro's restriction to a sub/unchanged/sub shape is dropped, on the ground that edit type is a property of the spelling while "together affecting one amino acid" is a property of the resulting sequence |
 | `derivation-may-not-be-bounded-by-the-inputs-spelling` | **DELETE THE BOUND.** No clause compares a description to the *input*; the recommendations compare it to the sequence, and `background/basics.md:38`'s design values omit minimality. So `canonicalize_from_sequence` may not refuse a derivation for weighing more than the member list the caller happened to write — that comparand contradicts `canonical-form-choice-when-both-legal` in terms. **Read the scope**: the ruling removes an input-relative comparand, it does **not** license the merges the comparand happened to be blocking. Those are governed by `general.md:34` and by `delins-merge-vs-individual-gap-two-or-more`. **Do not attribute the masking to `best_alignment`'s single-gap restriction (#1617)** — the record measures the producers as `partition_block`'s two payload-coincidence exits plus the `MAX_SPLIT_BLOCK` length cap, and withdraws that earlier attribution by name |
 | `exon-junction-dup-converge-from-the-far-side` | **CONVERGE.** `LRG_199t1:c.3922dup` normalizes to `c.3921dup`. The canonical position is the most 3' position that does **not** cross an exon/exon junction, reached from **either** side — a description approaching the junction stops at it, one already spelled past it is pulled back. Grounded three times in `DNA/duplication.md` (`:26`, `:60`, `:148`), which is what carries it past the RFC 2119 census's lesson about single lowercase-prose clauses |
+| `c-and-n-positions-are-flat-transcript-offsets` | **FLAT, 2026-08-12.** A `c.`/`n.` number is an offset on the transcript reference sequence, resolved as `cds_start + N - 1` and never by walking an exon table. `background/numbering.md:52` governs — `n.` numbering runs "from the first to the last nucleotide of the reference sequence", a count over the sequence's own bases with no term for an alignment — with `:21` the second authority, tying the `c.` axis to those same nucleotides by anchoring `c.1` on the sequence's own start codon. `:40` and `:44` are **supporting context, not authority**, and the record says so: `:40` is about introns and flanking regions rather than about bases that fail to align, and `:44` is an out-of-bounds rule `c.4818` does not engage. **The gaps are REAL and the ruling does not say otherwise**: 58 of 474,818 GRCh38 multi-exon cdot builds carry one, 23–2718 bases, which is why #1665 was closed for calling them malformed. What settles it is whose coordinate space they are in — RefSeq gives `NM_033517.1` a contiguous exon table, a GenBank `CDS 1..5196` and a 1731-aa `NP_277052.1`, all 39 bases longer than cdot's exon-covered span, so the hole is a fact about cdot's **genome alignment**. **Scoped to the sequence frame**: genome↔transcript mapping is untouched and stays exon- and CIGAR-aware. **Moves rows on gapped transcripts only.** Explicitly does **not** settle the sibling provider defect — cdot's gap-collapsed `start_codon`/`stop_codon` reaching a flat-space `cds_end`, so the live provider serves `NM_033517.1` `cds_end = 5157` against RefSeq's `5196` |
 
 Two things follow for representation-stability work specifically. The repository's doctrine once
 read as "do not move a normalized output", while the downstream filer has said instability is

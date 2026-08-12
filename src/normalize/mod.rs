@@ -9490,7 +9490,9 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // leaves a large intron's far edge outside the fetched bases, which
         // fails the minus-strand shuffle boundary check (issue #573). The
         // intron lookup needs only the transcript/mapper, not the sequence.
-        // Use exon-aware CDS-to-tx mapping to account for cdot's gap positions.
+        // `cds_to_tx` is the flat sequence-axis conversion (#1619): the
+        // transcript position is `cds_start + N - 1`, and the exon table is
+        // consulted only by the genome-frame lookup below.
         let tx_pos = mapper.cds_to_tx(start_pos)?;
         let tx_start = u64::try_from(tx_pos.base).map_err(|_| FerroError::ConversionError {
             msg: format!(

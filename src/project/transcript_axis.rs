@@ -1,15 +1,28 @@
 //! The `c↔n` axis: derive the `n.` (transcript-relative) representation of a
 //! coding (`c.`) variant.
 //!
-//! The CDS→transcript conversion is routed through the projector's authoritative
-//! [`CoordinateMapper::cds_to_tx`] — the **same** exon- and CIGAR-aware mapping
-//! that `genome_to_cds` / `project_single_inner` already trust. A flat
-//! CDS-offset shift (`cds_start + base - 1`) would silently diverge on
-//! multi-exon transcripts with tx-coordinate gaps or on transcripts whose
-//! genome alignment carries CIGAR insertions, producing an `n.` base that
-//! disagrees with the `c.` form's true transcript position. Routing through the
-//! mapper keeps the two axes consistent and makes `c→n` defined even for
-//! intronic positions (the mapper carries the offset).
+//! The CDS→transcript conversion is routed through [`CoordinateMapper::cds_to_tx`],
+//! which is a **sequence-frame** conversion: `c.N` is `cds_start + N - 1` on the
+//! flat transcript, with no exon walk and no CIGAR adjustment. `c.` and `n.`
+//! number the same reference sequence — `docs/background/numbering.md:52`
+//! numbers `n.` "from the first to the last nucleotide of the reference
+//! sequence" and `:21` anchors `c.1` on that sequence's start codon — so the
+//! `c→n` reframe is a shift and nothing else.
+//!
+//! **This paragraph used to claim the opposite** (#1619), and the claim was
+//! load-bearing: it argued that a flat shift "would silently diverge on
+//! multi-exon transcripts with tx-coordinate gaps", when in fact the exon walk
+//! was the divergence. Walking cdot's exon table across a transcript-coordinate
+//! gap moved every `c.` position 3' of it while `ReferenceProvider::get_sequence`
+//! kept serving the flat transcript, so the `n.` this module derived named a
+//! different base from the one the `c.` form denotes. The mapper is still the
+//! single place the conversion lives — that part was right, and it is what keeps
+//! the two axes consistent and makes `c→n` defined for intronic positions (the
+//! mapper carries the offset). What changed is the arithmetic it performs.
+//!
+//! The exon- and CIGAR-aware mapping is still exactly that on the **genome**
+//! frame (`genomic_to_tx` / `tx_to_genomic`, and `project_single_inner` above
+//! them), which this module does not touch.
 #![forbid(unsafe_code)]
 
 use crate::convert::mapper::CoordinateMapper;
@@ -26,7 +39,7 @@ use crate::reference::transcript::Transcript;
 ///
 /// The edit is identical to the one carried in the `c.` form — only the
 /// coordinate frame reframes from CDS-relative to transcript-relative, via the
-/// exon/CIGAR-aware [`CoordinateMapper::cds_to_tx`]. Intronic offsets and the
+/// flat sequence-axis [`CoordinateMapper::cds_to_tx`]. Intronic offsets and the
 /// 3'UTR (`c.*N` → a plain positive `n.`, not `n.*N`) are handled by the mapper.
 pub(crate) fn noncoding_from_coding(
     cds_start: &CdsPos,
@@ -239,7 +252,7 @@ mod tests {
         // #944: HGVS c./n. numbering is transcript-native — a CIGAR insertion adds
         // transcript bases that BOTH the CDS and n. coordinate already count, so
         // c.6 maps to n.6 with NO shift (the 2 inserted bases are c.4/c.5). The n.
-        // derivation must still route through the same CIGAR-aware `cds_to_tx` as
+        // derivation must still route through the same `cds_to_tx` as
         // the c. form (c/n consistency — this test's original #592 intent); after
         // the #944 fix both agree at n.6.
         let tx = Transcript {

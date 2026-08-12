@@ -292,18 +292,42 @@ fn the_parser_is_what_keeps_an_insertion_anchor_off_i64_max() {
 // ---------------------------------------------------------------------------
 // A FOURTH site, on a different entry point, and NOT closed by this change.
 //
-// `convert::mapper::cds_to_tx_exon_aware` returns `start_tx + offset` unchecked
-// on both of its early-return branches, and an extreme `c.` coordinate reaches
-// it through `hgvs_to_spdi` rather than through normalization — so nothing on
-// the derivation path this module is about stands in front of it.
+// `convert::mapper::CoordinateMapper::cds_to_tx` resolves a `c.` position with
+// an unchecked add on each of its three arms — `cds_end as i64 + pos.base` for
+// `*N`, `cds_start as i64 + pos.base` for `-N`, and `cds_start as i64 +
+// pos.base - 1` for a plain CDS position — and an extreme `c.` coordinate
+// reaches it through `hgvs_to_spdi` rather than through normalization, so
+// nothing on the derivation path this module is about stands in front of it.
 //
-// Measured, not inferred. Of the four seam-oracle flags only
-// `FERRO_ASSERT_SEQUENCE=1` converts the output, and under it exactly the four
-// tests above that carry an extreme coordinate into `normalize` panic at
-// `src/convert/mapper.rs` with `attempt to add with overflow`; the other three
-// flags are green. CI's `test-oracle` job does not set that flag (`sweeps` and
-// the nightly do, over selections that exclude this module), which is why the
-// gate is green and why the site would otherwise stay invisible.
+// **The name here is the only thing this branch moved.** The site used to be
+// spelled `cds_to_tx_exon_aware`, a private helper `cds_to_tx` delegated to;
+// #1619 deleted it and inlined the flat arithmetic, so the same three
+// additions now sit directly in `cds_to_tx`. The defect is unchanged — do not
+// read the rename as a fix, and do not grep for the old name and conclude the
+// site is gone.
+//
+// Measured, not inferred, and re-measured on this branch. Of the four
+// seam-oracle flags only `FERRO_ASSERT_SEQUENCE=1` converts the output, and
+// under it exactly THREE of the four tests above that carry an extreme
+// coordinate into `normalize` panic with `attempt to add with overflow`:
+//
+//   an_extreme_coordinate_is_refused_instead_of_panicking
+//   two_adjacent_members_at_the_top_of_the_range_are_refused_instead_of_panicking
+//   a_lone_member_at_an_extreme_coordinate_is_refused_instead_of_panicking
+//
+// The other three flags are green. `a_narrow_span_at_an_extreme_position_…`
+// does NOT panic here — its coordinates sit at `…700`/`…702`, so `+ cds_start
+// - 1` fits — and naming it would overstate the coverage. The same three fail
+// on `origin/main` at `1ea75334` (`src/convert/mapper.rs:113`, inside the old
+// helper) and on this branch (`src/convert/mapper.rs:114`, inside `cds_to_tx`),
+// so the set is identical either side and only the line moved. This paragraph
+// previously said "exactly the four", which was already wrong before #1619;
+// the count is stated here so the next re-measurement has something to check
+// against.
+//
+// CI's `test-oracle` job does not set that flag (`sweeps` and the nightly do,
+// over selections that exclude this module), which is why the gate is green
+// and why the site would otherwise stay invisible.
 //
 // Left to a separate change on purpose: a different module, a different entry
 // point, and a refusal there is a behaviour question for the conversion API

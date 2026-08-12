@@ -63,12 +63,16 @@
 //! reject genuine upstream data almost twice as often as the synthetic shape it
 //! was meant to catch, and it is the same under-span at the other end.
 //!
-//! No consumer asks for it. `CoordinateMapper` chooses between its flat and its
-//! exon-walking arithmetic on `w[0].end + 1 != w[1].start` (`src/convert/mapper.rs`,
-//! `cds_to_tx_exon_aware` and `tx_to_cds_exon_aware`) — a junction predicate —
-//! and nothing under `src/` reads `exons[0].start` at all. Every record in this
-//! fixture does begin at 1; that is an observation about the fixture, not a
-//! contract the data owes.
+//! No consumer asks for it, and since #1619 fewer consumers ask for anything
+//! here. `CoordinateMapper` used to choose between flat and exon-walking
+//! arithmetic on the junction predicate `w[0].end + 1 != w[1].start`; it no
+//! longer does, because `cds_to_tx`/`tx_to_cds` are flat sequence-axis
+//! conversions that never read the exon table (`src/convert/mapper.rs`, "the
+//! two frames"). What still reads it is the **genome** frame —
+//! `genomic_to_tx`/`tx_to_genomic`, which scan exons for the one spanning a
+//! position — and nothing under `src/` reads `exons[0].start` as an anchor.
+//! Every record in this fixture does begin at 1; that is an observation about
+//! the fixture, not a contract the data owes.
 //!
 //! # Where the exon tables come from, and the one that is not cdot's
 //!
@@ -90,19 +94,20 @@
 //! would re-admit the one-base synthetic holes this whole file exists to keep
 //! out; an exemption that names its one instance and its measurement cannot.
 //!
-//! Carrying it has a consequence worth stating plainly, because it is the
-//! reason this record was nearly left flattened. It re-arms #1619 inside the
-//! shared normalization corpus: `hgvs_to_spdi` walks the exon list across the
-//! hole while the normalizer indexes the flat transcript, so with
-//! `FERRO_ASSERT_SEQUENCE=1` the existing case `NM_033517.1:c.4818dupC` ->
-//! `c.4818dup` fires — the input applies `C`, the output applies `T`, at
-//! transcript position 4877. That is deliberate. It is the reproducer #1619 has
-//! not otherwise had, and no CI job arms the oracle where it fires: the flag is
-//! set only by `ci.yml`'s `sweeps` job, which selects `SWEEP_FILTER +
-//! test(issue_1615_denoted_sequence_oracle)`, and by the non-gating nightly,
-//! which selects the three reference-aware modules — `normalize_tests` is in
-//! neither. It is recorded as a deferred row on `test-oracle` in `ci.yml` and in
-//! `CLAUDE.md`.
+//! Carrying it is also what closed #1619, and it is the reason this record was
+//! nearly left flattened. While `hgvs_to_spdi` resolved a `c.` position by
+//! walking the exon list across the hole and the normalizer indexed the flat
+//! transcript, the existing case `NM_033517.1:c.4818dupC` -> `c.4818dup` fired
+//! under `FERRO_ASSERT_SEQUENCE=1`: the input applied `C`, the output `T`, at
+//! transcript position 4877. That was the reproducer #1619 had not otherwise
+//! had — it is why the issue could be settled against real cdot geometry
+//! instead of a shape nobody had measured — and it is now the regression guard
+//! for the ruling that closed it
+//! (`c-and-n-positions-are-flat-transcript-offsets`, in
+//! `tests/fixtures/grammar/hgvs_spec_normalization_overrides.json`). Flattening
+//! this record would delete that guard, which is the second reason not to,
+//! independent of the contract above. `tests/it/issue_1619_flat_transcript_frame.rs`
+//! pins the frame directly.
 
 use serde::Deserialize;
 use std::collections::BTreeSet;
@@ -131,7 +136,7 @@ const FLATTENED_RECORDS: &[(&str, &str)] = &[(
 /// gap, the smallest is 23 bases and **none** is one base.
 ///
 /// `NM_033517.1` is this fixture's only member of that population. See the
-/// module docs for what carrying it costs (#1619) and why that is deliberate.
+/// module docs for what carrying it bought (#1619) and why it must stay.
 const CDOT_GAP_JUNCTIONS: &[(&str, u32, i64)] = &[("NM_033517.1", 10, 39)];
 
 #[derive(Debug, Deserialize)]
