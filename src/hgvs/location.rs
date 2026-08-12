@@ -105,6 +105,29 @@ pub const GENOME_OFFSET_UNKNOWN_POSITIVE: i64 = i64::MAX;
 /// Sentinel value for unknown negative offset (-?)
 pub const GENOME_OFFSET_UNKNOWN_NEGATIVE: i64 = i64::MIN;
 
+/// The rendered form of an unknown-offset sentinel (`+?` / `-?`), or `None`
+/// when `offset` is a measured intronic distance.
+///
+/// The sentinels are stored **in band** (`i64::MAX` / `i64::MIN`, see
+/// [`crate::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE`]), so every
+/// `Display` that prints an offset has to ask this question first or the raw
+/// 19-digit integer escapes into a description as if it were a real distance.
+///
+/// It exists as one function, keyed off the named constants, because the
+/// alternative had already failed: `GenomePos::Display` compared against
+/// `GENOME_OFFSET_UNKNOWN_*`, `CdsPos::Display` re-spelled the same pair as
+/// bare `i64::MAX` / `i64::MIN` literals, and `TxPos`/`RnaPos` — added later —
+/// had no arm at all, so a parsed `n.5+?` printed as `5+9223372036854775807`.
+/// Three spellings of one pair is how the fourth axis came to have none.
+fn unknown_offset_marker(offset: i64) -> Option<&'static str> {
+    use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
+    match offset {
+        OFFSET_UNKNOWN_POSITIVE => Some("+?"),
+        OFFSET_UNKNOWN_NEGATIVE => Some("-?"),
+        _ => None,
+    }
+}
+
 impl fmt::Display for GenomePos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(special) = &self.special {
@@ -112,10 +135,10 @@ impl fmt::Display for GenomePos {
         } else {
             write!(f, "{}", self.base)?;
             if let Some(offset) = self.offset {
-                if offset == GENOME_OFFSET_UNKNOWN_POSITIVE {
-                    write!(f, "+?")?;
-                } else if offset == GENOME_OFFSET_UNKNOWN_NEGATIVE {
-                    write!(f, "-?")?;
+                // NOTE: unlike the transcript-relative axes below, a zero offset
+                // renders as nothing here rather than as `+0`. Unchanged.
+                if let Some(marker) = unknown_offset_marker(offset) {
+                    write!(f, "{}", marker)?;
                 } else if offset > 0 {
                     write!(f, "+{}", offset)?;
                 } else if offset < 0 {
@@ -283,11 +306,8 @@ impl fmt::Display for CdsPos {
             write!(f, "{}", self.base)?;
         }
         if let Some(offset) = self.offset {
-            // Handle sentinel values for uncertain offsets
-            if offset == i64::MAX {
-                write!(f, "+?")?;
-            } else if offset == i64::MIN {
-                write!(f, "-?")?;
+            if let Some(marker) = unknown_offset_marker(offset) {
+                write!(f, "{}", marker)?;
             } else if offset >= 0 {
                 write!(f, "+{}", offset)?;
             } else {
@@ -390,7 +410,9 @@ impl fmt::Display for TxPos {
             write!(f, "{}", self.base)?;
         }
         if let Some(offset) = self.offset {
-            if offset >= 0 {
+            if let Some(marker) = unknown_offset_marker(offset) {
+                write!(f, "{}", marker)?;
+            } else if offset >= 0 {
                 write!(f, "+{}", offset)?;
             } else {
                 write!(f, "{}", offset)?;
@@ -466,7 +488,9 @@ impl fmt::Display for RnaPos {
             write!(f, "{}", self.base)?;
         }
         if let Some(offset) = self.offset {
-            if offset >= 0 {
+            if let Some(marker) = unknown_offset_marker(offset) {
+                write!(f, "{}", marker)?;
+            } else if offset >= 0 {
                 write!(f, "+{}", offset)?;
             } else {
                 write!(f, "{}", offset)?;
@@ -826,7 +850,18 @@ impl IvsPos {
 
 impl fmt::Display for IvsPos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.offset >= 0 {
+        // The fifth `Display` that has to ask this question, and the one the
+        // `GenomePos`/`CdsPos`/`TxPos`/`RnaPos` sweep missed. `IvsNotation::to_ivs`
+        // maps a `CdsPos`/`TxPos` offset straight in, so a parsed `c.100+?`
+        // reaches here and rendered as `IVS3+9223372036854775807`.
+        //
+        // The sign is taken from the marker rather than from the number, which
+        // is why this cannot be written as a prefix to the arms below: the
+        // negative sentinel is `i64::MIN`, whose `Display` already carries a
+        // `-`, while the positive one needs a `+` this arm would have to add.
+        if let Some(marker) = unknown_offset_marker(self.offset) {
+            write!(f, "IVS{}{}", self.intron, marker)
+        } else if self.offset >= 0 {
             write!(f, "IVS{}+{}", self.intron, self.offset)
         } else {
             write!(f, "IVS{}{}", self.intron, self.offset)

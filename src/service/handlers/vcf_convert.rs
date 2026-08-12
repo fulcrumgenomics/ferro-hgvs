@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use crate::data::cdot::{CdotMapper, CdsPosition};
 use crate::reference::Strand;
+use crate::service::handlers::tx_position::resolve_tx_start;
 use crate::service::{
     server::AppState,
     types::{
@@ -577,13 +578,14 @@ fn convert_tx_to_vcf(
         }
     };
 
-    // Extract transcript position
-    let tx_pos = loc_edit
-        .location
-        .start
-        .inner()
-        .map(|p| p.base as u64)
-        .unwrap_or(1);
+    // Extract transcript position. `resolve_tx_start` refuses `n.*N`: reading
+    // `base` alone made `n.5` and `n.*5` resolve to the same coordinate, so
+    // this emitted a whole VCF record for a different nucleotide with no
+    // diagnostic.
+    let tx_pos = match resolve_tx_start(&loc_edit.location) {
+        Ok(pos) => pos,
+        Err(msg) => return (None, Some(msg)),
+    };
 
     // Convert to genomic
     let genomic_pos = match cdot_tx.tx_to_genome(tx_pos) {
@@ -775,6 +777,83 @@ fn extract_chromosome_from_accession(accession: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data::cdot::CdotTranscript;
+    use crate::hgvs::edit::{Base, NaEdit};
+    use crate::hgvs::interval::TxInterval;
+    use crate::hgvs::location::TxPos;
+    use crate::hgvs::variant::LocEdit;
+
+    /// One 9-base exon at genome 1000..1009, so every `n.` base in range maps
+    /// to a genomic coordinate and a divergence cannot be an artifact of the
+    /// exon walk declining.
+    fn single_exon_mapper() -> Arc<CdotMapper> {
+        let mut cdot = CdotMapper::new();
+        cdot.add_transcript(
+            "NM_TEST.1".to_string(),
+            CdotTranscript {
+                cds_start_incomplete: false,
+                gene_name: Some("TESTGENE".to_string()),
+                contig: "chr1".to_string(),
+                strand: Strand::Plus,
+                exons: vec![[1000, 1009, 0, 9]],
+                cds_start: Some(0),
+                cds_end: Some(9),
+                gene_id: None,
+                protein: Some("NP_TEST.1".to_string()),
+                exon_cigars: Vec::new(),
+            },
+        );
+        Arc::new(cdot)
+    }
+
+    /// The second drop route, at the handler seam: `n.5` and `n.*5` are
+    /// different nucleotides, so the VCF record emitted for them must not be
+    /// the same.
+    ///
+    /// Before the fix this read `base` alone, so both sides emitted a record at
+    /// the genomic coordinate of in-transcript base 5 — a *collapse*, and one
+    /// that leaves the wrong `POS` in a VCF with no diagnostic. Asserted as a
+    /// divergence rather than against a pinned message so it cannot be
+    /// satisfied by a wording change.
+    #[test]
+    fn n_to_vcf_does_not_emit_a_downstream_position_as_its_in_transcript_twin() {
+        let cdot = single_exon_mapper();
+        let edit = || NaEdit::Substitution {
+            reference: Base::C,
+            alternative: Base::A,
+        };
+        let convert = |pos: TxPos| {
+            convert_tx_to_vcf(
+                "NM_TEST.1",
+                &LocEdit::new(TxInterval::point(pos), edit()),
+                &GenomeBuild::GRCh38,
+                Some(&cdot),
+            )
+        };
+
+        let (plain, plain_err) = convert(TxPos::new(5));
+        let (downstream, downstream_err) = convert(TxPos::downstream(5));
+
+        assert!(
+            plain.is_some() && plain_err.is_none(),
+            "control: a plain in-transcript n.5 must still emit a record, \
+             got {plain:?} / {plain_err:?}"
+        );
+        assert_ne!(
+            plain.map(|r| r.pos),
+            downstream.as_ref().map(|r| r.pos),
+            "n.5 and n.*5 are different nucleotides and must not emit the same POS"
+        );
+        assert!(
+            downstream.is_none(),
+            "n.*5 names a nucleotide past the transcript's last base and has no \
+             genomic position; the handler emitted {downstream:?} instead of refusing"
+        );
+        assert!(
+            downstream_err.is_some_and(|m| m.contains("n.*")),
+            "the decline must name the notation it refused"
+        );
+    }
 
     #[test]
     fn test_get_refseq_accession_grch38() {
