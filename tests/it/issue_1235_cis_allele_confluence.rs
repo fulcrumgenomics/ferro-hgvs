@@ -151,11 +151,28 @@ fn issue_1231_dup_del_reduces_to_substitutions() {
 /// All four encodings below are stable fixed points on v0.11.0 — the issue
 /// reported two of them. The tie-break between `[35_37del;39T>A]` and
 /// `[35C>T;37_39del]` (equally minimal, equally stable) is an implementer's
-/// choice: the partition is taken 5'-most, then each member is 3'-shifted.
+/// choice, and this file has already said so twice — so which of the two is
+/// pinned is not what #1232 is about. What #1232 is about is that the spanning
+/// `g.35_39delinsTA` must **not** be retained across the unchanged interior
+/// base, and both candidates split at one.
+///
+/// **Re-blessed for #148**, which flips the shipped `FERRO_PARTITION` default
+/// from `live` to `canonical-coalesced`. The canonical arm re-derives the
+/// partition from the resulting sequence rather than 5'-anchoring the one the
+/// input spelled, and it lands on the other member of that equally-minimal pair:
+/// `[35C>T;37_39del]` instead of `[35_37del;39T>A]`. The payload-coincidence
+/// merge is not involved — it is scoped to the coding DNA axis by the ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` and this row is
+/// `g.` — so no member was merged, only re-cut.
+///
+/// The property the test exists for is unchanged: the interior base at `g.36`
+/// is still unchanged and still separates two members, so `delins.md:17` is
+/// still honoured. Verified to denote the same bases rather than assumed:
+/// `canonical_spdi` keys both spellings as `TEMPLATE:34:CAATT:TA`.
 #[test]
 fn issue_1232_spanning_delins_splits_at_unchanged_base() {
     converges_to(
-        "TEMPLATE:g.[35_37del;39T>A]",
+        "TEMPLATE:g.[35C>T;37_39del]",
         &[
             "TEMPLATE:g.35_39delinsTA",
             "TEMPLATE:g.[35_37del;39T>A]",
@@ -193,8 +210,19 @@ fn soft_masked_reference_yields_the_same_canonical_form() {
     );
     // Pin the shared answer too, so this cannot pass by both sides regressing
     // to the same spanning delins.
+    //
+    // **Re-blessed for #148** (default `FERRO_PARTITION` `live` ->
+    // `canonical-coalesced`), tracking the sibling change in
+    // `issue_1232_spanning_delins_splits_at_unchanged_base` above: the canonical
+    // arm re-derives the partition from the resulting sequence and picks the
+    // other member of that equally-minimal pair. The masking property this test
+    // is for is untouched — what it asserts is that the masked and unmasked
+    // references agree, and the pinned string only stops that agreement being
+    // reached by both sides collapsing to one spanning delins. Both spellings
+    // key as `TEMPLATE:34:CAATT:TA` under `canonical_spdi`, so the same interior
+    // base still survives unchanged.
     assert_eq!(
-        upper, "TEMPLATE:g.[35_37del;39T>A]",
+        upper, "TEMPLATE:g.[35C>T;37_39del]",
         "the #1232 split is the expected canonical form"
     );
 }

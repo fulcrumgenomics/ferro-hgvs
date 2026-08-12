@@ -271,13 +271,29 @@ fn rna_cross_reference_coding_expands_cds_relative() {
         "transcript-relative AAA must not appear in output; got {out}",
     );
     // The normalizer suffix-trims "ATG" to "AT" (trailing G matches ref), then
-    // (#1235) splits the result at the unchanged base at 13, since changes
+    // (#1235) splits the result at an unchanged interior base, since changes
     // separated by unchanged nucleotides are described individually
     // (`delins.md:17`). The span still ends at 14, which is what confirms
     // CDS-relative expansion succeeded — transcript-relative "AAA" would reach
     // 15.
+    //
+    // **Re-blessed for #148** (default `FERRO_PARTITION` `live` ->
+    // `canonical-coalesced`). Only the partition moved: the canonical arm
+    // re-derives the members from the resulting sequence instead of re-cutting
+    // the block the input handed it, so the unchanged base it splits at is
+    // `g.12` and the members are `[10_11delinsA;13_14del]` rather than
+    // `[10_12del;14C>T]`. This is `g.`, so the payload-coincidence merge is out
+    // of scope (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`) and
+    // nothing was coalesced.
+    //
+    // **What this row is for is unaffected, and that is why it is a value swap
+    // rather than a rewrite**: the two `assert!`s above still carry the #773
+    // claim, and the span still ends at 14 — `13_14del` — so transcript-relative
+    // `AAA`, which would reach 15, is still excluded. Verified to denote the
+    // same bases: `canonical_spdi` keys both spellings as
+    // `NC_000022.10:9:CGTAC:AT`.
     assert_eq!(
-        out, "NC_000022.10:g.[10_12del;14C>T]",
+        out, "NC_000022.10:g.[10_11delinsA;13_14del]",
         "CDS-relative r.1_3 (ATG) must normalize within the 10_14 range; got {out}",
     );
 }

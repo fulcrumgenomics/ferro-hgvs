@@ -46,12 +46,28 @@ fn separated_deletions_do_not_merge_into_a_different_deletion() {
 fn separated_deletions_with_a_downstream_substitution_stay_well_formed() {
     // The three-member variant of the same input. It used to expose the
     // corruption *visibly*, as the overlapping `g.[12_14del;13T>A]`; with the
-    // shift clamped, the deletion lands where it belongs and the substitution
-    // is untouched.
+    // shift clamped, the deletion lands where it belongs and no member overlaps
+    // another.
+    //
+    // **Re-blessed for #148**, which flips the shipped `FERRO_PARTITION` default
+    // from `live` to `canonical-coalesced`. What moved is the *partition*, not
+    // the variant: the canonical arm re-derives the members from the resulting
+    // sequence instead of shifting the ones the input spelled, and over the
+    // `(AT)` tract that derivation answers with three single-base deletions
+    // rather than a three-base deletion plus a substitution. `13T>A` disappears
+    // because deleting `13` and keeping the run's own bases produces the same
+    // string — the substitution was an artefact of where the input had cut.
+    //
+    // Verified to denote the same bases, not merely to look plausible:
+    // `canonical_spdi` keys both the old `g.[7_9del;13T>A]` and the new
+    // `g.[7del;10del;13del]` as `TEMPLATE:6:ATATAAT:TAAA`. `assert_normalizes_
+    // preserving`'s own second assertion re-checks it here on every run, through
+    // an applier that is not the normalizer, which is what keeps this row a
+    // guard on #1254 rather than a transcription of today's output.
     assert_normalizes_preserving(
         TEMPLATE,
         "TEMPLATE:g.[3_4del;9del;13T>A]",
-        "TEMPLATE:g.[7_9del;13T>A]",
+        "TEMPLATE:g.[7del;10del;13del]",
     );
 }
 
