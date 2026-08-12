@@ -2763,7 +2763,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         partition_rule(),
         &ref_bytes[lo..hi_ref],
         &result[lo..hi_alt],
-        axis_min_separation(frame.reading_frame),
+        axis_min_separation(frame.carries_translated_frame()),
     );
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
@@ -2788,7 +2788,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         // Per-axis separation threshold (see `axis_min_separation`) — the same
         // distinction `apply_coding_codon_exception` uses below, via the same
         // `AxisFrame`.
-        let min_separation = axis_min_separation(frame.reading_frame);
+        let min_separation = axis_min_separation(frame.carries_translated_frame());
         let block = &ref_bytes[lo..hi_ref];
         let mut shadow = partition_block_sequence_first(block, &result[lo..hi_alt], min_separation);
         // `min_separation` alone captures only the distance half of
@@ -2800,7 +2800,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         if let Some(shadow_pieces) = shadow.as_mut() {
             split_codon_incompatible_triplets(
                 shadow_pieces,
-                frame.reading_frame,
+                frame.carries_translated_frame(),
                 w_lo + lo as i64,
                 block,
             );
@@ -2858,7 +2858,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // measured by getting it wrong. See `coalesce_coding_frame_separation`.
     let unwidened = coalesce_coding_frame_separation(
         &mut pieces,
-        frame.reading_frame,
+        frame.carries_translated_frame(),
         hi_ref != hi_alt,
         w_lo,
         &ref_bytes,
@@ -2873,7 +2873,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // `LRG_199t1:c.850_901` example is out of scope by construction.
     split_concealed_separations(
         &mut pieces,
-        frame.reading_frame,
+        frame.carries_translated_frame(),
         hi_ref != hi_alt,
         w_lo,
         &ref_bytes,
@@ -3073,7 +3073,12 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // widening on top of an already-accepted partition, not part of what the
     // bound judges. Running it first would let a legitimate codon merge inflate
     // the weight and trip a refusal.
-    apply_coding_codon_exception(&mut pieces, frame.reading_frame, w_lo, &ref_bytes);
+    apply_coding_codon_exception(
+        &mut pieces,
+        frame.carries_translated_frame(),
+        w_lo,
+        &ref_bytes,
+    );
     // A veto stood here that refused the whole group whenever any derived piece
     // was an inversion. It was not an input-relative gate — it read only the
     // pieces and the reference, so two spellings of one variant always got the
@@ -3846,6 +3851,79 @@ struct AxisFrame {
     /// exception off the axis alone stamps a reading frame onto a transcript
     /// that has none (#1241).
     reading_frame: bool,
+    /// The coordinate system the description declares, kept so a rule can be
+    /// scoped by the **type of reference sequence** rather than by whether a
+    /// frame happens to exist. `general.md:23` makes the prefix a claim about
+    /// that type, and the two questions are not the same one: a rule stated
+    /// only in `DNA/` cannot reach `r.` however well-framed the transcript is.
+    /// See [`AxisFrame::carries_translated_frame`] and
+    /// [`AxisFrame::is_coding_dna`].
+    kind: CisKind,
+}
+
+impl AxisFrame {
+    /// Does this axis carry a **translated reading frame**, so that a rule
+    /// reasoning in amino acids has something to reason about?
+    ///
+    /// True on `c.`, and on `r.` when the transcript actually has a CDS.
+    ///
+    /// **Authority.** The codon exception — "two variants separated by one
+    /// nucleotide, together affecting one amino acid, should be described as a
+    /// 'delins'" — is stated in **eleven** places, and crucially in *both*
+    /// molecule documents: `general.md:35`; `DNA/{deletion:19, delins:18,
+    /// delins:42, duplication:23, insertion:20, inversion:21, substitution:17,
+    /// substitution:37}`; and `RNA/{delins:18, substitution:18}`. The RNA
+    /// statements carry their own worked example (`r.142_144delinsugg`), so a
+    /// rule resting on this exception reaches the coding RNA axis on RNA's own
+    /// authority rather than by inheriting a DNA clause. This predicate is the
+    /// right gate for such a rule.
+    ///
+    /// Not answerable from [`Self::kind`] alone, which is #1241: `CisKind::Rna`
+    /// says nothing about whether the transcript has a CDS.
+    fn carries_translated_frame(&self) -> bool {
+        let axis_may_translate = match self.kind {
+            CisKind::Cds | CisKind::Rna => true,
+            CisKind::Genome | CisKind::Mt | CisKind::Tx => false,
+        };
+        axis_may_translate && self.reading_frame
+    }
+
+    /// Is `kind` the **coding DNA** axis, `c.`?
+    ///
+    /// The gate for a rule whose authority is stated *only* under `DNA/`.
+    /// `DNA/delins.md:47`'s payload-coincidence carve-out is the standing
+    /// example, and the operator ruling
+    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11)
+    /// scopes it to `c.` **and nothing else**. Getting that wrong is what this
+    /// pair of predicates exists to prevent.
+    ///
+    /// The other axes are excluded for two different reasons, and collapsing
+    /// them into one is how the scope gets restated too narrowly. `r.` is out
+    /// on **jurisdiction** — a `DNA/` clause cannot scope the RNA axis, and
+    /// `RNA/delins.md` states no `:47` counterpart that could carry the
+    /// carve-out there. `g.`/`m.`/`o.`/`n.` are DNA axes, so jurisdiction is no
+    /// objection at all; they are out because `:47`'s stated reason is
+    /// preventing "incorrect predictions for the consequences on protein
+    /// level", which has nothing to bite on where no protein is coded, and
+    /// `general.md:34` governs there instead. Note `n.` in particular *is* a
+    /// DNA axis — reading "DNA-only" as "everything except `r.`" would admit
+    /// it, which the ruling forbids.
+    ///
+    /// Takes the [`CisKind`] rather than `&self`, unlike its sibling
+    /// [`Self::carries_translated_frame`], and the asymmetry is the #1241
+    /// point rather than an inconsistency: whether an axis *translates* is not
+    /// answerable from the kind alone, whereas whether it is coding DNA is.
+    /// The one gate that asks this — [`payload_coalesce_applies`] — accordingly
+    /// runs where no [`AxisFrame`] has been resolved.
+    ///
+    /// Exhaustive on [`CisKind`] with no wildcard, so a new axis is a compile
+    /// error here rather than a silent default.
+    fn is_coding_dna(kind: CisKind) -> bool {
+        match kind {
+            CisKind::Cds => true,
+            CisKind::Genome | CisKind::Mt | CisKind::Tx | CisKind::Rna => false,
+        }
+    }
 }
 
 /// The axis-coordinate bounds of the exon enclosing `[lo, hi]`, when one does.
@@ -3963,6 +4041,7 @@ fn axis_frame<P: ReferenceProvider>(
         CisKind::Genome | CisKind::Mt | CisKind::Tx => Some(AxisFrame {
             delta: 0,
             reading_frame: false,
+            kind,
         }),
         CisKind::Cds => {
             let tx = provider
@@ -3971,6 +4050,7 @@ fn axis_frame<P: ReferenceProvider>(
             Some(AxisFrame {
                 delta: i64::try_from(tx.cds_start?).ok()? - 1,
                 reading_frame: true,
+                kind,
             })
         }
         // `r.` is CDS-relative on a coding transcript but transcript-relative on
@@ -3987,6 +4067,7 @@ fn axis_frame<P: ReferenceProvider>(
                 Some(cds_start) => Some(AxisFrame {
                     delta: i64::try_from(cds_start).ok()? - 1,
                     reading_frame: true,
+                    kind,
                 }),
                 // Transcript-relative: either a non-coding transcript, or a
                 // provider that cannot resolve it. Both mean "no CDS offset",
@@ -3997,6 +4078,7 @@ fn axis_frame<P: ReferenceProvider>(
                 None => Some(AxisFrame {
                     delta: 0,
                     reading_frame: false,
+                    kind,
                 }),
             }
         }
@@ -5900,20 +5982,22 @@ fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> b
 /// counterpart that could carry the carve-out there. RNA is outside the ruling
 /// rather than decided against, so the arm must not merge on it.
 ///
-/// The `match` is exhaustive on purpose, for the reason
-/// [`PartitionRule::cuts_with_canonical`] gives: a new axis must be decided
-/// rather than defaulted.
+/// The axis half is [`AxisFrame::is_coding_dna`] rather than a `match` here, so
+/// the scope is written once; its `match` is exhaustive on purpose, for the
+/// reason [`PartitionRule::cuts_with_canonical`] gives: a new axis must be
+/// decided rather than defaulted.
 ///
 /// A free function rather than an inline conjunction because `partition_rule()`
 /// caches its read in a `OnceLock`, so one test binary can never exercise two
 /// arms through the call site. This half is pure and therefore pinnable — see
 /// `the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis`.
 fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
-    let coding_dna = match kind {
-        CisKind::Cds => true,
-        CisKind::Genome | CisKind::Mt | CisKind::Tx | CisKind::Rna => false,
-    };
-    rule == PartitionRule::CanonicalCoalesced && coding_dna
+    // The scope test is [`AxisFrame::is_coding_dna`], not a second copy of it.
+    // This gate and that predicate answer the same question, and while a new
+    // `CisKind` is a compile error in either, two exhaustive matches can still
+    // be given *different* arms — and would compile, so the drift would be
+    // silent. One rule, written once.
+    rule == PartitionRule::CanonicalCoalesced && AxisFrame::is_coding_dna(kind)
 }
 
 /// Re-spell a multi-member allele as the single `delins` the spec recommends,
@@ -10959,6 +11043,99 @@ mod tests {
     use crate::hgvs::variant::Accession;
     use crate::reference::MockProvider;
 
+    /// Every axis states which rule scope it is in, and the two scopes differ.
+    ///
+    /// # Why this exists
+    ///
+    /// The frame-derived rules used to be gated on a bare `reading_frame: bool`.
+    /// That answers "does a codon exist here", which is the right question for a
+    /// rule the spec states in *both* molecule documents and the wrong one for a
+    /// rule stated in only one. Nothing in a `bool` records which kind a given
+    /// rule is, so the distinction lived in reviewers' heads and was got wrong:
+    /// `DNA/delins.md:47`'s payload-coincidence carve-out shipped gated on the
+    /// frame and so reached the coding `r.` axis, which no `DNA/` clause can
+    /// scope. The two predicates make each rule name its scope, and this test
+    /// makes the mapping a decision rather than a convention.
+    ///
+    /// # What it does not claim
+    ///
+    /// Only that the predicates answer as stated per axis. It does not check
+    /// that any particular rule picked the right one of the two — that is the
+    /// citation's job, at each rule site.
+    #[test]
+    fn every_axis_declares_which_rule_scope_it_is_in() {
+        // (kind, reading_frame, translated, coding_dna)
+        let cases = [
+            (CisKind::Genome, false, false, false),
+            (CisKind::Mt, false, false, false),
+            (CisKind::Tx, false, false, false),
+            (CisKind::Cds, true, true, true),
+            // A coding transcript: RNA authority (`RNA/delins.md:18`) reaches
+            // it, DNA-only authority does not. This row is the whole point.
+            (CisKind::Rna, true, true, false),
+            // A non-coding transcript has no CDS, so no frame either (#1241).
+            (CisKind::Rna, false, false, false),
+            // The three rows below are UNREACHABLE through `axis_frame`, which
+            // never stamps a frame onto a genomic, mitochondrial or `n.` axis.
+            // They are pinned *because* they are unreachable: the kind conjunct
+            // in `carries_translated_frame` is the guard against a future
+            // constructor that does, and without these rows nothing can tell
+            // that conjunct from a no-op. Measured — with them omitted, both
+            // widening the match to always-true and admitting `Tx` into it
+            // leave the whole suite green.
+            //
+            // `Tx` is `n.`, a NON-CODING DNA reference, so it carries no
+            // translated frame whatever a caller claims; that is the same
+            // reading `projection-codon-exception-is-decided-by-the-rendered-
+            // axis` states, and pinning it here decides nothing that record
+            // leaves open (which is how *projection* renders `n.`, not whether
+            // `n.` has a frame).
+            (CisKind::Genome, true, false, false),
+            (CisKind::Mt, true, false, false),
+            (CisKind::Tx, true, false, false),
+        ];
+        for (kind, reading_frame, translated, coding_dna) in cases {
+            let frame = AxisFrame {
+                delta: 0,
+                reading_frame,
+                kind,
+            };
+            assert_eq!(
+                frame.carries_translated_frame(),
+                translated,
+                "{kind:?} (reading_frame={reading_frame}): carries_translated_frame"
+            );
+            assert_eq!(
+                AxisFrame::is_coding_dna(kind),
+                coding_dna,
+                "{kind:?} (reading_frame={reading_frame}): is_coding_dna"
+            );
+        }
+    }
+
+    /// The two scopes are not the same predicate wearing two names.
+    ///
+    /// A coding `r.` separates them: it translates, so a rule with RNA
+    /// authority reaches it, while a `DNA/`-only rule must not. If this ever
+    /// passes vacuously the pair has collapsed and the distinction it exists to
+    /// carry is gone.
+    #[test]
+    fn a_coding_rna_axis_separates_the_two_scopes() {
+        let frame = AxisFrame {
+            delta: 0,
+            reading_frame: true,
+            kind: CisKind::Rna,
+        };
+        assert!(
+            frame.carries_translated_frame(),
+            "a coding `r.` translates, so RNA-stated rules reach it"
+        );
+        assert!(
+            !AxisFrame::is_coding_dna(frame.kind),
+            "a coding `r.` is not a DNA axis, so `DNA/`-only rules must not"
+        );
+    }
+
     /// The two geometries #1461 turns on, pinned as numbers so the reasoning
     /// survives without a 457-base literal in the test.
     ///
@@ -11110,6 +11287,7 @@ mod tests {
         let frame = AxisFrame {
             delta: 4,
             reading_frame: true,
+            kind: CisKind::Cds,
         };
         let crosses =
             |lo, hi| crosses_exon_junction(CisKind::Cds, "NM_001234.1", &provider, &frame, lo, hi);
@@ -11147,6 +11325,7 @@ mod tests {
         let frame = AxisFrame {
             delta: 0,
             reading_frame: false,
+            kind: CisKind::Cds,
         };
         for kind in [CisKind::Genome, CisKind::Mt] {
             assert!(
