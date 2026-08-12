@@ -63,21 +63,48 @@ env:
   # in the plain `test` job; this is not a coverage exemption, it is a statement
   # about which instrument may be armed while another is measuring.
   #
-  # WHY: the corpus COUNTS non-idempotent outputs (7 at 3', 4 at 5' as pinned in
-  # `spec_conformance_axis.rs`) as a burn-down figure. `FERRO_ASSERT_IDEMPOTENT` PANICS
+  # WHY, REASON 1: the corpus COUNTS non-idempotent outputs (4 at 3', 4 at 5' as
+  # pinned in `spec_conformance_axis.rs`) as a burn-down figure.
+  # `FERRO_ASSERT_IDEMPOTENT` PANICS
   # on exactly that condition. The two agree perfectly about ferro — the oracle
   # fires on precisely the rows the corpus classifies — but a panic returns no
   # value, so the harness's `catch_unwind` files the row under `declined` and its
   # output never reaches the family's output set.
   #
   # That does not merely re-bucket a counter, it DESTROYS EVIDENCE, and in the
-  # flattering direction. Measured directly on `main` @ 35de96c8, where the
-  # figures were 7 at 3' and 4 at 5': in all 11 cases the non-idempotent output
-  # is the one that disagreed with its siblings, so removing it makes the family
-  # look unanimous. Confluence read 9147 converged / 2428 split-2 under the
-  # oracle against a true 9140 / 2435 — CI would have reported seven more
-  # converged families than actually converge. Those are still the pinned
-  # figures, re-measured unchanged on `main` @ 5b54b2b6.
+  # flattering direction: the non-idempotent output is the one that disagreed
+  # with its siblings, so removing it makes the family look unanimous.
+  #
+  # RE-MEASURED on `main` @ 1dd8148d, armed against the committed pins, both
+  # directions. The previous figures here were taken at `main` @ 35de96c8 and
+  # were stale in three places — #1599 re-blessed 3' `non_idempotent_outputs`
+  # 7 -> 4 and #1536 re-blessed `converged`/`split_two`, both recorded in
+  # `spec_conformance_axis.rs`'s own doc, so "still the pinned figures" had
+  # stopped being true:
+  #
+  #   3': declined 0 -> 4, non_idempotent_outputs 4 -> 0,
+  #       converged 9141 -> 9145, split_two 2440 -> 2436
+  #   5': declined 0 -> 4, non_idempotent_outputs 4 -> 0,
+  #       converged 8944 -> 8948, split_two 2706 -> 2702
+  #
+  # So CI would report FOUR more converged families than converge, in each
+  # direction — not the seven this comment used to claim, which was the figure
+  # before #1599 lowered the count it is derived from.
+  #
+  # WHY, REASON 2 — simpler, and not covered by the paragraphs above. Five tests
+  # in these modules do not merely count the defect, they ASSERT it: the four in
+  # `defect_non_idempotent_outputs` and
+  # `spec_corpus_regressions::an_insertion_at_the_cds_end_is_not_a_fixed_point`
+  # pin `c.*1delinsCTT` -> `c.72_*1insCT` -> `c.72delinsCCT` as a known
+  # non-fixed point. A test that pins a defect and an oracle that aborts on it
+  # cannot both run, whatever the census does. Together the two reasons account
+  # for all 7 tests a bare armed run fails, and `FERRO_ASSERT_IDEMPOTENT` alone
+  # accounts for all 7 — `FERRO_ASSERT_REPARSE` and `FERRO_ASSERT_IN_BOUNDS`
+  # each contribute 0, and a prepared reference changes nothing (these modules
+  # are `MockProvider`-backed).
+  #
+  # Locally, `scripts/run_oracle_suite.sh` applies this same exclusion, reading
+  # it from here rather than copying it.
   #
   # The corpus loses nothing by running un-armed: it measures idempotency itself,
   # and more precisely than the oracle does (a count and a classification, versus

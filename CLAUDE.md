@@ -141,15 +141,73 @@ full suite) before pushing.
   139 k-line crate. A split would add a second full link for every change to
   `tests/it/common/`.
 
+#### Running the oracles locally — a bare armed run CANNOT pass
+
+Read this before running any of the four flags below over the whole suite. The
+obvious command is documented nowhere else in this file any more, because it is
+a trap:
+
+```bash
+FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev   # ALWAYS RED on main
+```
+
+It fails **7** tests on a clean `origin/main`, and has for as long as the spec
+corpus has existed. Use the local runner instead, which mirrors `ci.yml`'s
+`test-oracle` job — its flags, and its selection:
+
+```bash
+scripts/run_oracle_suite.sh                     # as test-oracle runs it
+scripts/run_oracle_suite.sh --print-selection   # what it would run, without running it
+scripts/run_oracle_suite.sh -E 'test(my_test)'  # extra args reach nextest
+```
+
+**Why the bare form is red, and why that is not a coverage gap to close.** All 7
+failures come from `FERRO_ASSERT_IDEMPOTENT` alone — measured: `FERRO_ASSERT_REPARSE`
+and `FERRO_ASSERT_IN_BOUNDS` each contribute **0**, and a prepared reference
+changes nothing (the same 7 fail with and without `FERRO_MANIFEST`; every one of
+these modules is `MockProvider`-backed). All 7 live in modules `ORACLE_EXCLUDE`
+already names, for two reasons that are worth keeping apart:
+
+- **5 of them ASSERT the defect the oracle PANICS on.** The four
+  `defect_non_idempotent_outputs` tests and
+  `spec_corpus_regressions::an_insertion_at_the_cds_end_is_not_a_fixed_point`
+  pin `c.*1delinsCTT` → `c.72_*1insCT` → `c.72delinsCCT` as a known non-fixed
+  point. A test that pins a defect and an oracle that aborts on it cannot both
+  run; there is no version of this the flag could pass.
+- **2 of them COUNT it**, and arming the oracle makes the count read *better*
+  than the truth. `spec_conformance_axis`'s censuses wrap normalization in
+  `catch_unwind`, so a panicking row is filed `declined` and never reaches its
+  family's output set. See `ORACLE_EXCLUDE`'s comment in `ci.yml` for the
+  measured figures.
+
+So the answer is not "run it in CI anyway" — that is the one thing that would
+destroy the evidence. The answer is that CI already excludes it, and the local
+path now excludes it the same way, from the same source of truth.
+
+**The runner reads the whole `-E` selection and the flag set out of `ci.yml`**,
+so neither can drift into a second copy. "Whole" is load-bearing: `test-oracle`
+negates `test(proptest)` and `SWEEP_FILTER` as well as `ORACLE_EXCLUDE`, and a
+runner that negated only the last of them would run the proptest modules and the
+three exhaustive sweeps while reporting itself as mirroring that job. So the
+shape of the expression is read too, and only its variable references are
+expanded — rebuilding it here from a hardcoded `not test(proptest) and not (…)`
+would trade today's drift for tomorrow's.
+
+`tests/it/oracle_exclude_invariant.rs` re-derives all of it in Rust — different
+anchors, deliberately — and compares; separately asserts that the agreed
+selection actually negates all three (a spelling-independent check, since both
+sides otherwise read the same line of `ci.yml` and a matching pair of wrong ones
+would satisfy the equality); and separately forbids the script from hardcoding a
+module name. Each of those guards is checked against a deliberate sabotage
+rather than assumed.
+
 #### Normalization idempotency oracle
 
 `FERRO_ASSERT_IDEMPOTENT=1` turns every `Normalizer::normalize` call into an
 assertion that `norm(norm(x)) == norm(x)`, so any test that normalizes becomes an
-idempotency check:
-
-```bash
-FERRO_ASSERT_IDEMPOTENT=1 cargo nextest run --features dev
-```
+idempotency check. Run it through `scripts/run_oracle_suite.sh` — see
+[Running the oracles locally](#running-the-oracles-locally--a-bare-armed-run-cannot-pass)
+for why the bare full-suite form cannot pass.
 
 It is compiled out in release builds (`#[cfg(debug_assertions)]`) and read once
 into a `OnceLock`, so a disabled run pays only one atomic load. CI runs the suite
@@ -199,9 +257,10 @@ Like the idempotency oracle it is compiled out in release builds
 (`#[cfg(debug_assertions)]`) and read once into a `OnceLock`, so it adds no
 release-build cost and a disabled debug run pays only one atomic load.
 
-```bash
-FERRO_ASSERT_REPARSE=1 cargo nextest run --features dev
-```
+`scripts/run_oracle_suite.sh` arms it, alongside the two flags beside it — the
+bare full-suite form is red for a reason this oracle has no part in, so it tells
+you nothing about re-parsing. Measured: `FERRO_ASSERT_REPARSE` on its own fails
+**0** tests over `ORACLE_EXCLUDE`'s modules.
 
 Kept separate from `FERRO_ASSERT_IDEMPOTENT` because neither subsumes the other,
 and the idempotency oracle has a blind spot this one covers: it verifies by
@@ -217,9 +276,10 @@ the exception and is not set everywhere they are — see
 `FERRO_ASSERT_IN_BOUNDS=1` is the third at the same seam: no coordinate a
 normalized description names may be past the end of its own sequence.
 
-```bash
-FERRO_ASSERT_IN_BOUNDS=1 cargo nextest run --features dev
-```
+`scripts/run_oracle_suite.sh` arms it too. As with the re-parse oracle,
+`FERRO_ASSERT_IN_BOUNDS` on its own fails **0** tests over `ORACLE_EXCLUDE`'s
+modules — the 7 failures a bare armed run shows are the idempotency oracle's,
+and reading them as this one's would send you after the wrong invariant.
 
 It exists because the class kept being found by hand, one shape at a time —
 **#1274** (`T:g.[8_9insA;10del]` -> `g.10_11=` on a 10-base contig), **#1343**
@@ -271,8 +331,16 @@ asks what the output **means** rather than how it is written: apply the input to
 the reference, apply the output, and assert the bases agree.
 
 ```bash
-FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev
+FERRO_ASSERT_SEQUENCE=1 cargo nextest run --features dev -E "$SWEEP_SELECTION"
 ```
+
+**`scripts/run_oracle_suite.sh` deliberately does NOT arm this one**, because
+`test-oracle` does not — the runner mirrors that job, and mirroring it faithfully
+means inheriting the gap. The job where this flag is green is `sweeps`, so scope
+a local run to that job's selection rather than to the whole suite. Added to
+`ORACLE_EXCLUDE`'s modules it raises **5** further failures beyond the
+idempotency oracle's 7, all in `spec_corpus_regressions` and all the same shape
+as those: a test pinning the CDS-end defect that this oracle aborts on.
 
 **The other three are all form questions, and a wrong sequence passes all of
 them.** It is a fixed point, so `FERRO_ASSERT_IDEMPOTENT` is satisfied; it
@@ -453,6 +521,14 @@ wraps normalization in `catch_panics`, so an oracle panic there lands in the
 uploaded xfail artifact as a FAILing case instead of failing the workflow. That
 applies equally to all four flags, and it is why a red oracle in the nightly must
 be read out of the xfail report rather than from the workflow conclusion.
+
+**So the nightly's `report-failure` issue is never about an oracle.** `if:
+failure()` cannot fire on a step whose failure `continue-on-error` has already
+absorbed, so every issue that job opens is an infrastructure one — checkout, the
+`ferro` build, `ferro prepare`, a missing manifest, the artifact upload — and its
+`hint:` says so. The armed reproduction command lives where the oracle failure
+actually surfaces instead: an `outcome == 'failure'` step writes it to the run's
+**job summary**, alongside the pointer to the `ferro-xfail-*` artifact.
 
 **An oracle fire DOES block the merge — corrected 2026-08-09.** This section used
 to say the opposite: that the ruleset requires only a subset of the jobs CI runs,
