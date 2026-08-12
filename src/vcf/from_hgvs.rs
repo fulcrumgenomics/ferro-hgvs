@@ -18,7 +18,7 @@
 use crate::convert::mapper::CoordinateMapper;
 use crate::error::FerroError;
 use crate::hgvs::edit::NaEdit;
-use crate::hgvs::interval::interval_is_wraparound;
+use crate::hgvs::interval::{interval_is_wraparound, GenomeInterval};
 use crate::hgvs::location::{CdsPos, RnaPos, TxPos};
 use crate::hgvs::variant::{CdsVariant, GenomeVariant, HgvsVariant, RnaVariant, TxVariant};
 use crate::project::edit::u_to_t_edit;
@@ -27,6 +27,116 @@ use crate::reference::ReferenceProvider;
 use crate::sequence::reverse_complement;
 
 use super::record::VcfRecord;
+
+/// Refuse a genomic interval whose start or end holds something VCF cannot be
+/// given a coordinate for: a `+`/`-` offset, or a `pter`/`qter`/`cen` special
+/// position.
+///
+/// The two are the same defect in two fields of one struct.
+/// [`GenomePos`](crate::hgvs::location::GenomePos) can hold either because the
+/// parser accepts both, and neither half of the conversion can honour them:
+///
+/// - an **offset** has nothing on a genomic accession to be measured against —
+///   there is no exon structure, and `checklist.md:16` prohibits an offset on a
+///   genomic position outright — and a VCF `POS` is a single integer with no
+///   offset notation;
+/// - a **special position** names a landmark of the assembled chromosome
+///   (`pter`, `qter`) or of its centromere annotation (`cen`), none of which a
+///   sequence accession carries. `GenomePos` stores `base: 0` beside the
+///   `special` marker precisely because there is no coordinate to store.
+///
+/// What [`HgvsToVcfConverter::convert_genome`] did instead was read `base` and
+/// drop both, which is the one answer worse than either honest option. It
+/// produced the same failure the SPDI path was fixed for twice over — see
+/// `spdi::convert::reject_unresolvable_genomic_position`, whose ruling this
+/// mirrors, including the verdict:
+///
+/// - **Dropping the offset** made `g.10+2del`, `g.10-2del` and `g.10del` — three
+///   descriptions `normalize` keeps distinct — emit one byte-identical VCF row
+///   (`POS=9 REF=AC ALT=["A"]`), with no error at all in either build profile.
+/// - **Flattening a special position** onto `base: 0` sent 0 into
+///   [`HgvsToVcfConverter::build_vcf_record`]'s `start - 1`, which panicked in
+///   debug and wrapped to `18446744073709551614` in release. The wrap was caught
+///   only because the fixture's provider bounds-checks its fetch; a provider
+///   that does not would emit a record at the wrapped coordinate.
+///
+/// Refusing is what the rest of this module already does with the positions it
+/// cannot lower — the `c.`/`n.`/`r.` arms decline an intronic position rather
+/// than pretend it sits on the exon, and every unrepresentable edit declines by
+/// name. The genomic arm was the one hole in an otherwise consistent policy.
+///
+/// **One guard, not six.** The SPDI sibling needed a call site per genomic arm
+/// and passed each its axis label; here `g.`, `m.` and `o.` all funnel through
+/// `convert_genome` (the `m.`/`o.` arms of [`HgvsToVcfConverter::convert`]
+/// rebuild the variant as a `GenomeVariant`), so there is one guarded funnel and
+/// no per-site label to get wrong. The offending description is quoted instead,
+/// which is what a caller needs to act.
+fn reject_unresolvable_genomic_position(
+    interval: &GenomeInterval,
+    hgvs_string: &str,
+) -> Result<(), FerroError> {
+    // Name the side the offending endpoint came from. Both endpoints are checked, so
+    // `g.4_10+2del` reports the value without saying which of the two carried it, and an
+    // interval whose two ends fail differently is indistinguishable from one whose start
+    // fails twice. The label is diagnostic only — the refusal itself is unchanged.
+    for (side, endpoint) in [
+        ("interval start", interval.start.inner()),
+        ("interval end", interval.end.inner()),
+    ]
+    .into_iter()
+    .filter_map(|(side, endpoint)| endpoint.map(|endpoint| (side, endpoint)))
+    {
+        if endpoint.offset.is_some() {
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "genomic position {endpoint} ({side}) carries a +/- offset: a genomic \
+                     position cannot have one, and a VCF POS has no offset notation to express \
+                     it. Drop the offset, or describe the variant on a transcript accession \
+                     where an offset is meaningful. Variant: {hgvs_string}"
+                ),
+            });
+        }
+        if let Some(special) = endpoint.special {
+            return Err(FerroError::InvalidCoordinates {
+                msg: format!(
+                    "genomic position `{special}` ({side}) names no numeric coordinate: `pter`, \
+                     `qter` and `cen` are landmarks of the assembled chromosome, not \
+                     positions on the sequence, and a VCF POS has no notation for them. \
+                     Give the position a number, or keep the description in HGVS. \
+                     Variant: {hgvs_string}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// The 1-based reference position an anchored edit hangs its anchor base on:
+/// the base immediately before `start`.
+///
+/// VCF anchors a deletion — and a length-changing `delins` — on the preceding
+/// reference base, so `start` must have a predecessor. This is `start - 1` on
+/// `u64`, and it was written that way: at `start = 0` it panicked in debug and
+/// wrapped to `u64::MAX - 1` in release, which then either escaped as a record
+/// at a nonsense coordinate or came back as a bounds error blaming the provider.
+///
+/// The check lives here rather than only at the genomic arm because
+/// [`HgvsToVcfConverter::build_vcf_record`] is the **shared trunk**:
+/// `convert_cds`, `convert_tx`, `convert_rna` and `convert_genome` all reach it.
+/// The `pter` guard above closes the one caller that is known to have fed it a
+/// zero; this closes the arithmetic for every caller, present and future, and
+/// makes the two build profiles answer identically.
+fn anchor_position_before(start: u64, hgvs_string: &str) -> Result<u64, FerroError> {
+    start
+        .checked_sub(1)
+        .ok_or_else(|| FerroError::InvalidCoordinates {
+            msg: format!(
+                "1-based position {start} has no anchor base before it: VCF anchors a \
+             deletion or a length-changing delins on the preceding reference base, and \
+             position {start} has no predecessor. Variant: {hgvs_string}"
+            ),
+        })
+}
 
 /// Result of converting an HGVS variant to VCF
 #[derive(Debug, Clone)]
@@ -491,6 +601,7 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
         let warnings = Vec::new();
 
         let interval = &variant.loc_edit.location;
+        reject_unresolvable_genomic_position(interval, &hgvs_string)?;
         let edit = variant
             .loc_edit
             .edit
@@ -573,7 +684,7 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
             NaEdit::Deletion { sequence, .. } => {
                 // Deletion: need anchor base before the deletion
                 // VCF format: REF includes anchor + deleted bases, ALT is just anchor
-                let anchor_pos = start - 1;
+                let anchor_pos = anchor_position_before(start, hgvs_string)?;
                 let anchor_base = self.get_reference_base(chrom, anchor_pos)?;
 
                 let deleted_seq = if let Some(seq) = sequence {
@@ -616,7 +727,7 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
                     (start, deleted_seq, vec![alt_seq])
                 } else {
                     // Add anchor for length-changing variants
-                    let anchor_pos = start - 1;
+                    let anchor_pos = anchor_position_before(start, hgvs_string)?;
                     let anchor_base = self.get_reference_base(chrom, anchor_pos)?;
                     let ref_allele = format!("{}{}", anchor_base, deleted_seq);
                     let alt_allele = format!("{}{}", anchor_base, alt_seq);
@@ -921,8 +1032,15 @@ impl<'a, P: ReferenceProvider> HgvsToVcfConverter<'a, P> {
 /// VCF anchor base that deletions and insertions require — those edits decline
 /// with a clear error. To convert deletions/insertions, use
 /// [`HgvsToVcfConverter`], which fetches the anchor base from the provider.
+///
+/// Like the provider-backed path, a `+`/`-` offset or a `pter`/`qter`/`cen`
+/// special position on either endpoint is refused rather than read through to
+/// `base` — see `reject_unresolvable_genomic_position`. Both entry points are
+/// guarded, because both read the same field of the same struct: unguarded,
+/// this one lowered `g.10+2C>T` and `g.10C>T` to the same `POS=10` row.
 pub fn genomic_hgvs_to_vcf(variant: &GenomeVariant) -> Result<VcfRecord, FerroError> {
     let interval = &variant.loc_edit.location;
+    reject_unresolvable_genomic_position(interval, &variant.to_string())?;
     let edit = variant
         .loc_edit
         .edit
@@ -1063,6 +1181,12 @@ fn rna_pos_to_cds(pos: &RnaPos) -> CdsPos {
 /// Callers MUST reject `utr3`/negative-`base` positions before calling this —
 /// `convert_rna`'s non-coding branch does so — otherwise the dropped `utr3`
 /// flag would map `*N` as the unrelated transcript position `N`.
+///
+/// That obligation is an ordering, not a type, so it is pinned rather than
+/// assumed: `the_dropped_utr3_marker_is_shielded_by_the_non_coding_guard`
+/// asserts both that the marker is really lost here and that the sole call
+/// site refuses ahead of it, so moving the guard — or adding a second caller —
+/// fails a test instead of silently answering a different question.
 fn rna_pos_to_tx(pos: &RnaPos) -> TxPos {
     TxPos {
         base: pos.base,
@@ -1925,6 +2049,126 @@ mod tests {
 
         let err = converter.convert(&variant).unwrap_err();
         assert!(matches!(err, FerroError::ConversionError { .. }));
+    }
+
+    /// `rna_pos_to_tx` hard-codes `downstream: false`, so it drops the `utr3`
+    /// (`*`) marker the AST carries — the same in-band-marker drop that
+    /// `CoordinateMapper::tx_to_cds` is being fixed for on the `n.` axis. Here
+    /// the site is genuinely **unreachable** with `utr3 == true`, so this test
+    /// pins the guard that makes it so instead of changing behaviour: making
+    /// the helper refuse would be dead code today, and a refusal nothing can
+    /// reach is worse than none because it reads as coverage.
+    ///
+    /// "Handled one layer up" is only true while the layer stays put, which is
+    /// what this test is for. It has three halves, and the first is what makes
+    /// the other two worth having:
+    ///
+    /// 1. The drop is **real** — `r.*5` and `r.5` lower to the same `TxPos`,
+    ///    so if control ever reached the helper the answer would be silently
+    ///    wrong rather than absent.
+    /// 2. The helper's **only** call site — `convert_rna`'s non-coding `map_tx`
+    ///    closure — refuses first, and refuses *for that reason*: the message
+    ///    is asserted, not just `is_err()`, so a decline arriving from some
+    ///    other check cannot stand in for this guard.
+    /// 3. The coding branch never reaches the helper at all — it lowers
+    ///    through `rna_pos_to_cds`, which carries `utr3` faithfully — so a
+    ///    coding transcript must not produce the non-coding guard's message.
+    ///
+    /// This is the same shape as
+    /// `the_delins_anchor_is_shielded_by_the_reference_fetch`: an unreachable
+    /// site whose unreachability depends on an ordering nothing else pins.
+    /// If the guard is moved after the call, or a second caller appears, this
+    /// is what notices.
+    #[test]
+    fn the_dropped_utr3_marker_is_shielded_by_the_non_coding_guard() {
+        // 1. The helper really does lose the marker.
+        let starred = rna_pos_to_tx(&RnaPos::utr3(5));
+        let plain = rna_pos_to_tx(&RnaPos::new(5));
+        assert!(
+            !starred.downstream,
+            "the helper is expected to drop the `*` marker; if it now carries it, \
+             this test has been overtaken by a real fix and should be replaced by \
+             one asserting the marker survives"
+        );
+        assert_eq!(
+            starred, plain,
+            "`r.*5` and `r.5` must be indistinguishable after lowering — that \
+             indistinguishability is exactly why the guard below has to exist"
+        );
+
+        // 2. The only call site refuses first, and says why.
+        let mut non_coding = create_test_transcript();
+        non_coding.cds_start = None;
+        non_coding.cds_end = None;
+        let mut provider = MockProvider::new();
+        let seq = "ACGT".repeat(400);
+        let converter = converter_with_genomic_chr1(&non_coding, &mut provider, &seq);
+
+        for pos in [RnaPos::utr3(5), RnaPos::new(0), RnaPos::new(-3)] {
+            let descriptor = format!("r.{pos}");
+            let variant = HgvsVariant::Rna(RnaVariant {
+                accession: Accession::new("NR", "000088", Some(3)),
+                gene_symbol: None,
+                loc_edit: LocEdit::new(
+                    RnaInterval::point(pos),
+                    NaEdit::Substitution {
+                        reference: Base::A,
+                        alternative: Base::G,
+                    },
+                ),
+            });
+
+            let message = converter
+                .convert(&variant)
+                .expect_err("a position with no meaning on a non-coding transcript must be refused")
+                .to_string();
+            assert!(
+                message.contains("has no meaning on a non-coding transcript"),
+                "`{descriptor}` was refused by some other check, so the guard that \
+                 shields `rna_pos_to_tx` is no longer what stops it. Re-read \
+                 `convert_rna`'s non-coding branch before trusting this decline. \
+                 Got: {message}"
+            );
+        }
+
+        // 3. The coding branch does not go through the helper at all.
+        let coding = create_test_transcript();
+        let mut coding_provider = MockProvider::new();
+        let coding_converter =
+            converter_with_genomic_chr1(&coding, &mut coding_provider, &"ACGT".repeat(700));
+        let coding_variant = HgvsVariant::Rna(RnaVariant {
+            accession: Accession::new("NM", "000088", Some(3)),
+            gene_symbol: None,
+            loc_edit: LocEdit::new(
+                RnaInterval::point(RnaPos::utr3(5)),
+                NaEdit::Substitution {
+                    reference: Base::A,
+                    alternative: Base::G,
+                },
+            ),
+        });
+        // Asserted unconditionally rather than under `if let Err(..)`: a bare
+        // conditional check says nothing at all when the conversion succeeds, so
+        // it could not distinguish "the coding branch works" from "the coding
+        // branch stopped being reached". Both outcomes are pinned instead — the
+        // conversion must succeed, and if it ever regresses to an error the
+        // message must not be the non-coding guard's.
+        match coding_converter.convert(&coding_variant) {
+            Ok(result) => assert_eq!(
+                result.hgvs_string, "NM_000088.3:r.*5a>g",
+                "the coding lowering must convert `r.*5`, not merely avoid the \
+                 non-coding guard"
+            ),
+            Err(err) => {
+                let message = err.to_string();
+                assert!(
+                    !message.contains("has no meaning on a non-coding transcript"),
+                    "a CODING transcript reached the non-coding guard, so `is_coding()` \
+                     no longer selects the `rna_pos_to_cds` lowering: {message}"
+                );
+                panic!("the coding `r.*5` lowering must still convert: {message}");
+            }
+        }
     }
 
     #[test]
@@ -2845,5 +3089,321 @@ mod tests {
         assert_eq!(record.reference, "A");
         // unit = trailing "T" only, repeated 5 times.
         assert_eq!(record.alternate, vec![format!("A{}", "T".repeat(5))]);
+    }
+
+    // ------------------------------------------------------------------
+    // Unresolvable genomic positions: offsets and pter/qter/cen
+    // ------------------------------------------------------------------
+
+    /// Sixteen bases of `chr1`, enough for every descriptor below to have a
+    /// real anchor and a real deleted base when it is *not* refused. The
+    /// guard under test fires before any fetch, so the content matters only
+    /// to the control cases that must still convert.
+    const CHR1_16: &str = "ACGTACGTACGTACGT";
+
+    /// Convert `descriptor` through the full provider-backed converter, with
+    /// sixteen bases of `chr1` available.
+    fn convert_descriptor(descriptor: &str) -> Result<VcfConversionResult, FerroError> {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        provider.add_genomic_sequence("chr1", CHR1_16);
+        provider.add_genomic_sequence("chrM", CHR1_16);
+        provider.add_genomic_sequence("001416", CHR1_16);
+        let converter = HgvsToVcfConverter::new(&transcript, &provider);
+        let variant = crate::parse_hgvs(descriptor).expect("fixture must parse");
+        converter.convert(&variant)
+    }
+
+    /// A `g.` position carrying a `+`/`-` offset must not be silently
+    /// flattened onto its base. `convert_genome` read only `GenomePos::base`,
+    /// so `g.10+2del` and `g.10del` emitted byte-identical VCF records — a
+    /// wrong row with no error at all, in both build profiles.
+    ///
+    /// The verdict mirrors #1641's ruling for the SPDI path: **refuse**. A
+    /// genomic accession has no exon structure to measure an offset against,
+    /// and VCF is purely positional, so there is nothing to resolve and no
+    /// notation to carry it. The `m.` and `o.` axes hold the same
+    /// `Interval<GenomePos>` and funnel through the same `convert_genome`, so
+    /// all three are exercised.
+    ///
+    /// The message is asserted rather than a bare `is_err()`: several of these
+    /// shapes can fail for unrelated reasons (a fetch that runs off the end of
+    /// a 16-base contig, for one), and "failed somehow" would be satisfied by
+    /// a build with the guard removed.
+    #[test]
+    fn a_genomic_offset_is_refused_rather_than_dropped() {
+        for descriptor in [
+            "NC_000001.11:g.10+2del",
+            "NC_000001.11:g.10-2del",
+            "NC_000001.11:g.10+2_12del",
+            "NC_000001.11:g.4_10+2del",
+            "NC_000001.11:g.10+2C>T",
+            "NC_012920.1:m.10+2del",
+            "NC_001416.1:o.10+2del",
+        ] {
+            let err = match convert_descriptor(descriptor) {
+                Err(err) => err,
+                Ok(result) => panic!(
+                    "`{descriptor}` converted to POS={} REF={} ALT={:?}; the offset was dropped",
+                    result.record.pos, result.record.reference, result.record.alternate
+                ),
+            };
+            let message = err.to_string();
+            assert!(
+                message.contains("carries a +/- offset"),
+                "`{descriptor}` was refused for some other reason: {message}"
+            );
+        }
+    }
+
+    /// The invariant the drop breaks, stated directly: two descriptions that
+    /// the converter maps to the same VCF record must be the same variant.
+    /// `g.10+2del`, `g.10-2del` and `g.10del` are three descriptions and were
+    /// one row — `POS=9 REF=AC ALT=["A"]` for all three.
+    ///
+    /// The denominator is asserted, because once the guard is in place the
+    /// two offset-carrying rows never reach `seen` and the collision check
+    /// has nothing left to compare. If that count grows, an offset is
+    /// convertible again and the collision check has just gone live.
+    #[test]
+    fn distinct_genomic_descriptions_do_not_share_one_vcf_record() {
+        /// Only the offset-free spelling converts today.
+        const CONVERTIBLE_TODAY: usize = 1;
+
+        let descriptors = [
+            "NC_000001.11:g.10+2del",
+            "NC_000001.11:g.10-2del",
+            "NC_000001.11:g.10del",
+        ];
+        let mut seen: Vec<(&str, String)> = Vec::new();
+        for descriptor in descriptors {
+            if let Ok(result) = convert_descriptor(descriptor) {
+                let row = format!(
+                    "{}:{} {} -> {:?}",
+                    result.record.chrom,
+                    result.record.pos,
+                    result.record.reference,
+                    result.record.alternate
+                );
+                if let Some((other, _)) = seen.iter().find(|(_, r)| *r == row) {
+                    panic!(
+                        "`{descriptor}` and `{other}` are different variants but share \
+                         the VCF row `{row}`"
+                    );
+                }
+                seen.push((descriptor, row));
+            }
+        }
+
+        assert_eq!(
+            seen.len(),
+            CONVERTIBLE_TODAY,
+            "{} of {} descriptors converted, expected {CONVERTIBLE_TODAY}: {seen:?}. \
+             If this grew, an offset-carrying description is convertible again and the \
+             collision check above has just become live",
+            seen.len(),
+            descriptors.len()
+        );
+    }
+
+    /// `pter`, `qter` and `cen` name landmarks of the assembled chromosome,
+    /// not positions on the sequence, and `GenomePos` stores `base: 0` for all
+    /// three. `convert_genome` never called `is_special()`, so base 0 reached
+    /// `build_vcf_record`, whose Deletion arm computes `start - 1` on `u64`:
+    /// a debug panic (`attempt to subtract with overflow`) and a release wrap
+    /// to `18446744073709551614`.
+    ///
+    /// The verdict mirrors #1662's ruling for the SPDI path: **refuse**, for
+    /// the same reason — a sequence accession carries no telomere or
+    /// centromere annotation to resolve the landmark against.
+    ///
+    /// The message is asserted, and that is load-bearing here: in release the
+    /// wrapped coordinate is *already* caught by the provider's bounds check,
+    /// so `is_err()` passes on unguarded code. It passes for the wrong reason,
+    /// and a provider that does not bounds-check its fetch would emit a record
+    /// at the wrapped coordinate instead.
+    #[test]
+    fn a_genomic_special_position_is_refused_rather_than_flattened() {
+        for descriptor in [
+            "NC_000001.11:g.pter_4del",
+            "NC_000001.11:g.4_qterdel",
+            "NC_000001.11:g.4_cendel",
+            "NC_000001.11:g.pter_4delinsACGT",
+            "NC_000001.11:g.4_qterdup",
+            "NC_012920.1:m.pter_4del",
+            "NC_001416.1:o.pter_4del",
+        ] {
+            let err = match convert_descriptor(descriptor) {
+                Err(err) => err,
+                Ok(result) => panic!(
+                    "`{descriptor}` converted to POS={} REF={} ALT={:?}; the special \
+                     position was flattened onto base 0",
+                    result.record.pos, result.record.reference, result.record.alternate
+                ),
+            };
+            let message = err.to_string();
+            assert!(
+                message.contains("names no numeric coordinate"),
+                "`{descriptor}` was refused for some other reason: {message}"
+            );
+        }
+    }
+
+    /// The provider-less entry point reads the same field of the same struct,
+    /// so it carried the same defect and gets the same guard. It matters most
+    /// for the substitution arm, which is the one edit it lowers without
+    /// needing a reference: unguarded, `g.10+2C>T` and `g.10C>T` both emitted
+    /// `POS=10 REF=C ALT=[T]`.
+    ///
+    /// `ferro`'s `hgvs2vcf` subcommand is this function's only non-test
+    /// caller, so this is the CLI-visible half of the defect.
+    #[test]
+    fn the_provider_less_path_refuses_an_unresolvable_genomic_position() {
+        for (descriptor, expected) in [
+            ("NC_000001.11:g.10+2C>T", "carries a +/- offset"),
+            ("NC_000001.11:g.10-2C>T", "carries a +/- offset"),
+            (
+                "NC_000001.11:g.pter_4delACGT",
+                "names no numeric coordinate",
+            ),
+            (
+                "NC_000001.11:g.4_qterdelACGT",
+                "names no numeric coordinate",
+            ),
+        ] {
+            let variant = match crate::parse_hgvs(descriptor).expect("fixture must parse") {
+                HgvsVariant::Genome(genome) => genome,
+                other => panic!("`{descriptor}` parsed as {other:?}, expected a genomic variant"),
+            };
+            let err = match genomic_hgvs_to_vcf(&variant) {
+                Err(err) => err,
+                Ok(record) => panic!(
+                    "`{descriptor}` converted to POS={} REF={} ALT={:?}",
+                    record.pos, record.reference, record.alternate
+                ),
+            };
+            let message = err.to_string();
+            assert!(
+                message.contains(expected),
+                "`{descriptor}` was refused for some other reason: {message}"
+            );
+        }
+
+        // Control: the offset-free spelling still converts on this path.
+        let plain = match crate::parse_hgvs("NC_000001.11:g.10C>T").unwrap() {
+            HgvsVariant::Genome(genome) => genome,
+            other => panic!("expected a genomic variant, got {other:?}"),
+        };
+        let record = genomic_hgvs_to_vcf(&plain).expect("the legal spelling must still convert");
+        assert_eq!(record.pos, 10);
+    }
+
+    /// The refusal names WHICH endpoint was unresolvable, not just the value.
+    ///
+    /// Both endpoints are checked in one loop, so before this the two sides were
+    /// indistinguishable in the message: `g.pter_4del` and `g.4_qterdel` differ only
+    /// in which end carries the landmark, and both reported the landmark alone. A
+    /// caller holding a two-ended interval could not tell which end to correct.
+    ///
+    /// The two directions are asserted against each other rather than each on its
+    /// own, so a label hardcoded to one side — the obvious wrong fix, and the shape
+    /// a single-sided fixture would pass — fails here.
+    #[test]
+    fn the_refusal_names_which_endpoint_was_unresolvable() {
+        for (descriptor, expected_side, forbidden_side) in [
+            (
+                "NC_000001.11:g.pter_4delACGT",
+                "interval start",
+                "interval end",
+            ),
+            (
+                "NC_000001.11:g.4_qterdelACGT",
+                "interval end",
+                "interval start",
+            ),
+        ] {
+            let variant = match crate::parse_hgvs(descriptor).expect("fixture must parse") {
+                HgvsVariant::Genome(genome) => genome,
+                other => panic!("`{descriptor}` parsed as {other:?}, expected a genomic variant"),
+            };
+            let message = match genomic_hgvs_to_vcf(&variant) {
+                Err(err) => err.to_string(),
+                Ok(record) => panic!("`{descriptor}` converted to POS={}", record.pos),
+            };
+            assert!(
+                message.contains(expected_side),
+                "`{descriptor}` must name `{expected_side}`: {message}"
+            );
+            assert!(
+                !message.contains(forbidden_side),
+                "`{descriptor}` named the wrong end (`{forbidden_side}`): {message}"
+            );
+        }
+    }
+
+    /// The offset drop is confined to `convert_genome`, but `start - 1` lives
+    /// in `build_vcf_record`, which is the shared trunk: `convert_cds`,
+    /// `convert_tx`, `convert_rna` and `convert_genome` all reach it. So the
+    /// anchor arithmetic is checked at the trunk as well as guarded at the
+    /// genomic arm, and this test calls the trunk directly with `start = 0` —
+    /// no caller is needed for the arithmetic to be wrong.
+    ///
+    /// Without the check the Deletion arm panics in debug (`attempt to
+    /// subtract with overflow`) and wraps in release; with it, both profiles
+    /// refuse identically and say why.
+    #[test]
+    fn the_vcf_anchor_cannot_underflow_at_position_zero() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, CHR1_16);
+
+        let edit = NaEdit::Deletion {
+            sequence: Some(Sequence::from_str("A").unwrap()),
+            length: None,
+        };
+        let err = converter
+            .build_vcf_record("chr1", 0, 1, &edit, "synthetic")
+            .expect_err("an anchor before position 0 does not exist");
+        let message = err.to_string();
+        assert!(
+            message.contains("has no anchor base before it"),
+            "the deletion arm underflowed or declined for another reason: {message}"
+        );
+    }
+
+    /// The **second** `start - 1` in the trunk — the length-changing `Delins`
+    /// branch — is checked too, but it is not what refuses `start = 0` and
+    /// this test pins that rather than letting a bare `is_err()` imply
+    /// otherwise. That arm fetches the deleted bases *before* it computes an
+    /// anchor, and the fetch's own `start >= 1` validation fires first, so the
+    /// subtraction is unreachable at zero.
+    ///
+    /// This is exactly the shape the SPDI siblings warn about: a decline that
+    /// looks like coverage but comes from a check asking a different question.
+    /// The arithmetic is still made checked, because "unreachable today"
+    /// depends on an evaluation order nothing else pins — and this assertion
+    /// is what will notice if that order changes.
+    #[test]
+    fn the_delins_anchor_is_shielded_by_the_reference_fetch() {
+        let transcript = create_test_transcript();
+        let mut provider = MockProvider::new();
+        let converter = converter_with_genomic_chr1(&transcript, &mut provider, CHR1_16);
+
+        let edit = NaEdit::Delins {
+            sequence: InsertedSequence::Literal(Sequence::from_str("ACGT").unwrap()),
+            deleted: None,
+            deleted_length: None,
+            substitution_reference: None,
+        };
+        let err = converter
+            .build_vcf_record("chr1", 0, 1, &edit, "synthetic")
+            .expect_err("position 0 is not a valid 1-based coordinate");
+        let message = err.to_string();
+        assert!(
+            message.contains("invalid 1-based genomic range [0, 1]"),
+            "the delins arm no longer declines at the fetch; if it now declines at the \
+             anchor check instead, that is an improvement — re-read the arm's order and \
+             re-pin this. Got: {message}"
+        );
     }
 }
