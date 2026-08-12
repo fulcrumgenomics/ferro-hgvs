@@ -6770,7 +6770,48 @@ impl<P: ReferenceProvider> Normalizer<P> {
             ));
         }
         if residual_del.len() == 1 && residual_seq.0.len() == 1 {
-            // Sub > delins.
+            // Sub > delins — except at the translation initiation codon, where
+            // the substitution form does not exist.
+            //
+            // `validate_no_start_loss_substitution` (parser) refuses
+            // `p.Met1<Xaa>`: a variant that changes the initiation codon is
+            // described neither as a substitution nor as an extension
+            // (`protein/substitution.md:49`, `checklist.md:65`,
+            // `protein/extension.md:28`). A *range* delins is not refused —
+            // that guard keys on a single certain position — so an input like
+            // `p.Met1_Ala3delinsValAlaAla` parses, and it is the affix trim
+            // here that would manufacture the illegal `p.Met1Val`. The guard
+            // therefore belongs in the producer as well (#1607).
+            //
+            // Declining is the only move available. The spec offers `p.0`,
+            // `p.0?`, `p.(Met1?)` and — when an upstream initiation site is
+            // activated — the insertion form `p.Met1_Leu2ins…`; which one holds
+            // is a claim about the *consequence*, and the reference and payload
+            // residues do not settle it. So the input is left as authored
+            // rather than canonicalised into a choice ferro cannot make.
+            //
+            // The condition mirrors **`validate_no_start_loss_substitution`**
+            // — the parser's guard, and only that one — evaluated against the
+            // substitution this branch is about to build: residue 1, an
+            // initiator `Met` as the reference residue, and a different
+            // residue replacing it. So the producer cannot emit a
+            // substitution that entry point would refuse. A non-`Met` residue
+            // 1 and a `Met`→`Met` residual are both accepted there and so are
+            // left to canonicalise.
+            //
+            // It is deliberately **not** parity with the sibling producer
+            // guard in `try_protein_delins_split_unchanged_interior`
+            // (#1606), which declines on the broader
+            // `start_pos.number == 1 && ref_aas[0] != seq.0[0]` — any change
+            // at residue 1, `Met` or not. That path emits an allele of
+            // members and takes the wider berth; this one is scoped to the
+            // reparse hole, so it tracks the parser instead.
+            if new_start == 1
+                && residual_del[0] == AminoAcid::Met
+                && residual_seq.0[0] != AminoAcid::Met
+            {
+                return None;
+            }
             let pos = ProtPos::new(residual_del[0], new_start);
             return Some((
                 ProteinEdit::Substitution {
