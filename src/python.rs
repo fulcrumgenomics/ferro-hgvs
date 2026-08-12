@@ -220,6 +220,213 @@ fn projection_error_at(i: usize, e: &crate::error::FerroError) -> PyErr {
     )
 }
 
+// ============================================================================
+// Numeric coordinate entry points: boundary validation
+// ============================================================================
+//
+// `CoordinateMapper`'s `c_to_g` / `g_to_c` / `c_to_p` / `c_to_n` / `n_to_c`
+// take coordinates as raw integers rather than as a description, so nothing
+// the parser checks is on their path — they build a `CdsPos` / `TxPos` from
+// whatever Python passed. Everything a description would have been checked for
+// has to be checked here instead, or ferro answers questions it has already
+// refused to answer at its other entry point.
+//
+// These helpers are deliberately *pure*: they take and return plain values and
+// never touch the interpreter, so the unit tests at the bottom of this file can
+// exercise them without a Python runtime. Only `BoundaryRejection::into_pyerr`
+// crosses into PyO3.
+
+/// A refused argument at a numeric coordinate entry point.
+///
+/// Carries the library error the refusal corresponds to as well as the message,
+/// so the Python exception reports the same `E####` code and mutalyzer
+/// equivalents the rest of ferro reports for the same refusal — a caller
+/// discriminating on `err.code` sees one vocabulary, not one per entry point.
+struct BoundaryRejection {
+    /// The `ferro_hgvs` exception class to raise (see `ferro_exception`).
+    class: &'static str,
+    /// The message, phrased for a caller who passed integers: it names the
+    /// coordinate rather than an offset into a source string, because at these
+    /// entry points there is no source string.
+    message: String,
+    /// The equivalent library error, read only for its code and mutalyzer map.
+    error: crate::error::FerroError,
+}
+
+impl BoundaryRejection {
+    fn into_pyerr(self) -> PyErr {
+        ferro_typed(self.class, self.message, &self.error)
+    }
+}
+
+/// Spell the coordinate a numeric entry point was handed, for a diagnostic.
+fn render_boundary_position(axis: char, base: i64, utr3: bool) -> String {
+    if utr3 {
+        format!("{axis}.*{base}")
+    } else {
+        format!("{axis}.{base}")
+    }
+}
+
+/// Whether `offset` is one of the parser's unknown-offset sentinels rather than
+/// a measured intronic distance.
+///
+/// Mirrors [`CdsPos::has_unknown_offset`] but takes the bare `Option<i64>`, so
+/// it can be applied to an argument before any position struct is built — which
+/// is the whole point at these entry points.
+fn is_unknown_offset(offset: Option<i64>) -> bool {
+    use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
+    matches!(
+        offset,
+        Some(OFFSET_UNKNOWN_POSITIVE) | Some(OFFSET_UNKNOWN_NEGATIVE)
+    )
+}
+
+/// Refuse a base coordinate of zero.
+///
+/// `parse_hgvs` refuses `c.0` / `n.0` as `E1003 InvalidPosition` ("Position 0
+/// is not valid in HGVS notation", `src/error_handling/preprocessor.rs`), on
+/// the spec's authority: `background/numbering.md:31` states there is no
+/// nucleotide `c.0`. That sits *inside* the definition of the numbering axis,
+/// so it is a claim about what the axis contains rather than input hygiene —
+/// and it therefore holds however the coordinate arrives, as an integer just as
+/// much as as text. Every other implementation agrees: biocommons/hgvs raises
+/// "BaseOffsetPosition base may not be 0" from the type itself, Mutalyzer
+/// rejects it, and `mutalyzer-crossmapper`'s documentation opens with "There is
+/// no zero (0) in any of the HGVS numbering systems".
+///
+/// Without this the numeric entry points answered `c.0` **identically to
+/// `c.1`** — `CoordinateMapper::cds_to_tx` routes a zero base through its
+/// `base < 1` arm, which adds nothing, landing on the CDS start.
+///
+/// No ruling record has been committed for `c.0` yet, so the authorities are
+/// recorded here rather than in the ledger. Two sites inside ferro still
+/// disagree with this and with each other (`src/convert/mapper.rs` reads `c.0`
+/// as `c.1`, `src/normalize/mod.rs` reads it as `c.-1`); reconciling those is
+/// separate work, and this refusal is correct whichever way it goes, because a
+/// coordinate that does not exist cannot be converted to one that does.
+fn reject_zero_base(axis: char, base: i64, utr3: bool) -> Result<(), BoundaryRejection> {
+    if base != 0 {
+        return Ok(());
+    }
+    let position = render_boundary_position(axis, base, utr3);
+    let message = format!("Position 0 is not valid in HGVS notation ({position})");
+    Err(BoundaryRejection {
+        class: "ParseError",
+        message: message.clone(),
+        error: crate::error::FerroError::parse_with_diagnostic(
+            0,
+            message,
+            crate::error::Diagnostic::new()
+                .with_code(crate::error::ErrorCode::InvalidPosition)
+                .with_hint("HGVS positions start at 1, not 0"),
+        ),
+    })
+}
+
+/// Refuse an unknown-offset sentinel where a measured distance is required.
+///
+/// `c.N+?` / `c.N-?` parse to `i64::MAX` / `i64::MIN`. Per the spec they denote
+/// an unknown position 3'/5' of the base, unbounded in that direction, so no
+/// coordinate can be derived from them at all — see
+/// [`CdsPos::has_unknown_offset`] and issue #1087.
+///
+/// The `#1087` / PR `#1088` guard lives in `src/data/mapping.rs` and is not on
+/// this path. This is the same refusal, at the entry point that reaches the
+/// conversion without it — the wording and the `UnsupportedProjection` code are
+/// deliberately kept identical to that guard's.
+///
+/// # What this guard does NOT do — read before widening it
+///
+/// It is keyed on sentinel **identity**, and that is all it can be keyed on: it
+/// runs before the transcript is fetched, so it holds no intron to measure a
+/// magnitude against. It is therefore **not** what protects
+/// `Transcript::intronic_to_genomic` from an oversized offset, and an earlier
+/// version of this comment claimed otherwise — describing the `i64::MIN`
+/// negation overflow as if refusing the sentinel closed it. It did not:
+/// `i64::MIN + 1` is one step away, is not a sentinel, and reproduced the whole
+/// class (panic under `debug_assertions`, silent wrap in a `--release` wheel),
+/// while `i64::MAX - 1` returned a coordinate-shaped number ~9.2e18 bases
+/// outside its intron. That is #1765.
+///
+/// The magnitude class is closed where the magnitude can actually be judged —
+/// in `intronic_to_genomic`, whose arithmetic is now total (`unsigned_abs` plus
+/// checked add/sub) and whose result must land inside the intron the offset was
+/// measured into, else it declines. Every caller gets that, not only this one.
+///
+/// So what survives here is the **diagnostic**: `+?` / `-?` deserve to be named
+/// as unknown-offset markers rather than reported as an unmappable distance.
+fn reject_sentinel_offset(
+    axis: char,
+    base: i64,
+    utr3: bool,
+    offset: Option<i64>,
+) -> Result<(), BoundaryRejection> {
+    use crate::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE;
+    if !is_unknown_offset(offset) {
+        return Ok(());
+    }
+    let sign = if offset == Some(OFFSET_UNKNOWN_NEGATIVE) {
+        '-'
+    } else {
+        '+'
+    };
+    let position = render_boundary_position(axis, base, utr3);
+    Err(unsupported_boundary_projection(format!(
+        "cannot resolve unknown intronic offset (`{sign}?`) at {position}"
+    )))
+}
+
+/// Refuse to *return* an unknown-offset sentinel to Python.
+///
+/// The sibling of [`reject_sentinel_offset`], on the way out. An `i64` sentinel
+/// crosses into Python as `9223372036854775807`, which a caller cannot tell
+/// from a measured distance — there is no `None`, no marker, nothing. Stated
+/// over the produced value rather than over the argument so it still holds if a
+/// conversion ever yields a sentinel it was not handed.
+fn reject_sentinel_result(
+    axis: char,
+    base: i64,
+    offset: Option<i64>,
+) -> Result<(), BoundaryRejection> {
+    if !is_unknown_offset(offset) {
+        return Ok(());
+    }
+    Err(unsupported_boundary_projection(format!(
+        "conversion produced an unknown intronic offset at {axis}.{base}, which has no \
+         representation as a distance"
+    )))
+}
+
+/// Refuse a `downstream` flag the conversion behind this entry point discards.
+///
+/// `n.*N` names a position past the end of the transcript. `tx_to_cds` drops
+/// the flag, so `downstream=True` and `downstream=False` returned the same
+/// triple and a caller asking about `n.*195` was answered about `n.195` — with
+/// no indication the question had been changed. Honouring the flag is a change
+/// to the conversion and is tracked separately; until that lands the honest
+/// answer at the boundary is a refusal, because a confidently wrong coordinate
+/// is worse than an error. Lift this once `tx_to_cds` honours the flag.
+fn reject_unhonoured_downstream(downstream: bool) -> Result<(), BoundaryRejection> {
+    if !downstream {
+        return Ok(());
+    }
+    Err(unsupported_boundary_projection(
+        "the transcript-to-CDS conversion does not honour `downstream` (n.*N), so it cannot be \
+         answered rather than silently answered as `downstream=False`"
+            .to_string(),
+    ))
+}
+
+/// Build the `UnsupportedProjection` rejection the three refusals above share.
+fn unsupported_boundary_projection(reason: String) -> BoundaryRejection {
+    BoundaryRejection {
+        class: "ProjectionError",
+        message: reason.clone(),
+        error: crate::error::FerroError::UnsupportedProjection { reason },
+    }
+}
+
 /// Convert a list of per-input projection lists into the Python return value —
 /// a `list[list[VariantProjection]]`.
 fn projections_to_pylist(
@@ -6610,15 +6817,24 @@ impl PyCoordinateMapper {
     ///
     /// Args:
     ///     transcript_id: Transcript accession (e.g., "NM_000088.3")
-    ///     cds_position: CDS position (e.g., 100 for c.100)
-    ///     offset: Optional intronic offset (e.g., 5 for c.100+5)
+    ///     cds_position: CDS position in the transcript's c. numbering, 1-based
+    ///         (e.g., 100 for c.100). Negative values are 5' UTR positions
+    ///         (-1 for c.-1); 0 is not a position on this axis and is refused.
+    ///     offset: Optional intronic offset in bases from the nearest exon
+    ///         boundary (e.g., 5 for c.100+5). Must be a measured distance:
+    ///         the unknown-offset sentinels that `c.100+?` / `c.100-?` parse to
+    ///         (2**63 - 1 and -2**63) denote no distance and are refused.
     ///
     /// Returns:
-    ///     Tuple of (chromosome, genomic_position) or None if position is intronic
-    ///     without offset support
+    ///     Tuple of (chromosome, genomic_position), where genomic_position is
+    ///     a 1-based coordinate on that chromosome; or None if the position is
+    ///     intronic without offset support.
     ///
     /// Raises:
-    ///     ValueError: If transcript not found or has no genomic coordinates
+    ///     ParseError: If cds_position is 0 (E1003; HGVS has no c.0).
+    ///     ProjectionError: If offset is an unknown-offset sentinel (E4003), or
+    ///         the conversion fails.
+    ///     ReferenceDataError: If the transcript is not found.
     #[pyo3(signature = (transcript_id, cds_position, offset=None))]
     fn c_to_g(
         &self,
@@ -6626,6 +6842,10 @@ impl PyCoordinateMapper {
         cds_position: i64,
         offset: Option<i64>,
     ) -> PyResult<Option<(String, u64)>> {
+        reject_zero_base('c', cds_position, false).map_err(BoundaryRejection::into_pyerr)?;
+        reject_sentinel_offset('c', cds_position, false, offset)
+            .map_err(BoundaryRejection::into_pyerr)?;
+
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
             ferro_typed(
                 "ReferenceDataError",
@@ -6700,16 +6920,21 @@ impl PyCoordinateMapper {
     ///
     /// Args:
     ///     transcript_id: Transcript accession (e.g., "NM_000088.3")
-    ///     genomic_position: Genomic position (1-based)
+    ///     genomic_position: Genomic position on the transcript's chromosome,
+    ///         1-based.
     ///
     /// Returns:
-    ///     Tuple of (cds_position, offset, is_utr3). For exonic positions,
-    ///     offset will be None. For intronic positions, offset will contain
-    ///     the distance from the nearest exon boundary.
+    ///     Tuple of (cds_position, offset, is_utr3), where cds_position is
+    ///     1-based in the transcript's c. numbering (negative in the 5' UTR,
+    ///     and counted from the CDS end when is_utr3 is True, i.e. c.*N). For
+    ///     exonic positions, offset will be None. For intronic positions,
+    ///     offset is the signed distance in bases from the nearest exon
+    ///     boundary.
     ///
     /// Raises:
-    ///     ValueError: If transcript not found, position is outside transcript bounds,
-    ///         or conversion fails
+    ///     ProjectionError: If the position is outside transcript bounds or the
+    ///         conversion fails.
+    ///     ReferenceDataError: If the transcript is not found.
     fn g_to_c(
         &self,
         transcript_id: &str,
@@ -6755,14 +6980,22 @@ impl PyCoordinateMapper {
     ///
     /// Args:
     ///     transcript_id: Transcript accession (e.g., "NM_000088.3")
-    ///     cds_position: CDS position (e.g., 100 for c.100)
+    ///     cds_position: CDS position in the transcript's c. numbering, 1-based
+    ///         (e.g., 100 for c.100). Negative values are 5' UTR positions and
+    ///         have no protein position; 0 is not a position on this axis and
+    ///         is refused.
     ///
     /// Returns:
-    ///     Protein position (1-based codon number)
+    ///     Protein position in the encoded protein's p. numbering, 1-based
+    ///     (the codon number).
     ///
     /// Raises:
-    ///     ValueError: If transcript not found or position is in UTR/intronic
+    ///     ParseError: If cds_position is 0 (E1003; HGVS has no c.0).
+    ///     ProjectionError: If the position is in a UTR or intronic.
+    ///     ReferenceDataError: If the transcript is not found.
     fn c_to_p(&self, transcript_id: &str, cds_position: i64) -> PyResult<u64> {
+        reject_zero_base('c', cds_position, false).map_err(BoundaryRejection::into_pyerr)?;
+
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
             ferro_typed(
                 "ReferenceDataError",
@@ -6785,15 +7018,26 @@ impl PyCoordinateMapper {
     ///
     /// Args:
     ///     transcript_id: Transcript accession (e.g., "NM_000088.3")
-    ///     cds_position: CDS position (e.g., 100 for c.100)
-    ///     offset: Optional intronic offset
+    ///     cds_position: CDS position in the transcript's c. numbering, 1-based
+    ///         (e.g., 100 for c.100). Negative values are 5' UTR positions; when
+    ///         utr3 is True the value counts from the CDS end (c.*N). 0 is not a
+    ///         position on this axis and is refused.
+    ///     offset: Optional intronic offset in bases from the nearest exon
+    ///         boundary. Must be a measured distance: the unknown-offset
+    ///         sentinels that `c.100+?` / `c.100-?` parse to (2**63 - 1 and
+    ///         -2**63) denote no distance and are refused.
     ///     utr3: Whether this is a 3' UTR position (c.*N notation)
     ///
     /// Returns:
-    ///     Tuple of (transcript_position, offset)
+    ///     Tuple of (transcript_position, offset), where transcript_position is
+    ///     1-based in the transcript's n. numbering and offset is the same
+    ///     signed intronic distance in bases, or None for an exonic position.
     ///
     /// Raises:
-    ///     ValueError: If transcript not found
+    ///     ParseError: If cds_position is 0 (E1003; HGVS has no c.0).
+    ///     ProjectionError: If offset is an unknown-offset sentinel (E4003), or
+    ///         the conversion fails.
+    ///     ReferenceDataError: If the transcript is not found.
     #[pyo3(signature = (transcript_id, cds_position, offset=None, utr3=false))]
     fn c_to_n(
         &self,
@@ -6802,6 +7046,10 @@ impl PyCoordinateMapper {
         offset: Option<i64>,
         utr3: bool,
     ) -> PyResult<(i64, Option<i64>)> {
+        reject_zero_base('c', cds_position, utr3).map_err(BoundaryRejection::into_pyerr)?;
+        reject_sentinel_offset('c', cds_position, utr3, offset)
+            .map_err(BoundaryRejection::into_pyerr)?;
+
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
             ferro_typed(
                 "ReferenceDataError",
@@ -6819,26 +7067,47 @@ impl PyCoordinateMapper {
             special: None,
         };
 
-        mapper
+        let tx_pos = mapper
             .cds_to_tx(&cds_pos)
-            .map(|tx_pos| (tx_pos.base, tx_pos.offset))
-            .map_err(|e| ferro_typed("ProjectionError", format!("Conversion error: {e}"), &e))
+            .map_err(|e| ferro_typed("ProjectionError", format!("Conversion error: {e}"), &e))?;
+
+        // `cds_to_tx` copies the offset through without arithmetic, so a
+        // sentinel that got past the entry check would leave here as a plain
+        // integer. Refusing on the way out too costs nothing and keeps the
+        // guarantee a property of the return value.
+        reject_sentinel_result('n', tx_pos.base, tx_pos.offset)
+            .map_err(BoundaryRejection::into_pyerr)?;
+
+        Ok((tx_pos.base, tx_pos.offset))
     }
 
     /// Convert a transcript position to CDS position
     ///
     /// Args:
     ///     transcript_id: Transcript accession (e.g., "NM_000088.3")
-    ///     tx_position: Transcript position (1-based)
-    ///     offset: Optional intronic offset
+    ///     tx_position: Transcript position in the transcript's n. numbering,
+    ///         1-based. 0 is not a position on this axis and is refused.
+    ///     offset: Optional intronic offset in bases from the nearest exon
+    ///         boundary. Must be a measured distance: the unknown-offset
+    ///         sentinels that `n.100+?` / `n.100-?` parse to (2**63 - 1 and
+    ///         -2**63) denote no distance and are refused.
     ///     downstream: Whether this is a downstream position (n.*100 notation for
     ///         positions past the end of the transcript). Defaults to False.
+    ///         Currently refused when True — the conversion does not honour it.
     ///
     /// Returns:
-    ///     Tuple of (cds_position, offset, is_utr3)
+    ///     Tuple of (cds_position, offset, is_utr3), where cds_position is
+    ///     1-based in the transcript's c. numbering (negative in the 5' UTR,
+    ///     and counted from the CDS end when is_utr3 is True, i.e. c.*N) and
+    ///     offset is the same signed intronic distance in bases, or None for an
+    ///     exonic position.
     ///
     /// Raises:
-    ///     ValueError: If transcript not found or has no CDS
+    ///     ParseError: If tx_position is 0 (E1003; HGVS has no n.0).
+    ///     ProjectionError: If offset is an unknown-offset sentinel, if
+    ///         downstream is True (both E4003), if the transcript resolves but
+    ///         has no CDS (E5001), or the conversion otherwise fails.
+    ///     ReferenceDataError: If the transcript is not found (E2001).
     #[pyo3(signature = (transcript_id, tx_position, offset=None, downstream=false))]
     fn n_to_c(
         &self,
@@ -6847,6 +7116,11 @@ impl PyCoordinateMapper {
         offset: Option<i64>,
         downstream: bool,
     ) -> PyResult<(i64, Option<i64>, bool)> {
+        reject_zero_base('n', tx_position, false).map_err(BoundaryRejection::into_pyerr)?;
+        reject_sentinel_offset('n', tx_position, false, offset)
+            .map_err(BoundaryRejection::into_pyerr)?;
+        reject_unhonoured_downstream(downstream).map_err(BoundaryRejection::into_pyerr)?;
+
         let transcript = self.provider.get_transcript(transcript_id).map_err(|e| {
             ferro_typed(
                 "ReferenceDataError",
@@ -7069,6 +7343,181 @@ fn ferro_hgvs(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The numeric coordinate entry points' boundary validators.
+    ///
+    /// These are asserted here rather than only through `tests/python/` because
+    /// they are pure — they never touch the interpreter — so they can be
+    /// exercised by `cargo test --features python --lib` with no Python
+    /// runtime. The end-to-end half, which proves the guards are actually wired
+    /// into the five methods and that the refusals cross into Python as the
+    /// right exception classes, is
+    /// `tests/python/test_numeric_entry_point_validation.py`.
+    mod numeric_entry_point_validation {
+        use super::*;
+        use crate::error::ErrorCode;
+        use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
+
+        #[test]
+        fn a_zero_base_is_refused_with_the_parsers_code() {
+            for (axis, utr3, rendered) in [
+                ('c', false, "c.0"),
+                ('c', true, "c.*0"),
+                ('n', false, "n.0"),
+            ] {
+                let rejection =
+                    reject_zero_base(axis, 0, utr3).expect_err("a base of zero must be refused");
+
+                assert_eq!(rejection.class, "ParseError");
+                assert_eq!(rejection.error.code(), Some(ErrorCode::InvalidPosition));
+                assert!(
+                    rejection
+                        .message
+                        .contains("Position 0 is not valid in HGVS notation"),
+                    "message must reuse the parser's wording, got {:?}",
+                    rejection.message
+                );
+                assert!(
+                    rejection.message.contains(rendered),
+                    "message must name the coordinate {rendered}, got {:?}",
+                    rejection.message
+                );
+            }
+        }
+
+        /// The guard fires at zero and nowhere else — in particular not on the
+        /// negative 5'UTR coordinates a "positions must be positive" check
+        /// would wrongly reject.
+        #[test]
+        fn every_other_base_is_admitted() {
+            for base in [-1000, -1, 1, 2, i64::MAX] {
+                assert!(reject_zero_base('c', base, false).is_ok(), "c.{base}");
+                assert!(reject_zero_base('c', base, true).is_ok(), "c.*{base}");
+                assert!(reject_zero_base('n', base, false).is_ok(), "n.{base}");
+            }
+        }
+
+        #[test]
+        fn a_sentinel_offset_is_refused_in_both_directions() {
+            for (offset, sign) in [
+                (OFFSET_UNKNOWN_POSITIVE, '+'),
+                (OFFSET_UNKNOWN_NEGATIVE, '-'),
+            ] {
+                let rejection = reject_sentinel_offset('c', 100, false, Some(offset))
+                    .expect_err("an unknown-offset sentinel must be refused");
+
+                assert_eq!(rejection.class, "ProjectionError");
+                assert_eq!(
+                    rejection.error.code(),
+                    Some(ErrorCode::UnsupportedProjection),
+                    "must reuse the #1088 guard's code, not invent one",
+                );
+                assert!(
+                    rejection
+                        .message
+                        .contains(&format!("unknown intronic offset (`{sign}?`)")),
+                    "message must name the direction, got {:?}",
+                    rejection.message
+                );
+                assert!(
+                    rejection.message.contains("c.100"),
+                    "{:?}",
+                    rejection.message
+                );
+            }
+        }
+
+        /// A measured distance — including one large enough to be implausible —
+        /// is not a sentinel and must pass *this* guard. Only the two exact
+        /// sentinel values are markers; everything else is a number the
+        /// conversion judges for itself.
+        ///
+        /// That last clause used to be an assumption and is now true: #1765
+        /// measured that the conversion did **not** judge them — it overflowed
+        /// on `i64::MIN + 1` and returned a coordinate-shaped number for
+        /// `i64::MAX - 1` — so this test was pinning the gap open rather than
+        /// stating a property. `intronic_to_genomic` is now total and bounded by
+        /// the intron the offset is measured into, which is what makes admitting
+        /// them here safe; see
+        /// `reference::transcript::tests::intronic_to_genomic_declines_an_offset_that_leaves_its_own_intron`
+        /// and its sibling, which pin the other side of that contract.
+        #[test]
+        fn a_measured_offset_is_admitted() {
+            for offset in [
+                None,
+                Some(-1_000_000),
+                Some(-5),
+                Some(0),
+                Some(5),
+                Some(i64::MAX - 1),
+            ] {
+                assert!(
+                    reject_sentinel_offset('c', 100, false, offset).is_ok(),
+                    "offset {offset:?}",
+                );
+                assert!(
+                    reject_sentinel_result('n', 100, offset).is_ok(),
+                    "offset {offset:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_sentinel_result_is_refused_on_the_way_out() {
+            for offset in [OFFSET_UNKNOWN_POSITIVE, OFFSET_UNKNOWN_NEGATIVE] {
+                let rejection = reject_sentinel_result('n', 100, Some(offset))
+                    .expect_err("a sentinel must not be returned to Python");
+
+                assert_eq!(rejection.class, "ProjectionError");
+                assert_eq!(
+                    rejection.error.code(),
+                    Some(ErrorCode::UnsupportedProjection)
+                );
+                assert!(
+                    rejection.message.contains("n.100"),
+                    "{:?}",
+                    rejection.message
+                );
+            }
+        }
+
+        #[test]
+        fn the_downstream_flag_is_refused_only_when_set() {
+            assert!(reject_unhonoured_downstream(false).is_ok());
+
+            let rejection = reject_unhonoured_downstream(true)
+                .expect_err("a flag the conversion discards must not be accepted");
+            assert_eq!(rejection.class, "ProjectionError");
+            assert_eq!(
+                rejection.error.code(),
+                Some(ErrorCode::UnsupportedProjection)
+            );
+            assert!(
+                rejection.message.contains("downstream"),
+                "{:?}",
+                rejection.message
+            );
+        }
+
+        /// The sentinel predicate must key on the two exact values, so that a
+        /// neighbouring magnitude is still treated as a distance. Pinned
+        /// separately because both guards above are built on it.
+        ///
+        /// "Treated as a distance" is the right answer to a question about
+        /// *sentinel identity* and was the wrong answer to the question #1765
+        /// actually asked, which is about magnitude. Keying this predicate wider
+        /// would have been the wrong repair — a sentinel is a sentinel, and
+        /// `i64::MIN + 1` is a number — so the magnitude condition is enforced in
+        /// `intronic_to_genomic` instead, where the intron is in hand.
+        #[test]
+        fn only_the_two_exact_sentinels_are_sentinels() {
+            assert!(is_unknown_offset(Some(OFFSET_UNKNOWN_POSITIVE)));
+            assert!(is_unknown_offset(Some(OFFSET_UNKNOWN_NEGATIVE)));
+            assert!(!is_unknown_offset(None));
+            assert!(!is_unknown_offset(Some(OFFSET_UNKNOWN_POSITIVE - 1)));
+            assert!(!is_unknown_offset(Some(OFFSET_UNKNOWN_NEGATIVE + 1)));
+        }
+    }
 
     /// Closes #395 item 5 — verifies the `From<&NormalizationWarning>
     /// for PyNormalizationWarning` converter at the Rust level.
