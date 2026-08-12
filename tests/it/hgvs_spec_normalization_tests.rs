@@ -1156,6 +1156,19 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // `start_codon`/`stop_codon` reaching a flat-space `cds_end`), which the
     // record names and leaves open.
     ("c-and-n-positions-are-flat-transcript-offsets", "decided"),
+    // Where an allele mixes a member whose intronic offset ferro MANUFACTURED
+    // with one the author spelled intronic, `checklist.md:20` wants a genomic
+    // reference on the first and `DNA/alleles.md:16` wants one reference
+    // factored out of the whole allele — and the compact form
+    // (`use_compact_form` / `all_share_accession_and_type`) admits only one
+    // accession, so lifting the wrapper re-spells a member
+    // `bare-transcript-intronic-position` decided is left as authored, while
+    // expanding to per-member accessions abandons the form `:16` states.
+    // **Undecided**: #1723 makes both answers expressible and picks neither.
+    // Ferro DECLINES today — byte-for-byte what #1704 shipped — which is the
+    // status quo rather than a ruling, pinned by
+    // `defect_371_transcript_exit::a_mixed_allele_still_ships_a_manufactured_offset_bare`.
+    ("junction-exit-wrapper-scope-in-a-mixed-allele", "undecided"),
 ];
 
 /// Every case where a preference the spec *states* was overridden, because the

@@ -96,6 +96,7 @@
 //! `NC_SYNTH.1(NM_TEST.1)` or refusing it.
 
 use ferro_hgvs::reference::transcript::{Exon, GenomeBuild, ManeStatus, Strand, Transcript};
+use ferro_hgvs::ReferenceProvider;
 use ferro_hgvs::{parse_hgvs, MockProvider, NormalizeConfig, Normalizer, ShuffleDirection};
 
 // ---------------------------------------------------------------------------
@@ -268,6 +269,22 @@ pub(crate) fn junction_provider_named(
         None,
     ));
     provider
+}
+
+/// Add a second transcript with the **identical geometry** under `accession`.
+///
+/// Two accessions on one contig, both crossing their exon 1/intron 1 junction on
+/// the same input, is the shape `#1704`'s first-leaf `find_map` could not repair.
+/// Cloning the fixture record rather than laying down a second locus keeps the
+/// crossing itself a controlled constant: the only variable between the two
+/// members is which accession carries them.
+pub(crate) fn with_twin_transcript(provider: &mut MockProvider, accession: &str) {
+    let mut twin = (*provider
+        .get_transcript(CODING)
+        .expect("the fixture transcript"))
+    .clone();
+    twin.id = accession.to_string();
+    provider.add_transcript(twin);
 }
 
 /// Exon blocks whose only ambiguity is a four-base `run` of `base` flush against
@@ -1049,32 +1066,36 @@ fn an_unnamed_chromosome_never_reaches_the_rendering_guards() {
     );
 }
 
-/// **Question — and this one records a DEFECT, not a decision.** An allele mixes
-/// a member whose intronic offset ferro *manufactured* with a member the author
-/// spelled intronic. What ships?
+/// **Question.** An allele mixes a member whose intronic offset ferro
+/// *manufactured* with a member the author spelled intronic. What ships?
 ///
-/// **The manufactured offset ships on a bare accession** — the exact class
-/// `#1704` exists to close, surviving in the one shape its guard cannot see.
+/// **The manufactured offset ships on a bare accession** — byte-for-byte what
+/// `#1704` shipped. What changed under `#1723` is *why*, and that is the whole
+/// point of keeping this pin.
 ///
-/// The cause is a granularity mismatch. Provenance ("did ferro manufacture this
-/// offset?") is a property of each **leaf**, but it is asked here at
-/// whole-description granularity: `names_bare_transcript_intronic(input)` is an
-/// ANY-leaf existence test, so one authored member vetoes the wrapper for every
-/// other member, including one ferro moved itself. Compare the lone cases pinned
-/// in [`a_junction_exit_is_rendered_against_the_genomic_wrapper`] and
+/// Under `#1704` this string was an accident of granularity.
+/// `names_bare_transcript_intronic(input)` was an ANY-leaf existence test over
+/// the whole input, so one authored member vetoed the wrapper for every other
+/// member. The code could not represent "wrap because of member 1 but not member
+/// 2" at all, and it could not tell this case apart from
+/// [`a_second_bare_accession_is_repaired_too`] — which it also got wrong, in the
+/// opposite direction.
+///
+/// Under `#1723` provenance is carried per leaf from the `#670` gate, so the two
+/// are different branches of one decision and **this one is a deliberate
+/// decline**. The compact form `ACC:c.[a;b]` requires its members to share an
+/// accession, so repairing the manufactured member means either lifting the
+/// wrapper to the whole description — which re-spells an authored intronic
+/// position the `bare-transcript-intronic-position` ruling says to leave alone —
+/// or expanding to per-member accessions, which `reparent_leaves` argues against
+/// for exonic members. Neither follows from a clause. The question is on the
+/// record as the `undecided` `junction-exit-wrapper-scope-in-a-mixed-allele`
+/// ruling, and this test pins the status quo until it is answered.
+///
+/// Compare the lone cases in
+/// [`a_junction_exit_is_rendered_against_the_genomic_wrapper`] and
 /// [`an_authored_intronic_position_is_left_as_authored`]: each is correct alone,
-/// and only the mixture is wrong.
-///
-/// **This is pinned as it is, deliberately.** Closing it needs per-leaf
-/// provenance carried from the site that manufactures the offset, because it
-/// cannot be recovered by comparing input and output after the fact —
-/// normalization reorders, merges and splits members, so no identity map from
-/// output leaf back to input leaf survives. And the rendering question that then
-/// arises (the compact form `ACC:c.[a;b]` requires members to share an accession,
-/// so a mixed description must either lift the wrapper to the whole description
-/// or expand to per-member accessions) is a representation-policy choice that is
-/// not this PR's to make. Pinning the current string keeps the residue from
-/// changing unnoticed in either direction.
+/// and only the mixture is open.
 #[test]
 fn a_mixed_allele_still_ships_a_manufactured_offset_bare() {
     let intron = intron_leading_with("AA");
@@ -1111,6 +1132,154 @@ fn a_mixed_allele_still_ships_a_manufactured_offset_bare() {
             format!("{CODING}:c.[18del;30+5del]"),
             "no member crosses, so nothing is manufactured and leaving it bare is correct \
              ({strand:?})"
+        );
+    }
+}
+
+/// **Question — and this one records a FIX.** Two members of one description sit
+/// on two different bare transcripts, and both cross their own exon/intron
+/// junction. Are both repaired?
+///
+/// **Under `#1723`, yes. Under `#1704`, only the first.** The old pass took the
+/// offending accession with a `find_map` — the *first* bare-intronic leaf — and
+/// then rewrote by accession equality with no loop, so a second offending
+/// accession was never looked at. Measured on this fixture at `#1704`'s tip
+/// (`5409c6be`), the second member shipped as `NM_OTHER.1:c.10+2del`: a
+/// manufactured intronic offset on a bare transcript, which is precisely the
+/// class `#1704` exists to close.
+///
+/// `#1704`'s own doc comment anticipated this for a `products` allele and noted
+/// the consequence "would be silent". **It is not confined to `products`** — an
+/// ordinary trans allele and an ordinary multi-accession cis allele both reach
+/// it, which is what the two shapes below are. That matters because `products`
+/// is documented as meaningful only on the `r.`/`p.` axes, and `r.` is out of
+/// this predicate's scope, so a reader could reasonably conclude the shape was
+/// unreachable.
+///
+/// The repair is per-leaf because the provenance is: each member's own `#670`
+/// gate recorded its own bare accession together with the contig **that** member's
+/// crossing was computed against, so the fold has a wrapper per accession rather
+/// than one wrapper it tries to apply everywhere.
+#[test]
+fn a_second_bare_accession_is_repaired_too() {
+    let intron = intron_leading_with("AA");
+    let exons = exons_with_run_at_exon1_end('A');
+    let blocks = [exons[0].as_str(), exons[1].as_str(), exons[2].as_str()];
+    const TWIN: &str = "NM_OTHER.1";
+
+    for strand in [Strand::Plus, Strand::Minus] {
+        let mut provider = junction_provider(strand, blocks, &intron, true);
+        with_twin_transcript(&mut provider, TWIN);
+
+        // The control first: each accession alone is repaired, so a failure below
+        // cannot be "the twin never crosses".
+        for accession in [CODING, TWIN] {
+            assert_eq!(
+                normalize_3prime(&provider, &format!("{accession}:c.7del")),
+                format!("{CONTIG}({accession}):c.10+2del"),
+                "each transcript crosses and wraps on its own ({strand:?})"
+            );
+        }
+
+        // Trans: two alleles, two accessions.
+        assert_eq!(
+            normalize_3prime(&provider, &format!("[{CODING}:c.7del];[{TWIN}:c.7del]")),
+            format!("[{CONTIG}({CODING}):c.10+2del];[{CONTIG}({TWIN}):c.10+2del]"),
+            "BOTH manufactured offsets carry a genomic reference, not just the first \
+             ({strand:?})"
+        );
+
+        // Cis: one allele, two accessions — the same defect without the phase
+        // being the variable.
+        assert_eq!(
+            normalize_3prime(&provider, &format!("[{CODING}:c.7del;{TWIN}:c.7del]")),
+            format!("[{CONTIG}({CODING}):c.10+2del;{CONTIG}({TWIN}):c.10+2del]"),
+            "and the same in cis, so the fix is not keyed on the phase ({strand:?})"
+        );
+    }
+}
+
+/// **Question.** With provenance carried per leaf, does the *exonic*-sibling case
+/// still lift the wrapper to the whole description?
+///
+/// **Yes, unchanged.** This is the branch [`reparent_leaves`'s] argument covers:
+/// every bare-intronic leaf on the accession is one ferro manufactured, so
+/// lifting re-spells only exonic siblings and keeps the compact form
+/// `ACC:c.[a;b]`. Expanding to per-member accessions would be "a far larger
+/// representation change than the defect it repairs".
+///
+/// Pinned separately from [`a_mixed_allele_still_ships_a_manufactured_offset_bare`]
+/// because the two are now the two branches of one decision, and a change that
+/// collapsed them — in either direction — would otherwise show up as one test
+/// moving rather than as the policy changing.
+#[test]
+fn an_exonic_sibling_is_lifted_with_the_wrapper() {
+    let intron = intron_leading_with("AA");
+    let filler: String = std::iter::repeat_n('C', 20).collect();
+    let mut exon1 = filler.clone();
+    exon1.replace_range(16..20, "AAAA");
+    let mut exon2 = filler.clone();
+    exon2.replace_range(4..8, "AAAA");
+    let blocks = [exon1.as_str(), exon2.as_str(), filler.as_str()];
+
+    for strand in [Strand::Plus, Strand::Minus] {
+        let provider = junction_provider(strand, blocks, &intron, true);
+        assert_eq!(
+            normalize_3prime(&provider, &format!("{CODING}:c.[7del;15del]")),
+            format!("{CONTIG}({CODING}):c.[10+2del;18del]"),
+            "the exonic sibling is lifted so the allele stays compact ({strand:?})"
+        );
+    }
+}
+
+/// **Question.** The fold decides *per accession*. Does one description in which
+/// two accessions land on **different** branches get both answers?
+///
+/// **Yes.** `NM_TEST.1` is mixed — one offset ferro manufactured (`c.7del` ->
+/// `c.10+2del`) beside one the author spelled intronic (`c.30+5del`) — so it
+/// declines, exactly as [`a_mixed_allele_still_ships_a_manufactured_offset_bare`]
+/// pins for that accession alone. `NM_OTHER.1` is all-manufactured, so it
+/// repairs, exactly as [`a_second_bare_accession_is_repaired_too`] pins for
+/// *that* accession alone. Here they are in one description, and each keeps its
+/// own verdict.
+///
+/// # Why this case and not the two beside it
+///
+/// The two tests it is named after pin the two branches **separately**, one
+/// accession per description, so between them they are satisfied by a fold that
+/// decides once for the whole description. Collapsing the loop to "decline
+/// everything if any accession is mixed" — which is `#1704`'s behaviour widened,
+/// and the most plausible simplification of this pass — passes both of them and
+/// the rest of the suite. It fails here, and only here.
+///
+/// Both phases, for the same reason the sibling test runs both: the fold keys on
+/// the accession, so a verdict that turned out to be phase-sensitive would be
+/// reading something it has no business reading.
+#[test]
+fn two_accessions_take_different_branches_in_one_description() {
+    let intron = intron_leading_with("AA");
+    let filler: String = std::iter::repeat_n('C', EXON_LEN).collect();
+    let mut exon1 = filler.clone();
+    exon1.replace_range(16..20, "AAAA");
+    let mut exon2 = filler.clone();
+    exon2.replace_range(4..8, "AAAA");
+    let blocks = [exon1.as_str(), exon2.as_str(), filler.as_str()];
+    const TWIN: &str = "NM_OTHER.1";
+
+    for strand in [Strand::Plus, Strand::Minus] {
+        let mut provider = junction_provider(strand, blocks, &intron, true);
+        with_twin_transcript(&mut provider, TWIN);
+
+        // Cis: one allele, three members, two accessions, two verdicts.
+        assert_eq!(
+            normalize_3prime(
+                &provider,
+                &format!("[{CODING}:c.7del;{CODING}:c.30+5del;{TWIN}:c.7del]")
+            ),
+            format!("[{CODING}:c.10+2del;{CODING}:c.30+5del;{CONTIG}({TWIN}):c.10+2del]"),
+            "PER-ACCESSION: {CODING} is mixed and declines, {TWIN} is all-manufactured \
+             and repairs — a fold that decided once for the whole description would \
+             give both accessions one answer ({strand:?})"
         );
     }
 }

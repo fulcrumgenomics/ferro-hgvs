@@ -1181,8 +1181,80 @@ fn intronic_on_bare_transcript_axis(variant: &HgvsVariant) -> Option<&'static st
     }
 }
 
-/// Whether `variant` — or any leaf of it — is the `checklist.md:20` form: an
-/// intronic position named on a **bare** transcript reference.
+/// One intronic offset ferro **manufactured**, recorded at the `#670` junction
+/// gate that made it (`#1723`).
+///
+/// # Why this is carried rather than re-derived
+///
+/// `#1704` asked the provenance question — "did ferro manufacture this intronic
+/// offset, or did the author write it?" — at the top of the pipeline, by
+/// comparing the whole input description against the whole output. That cannot
+/// be made per-leaf, and per-leaf is what the question is: normalization
+/// reorders, merges and splits members, so no identity map from an output leaf
+/// back to an input leaf survives to the top. The consequence was measured in
+/// two directions, both pinned in `defect_371_transcript_exit`: one authored
+/// intronic member vetoed the wrapper for a sibling ferro had moved itself, and
+/// a second bare accession needing a wrapper was never looked at.
+///
+/// # The fact is free at the gate
+///
+/// `normalize_cds` diverts **every** input with an intronic endpoint to
+/// `normalize_intronic_cds` / `normalize_boundary_spanning_cds` before the gate
+/// is reached (`start_pos.is_intronic() || end_pos.is_intronic()`), and the
+/// mirrors in `normalize_tx` / `normalize_rna` do the same. So reaching the gate
+/// *is* the statement that both endpoints were exonic, and the gate's own
+/// success condition is `crossed_into_intron`. Nothing is compared: manufacture
+/// is what the branch means.
+///
+/// The contig is free there too. The crossing is computed by fetching genomic
+/// bases from `boundary_transcript.chromosome`, so a resolved genomic reference
+/// is already in hand — `#1704` re-derived it at the top with a second provider
+/// lookup that could disagree with the one the crossing actually used.
+///
+/// # What a record IS evidence of, and what it deliberately is not
+///
+/// **A record says only that *some* gate produced this exact leaf.** It is not
+/// evidence that the pass which produced it survived. `manufactured` is a
+/// `&mut Vec` threaded through `normalize_core`, and at least two callers throw
+/// their *results* away while keeping the records: `normalize_allele`'s
+/// warnings-only loop on the raw-conflict branch, which returns the authored
+/// members verbatim, and `canonicalize_from_sequence`'s alternation loop, whose
+/// non-converged intermediates are discarded. Records minted on those paths
+/// still reach the seam.
+///
+/// That is safe because matching is by **leaf value**, and value equality is a
+/// strong statement: the output leaf must be byte-identical to one a `#670`
+/// junction gate produced, on the same accession. So an authored leaf can only
+/// be repaired by coinciding exactly with a manufactured one — at which point
+/// the two descriptions are the same string and the provenance question has no
+/// observable answer.
+///
+/// **Not evidenced.** No input was constructed in which an *authored* intronic
+/// leaf coincides with a manufactured one on the same accession, so this is an
+/// unverified residual rather than a demonstrated hazard. It is stated here
+/// because the sibling half of the doc — "an unmatched record leaves the output
+/// exactly as `#1704` left it" — addresses only the *moved-leaf* direction and
+/// reads as though it covered both.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ManufacturedJunctionExit {
+    /// The leaf exactly as the gate produced it.
+    ///
+    /// Identity is by value rather than by index because there is no stable
+    /// index: the sibling passes below `normalize_allele` may reorder, merge or
+    /// drop members after the gate has run. A leaf that a later pass *moved* no
+    /// longer matches, and that is the safe direction — an unmatched record
+    /// leaves the output exactly as `#1704` left it rather than wrapping
+    /// something whose provenance is no longer known.
+    leaf: HgvsVariant,
+    /// The bare transcript accession the leaf is rendered against.
+    bare: Accession,
+    /// `bare` carrying the genomic context the crossing resolved —
+    /// `NC_…(NM_…)`, the form `checklist.md:20` names.
+    wrapper: Accession,
+}
+
+/// Every leaf that is the `checklist.md:20` form — an intronic position named on
+/// a **bare** transcript reference — in document order.
 ///
 /// Delegates to [`intronic_on_bare_transcript_axis`] per leaf rather than
 /// re-stating its scope, so the clause has exactly one reading in this crate —
@@ -1193,34 +1265,39 @@ fn intronic_on_bare_transcript_axis(variant: &HgvsVariant) -> Option<&'static st
 /// and whether `#1704` must *re-parent an output*. Two readings of one clause is
 /// how ferro came to refuse a description in strict mode while manufacturing the
 /// identical description in lenient.
-fn names_bare_transcript_intronic(variant: &HgvsVariant) -> bool {
-    bare_transcript_intronic_accession(variant).is_some()
+///
+/// **Every leaf, not the first.** `#1704` reached for the offending leaf with a
+/// `find_map`, so it could only ever repair one accession — and it additionally
+/// asked an ANY-leaf existence question of the *input* as a provenance proxy,
+/// which is the granularity mismatch `#1723` removes. Its own doc comment named
+/// the first-leaf consequence for a `products` allele and called it silent; it is
+/// not confined to `products` — an ordinary two-accession allele reaches it, and
+/// `a_second_bare_accession_is_repaired_too` pins that shape.
+fn bare_transcript_intronic_leaves(variant: &HgvsVariant) -> Vec<&HgvsVariant> {
+    let mut found = Vec::new();
+    collect_bare_transcript_intronic_leaves(variant, &mut found);
+    found
 }
 
-/// The accession of the first leaf that is the `checklist.md:20` form, if any.
-///
-/// Taken from the offending **leaf** rather than from
-/// [`HgvsVariant::accession`], which reports an allele's *first* member. Those
-/// coincide for every allele ferro normalizes today, since a cis allele's members
-/// share a reference — but a `products` allele (`[NM_A:c.…,NM_B:c.…]`) does not,
-/// and there the first member's accession would name a transcript the offending
-/// member is not on. The consequence would be silent: `reparent_leaves` matches
-/// on equality, so it would rewrite nothing and the invalid description would
-/// survive looking repaired.
-fn bare_transcript_intronic_accession(variant: &HgvsVariant) -> Option<&Accession> {
+fn collect_bare_transcript_intronic_leaves<'a>(
+    variant: &'a HgvsVariant,
+    found: &mut Vec<&'a HgvsVariant>,
+) {
     match variant {
-        HV::Allele(allele) => allele
-            .variants
-            .iter()
-            .find_map(bare_transcript_intronic_accession),
-        HV::Supernumerary(inner) => bare_transcript_intronic_accession(inner),
+        HV::Allele(allele) => {
+            for member in &allele.variants {
+                collect_bare_transcript_intronic_leaves(member, found);
+            }
+        }
+        HV::Supernumerary(inner) => collect_bare_transcript_intronic_leaves(inner, found),
         // The predicate, not the warning constructor: this runs on every
         // `normalize()` and only wants the answer, while building the warning
         // would render the description into a `String` and drop it.
-        leaf => intronic_on_bare_transcript_axis(leaf)
-            .is_some()
-            .then(|| leaf.accession())
-            .flatten(),
+        leaf => {
+            if intronic_on_bare_transcript_axis(leaf).is_some() {
+                found.push(leaf);
+            }
+        }
     }
 }
 
@@ -1236,6 +1313,13 @@ fn bare_transcript_intronic_accession(variant: &HgvsVariant) -> Option<&Accessio
 /// wrapper on an *exonic* position is unremarkable
 /// (`NC_000023.10(NM_004006.2):c.94del`), so lifting it to the whole description
 /// is the cheap side of the trade.
+///
+/// **That argument is about EXONIC members and does not settle the mixed case.**
+/// Where the sibling is an *authored* intronic position, lifting re-spells a leaf
+/// the `bare-transcript-intronic-position` ruling says to leave as authored, so
+/// the two answers are a genuine policy choice rather than a cheap side. See
+/// [`Normalizer::reparent_junction_exit`] and the `undecided`
+/// `junction-exit-wrapper-scope-in-a-mixed-allele` record.
 fn reparent_leaves(variant: HgvsVariant, bare: &Accession, wrapper: &Accession) -> HgvsVariant {
     match variant {
         HV::Cds(mut v) if v.accession == *bare => {
@@ -1259,6 +1343,97 @@ fn reparent_leaves(variant: HgvsVariant, bare: &Accession, wrapper: &Accession) 
         }
         other => other,
     }
+}
+
+/// Record every `checklist.md:20` leaf the `#670` junction gate just produced,
+/// against the contig the crossing was computed on.
+///
+/// Called from all three copies of that gate — `normalize_cds`, `normalize_tx`
+/// and `normalize_rna` — at the point the crossed answer is adopted. Reaching
+/// that point is itself the proof of manufacture: an input naming an intronic
+/// endpoint is diverted to `normalize_intronic_*` / `normalize_boundary_spanning_*`
+/// well before the gate, so both endpoints were exonic and the intronic offset
+/// in `produced` is one ferro made. See [`ManufacturedJunctionExit`].
+///
+/// **Scope is delegated, not restated.** The `r.` gate calls this too and it
+/// records nothing there, because `intronic_on_bare_transcript_warning` — the
+/// single reading of the clause in this crate — does not reach the `r.` axis
+/// (`#486`/`#834`). Wiring the call anyway is deliberate: if that scope is ever
+/// widened, the provenance follows it instead of silently staying behind.
+fn record_manufactured_junction_exits(
+    produced: &HgvsVariant,
+    chromosome: Option<&str>,
+    manufactured: &mut Vec<ManufacturedJunctionExit>,
+) {
+    let Some(chromosome) = chromosome else {
+        return;
+    };
+    for leaf in bare_transcript_intronic_leaves(produced) {
+        let Some(bare) = leaf.accession() else {
+            continue;
+        };
+        let Some(wrapper) = genomic_wrapper_for(bare, chromosome) else {
+            continue;
+        };
+        manufactured.push(ManufacturedJunctionExit {
+            leaf: leaf.clone(),
+            bare: bare.clone(),
+            wrapper,
+        });
+    }
+}
+
+/// Build `NC_…(NM_…)` from the contig name the `#670` crossing resolved, or
+/// decline.
+///
+/// # Guards on data, not on a re-derivation
+///
+/// `#1704` ran these three conditions at the top of the pipeline against a
+/// *second* provider lookup. They now run at the gate, against the very
+/// `Transcript` whose `chromosome` field the genomic re-shuffle fetched bases
+/// from — so the reference this returns is the one the coordinate was computed
+/// in, not one re-derived and hoped to agree.
+///
+/// # What each condition actually excludes — measured, not assumed
+///
+/// - **The bare parse.** `chromosome` is a provider-supplied string, not
+///   necessarily an accession. A SAM-style `chr17` or an assembly name `GRCh38`
+///   is refused *here*, by `parse_accession` failing on the bare string. It is
+///   **not** refused by the pairing rule below: `is_valid_compound_outer`
+///   deliberately admits an unclassifiable custom accession
+///   (`inferred_variant_type().is_none()`, `#1146`) so a custom reference can
+///   still carry a specification, and ferro's own parser reads
+///   `chr17(NM_TEST.1):c.10+2del` back happily. Pinned by
+///   `a_sam_style_chromosome_is_excluded_by_the_bare_accession_parse`.
+/// - **`rest.is_empty()`.** `parse_accession` is a `nom` parser and stops at the
+///   first byte it cannot use, so `NC_SYNTH.1junk` parses to `NC_SYNTH.1` with a
+///   trailing remainder. Without this, a garbage suffix would be silently
+///   discarded rather than declined.
+/// - **`is_valid_compound_outer`.** Refuses a *transcript* named as the outer
+///   reference — `NM_OTHER.1(NM_TEST.1)` is backwards and `parse_hgvs` will not
+///   read it back, which is the property `FERRO_ASSERT_REPARSE` checks at this
+///   same seam.
+/// - **`outer == *bare`.** Refuses a self-referential wrapper, and it is **not**
+///   subsumed by the condition above. That was assumed once and it is false: the
+///   `checklist.md:20` predicate admits LRG by prefix (`Accession::is_lrg`, so a
+///   bare `LRG_<N>` as well as `LRG_<N>t<M>`), while `is_valid_compound_outer`
+///   keys off `inferred_variant_type`, which reads a bare `LRG_<N>` as
+///   **genomic** and admits it. For `bare == LRG_5` the two conditions above both
+///   pass and only this one stops `LRG_5(LRG_5):c.…`. Nothing downstream would —
+///   that string re-parses, so `FERRO_ASSERT_REPARSE` is blind to it — and the
+///   provider shape is not contrived, since an LRG record *is* its own genomic
+///   reference and naming itself in `Transcript::chromosome` is reasonable.
+///   Pinned by `a_self_referential_wrapper_is_declined` and, on this function
+///   directly, by `the_genomic_wrapper_builder_declines_what_it_cannot_justify`.
+fn genomic_wrapper_for(bare: &Accession, chromosome: &str) -> Option<Accession> {
+    let (rest, outer) = crate::hgvs::parser::accession::parse_accession(chromosome).ok()?;
+    if !rest.is_empty()
+        || !crate::hgvs::parser::accession::is_valid_compound_outer(&outer)
+        || outer == *bare
+    {
+        return None;
+    }
+    Some(bare.clone().with_genomic_context(outer))
 }
 
 /// The number of cis members a variant describes.
@@ -2835,6 +3010,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: HgvsVariant,
         warnings: Vec<NormalizationWarning>,
+        manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         /// Alternations between the sequence-first pass and `normalize_core`.
         /// Two is enough for every shape seen so far; the bound only exists so
@@ -2882,7 +3058,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // The re-derived form is expressed in raw coordinates; hand it back
             // to the per-member pipeline so axis-specific canonicalization
             // (position shapes, boundary clamps, warnings) is applied to it.
-            let (renormalized, pass_warnings) = self.normalize_core(&canonical)?;
+            let (renormalized, pass_warnings) = self.normalize_core(&canonical, manufactured)?;
             if renormalized == current {
                 converged = true;
                 break;
@@ -3038,10 +3214,20 @@ impl<P: ReferenceProvider> Normalizer<P> {
         &self,
         variant: &HgvsVariant,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
-        let (normalized, warnings) = self.normalize_core(variant)?;
-        let (normalized, warnings) = self.canonicalize_from_sequence(normalized, warnings)?;
+        // The one place the per-leaf junction-exit provenance is collected. It is
+        // created here rather than threaded in because this is the single seam
+        // every public normalization exits through, and it is the only consumer.
+        // `Vec::new()` does not allocate, so a normalization that manufactures
+        // nothing — essentially all of them — pays nothing for carrying it.
+        let mut manufactured: Vec<ManufacturedJunctionExit> = Vec::new();
+        let (normalized, warnings) = self.normalize_core(variant, &mut manufactured)?;
+        let (normalized, warnings) =
+            self.canonicalize_from_sequence(normalized, warnings, &mut manufactured)?;
         let normalized = self.split_protein_separation(normalized);
-        Ok((self.reparent_junction_exit(variant, normalized), warnings))
+        Ok((
+            self.reparent_junction_exit(normalized, &manufactured),
+            warnings,
+        ))
     }
 
     /// Render a junction-crossing output against the genomic reference the
@@ -3087,12 +3273,13 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ///
     /// # Scope, and the two deliberate limits
     ///
-    /// The trigger is *ferro manufactured the offset*: an output naming a
-    /// bare-transcript intronic position whose **input** named none. An input
-    /// that already carried one is left exactly as authored — that class is
-    /// settled by the `bare-transcript-intronic-position` ruling (strict refuses,
-    /// lenient accepts as written), and re-spelling it here would overturn a
-    /// decided record as a side effect of fixing a different one.
+    /// The trigger is *ferro manufactured the offset*, and since `#1723` that is
+    /// a **per-leaf** fact carried from the `#670` gate in
+    /// [`ManufacturedJunctionExit`] rather than a whole-description guess made
+    /// here. An authored intronic position is left exactly as authored — that
+    /// class is settled by the `bare-transcript-intronic-position` ruling (strict
+    /// refuses, lenient accepts as written), and re-spelling it here would
+    /// overturn a decided record as a side effect of fixing a different one.
     ///
     /// The `r.` axis is **not** covered, matching
     /// [`intronic_on_bare_transcript_warning`]'s scope exactly (`#486`/`#834`
@@ -3103,66 +3290,111 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// Declining is still possible and is the safe direction: when no usable
     /// genomic accession can be built the output is returned untouched, which is
     /// the pre-`#1704` string rather than a worse one.
-    fn reparent_junction_exit(&self, input: &HgvsVariant, output: HgvsVariant) -> HgvsVariant {
+    ///
+    /// # The one question this deliberately does NOT answer
+    ///
+    /// `ACC:c.[a;b]` renders compactly only when its members share an accession
+    /// (`use_compact_form` / `all_share_accession_and_type`). So when one leaf on
+    /// an accession needs a wrapper and a sibling on the same accession does not,
+    /// there is a choice — **lift** the wrapper to the whole description, or
+    /// **expand** to per-member accessions — and it is a representation-policy
+    /// choice, not a code one.
+    ///
+    /// It is answered here only where it is not really a choice. Where every
+    /// bare-intronic leaf on the accession is one ferro manufactured, lifting
+    /// re-spells only *exonic* siblings, which [`reparent_leaves`] argues is the
+    /// cheap side. Where a sibling is an **authored** intronic position, lifting
+    /// would re-spell a leaf the `bare-transcript-intronic-position` ruling says
+    /// to leave alone, and expanding would change the description's shape — so
+    /// this declines, which is byte-for-byte what `#1704` shipped, and the
+    /// question is on the record as the `undecided`
+    /// `junction-exit-wrapper-scope-in-a-mixed-allele` ruling.
+    ///
+    /// The point of `#1723` is that both answers are now *expressible*: the
+    /// decision reads a per-leaf classification and could take either branch.
+    /// `#1704` could not represent the question at all — its input predicate was
+    /// an any-leaf existence test, so one authored member silently vetoed the
+    /// repair for every other member, including one ferro had moved itself.
+    fn reparent_junction_exit(
+        &self,
+        output: HgvsVariant,
+        manufactured: &[ManufacturedJunctionExit],
+    ) -> HgvsVariant {
         // Cheapest question first, and the one that is false for essentially
-        // every normalization: did ferro emit the `checklist.md:20` form at all?
-        let Some(bare) = bare_transcript_intronic_accession(&output).cloned() else {
-            return output;
-        };
-        // Authored intronic positions are the decided class; leave them alone.
-        if names_bare_transcript_intronic(input) {
+        // every normalization: did any gate manufacture an offset at all?
+        if manufactured.is_empty() {
             return output;
         }
-        let Ok(transcript) = self.provider.get_transcript_for_accession(&bare) else {
-            return output;
-        };
-        let Some(chromosome) = transcript.chromosome.as_deref() else {
-            return output;
-        };
-        // The chromosome field is a provider-supplied string, not necessarily an
-        // accession, so three separate questions stand between it and a compound
-        // reference ferro is willing to emit. Which one catches which input is
-        // MEASURED (`defect_371_transcript_exit`), because the intuitive reading
-        // credits the wrong one — and did, in this comment, until #1708:
+        // Group the recorded manufactures by the accession they landed on, so a
+        // description carrying two offending accessions repairs both. `#1704`
+        // took the FIRST offending leaf and matched on accession equality with no
+        // loop, so a second accession was never considered.
         //
-        // 1. **The bare parse** is what excludes a SAM-style `chr17` and an
-        //    assembly name `GRCh38`. Not the pairing rule:
-        //    `parse_hgvs("chr17(NM_TEST.1):c.10+2del")` is `Ok`, because
-        //    `is_valid_compound_outer` deliberately admits an unclassifiable
-        //    custom accession and an assembly reference (#1146). What refuses
-        //    `chr17` is that `parse_accession` fails on the *bare* string, one
-        //    step before the pairing rule is ever asked. A trailing `rest` is the
-        //    same question: `NC_SYNTH.1junk` parses a prefix and leaves residue.
-        // 2. **The pairing rule** is what excludes a known transcript or protein
-        //    outer: `parse_hgvs("NM_OTHER.1(NM_TEST.1):c.10+2del")` is `Err`, so
-        //    without this ferro could emit a compound reference its own parser
-        //    refuses to read back — the property `FERRO_ASSERT_REPARSE` checks at
-        //    this same seam.
-        // 3. **`outer == bare`** rejects a self-referential wrapper. It is
-        //    unreachable for every RefSeq accession — `bare` is a transcript, and
-        //    (2) rejects a transcript outer first — but it is NOT dead code, and
-        //    the one class that reaches it is a **bare LRG record**: the
-        //    `checklist.md:20` predicate admits LRG by prefix (`Accession::is_lrg`,
-        //    so `LRG_<N>` as well as `LRG_<N>t<M>`), while
-        //    `is_valid_compound_outer` keys off `inferred_variant_type`, which
-        //    reads a bare `LRG_<N>` as genomic and admits it. So for
-        //    `bare == LRG_5` the first two both pass and only this conjunct stops
-        //    `LRG_5(LRG_5):c.…`. Nothing downstream would: that string re-parses,
-        //    so `FERRO_ASSERT_REPARSE` cannot see it. The provider shape is not
-        //    contrived either — an LRG record *is* its own genomic reference, so
-        //    naming itself in `Transcript::chromosome` is a reasonable thing for a
-        //    provider to do. Pinned by `a_self_referential_wrapper_is_declined`.
-        let Ok((rest, outer)) = crate::hgvs::parser::accession::parse_accession(chromosome) else {
-            return output;
-        };
-        if !rest.is_empty()
-            || !crate::hgvs::parser::accession::is_valid_compound_outer(&outer)
-            || outer == bare
-        {
-            return output;
+        // **Two records for one bare accession must agree on the wrapper, and
+        // disagreement DECLINES rather than picking one.** Keeping the first
+        // silently would be the same shape as the `find_map` this pass removes,
+        // one level in: the whole thesis here is that the contig must be the one
+        // the crossing was computed against, so a second contig arriving for the
+        // same transcript means the two crossings resolved differently and
+        // neither is entitled to speak for the accession. `None` is the declined
+        // state and is sticky — a third agreeing record does not revive it.
+        //
+        // **Not evidenced, deliberately stated anyway.** No provider in this tree
+        // reaches it: `Transcript::chromosome` is constant per accession in every
+        // fixture, and no input was constructed that makes two gates on one
+        // accession resolve different contigs. So this is a latent invariant
+        // written where it is relied on, not a fixed bug — the same status
+        // `outer == *bare` had until LRG turned out to reach it.
+        let mut by_accession: Vec<(&Accession, Option<&Accession>)> = Vec::new();
+        for record in manufactured {
+            match by_accession
+                .iter_mut()
+                .find(|(bare, _)| *bare == &record.bare)
+            {
+                Some((_, wrapper)) => {
+                    if *wrapper != Some(&record.wrapper) {
+                        *wrapper = None;
+                    }
+                }
+                None => by_accession.push((&record.bare, Some(&record.wrapper))),
+            }
         }
-        let wrapper = bare.clone().with_genomic_context(outer);
-        reparent_leaves(output, &bare, &wrapper)
+
+        let mut output = output;
+        for (bare, wrapper) in by_accession {
+            // The disagreement case above: two contigs for one transcript, so
+            // this accession is left exactly as `#1704` left it.
+            let Some(wrapper) = wrapper else {
+                continue;
+            };
+            // Every bare-intronic leaf still standing on this accession, and
+            // whether each is one a gate recorded. A leaf a later sibling pass
+            // moved no longer matches any record, so it counts as unexplained and
+            // the accession declines — the safe direction.
+            let verdict = {
+                let leaves: Vec<&HgvsVariant> = bare_transcript_intronic_leaves(&output)
+                    .into_iter()
+                    .filter(|leaf| leaf.accession() == Some(bare))
+                    .collect();
+                // An empty set is NOT "all manufactured". The gate recorded a
+                // leaf, but nothing on this accession still names a bare intronic
+                // position — a later sibling pass moved or dropped it — so there
+                // is nothing to repair, and wrapping the exonic leaves that
+                // remain would be a re-spelling no clause asks for.
+                !leaves.is_empty()
+                    && leaves
+                        .iter()
+                        .all(|leaf| manufactured.iter().any(|record| &record.leaf == *leaf))
+            };
+            if !verdict {
+                // Either nothing to repair, or the mixed case. Declining
+                // reproduces `#1704` exactly; see the `undecided` ruling named
+                // above for what the mixed half leaves open.
+                continue;
+            }
+            output = reparent_leaves(output, bare, wrapper);
+        }
+        output
     }
 
     /// The protein-axis partition pass, run once at the top level.
@@ -3735,6 +3967,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     pub(crate) fn normalize_core(
         &self,
         variant: &HgvsVariant,
+        manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         // Rewrite a legacy gene-model selector (`NG_(GENE_v001):c.…`) to the
         // spec-preferred transcript form (`NG_(NM_):c.…`) up front, so the rest
@@ -3797,7 +4030,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // substitution never reaches the resolution pass, so this only changes the
         // resolve-failure path. Reject mode already short-circuited above; silent
         // mode (no eintronic_warning) propagates the error unchanged.
-        let (result, mut warnings) = match self.normalize_dispatch(variant) {
+        let (result, mut warnings) = match self.normalize_dispatch(variant, manufactured) {
             Ok(resolved) => resolved,
             Err(e) => match &eintronic_warning {
                 Some(w) => return Ok((variant.clone(), vec![w.clone()])),
@@ -3859,6 +4092,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     fn normalize_dispatch(
         &self,
         variant: &HgvsVariant,
+        manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         Ok(match variant {
             // A `g.` variant on a mitochondrial reference (NC_012920 / NC_001807)
@@ -3875,12 +4109,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 self.normalize_mt(&mt)?
             }
             HV::Genome(v) => self.normalize_genome(v)?,
-            HV::Cds(v) => self.normalize_cds(v)?,
-            HV::Tx(v) => self.normalize_tx(v)?,
+            HV::Cds(v) => self.normalize_cds(v, manufactured)?,
+            HV::Tx(v) => self.normalize_tx(v, manufactured)?,
             HV::Protein(v) => self.normalize_protein(v)?,
-            HV::Rna(v) => self.normalize_rna(v)?,
+            HV::Rna(v) => self.normalize_rna(v, manufactured)?,
             HV::Mt(v) => self.normalize_mt(v)?,
-            HV::Allele(a) => self.normalize_allele(a)?,
+            HV::Allele(a) => self.normalize_allele(a, manufactured)?,
             // Circular (`o.`, SVD-WG006) variants are returned unchanged: no
             // 3'-shift runs and no warning is emitted. A genuine circular
             // normalizer would 3'-shift with origin-wraparound semantics (cf.
@@ -3927,6 +4161,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     fn normalize_allele(
         &self,
         allele: &crate::hgvs::variant::AlleleVariant,
+        manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         // Merge first, then normalize each result through the full per-variant
         // pipeline. Pre-normalizing each bracket entry would shift it
@@ -4022,7 +4257,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             // conflicted with it. Whether the members collide is unrelated to
             // whether one of them is resolvable at all.
             for member in &allele.variants {
-                let (_, member_warnings) = self.normalize_core(member)?;
+                let (_, member_warnings) = self.normalize_core(member, manufactured)?;
                 all_warnings.extend(member_warnings);
             }
             all_warnings.extend(raw_conflicts);
@@ -4069,7 +4304,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // normal pipeline. The helper is a no-op once no adjacent run remains,
         // so the re-dispatch cannot loop.
         if let Some(coalesced) = merge::coalesce_protein_adjacent_changes(allele) {
-            let (normalized, mut warnings) = self.normalize_dispatch(&coalesced)?;
+            let (normalized, mut warnings) = self.normalize_dispatch(&coalesced, manufactured)?;
             all_warnings.append(&mut warnings);
             return Ok((normalized, all_warnings));
         }
@@ -4186,7 +4421,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                 let mut origins = Vec::with_capacity(merged_raw.len());
                 for variant in merged_raw {
                     let origin = variant.clone();
-                    let pieces = self.canonical_split_for_variant(variant);
+                    let pieces = self.canonical_split_for_variant(variant, manufactured);
                     if pieces.len() == 1 {
                         origins.push(origin);
                     } else {
@@ -4208,7 +4443,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
             let mut result: Vec<HgvsVariant> = Vec::with_capacity(merged_split.len());
             let mut pass_warnings: Vec<NormalizationWarning> = Vec::new();
             for v in &merged_split {
-                let (r, warnings) = self.normalize_core(v)?;
+                let (r, warnings) = self.normalize_core(v, manufactured)?;
                 pass_warnings.extend(warnings);
                 result.push(r);
             }
@@ -5407,6 +5642,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     fn normalize_cds(
         &self,
         variant: &CdsVariant,
+        manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         // #972 Task 5: a transcript whose 5' CDS is annotated incomplete
         // (`cds_start_NF`) has no confirmed ATG, so `c.1` is undefined
@@ -5459,7 +5695,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
                 ),
             };
-            return self.normalize_cds(&new_variant);
+            return self.normalize_cds(&new_variant, manufactured);
         }
 
         // Resolve telomere/centromere markers (pter/qter) to concrete CdsPos
@@ -5551,7 +5787,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             variant.loc_edit.edit.clone(),
                         ),
                     };
-                    return self.normalize_cds(&new_variant);
+                    return self.normalize_cds(&new_variant, manufactured);
                 }
                 _ => {
                     // A pter/qter bound did not project (e.g. a non-coding
@@ -5668,7 +5904,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                             // flags the out-of-scheme input. See #920/#336.
                             let mut v = variant.clone();
                             v.loc_edit.location = CdsInterval::new(new_start, new_end);
-                            let (normalized, mut warns) = self.normalize_cds(&v)?;
+                            let (normalized, mut warns) = self.normalize_cds(&v, manufactured)?;
                             let mut merged = bounds_warnings;
                             merged.append(&mut warns);
                             return Ok((normalized, merged));
@@ -5711,7 +5947,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if let Some((new_variant, warning)) =
             self.try_expand_cds_ins(variant, edit, &cds_accession)?
         {
-            let (result, mut warnings) = self.normalize_cds(&new_variant)?;
+            let (result, mut warnings) = self.normalize_cds(&new_variant, manufactured)?;
             warnings.insert(0, warning);
             return Ok((result, warnings));
         }
@@ -5793,7 +6029,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                         variant.loc_edit.edit.clone(),
                     ),
                 };
-                return self.normalize_cds(&new_variant);
+                return self.normalize_cds(&new_variant, manufactured);
             }
         }
 
@@ -6261,6 +6497,16 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     || cv.loc_edit.location.end.inner().is_some_and(|p| p.is_intronic())
                         );
                         if crossed_into_intron {
+                            // #1723: the offset in `boundary_variant` is ferro's
+                            // own — an intronic input never reaches this gate —
+                            // and `boundary_transcript.chromosome` is the contig
+                            // the crossing was computed against. Record both here
+                            // rather than guessing at the top of the pipeline.
+                            record_manufactured_junction_exits(
+                                &boundary_variant,
+                                boundary_transcript.chromosome.as_deref(),
+                                manufactured,
+                            );
                             let mut combined = warnings;
                             combined.extend(boundary_warnings);
                             return Ok((boundary_variant, combined));
@@ -6644,7 +6890,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     .into_iter()
                     .filter(|w| !matches!(w, NormalizationWarning::AxisClampApplied { .. }))
                     .collect();
-                let (inner, inner_warnings) = self.normalize_cds(&new_variant)?;
+                let (inner, inner_warnings) = self.normalize_cds(&new_variant, manufactured)?;
                 carried.extend(inner_warnings);
                 return Ok((inner, carried));
             }
@@ -6671,6 +6917,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     fn normalize_tx(
         &self,
         variant: &TxVariant,
+        manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         // Can't normalize variants with unknown edits or positions
         let edit = match variant.loc_edit.edit.inner() {
@@ -6694,7 +6941,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
                 ),
             };
-            return self.normalize_tx(&new_variant);
+            return self.normalize_tx(&new_variant, manufactured);
         }
 
         // Bounds check: `n.<N>` where N exceeds the transcript length is
@@ -6758,7 +7005,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if let Some((new_variant, warning)) =
             self.try_expand_tx_ins(variant, edit, &tx_accession)?
         {
-            let (result, mut warnings) = self.normalize_tx(&new_variant)?;
+            let (result, mut warnings) = self.normalize_tx(&new_variant, manufactured)?;
             warnings.insert(0, warning);
             return Ok((result, warnings));
         }
@@ -6970,6 +7217,12 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                     || tv.loc_edit.location.end.inner().is_some_and(|p| p.is_intronic())
                         );
                         if crossed_into_intron {
+                            // #1723 — mirror of the `normalize_cds` recording.
+                            record_manufactured_junction_exits(
+                                &boundary_variant,
+                                boundary_transcript.chromosome.as_deref(),
+                                manufactured,
+                            );
                             let mut combined = warnings;
                             combined.extend(boundary_warnings);
                             return Ok((boundary_variant, combined));
@@ -8342,6 +8595,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
     fn normalize_rna(
         &self,
         variant: &crate::hgvs::variant::RnaVariant,
+        manufactured: &mut Vec<ManufacturedJunctionExit>,
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         use crate::hgvs::interval::RnaInterval;
         use crate::hgvs::variant::{LocEdit, RnaVariant};
@@ -8396,7 +8650,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant.loc_edit.edit.map_ref(|_| dna_edit.clone()),
                 ),
             };
-            return self.normalize_rna(&new_variant);
+            return self.normalize_rna(&new_variant, manufactured);
         }
 
         // SVD-WG009: rewrite `con` to `delins`. Re-run on the rewritten
@@ -8411,7 +8665,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
                     variant.loc_edit.edit.map_ref(|_| new_edit.clone()),
                 ),
             };
-            return self.normalize_rna(&new_variant);
+            return self.normalize_rna(&new_variant, manufactured);
         }
 
         // Issue #333 / #1183: expand bracketed / reference-range `ins[...]`
@@ -8425,7 +8679,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         if let Some((new_variant, warning)) =
             self.try_expand_rna_ins(variant, edit, &rna_accession)?
         {
-            let (result, mut warnings) = self.normalize_rna(&new_variant)?;
+            let (result, mut warnings) = self.normalize_rna(&new_variant, manufactured)?;
             warnings.insert(0, warning);
             return Ok((result, warnings));
         }
@@ -8743,7 +8997,19 @@ impl<P: ReferenceProvider> Normalizer<P> {
                                 let mut combined = warnings;
                                 combined.extend(boundary_warnings);
                                 combined.append(&mut split_warnings);
-                                return Ok((wrap_allele_if_split(split, uncertain), combined));
+                                let produced = wrap_allele_if_split(split, uncertain);
+                                // #1723 — the third copy of the gate. This records
+                                // NOTHING today: the clause's single reading in
+                                // this crate does not reach the `r.` axis, so
+                                // `bare_transcript_intronic_leaves` finds none
+                                // here. Wired anyway so the provenance follows the
+                                // scope rather than lagging behind a widening.
+                                record_manufactured_junction_exits(
+                                    &produced,
+                                    boundary_transcript.chromosome.as_deref(),
+                                    manufactured,
+                                );
+                                return Ok((produced, combined));
                             }
                         }
                     }
@@ -12137,7 +12403,11 @@ impl<P: ReferenceProvider> Normalizer<P> {
     /// If the result is an `HgvsVariant::Allele` (the split fired and
     /// produced multiple variants), unwrap its inner variants so they
     /// flatten into the outer cis-allele list rather than nesting.
-    fn canonical_split_for_variant(&self, v: HgvsVariant) -> Vec<HgvsVariant> {
+    fn canonical_split_for_variant(
+        &self,
+        v: HgvsVariant,
+        manufactured: &mut Vec<ManufacturedJunctionExit>,
+    ) -> Vec<HgvsVariant> {
         if !matches!(
             v,
             HgvsVariant::Genome(_)
@@ -12169,7 +12439,7 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `normalize_core` is; and it discards everything the diagnostics
         // wrapper adds, so the `detect_shuffle_infos` pass it used to run was
         // wasted work on every call.
-        match self.normalize_core(&v) {
+        match self.normalize_core(&v, manufactured) {
             Ok((result, _warnings)) => match result {
                 HgvsVariant::Allele(a) => a.variants,
                 other => vec![other],
@@ -13276,6 +13546,199 @@ mod tests {
     use super::*;
     use crate::hgvs::parser::parse_hgvs;
     use crate::reference::MockProvider;
+
+    // -----------------------------------------------------------------------
+    // #1723: the junction-exit fold, exercised directly
+    //
+    // `reparent_junction_exit` is driven at the seam by whatever the `#670`
+    // gates recorded, and two of its branches are not reachable from a fixture
+    // provider — a record whose leaf a later sibling pass moved, and a record
+    // for an accession that is no longer in the output at all. Constructing the
+    // records here is the only way to exercise those, and it is honest about
+    // which they are: the end-to-end shapes live in
+    // `tests/it/defect_371_transcript_exit.rs`.
+    // -----------------------------------------------------------------------
+
+    /// A normalizer over an empty provider. The fold never consults the provider
+    /// — that is the point of carrying the contig from the gate — so an empty one
+    /// is sufficient and proves the absence of a second lookup.
+    fn fold_only_normalizer() -> Normalizer<MockProvider> {
+        Normalizer::new(MockProvider::new())
+    }
+
+    fn manufactured_record(output_leaf: &str) -> ManufacturedJunctionExit {
+        let leaf = parse_hgvs(output_leaf).expect("fixture leaf parses");
+        let bare = leaf.accession().expect("a leaf has an accession").clone();
+        let wrapper = genomic_wrapper_for(&bare, "NC_SYNTH.1").expect("a usable contig");
+        ManufacturedJunctionExit {
+            leaf,
+            bare,
+            wrapper,
+        }
+    }
+
+    /// The empty fast path: no gate fired, so the output is returned untouched
+    /// and no accession is even looked at.
+    #[test]
+    fn the_junction_exit_fold_is_a_no_op_with_no_records() {
+        let output = parse_hgvs("NM_TEST.1:c.10+2del").unwrap();
+        let folded = fold_only_normalizer().reparent_junction_exit(output.clone(), &[]);
+        assert_eq!(folded, output, "no record means no repair");
+    }
+
+    /// The recorded leaf is the one in the output: it is repaired.
+    #[test]
+    fn the_junction_exit_fold_repairs_a_recorded_leaf() {
+        let records = [manufactured_record("NM_TEST.1:c.10+2del")];
+        let output = parse_hgvs("NM_TEST.1:c.10+2del").unwrap();
+        assert_eq!(
+            fold_only_normalizer()
+                .reparent_junction_exit(output, &records)
+                .to_string(),
+            "NC_SYNTH.1(NM_TEST.1):c.10+2del"
+        );
+    }
+
+    /// **The moved-leaf branch.** A record survives to the seam but the leaf it
+    /// names no longer matches anything in the output — a sibling pass shifted
+    /// it. There is then no leaf whose provenance is known, so the accession
+    /// declines rather than being repaired on the strength of a record that no
+    /// longer describes it.
+    ///
+    /// Not reachable from a fixture provider, which is why this is a unit test.
+    /// Dropping the `all(...)` conjunct turns this assertion into
+    /// `NC_SYNTH.1(NM_TEST.1):c.10+9del`.
+    #[test]
+    fn the_junction_exit_fold_declines_a_leaf_no_record_explains() {
+        let records = [manufactured_record("NM_TEST.1:c.10+2del")];
+        let output = parse_hgvs("NM_TEST.1:c.10+9del").unwrap();
+        assert_eq!(
+            fold_only_normalizer()
+                .reparent_junction_exit(output, &records)
+                .to_string(),
+            "NM_TEST.1:c.10+9del",
+            "a leaf that no record explains is left exactly as it stands"
+        );
+    }
+
+    /// **The empty-leaf-set branch.** A record survives to the seam but nothing
+    /// in the output names a bare intronic position on that accession any more.
+    /// `all()` over an empty set is vacuously true, so without the explicit
+    /// `!leaves.is_empty()` the exonic leaves that remain would be wrapped for no
+    /// reason. Dropping that conjunct turns this assertion into
+    /// `NC_SYNTH.1(NM_TEST.1):c.18del`.
+    #[test]
+    fn the_junction_exit_fold_wraps_nothing_when_no_intronic_leaf_survives() {
+        let records = [manufactured_record("NM_TEST.1:c.10+2del")];
+        let output = parse_hgvs("NM_TEST.1:c.18del").unwrap();
+        assert_eq!(
+            fold_only_normalizer()
+                .reparent_junction_exit(output, &records)
+                .to_string(),
+            "NM_TEST.1:c.18del",
+            "an exonic-only output is not wrapped merely because a gate once fired"
+        );
+    }
+
+    /// **The mixed case, isolated from the pipeline.** One recorded leaf and one
+    /// the author spelled, on one accession: the accession declines as a whole.
+    /// This is the residue the `undecided`
+    /// `junction-exit-wrapper-scope-in-a-mixed-allele` ruling records, and
+    /// pinning it here as well as end-to-end separates "the policy is decline"
+    /// from "the pipeline happened not to reach it".
+    #[test]
+    fn the_junction_exit_fold_declines_a_mixed_accession() {
+        let records = [manufactured_record("NM_TEST.1:c.10+2del")];
+        let output = parse_hgvs("NM_TEST.1:c.[10+2del;30+5del]").unwrap();
+        assert_eq!(
+            fold_only_normalizer()
+                .reparent_junction_exit(output, &records)
+                .to_string(),
+            "NM_TEST.1:c.[10+2del;30+5del]",
+            "an authored sibling on the same accession is the undecided case; decline"
+        );
+    }
+
+    /// **Two accessions, both recorded, both repaired.** `#1704` matched on
+    /// accession equality with no loop after taking the *first* offending leaf,
+    /// so the second accession was never reached. Reverting the fold to a single
+    /// accession leaves `NM_OTHER.1:c.10+2del` bare here.
+    #[test]
+    fn the_junction_exit_fold_repairs_every_recorded_accession() {
+        let records = [
+            manufactured_record("NM_TEST.1:c.10+2del"),
+            manufactured_record("NM_OTHER.1:c.10+2del"),
+        ];
+        let output = parse_hgvs("[NM_TEST.1:c.10+2del;NM_OTHER.1:c.10+2del]").unwrap();
+        assert_eq!(
+            fold_only_normalizer()
+                .reparent_junction_exit(output, &records)
+                .to_string(),
+            "[NC_SYNTH.1(NM_TEST.1):c.10+2del;NC_SYNTH.1(NM_OTHER.1):c.10+2del]"
+        );
+    }
+
+    /// The wrapper builder's own declines, on the strings that reach it. Each
+    /// case names the conjunct that refuses it — the SAM-style and assembly names
+    /// die on the **bare parse**, not on the pairing rule, which is the half a
+    /// reader attributes wrongly.
+    #[test]
+    fn the_genomic_wrapper_builder_declines_what_it_cannot_justify() {
+        let bare = parse_hgvs("NM_TEST.1:c.10+2del")
+            .unwrap()
+            .accession()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            genomic_wrapper_for(&bare, "NC_SYNTH.1")
+                .expect("a genomic accession is usable")
+                .to_string(),
+            "NC_SYNTH.1(NM_TEST.1)"
+        );
+        for refused in [
+            "chr17",          // bare parse
+            "GRCh38",         // bare parse
+            "NC_SYNTH.1junk", // trailing remainder
+        ] {
+            assert!(
+                genomic_wrapper_for(&bare, refused).is_none(),
+                "{refused:?} must not become an outer reference"
+            );
+        }
+        // The pairing rule, which is a different mechanism from the two above.
+        assert!(
+            crate::hgvs::parser::accession::parse_accession("NM_OTHER.1").is_ok(),
+            "the bare parse SUCCEEDS here, so the decline below is the pairing rule"
+        );
+        assert!(
+            genomic_wrapper_for(&bare, "NM_OTHER.1").is_none(),
+            "a transcript named as the outer reference is backwards"
+        );
+
+        // And the third conjunct, which is a THIRD mechanism and is reachable
+        // only through LRG. `a_self_referential_wrapper_is_declined` pins it
+        // end-to-end; this pins the two premises that make it reachable, so a
+        // future reader can see why `outer == *bare` is not subsumed by the
+        // pairing rule rather than having to re-derive it.
+        let lrg = parse_hgvs("LRG_5:c.10+2del")
+            .expect("a bare LRG record parses")
+            .accession()
+            .expect("and carries an accession")
+            .clone();
+        let (rest, outer) = crate::hgvs::parser::accession::parse_accession("LRG_5")
+            .expect("premise 1: the bare parse SUCCEEDS for an LRG record");
+        assert!(rest.is_empty(), "premise 1: and consumes the whole string");
+        assert!(
+            crate::hgvs::parser::accession::is_valid_compound_outer(&outer),
+            "premise 2: the pairing rule ADMITS a bare LRG, because \
+             `inferred_variant_type` reads it as genomic — so it cannot be what declines"
+        );
+        assert!(
+            genomic_wrapper_for(&lrg, "LRG_5").is_none(),
+            "so only `outer == *bare` stops `LRG_5(LRG_5):c.…`, which re-parses and is \
+             therefore invisible to FERRO_ASSERT_REPARSE"
+        );
+    }
 
     /// The growth ladder must reach the cap and then stop, from any starting
     /// window. #1691's fix depends on both halves: never terminating would spin
