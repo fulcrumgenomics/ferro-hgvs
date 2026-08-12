@@ -51,15 +51,22 @@ mod rkyv_cache {
     use rustc_hash::FxHashMap;
     use std::collections::HashMap;
 
-    /// Bump whenever the layout below changes so a stale archive is rejected by
-    /// the version check (in addition to rkyv's own structural validation) and
-    /// regenerated rather than mis-read.
+    /// Bump whenever the layout below changes **or its coordinates change
+    /// meaning**, so a stale archive is rejected by the version check (in
+    /// addition to rkyv's own structural validation) and regenerated rather
+    /// than mis-read.
     // v2 (#742): exon coordinates are now stored in the HGVS convention
     // (genome 1-based, tx 0-based half-open); a v1 cache holds the old raw
     // cdot convention and must be regenerated.
     // v3 (#972): `RkyvTx` gained `cds_start_incomplete`; a v2 cache has no such
     // field and would silently rehydrate every transcript as "complete".
-    pub(super) const RKYV_FORMAT_VERSION: u32 = 3;
+    // v4 (#1619): `cds_start`/`cds_end` are now FLAT transcript offsets, mapped
+    // out of cdot's gap-collapsed `start_codon`/`stop_codon` space. The layout
+    // is unchanged, so rkyv's structural validation cannot see the difference —
+    // a v3 cache would rehydrate the 58 gapped GRCh38 builds with a CDS short by
+    // the enclosed gap, which is exactly the defect this bump exists to stop
+    // surviving in a cache.
+    pub(super) const RKYV_FORMAT_VERSION: u32 = 4;
 
     #[derive(Archive, Serialize, Deserialize)]
     pub(super) struct RkyvCigar {
@@ -703,7 +710,14 @@ const CDOT_BINCODE_MAGIC: [u8; 4] = *b"FCDT";
 // v3 (#972): `CdotTranscriptSnapshot` gained `cds_start_incomplete`; a v2
 // cache has no such field and bincode's positional layout would otherwise
 // misread the following bytes.
-const CDOT_BINCODE_VERSION: u32 = 3;
+// v4 (#1619): `cds_start`/`cds_end` are now FLAT transcript offsets, mapped out
+// of cdot's gap-collapsed `start_codon`/`stop_codon` space. The layout is
+// unchanged, so a v3 cache reads back cleanly and would serve the 58 gapped
+// GRCh38 builds a CDS short by the enclosed gap. This bump must move with
+// `RKYV_FORMAT_VERSION`, not after it: a *fresh* v3 bincode cache is loaded in
+// preference to the JSON and then PROMOTED to an rkyv archive, so leaving it at
+// 3 would launder the stale values into a current-version rkyv file.
+const CDOT_BINCODE_VERSION: u32 = 4;
 
 /// Parse the integer version suffix of an accession (`"NM_003002.4"` -> `Some(4)`),
 /// or `None` when there is no trailing numeric `.<n>`. Used to pick the highest
@@ -838,11 +852,18 @@ struct RawGenomeBuild {
 
 impl RawCdotTranscript {
     /// Convert raw transcript to internal format for a specific genome build.
-    fn to_transcript(&self, genome_build: &str) -> Option<CdotTranscript> {
+    ///
+    /// `codon_space` is the numbering the source cdot release states
+    /// `start_codon`/`stop_codon` in, from the file's `cdot_version`.
+    fn to_transcript(
+        &self,
+        genome_build: &str,
+        codon_space: CodonBoundSpace,
+    ) -> Option<CdotTranscript> {
         // Try genome_builds first (real cdot format)
         if let Some(builds) = &self.genome_builds {
             if let Some(build) = builds.get(genome_build) {
-                return self.from_genome_build(build);
+                return self.from_genome_build(build, codon_space);
             }
         }
 
@@ -852,7 +873,11 @@ impl RawCdotTranscript {
 
     /// Convert from nested genome_builds format.
     #[allow(clippy::wrong_self_convention)]
-    fn from_genome_build(&self, build: &RawGenomeBuild) -> Option<CdotTranscript> {
+    fn from_genome_build(
+        &self,
+        build: &RawGenomeBuild,
+        codon_space: CodonBoundSpace,
+    ) -> Option<CdotTranscript> {
         let strand = parse_strand(build.strand.as_deref().unwrap_or("+"))?;
 
         // Ensembl marks a transcript whose 5′ CDS lacks a confirmed ATG start
@@ -949,8 +974,64 @@ impl RawCdotTranscript {
         // Use transcript-level CDS coordinates (start_codon/stop_codon) if available
         // These are 0-indexed and more reliable than converting from genomic coords
         let (cds_start, cds_end) = if self.start_codon.is_some() || self.stop_codon.is_some() {
-            // Use transcript-level coordinates directly (0-indexed)
-            (self.start_codon, self.stop_codon)
+            // #1619: a cdot record carries TWO transcript coordinate spaces and
+            // labels neither. The exon table's `tx_start`/`tx_end` are absolute
+            // offsets into the transcript *sequence* (so a base unaligned to the
+            // genome still occupies a position), while `start_codon`/`stop_codon`
+            // are offsets into the gap-COLLAPSED transcript — exon bases only.
+            // The two agree for the 474,760 GRCh38 builds whose exon table is
+            // contiguous and disagree for the 58 that are not, where taking the
+            // codon bounds verbatim serves a CDS short by the enclosed gap.
+            //
+            // Measured over those 58 (50 have both a CDS and a sequence on the
+            // prepared reference): reading `start_codon`/`stop_codon` as
+            // collapsed offsets yields a valid ORF 50/50 and reading them as flat
+            // offsets 0/50. `NM_033517.1` is the worked case — cdot says 5157,
+            // RefSeq annotates `CDS 1..5196` and `NP_277052.1` is 1731 aa.
+            //
+            // Everything downstream — `cds_to_tx`, `tx_to_cds`, the exon walk in
+            // `TranscriptMetadata` — indexes the flat sequence, so map into that
+            // space here and let the rest of the crate keep one space. Note the
+            // end is mapped through its LAST CODING BASE rather than directly:
+            // a CDS flush with an exon boundary must not absorb the gap that
+            // follows it, which is what "add every preceding gap" would do.
+            //
+            // The collapsed numbering is a property of the cdot RELEASE, not of
+            // the record: upstream fixed it in `data_v0.2.34` (SACGF/cdot#123),
+            // whose codon bounds are already flat. So the mapping runs only for
+            // a release known to predate that fix — applying it to a fixed
+            // release adds the gap twice (#1887) — and the record cannot settle
+            // it itself, since both readings fall inside its exon-covered length.
+            let mapped = (
+                self.start_codon
+                    .map(|start| collapsed_to_flat_tx_pos(&exons, start)),
+                self.stop_codon.map(|stop| match stop.checked_sub(1) {
+                    Some(last) => collapsed_to_flat_tx_pos(&exons, last).saturating_add(1),
+                    // An empty CDS carries no last coding base to map.
+                    None => 0,
+                }),
+            );
+            let verbatim = (self.start_codon, self.stop_codon);
+            match codon_space {
+                CodonBoundSpace::GapCollapsed => mapped,
+                CodonBoundSpace::Flat => verbatim,
+                // With no release to go by, use the bounds only where both
+                // readings agree — every contiguous exon table, and a gapped one
+                // whose CDS does not straddle a hole. Otherwise decline the CDS
+                // rather than guess which space the numbers are in.
+                CodonBoundSpace::Unknown if mapped == verbatim => verbatim,
+                CodonBoundSpace::Unknown => {
+                    log::warn!(
+                        "Declining the CDS of a gapped transcript (gene {:?}, contig {}): \
+                         its cdot release is unknown, so start_codon/stop_codon {:?} could \
+                         be gap-collapsed or flat (SACGF/cdot#123)",
+                        self.gene_name,
+                        build.contig,
+                        verbatim
+                    );
+                    (None, None)
+                }
+            }
         } else {
             // Fall back to converting genomic CDS coordinates to transcript coordinates
             match (build.cds_start, build.cds_end) {
@@ -1077,6 +1158,90 @@ fn parse_strand(s: &str) -> Option<Strand> {
         "+" | "1" | "plus" => Some(Strand::Plus),
         "-" | "-1" | "minus" => Some(Strand::Minus),
         _ => None,
+    }
+}
+
+/// The transcript numbering a cdot release states `start_codon`/`stop_codon` in.
+///
+/// Releases before `data_v0.2.34` computed both by accumulating exon lengths, so
+/// on a transcript whose exon table has a hole they count exon bases only
+/// (gap-collapsed). `data_v0.2.34` fixed the generator to emit whole-transcript
+/// (flat) offsets (SACGF/cdot#123). The two agree on every contiguous exon table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodonBoundSpace {
+    /// A release before the upstream fix: map the bounds into flat space.
+    GapCollapsed,
+    /// `data_v0.2.34` or later: the bounds are already flat.
+    Flat,
+    /// No `cdot_version`, or one that does not parse as a release number.
+    Unknown,
+}
+
+/// The first cdot data release whose codon bounds are whole-transcript offsets.
+const FIRST_FLAT_CODON_CDOT_RELEASE: (u64, u64, u64) = (0, 2, 34);
+
+impl CodonBoundSpace {
+    /// Classify a cdot file by its top-level `cdot_version` (e.g. `"0.2.32"`;
+    /// the `data_v`/`v` release-tag prefixes are accepted too).
+    fn of_cdot_version(cdot_version: Option<&str>) -> Self {
+        let Some(version) = cdot_version.map(str::trim) else {
+            return Self::Unknown;
+        };
+        let number = version
+            .strip_prefix("data_v")
+            .or_else(|| version.strip_prefix('v'))
+            .unwrap_or(version);
+        let parts: Vec<Option<u64>> = number.split('.').map(|p| p.parse().ok()).collect();
+        match parts.as_slice() {
+            [Some(major), Some(minor), Some(patch)] => {
+                if (*major, *minor, *patch) < FIRST_FLAT_CODON_CDOT_RELEASE {
+                    Self::GapCollapsed
+                } else {
+                    Self::Flat
+                }
+            }
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Map a 0-based **inclusive** offset in the gap-collapsed transcript onto the
+/// flat transcript sequence (#1619).
+///
+/// The gap-collapsed transcript is the concatenation of the exons' transcript
+/// spans, so it omits any base the exon table does not cover — the holes cdot
+/// leaves when part of a transcript does not align to the genome. The flat
+/// transcript is the sequence as the FASTA serves it, holes included. cdot
+/// releases before `data_v0.2.34` state `start_codon`/`stop_codon` in the former
+/// (see [`CodonBoundSpace`]) and every consumer in this crate indexes the latter.
+///
+/// # Arguments
+/// * `exons` - exons in the in-memory layout `[genome_start, genome_end,
+///   tx_start (0-based inclusive), tx_end (0-based exclusive)]`, sorted by
+///   `tx_start`.
+/// * `collapsed` - a 0-based inclusive offset into the gap-collapsed transcript.
+///
+/// # Returns
+/// The corresponding 0-based inclusive offset into the flat transcript. This is
+/// the identity whenever the exon table is contiguous and starts at 0, which is
+/// every build but the 58 gapped GRCh38 ones. An offset past the end of the
+/// collapsed transcript (and an empty exon table) degrades gracefully rather
+/// than declining: the overshoot is carried past the final exon, since a CDS
+/// bound that outruns its own exon table is annotation ferro reports on
+/// elsewhere, not something to silently drop here.
+fn collapsed_to_flat_tx_pos(exons: &[[u64; 4]], collapsed: u64) -> u64 {
+    let mut exon_bases_seen: u64 = 0;
+    for exon in exons {
+        let (tx_start, tx_end) = (exon[2], exon[3]);
+        let span = tx_end.saturating_sub(tx_start);
+        if collapsed < exon_bases_seen.saturating_add(span) {
+            return tx_start.saturating_add(collapsed - exon_bases_seen);
+        }
+        exon_bases_seen = exon_bases_seen.saturating_add(span);
+    }
+    match exons.last() {
+        Some(last) => last[3].saturating_add(collapsed - exon_bases_seen),
+        None => collapsed,
     }
 }
 
@@ -2896,6 +3061,7 @@ impl CdotMapper {
     fn from_raw_cdot_file(raw_file: RawCdotFile, genome_build: &str) -> Self {
         let mut mapper = Self::new();
         mapper.primary_build = Some(genome_build.to_string());
+        let codon_space = CodonBoundSpace::of_cdot_version(raw_file.cdot_version.as_deref());
 
         for (accession, raw_transcript) in raw_file.transcripts {
             // Stash any non-primary build views first so a missing primary-
@@ -2905,7 +3071,7 @@ impl CdotMapper {
                     if build_name == genome_build {
                         continue;
                     }
-                    if let Some(tx) = raw_transcript.to_transcript(build_name) {
+                    if let Some(tx) = raw_transcript.to_transcript(build_name, codon_space) {
                         mapper
                             .alt_build_transcripts
                             .entry(build_name.clone())
@@ -2915,7 +3081,7 @@ impl CdotMapper {
                 }
             }
 
-            if let Some(transcript) = raw_transcript.to_transcript(genome_build) {
+            if let Some(transcript) = raw_transcript.to_transcript(genome_build, codon_space) {
                 mapper.add_transcript(accession, transcript);
             }
         }
@@ -4223,6 +4389,284 @@ mod tests {
         }
     }
 
+    /// Two-exon raw cdot JSON with a 40-base transcript-coordinate hole between
+    /// the exons (exon 1 ends at cdna 100, exon 2 starts at cdna 141), carrying
+    /// the given `start_codon`/`stop_codon`. Genomic bounds are arbitrary but
+    /// well-formed; only the transcript axis is under test.
+    fn gapped_cdot_json(start_codon: u64, stop_codon: u64) -> String {
+        format!(
+            r#"
+            {{
+                "transcripts": {{
+                    "NM_GAPPED.1": {{
+                        "gene_name": "TEST",
+                        "genome_builds": {{
+                            "GRCh38": {{
+                                "contig": "NC_000001.11",
+                                "strand": "+",
+                                "exons": [
+                                    [1000, 1100, 0, 1, 100, "M100"],
+                                    [2000, 2100, 1, 141, 240, "M100"]
+                                ]
+                            }}
+                        }},
+                        "start_codon": {start_codon},
+                        "stop_codon": {stop_codon}
+                    }}
+                }}
+            }}
+            "#
+        )
+    }
+
+    fn load_gapped(start_codon: u64, stop_codon: u64) -> CdotTranscript {
+        load_gapped_from_release(Some("0.2.32"), start_codon, stop_codon)
+    }
+
+    /// [`gapped_cdot_json`] stamped with the given file-level `cdot_version`
+    /// (omitted when `None`), loaded through the real reader.
+    fn load_gapped_from_release(
+        cdot_version: Option<&str>,
+        start_codon: u64,
+        stop_codon: u64,
+    ) -> CdotTranscript {
+        let json = with_cdot_version(&gapped_cdot_json(start_codon, stop_codon), cdot_version);
+        CdotMapper::from_reader_with_build(json.as_bytes(), "GRCh38")
+            .unwrap()
+            .get_transcript("NM_GAPPED.1")
+            .unwrap()
+            .clone()
+    }
+
+    /// Stamp a raw cdot JSON document with a file-level `cdot_version`, as every
+    /// real cdot release carries; `None` leaves it unstamped.
+    fn with_cdot_version(json: &str, cdot_version: Option<&str>) -> String {
+        match cdot_version {
+            Some(version) => json.replacen(
+                "\"transcripts\"",
+                &format!("\"cdot_version\": \"{version}\", \"transcripts\""),
+                1,
+            ),
+            None => json.to_string(),
+        }
+    }
+
+    /// cdot fixed its codon fields to whole-transcript numbering in
+    /// `data_v0.2.34` (SACGF/cdot#123). A record from that release already states
+    /// the flat bound, so mapping it again would apply the gap twice — the
+    /// double-correction #1887 measured (`cds_end` 260 where 220 is right).
+    #[test]
+    fn cdot_codon_bounds_from_a_whole_transcript_release_are_not_remapped() {
+        for release in ["0.2.34", "0.2.36", "data_v0.2.34", "1.0.0"] {
+            let tx = load_gapped_from_release(Some(release), 10, 220);
+            assert_eq!(
+                (tx.cds_start, tx.cds_end),
+                (Some(10), Some(220)),
+                "cdot {release} states codon bounds in whole-transcript space"
+            );
+        }
+    }
+
+    /// Every release before the upstream fix states the codon bounds
+    /// gap-collapsed, so each of them is still mapped.
+    #[test]
+    fn cdot_codon_bounds_from_a_gap_collapsed_release_are_mapped() {
+        for release in ["0.2.32", "0.2.33", "data_v0.2.33", "0.1.9"] {
+            let tx = load_gapped_from_release(Some(release), 10, 180);
+            assert_eq!(
+                (tx.cds_start, tx.cds_end),
+                (Some(10), Some(220)),
+                "cdot {release} states codon bounds gap-collapsed"
+            );
+        }
+    }
+
+    /// With no release to go by, a gapped record's codon bounds read two ways
+    /// and nothing in the record says which: decline the CDS rather than guess.
+    #[test]
+    fn cdot_gapped_codon_bounds_without_a_known_release_decline_the_cds() {
+        for release in [None, Some(""), Some("unknown"), Some("0.2")] {
+            let tx = load_gapped_from_release(release, 10, 180);
+            assert_eq!(
+                (tx.cds_start, tx.cds_end),
+                (None, None),
+                "cdot_version {release:?} cannot say which space 180 is in"
+            );
+        }
+    }
+
+    /// The decline is confined to bounds the two readings actually disagree on:
+    /// a CDS that ends before the hole means the same thing either way, so it
+    /// survives a missing release.
+    #[test]
+    fn cdot_codon_bounds_both_readings_agree_on_survive_an_unknown_release() {
+        let tx = load_gapped_from_release(None, 10, 100);
+        assert_eq!((tx.cds_start, tx.cds_end), (Some(10), Some(100)));
+    }
+
+    /// A gap **between** the two codon bounds must widen the CDS: `stop_codon`
+    /// is an offset into the gap-collapsed transcript, so it lands 40 bases
+    /// short of the true flat end.
+    #[test]
+    fn cdot_cds_end_is_mapped_out_of_gap_collapsed_space() {
+        let tx = load_gapped(10, 180);
+        assert_eq!(tx.cds_start, Some(10), "no gap precedes the start codon");
+        // collapsed 179 (last coding base) sits at exon-2 offset 79 => flat 219.
+        assert_eq!(
+            tx.cds_end,
+            Some(220),
+            "cds_end must be a FLAT transcript offset"
+        );
+    }
+
+    /// A gap **before** the start codon must shift both bounds, not just the end.
+    #[test]
+    fn cdot_cds_start_is_mapped_out_of_gap_collapsed_space() {
+        let tx = load_gapped(120, 180);
+        assert_eq!(
+            tx.cds_start,
+            Some(160),
+            "collapsed 120 = exon-2 offset 20 => flat 160"
+        );
+        assert_eq!(tx.cds_end, Some(220));
+    }
+
+    /// The collapsed offset of the FIRST base after the gap must land on the
+    /// first base of exon 2, not inside the hole.
+    ///
+    /// This is the other side of the boundary
+    /// [`cdot_cds_end_flush_with_an_exon_boundary_excludes_the_following_gap`]
+    /// pins. That test fixes the last collapsed offset *before* the gap
+    /// (collapsed 99 -> flat 99); this one fixes the first offset *after* it
+    /// (collapsed 100 -> flat 140). An off-by-one in the loop's
+    /// `collapsed < exon_bases_seen + span` comparison moves exactly one of the
+    /// two, so neither test alone pins the boundary.
+    #[test]
+    fn cdot_cds_start_at_the_first_collapsed_base_after_the_gap() {
+        let tx = load_gapped(100, 180);
+        assert_eq!(
+            tx.cds_start,
+            Some(140),
+            "collapsed 100 is the first base of exon 2, which is flat 140 — not a \
+             position inside the 40-base hole"
+        );
+        assert_eq!(
+            tx.cds_end,
+            Some(220),
+            "collapsed 179 (the last coding base) is exon-2 offset 79 => flat 219"
+        );
+    }
+
+    /// A CDS ending exactly at an exon boundary must NOT absorb the gap that
+    /// follows it — the naive "add every preceding gap" mapping would return 140.
+    #[test]
+    fn cdot_cds_end_flush_with_an_exon_boundary_excludes_the_following_gap() {
+        let tx = load_gapped(10, 100);
+        assert_eq!(tx.cds_start, Some(10));
+        assert_eq!(
+            tx.cds_end,
+            Some(100),
+            "the CDS ends at the exon, before the gap"
+        );
+    }
+
+    /// The mapping is the identity on a gapless exon table, which is every
+    /// transcript but the 58 gapped GRCh38 builds.
+    #[test]
+    fn cdot_cds_bounds_are_unchanged_on_a_gapless_exon_table() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_FLAT.1": {
+                    "gene_name": "TEST",
+                    "genome_builds": {
+                        "GRCh38": {
+                            "contig": "NC_000001.11",
+                            "strand": "+",
+                            "exons": [
+                                [1000, 1100, 0, 1, 100, "M100"],
+                                [2000, 2100, 1, 101, 200, "M100"]
+                            ]
+                        }
+                    },
+                    "start_codon": 10,
+                    "stop_codon": 190
+                }
+            }
+        }
+        "#;
+        let cdot = CdotMapper::from_reader_with_build(json.as_bytes(), "GRCh38").unwrap();
+        let tx = cdot.get_transcript("NM_FLAT.1").unwrap();
+        assert_eq!(tx.cds_start, Some(10));
+        assert_eq!(tx.cds_end, Some(190));
+    }
+
+    /// #1619 real-geometry regression. `NM_033517.1` (SHANK3, GRCh38) is one of
+    /// the 58 gapped cdot builds: exon 10 ends at cdna 1302, exon 11 starts at
+    /// cdna 1342, a genuine 39-base transcript-coordinate hole. cdot's
+    /// `stop_codon` is 5157, which is 5196 - 39 — i.e. it counts exon bases only.
+    ///
+    /// RefSeq's own annotation for this accession is FLAT: GenBank annotates
+    /// `CDS 1..5196` with `/coded_by="NM_033517.1:1..5196"`, and `NP_277052.1`
+    /// is 1731 aa (5196 / 3 = 1732 codons = 1731 residues + stop). The repo's
+    /// own `tests/fixtures/sequences/normalization_transcripts.json` carries
+    /// `cds_end: 5196` for it, so the live provider and the fixture disagreed
+    /// until this mapping existed.
+    #[test]
+    fn cdot_nm_033517_cds_end_matches_refseq_issue_1619() {
+        let json = r#"
+        {
+            "transcripts": {
+                "NM_033517.1": {
+                    "gene_name": "SHANK3",
+                    "protein": "NP_277052.1",
+                    "genome_builds": {
+                        "GRCh38": {
+                            "contig": "NC_000022.11",
+                            "strand": "+",
+                            "exons": [
+                                [50674641, 50674704, 0, 1, 63, null],
+                                [50675047, 50675251, 1, 64, 267, null],
+                                [50676621, 50676693, 2, 268, 339, null],
+                                [50678584, 50678693, 3, 340, 448, null],
+                                [50678768, 50678920, 4, 449, 600, null],
+                                [50679018, 50679186, 5, 601, 768, null],
+                                [50679311, 50679428, 6, 769, 885, null],
+                                [50683339, 50683417, 7, 886, 963, null],
+                                [50684584, 50684651, 8, 964, 1030, null],
+                                [50694774, 50695046, 9, 1031, 1302, null],
+                                [50697556, 50697715, 10, 1342, 1498, "M5 D2 M152"],
+                                [50698689, 50698803, 11, 1499, 1612, null],
+                                [50703859, 50703935, 12, 1613, 1688, null],
+                                [50704165, 50704248, 13, 1689, 1771, null],
+                                [50704737, 50704862, 14, 1772, 1896, null],
+                                [50704963, 50705096, 15, 1897, 2029, null],
+                                [50706071, 50706152, 16, 2030, 2110, null],
+                                [50711614, 50711638, 17, 2111, 2134, null],
+                                [50714916, 50715047, 18, 2135, 2265, null],
+                                [50715668, 50715753, 19, 2266, 2350, null],
+                                [50720183, 50722437, 20, 2351, 4604, null],
+                                [50730720, 50733212, 21, 4605, 7096, null]
+                            ]
+                        }
+                    },
+                    "start_codon": 0,
+                    "stop_codon": 5157
+                }
+            }
+        }
+        "#;
+        let json = with_cdot_version(json, Some("0.2.32"));
+        let cdot = CdotMapper::from_reader_with_build(json.as_bytes(), "GRCh38").unwrap();
+        let tx = cdot.get_transcript("NM_033517.1").unwrap();
+        assert_eq!(tx.cds_start, Some(0), "no gap precedes the start codon");
+        assert_eq!(
+            tx.cds_end,
+            Some(5196),
+            "cdot's stop_codon 5157 excludes the 39-base hole between exons 10 and 11"
+        );
+    }
+
     /// Builds a minimal `RawGenomeBuild` carrying the given cdot `tag` string
     /// (or none), with no exons — sufficient to exercise
     /// `from_genome_build`'s tag parsing without needing real alignment data.
@@ -4261,7 +4705,9 @@ mod tests {
     fn cds_start_nf_tag_sets_flag_true() {
         let build = raw_genome_build_with_tag(Some("cds_start_NF,mRNA_start_NF"));
         let raw = raw_cdot_transcript_for_tag_test();
-        let tx = raw.from_genome_build(&build).expect("builds transcript");
+        let tx = raw
+            .from_genome_build(&build, CodonBoundSpace::GapCollapsed)
+            .expect("builds transcript");
         assert!(tx.cds_start_incomplete);
     }
 
@@ -4269,7 +4715,9 @@ mod tests {
     fn cds_start_nf_tag_absent_leaves_flag_false() {
         let build = raw_genome_build_with_tag(None);
         let raw = raw_cdot_transcript_for_tag_test();
-        let tx = raw.from_genome_build(&build).expect("builds transcript");
+        let tx = raw
+            .from_genome_build(&build, CodonBoundSpace::GapCollapsed)
+            .expect("builds transcript");
         assert!(!tx.cds_start_incomplete);
     }
 
@@ -4277,7 +4725,9 @@ mod tests {
     fn cds_start_nf_tag_other_value_leaves_flag_false() {
         let build = raw_genome_build_with_tag(Some("MANE_Select"));
         let raw = raw_cdot_transcript_for_tag_test();
-        let tx = raw.from_genome_build(&build).expect("builds transcript");
+        let tx = raw
+            .from_genome_build(&build, CodonBoundSpace::GapCollapsed)
+            .expect("builds transcript");
         assert!(!tx.cds_start_incomplete);
     }
 
@@ -4334,7 +4784,7 @@ mod tests {
         ]);
         let raw = raw_cdot_transcript_for_tag_test();
         let tx = raw
-            .from_genome_build(&build)
+            .from_genome_build(&build, CodonBoundSpace::GapCollapsed)
             .expect("a well-formed cdot exon table must load");
         assert_eq!(tx.exons.len(), 3, "every exon row must be kept");
         assert_eq!((tx.cds_start, tx.cds_end), (Some(10), Some(250)));
@@ -4356,7 +4806,7 @@ mod tests {
         ]);
         let raw = raw_cdot_transcript_for_tag_test();
         let tx = raw
-            .from_genome_build(&build)
+            .from_genome_build(&build, CodonBoundSpace::GapCollapsed)
             .expect("a five-field row (no gap_info) is well-formed and must load");
         assert_eq!(tx.exons.len(), 3);
         assert_eq!((tx.cds_start, tx.cds_end), (Some(10), Some(250)));
@@ -4372,7 +4822,8 @@ mod tests {
         let build = raw_genome_build_with_middle_row(vec![json!(1100), json!(1200), json!(1)]);
         let raw = raw_cdot_transcript_for_tag_test();
         assert!(
-            raw.from_genome_build(&build).is_none(),
+            raw.from_genome_build(&build, CodonBoundSpace::GapCollapsed)
+                .is_none(),
             "a truncated exon row must refuse the transcript, not drop the row"
         );
     }
@@ -4394,7 +4845,8 @@ mod tests {
         ]);
         let raw = raw_cdot_transcript_for_tag_test();
         assert!(
-            raw.from_genome_build(&build).is_none(),
+            raw.from_genome_build(&build, CodonBoundSpace::GapCollapsed)
+                .is_none(),
             "a non-numeric exon coordinate must refuse the transcript, not drop the row"
         );
     }
