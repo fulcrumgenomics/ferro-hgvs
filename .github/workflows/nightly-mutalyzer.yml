@@ -47,6 +47,19 @@ jobs:
     name: Reference-aware mutalyzer / biocommons tests
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      # The three reference-aware modules this job exists to run, defined ONCE
+      # because two steps need them: the run itself, and the reproduction recipe
+      # the summary step prints when that run fails. A second copy would drift —
+      # and it would drift in the direction that matters least visibly, since a
+      # stale recipe still looks like a working command to whoever pastes it.
+      #
+      # This is the same rule `scripts/run_oracle_suite.sh` applies to
+      # `test-oracle`'s selection: read it from one place, never copy it.
+      REFERENCE_AWARE_SELECTION: >-
+        test(/mutalyzer_normalize_tests::/) |
+        test(/biocommons_normalize_tests::/) |
+        test(/hgvs_rs_projection_tests::/)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -141,6 +154,7 @@ jobs:
           echo "manifest size: $(stat -c%s benchmark-output/manifest.json) bytes"
 
       - name: Run reference-aware tests
+        id: reference-aware-tests
         # Failures are NOT propagated to the workflow conclusion — the
         # purpose of the nightly is to surface drift in the xfail report,
         # not to gate PRs. (PR CI's strict-mode test job already covers
@@ -184,8 +198,58 @@ jobs:
           # soft-masked bases. Non-gating here like the other three.
           FERRO_ASSERT_SEQUENCE: "1"
         run: |
-          cargo nextest run --features dev \
-            -E 'test(/mutalyzer_normalize_tests::/) | test(/biocommons_normalize_tests::/) | test(/hgvs_rs_projection_tests::/)'
+          cargo nextest run --features dev -E "$REFERENCE_AWARE_SELECTION"
+
+      # The reproduction recipe for the failure this job actually produces.
+      #
+      # It lives HERE, and not in `report-failure`'s `hint:` below, because
+      # `report-failure` is `if: failure()` and the step above is
+      # `continue-on-error: true` — so the job concludes `success` whenever the
+      # ONLY thing that failed is the test run, and that hint is never rendered
+      # for a fired oracle or a moved baseline. Every failure that does reach
+      # `report-failure` is an infrastructure one (checkout, `ferro prepare`, a
+      # missing manifest), for which an armed re-run is the wrong advice.
+      #
+      # Keyed on `outcome`, not `conclusion`: `continue-on-error` rewrites the
+      # latter to `success` while the former stays `failure`, which is exactly
+      # the distinction the step above documents.
+      #
+      # Non-gating like the run itself — it only writes to the job summary, so
+      # it cannot turn the nightly red.
+      - name: Explain how to reproduce a failed run
+        if: always() && steps.reference-aware-tests.outcome == 'failure'
+        env:
+          # Through `env:` rather than interpolated into `run:` — a `${{ }}`
+          # expansion is spliced in as text before the shell parses the script,
+          # which is the template-injection shape `zizmor` flags. Harmless for a
+          # run id, but the habit is what the rule is protecting.
+          XFAIL_ARTIFACT: ferro-xfail-${{ github.run_id }}
+        run: |
+          {
+            echo "## Reference-aware tests failed"
+            echo
+            echo "These axes only run with a prepared reference (\`FERRO_MANIFEST\`), so they"
+            echo "cannot run on a pull request. Reproduce on a box with the reference, with the"
+            echo "same four oracles armed and over the same three modules:"
+            echo
+            echo '```'
+            echo "FERRO_MANIFEST=<ref>/manifest.json \\"
+            echo "  FERRO_ASSERT_IDEMPOTENT=1 FERRO_ASSERT_REPARSE=1 \\"
+            echo "  FERRO_ASSERT_IN_BOUNDS=1 FERRO_ASSERT_SEQUENCE=1 \\"
+            echo "  cargo nextest run --features dev -E '${REFERENCE_AWARE_SELECTION}'"
+            echo '```'
+            echo
+            echo "Keep the \`-E\` selection. Dropping it while keeping the flags widens the run"
+            echo "onto the modules \`ci.yml\`'s \`ORACLE_EXCLUDE\` withholds from an armed job,"
+            echo "which fail on \`main\` for reasons no nightly caused — see that variable's"
+            echo "comment, and \`scripts/run_oracle_suite.sh\` for the local runner that applies"
+            echo "the same exclusion."
+            echo
+            echo "A moved conformance baseline is re-blessable; a new live divergence is not."
+            echo "Read which it is out of the \`${XFAIL_ARTIFACT}\` artifact"
+            echo "attached to this run — an oracle fire lands there as a FAILing case rather"
+            echo "than as a failed workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload xfail reports
         if: always()
@@ -207,8 +271,6 @@ jobs:
       summary: >-
         The nightly manifest-backed conformance run failed.
       hint: |
-          These axes only run with a prepared reference (`FERRO_MANIFEST`), so they cannot run on a pull request. Reproduce on a box with the reference:
-          ```
-          FERRO_MANIFEST=<ref>/manifest.json cargo nextest run --features dev
-          ```
-          A moved conformance baseline is re-blessable; a new live divergence is not.
+          **This is an infrastructure failure, not a conformance one.** The test step carries `continue-on-error: true`, so a fired oracle or a moved baseline leaves this job concluding `success` and never opens an issue — it lands in the run's `ferro-xfail-*` artifact instead, and the run's job summary carries the armed reproduction command. Reaching this issue therefore means something before or around the tests broke: the checkout, the `ferro` build, `ferro prepare`, a manifest that never appeared, or the artifact upload.
+          Start from the failing step's own log rather than from a re-run of the axes. These axes only run with a prepared reference (`FERRO_MANIFEST`), so they cannot run on a pull request, and re-running them proves nothing about a step that failed before they started.
+          `ferro prepare` runs on every night's run — the prepared reference is deliberately not cached (see the comment above that step) — so it fetches from NCBI and Ensembl each time, and an upstream fetch is the most likely thing to have broken.
