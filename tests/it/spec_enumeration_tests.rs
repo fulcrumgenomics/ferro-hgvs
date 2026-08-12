@@ -506,8 +506,30 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // — equal and opposite, as this pair must always be read. The adjudication
     // is recorded with that status in `DIVERGENCE_BUDGET`: sequence-preserving
     // in all three, a fix on `n.`, unruled on `r.`, and one residue on `c.`.
-    (Status::ProjectionPinned, 1165),
-    (Status::ProjectionUnavailablePinned, 487),
+    //
+    // 1165 -> 1167 (#1704), and it is an improvement rather than a
+    // re-partition: `project-g/c.1704del` and `project-g/c.1704dup` used to read
+    // `unavailable: no g. representation for this variant` and now render
+    // `NC_000023.11:g.32573745del` / `dup`. `NM_004006.2:c.1704del` 3'-shifts
+    // across the exon/intron junction, and while its `c.` answer was spelled on a
+    // BARE `NM_004006.2` there was no genomic reference in the description for the
+    // genomic axis to derive from. Re-parenting it onto
+    // `NC_000023.11(NM_004006.2)` — what `checklist.md:20` requires anyway —
+    // restores the anchor, so the projection resolves. `ProjectionUnavailablePinned`
+    // takes the matching -2, below. The two changes touch disjoint rows, but the
+    // figure was re-measured on the rebase rather than composed from the deltas.
+    //
+    // Four further rows change their rendered string without changing status, and
+    // are a representation change rather than a capability one: `project-c` and
+    // `project-n` for the same two inputs now read
+    // `NC_000023.11(NM_004006.2):c.1704+1del` / `:n.1948+1del` (and the `dup`
+    // pair). Those are the same accession repair, on the axes that were already
+    // rendering.
+    (Status::ProjectionPinned, 1167),
+    // #1704: 487 -> 485, the two `project-g/c.1704{del,dup}` rows that stopped
+    // being unavailable. See the note above; read the pair together, since a move
+    // between these two statuses is invisible in either number alone.
+    (Status::ProjectionUnavailablePinned, 485),
     (Status::ProjectionErrorPinned, 210),
     // 132 -> 120 (#1498). The 12 rows are all LRG — `LRG_199:c.357+1G>A`,
     // `LRG_199:g.954966C>T`, `LRG_199:g.981731G>A` and `LRG_476:g.4950_39800=`,

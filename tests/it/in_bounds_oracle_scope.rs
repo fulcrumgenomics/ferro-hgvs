@@ -3,7 +3,7 @@
 //!
 //! # The question this file settles
 //!
-//! `spec_conformance_axis` measures `outputs_leaving_the_transcript` at **371**
+//! `spec_conformance_axis` measured `outputs_leaving_the_transcript` at **371**
 //! on the 3' direction. Run the same corpus with `FERRO_ASSERT_IN_BOUNDS=1`
 //! armed and the oracle fires on **none** of them — only the idempotency oracle
 //! fires, on 7 rows. Two readings were available and they have very different
@@ -41,7 +41,7 @@
 //! | | asks | answer for `NM_TEST.1:c.10+2del` |
 //! |---|---|---|
 //! | `FERRO_ASSERT_IN_BOUNDS` | does the named position exist on the served sequence? | unanswerable — skipped |
-//! | corpus `outputs_leaving_the_transcript` | did the output name an intronic position its input did not? | yes — counted |
+//! | corpus `outputs_leaving_the_transcript` | did the output name an intronic position its input did not, on a BARE accession? | yes — counted (until #1704) |
 //!
 //! **The consequence worth committing is the negative one:** a zero from
 //! `FERRO_ASSERT_IN_BOUNDS` over the corpus is a claim about the oracle's scope,
@@ -55,9 +55,20 @@
 //! position on a bare `NM_` (pinned by
 //! `spec_corpus_regressions::a_bare_transcript_accession_accepts_an_intronic_position`),
 //! so `FERRO_ASSERT_REPARSE` is silent too. Both halves are measured in
-//! `defect_371_transcript_exit::the_intronic_output_is_a_fixed_point_so_no_seam_oracle_sees_it`.
-//! **No seam oracle covers the corpus's largest defect class**, and closing that
-//! would mean a fourth predicate, not a widening of this one.
+//! `defect_371_transcript_exit::the_wrapped_output_is_a_fixed_point_and_re_parses`.
+//! **No seam oracle covered the corpus's largest defect class**, and closing that
+//! would have meant a fourth predicate, not a widening of this one.
+//!
+//! # #1704 closed the class, and this file's scope statement is UNCHANGED
+//!
+//! That is the point of keeping it. The fix re-parents the exit onto the genomic
+//! wrapper `checklist.md:20` requires, so the output is now
+//! `NC_SYNTH.1(NM_TEST.1):c.10+2del` — a different accession carrying the *same*
+//! intronic coordinate. Every endpoint is still intronic, so `simple_cds_pos`
+//! still short-circuits, and the armed child is still silent. The oracle's
+//! blindness was never to the defect; it was to the coordinate shape, and that is
+//! what the file pins. A future widening of `first_out_of_bounds_coordinate` to
+//! read intronic endpoints must still move these assertions.
 //!
 //! # Why the predicate is not called directly here
 //!
@@ -92,7 +103,10 @@ const CHILD_MARKER: &str = "FERRO_371_ORACLE_CHILD";
 /// The same shape `defect_371_transcript_exit` dissects: a four-base run flush
 /// against exon 1's 3' end, with an intron that continues it by two.
 const INPUT: &str = "c.7del";
-const EXIT_OUTPUT: &str = "c.10+2del";
+/// Spelled in full rather than as a suffix on [`CODING`]: since #1704 the exit is
+/// rendered against the genomic wrapper (`CONTIG(CODING)`), so the output's
+/// accession is no longer the input's.
+const EXIT_OUTPUT: &str = "NC_SYNTH.1(NM_TEST.1):c.10+2del";
 
 /// The fixture the exemplar is normalized against: exon 1 ends `…AAAA`, the
 /// intron opens `AA`, everything else is filler.
@@ -163,8 +177,7 @@ fn the_transcript_exit_output_carries_only_endpoints_the_oracle_skips() {
     for strand in [Strand::Plus, Strand::Minus] {
         let output = normalize_3prime(&exit_provider(strand), &format!("{CODING}:{INPUT}"));
         assert_eq!(
-            output,
-            format!("{CODING}:{EXIT_OUTPUT}"),
+            output, EXIT_OUTPUT,
             "the fixture must still produce the exit for this test to mean anything ({strand:?})"
         );
 
@@ -255,7 +268,7 @@ fn oracle_probe_normalizes_the_transcript_exit_under_arming() {
     }
     for strand in [Strand::Plus, Strand::Minus] {
         let output = normalize_3prime(&exit_provider(strand), &format!("{CODING}:{INPUT}"));
-        assert_eq!(output, format!("{CODING}:{EXIT_OUTPUT}"));
+        assert_eq!(output, EXIT_OUTPUT);
         // Re-normalizing is what makes the idempotency oracle's silence a
         // measurement rather than an absence of opportunity.
         assert_eq!(normalize_3prime(&exit_provider(strand), &output), output);

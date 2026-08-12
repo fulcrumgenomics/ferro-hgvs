@@ -75,6 +75,7 @@ use crate::error_handling::ErrorConfig;
 use crate::hgvs::edit::{InsertedSequence, NaEdit};
 use crate::hgvs::interval::UncertainBoundary;
 use crate::hgvs::location::CdsPos;
+use crate::hgvs::variant::Accession;
 use crate::{HgvsVariant, NormalizeConfig, ShuffleDirection};
 
 /// Repo-relative path to the pinned outputs.
@@ -241,6 +242,27 @@ impl SweepOutcome {
     }
 }
 
+/// Whether `accession` names [`TRANSCRIPT`], **with or without** the genomic
+/// wrapper an intronic position requires.
+///
+/// The wrapper is not a re-anchor, and telling the two apart is the whole point
+/// of this helper (#1704). `checklist.md:20` makes `NC_000023.11(NM_004006.2)`
+/// mandatory once a description names an intronic position, and four rows of this
+/// sweep shift into an intron — so ferro renders them compound, and a bare string
+/// comparison read that as "re-anchored onto another transcript", the exact
+/// retype-in-disguise the check exists to catch. It is not one: the inner
+/// accession is unchanged, and `Accession::without_genomic_context` is what says
+/// so structurally rather than by string surgery.
+///
+/// What is deliberately NOT checked here is that the wrapper only appears where
+/// an intronic position needs it. A gratuitous wrapper would be a representation
+/// change like any other, and `every_authored_inversion_produces_its_pinned_output`
+/// pins all 2,075 strings exactly — so it would fail there, with the string in
+/// hand, rather than being silently absorbed by a looser predicate.
+fn names_the_sweep_transcript(accession: &Accession) -> bool {
+    accession.clone().without_genomic_context().full() == TRANSCRIPT
+}
+
 /// Classify a normalized result against the authored input it came from.
 ///
 /// `rendered` is the output string and `input` the description handed in;
@@ -264,7 +286,7 @@ pub fn classify(input: &str, normalized: &HgvsVariant, rendered: &str) -> SweepO
     // onto another transcript — or onto another *version* of this one — would be
     // classified `Unchanged` or `ShiftedInversion` and counted as conformant,
     // which is precisely the retype-in-disguise the invariant exists to catch.
-    if cds.accession.full() != TRANSCRIPT {
+    if !names_the_sweep_transcript(&cds.accession) {
         return SweepOutcome::Unexpected(format!(
             "output is a c. description on {} rather than on {TRANSCRIPT}: {rendered}",
             cds.accession.full()
@@ -299,7 +321,7 @@ fn member_violation(member: &HgvsVariant, rendered: &str) -> Option<SweepOutcome
             "a member is not a c. description on {TRANSCRIPT}: {rendered}"
         )));
     };
-    if cds.accession.full() != TRANSCRIPT {
+    if !names_the_sweep_transcript(&cds.accession) {
         return Some(SweepOutcome::Unexpected(format!(
             "a member is on {} rather than on {TRANSCRIPT}: {rendered}",
             cds.accession.full()
@@ -855,6 +877,66 @@ mod tests {
             classify(input, &parsed, unbalanced),
             SweepOutcome::MemberChangesLength(_)
         ));
+    }
+
+    /// The direction [`names_the_sweep_transcript`] was added for, which its two
+    /// neighbours do not cover: the genomic wrapper is **accepted**.
+    ///
+    /// `an_output_on_another_accession_is_unexpected_rather_than_unchanged` and
+    /// `a_member_on_another_accession_is_unexpected` both test the reject side,
+    /// and both would still pass against the bare `accession.full() != TRANSCRIPT`
+    /// comparison this helper replaced. Only this test distinguishes them, so
+    /// without it the helper is untested in the only direction it changed.
+    ///
+    /// The claim is that a wrapper is not a re-anchor (#1704): `checklist.md:20`
+    /// makes `NC_000023.11(NM_004006.2)` mandatory once a description names an
+    /// intronic position, and four rows of this sweep shift into an intron. Under
+    /// a bare string comparison those read as "re-anchored onto another
+    /// transcript" — the retype-in-disguise `classify` exists to catch — and they
+    /// are not one: the inner accession is unchanged.
+    ///
+    /// Both call sites are exercised, because they are separate comparisons and a
+    /// fix applied to one only is the likely regression.
+    ///
+    /// Note the wrapped row lands in `ShiftedInversion`, not `Unchanged`:
+    /// `Unchanged` is a **string-identity** bucket (`rendered == input`) and the
+    /// wrapper changes the string. That is the correct bucket — the description
+    /// really did move — and it is a conformant one, which is the claim. Reading
+    /// `Unchanged` as "same variant" is the mistake this note exists to head off.
+    #[test]
+    fn a_genomic_wrapper_is_not_a_re_anchor() {
+        // The whole-description call site, in `classify`.
+        let input = "NM_004006.2:c.101_104inv";
+        let wrapped = "NC_000023.11(NM_004006.2):c.101_104inv";
+        let parsed = crate::parse_hgvs(wrapped).expect("parse");
+        assert_eq!(
+            classify(input, &parsed, wrapped),
+            SweepOutcome::ShiftedInversion,
+            "the wrapper is the reference `checklist.md:20` requires, not a different \
+             transcript — the inner accession is unchanged, so this is a conformant \
+             re-rendering rather than `Unexpected`"
+        );
+
+        // The per-member call site, in `member_violation`.
+        let split = "NC_000023.11(NM_004006.2):c.[101A>T;104A>T]";
+        let parsed = crate::parse_hgvs(split).expect("parse");
+        assert!(
+            classify(input, &parsed, split).is_conformant(),
+            "a wrapped member is on the sweep transcript too, and `member_violation` is a \
+             second comparison that has to agree with the first"
+        );
+
+        // The control: a wrapper around a *different* transcript is still
+        // rejected, so the helper is not simply ignoring the inner accession.
+        let elsewhere = "NC_000023.11(NM_000088.3):c.101_104inv";
+        let parsed = crate::parse_hgvs(elsewhere).expect("parse");
+        assert!(
+            matches!(
+                classify(input, &parsed, elsewhere),
+                SweepOutcome::Unexpected(_)
+            ),
+            "stripping the wrapper must not strip the check — the inner accession still decides"
+        );
     }
 
     #[test]

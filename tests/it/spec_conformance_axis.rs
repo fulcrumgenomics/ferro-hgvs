@@ -68,7 +68,8 @@
 //!
 //! | counter | 3' | 5' | what it is |
 //! |---|---|---|---|
-//! | `outputs_leaving_the_transcript` | **371** | 0 | a `c.`/`n.` output naming an INTRONIC position its input did not. `checklist.md:20` — a bare `NM_` cannot express an intronic position at all. See the correction below: the SHIFT is legal, the ACCESSION is not |
+//! | `outputs_leaving_the_transcript` | ~~371~~ **0** | 0 | a `c.`/`n.` output naming an INTRONIC position its input did not, **on a bare accession**. `checklist.md:20` — a bare `NM_` cannot express an intronic position at all. **Closed by #1704**; see RE-BLESSED (3 of 3) |
+//! | `outputs_intronic_under_a_genomic_wrapper` | **371** | 0 | the same 371 rows, now rendered as `NC_…(NM_…):c.…` — CONFORMANT, and not a defect counter |
 //! | `outputs_denoting_no_sequence` | 10 | 18 | two members of the OUTPUT claim one territory, so it denotes nothing — rank-1 invalid |
 //! | `sequence_changed` | 4 | 0 | the output denotes different bases from the input; a member was dropped |
 //! | `non_idempotent_outputs` | ~~7~~ **4** | 4 | the output is not its own fixed point. Re-blessed: see the note below |
@@ -81,8 +82,11 @@
 //! separation of one, so it does not implement rejected SVD-WG010. The denominator
 //! is asserted non-zero, because `0 of 0` is what a rebuilt #1456 looks like.
 //!
-//! The 3'/5' asymmetry is itself a finding: the transcript-leaving class is
-//! **371 to 0**, and 3' is the default direction.
+//! The 3'/5' asymmetry is itself a finding: the junction-crossing class is
+//! **371 to 0**, and 3' is the default direction. #1704 makes those 371 outputs
+//! conformant without moving a single coordinate, so the asymmetry survives the
+//! fix intact — it is now carried by `outputs_intronic_under_a_genomic_wrapper`,
+//! and it is still a claim about the code rather than about the corpus.
 //!
 //! # RE-BLESSED (1 of 4) — #1599, the amino-acid precondition
 //!
@@ -119,8 +123,9 @@
 //! Both counters therefore move for one reason — the pass no longer merges
 //! across a codon boundary — and neither direction of the move is a
 //! representation *choice* left open: `general.md:35`'s second conjunct is
-//! either met or it is not. `outputs_leaving_the_transcript` stays **371**, which
-//! is the pre-existing baseline and not a regression of #1599's.
+//! either met or it is not. `outputs_leaving_the_transcript` stayed **371** across
+//! #1599, which was the pre-existing baseline and not a regression of its — it is
+//! #1704, three sections down, that finally moves it.
 //!
 //! # RE-BLESSED (2 of 4) — #1536, the cross-axis re-typing carve-out
 //!
@@ -304,8 +309,9 @@
 //! What is invalid is the **accession**: `checklist.md:20` forbids a bare `NM_`
 //! from naming an intronic position. So converging these rows on the clamped
 //! in-exon answer would implement an exception the spec explicitly withholds —
-//! and would silently revert #670. The live candidates are re-parenting onto a
-//! genomic wrapper, or refusal.
+//! and would silently revert #670. **Settled by #1704: re-parenting onto a genomic
+//! wrapper, not refusal** — see the RE-BLESSED section below and
+//! `Normalizer::reparent_junction_exit`.
 //!
 //! Two further corrections from the same investigation, both measured:
 //!
@@ -319,6 +325,44 @@
 //!   continues a run and `AA` always does. Holding the transcript-direction
 //!   intron fixed makes both strands agree. See `defect_371_transcript_exit.rs`,
 //!   whose `junction_provider` takes the intron as a parameter for this reason.
+//!
+//! # RE-BLESSED (3 of 3) — #1704, the junction exit's accession
+//!
+//! `outputs_leaving_the_transcript` goes **371 -> 0** at 3', and every one of
+//! those 371 rows is now counted by the new
+//! `outputs_intronic_under_a_genomic_wrapper`, at **371**. That identity is the
+//! whole disclosure: **no row stopped reaching the check**, and no coordinate
+//! moved. The fix renders a junction-crossing output as
+//! `NC_SYNTH.1(NM_TEST.1):c.20+2del` instead of `NM_TEST.1:c.20+2del`.
+//!
+//! | figure | was | now | direction |
+//! |---|---|---|---|
+//! | 3' `outputs_leaving_the_transcript` | 371 | **0** | rank-1 class CLOSED |
+//! | 3' `outputs_intronic_under_a_genomic_wrapper` | — | **371** | new counter; conformant, not a defect |
+//! | 5' both of the above | 0 | **0** | unchanged — no 5' mirror of the #670 gate exists |
+//!
+//! **Every other counter is byte-identical in both directions**, measured rather
+//! than argued: 58,552 outputs / 0 declined / 0 unparseable / 10 (3') and 18 (5')
+//! denoting no sequence / 32 prohibition-violating / 9,141 converged / 2,440 /
+//! 248 / 53 / 4 non-idempotent / 4 sequence-changed / 72 / 32 / 40 / 0 guard
+//! violations. So nothing was traded for this.
+//!
+//! **The counter had to be re-scoped, and that is a finding rather than a
+//! convenience.** The old counter was every `Denotation::Inexpressible` output,
+//! and re-parenting moves that not at all: SPDI is positional and has no offset
+//! notation, so `hgvs_to_spdi` declines an intronic position whatever accession
+//! carries it. Run against the pre-#1704 census, the fix reports **371 before and
+//! 371 after** — a change that made all 371 outputs conformant, invisible to the
+//! instrument. The proxy and the clause had silently come apart, and the census
+//! now asks `checklist.md:20`'s own question (is the accession bare?) directly
+//! from the AST. See `names_bare_transcript_intronic` below, including why it is
+//! written there rather than borrowed from `src/normalize/`.
+//!
+//! **Under `FERRO_PARTITION=canonical-coalesced` the same fix reads 389 -> 0**,
+//! with 389 on the wrapper counter. That arm has no pin of its own and fails on
+//! an unrelated pre-existing counter (`guard_violations` 0 -> 6), which is the
+//! coalesced partitioner's own divergence and is unmoved by #1704 — verified by
+//! re-running that arm with `src/normalize/` reverted.
 //!
 //! # The honest-zero discipline is enforced, not described
 //!
@@ -353,6 +397,8 @@ use ferro_hgvs::conformance::spec_corpus::{
     SpecCorpus, Strength,
 };
 use ferro_hgvs::error_handling::ErrorMode;
+use ferro_hgvs::hgvs::interval::{Interval, UncertainBoundary};
+use ferro_hgvs::hgvs::location::{CdsPos, TxPos};
 use ferro_hgvs::reference::MockProvider;
 use ferro_hgvs::{parse_hgvs, HgvsVariant, NormalizeConfig, Normalizer, ShuffleDirection};
 
@@ -420,10 +466,20 @@ pub(crate) const THREE_PRIME: Census = Census {
     declined: 0,
     unparseable_outputs: 0,
     outputs_denoting_no_sequence: 10,
-    outputs_leaving_the_transcript: 371,
+    // #1704: was **371**, and every one of those rows is now on the line below.
+    // The class did not shrink — it stopped being a violation, because the
+    // junction-crossing answer is now rendered against the genomic reference the
+    // crossing itself resolved. 371 = 0 + 371 is the accounting identity that
+    // makes this a fix rather than a re-partition.
+    outputs_leaving_the_transcript: 0,
+    outputs_intronic_under_a_genomic_wrapper: 371,
     // Re-blessed DOWN by #1627: `standards.md:39`'s 24 `X` rows are refused
     // rather than re-emitted. The residual 8 are `checklist.md:16`'s genomic
     // offsets, which is #1628. See the module docs' fourth RE-BLESSED section.
+    //
+    // Independent of the #1704 split directly above: #1627 refuses rows on the
+    // alignment-symbol ground, #1704 re-parents rows on the junction-crossing
+    // ground, and the two touch disjoint row sets.
     prohibition_violating_outputs: 8,
     // -- confluence (rank 2) --
     //
@@ -486,6 +542,12 @@ pub(crate) const FIVE_PRIME: Census = Census {
     unparseable_outputs: 0,
     outputs_denoting_no_sequence: 18,
     outputs_leaving_the_transcript: 0,
+    // Zero on both sides of the split at 5', and for the same structural reason
+    // the sibling counter was zero here before #1704: all three copies of the
+    // #670 junction gate are guarded on `ThreePrime` with no 5' mirror, so the 5'
+    // direction never produces an intronic output at all — wrapped or bare. Read
+    // as the negative control for the 3' pin, not as a second measurement of it.
+    outputs_intronic_under_a_genomic_wrapper: 0,
     // Re-blessed DOWN by #1627, by the same 24 rows as at 3'. Validity does not
     // depend on shuffle direction, so the two directions moving identically is
     // the cross-check rather than a coincidence.
@@ -614,17 +676,39 @@ pub(crate) struct Census {
     /// Outputs whose members claim overlapping territory, so the description
     /// denotes no sequence. Rank-1 invalid.
     pub(crate) outputs_denoting_no_sequence: usize,
-    /// Outputs the oracle cannot express although the input was exonic — which
-    /// means the description **left the transcript**: a `c.`/`n.` output naming an
-    /// intronic offset position that the input did not name.
+    /// Outputs naming an intronic offset the input did not name, **on a bare
+    /// transcript accession**. Rank-1 invalid, on `checklist.md:20`: an `NM_`
+    /// "can only be used to describe variants in introns using a `c.` prefix when
+    /// a genomic reference sequence is given", so the description is not
+    /// expressible against the accession it carries.
     ///
-    /// Two clauses bear on it. `general.md:44` exempts "deletions/duplications
-    /// around exon/exon junctions using **c.**, **r.** or **n.** reference
-    /// sequences" from the 3' rule, so the shift should stop at the junction; and
-    /// `checklist.md:20` says an `NM_` "can only be used to describe variants in
-    /// introns using a `c.` prefix when a genomic reference sequence is given", so
-    /// the output is not even expressible against the accession it carries.
+    /// **The coordinate is not the defect, and the counter was re-scoped in
+    /// #1704 to say so.** It used to be every `Denotation::Inexpressible`
+    /// output — i.e. every intronic output, wrapper or not — which conflated a
+    /// spec violation with a limit of the oracle. `general.md:44`'s exemption of
+    /// "deletions/duplications around exon/exon junctions" was read as requiring
+    /// the shift to stop at the junction; `background/numbering.md:26` explicitly
+    /// **withholds** that exemption from exon/intron junctions, so the shift is
+    /// required and only the accession was ever wrong. The conformant outputs the
+    /// old counter also swept up are now [`Self::outputs_intronic_under_a_genomic_wrapper`].
     pub(crate) outputs_leaving_the_transcript: usize,
+    /// Outputs naming an intronic offset under the genomic wrapper
+    /// `checklist.md:20` asks for (`NC_…(NM_…):c.10+2del`). **Conformant** — this
+    /// is not a defect counter, and it is not asserted at zero.
+    ///
+    /// It exists so the class stays *accounted for* rather than merely stopping
+    /// being counted. #1704 moved every one of the 371 rows the sibling counter
+    /// held from the defect side to this one, and the two figures summing to the
+    /// old 371 is what shows the fix closed the class rather than shrinking the
+    /// population that reached the check.
+    ///
+    /// The oracle cannot verify these outputs' bases — SPDI is positional and has
+    /// no offset notation, so `hgvs_to_spdi` declines an intronic position
+    /// whatever accession carries it. That was equally true before, and is a
+    /// property of the instrument rather than of the descriptions:
+    /// `defect_371_transcript_exit` is where the coordinates themselves are
+    /// pinned, string by string.
+    pub(crate) outputs_intronic_under_a_genomic_wrapper: usize,
     /// Outputs violating an absolute textual prohibition.
     ///
     /// **Ratchet-pinned at 8, not asserted at zero** — this doc once said the
@@ -717,6 +801,56 @@ fn members_of(variant: &HgvsVariant) -> Vec<HgvsVariant> {
         HgvsVariant::Allele(allele) => allele.variants.clone(),
         single => vec![single.clone()],
     }
+}
+
+/// Whether either endpoint of `interval` names an intronic offset.
+///
+/// Both `Single` and `Range` (uncertain-breakpoint) boundaries are inspected, and
+/// an unknown (`?`) offset counts — it is still an intronic position, just one
+/// whose magnitude is unspecified.
+fn interval_is_intronic<T>(
+    interval: &Interval<T>,
+    is_intronic: impl Fn(&T) -> bool + Copy,
+) -> bool {
+    let boundary = |b: &UncertainBoundary<T>| match b {
+        UncertainBoundary::Single(mu) => mu.inner().is_some_and(is_intronic),
+        UncertainBoundary::Range { start, end } => {
+            start.inner().is_some_and(is_intronic) || end.inner().is_some_and(is_intronic)
+        }
+    };
+    boundary(&interval.start) || boundary(&interval.end)
+}
+
+/// Whether `output` names an intronic position under a **bare** transcript
+/// accession — the form `checklist.md:20` refuses.
+///
+/// > a (non-)coding DNA reference sequence "can only be used to describe variants
+/// > in introns using a `c.` prefix when a genomic reference sequence is given"
+///
+/// so `NC_000023.10(NM_004006.2):c.94-2A>G` is the conformant spelling and
+/// `NM_004006.2:c.94-2A>G` is not.
+///
+/// **Written here from the AST rather than borrowed from `src/normalize/`.** The
+/// normalizer has its own reading of this clause
+/// (`intronic_on_bare_transcript_warning`, the W4007 rung), and calling it from
+/// the census would make the instrument agree with the code by construction —
+/// the census exists to judge ferro from outside. The two readings agreeing is a
+/// result; sharing one implementation would make it an identity.
+fn names_bare_transcript_intronic(output: &HgvsVariant) -> bool {
+    members_of(output).iter().any(|member| {
+        let (accession, intronic) = match member {
+            HgvsVariant::Cds(v) => (
+                &v.accession,
+                interval_is_intronic(&v.loc_edit.location, CdsPos::is_intronic),
+            ),
+            HgvsVariant::Tx(v) => (
+                &v.accession,
+                interval_is_intronic(&v.loc_edit.location, TxPos::is_intronic),
+            ),
+            _ => return false,
+        };
+        intronic && accession.genomic_context.is_none()
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -898,15 +1032,49 @@ fn measure(direction: ShuffleDirection) -> Measured {
                             ),
                         });
                     }
+                    // The oracle cannot express the output, and the input was
+                    // exonic — so the description has left the transcript. Two
+                    // very different things live under that one symptom, and
+                    // #1704 is the reason they are now told apart:
+                    //
+                    // - a **bare** transcript accession naming an intronic
+                    //   position is what `checklist.md:20` refuses, and is a
+                    //   rank-1 output defect;
+                    // - the same coordinate under the genomic wrapper that
+                    //   clause asks for (`NC_…(NM_…):c.10+2del`) is CONFORMANT.
+                    //   The oracle still cannot reach it — SPDI is positional and
+                    //   has no offset notation, so `hgvs_to_spdi` declines the
+                    //   offset whatever accession carries it — but that is a
+                    //   limit of the instrument, which `Denotation` says of
+                    //   itself in as many words.
+                    //
+                    // Keeping one counter over both would have made the rank-1
+                    // figure unfixable: re-parenting closes the defect and moves
+                    // `Denotation` not at all, so the census would have reported
+                    // 371 before and after a change that made every one of those
+                    // 371 outputs conformant.
                     Denotation::Inexpressible => {
-                        census.outputs_leaving_the_transcript += 1;
-                        findings.push(Finding {
-                            id: row.id.clone(),
-                            what: format!(
-                                "output left the transcript (an intronic position the input \
-                                 did not name): {spelling} -> {output}"
-                            ),
-                        });
+                        // An output that does not re-parse cannot be shown to
+                        // carry the wrapper, so it stays on the DEFECT side. A
+                        // row must never fall into the conformant bucket for
+                        // want of evidence.
+                        if reparsed
+                            .as_ref()
+                            .ok()
+                            .is_none_or(names_bare_transcript_intronic)
+                        {
+                            census.outputs_leaving_the_transcript += 1;
+                            findings.push(Finding {
+                                id: row.id.clone(),
+                                what: format!(
+                                    "output left the transcript (an intronic position the input \
+                                     did not name, on a BARE transcript accession): \
+                                     {spelling} -> {output}"
+                                ),
+                            });
+                        } else {
+                            census.outputs_intronic_under_a_genomic_wrapper += 1;
+                        }
                     }
                     // Already counted as `unparseable_outputs` above.
                     Denotation::Unparseable => {}
@@ -1001,7 +1169,8 @@ fn report(label: &str, measured: &Measured) -> String {
          NORMALIZED UNDER: error mode `{}` — every figure downstream of normalization is \
          a figure for THAT mode; the parse half applies no mode at all (#1632)\n  \
          VALIDITY (rank 1): {} outputs, {} declined, {} unparseable, {} denoting no sequence, \
-         {} leaving the transcript, {} violating an absolute prohibition\n  \
+         {} leaving the transcript on a bare accession, {} intronic under a genomic wrapper \
+         (conformant), {} violating an absolute prohibition\n  \
          CONFLUENCE (rank 2): converged {}, split 2 {}, split 3 {}, split 4+ {}, \
          underdetermined {}\n  \
          IDEMPOTENCY: {} outputs are not their own fixed point\n  \
@@ -1015,6 +1184,7 @@ fn report(label: &str, measured: &Measured) -> String {
         census.unparseable_outputs,
         census.outputs_denoting_no_sequence,
         census.outputs_leaving_the_transcript,
+        census.outputs_intronic_under_a_genomic_wrapper,
         census.prohibition_violating_outputs,
         census.converged,
         census.split_two,
@@ -1085,7 +1255,8 @@ fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
         (
             census.outputs_leaving_the_transcript,
             pinned.outputs_leaving_the_transcript,
-            "outputs that left the transcript (an intronic position the input did not name)",
+            "outputs that left the transcript (an intronic position the input did not name, \
+             on a bare transcript accession — checklist.md:20)",
         ),
         (
             census.sequence_changed,
