@@ -910,6 +910,32 @@ impl AlleleVariant {
     /// intentionally broader than "equal/inverse edits over the same span".
     /// Non-overlapping `del` + `dup` members on the same allele are accepted.
     ///
+    /// # This is a scoped spec prohibition, NOT the overlap geometry (#1749)
+    ///
+    /// It keys on **read** spans, which the rest of the codebase deliberately
+    /// does not: `normalize::footprint::WriteFootprint` decides overlap on what
+    /// a member *writes*, and by that geometry a `del` and a `dup` whose read
+    /// spans intersect are usually disjoint — the `dup` writes at the junction
+    /// 3' of its span (`duplication.md:5`), so
+    /// `g.[43045721_43045725del;43045723_43045727dup]` denotes one unambiguous
+    /// sequence and would be accepted.
+    ///
+    /// It is refused anyway, and the two are not in conflict because they are
+    /// not answering one question. `general.md:58` names this **edit-type
+    /// pair** by name and disallows it, and its own worked example
+    /// (`NM_004006.2:c.[762_768del;767_774dup]`) overlaps at 767-768 without
+    /// cancelling — so the clause keys on read spans by construction and cannot
+    /// be derived from a write-footprint geometry. Precedence is spec-explicit
+    /// over our judgement, so the clause governs here.
+    ///
+    /// Two consequences worth keeping in view. This check is the **only**
+    /// overlap-adjacent refusal that fires at PARSE, so no error mode opts out
+    /// of it — which is one of the cases
+    /// `rulings[absolute-prohibition-enforcement-stage]` is about. And its
+    /// scope is exactly `del` x `dup`:
+    /// widening it to other edit-type pairs would be inventing a rule, while
+    /// deriving it from `WriteFootprint` would delete one the spec states.
+    ///
     /// Returns `Some((idx_del, idx_dup))` for the first offending pair found
     /// (deterministic by ascending pair index), or `None` otherwise.
     ///

@@ -61,6 +61,7 @@
 
 use crate::error::FerroError;
 use crate::hgvs::variant::HgvsVariant;
+use crate::normalize::footprint::WriteFootprint;
 use crate::reference::ReferenceProvider;
 use crate::spdi::convert::{apply_alphabet, AlphabetMode};
 use crate::spdi::SpdiVariant;
@@ -460,31 +461,18 @@ pub(crate) fn apply_triples(
     let ref_bytes = reference.as_bytes();
     let mut bytes = ref_bytes.to_vec();
     let mut ordered: Vec<&SpdiVariant> = triples.iter().collect();
-    // Descending position, and **longer deletions first** among triples at one
-    // position — the same key [`splice_denoted_sequence`] already uses, for the
-    // same reason it states: a span-claiming member must be applied before the
-    // zero-length one flush against it.
+    // Descending position, and at one position the **longer deletion first**.
     //
-    // Without the second component the sort is stable on a tie, so two triples
-    // sharing a position keep the order the *author* happened to write their
-    // members in. An insertion at interbase `p` and a `sub`/`del` starting at
-    // `p` share that position, and [`triples_are_disjoint`]'s running-reach walk
-    // then reads them as overlapping or not depending on which came first:
-    // visiting the length-1 member first sets `reach = p + 1`, and the
-    // zero-length insertion at `p` is rejected. So `g.[129_130insT;130G>A]` was
-    // refused while `g.[130G>A;129_130insT]` — the same variant, members
-    // written the other way round — applied cleanly (#1831).
-    //
-    // That contradicted this module's own contract, stated on
-    // `triples_are_disjoint`: an insertion deletes nothing and therefore claims
-    // no base, so the two members do not claim the same base and the resulting
-    // sequence is well defined. It also contradicted #1098, which settled that
-    // member order carries no meaning.
-    //
-    // Two or more *pure* insertions at one interbase tie on both components, so
-    // the stable sort still preserves authored order there and the walk's
-    // `p > p` test still passes — that shape is deliberately unchanged, and
-    // `variant_edit_triples_reason` is what refuses it where it must be refused.
+    // The length tie-break is not cosmetic (#1749). `sort_by_key` is stable, so
+    // without it two triples sharing an interbase position keep their input
+    // order, and an insertion flush against the 5' edge of a deletion is then
+    // applied before it: the insertion's bases land at `rel`, and the
+    // deletion's splice of `rel..rel + len` eats them and leaves one base of
+    // the deletion behind. One variant, two resulting sequences, decided by
+    // nothing the description states. Applying the deletion first is the order
+    // that is correct for every tie — the deletion is the member that extends
+    // 3', so taking it first preserves the "everything already applied sits 3'
+    // of what is next" invariant this walk rests on.
     ordered.sort_by_key(|t| {
         (
             std::cmp::Reverse(t.position),
@@ -520,48 +508,87 @@ pub(crate) fn apply_triples(
     String::from_utf8(bytes).ok()
 }
 
-/// Whether no two of `ordered` claim the same reference base.
-///
-/// `ordered` must be sorted by descending position **and, among triples sharing
-/// a position, by descending deletion length**, as [`apply_triples`] leaves it.
-/// The second component is load-bearing rather than cosmetic: this predicate
-/// walks the slice in reverse and compares each triple against the furthest 3'
-/// reach seen so far, so a zero-length insertion visited *after* a
-/// reference-consuming member at the same position is reported as an overlap
-/// although it claims no base. Sorting on position alone left that to the
-/// author's member order (#1831).
+/// Whether `ordered` can be spliced in one 3' -> 5' walk.
 ///
 /// That descending application order is what lets each stated deletion be
 /// validated against the pristine reference: every already-applied splice sits
-/// strictly 3' of the next one, so the span about to be read is untouched. The
-/// argument holds only while the triples are disjoint — overlapping ones both
-/// invalidate that validation and can index past the end of the shrinking
-/// buffer, which is the out-of-bounds panic of #1244.
+/// 3' of the next one, so the span about to be read is untouched. The argument
+/// holds only while no triple's write obstructs another's, since overlapping
+/// ones both invalidate that validation and can index past the end of the
+/// shrinking buffer — the out-of-bounds panic of #1244.
 ///
-/// Declining is also the honest answer semantically: an allele whose members
-/// claim the same base has no single well-defined resulting sequence, so there
-/// is nothing to compare. The caller uses the comparison only to *upgrade* a
-/// `NotEquivalent` verdict, so a decline never invents an equivalence.
+/// Declining is also the honest answer semantically for the shapes it catches:
+/// an allele whose members claim the same base has no single well-defined
+/// resulting sequence, so there is nothing to compare. The caller uses the
+/// comparison only to *upgrade* a `NotEquivalent` verdict, so a decline never
+/// invents an equivalence.
 ///
-/// Two triples that merely abut are disjoint, and so is any number of pure
-/// insertions at one interbase position — an insertion deletes nothing and
-/// therefore claims no base.
+/// # One definition, and one thing it deliberately is not (#1749)
+///
+/// The geometry is [`WriteFootprint`]'s, shared with `normalize::overlap` —
+/// which is what makes "a `dup` writes at a junction, not over the span it
+/// reads" one rule rather than one rule per module. SPDI arrives already in
+/// those terms: a `dup` converts to `seq:101::ATG`, a triple with an **empty
+/// deletion**, so it claims no base and cannot collide with one.
+///
+/// It answers the **splice algorithm's precondition**, which is not the same
+/// question as "does this allele denote one sequence" — see
+/// [`WriteFootprint::obstructs_splice_of`]. An insertion interior to a pure
+/// deletion denotes one sequence perfectly well and still cannot be executed in
+/// one walk, so it is declined here and is *not* a conflict in `overlap`.
+///
+/// Two triples that merely abut are disjoint, and so is an insertion flush
+/// against either edge of a deletion. Any number of pure insertions at one
+/// interbase position is likewise disjoint here — an insertion deletes nothing
+/// and therefore claims no base — and the ordering ambiguity that shape does
+/// carry is caught by `variant_edit_triples_reason` instead, for the reason
+/// recorded on [`WriteFootprint::obstructs_splice_of`].
+///
+/// The parameter is still `ordered` for the caller's convenience, but the test
+/// is now **pairwise and therefore order-independent**. The previous
+/// implementation carried a running 3'-most `reach` and compared it against
+/// each triple's position, which read a tie between a zero-width triple and a
+/// span triple differently depending on which the stable sort happened to visit
+/// first: `g.[5_9del;4_5insA]` was disjoint and `g.[4_5insA;5_9del]` was not.
+/// `CLAUDE.md` records that class as 233 false fires of the denoted-sequence
+/// oracle.
 fn triples_are_disjoint(ordered: &[&SpdiVariant]) -> bool {
-    // Walk 5' -> 3' (the reverse of `ordered`) carrying the furthest 3' reach
-    // of every triple seen so far. Comparing against the running maximum rather
-    // than the immediate predecessor is what makes this complete: one long
-    // triple can span several shorter ones that do not touch each other.
-    let mut reach: Option<u64> = None;
-    for t in ordered.iter().rev() {
-        let Some(end) = t.position.checked_add(t.deletion.len() as u64) else {
-            return false;
-        };
-        if reach.is_some_and(|r| r > t.position) {
+    let footprints: Vec<WriteFootprint<u64>> =
+        ordered.iter().map(|t| triple_footprint(t)).collect();
+    for (i, first) in footprints.iter().enumerate() {
+        if footprints[i + 1..]
+            .iter()
+            .any(|second| first.obstructs_splice_of(second))
+        {
             return false;
         }
-        reach = Some(reach.map_or(end, |r| r.max(end)));
     }
     true
+}
+
+/// An SPDI triple's write footprint, in **1-based base indices**.
+///
+/// SPDI positions are 0-based interbase: `position` names the gap *before* base
+/// `position`, and a deletion of length `L` claims reference bytes
+/// `[position, position + L)`. Adding one moves that onto a base index whose
+/// junctions are non-negative, so a triple at interbase `0` has a representable
+/// junction and the shared geometry needs no special case at the 5' terminus.
+///
+/// - a triple with an **empty deletion** claims no base and writes at the
+///   junction 3' of base `position`;
+/// - any other triple rewrites the closed base range
+///   `position + 1 ..= position + deletion.len()`, and its bases survive only
+///   if it puts something back.
+fn triple_footprint(triple: &SpdiVariant) -> WriteFootprint<u64> {
+    let length = triple.deletion.len() as u64;
+    if length == 0 {
+        return WriteFootprint::at_junction(triple.position);
+    }
+    WriteFootprint::spanning(
+        triple.position + 1,
+        triple.position + length,
+        !triple.insertion.is_empty(),
+    )
 }
 
 /// The SPDI triples that make up `variant`'s resulting sequence, and the single
@@ -1380,6 +1407,75 @@ mod tests {
         }
     }
 
+    /// An insertion **strictly interior to a pure deletion** is declined by the
+    /// applier — the behavioural half of [`WriteFootprint::obstructs_splice_of`]'s
+    /// junction rule (#1406, #1749).
+    ///
+    /// # Why this is not a row in the test above
+    ///
+    /// Every shape in `shapes_without_one_resulting_sequence_decline` denotes
+    /// *no* single sequence, so declining it is a semantic verdict. This one is
+    /// the opposite, and that is the point: `g.[10_20del;14_15insCC]` composes
+    /// uniquely — the deletion removes every base it spans, so an interior
+    /// junction has nothing left to be positioned against — and
+    /// `normalize::overlap` deliberately does **not** report it
+    /// (`insertion_interior_to_deletion_is_not_a_conflict`). It is declined
+    /// here only because the 3' -> 5' walk cannot *execute* it: the zero-width
+    /// triple splices first and the deletion's splice then consumes the bases
+    /// it just wrote. That is exactly the distinction `obstructs_splice_of`
+    /// exists to draw, so it needs a test where the two answers differ.
+    ///
+    /// # Why it is asserted HERE (#1749 mutation matrix)
+    ///
+    /// `normalize::footprint`'s `the_splice_precondition_ignores_whether_bases_survive`
+    /// pins the predicate, and `shapes_without_one_resulting_sequence_decline`
+    /// pins the **base-intersection** half of the caller. Between them nothing
+    /// pinned that the caller still *consults* the junction half: replacing the
+    /// `obstructs_splice_of` call at its only call site with a bare base
+    /// intersection passed all 10,487 tests. The failure is silent rather than
+    /// loud because each stated deletion is validated against the **pristine**
+    /// `ref_bytes`, so the corrupted splice never trips the ref-match check —
+    /// it just returns a wrong sequence.
+    #[test]
+    fn an_insertion_interior_to_a_deletion_is_declined_by_the_applier() {
+        let descriptor = "NC_KEY.1:g.[10_20del;14_15insCC]";
+        let variant = parse_hgvs(descriptor).expect("fixture must parse");
+        assert!(
+            apply_to_reference(&variant, &provider()).is_err(),
+            "`{descriptor}`: the insertion's junction is strictly interior to \
+             the deletion, so the 3' -> 5' walk cannot execute the pair in one \
+             pass and the applier must decline rather than return a sequence"
+        );
+        assert!(
+            canonical_spdi(&variant, &provider()).is_err(),
+            "`{descriptor}`: the published key must decline it for the same \
+             reason — a key may not be derived from a splice that cannot run"
+        );
+    }
+
+    /// The discriminating control for the test above: an insertion **flush**
+    /// against either edge of the same deletion still applies.
+    ///
+    /// Without this, the decline above would also be satisfied by a predicate
+    /// that called every insertion-plus-deletion pair an obstruction — which is
+    /// the over-rejection `gap < end`'s strictness exists to prevent, and the
+    /// class `CLAUDE.md` records as 233 false fires of the denoted-sequence
+    /// oracle.
+    #[test]
+    fn an_insertion_flush_against_that_deletion_still_applies() {
+        for descriptor in [
+            "NC_KEY.1:g.[10_20del;20_21insCC]",
+            "NC_KEY.1:g.[10_20del;9_10insCC]",
+        ] {
+            let variant = parse_hgvs(descriptor).expect("fixture must parse");
+            assert!(
+                apply_to_reference(&variant, &provider()).is_ok(),
+                "`{descriptor}`: a junction flush against a deletion's edge is \
+                 not interior to it, so the pair splices in one walk"
+            );
+        }
+    }
+
     /// The control for the test above: a single-member variant on a served
     /// accession applies. Without this, every decline assertion would also be
     /// satisfied by an `apply_to_reference` that declined *everything*.
@@ -1620,5 +1716,76 @@ mod tests {
             apply_to_reference(&variant, &provider()).is_err(),
             "an insertion interior to an inversion has no single resulting sequence"
         );
+    }
+
+    // --- #1749: one overlap definition, on write footprints -----------------
+
+    fn triple(position: u64, deletion: &str, insertion: &str) -> SpdiVariant {
+        SpdiVariant {
+            sequence: "NC_TEST.1".to_string(),
+            position,
+            deletion: deletion.to_string(),
+            insertion: insertion.to_string(),
+        }
+    }
+
+    /// `apply_triples` sorts by descending position with a **stable** sort, so a
+    /// zero-width triple and a span triple sharing one interbase position keep
+    /// their input order — and the running-`reach` test then reads them
+    /// differently depending on which it visits first.
+    ///
+    /// An insertion flush against the 5' edge of a deletion is well defined
+    /// (`CLAUDE.md` records it as a 233-fire false-positive class of the
+    /// denoted-sequence oracle), so the verdict must be "disjoint" in **both**
+    /// member orders. Today it is not, and nothing in the description picks
+    /// between them.
+    #[test]
+    fn a_flush_insertion_is_disjoint_in_either_member_order() {
+        let deletion = triple(4, "TTTTT", "");
+        let insertion = triple(4, "", "A");
+
+        for (label, triples) in [
+            ("deletion first", vec![deletion.clone(), insertion.clone()]),
+            ("insertion first", vec![insertion.clone(), deletion.clone()]),
+        ] {
+            let mut ordered: Vec<&SpdiVariant> = triples.iter().collect();
+            ordered.sort_by_key(|t| std::cmp::Reverse(t.position));
+            assert!(
+                triples_are_disjoint(&ordered),
+                "{label}: an insertion at the 5' edge of a deletion claims no \
+                 base, so it is disjoint from it whichever order the members \
+                 were written in",
+            );
+        }
+    }
+
+    /// The same order independence, stated as a property over every pair of a
+    /// zero-width triple and a span triple that share a position.
+    #[test]
+    fn disjointness_does_not_depend_on_member_order() {
+        let cases = [
+            (triple(4, "TTTTT", ""), triple(4, "", "A")),
+            (triple(10, "AC", "G"), triple(10, "", "TT")),
+            (triple(7, "G", ""), triple(7, "", "C")),
+        ];
+        for (span, zero_width) in cases {
+            let forward = {
+                let v = [span.clone(), zero_width.clone()];
+                let mut o: Vec<&SpdiVariant> = v.iter().collect();
+                o.sort_by_key(|t| std::cmp::Reverse(t.position));
+                triples_are_disjoint(&o)
+            };
+            let reverse = {
+                let v = [zero_width.clone(), span.clone()];
+                let mut o: Vec<&SpdiVariant> = v.iter().collect();
+                o.sort_by_key(|t| std::cmp::Reverse(t.position));
+                triples_are_disjoint(&o)
+            };
+            assert_eq!(
+                forward, reverse,
+                "disjointness of {span:?} and {zero_width:?} changed with member \
+                 order: {forward} vs {reverse}",
+            );
+        }
     }
 }

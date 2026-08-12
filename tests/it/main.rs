@@ -33,6 +33,7 @@ mod issue_1632_parse_entry_applies_no_mode;
 mod issue_1713_bare_transcript_genomic_decline;
 mod issue_1715_rna_alignment_symbol_reach;
 mod issue_1748_noncoding_axis_zones;
+mod issue_1749_one_overlap_definition;
 mod issue_1764_hgvs_to_vcf_continues;
 mod issue_1767_unknown_offset_splice_classifiers;
 mod issue_1796_base_zero_names_no_nucleotide;
