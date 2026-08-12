@@ -79,6 +79,21 @@ pub(crate) enum Region {
 /// inversion and random-haplotype corpora were byte-identical with and without
 /// it — so it was dropped rather than kept as a second, silent authority for a
 /// typing another module already owns.
+///
+/// **A second reason to keep it absent, distinct from the one above, and worth
+/// recording because it looks like a bug fix.** [`coalesce_inversion_runs`] can
+/// hand back `[del; inv; del]`, whose three members are strictly adjacent, and
+/// `merge_consecutive_edits` sees them before `rules` has typed anything — so it
+/// merges them straight back into the spanning `delins` the run scan just
+/// decomposed. Adding an `Inversion` form here would prevent that, because
+/// `anchor_from_loc_edit` would then have no arm for it and an `inv` member is
+/// therefore already a merge barrier. That is a back door into the decided
+/// `delins-adjacent-members-when-both-consume-reference` ruling rather than an
+/// argument against it, and it was measured to move real rows: three
+/// `issue_1454_split_member_inversion_typing` guards go red, because
+/// `c.10_15delinsTAATAT` comes apart into `c.[10_12delinsTAA;13_15inv]`. Widening
+/// that ruling is a separate decision, taken on the ruling's own terms rather
+/// than as a side effect of this pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AnchorForm {
     /// The span is replaced by `alt`; typing follows from the two lengths.
@@ -3100,7 +3115,17 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     if compensating_gap_coalesce_applies(partition_rule(), kind) {
         coalesce_compensating_gap_split(&mut pieces, &ref_bytes);
     }
-    coalesce_whole_block_inversion(&mut pieces, &ref_bytes);
+    // The whole-block rule generalised to every maximal run of consecutive
+    // pieces, plus the flanked shape a whole-block test cannot express. Route 0
+    // inside it is `coalesce_whole_block_inversion` verbatim, so this is
+    // additive: a block that coalesces today still coalesces by that same path.
+    coalesce_inversion_runs(
+        &mut pieces,
+        &ref_bytes,
+        lo,
+        &ref_bytes[lo..hi_ref],
+        &result[lo..hi_alt],
+    );
 
     // Applied *after* the weight bound, deliberately. The bound is a statement
     // about the re-derived partition — it may not describe more change than the
@@ -5447,6 +5472,646 @@ fn coalesce_compensating_gap_split(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
 fn coalesce_whole_block_inversion(pieces: &mut Vec<Piece>, ref_bytes: &[u8]) {
     if let Some(whole) = whole_block_inversion(pieces, ref_bytes) {
         *pieces = vec![whole];
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Post-hoc inversion recognition over RUNS of replacements
+// ----------------------------------------------------------------------------
+
+/// The largest number of consecutive pieces one run-scan **window** may cover.
+///
+/// **A work bound on route C only.** It does not reach the block-level routes
+/// (see [`block_inversion`]), which read the block itself and are `O(span)`
+/// whatever the piece count — pinned by
+/// [`the_window_bound_does_not_reach_the_block_level_routes`], which recognises
+/// a 700-piece inversion with the bound at 256. So the whole-block answer, which
+/// is every case this pass was measured on, is bound-independent; what the bound
+/// limits is recognising an inversion that is only *part* of a block with more
+/// than 256 pieces.
+///
+/// With it, the scan is `O(k · 256)` window tests for `k` pieces — linear in
+/// member count rather than quadratic, which is the property the bound exists to
+/// buy on a 193-member allele.
+///
+/// **Not derived from a measured piece-count distribution, and saying otherwise
+/// would be the kind of unearned claim this repository keeps having to
+/// retract.** What is measured is one point: `NG_009874.2:g.158330_159052`, the
+/// 723-base block this pass exists for, partitions into 193 pieces on the
+/// canonical arm. 256 is the next power of two above that. The structural
+/// ceiling is far higher — a [`MAX_CANONICAL_WINDOW`]-wide block can shred into
+/// 2048 pieces, one changed column per unchanged one — so the bound is not
+/// vacuous, and a block past it loses only route C.
+const INVERSION_RUN_MAX_PIECES: usize = 256;
+
+/// Recognise inversions post hoc over **runs** of consecutive pieces, rather
+/// than only over the whole block.
+///
+/// [`coalesce_whole_block_inversion`] asks one question — "do *all* the pieces
+/// together span one reverse complement?" — and an inversion that arrives with
+/// anything else in the same block cannot answer it. That is the concession the
+/// 2025 Leiden description-extractor makes in its §3.4 when it says post-hoc
+/// inversion detection "fails when the inversion is better expressed as an
+/// allele": their test is per-replacement, ferro's is per-block, and both are
+/// the same test at a fixed arity.
+///
+/// This generalises the arity. Each maximal window of consecutive pieces is
+/// asked the question, longest-first and left to right, and a window is admitted
+/// on **exact equality** with the reverse complement — never on a density
+/// heuristic. Two shapes are recognised:
+///
+/// * **exact** — the window's reconstruction equals `revcomp` of its own hull.
+///   This is [`whole_block_inversion`] verbatim, so the whole-block window
+///   reproduces today's behaviour and the pass is additive by construction.
+/// * **flanked** — the reconstruction equals `revcomp` of an *interior* sub-span
+///   of the hull, with the two flanks falling out as deletions. See
+///   [`flanked_window_inversion`], which is where the `delins`-shaped genomic
+///   rows live: `NG_009874.2:g.158330_159052delins…` is 723 reference bases
+///   whose 697-base payload is `revcomp(158346..159042)`, i.e.
+///   `[158330_158345del; 158346_159042inv; 159043_159052del]`.
+///
+/// # Why the admission gate is reused rather than replaced
+///
+/// [`whole_block_inversion`]'s four admission routes are what keep
+/// `AAGCTA -> TAGCTT` split into two substitutions, which `general.md:56` ranks
+/// above inversion and which the `inversion-vs-two-delins-76-83` ruling
+/// deliberately leaves alone (that ruling turns on `:56` being able to rank a
+/// *substitution* alternative while saying nothing about `delins`). Applying the
+/// same gate **per window** is what carries that guard onto every window rather
+/// than only onto the whole block: the two-substitution control fails all four
+/// routes at the whole-block window and at each single-piece window, so no
+/// window of it is admitted.
+///
+/// # Cost
+///
+/// The block's reconstruction and the reverse complement of its hull are each
+/// built **once**, so a window test is a slice comparison against precomputed
+/// bytes with no allocation. Window count is bounded by
+/// [`INVERSION_RUN_MAX_PIECES`].
+fn coalesce_inversion_runs(
+    pieces: &mut Vec<Piece>,
+    ref_bytes: &[u8],
+    block_lo: usize,
+    ref_block: &[u8],
+    result_block: &[u8],
+) {
+    // Route 0 — the whole block, by delegation, so a block that coalesces today
+    // still coalesces by exactly the path it did whatever the scan below
+    // decides. The length test is exact: that call replaces the whole vector
+    // with one piece and does nothing otherwise, and it declines below two
+    // pieces, so a change in length is precisely "it fired".
+    let before = pieces.len();
+    coalesce_whole_block_inversion(pieces, ref_bytes);
+    if pieces.len() != before || pieces.is_empty() {
+        return;
+    }
+    // Routes A and B — the BLOCK, asked directly.
+    //
+    // Deliberately not asked through the pieces. Whether a block is an inversion
+    // is a property of `(reference block, resulting block)` and of nothing else,
+    // but by the time this pass runs `shift_pieces` has moved every pure indel
+    // 3', so the pieces' hull is routinely narrower or wider than the block they
+    // were cut from. `revcomp` does not survive that: `revcomp(x)[k..]` is
+    // `revcomp(x[..len-k])`, not `revcomp(x[k..])`, so a hull off by one base
+    // asks a different question and answers no. Measured over 240 synthetic
+    // clean inversions on the `canonical-coalesced` arm: reading the relation
+    // off the hull left 20 of them shredded, several with a `dup` or `del`
+    // sitting exactly one base outside the block.
+    //
+    // The pieces are still what the ADMISSION gate reads — the competing
+    // description is what `general.md:56` ranks against, and that is a statement
+    // about members.
+    if inversion_gate_admits(pieces) {
+        if let Some(members) = block_inversion(ref_block, result_block, block_lo, pieces.len()) {
+            *pieces = members;
+            return;
+        }
+    }
+    // Route C — runs of consecutive pieces, for an inversion that is only PART
+    // of the block.
+    let Some(scan) = RunScan::new(pieces, ref_bytes) else {
+        return;
+    };
+    let mut out: Vec<Piece> = Vec::with_capacity(pieces.len());
+    let mut i = 0usize;
+    let mut changed = false;
+    while i < pieces.len() {
+        // Longest-first: a window that is an inversion is preferred over any of
+        // its own sub-windows, which is the whole point of scanning runs rather
+        // than single replacements.
+        let hi = pieces.len().min(i + INVERSION_RUN_MAX_PIECES);
+        let mut taken = None;
+        for j in (i + 1..=hi).rev() {
+            if let Some(members) = scan.window_inversion(i, j) {
+                taken = Some((j, members));
+                break;
+            }
+        }
+        match taken {
+            // A runtime invariant, deliberately not a `debug_assert!`: this pass
+            // rewrites members, and a rewrite that changes the bases a
+            // description denotes is the worst failure this crate has, so it must
+            // be refused in release builds too rather than only reported in
+            // debug ones. It costs one span-sized comparison per *accepted*
+            // window, and accepted windows are rare. It has already earned its
+            // place — the first revision indexed the reconstruction by payload
+            // starts alone, which appended the gap after the window's last piece,
+            // and this is the check that named that rather than leaving it to a
+            // round-trip refusal three hundred lines downstream.
+            Some((j, members)) if scan.replacement_preserves_denotation(i, j, &members) => {
+                out.extend(members);
+                i = j;
+                changed = true;
+            }
+            // Either no window spelled an inversion, or one did and its
+            // replacement failed the denotation check. Both leave this piece
+            // exactly as it arrived.
+            Some(_) => {
+                out.push(pieces[i].clone());
+                i += 1;
+            }
+            None => {
+                out.push(pieces[i].clone());
+                i += 1;
+            }
+        }
+    }
+    if changed {
+        *pieces = out;
+    }
+}
+
+/// The admission gate for inversion recognition, on one window of pieces.
+///
+/// Four of the five routes are [`whole_block_inversion`]'s own, listed in its
+/// order so the block-level and window-level answers cannot drift; the fifth is
+/// new here, and its reasoning is on
+/// [`not_every_piece_is_a_lone_substitution`].
+///
+/// **The fifth subsumes the third**, and the third is kept only so the four
+/// carried over stay readable against their source. Where
+/// `no_piece_is_a_lone_substitution` holds, `not_every_piece_is_a_lone_substitution`
+/// holds too, the window never being empty — so the disjunction's effective
+/// content is "admit unless *every* competing member is a lone substitution, or
+/// one of the separation/density routes admits it anyway".
+///
+/// This reads the **competing description**, never the sequence: the question
+/// it answers is "is there an alternative `general.md:56` can rank above an
+/// inversion", and `:56` ranks member types. Whether the span really is a
+/// reverse complement is asked separately, by exact equality.
+fn inversion_gate_admits(pieces: &[Piece]) -> bool {
+    !pieces.is_empty()
+        && (every_separation_is_a_single_base(pieces)
+            || changed_columns_dominate_the_span(pieces)
+            || no_piece_is_a_lone_substitution(pieces)
+            || payload_columns_dominate_the_span(pieces)
+            || not_every_piece_is_a_lone_substitution(pieces))
+}
+
+/// The inversion a whole changed block spells, as the pieces that describe it.
+///
+/// `reference` starts at `block_lo` inside the caller's window and must be at
+/// least as long as the block; `result_block` is what the block denotes. Two
+/// shapes, and the second is the one a per-replacement or per-block equality
+/// test cannot reach:
+///
+/// * **exact** — `result_block == revcomp(reference_block)`. One `inv`.
+/// * **flanked** — `result_block == revcomp(reference_block[p..p + payload])`
+///   for exactly one `p`. `[del; inv; del]`, with either flank absent when it is
+///   empty. This is `NG_009874.2:g.158330_159052delins<697 bases>`: 723
+///   reference bases whose payload is the reverse complement of `158346..159042`
+///   and of no other 697-base sub-span, i.e.
+///   `[158330_158345del; 158346_159042inv; 159043_159052del]`.
+///
+/// # Three conditions on the flanked shape, none of them a tuned threshold
+///
+/// * **Net deletion.** The payload is shorter than the block. The net-insertion
+///   mirror (`[ins; inv; ins]`) is deliberately out of scope, the same direction
+///   scoping the decided `delins-merge-vs-individual-gap-two-or-more` record
+///   applies to its own licence.
+/// * **The inversion dominates the block** (`2 · payload > span`). The *same*
+///   majority predicate [`changed_columns_dominate_the_span`] and
+///   [`payload_columns_dominate_the_span`] already apply, restated on the
+///   payload — not a new constant. Without it a short payload matches `revcomp`
+///   of some sub-span of a long block by chance, and a deletion gets described
+///   as an inversion.
+/// * **Uniqueness.** Two admissible placements mean the flank split is
+///   arbitrary, and picking one trades a stable canonical form for an arbitrary
+///   member of a family — the stability `background/basics.md:38` puts first,
+///   and the split-family arbitrariness this repository has already enumerated
+///   (27 of 40 rows admit more than one equally-compliant split). Ambiguity is
+///   refused, not broken. It also subsumes shift ambiguity: a flank deletion
+///   that could be 3'-shifted *is* a second placement.
+fn block_inversion(
+    ref_block: &[u8],
+    result_block: &[u8],
+    block_lo: usize,
+    pieces: usize,
+) -> Option<Vec<Piece>> {
+    let payload = result_block.len();
+    let span = ref_block.len();
+    if span < 2 {
+        return None;
+    }
+    let rc = reverse_complement_bytes(ref_block)?;
+    if payload == span {
+        return (result_block == rc.as_slice()).then(|| {
+            vec![Piece {
+                ref_start: block_lo,
+                ref_end: block_lo + span,
+                alt: result_block.to_vec(),
+            }]
+        });
+    }
+    if payload < 2 || payload > span || payload.checked_mul(2)? <= span {
+        return None;
+    }
+    // **The flanked shape needs the partition to state no separation of its
+    // own**, which for a block means exactly one piece. Not a preference — a
+    // measured rank-1 conformance regression.
+    //
+    // Unlike the exact shape, this one INVENTS members: it moves a deletion
+    // flush against the inversion it proposes. Where the partition already
+    // holds two pieces, the base between them is one `general.md:34` says
+    // separates two variants, and swallowing it re-describes them as a single
+    // span — which on a frameless axis is rejected SVD-WG010 by name. Measured
+    // on the spec conformance axis: without this,
+    // `NC_TEST.1:g.[265_268inv;270_273del]` — separation one — comes back as
+    // `g.265_273delinsGTCAG`, and `five_prime_conformance_census` reports
+    // "outputs implementing REJECTED SVD-WG010 rose from 0 to 2".
+    //
+    // The mechanism is worth naming because uniqueness did not catch it: the
+    // payload was 5 bases, and a 5-base payload matches `revcomp` of *some*
+    // 5-base window of a 9-base block by chance about once in two hundred. Exact
+    // equality is a strong test at 697 bases and a weak one at 5, and no length
+    // threshold is going to be the honest fix for that — refusing to cross a
+    // separation the partition already found is.
+    //
+    // A single-piece block states no separation, so nothing is crossed. That is
+    // also exactly the population the shape lives in: a stored spanning `delins`
+    // (`NG_009874.2:g.158330_159052delins…`), which is the case the 2025 Leiden
+    // §3.4 post-hoc test concedes it cannot express.
+    if pieces > 1 {
+        return None;
+    }
+    // **Overlapping** occurrences, and the distinction is load-bearing rather
+    // than pedantic: `memmem::find_iter` yields NON-overlapping matches, so on
+    // `AAAAAA -> TTTT` it reports one placement where there are three and the
+    // uniqueness test passes on an ambiguous block. That produced
+    // `[0_1del; 2_5inv]` for a plain deletion — caught by
+    // `an_ambiguous_flank_split_is_refused`, which is why that test exists.
+    let mut found: Option<usize> = None;
+    let mut from = 0usize;
+    while let Some(rel) = memchr::memmem::find(&rc[from..], result_block) {
+        let at = from + rel;
+        if found.is_some() {
+            return None;
+        }
+        found = Some(span - payload - at);
+        from = at + 1;
+    }
+    let p = found?;
+    let mut out = Vec::with_capacity(3);
+    if p > 0 {
+        out.push(Piece {
+            ref_start: block_lo,
+            ref_end: block_lo + p,
+            alt: Vec::new(),
+        });
+    }
+    out.push(Piece {
+        ref_start: block_lo + p,
+        ref_end: block_lo + p + payload,
+        alt: result_block.to_vec(),
+    });
+    if p + payload < span {
+        out.push(Piece {
+            ref_start: block_lo + p + payload,
+            ref_end: block_lo + span,
+            alt: Vec::new(),
+        });
+    }
+    Some(out)
+}
+
+/// Not every piece spells a one-base substitution.
+///
+/// The fifth admission route, and the only one this change adds. It is
+/// [`no_piece_is_a_lone_substitution`] with `all` weakened to `any`, and the
+/// reason is that the stronger form states `general.md:56`'s argument more
+/// broadly than `:56` says it.
+///
+/// `:56` ranks **type labels for one span** — "(1) substitution, (2) deletion,
+/// (3) inversion, (4) duplication, (5) insertion" — so it withdraws a spanning
+/// `inv` in favour of an alternative that *is* a substitution. That is #1230's
+/// `GATG -> CATC` and #1040's `AAGCTA -> TAGCTT`: in both, **every** competing
+/// member is a one-base substitution, and both stay split under this predicate
+/// exactly as they do under its sibling.
+///
+/// What `:56` cannot do is withdraw the `inv` in favour of an alternative that
+/// is *not* a substitution — which is the whole of the
+/// `inversion-vs-two-delins-76-83` ruling ("`delins` is absent from `:56`'s
+/// list at all, so `:56` cannot rank the alternative here"). The sibling
+/// predicate implements that ruling as "**no** competing member may be a lone
+/// substitution", and that is stricter than the ruling: a competitor holding one
+/// substitution *and* an insertion is not a substitution alternative either, and
+/// `:56` has nothing to say about it.
+///
+/// The case that forces the distinction is #1461 measured on the **canonical**
+/// partitioner. `NC_000013.10:g.100809575_100810031inv` is a perfect 457-base
+/// reverse complement, and its canonical partition is 133 pieces of which the
+/// first is `g.100809575A>T`. All four earlier routes refuse it: the widest gap
+/// is 5, and — measured, and contrary to the density figures recorded for the
+/// *live* partition of the same variant — the canonical partition leaves 229 of
+/// its 457 columns unchanged, so both density routes read exactly the wrong side
+/// of one half. The block is an exact whole-span reverse complement and the gate
+/// says nothing about it.
+///
+/// # This deliberately widens the sibling, and the widening is the adjudication
+///
+/// Stated plainly because it is the one place this change takes a position
+/// rather than measuring one. `no_piece_is_a_lone_substitution` is subsumed:
+/// where no piece is a lone substitution, not every piece is one either (the
+/// window is never empty). So this predicate decides wherever the two differ,
+/// and what it decides is that a **mixed** competitor is not a substitution
+/// competitor. `tests/it/issue_1517_inv_priority_over_delins.rs` records the
+/// contested reading of `:56` this rests on; the widening inherits that contest
+/// and does not settle it.
+fn not_every_piece_is_a_lone_substitution(pieces: &[Piece]) -> bool {
+    !pieces
+        .iter()
+        .all(|piece| piece.ref_end.saturating_sub(piece.ref_start) == 1 && piece.alt.len() == 1)
+}
+
+/// Precomputed state for one block's run scan.
+///
+/// Holds the block's reconstruction and the reverse complement of its hull, so
+/// that testing a window costs a slice comparison rather than a rebuild. Both
+/// are `O(span)` to build and are built once per block.
+struct RunScan<'a> {
+    pieces: &'a [Piece],
+    /// The window the pieces are offsets into.
+    ref_bytes: &'a [u8],
+    /// The 3' end of the pieces' hull inside `ref_bytes`
+    /// (`pieces[last].ref_end`), which is what [`Self::rc`] is indexed against.
+    ///
+    /// **The hull, deliberately, and not the block** — that is the division of
+    /// labour between route C and the block-level routes A and B. The
+    /// reverse-complement relation is a property of the *block*, and by the time
+    /// this pass runs `shift_pieces` has moved every pure indel 3', so the hull
+    /// is routinely a base or two off the block it was cut from; `revcomp` does
+    /// not survive that, since `revcomp(x)[k..]` is `revcomp(x[..len - k])`
+    /// rather than `revcomp(x[k..])`. So the whole-block question is asked of the
+    /// block itself, by [`block_inversion`], and route C asks a different and
+    /// narrower one: does some *run* of pieces spell an inversion over the span
+    /// those pieces themselves cover.
+    hull_end: usize,
+    /// The whole block's denoted sequence: each piece's payload with the
+    /// unchanged reference bases between pieces spliced back in.
+    denoted: Vec<u8>,
+    /// `reverse_complement(ref_bytes[hull_start..hull_end])`. Indexed from the
+    /// 3' end, so `revcomp(ref[a..b))` is `rc[hull_end - b .. hull_end - a]`.
+    rc: Vec<u8>,
+    /// `payload_bounds[n]` is where piece `n`'s payload starts and ends inside
+    /// [`Self::denoted`]. A window `[i, j)` therefore denotes
+    /// `denoted[payload_bounds[i].0 .. payload_bounds[j - 1].1]`.
+    ///
+    /// **Both ends are needed, and using one array of payload *starts* was a
+    /// real defect rather than a tidier spelling.** A window's hull ends at
+    /// `pieces[j - 1].ref_end`, whereas the start of piece `j`'s payload is one
+    /// unchanged gap further on, so `denoted[start[i]..start[j]]` silently
+    /// appends the reference bases between the window's last piece and the next
+    /// one. It is invisible whenever `j` is the last piece — which is every
+    /// whole-block window, i.e. every case the pass could reach before this one
+    /// — and it made a sub-window of #1461's 133-piece partition denote 89 bases
+    /// that were not what the window said.
+    payload_bounds: Vec<(usize, usize)>,
+}
+
+impl<'a> RunScan<'a> {
+    /// Build the scan state, or decline when the pieces cannot support one.
+    ///
+    /// Declines on the same preconditions [`whole_block_inversion`] checks —
+    /// pieces out of order or strictly overlapping — and additionally on a
+    /// non-IUPAC byte in the hull, which is what makes the precomputed reverse
+    /// complement total. Declining leaves the pieces untouched.
+    fn new(pieces: &'a [Piece], ref_bytes: &'a [u8]) -> Option<Self> {
+        let hull_start = pieces.first()?.ref_start;
+        let hull_end = pieces.last()?.ref_end;
+        if hull_end < hull_start || hull_end > ref_bytes.len() {
+            return None;
+        }
+        if pieces
+            .windows(2)
+            .any(|pair| pair[1].ref_start < pair[0].ref_end)
+        {
+            return None;
+        }
+        let mut denoted = Vec::with_capacity(hull_end - hull_start);
+        let mut payload_bounds = Vec::with_capacity(pieces.len());
+        let mut cursor = hull_start;
+        for piece in pieces {
+            denoted.extend_from_slice(ref_bytes.get(cursor..piece.ref_start)?);
+            let from = denoted.len();
+            denoted.extend_from_slice(&piece.alt);
+            payload_bounds.push((from, denoted.len()));
+            cursor = piece.ref_end;
+        }
+        denoted.extend_from_slice(ref_bytes.get(cursor..hull_end)?);
+        let rc = reverse_complement_bytes(&ref_bytes[hull_start..hull_end])?;
+        Some(Self {
+            pieces,
+            ref_bytes,
+            hull_end,
+            denoted,
+            rc,
+            payload_bounds,
+        })
+    }
+
+    /// The reference span the window `[i, j)` covers: from its first piece's
+    /// start to its last piece's end.
+    fn window_span(&self, i: usize, j: usize) -> (usize, usize) {
+        (self.pieces[i].ref_start, self.pieces[j - 1].ref_end)
+    }
+
+    /// `revcomp(ref_bytes[a..b))`, as a slice into the precomputed hull.
+    fn revcomp_of(&self, a: usize, b: usize) -> &[u8] {
+        &self.rc[self.hull_end - b..self.hull_end - a]
+    }
+
+    /// What the window `[i, j)` denotes, over the span [`Self::window_span`]
+    /// gives it.
+    fn denoted_by(&self, i: usize, j: usize) -> &[u8] {
+        &self.denoted[self.payload_bounds[i].0..self.payload_bounds[j - 1].1]
+    }
+
+    /// Whether `members` denote exactly what the window `[i, j)` denotes.
+    ///
+    /// Reconstructed from `members` the same way [`Self::new`] reconstructs the
+    /// block, so the two answers are produced by one definition rather than two
+    /// that can drift.
+    fn replacement_preserves_denotation(&self, i: usize, j: usize, members: &[Piece]) -> bool {
+        let Some(first) = members.first() else {
+            return false;
+        };
+        let Some(last) = members.last() else {
+            return false;
+        };
+        let (a, b) = self.window_span(i, j);
+        if first.ref_start != a || last.ref_end != b {
+            return false;
+        }
+        let mut rebuilt = Vec::with_capacity(self.denoted_by(i, j).len());
+        let mut cursor = a;
+        for member in members {
+            if member.ref_start < cursor || member.ref_end < member.ref_start {
+                return false;
+            }
+            // The reference bases between two replacement members are unchanged
+            // and so are part of what the members denote.
+            let Some(gap) = self.ref_bytes.get(cursor..member.ref_start) else {
+                return false;
+            };
+            rebuilt.extend_from_slice(gap);
+            rebuilt.extend_from_slice(&member.alt);
+            cursor = member.ref_end;
+        }
+        rebuilt == self.denoted_by(i, j)
+    }
+
+    /// The single inversion the window `[i, j)` spells, when it spells one.
+    ///
+    /// Returns the pieces that replace the window, which is one piece for an
+    /// exact inversion and two or three for a flanked one.
+    fn window_inversion(&self, i: usize, j: usize) -> Option<Vec<Piece>> {
+        let window = &self.pieces[i..j];
+        // The same gate [`whole_block_inversion`] applies, applied per window.
+        // A single-piece window passes the separation route vacuously, which is
+        // correct: `general.md:34` is about what separates *two* variants, and a
+        // lone `delins` separates nothing.
+        if !inversion_gate_admits(window) {
+            return None;
+        }
+        let (a, b) = self.window_span(i, j);
+        let span = b.checked_sub(a)?;
+        // `inversion.md:5,16` — a one-nucleotide "inversion" is a substitution.
+        if span < 2 {
+            return None;
+        }
+        let denoted = self.denoted_by(i, j);
+        // Exact: the window denotes the reverse complement of its own hull.
+        // Multi-piece only, because a single piece that is already a whole
+        // reverse complement is typed `inv` by `crate::normalize::rules` and
+        // needs nothing from this pass.
+        if window.len() >= 2 && denoted.len() == span && denoted == self.revcomp_of(a, b) {
+            return Some(vec![Piece {
+                ref_start: a,
+                ref_end: b,
+                alt: denoted.to_vec(),
+            }]);
+        }
+        // Same restriction as [`block_inversion`]'s flanked shape, for the same
+        // measured reason: a window holding more than one piece states a
+        // separation, and the flanked decomposition would swallow it.
+        if window.len() > 1 {
+            return None;
+        }
+        self.flanked_window_inversion(a, b, span, denoted)
+    }
+
+    /// An inversion of an **interior** sub-span of the window's hull, with the
+    /// two flanks falling out as deletions.
+    ///
+    /// This is the shape post-hoc recognition over a single replacement cannot
+    /// reach and the reason a run scan is worth having. `NG_009874.2` carries
+    /// the worked case: a stored `g.158330_159052delins<697 bases>` whose
+    /// payload is not the reverse complement of its own 723-base span, but *is*
+    /// the reverse complement of `158346..159042` exactly — so the description
+    /// is `[16 bases deleted; 697 bases inverted; 10 bases deleted]`, which is
+    /// what Mutalyzer emits and what the arithmetic independently gives.
+    ///
+    /// # Three conditions, none of them a tuned threshold
+    ///
+    /// * **Net deletion.** The window's payload is shorter than its hull. The
+    ///   net-insertion mirror (`[ins; inv; ins]`) is deliberately **out of
+    ///   scope** — `delins-merge-vs-individual-gap-two-or-more` scopes its own
+    ///   licence to the net-deletion direction for reasons that transfer, and
+    ///   nothing measured here argues the other direction.
+    /// * **The inversion dominates its hull** (`2 · payload > span`). This is
+    ///   the *same* majority predicate [`changed_columns_dominate_the_span`] and
+    ///   [`payload_columns_dominate_the_span`] already apply, restated on this
+    ///   window's payload; it is not a new constant. Without it a short payload
+    ///   can match `revcomp` of some sub-span of a long hull by chance, and the
+    ///   description would claim an inversion where a deletion is the answer.
+    /// * **Uniqueness.** The interior placement must be the *only* one that
+    ///   matches. A hull admitting two placements is a hull where the flank
+    ///   split is arbitrary, and picking one would trade a stable canonical form
+    ///   for an arbitrary member of a family — the stability argument
+    ///   `background/basics.md:38` makes and which the repository's own
+    ///   enumeration of split families measured (27 rows of 40 admit more than
+    ///   one equally-compliant split). Ambiguity is refused, not broken.
+    ///
+    /// Uniqueness also subsumes shift ambiguity: a flank deletion that could be
+    /// 3'-shifted is exactly a second placement, so an ambiguous shift can never
+    /// reach the output.
+    fn flanked_window_inversion(
+        &self,
+        a: usize,
+        b: usize,
+        span: usize,
+        denoted: &[u8],
+    ) -> Option<Vec<Piece>> {
+        let payload = denoted.len();
+        if payload < 2 || payload >= span || payload.checked_mul(2)? <= span {
+            return None;
+        }
+        let hull_rc = self.revcomp_of(a, b);
+        // `revcomp(ref[a+p .. a+p+payload])` is the slice of the hull's own
+        // reverse complement running from `span - p - payload` to `span - p`,
+        // so every candidate placement is a window of `hull_rc` and the search
+        // is one linear substring scan rather than `span` reconstructions.
+        // Overlapping, for the reason [`block_inversion`] gives.
+        let mut found: Option<usize> = None;
+        let mut from = 0usize;
+        while let Some(rel) = memchr::memmem::find(&hull_rc[from..], denoted) {
+            let at = from + rel;
+            if found.is_some() {
+                // A second placement: the flank split is arbitrary. Refuse.
+                return None;
+            }
+            found = Some(span - payload - at);
+            from = at + 1;
+        }
+        let p = found?;
+        debug_assert_eq!(
+            self.revcomp_of(a + p, a + p + payload),
+            denoted,
+            "flanked inversion placement does not reproduce the payload"
+        );
+        let mut out = Vec::with_capacity(3);
+        if p > 0 {
+            out.push(Piece {
+                ref_start: a,
+                ref_end: a + p,
+                alt: Vec::new(),
+            });
+        }
+        out.push(Piece {
+            ref_start: a + p,
+            ref_end: a + p + payload,
+            alt: denoted.to_vec(),
+        });
+        if a + p + payload < b {
+            out.push(Piece {
+                ref_start: a + p + payload,
+                ref_end: b,
+                alt: Vec::new(),
+            });
+        }
+        // Two pieces at most one of which is a change is not a run to report;
+        // guard against handing back exactly what came in.
+        (out.len() > 1).then_some(out)
     }
 }
 
@@ -16711,6 +17376,335 @@ mod tests {
                 partition_block(b"AGTCAGT", b"GATTA").len(),
                 3,
                 "#1157A, net deletion"
+            );
+        }
+    }
+
+    /// Falsification suite for the post-hoc inversion run scan.
+    ///
+    /// Every case here was written to BREAK the pass, not to demonstrate it.
+    /// The ones that pass are guards; the ones whose recorded expectation is a
+    /// refusal are the pass's stated limits.
+    mod inversion_run_scan {
+        use super::*;
+
+        /// `revcomp` over a byte slice, for building expectations.
+        fn rc(bases: &[u8]) -> Vec<u8> {
+            reverse_complement_bytes(bases).expect("test bases are IUPAC")
+        }
+
+        fn piece(start: usize, end: usize, alt: &[u8]) -> Piece {
+            Piece {
+                ref_start: start,
+                ref_end: end,
+                alt: alt.to_vec(),
+            }
+        }
+
+        /// The #1040 negative control, and the single most important row here.
+        ///
+        /// `AAGCTA -> TAGCTT` **is** an exact whole-span reverse complement —
+        /// its interior `AGCT` is self-reverse-complementary — and it must stay
+        /// two substitutions, because `general.md:56` ranks substitution above
+        /// inversion and every competing member here is a one-base
+        /// substitution. Asserted at the block level (where routes A/B live)
+        /// and at the window level, because the two read the gate separately.
+        #[test]
+        fn the_two_substitution_control_is_refused_at_every_arity() {
+            let reference = b"AAGCTA";
+            let result = b"TAGCTT";
+            assert_eq!(rc(reference), result.to_vec(), "the control IS a revcomp");
+            let pieces = vec![piece(0, 1, b"T"), piece(5, 6, b"T")];
+            assert!(
+                !inversion_gate_admits(&pieces),
+                "two lone substitutions are exactly what `general.md:56` ranks \
+                 above an inversion"
+            );
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, result);
+            assert_eq!(scanned, pieces, "the control must survive the scan intact");
+        }
+
+        /// #1230's `GATG -> CATC`, the other pinned two-substitution split.
+        #[test]
+        fn the_1230_substitution_pair_is_refused() {
+            let reference = b"GATG";
+            let result = b"CATC";
+            assert_eq!(rc(reference), result.to_vec());
+            let pieces = vec![piece(0, 1, b"C"), piece(3, 4, b"C")];
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, result);
+            assert_eq!(scanned, pieces);
+        }
+
+        /// A three-substitution competitor is refused for the same reason a
+        /// two-substitution one is, which is worth pinning because the widened
+        /// gate is stated on "every piece", not "two pieces".
+        #[test]
+        fn an_all_substitution_competitor_is_refused_at_arity_three() {
+            // Changed columns of a reverse complement come in MIRROR PAIRS, plus
+            // the centre column of an odd span, so three separated substitutions
+            // need a 9-mer whose changes fall at 0, 4 and 8. Every separation is
+            // 3, which is what keeps the pre-existing separation route from
+            // admitting this on adjacency alone.
+            let reference = b"AGTCAGACA";
+            let result = rc(reference);
+            let pieces: Vec<Piece> = (0..9)
+                .filter(|i| reference[*i] != result[*i])
+                .map(|i| piece(i, i + 1, &result[i..i + 1]))
+                .collect();
+            assert_eq!(
+                pieces.iter().map(|p| p.ref_start).collect::<Vec<_>>(),
+                vec![0, 4, 8],
+                "this fixture must be three separated lone substitutions"
+            );
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, &result);
+            assert_eq!(
+                scanned, pieces,
+                "an all-substitution competitor is refused whatever its arity"
+            );
+        }
+
+        /// A palindromic (self-reverse-complementary) span denotes NO change
+        /// when inverted, so the pass can never see it: `trim_common_flanks`
+        /// removes the whole block first. Recorded as a **structural** zero, not
+        /// as evidence the pass handles palindromes.
+        #[test]
+        fn a_palindromic_span_is_structurally_unreachable() {
+            let reference = b"AAGCTT";
+            assert_eq!(
+                rc(reference),
+                reference.to_vec(),
+                "this fixture must be self-reverse-complementary"
+            );
+            // Inverting it changes nothing, so there is no block and no piece.
+            let mut pieces: Vec<Piece> = Vec::new();
+            coalesce_inversion_runs(&mut pieces, reference, 0, reference, reference);
+            assert!(pieces.is_empty());
+        }
+
+        /// The flanked shape, on the smallest fixture that carries it: a block
+        /// whose payload is the reverse complement of an interior sub-span.
+        #[test]
+        fn a_flanked_inversion_falls_out_as_del_inv_del() {
+            //                   0123456789
+            let reference = b"TTACGTAAGG";
+            // Invert 2..8 (`ACGTAA` -> `TTACGT`) and delete the two flanks.
+            let core = rc(&reference[2..8]);
+            let result = core.clone();
+            let pieces = vec![piece(0, 10, &result)];
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, &result);
+            assert_eq!(
+                scanned,
+                vec![piece(0, 2, b""), piece(2, 8, &core), piece(8, 10, b"")],
+                "the flanks fall out as deletions and the interior as one inv"
+            );
+            assert!(is_inversion(&scanned[1], reference));
+        }
+
+        /// **A second admissible placement is refused, not broken.** Built so
+        /// the payload matches `revcomp` at two offsets; the pass must decline
+        /// rather than pick one.
+        #[test]
+        fn an_ambiguous_flank_split_is_refused() {
+            // `AAAA` reverse-complements to `TTTT` wherever it sits in an A run,
+            // so a payload of `TTTT` over `AAAAAA` matches at three offsets.
+            let reference = b"AAAAAA";
+            let result = b"TTTT".to_vec();
+            let pieces = vec![piece(0, 6, &result)];
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, &result);
+            assert_eq!(
+                scanned, pieces,
+                "three equally-compliant flank splits: refuse rather than pick"
+            );
+        }
+
+        /// A payload too short to dominate its block is a deletion, not an
+        /// inversion — the majority condition, on the case it exists for.
+        #[test]
+        fn a_minority_payload_is_not_read_as_an_inversion() {
+            //                   0123456789
+            let reference = b"GGGGACGTTT";
+            let core = rc(&reference[4..7]); // 3 bases of a 10-base block
+            let pieces = vec![piece(0, 10, &core)];
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, &core);
+            assert_eq!(
+                scanned, pieces,
+                "2 * 3 <= 10, so this is a deletion with a coincidence in it"
+            );
+        }
+
+        /// A net INSERTION flanking an inversion is deliberately out of scope.
+        /// Pinned as a limit rather than left to be discovered.
+        #[test]
+        fn a_net_insertion_flanked_inversion_is_out_of_scope() {
+            let reference = b"ACGTAC";
+            let mut result = b"GG".to_vec();
+            result.extend(rc(reference));
+            result.extend(b"GG");
+            let pieces = vec![piece(0, 6, &result)];
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, &result);
+            assert_eq!(
+                scanned, pieces,
+                "the `[ins; inv; ins]` mirror is not implemented"
+            );
+        }
+
+        /// An inversion sitting next to a genuine, separated substitution: the
+        /// inversion is recognised and the substitution is left alone. This is
+        /// the case a whole-block test cannot reach and the run scan exists for.
+        #[test]
+        fn an_inversion_beside_a_separated_substitution_keeps_both() {
+            //                    0         1
+            //                    0123456789012345
+            let reference = b"TTACGTAACCCCGAAA";
+            let core = rc(&reference[0..8]);
+            let mut result = core.clone();
+            result.extend_from_slice(&reference[8..12]);
+            result.extend_from_slice(b"T"); // reference[12] is G
+            result.extend_from_slice(&reference[13..]);
+            let pieces = vec![piece(0, 8, &core), piece(12, 13, b"T")];
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, &result);
+            assert_eq!(
+                scanned,
+                vec![piece(0, 8, &core), piece(12, 13, b"T")],
+                "the inversion is already one piece and the substitution is \
+                 four bases away; nothing merges"
+            );
+        }
+
+        /// A shredded inversion beside a separated substitution: the run scan
+        /// must put the inversion back together WITHOUT swallowing the
+        /// substitution.
+        #[test]
+        fn a_shredded_inversion_beside_a_substitution_recovers_only_the_inversion() {
+            let reference = b"TTACGTAACCCCGAAA";
+            let core = rc(&reference[0..8]);
+            let mut result = core.clone();
+            result.extend_from_slice(&reference[8..12]);
+            result.extend_from_slice(b"T");
+            result.extend_from_slice(&reference[13..]);
+            // Shred the inversion into its changed columns.
+            let mut pieces: Vec<Piece> = (0..8)
+                .filter(|i| reference[*i] != core[*i])
+                .map(|i| piece(i, i + 1, &core[i..i + 1]))
+                .collect();
+            pieces.push(piece(12, 13, b"T"));
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, &result);
+            // The all-substitution gate refuses a competitor made only of lone
+            // substitutions, so this shape is REFUSED — recorded as the pass's
+            // stated limit rather than as a success.
+            assert_eq!(
+                scanned, pieces,
+                "every competing member is a lone substitution, so \
+                 `general.md:56` keeps the split — the same rule the #1040 \
+                 control rests on, applied where it costs recognition"
+            );
+        }
+
+        /// Nested inversions: an inner inversion inside an outer one. The outer
+        /// relation is what the sequence states, so the outer is what is
+        /// recognised — and the composite of the two is NOT a reverse
+        /// complement, so nothing is claimed when they disagree.
+        #[test]
+        fn a_nested_inversion_does_not_produce_a_spurious_outer_inv() {
+            let reference = b"TTACGTAAGGCCTTAA";
+            let mut composite = rc(reference);
+            // Invert the inner 4 bases of the already-inverted sequence.
+            let inner = rc(&composite[6..10]);
+            composite[6..10].copy_from_slice(&inner);
+            assert_ne!(
+                composite,
+                rc(reference),
+                "the fixture must actually be a nested pair"
+            );
+            let pieces = vec![piece(0, 16, &composite)];
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, reference, &composite);
+            assert_eq!(
+                scanned, pieces,
+                "a composite of two inversions is not a reverse complement of \
+                 anything, and exact equality is what refuses it"
+            );
+        }
+
+        /// The work bound is a bound on work, not on recognition: a block with
+        /// more pieces than [`INVERSION_RUN_MAX_PIECES`] is still reachable by
+        /// the block-level routes, which do not scan windows at all.
+        #[test]
+        fn the_window_bound_does_not_reach_the_block_level_routes() {
+            // A 700-base inversion shredded into more pieces than the bound.
+            let mut reference = Vec::new();
+            for i in 0..700u32 {
+                reference.push(b"ACGT"[(i as usize * 7 + i as usize / 3) % 4]);
+            }
+            let result = rc(&reference);
+            let pieces: Vec<Piece> = (0..700)
+                .filter(|i| reference[*i] != result[*i])
+                .map(|i| piece(i, i + 1, &result[i..i + 1]))
+                .collect();
+            assert!(
+                pieces.len() > INVERSION_RUN_MAX_PIECES,
+                "fixture must exceed the window bound; got {}",
+                pieces.len()
+            );
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, &reference, 0, &reference, &result);
+            assert_eq!(
+                scanned,
+                vec![piece(0, 700, &result)],
+                "the block-level route reads the block, so a piece count past \
+                 the window bound costs it nothing"
+            );
+        }
+
+        /// The reconstruction invariant that caught this pass's own first
+        /// defect: a window's denoted bases are the payloads PLUS the unchanged
+        /// reference between them, and never the gap that follows the window.
+        #[test]
+        fn a_window_denotes_its_own_span_and_not_the_gap_after_it() {
+            let reference = b"ACGTACGTACGT";
+            let pieces = vec![piece(0, 1, b"T"), piece(2, 3, b"A"), piece(6, 7, b"C")];
+            let scan = RunScan::new(&pieces, reference).expect("well-formed pieces");
+            assert_eq!(
+                scan.denoted_by(0, 2),
+                b"TCA",
+                "window [0,2) spans reference 0..3: payload T, unchanged C, payload A"
+            );
+            assert_eq!(
+                scan.denoted_by(0, 3),
+                b"TCATACC",
+                "window [0,3) spans reference 0..7 and stops at the last payload"
+            );
+        }
+
+        /// A block that is *already* a single piece spanning its own reverse
+        /// complement is left exactly as it arrived.
+        ///
+        /// `crate::normalize::rules` types that piece `inv` from the rendered
+        /// member, so there is nothing here for this pass to add — and the
+        /// exact-shape route says so explicitly by requiring two or more pieces.
+        /// Pinned because "does nothing" is the property that makes the pass
+        /// additive, and it is the one no measurement can show.
+        #[test]
+        fn a_single_piece_that_is_already_an_inversion_is_left_alone() {
+            let reference = b"TTACGTAAGG";
+            let core = rc(&reference[0..8]);
+            let mut result = core.clone();
+            result.extend_from_slice(&reference[8..]);
+            let pieces = vec![piece(0, 8, &core)];
+            let mut scanned = pieces.clone();
+            coalesce_inversion_runs(&mut scanned, reference, 0, &reference[..8], &core);
+            assert_eq!(
+                scanned, pieces,
+                "already one piece spanning its own revcomp: nothing to do"
             );
         }
     }
