@@ -859,7 +859,16 @@ jobs:
         # gates only 2 of its ~360 modules on the feature and neither the soak
         # nor the sweeps selects one, so the selections are unchanged: verified
         # by listing both under each feature set, `test(proptest)` resolves to
-        # 10 tests either way and the sweep filter to 29.
+        # 15 tests either way and the sweep filter to 44.
+        #
+        # Both counts were stale (10 and 29) and both are re-measured above.
+        # The claim this comment exists to make is the *feature-independence* —
+        # "either way" — which held and still holds; the totals are incidental
+        # to it and drift whenever a matching module is added. Re-measure rather
+        # than trust them:
+        #
+        #   cargo nextest list --test it -E 'test(proptest)' | wc -l
+        #   cargo nextest list --test it -E "$SWEEP_FILTER" | wc -l
         run: |
           cargo nextest archive --cargo-profile soak --test it \
             --archive-file nextest-soak.tar.zst
