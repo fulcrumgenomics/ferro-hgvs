@@ -240,6 +240,7 @@ use ferro_hgvs::conformance::spec_corpus::{
     corpus, denotation_of, denoted_by, CorpusBounds, Denotation, Frame, RefShape, Row, RowKind,
     SpecCorpus, Strength,
 };
+use ferro_hgvs::error_handling::ErrorMode;
 use ferro_hgvs::reference::MockProvider;
 use ferro_hgvs::{parse_hgvs, HgvsVariant, NormalizeConfig, Normalizer, ShuffleDirection};
 
@@ -293,6 +294,15 @@ const SHAPE: CorpusShape = CorpusShape {
 /// module docs carry a RE-BLESSED section per change, naming each figure, which way
 /// it moved, and the row ids behind it.
 pub(crate) const THREE_PRIME: Census = Census {
+    // -- provenance --
+    //
+    // LENIENT, because `NormalizeConfig::default()` substitutes
+    // `ErrorConfig::lenient()`. Every figure below that is downstream of
+    // normalization is therefore a lenient-mode figure;
+    // `corpus_prohibited_inputs.rs` re-measures the refusal counters in strict
+    // mode and gets different numbers. `attempted` and `unparseable_outputs`
+    // are the exception and carry no mode at all — see the field's own docs.
+    measured_under: ErrorMode::Lenient,
     // -- validity (rank 1) --
     outputs: 58_552,
     declined: 0,
@@ -349,6 +359,8 @@ pub(crate) const THREE_PRIME: Census = Census {
 /// about the code (all three copies of the #670 junction gate are guarded on
 /// `ThreePrime` with no 5' mirror), not about one shuffle direction's luck.
 pub(crate) const FIVE_PRIME: Census = Census {
+    // Lenient, as at 3' — see [`THREE_PRIME`].
+    measured_under: ErrorMode::Lenient,
     outputs: 58_552,
     declined: 0,
     unparseable_outputs: 0,
@@ -419,6 +431,36 @@ impl CorpusShape {
 /// accuses the implementation of a defect that is really a stale constant.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Census {
+    /// The error mode the **normalizer** behind every figure below was built
+    /// with (#1629).
+    ///
+    /// **It does not reach the parse half.** Every spelling is read with the
+    /// bare `parse_hgvs`, which constructs no `InputPreprocessor` and so applies
+    /// no `ErrorConfig` at all — not lenient's repairs, not strict's refusals
+    /// (#1632, pinned by `issue_1632_parse_entry_applies_no_mode.rs`). So
+    /// `unparseable_outputs` and `attempted` are mode-*less* figures, and only
+    /// the counters downstream of normalization are lenient-mode figures. "No
+    /// mode" is a third thing rather than a synonym for strict, which is exactly
+    /// why it has to be said instead of inferred from this field.
+    ///
+    /// **Not decoration.** `corpus_prohibited_inputs.rs` re-measures three of
+    /// the four refusal counters in strict mode and two of them move
+    /// (`prohibited_absolute_accepted`'s 32 stay accepted) —
+    /// so a census compared against one taken under a different mode is a
+    /// category error, and until this field existed nothing in the artifact or
+    /// the pin said which mode either was. The decided ruling
+    /// `bare-transcript-intronic-position` has to end with the sentence "so that
+    /// counter is a lenient-mode figure" for exactly this reason.
+    ///
+    /// Set from [`measurement_config`], never written by hand, and carried in
+    /// the same `assert_eq!(census, pinned)` as every other field — so changing
+    /// what the axis measures under fails here, naming the mode, instead of
+    /// silently re-basing seventeen numbers.
+    ///
+    /// [`Default`] gives `Strict` (the enum's own default) rather than the
+    /// lenient value the axis actually uses, which is deliberate: an accumulator
+    /// that was never stamped must not read as a valid claim.
+    pub(crate) measured_under: ErrorMode,
     /// Spellings **attempted**, across every row — incremented before
     /// `parse_hgvs` runs, so it counts every spelling the sweep reached.
     ///
@@ -591,9 +633,26 @@ fn grouped(built: &SpecCorpus) -> Vec<&Row> {
     rows
 }
 
+/// The normalization configuration every figure in the census is measured under.
+///
+/// Extracted so the mode stamped into [`Census::measured_under`] is read off the
+/// very config the normalizer is built from, rather than restated beside it
+/// (#1629). A restated mode is a claim nothing checks, which is the defect the
+/// stamp exists to close.
+///
+/// `NormalizeConfig::default()` substitutes `ErrorConfig::lenient()` — note that
+/// `ErrorConfig::default()` and `ErrorMode`'s own `#[default]` are both *strict*,
+/// so "the default" is not a description of this measurement.
+fn measurement_config(direction: ShuffleDirection) -> NormalizeConfig {
+    NormalizeConfig::default().with_direction(direction)
+}
+
 fn measure(direction: ShuffleDirection) -> Measured {
     let built = built();
-    let mut census = Census::default();
+    let mut census = Census {
+        measured_under: measurement_config(direction).error_config.mode,
+        ..Census::default()
+    };
     let mut divergences: Vec<Divergence> = Vec::new();
     let mut findings: Vec<Finding> = Vec::new();
 
@@ -605,10 +664,8 @@ fn measure(direction: ShuffleDirection) -> Measured {
             .is_some_and(|(shape, core, _, _)| *shape == row.shape && core == &row.core);
         if !key_matches {
             let rebuilt = row.frame();
-            let normalizer = Normalizer::with_config(
-                rebuilt.provider().clone(),
-                NormalizeConfig::default().with_direction(direction),
-            );
+            let normalizer =
+                Normalizer::with_config(rebuilt.provider().clone(), measurement_config(direction));
             frame = Some((row.shape, row.core.clone(), rebuilt, normalizer));
         }
         let (_, _, active, normalizer) = frame.as_ref().expect("a frame was just built");
@@ -809,6 +866,8 @@ fn report(label: &str, measured: &Measured) -> String {
     let census = &measured.census;
     let mut out = format!(
         "spec conformance axis ({label})\n  \
+         NORMALIZED UNDER: error mode `{}` — every figure downstream of normalization is \
+         a figure for THAT mode; the parse half applies no mode at all (#1632)\n  \
          VALIDITY (rank 1): {} outputs, {} declined, {} unparseable, {} denoting no sequence, \
          {} leaving the transcript, {} violating an absolute prohibition\n  \
          CONFLUENCE (rank 2): converged {}, split 2 {}, split 3 {}, split 4+ {}, \
@@ -818,6 +877,7 @@ fn report(label: &str, measured: &Measured) -> String {
          REFUSAL: {} conflicting alleles accepted, {} absolute prohibitions accepted, \
          {} conditional prohibitions accepted\n  \
          NEGATIVE GUARDS: {} outputs implement rejected SVD-WG010\n",
+        census.measured_under,
         census.outputs,
         census.declined,
         census.unparseable_outputs,

@@ -297,7 +297,9 @@ impl NormalizeConfig {
     /// per errors-axis; it is simply promoted to an error in strict mode and
     /// surfaced as a warning-plus-best-effort otherwise (#1012 item 2).
     pub fn should_reject_reduced_capability(&self) -> bool {
-        self.error_config.mode == ErrorMode::Strict
+        // `ErrorMode::is_strict`, not `action_for(..)`: this is the documented
+        // *non*-overridable case, so it asks the mode rather than a code (#1629).
+        self.error_config.mode.is_strict()
     }
 
     /// Returns true if past-end positions should emit warnings (lenient mode).

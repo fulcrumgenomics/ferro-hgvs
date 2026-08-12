@@ -156,10 +156,23 @@ fn strict_rejects_a_reference_mismatch_that_lenient_accepts() {
 /// by two silences.
 ///
 /// That `silent` prints it is a genuine open question, recorded rather than
-/// decided here: `ErrorMode::emits_warnings()` says only `Lenient` should, but
-/// that predicate has no call site in `src/`, and `ferro project` (#1182) prints
-/// normalizer warnings in every mode. The two sibling commands are consistent
-/// with each other, which is the property this change preserved.
+/// decided here. It used to be stated against `ErrorMode::emits_warnings()`,
+/// which "says only `Lenient` should" — **#1629 removed that predicate**, since
+/// it had no call site in `src/` and could not have acquired one without
+/// overruling the per-code `--ignore`/`--reject` overrides. So the question
+/// survives, in a sharper form: `REFSEQ_MISMATCH` (W5001) reaches the CLI's
+/// diagnostic printer unconditionally rather than through
+/// `NormalizeConfig::should_warn_ref_mismatch()` — which *is* the per-code
+/// authority, *does* answer `false` under silent mode, and is itself unwired
+/// (the sole `warnings.push(NormalizationWarning::RefSeqMismatch { … })` in
+/// `src/normalize/mod.rs` sits in `normalize_na_edit`'s `if !validation.valid`
+/// arm, guarded by nothing but the mismatch itself; only
+/// `should_reject_ref_mismatch` is consulted, at the strict gate — cited by
+/// expression rather than by line, because line numbers here drift).
+/// `ferro project`
+/// (#1182) prints normalizer warnings in every mode for the same reason. The
+/// two sibling commands are consistent with each other, which is the property
+/// this change preserved.
 #[test]
 fn strict_is_distinct_from_lenient_and_silent_at_the_cli() {
     let (_dir, reference, variant) = fixture();

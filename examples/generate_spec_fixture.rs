@@ -285,7 +285,7 @@ mod overrides {
 mod runner {
     use super::*;
     use ferro_hgvs::reference::mock::MockProvider;
-    use ferro_hgvs::{parse_hgvs, Normalizer};
+    use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};
 
     /// What ferro did with one harvested input.
     ///
@@ -465,7 +465,7 @@ mod runner {
             }
         }
 
-        let normalizer = Normalizer::new(MockProvider::new());
+        let normalizer = Normalizer::with_config(MockProvider::new(), measurement_config());
 
         let mut rows = Vec::with_capacity(by_input.len());
         for (input, agg) in by_input {
@@ -585,9 +585,33 @@ mod runner {
         Ok(rows)
     }
 
+    /// The error configuration every row in this fixture is **normalized** under
+    /// (#1629).
+    ///
+    /// Named rather than implied. `Normalizer::new` takes `NormalizeConfig::default()`,
+    /// which substitutes **`ErrorConfig::lenient()`** — while `ErrorConfig::default()`
+    /// is `strict()` and `ErrorMode`'s own `#[default]` is `Strict`. So "the default"
+    /// was never an accurate description of this measurement, and until #1629 it was
+    /// the only one the artifact offered. `render` derives the document's
+    /// `normalized_under` stamp from this same value, so the artifact's claim and the
+    /// normalizer that produced it cannot drift.
+    ///
+    /// **It covers the normalize half only, and the artifact's field is named for
+    /// that.** `run_ferro` reaches the AST through the bare [`parse_hgvs`], which
+    /// constructs no `InputPreprocessor` and therefore applies *no* `ErrorConfig` at
+    /// all — not lenient's repairs and not strict's refusals (#1632, pinned by
+    /// `tests/it/issue_1632_parse_entry_applies_no_mode.rs`). "No mode" is a third
+    /// thing, not a synonym for strict, so a document-level stamp reading
+    /// `generated_under: lenient` would have claimed a parser-level precondition no
+    /// row ever had. Routing the parse through this config instead would change what
+    /// the fixture *records*, which is a behaviour change and out of scope here.
+    pub fn measurement_config() -> NormalizeConfig {
+        NormalizeConfig::default()
+    }
+
     /// A normalizer over the hermetic provider, for callers outside `build_rows`.
     pub fn new_normalizer() -> Normalizer<MockProvider> {
-        Normalizer::new(MockProvider::new())
+        Normalizer::with_config(MockProvider::new(), measurement_config())
     }
 
     /// Run one description and report `(rendering, evaluated_cleanly)`.
@@ -1261,12 +1285,22 @@ mod decisions {
 
 mod render {
     use super::*;
+    use ferro_hgvs::conformance::error_mode_stamp::ErrorModeStamp;
 
     #[derive(Serialize)]
     struct Document<'a> {
         description: &'a str,
         spec: SpecBlock<'a>,
         generated_utc: String,
+        /// The **normalizer's** error-handling precondition every row below was
+        /// measured under (#1629). Derived from `runner::measurement_config`, so
+        /// it cannot disagree with the normalizer that produced the rows.
+        ///
+        /// Named `normalized_under` rather than `generated_under` because that
+        /// is its exact reach: the parse half of every row runs through the bare
+        /// `parse_hgvs`, which applies no `ErrorConfig` at all (#1632). See
+        /// `runner::measurement_config`.
+        normalized_under: ErrorModeStamp,
         summary: Summary,
         /// Curated "these spellings are one variant" declarations, resolved
         /// against ferro's current output. See `decisions`.
@@ -1367,6 +1401,7 @@ mod render {
                 commit_sha,
             },
             generated_utc: "fixture-byte-stable".to_string(),
+            normalized_under: ErrorModeStamp::of(&runner::measurement_config().error_config),
             summary,
             equivalence_classes: &decisions.equivalence_classes,
             rulings: &decisions.rulings,
