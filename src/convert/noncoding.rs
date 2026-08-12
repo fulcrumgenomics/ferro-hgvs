@@ -117,9 +117,14 @@ pub enum IntronicConsequence {
 }
 
 impl IntronicConsequence {
-    /// Create from an IntronPosition
-    pub fn from_intron_position(pos: &IntronPosition) -> Self {
-        match pos.splice_site_type() {
+    /// Create from a [`SpliceSiteType`] bin.
+    ///
+    /// The distance thresholds are **not** restated here — they live in one
+    /// place, [`SpliceSiteType::from_distance_on_side`]. This is only the
+    /// projection of that bin onto this enum, which is coarser: the two
+    /// `*Region` bins collapse into [`Self::SpliceRegionVariant`].
+    pub fn from_splice_site_type(site: SpliceSiteType) -> Self {
+        match site {
             SpliceSiteType::DonorCanonical => Self::SpliceDonorVariant,
             SpliceSiteType::AcceptorCanonical => Self::SpliceAcceptorVariant,
             SpliceSiteType::DonorExtended => Self::SpliceDonorRegionVariant,
@@ -132,85 +137,47 @@ impl IntronicConsequence {
         }
     }
 
+    /// Create from an IntronPosition
+    pub fn from_intron_position(pos: &IntronPosition) -> Self {
+        Self::from_splice_site_type(pos.splice_site_type())
+    }
+
     /// Create from a CDS position with intronic offset.
     ///
-    /// Returns `None` for an unknown offset (`c.100+?` / `c.100-?`): every
-    /// variant of this enum states a distance from the exon boundary, and the
-    /// sentinels denote a position unbounded in one direction, so there is no
-    /// distance to state (#1767). `is_intronic` is satisfied by a sentinel, so
-    /// this guard is what keeps it out — not the check above.
+    /// Returns `None` for a non-intronic position, and for an unknown offset
+    /// (`c.100+?` / `c.100-?`): every variant of this enum states a distance
+    /// from the exon boundary, and the sentinels denote a position unbounded in
+    /// one direction, so there is no distance to state (#1767). `is_intronic`
+    /// is satisfied by a sentinel, so the `has_unknown_offset` guard is what
+    /// keeps it out — not the `is_intronic` check beside it.
+    ///
+    /// Positive offsets are the donor side, zero and negative the acceptor
+    /// side — see [`SpliceSiteType::from_signed_offset`], which selects the side
+    /// and hands off to [`SpliceSiteType::from_distance_on_side`], where the
+    /// thresholds live. (`is_intronic` already excludes `Some(0)`, so the sign
+    /// rule's zero case is unreachable from here.)
     pub fn from_cds_pos(pos: &CdsPos) -> Option<Self> {
         if !pos.is_intronic() || pos.has_unknown_offset() {
             return None;
         }
-
-        let offset = pos.offset?;
-        let abs_offset = offset.unsigned_abs();
-
-        Some(if offset > 0 {
-            // 5' end of intron (splice donor side)
-            if abs_offset <= 2 {
-                Self::SpliceDonorVariant
-            } else if abs_offset <= 6 {
-                Self::SpliceDonorRegionVariant
-            } else if abs_offset <= 20 {
-                Self::SpliceRegionVariant
-            } else if abs_offset <= 50 {
-                Self::NearSpliceSiteVariant
-            } else {
-                Self::IntronVariant
-            }
-        } else {
-            // 3' end of intron (splice acceptor side)
-            if abs_offset <= 2 {
-                Self::SpliceAcceptorVariant
-            } else if abs_offset <= 12 {
-                Self::SpliceAcceptorRegionVariant
-            } else if abs_offset <= 20 {
-                Self::SpliceRegionVariant
-            } else if abs_offset <= 50 {
-                Self::NearSpliceSiteVariant
-            } else {
-                Self::IntronVariant
-            }
-        })
+        Some(Self::from_splice_site_type(
+            SpliceSiteType::from_signed_offset(pos.offset?),
+        ))
     }
 
     /// Create from a transcript position with intronic offset.
     ///
-    /// Declines an unknown offset (`n.100+?` / `n.100-?`) for the same reason
-    /// as [`IntronicConsequence::from_cds_pos`] (#1767).
+    /// Returns `None` for a non-intronic position, and declines an unknown
+    /// offset (`n.100+?` / `n.100-?`) for the same reason as
+    /// [`IntronicConsequence::from_cds_pos`] (#1767). Same ladder and same sign
+    /// convention as that method.
     pub fn from_tx_pos(pos: &TxPos) -> Option<Self> {
         if !pos.is_intronic() || pos.has_unknown_offset() {
             return None;
         }
-
-        let offset = pos.offset?;
-        let abs_offset = offset.unsigned_abs();
-
-        Some(if offset > 0 {
-            if abs_offset <= 2 {
-                Self::SpliceDonorVariant
-            } else if abs_offset <= 6 {
-                Self::SpliceDonorRegionVariant
-            } else if abs_offset <= 20 {
-                Self::SpliceRegionVariant
-            } else if abs_offset <= 50 {
-                Self::NearSpliceSiteVariant
-            } else {
-                Self::IntronVariant
-            }
-        } else if abs_offset <= 2 {
-            Self::SpliceAcceptorVariant
-        } else if abs_offset <= 12 {
-            Self::SpliceAcceptorRegionVariant
-        } else if abs_offset <= 20 {
-            Self::SpliceRegionVariant
-        } else if abs_offset <= 50 {
-            Self::NearSpliceSiteVariant
-        } else {
-            Self::IntronVariant
-        })
+        Some(Self::from_splice_site_type(
+            SpliceSiteType::from_signed_offset(pos.offset?),
+        ))
     }
 
     /// Get the SO (Sequence Ontology) term for this consequence
@@ -281,21 +248,31 @@ impl IntronicRegion {
     /// took that break. The precondition used to be documented ("screen with
     /// `has_unknown_offset` before calling"); it is now in the type.
     ///
+    /// The bands are the side-agnostic collapse of the same ladder
+    /// [`SpliceSiteType::from_distance_on_side`] owns, reached through
+    /// [`SpliceSiteType::from_signed_offset`]: the donor/acceptor distinction is
+    /// dropped and the extended + region bins merge into
+    /// [`Self::ExtendedSpliceRegion`]. It used to restate a partial copy of the
+    /// thresholds (2/20/50, with the 6- and 12-rungs missing), which is why it
+    /// derives rather than repeats them — the rungs it drops must be dropped by
+    /// the mapping, not by a second and independently-editable ladder.
+    ///
     /// [`OFFSET_UNKNOWN_POSITIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_POSITIVE
     /// [`OFFSET_UNKNOWN_NEGATIVE`]: crate::hgvs::parser::position::OFFSET_UNKNOWN_NEGATIVE
     pub fn from_offset(offset: i64) -> Option<Self> {
         if crate::hgvs::parser::position::is_unknown_offset(offset) {
             return None;
         }
-        let abs_offset = offset.unsigned_abs();
-        Some(if abs_offset <= 2 {
-            Self::CanonicalSpliceSite
-        } else if abs_offset <= 20 {
-            Self::ExtendedSpliceRegion
-        } else if abs_offset <= 50 {
-            Self::NearSpliceSite
-        } else {
-            Self::DeepIntronic
+        Some(match SpliceSiteType::from_signed_offset(offset) {
+            SpliceSiteType::DonorCanonical | SpliceSiteType::AcceptorCanonical => {
+                Self::CanonicalSpliceSite
+            }
+            SpliceSiteType::DonorExtended
+            | SpliceSiteType::AcceptorExtended
+            | SpliceSiteType::DonorRegion
+            | SpliceSiteType::AcceptorRegion => Self::ExtendedSpliceRegion,
+            SpliceSiteType::NearSplice => Self::NearSpliceSite,
+            SpliceSiteType::DeepIntronic => Self::DeepIntronic,
         })
     }
 

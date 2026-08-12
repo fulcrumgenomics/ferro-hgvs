@@ -3,6 +3,7 @@
 use axum::{extract::State, http::StatusCode, response::Json};
 use std::time::Instant;
 
+use crate::effect::SpliceRegionBin;
 use crate::hgvs::location::CdsPos;
 use crate::service::{
     server::AppState,
@@ -565,39 +566,30 @@ fn predict_cds_effect(
     cds_pos: &CdsPos,
 ) -> SequenceEffect {
     if is_intronic {
-        // Check for splice site impact.
-        //
-        // An unknown offset (`c.100-?`) reaches here straight from a parsed
-        // request field: `CdsPos::is_intronic` is satisfied by the `i64::MAX` /
-        // `i64::MIN` sentinels. Taking a magnitude from one is meaningless, and
-        // `.abs()` on `i64::MIN` panicked the worker under `overflow-checks`
-        // while wrapping to a *negative* value in release, where it passed the
-        // `<= 2` test and was answered `splice_site_variant` / HIGH (#1767).
-        // Skip the distance ladder entirely and fall through to
-        // `intron_variant`, which is what is actually known about the position.
-        let measured_offset = if cds_pos.has_unknown_offset() {
-            None
-        } else {
-            cds_pos.offset
-        };
-        if let Some(offset) = measured_offset {
-            // `unsigned_abs` so the ladder is total for every `i64`, not only
-            // for the two values spelled `?`.
-            let abs_offset = offset.unsigned_abs();
-            if abs_offset <= 2 {
-                return SequenceEffect {
-                    so_term: "SO:0001629".to_string(),
-                    name: "splice_site_variant".to_string(),
-                    description: "A sequence variant that changes the first two or last two bases of an intron".to_string(),
-                    impact: "HIGH".to_string(),
-                };
-            } else if abs_offset <= 8 {
-                return SequenceEffect {
-                    so_term: "SO:0001630".to_string(),
-                    name: "splice_region_variant".to_string(),
-                    description: "A sequence variant in which a change has occurred within the region of the splice site".to_string(),
-                    impact: "LOW".to_string(),
-                };
+        // Check for splice site impact. The distance thresholds live on
+        // `SpliceRegionBin`, shared with `EffectPredictor::classify_splice_variant`
+        // so this surface and the library one cannot drift apart; only the
+        // rendering into an SO term is local. Note this is deliberately the
+        // SO-term ladder, not `SpliceSiteType`'s finer bins.
+        if let Some(offset) = cds_pos.offset {
+            match SpliceRegionBin::from_offset(offset) {
+                SpliceRegionBin::Canonical => {
+                    return SequenceEffect {
+                        so_term: "SO:0001629".to_string(),
+                        name: "splice_site_variant".to_string(),
+                        description: "A sequence variant that changes the first two or last two bases of an intron".to_string(),
+                        impact: "HIGH".to_string(),
+                    };
+                }
+                SpliceRegionBin::Region => {
+                    return SequenceEffect {
+                        so_term: "SO:0001630".to_string(),
+                        name: "splice_region_variant".to_string(),
+                        description: "A sequence variant in which a change has occurred within the region of the splice site".to_string(),
+                        impact: "LOW".to_string(),
+                    };
+                }
+                SpliceRegionBin::Intron => {}
             }
         }
         return SequenceEffect {

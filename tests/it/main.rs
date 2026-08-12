@@ -503,6 +503,7 @@ mod spec_enumeration_tests;
 mod spec_generator_preconditions;
 mod spec_worked_example_rules;
 mod spec_worked_examples;
+mod splice_ladder_shapes;
 mod strict_del_size_suffix_mode;
 mod strict_explicit_seq_size_modes;
 mod strict_rejection_survives_normalization;

@@ -953,6 +953,13 @@ pub struct IntronPosition {
 // Neither is reachable from a string entry point today; both are reachable by a
 // library caller, because every field of this struct is `pub`.
 impl IntronPosition {
+    // These four predicates spell their thresholds inline rather than deriving
+    // from [`SpliceSiteType::from_distance_on_side`], because three of the four
+    // do not correspond to a single rung of it — `is_near_splice_site`'s 10 is
+    // on neither ladder at all. They take the magnitude with `unsigned_abs` for
+    // the reason recorded on `from_distance_on_side`: `abs()` panics on
+    // `i64::MIN`, the `-?` unknown-offset sentinel.
+
     /// Check if this is a deep intronic position (>50bp from nearest exon)
     pub fn is_deep_intronic(&self) -> bool {
         self.offset.unsigned_abs() > 50
@@ -974,39 +981,13 @@ impl IntronPosition {
     }
 
     /// Get the splice site type based on position
+    ///
+    /// The ladder itself lives on [`SpliceSiteType::from_distance_on_side`];
+    /// this only supplies the side, which is taken from `boundary` rather than
+    /// from the sign of `offset` because the two are independent fields and
+    /// `boundary` is the authoritative one.
     pub fn splice_site_type(&self) -> SpliceSiteType {
-        let abs_offset = self.offset.unsigned_abs();
-        match self.boundary {
-            IntronBoundary::FivePrime => {
-                // 5' end of intron = splice donor site
-                if abs_offset <= 2 {
-                    SpliceSiteType::DonorCanonical
-                } else if abs_offset <= 6 {
-                    SpliceSiteType::DonorExtended
-                } else if abs_offset <= 20 {
-                    SpliceSiteType::DonorRegion
-                } else if abs_offset <= 50 {
-                    SpliceSiteType::NearSplice
-                } else {
-                    SpliceSiteType::DeepIntronic
-                }
-            }
-            IntronBoundary::ThreePrime => {
-                // 3' end of intron = splice acceptor site
-                if abs_offset <= 2 {
-                    SpliceSiteType::AcceptorCanonical
-                } else if abs_offset <= 12 {
-                    // Branch point region is typically -18 to -35
-                    SpliceSiteType::AcceptorExtended
-                } else if abs_offset <= 20 {
-                    SpliceSiteType::AcceptorRegion
-                } else if abs_offset <= 50 {
-                    SpliceSiteType::NearSplice
-                } else {
-                    SpliceSiteType::DeepIntronic
-                }
-            }
-        }
+        SpliceSiteType::from_distance_on_side(self.offset, self.boundary)
     }
 
     /// Get distance from splice donor (5' end of intron)
@@ -1060,6 +1041,117 @@ pub enum SpliceSiteType {
     NearSplice,
     /// Deep intronic (>50bp from nearest exon)
     DeepIntronic,
+}
+
+impl SpliceSiteType {
+    /// Classify a signed intronic offset into ferro's fine-grained splice bins.
+    ///
+    /// # Which question this answers
+    ///
+    /// This is **ferro's own splice-distance granularity**: donor 2/6/20/50,
+    /// acceptor 2/12/20/50, with the donor and acceptor sides distinguished at
+    /// every rung. The rungs themselves live in exactly one body,
+    /// [`SpliceSiteType::from_distance_on_side`], which this delegates to;
+    /// [`IntronPosition::splice_site_type`],
+    /// [`crate::convert::noncoding::IntronicConsequence`] and
+    /// [`crate::convert::noncoding::IntronicRegion`] all derive from that same
+    /// body rather than restating the thresholds.
+    ///
+    /// The exception, named so it is not mistaken for coverage: `IntronPosition`
+    /// also carries four standalone predicates — `is_canonical_splice_site`
+    /// (2), `is_extended_splice_region` (20), `is_deep_intronic` (50) and
+    /// `is_near_splice_site` (10, a threshold on **neither** ladder) — which
+    /// still spell their thresholds inline and are not derived from here.
+    ///
+    /// It is deliberately **not** the SO-term consequence call. That question —
+    /// "which Sequence Ontology term does VEP assign?" — is answered by
+    /// [`crate::effect::SpliceRegionBin`], on a coarser ladder (2/8) that
+    /// disagrees with this one by construction: offset `+10` is a `DonorRegion`
+    /// here (and `-10` an `AcceptorExtended`, the acceptor side reaching to 12)
+    /// while both are a plain intron variant there. The two are cross-tested at
+    /// their boundary offsets in `tests/it/splice_ladder_shapes.rs`; neither is
+    /// wrong, and they must not be merged.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - signed intronic offset. Positive is the 5' end of the
+    ///   intron (splice **donor** side, HGVS `+n`); zero or negative is the 3'
+    ///   end (splice **acceptor** side, HGVS `-n`).
+    pub fn from_signed_offset(offset: i64) -> Self {
+        let side = if offset > 0 {
+            IntronBoundary::FivePrime
+        } else {
+            IntronBoundary::ThreePrime
+        };
+        // Not `offset.abs()`: the callee takes the magnitude with
+        // `unsigned_abs`, and `i64::MIN.abs()` panics. See the note on
+        // `from_distance_on_side`.
+        Self::from_distance_on_side(offset, side)
+    }
+
+    /// Classify a distance from an exon boundary against an explicit intron side.
+    ///
+    /// This is where the rungs live. [`SpliceSiteType::from_signed_offset`] is
+    /// the thin wrapper that *derives* the side from the offset's sign and then
+    /// calls this; the split exists because [`IntronPosition`] carries its side
+    /// as a field rather than as the sign of its offset — and an
+    /// `IntronPosition` with `offset == 0` on the 5' boundary must still
+    /// classify as a donor, which reading the sign alone would get wrong.
+    ///
+    /// # Arguments
+    ///
+    /// # The magnitude is taken with `unsigned_abs`, deliberately
+    ///
+    /// `i64::MIN.abs()` **panics** in a debug build and wraps back to
+    /// `i64::MIN` in a release one, where every `abs_offset <= n` test below
+    /// would then read *true* and report a canonical splice site. That is not
+    /// hypothetical input: `c.<base>-?` parses to `offset == Some(i64::MIN)`
+    /// (`parser::position::OFFSET_UNKNOWN_NEGATIVE`), and this ladder is
+    /// reachable from the web service's untrusted-input handler. `unsigned_abs`
+    /// is total, so the sentinel lands in [`Self::DeepIntronic`] instead — still
+    /// not a *meaningful* answer for an unknown offset, but a conservative one
+    /// rather than a panic or a HIGH-impact claim. Declining outright for an
+    /// unknown offset is a separate behaviour question, not settled here.
+    ///
+    /// # Arguments
+    ///
+    /// * `distance` - distance from the exon boundary; its sign is ignored.
+    /// * `side` - which end of the intron the distance is measured from.
+    pub fn from_distance_on_side(distance: i64, side: IntronBoundary) -> Self {
+        let abs_offset = distance.unsigned_abs();
+        if side == IntronBoundary::FivePrime {
+            // 5' end of intron = splice donor site
+            if abs_offset <= 2 {
+                Self::DonorCanonical
+            } else if abs_offset <= 6 {
+                Self::DonorExtended
+            } else if abs_offset <= 20 {
+                Self::DonorRegion
+            } else if abs_offset <= 50 {
+                Self::NearSplice
+            } else {
+                Self::DeepIntronic
+            }
+        } else {
+            // 3' end of intron = splice acceptor site
+            if abs_offset <= 2 {
+                Self::AcceptorCanonical
+            } else if abs_offset <= 12 {
+                // The 12-rung is the POLYPYRIMIDINE TRACT, which abuts the
+                // acceptor (roughly -5 to -15) — not the branch point, which
+                // sits further out at roughly -18 to -35 and therefore falls in
+                // `AcceptorRegion`/`NearSplice`. This comment used to cite the
+                // branch point, a region the threshold it annotated excludes.
+                Self::AcceptorExtended
+            } else if abs_offset <= 20 {
+                Self::AcceptorRegion
+            } else if abs_offset <= 50 {
+                Self::NearSplice
+            } else {
+                Self::DeepIntronic
+            }
+        }
+    }
 }
 
 #[cfg(test)]
