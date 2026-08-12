@@ -547,6 +547,63 @@ point (`DNA/duplication.md:18`), so a member flush with the window's 5' edge com
 instead of a `dup`. It is applied to **both** sides — the window is `span + 2 * pad` — and the
 bases come back upper-cased, so a soft-masked region does not produce a mixed-case pair.
 
+### Bounding a derivation to a region it must not leave
+
+When a variant must stay inside a target region, an amplicon or a tiling window, anchor every raw
+pair to that region first. The derivation is a pure function of the window it is handed, so one
+window gives one answer:
+
+```python
+pair = ferro_hgvs.SequencePair("chr1", 10, "GCAAAAG", "GCAAAG")   # straight from a BAM
+
+str(pair.derive().variant)                  # 'chr1:g.15del' — rolls to the run's end
+bounded = pair.trim_to(end=14)              # hold it at 14
+str(bounded.derive().variant)               # 'chr1:g.14del'
+```
+
+`trim_to` needs no reference and can only *narrow*. To widen, use `Normalizer::reanchor`, which
+reads the padding bases from the reference:
+
+```python
+anchored = normalizer.reanchor(pair, start=5, end=25)   # 5' widened, 3' widened
+str(anchored.derive().variant)                          # 'chr1:g.15del'
+
+both = normalizer.reanchor(pair, start=5, end=14)       # 5' widened, 3' narrowed
+str(both.derive().variant)                              # 'chr1:g.14del'
+```
+
+**`reanchor` moves a window's edges; it does not relocate the window.** Each edge may go outwards
+(padded from the reference) or inwards (trimmed), in any combination — but the window you ask for
+must **overlap the pair's own**, and the overlap must still hold the bases the two sequences
+disagree on. `reanchor(pair, start=1000, end=1200)` on the pair above is refused, not fetched: the
+changed bases exist only in the pair, so there is nothing to carry to a region the pair does not
+cover. So "anchor every raw pair to my target region" works exactly when every raw pair overlaps
+that region — which is the case the feature is for, and is worth checking rather than assuming.
+
+Prefer `pair.derive()` to re-spreading the four fields: a pair returned by `trim_to` or
+`reanchor` carries its **own** position, and pairing a pre-trim position with post-trim bases is
+the mistake the method exists to prevent.
+
+Both take 1-based inclusive bounds, and `None` leaves that edge where it is.
+
+**Both refuse rather than clamp**, in every case: a bound that would cut a base the two sequences
+disagree on (naming the coordinate), a bound that would empty the reference, `start` past `end`,
+and — for `reanchor` — a bound outside the sequence, or a window disjoint from the pair's. A window
+silently pulled back to the contig would hide a bug upstream of the call.
+
+Case is not a disagreement: a soft-masked reference against an upper-case alternate trims normally.
+`trim_to` fetches nothing and so leaves your bases as you passed them; `reanchor` reads flank from
+the provider and therefore returns the whole window **upper-cased**, exactly as `to_sequences`
+does, rather than splicing provider bases onto caller bases and handing back a mixed-case pair.
+
+> **Reach for this when the bound is a requirement, not to make heterogeneous inputs agree.** For
+> that, `Normalizer::from_sequences(..., normalize = true)` and a `to_sequences` round trip both
+> already converge, and both reach the *reference-anchored* placement — which can shift as far as
+> the sequence allows rather than as far as your window allows. Anchoring to a window that cuts an
+> ambiguous run makes every caller using that window agree with each other and disagree with the
+> reference. That is a legitimate contract and a poor default; `placement_bounded_by_window`
+> reports it either way.
+
 ## Supported HGVS Syntax
 
 | Type | Prefix | Example |

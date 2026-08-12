@@ -48,8 +48,8 @@ impl SequencePair {
     /// This type is otherwise only ever *returned*, by
     /// [`crate::Normalizer::to_sequences`]. Without a constructor it is
     /// `#[non_exhaustive]` and so unbuildable outside this crate, which would put
-    /// [`Self::derive`] out of reach of exactly the caller it is for: one who has
-    /// bases and no description.
+    /// [`Self::trim_to`] and [`crate::Normalizer::reanchor`] out of reach of
+    /// exactly the caller they are for: one who has bases and no description.
     ///
     /// `position` is **1-based** and names the first base of `reference`.
     ///
@@ -101,8 +101,8 @@ impl SequencePair {
     ///
     /// The pair already carries all four arguments the free function takes, so
     /// spreading them back out at the call site re-passes an accession and a
-    /// position this type is holding — and invites pairing one window's position
-    /// with another window's bases.
+    /// position this type is holding — and, after a [`Self::trim_to`], invites
+    /// pairing the *original* position with the *trimmed* bases.
     pub fn derive(
         &self,
         options: &crate::normalize::from_sequences::FromSequencesOptions,
@@ -130,5 +130,127 @@ impl SequencePair {
         self.position
             .saturating_add(self.reference.len() as u64)
             .saturating_sub(1)
+    }
+
+    /// Narrow this window to `[start, end]`, **trimming matching bases only**.
+    ///
+    /// The reference-free half of re-anchoring. Use it to hold a derivation
+    /// inside a region it must not leave — a target region, an amplicon, a
+    /// tiling window — when every caller's raw window is at least as wide as
+    /// that region.
+    ///
+    /// `None` leaves that edge where it is. Both bounds are 1-based inclusive,
+    /// matching [`Self::position`].
+    ///
+    /// # This can only narrow, and narrowing costs the 3' rule
+    ///
+    /// Widening needs bases this type does not hold, so it lives on
+    /// [`crate::Normalizer::reanchor`], which has a reference to read them from.
+    ///
+    /// And narrowing is not free: `from_sequences` may not shift outside the
+    /// window it is given, so a bound that cuts an ambiguous run pulls the
+    /// placement back to the bound. That is the *point* when the bound is a
+    /// region the variant must not leave, and a **footgun** when it is an
+    /// arbitrary window — every caller anchored to it will agree with each other
+    /// and disagree with the reference-anchored answer. The derivation reports
+    /// this as `placement_bounded_by_window`; it is not silent.
+    ///
+    /// # Errors
+    ///
+    /// Refuses rather than clamping, in every case — a silent clamp would hand
+    /// back a window the caller did not ask for and cannot detect:
+    ///
+    /// * a bound that would *widen* the window (there are no bases to widen
+    ///   with — the message names `reanchor`);
+    /// * a bound that would cut into a base the two sequences disagree on,
+    ///   naming the coordinate where the disagreement starts. **Case is not a
+    ///   disagreement** — a soft-masked reference against an upper-case
+    ///   alternate is ordinary input, and the comparison folds;
+    /// * a bound that would leave the reference empty, or `start` past `end`.
+    ///
+    /// Case is otherwise preserved: this method fetches nothing, so it cannot
+    /// manufacture a mixed-case pair and has no reason to rewrite the caller's
+    /// bases. [`crate::Normalizer::reanchor`], which does fetch, folds instead.
+    pub fn trim_to(&self, start: Option<u64>, end: Option<u64>) -> Result<Self, FerroError> {
+        let (current_start, current_end) = (self.position, self.end());
+        let start = start.unwrap_or(current_start);
+        let end = end.unwrap_or(current_end);
+
+        let invalid = |msg: String| FerroError::InvalidCoordinates { msg };
+        if start > end {
+            return Err(invalid(format!(
+                "trim_to({start}, {end}) on {}: start is past end",
+                self.accession
+            )));
+        }
+        for (label, wanted, widens) in [
+            ("start", start, start < current_start),
+            ("end", end, end > current_end),
+        ] {
+            if widens {
+                return Err(invalid(format!(
+                    "trim_to would widen the window: {label} {wanted} is outside the window \
+                     [{current_start}, {current_end}] on {}. `trim_to` only removes bases; use \
+                     `Normalizer::reanchor`, which holds a reference and can supply them",
+                    self.accession
+                )));
+            }
+        }
+
+        let head = (start - current_start) as usize;
+        let tail = (current_end - end) as usize;
+        // The two sequences differ in length, so a 3' trim is counted from each
+        // one's own end rather than from a shared index.
+        let (ref_len, alt_len) = (self.reference.len(), self.alternate.len());
+        if head + tail >= ref_len || head + tail >= alt_len {
+            return Err(invalid(format!(
+                "trim_to({start}, {end}) on {} would leave nothing of the {ref_len}-base \
+                 reference or the {alt_len}-base alternate",
+                self.accession
+            )));
+        }
+
+        // "Matching bases only": a trimmed base must be one both sequences
+        // agree on, or the trim would silently change what the pair denotes.
+        //
+        // Compared **case-insensitively**, because case is not a difference
+        // anywhere else on this surface: `Base::from_char` folds, `validate`
+        // says so in as many words, and `Normalizer::to_sequences` upper-cases
+        // its whole window. A byte comparison here made a soft-masked reference
+        // against an upper-case alternate — an ordinary pileup — refuse a legal
+        // trim with "the reference and alternate first differ at position N",
+        // naming a coordinate where they do not differ.
+        let (r, a) = (self.reference.as_bytes(), self.alternate.as_bytes());
+        let differs = |x: u8, y: u8| !x.eq_ignore_ascii_case(&y);
+        if !r[..head].eq_ignore_ascii_case(&a[..head]) {
+            let at = (0..head).find(|i| differs(r[*i], a[*i])).unwrap_or(0);
+            return Err(invalid(format!(
+                "trim_to cannot trim to start {start} on {}: the reference and alternate first \
+                 differ at position {}, so trimming there would change what the pair denotes",
+                self.accession,
+                current_start + at as u64
+            )));
+        }
+        if !r[ref_len - tail..].eq_ignore_ascii_case(&a[alt_len - tail..]) {
+            let at = (0..tail)
+                .find(|i| differs(r[ref_len - 1 - *i], a[alt_len - 1 - *i]))
+                .unwrap_or(0);
+            return Err(invalid(format!(
+                "trim_to cannot trim to end {end} on {}: the reference and alternate differ at \
+                 position {}, so trimming there would change what the pair denotes",
+                self.accession,
+                current_end - at as u64
+            )));
+        }
+
+        Ok(Self {
+            accession: self.accession.clone(),
+            position: start,
+            reference: self.reference[head..ref_len - tail].to_string(),
+            alternate: self.alternate[head..alt_len - tail].to_string(),
+            // Trimming the 3' edge moves the window in off wherever it used to
+            // stop, so whatever settled the old edge no longer settles this one.
+            window_is_final: self.window_is_final && tail == 0,
+        })
     }
 }
