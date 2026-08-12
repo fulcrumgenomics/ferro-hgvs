@@ -10,6 +10,17 @@
 //! demote inputs from
 //! `tests/fixtures/mutalyzer-normalize/baseline-failures/<axis>.txt`.
 //!
+//! **What the axes measure, and over what.** Agreement with a reference
+//! implementation, never conformance — `adjudication-precedence-order` puts
+//! spec-explicit text above mutalyzer and mutalyzer above our judgement, so a
+//! divergence here is a question to adjudicate, not a verdict. The population
+//! matters as much as the rate: mutalyzer has no separation rule, so agreement
+//! on a multi-member allele is a weaker signal than on a single-member row, and
+//! a corpus that carries only the latter yields a figure that silently describes
+//! only the latter. `normalized_axis_covers_both_member_arities` reports the two
+//! populations apart and refuses to let the multi-member one collapse, and
+//! [`AxisTally::finish`] refuses a zero denominator on any axis.
+//!
 //! Backed by the ferro-prepared reference manifest. When the manifest is
 //! absent (CI by default), every axis test reports `skipping — no manifest`
 //! and exits 0. Same convention as `tests/real_data_normalization_tests.rs`.
@@ -354,6 +365,24 @@ struct AxisTally {
     reference_unavailable: Vec<(String, String)>,
     fail: Vec<(String, String)>, // (input, diagnostic)
     skipped: usize,
+    /// Rows this axis actually **compared** — every row [`record`](Self::record)
+    /// was called for, whatever bucket it landed in. This is the axis's
+    /// denominator, and [`finish`](Self::finish) refuses a zero one, so an axis
+    /// that compared nothing cannot report a green `0 of 0` indistinguishable
+    /// from a clean run. Same honest-zero discipline `spec_conformance_axis.rs`
+    /// enforces, which this module did not have.
+    ///
+    /// **What it catches is a CORPUS failure, not a provider one**, and stating
+    /// it the other way round would bake a wrong authority into the message a
+    /// reader next sees fire. A provider serving nothing does *not* reach this
+    /// predicate: `normalize` returns `Err`, `record` is still called (so
+    /// `recorded > 0`), and the rows land in `fail` — the run is red for the
+    /// ordinary reason. `skipped += 1` happens only when the case carries no
+    /// value for this axis, *before* `record`, and `catch_panics` converts a
+    /// panic into an `Err` that is still recorded. The reachable zero is a
+    /// corpus with no `to_test` row carrying a non-null value for the axis — a
+    /// schema change that silently nulled the field, or a bad regeneration.
+    recorded: usize,
     /// Count of rows for which ferro produced an **empty / degenerate
     /// projection** (tagged by [`EMPTY_PROJECTION_SENTINEL`]) — an
     /// output-quality signal independent of which bucket the row lands in
@@ -373,6 +402,7 @@ impl AxisTally {
             reference_unavailable: Vec::new(),
             fail: Vec::new(),
             skipped: 0,
+            recorded: 0,
             empty_got: 0,
         }
     }
@@ -435,6 +465,8 @@ impl AxisTally {
     /// (it has no spec basis), and a genuine panic still hard-FAILs. See
     /// #908 / #918.
     fn record(&mut self, case: &Case, expected: &str, actual: Result<String, String>) {
+        self.recorded += 1;
+
         // Output-quality signal (#651): the axis runner stamps
         // `EMPTY_PROJECTION_SENTINEL` on its `Err` when ferro produced nothing
         // (no protein / zero pairs). Count it independently of the bucket the
@@ -715,6 +747,20 @@ impl AxisTally {
         let _ = fs::write(&tsv_path, &tsv);
 
         println!("{}", self.summary_line(&report_path));
+
+        // The honest-zero discipline: an axis that compared nothing has made no
+        // claim, so it must not report the same green as one that compared
+        // everything and agreed. Checked ahead of every gate below, because a
+        // zero denominator satisfies all of them vacuously — `fail.is_empty()`
+        // most of all.
+        assert!(
+            self.recorded > 0,
+            "{}: VACUOUS — the axis compared no rows at all ({} skipped). A manifest was present, \
+             so this is a corpus or provider failure, not a skip: zero comparisons cannot be \
+             evidence of agreement.",
+            self.axis,
+            self.skipped
+        );
 
         for (input, policy) in self.divergence_accepted.iter().take(FAIL_PRINT_LIMIT) {
             eprintln!(
@@ -1054,6 +1100,181 @@ fn manifest_or_skip() {
              or benchmark-output/manifest.json"
         ),
     }
+}
+
+// ----------------------------------------------------------------------------
+// Corpus scope: member arity
+// ----------------------------------------------------------------------------
+
+/// Member arity of a corpus row's input — the split along which agreement with
+/// mutalyzer means two different things.
+///
+/// On a **single-member** row ferro's `normalize` and mutalyzer's canonicalize
+/// are doing the same job, so a disagreement is close to meaningful evidence.
+/// On a **multi-member** allele they are not: mutalyzer minimises a weighted
+/// description length whose constants are dated 2014 and carries no separation
+/// rule at all, so a disagreement there is two objectives meeting rather than a
+/// defect on either side. See `MIN_PIECE_SEPARATION` in `src/normalize/merge.rs`
+/// and the `adjudication-precedence-order` ruling, which is also why nothing
+/// here is framed as conformance: this module measures agreement with a
+/// reference implementation, and mutalyzer is not a spec oracle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MemberArity {
+    /// The input describes a single change.
+    Single,
+    /// The input is an allele of two or more members.
+    Multi,
+}
+
+/// Classify `input` by member arity. `None` when it does not parse: such a row
+/// belongs to neither population, and folding it into `Single` would pad the one
+/// denominator this census exists to keep honest.
+fn member_arity(input: &str) -> Option<MemberArity> {
+    match parse_hgvs(input) {
+        Ok(HgvsVariant::Allele(a)) if a.variants.len() > 1 => Some(MemberArity::Multi),
+        Ok(_) => Some(MemberArity::Single),
+        Err(_) => None,
+    }
+}
+
+/// Whether `case` carries an adjudication scoped to `axis` — any of
+/// `accepted_divergence`, `known_bug`, `improvement`, `reference_unavailable`,
+/// `spec_citation`, `accepted_rejection`.
+///
+/// Each of those was written because ferro's answer differed from the corpus's
+/// mutalyzer-derived expectation, and an *un*adjudicated difference is a FAIL
+/// that [`AxisTally::finish`] gates at zero — so on a green axis every divergent
+/// row is adjudicated, and the census can be measured from the corpus alone,
+/// with no manifest.
+///
+/// It is an **upper bound**, not an equality. Only `accepted_divergence`,
+/// `known_bug` and `improvement` XPASS-FAIL when ferro starts matching; a
+/// `spec_citation` or `accepted_rejection` row that ferro matches stays a PASS
+/// and keeps its annotation. Measured on the `normalized` axis against the
+/// blessed reference: 47 adjudicated rows against 45 that were not PASS.
+fn adjudicates(case: &Case, axis: Axis) -> bool {
+    case.accepted_divergences.iter().any(|a| a.axis == axis)
+        || case.known_bugs.iter().any(|k| k.axis == axis)
+        || case.improvement.as_ref().is_some_and(|i| i.axis == axis)
+        || case
+            .reference_unavailable
+            .as_ref()
+            .is_some_and(|r| r.axis == axis)
+        || case.spec_citations.iter().any(|s| s.axis == axis)
+        || case.accepted_rejections.iter().any(|r| r.axis == axis)
+}
+
+/// One arity population's share of an axis: rows contributed, and rows carrying
+/// an adjudication for it (see [`adjudicates`] for why that is an upper bound on
+/// the rows where ferro and mutalyzer actually differ).
+#[derive(Debug, Default, Clone, Copy)]
+struct AritySlice {
+    rows: usize,
+    adjudicated: usize,
+}
+
+/// Floor on the corpus's multi-member coverage of the `normalized` axis.
+///
+/// An agreement figure measured over a population with no multi-member rows is a
+/// single-member figure wearing a corpus-wide label, and that is easy to produce
+/// by accident rather than by choice. The stratified ClinVar population the
+/// benchmark harness draws its headline agreement numbers from
+/// (`clinvar_patterns.txt`, the 57,524,053 lines `docs/BENCHMARK_GUIDE.md`
+/// quotes) carries **1,026** multi-member rows — 724 of them cis — so a
+/// 20,000-row draw from it holds **0.36 multi-member rows** in expectation
+/// (20,000 × 1,026 / 57,524,053), and any agreement rate taken from that
+/// harness is a single-member rate whatever it is labelled.
+///
+/// Name the quantity, because the two available numbers differ by ~1,000× and
+/// the smaller one is the wrong one: 0.0004 is the draw's *sampling fraction*
+/// (20,000 / 57,524,053), not an expected count. The paragraph's point survives
+/// either figure — 0.36 is still under one row — but quoting the fraction as
+/// though it were a row count understates the corpus's coverage of the very
+/// population this floor exists to defend.
+///
+/// This corpus is deliberately not that population. The floor is what keeps it
+/// from drifting into it across an upstream refresh; it is set below the
+/// measured 23 so an ordinary refresh does not trip it and a collapse does.
+///
+/// 23 rather than the 25 a textual scan of the corpus finds, because two of its
+/// multi-member rows are ones ferro *refuses to parse* — they land in the
+/// `unparsed` count the test prints rather than in either population. That is
+/// the intended handling: the census would rather report a row it cannot
+/// classify than guess at it.
+const MULTI_MEMBER_ROW_FLOOR: usize = 15;
+
+/// The `normalized` axis must keep measuring **both** arity populations, and
+/// must report them apart.
+///
+/// Manifest-free on purpose: this is a claim about the corpus, so it holds on PR
+/// CI, where the axis tests themselves take the no-manifest early return and
+/// report a green that compared nothing.
+#[test]
+fn normalized_axis_covers_both_member_arities() {
+    let mut single = AritySlice::default();
+    let mut multi = AritySlice::default();
+    let mut unparsed = 0usize;
+
+    for case in fixture().cases.iter().filter(|c| c.to_test) {
+        if case.normalized.is_none() {
+            continue;
+        }
+        let adjudicated = adjudicates(case, Axis::Normalized);
+        let slice = match member_arity(&case.input) {
+            Some(MemberArity::Single) => &mut single,
+            Some(MemberArity::Multi) => &mut multi,
+            None => {
+                unparsed += 1;
+                continue;
+            }
+        };
+        slice.rows += 1;
+        slice.adjudicated += usize::from(adjudicated);
+    }
+
+    println!(
+        "normalized axis by member arity: single {}/{} adjudicated, multi {}/{} adjudicated, \
+         {unparsed} unparsed",
+        single.adjudicated, single.rows, multi.adjudicated, multi.rows,
+    );
+
+    assert!(
+        single.rows > 0,
+        "VACUOUS: the normalized axis has no single-member rows, so its agreement figure \
+         describes nothing"
+    );
+    assert!(
+        multi.rows >= MULTI_MEMBER_ROW_FLOOR,
+        "the normalized axis carries only {} multi-member row(s), under the floor of \
+         {MULTI_MEMBER_ROW_FLOOR}: an agreement figure over this corpus would now be a \
+         single-member figure with a corpus-wide label. Restore the coverage rather than \
+         lowering the floor.",
+        multi.rows
+    );
+
+    // `adjudicated` was computed and printed and gated by nothing, so
+    // `adjudicates()` could be made to return `false` unconditionally and this
+    // suite would stay green — measured, not supposed. This is the assertion
+    // that makes the column load-bearing rather than decorative.
+    //
+    // A floor rather than a pin: the counts move with an ordinary corpus
+    // refresh, and what must not silently become true is "the census reports no
+    // adjudications at all", which is exactly what a broken `adjudicates` looks
+    // like from here. The complementary `adjudicated <= rows` is deliberately
+    // NOT asserted — the two are incremented together above, so it holds by
+    // construction and would pass against the bug it appears to guard.
+    assert!(
+        single.adjudicated > 0 && multi.adjudicated > 0,
+        "VACUOUS: the census found no adjudicated rows in at least one arity slice \
+         (single {}/{}, multi {}/{}). Either the corpus genuinely carries none for \
+         that slice — in which case the arity census is reporting on a population \
+         whose divergences are unannotated — or `adjudicates()` stopped matching any \
+         annotation and this census is quoting a zero it never measured.",
+        single.adjudicated,
+        single.rows,
+        multi.adjudicated,
+        multi.rows
+    );
 }
 
 /// Issue #506: the direct c.→p. path must extend to bare `n.` (Tx) inputs.
