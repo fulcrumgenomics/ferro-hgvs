@@ -26,6 +26,7 @@ mod issue_1592_reduced_member_junction_clamp;
 mod issue_1600_reduced_delins_tract_demotion;
 mod issue_1607_protein_residue_one_guard;
 mod issue_1632_parse_entry_applies_no_mode;
+mod issue_1703_whole_span_inversion_before_the_cut;
 mod repeat_input_idempotency;
 mod repeat_lowering_sibling_junction;
 mod residual_above_cap_confluence;

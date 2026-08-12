@@ -2107,6 +2107,18 @@ impl Piece {
         (self.alt.is_empty() && ref_len > 0) || (ref_len == 0 && !self.alt.is_empty())
     }
 
+    /// Whether this piece spells a substitution: exactly one reference
+    /// nucleotide replaced by exactly one other.
+    ///
+    /// `delins.md:15` — "when **one** nucleotide is replaced by **one** other
+    /// nucleotide, the change is a substitution". Both halves are load-bearing
+    /// and a width test alone gets the second one wrong: a 1-base *deletion* is
+    /// also one column wide and is not a substitution. See
+    /// [`no_piece_is_a_lone_substitution`], which is the reason this exists.
+    fn is_substitution(&self) -> bool {
+        self.ref_end.saturating_sub(self.ref_start) == 1 && self.alt.len() == 1
+    }
+
     /// Whether this piece is a pure insertion sitting immediately outside one
     /// end of the fetched window.
     ///
@@ -2878,6 +2890,37 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         w_lo,
         &ref_bytes,
     );
+    // Whether this block is one `inv`, decided **here** — while the pieces still
+    // partition the trimmed block — and applied far below, after the weight
+    // bound. Two orderings are in tension and this is what reconciles them.
+    //
+    // `inversion.md:5` defines an inversion by the content of the **whole** span,
+    // so the typing is a predicate over the block; where to cut is a decision
+    // about how to divide it. The typing has to settle first. It does not survive
+    // `shift_pieces`: that pass moves a pure indel 3' as far as the reference
+    // allows, and a derived insertion sitting on the hull's right edge moves
+    // *past* it whenever the next reference base repeats the payload. The pieces
+    // then no longer span the block, and the reconstruction
+    // `whole_block_inversion` builds from their hull is a different, longer
+    // string. On `NC_000017.11:g.43044327_43044331` (`GTTAA -> TTAAC`) the hull
+    // becomes 6 bases and the reconstruction `TTAACC` against `GTTAAC`, which is
+    // not a reverse complement — so the answer computed after the shift is `None`
+    // for a block that is an exact reverse complement (#1703).
+    //
+    // The *application* must nevertheless stay after the changed-columns weight
+    // bound, for the reason `coalesce_whole_block_inversion`'s own doc works
+    // through in full: this rule **widens**, and the bound compares the derived
+    // weight against the *input's*, which differs between two spellings of one
+    // variant. `GTTAA -> TTAAC` weighs 3 spelled as three substitutions and 5
+    // spelled as one spanning `delins`, so a pre-bound widening to 5 columns is
+    // accepted for the second and refused for the first. Deciding here and
+    // applying below is what lets both constraints hold at once; collapsing them
+    // either way reintroduces one of the two defects.
+    //
+    // Nothing between here and the application can make this stale. It is a
+    // function of the trimmed block alone — `ref_bytes[lo..hi_ref]` against the
+    // denoted sequence — and neither is touched again.
+    let block_inversion = whole_block_inversion(&pieces, &ref_bytes);
     shift_pieces(&mut pieces, &ref_bytes, direction);
     coalesce_adjacent_pieces(&mut pieces);
     // Partitioning decides where the members are; this decides how wide each
@@ -3065,7 +3108,22 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     if partition_rule().cuts_with_canonical() {
         coalesce_compensating_gap_split(&mut pieces, &ref_bytes);
     }
-    coalesce_whole_block_inversion(&mut pieces, &ref_bytes);
+    // The typing decided on the trimmed block wins, and the post-shift pieces are
+    // consulted only when it declined. See the `block_inversion` binding above
+    // for why the decision and its application sit either side of the weight
+    // bound.
+    //
+    // Both directions are kept rather than the earlier one replacing the later:
+    // the pre-shift answer is stronger where a member has since left the hull,
+    // and the post-shift answer is the one that reaches a block whose pieces the
+    // passes between the two calls have merged (`coalesce_payload_alignment_split`
+    // and `coalesce_compensating_gap_split` both re-partition). Neither
+    // subsumes the other, and each is a whole-span reverse complement over the
+    // pieces it is asked about, so preferring the earlier one costs nothing.
+    match block_inversion {
+        Some(whole) => pieces = vec![whole],
+        None => coalesce_whole_block_inversion(&mut pieces, &ref_bytes),
+    }
 
     // Applied *after* the weight bound, deliberately. The bound is a statement
     // about the re-derived partition — it may not describe more change than the
@@ -5465,13 +5523,22 @@ fn changed_columns_dominate_the_span(pieces: &[Piece]) -> bool {
 ///   partition_block_canonical 0:0/A | 2:3/     an insertion and a deletion
 /// ```
 ///
-/// Both denote `AGC` and both are distance-minimal. On the second, all three
-/// earlier routes refuse: the gap is `2 - 0 = 2` so it is not a single base; the
-/// reference widths total `0 + 1 = 1` against a span of `3`; and the insertion's
-/// reference width is `0`, so it reads as narrower than a lone substitution. The
-/// block is an inversion and the gate says nothing about it — which is the
-/// defect, since the pass exists precisely to keep `inversion.md:5`'s
-/// whole-span reverse complement from being shredded into its columns.
+/// Both denote `AGC` and both are distance-minimal. When #1637 was filed all
+/// three earlier routes refused the second: the gap is `2 - 0 = 2` so it is not
+/// a single base; the reference widths total `0 + 1 = 1` against a span of `3`;
+/// and [`no_piece_is_a_lone_substitution`] then measured reference **width**, so
+/// the insertion read as narrower than a lone substitution. The block is an
+/// inversion and the gate said nothing about it — which is the defect, since the
+/// pass exists precisely to keep `inversion.md:5`'s whole-span reverse
+/// complement from being shredded into its columns.
+///
+/// The third route no longer refuses **this** block: #1703 corrected it to ask
+/// whether a piece *is* a substitution (`delins.md:15`) rather than how wide it
+/// is, and neither an insertion nor a deletion is one. That does not make this
+/// route redundant — it is still the only one that reaches a partition
+/// containing a genuine substitution, which is the shape the spec's own
+/// published 16 nt example takes (`8:9/A`, pinned by
+/// [`the_inversion_coalesce_reaches_the_spec_published_sixteen_nt_example`]).
 ///
 /// The density argument in [`changed_columns_dominate_the_span`]'s own doc is
 /// about **columns**, not reference width, so counting `max(ref_width, payload)`
@@ -5576,7 +5643,8 @@ fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
         .all(|pair| pair[1].ref_start.saturating_sub(pair[0].ref_end) <= 1)
 }
 
-/// No piece spells a lone substitution — every one covers two or more columns.
+/// No piece spells a lone substitution — no piece replaces exactly one
+/// nucleotide by exactly one other.
 ///
 /// The third alternative admitting [`coalesce_whole_block_inversion`], and the
 /// one that closes #1517. It exists because the other two are geometric — they
@@ -5620,10 +5688,67 @@ fn every_separation_is_a_single_base(pieces: &[Piece]) -> bool {
 /// member type is an implementer's reading of `:56`, not something its text
 /// compels. `tests/it/issue_1517_inv_priority_over_delins.rs` records the
 /// question, both readings, and the choice.
+///
+/// # It asks about substitution-hood, not about width — corrected by #1703
+///
+/// This used to read `ref_end - ref_start >= 2`, i.e. "every piece covers two or
+/// more reference columns". That is the right verdict for a `sub`/`delins`
+/// partition and the wrong one for any piece that does not consume and replace
+/// reference in equal measure, because **a narrow piece is not the same thing as
+/// a substitution**:
+///
+/// | piece | reference width | payload | is it a substitution? | width test said |
+/// |---|---|---|---|---|
+/// | `0:1/T` | 1 | 1 | yes | refuse — correct |
+/// | `0:1/` (a deletion) | 1 | 0 | **no** | refuse — wrong |
+/// | `5:5/C` (an insertion) | 0 | 1 | **no** | refuse — wrong |
+/// | `0:2/TT` | 2 | 2 | no | admit — correct |
+///
+/// `delins.md:15` states the distinction the name has always claimed: "when
+/// **one** nucleotide is replaced by **one** other nucleotide, the change is a
+/// substitution". A deletion replaces one nucleotide by none and an insertion
+/// replaces none by one, so `general.md:56`'s ranking of substitution above
+/// inversion — which is the entire content of this route — reaches neither, and
+/// nothing withdraws `inversion.md:5` from the block they partition.
+///
+/// The correction is **additive**: a piece two or more columns wide can never be
+/// a one-for-one replacement, so every partition the width test admitted is
+/// still admitted, and only a currently-refused one can change. What it newly
+/// admits is a partition made entirely of indels and multi-column runs, and such
+/// a partition still has to survive [`is_inversion`] on the reconstruction — an
+/// exact, equal-length reverse complement — so the widening is bounded by the
+/// sequence rather than by this predicate.
+///
+/// #1703 is the case it was refusing: `GTTAA -> TTAAC`, the real
+/// `NC_000017.11:g.43044327_43044331`, whose canonical partition is a 1-base
+/// deletion plus a 1-base insertion because Levenshtein reads that pair (2) as
+/// cheaper than the three substitutions its columns present (3). All four routes
+/// refused it and the whole-span reverse complement came back as
+/// `g.[43044327del;43044332dup]`, which `delins.md:5` and `inversion.md:5`
+/// between them do not admit.
+///
+/// # Jurisdiction, because this gate is axis-blind and the citations are not
+///
+/// Everything above cites the `DNA/` directory, and a `DNA/` clause cannot scope
+/// the `r.` axis — that misreading is what
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` was opened on. It
+/// is not a problem here only because the RNA recommendations state the **same**
+/// three clauses in their own directory, which was checked rather than assumed
+/// (spec checkout `6f85311`):
+///
+/// | claim | DNA | RNA |
+/// |---|---|---|
+/// | an inversion is a whole-span reverse complement of more than one nucleotide | `DNA/inversion.md:5` | `RNA/inversion.md:5` |
+/// | a delins is a replacement "and which is not a substitution or inversion" | `DNA/delins.md:5` | `RNA/delins.md:5` |
+/// | one nucleotide replaced by one other is a substitution | `DNA/delins.md:15` | `RNA/delins.md:16` |
+///
+/// The RNA texts of the first two are word-for-word identical to their DNA
+/// twins. `general.md:56`'s prioritisation is not molecule-specific. So each
+/// axis this gate decides is decided under a clause with jurisdiction over it,
+/// and an `r.` row moving with a `g.` row is a coincidence of wording rather
+/// than one directory reaching across.
 fn no_piece_is_a_lone_substitution(pieces: &[Piece]) -> bool {
-    pieces
-        .iter()
-        .all(|piece| piece.ref_end.saturating_sub(piece.ref_start) >= 2)
+    pieces.iter().all(|piece| !piece.is_substitution())
 }
 
 /// Partition a changed block by deriving member boundaries from the **denoted
@@ -13002,7 +13127,8 @@ mod tests {
         /// reconstruction is a valid inversion — `is_inversion` accepts it — so
         /// nothing is wrong with what the pass would produce. What refused was
         /// the admission gate, and each of the three routes that predate #1637
-        /// is asserted below to be the reason.
+        /// is asserted below — two of them still refusing, and the third only
+        /// because #1703 corrected it (see the note on that assertion).
         #[test]
         fn the_inversion_coalesce_reaches_a_canonical_partition() {
             let reference = b"GCT";
@@ -13046,9 +13172,24 @@ mod tests {
                 "the insertion consumes no reference, so reference width \
                  under-reads this partition's density"
             );
+            // RE-BLESSED by #1703, from `!no_piece_is_a_lone_substitution` to the
+            // positive. The verdict moved because the *predicate* was corrected,
+            // not because this block changed: it used to measure reference width
+            // (`>= 2`) and so called this insertion and this deletion lone
+            // substitutions, which `delins.md:15` says they are not. Nothing
+            // about `GCT -> AGC` moved — the pass reached the same `inv` before
+            // and after, by route 4 then and by two routes now.
+            //
+            // The test's subject is unaffected: what it pins is that the gate
+            // refused this partition and that the reconstruction was sound, and
+            // #1637's route is still the one that uniquely decides a partition
+            // containing a genuine substitution — see
+            // `the_inversion_coalesce_reaches_the_spec_published_sixteen_nt_example`,
+            // whose `8:9/A` keeps this route refusing there.
             assert!(
-                !no_piece_is_a_lone_substitution(&pieces),
-                "the insertion's reference width is 0, narrower than a lone substitution"
+                no_piece_is_a_lone_substitution(&pieces),
+                "an insertion replaces no reference base and a deletion replaces \
+                 it with none, so neither is a substitution (`delins.md:15`)"
             );
             assert!(
                 payload_columns_dominate_the_span(&pieces),
@@ -13060,6 +13201,174 @@ mod tests {
                 pieces,
                 vec![reconstructed],
                 "a whole-block inversion must survive the canonical partition as one piece"
+            );
+        }
+
+        /// A compensating deletion/insertion pair is not two lone substitutions,
+        /// and the gate must not read it as one (#1703).
+        ///
+        /// The canonical partition of `GTTAA -> TTAAC` — the real
+        /// `NC_000017.11:g.43044327_43044331`, whose 2nd and 4th columns are
+        /// self-complementary — is a 1-base deletion at the hull start plus a
+        /// 1-base insertion at the hull end. Levenshtein reads that pair as
+        /// cheaper (2) than the three substitutions the columns present (3), so
+        /// it is what a minimal alignment produces.
+        ///
+        /// Neither member is a substitution. `delins.md:15` is explicit about
+        /// what one is — "when **one** nucleotide is replaced by **one** other
+        /// nucleotide, the change is a substitution" — and a deletion replaces
+        /// one nucleotide by none while an insertion replaces none by one. So
+        /// `general.md:56`'s ranking of substitution (1) above inversion (3),
+        /// which is the whole content of this route, does not reach either of
+        /// them, and nothing withdraws `inversion.md:5`.
+        ///
+        /// This is the assertion the predicate failed before #1703: it measured
+        /// reference **width** (`>= 2`) while its name and its reasoning are
+        /// about substitution-hood, so it called a pure indel a lone
+        /// substitution and refused the block.
+        #[test]
+        fn a_deletion_and_an_insertion_are_not_lone_substitutions() {
+            let reference = b"GTTAA";
+            let pieces =
+                partition_block_canonical(reference, b"TTAAC").expect("grid far below the bound");
+            assert_eq!(
+                pieces,
+                vec![
+                    Piece {
+                        ref_start: 0,
+                        ref_end: 1,
+                        alt: Vec::new(),
+                    },
+                    Piece {
+                        ref_start: 5,
+                        ref_end: 5,
+                        alt: b"C".to_vec(),
+                    },
+                ],
+                "if the canonical partition of this block ever changes, the rest \
+                 of this test is measuring something else"
+            );
+            assert!(
+                no_piece_is_a_lone_substitution(&pieces),
+                "a 1-base deletion and a pure insertion are a deletion and an \
+                 insertion, not substitutions (`delins.md:15`)"
+            );
+
+            // The three routes that cannot see this block, each for its own
+            // reason — so a later widening of any of them cannot silently become
+            // the thing this test is measuring.
+            assert!(
+                !every_separation_is_a_single_base(&pieces),
+                "the gap is 4, so the single-base route cannot admit it"
+            );
+            assert!(
+                !changed_columns_dominate_the_span(&pieces),
+                "reference widths total 1 + 0 against a span of 5"
+            );
+            assert!(
+                !payload_columns_dominate_the_span(&pieces),
+                "counting the payload lifts the total only to 2, still under half \
+                 of 5 — density cannot reach a block this sparse, which is why \
+                 #1637's route is not the answer here"
+            );
+
+            // And the block really is the inversion the gate was refusing.
+            assert_eq!(
+                whole_block_inversion(&pieces, reference),
+                Some(Piece {
+                    ref_start: 0,
+                    ref_end: 5,
+                    alt: b"TTAAC".to_vec(),
+                }),
+                "`inversion.md:5` defines an inversion by the content of the \
+                 whole span, and this span is an exact reverse complement"
+            );
+        }
+
+        /// A lone substitution is still refused, and the corrected predicate is
+        /// what says so (#1703).
+        ///
+        /// The negative half of the test above, and the one that keeps
+        /// `general.md:56` doing work. `AAGCTA -> TAGCTT` is also a whole-span
+        /// reverse complement, but its members are two genuine substitutions —
+        /// one nucleotide replaced by one other — so the split outranks the
+        /// spanning `inv` and the gate must refuse.
+        #[test]
+        fn two_lone_substitutions_are_still_refused_by_the_corrected_predicate() {
+            let reference = b"AAGCTA";
+            let pieces = vec![
+                Piece {
+                    ref_start: 0,
+                    ref_end: 1,
+                    alt: b"T".to_vec(),
+                },
+                Piece {
+                    ref_start: 5,
+                    ref_end: 6,
+                    alt: b"T".to_vec(),
+                },
+            ];
+            assert!(
+                !no_piece_is_a_lone_substitution(&pieces),
+                "both members replace one nucleotide by one other, which is a \
+                 substitution by `delins.md:15`"
+            );
+            let mut refused = pieces.clone();
+            coalesce_whole_block_inversion(&mut refused, reference);
+            assert_eq!(
+                refused, pieces,
+                "the #1040 control must survive the pass untouched"
+            );
+        }
+
+        /// Inversion typing is settled on the trimmed block, **before** the
+        /// 3'-shift moves a member out of it (#1703).
+        ///
+        /// The second, independent half of #1703, and the one a fix to the gate
+        /// alone does not reach. `shift_pieces` runs before
+        /// `coalesce_whole_block_inversion` in `canonicalize_from_sequence`, and
+        /// it moves the derived insertion from the hull's right edge to one past
+        /// it whenever the next reference base repeats the payload — which is
+        /// exactly the case here, and is what renders the wrong answer's second
+        /// member as a `dup`.
+        ///
+        /// After that move the pieces no longer span the block: the hull is 6
+        /// bases and the reconstruction is `TTAACC` against `GTTAAC`, which is
+        /// not a reverse complement. So the pass must consult the answer computed
+        /// before the shift, and this test pins the two verdicts *differing* —
+        /// which is the whole reason the answer has to be carried forward rather
+        /// than recomputed.
+        #[test]
+        fn the_whole_block_inversion_is_settled_before_the_three_prime_shift() {
+            // The trailing `C` is the base the insertion shifts onto, mirroring
+            // `NC_000017.11:g.43044332`.
+            let reference = b"GTTAACG";
+            let mut pieces = partition_block_canonical(&reference[..5], b"TTAAC")
+                .expect("grid far below the bound");
+
+            let before = whole_block_inversion(&pieces, reference);
+            assert_eq!(
+                before,
+                Some(Piece {
+                    ref_start: 0,
+                    ref_end: 5,
+                    alt: b"TTAAC".to_vec(),
+                }),
+                "on the trimmed block the pieces span exactly the inversion"
+            );
+
+            shift_pieces(&mut pieces, reference, ShuffleDirection::ThreePrime);
+            assert_eq!(
+                pieces.last().map(|piece| piece.ref_start),
+                Some(6),
+                "the 3'-shift must move the insertion past the block's right edge, \
+                 or this test is not exercising the ordering at all"
+            );
+            assert_eq!(
+                whole_block_inversion(&pieces, reference),
+                None,
+                "once a member is outside the block hull the reconstruction spans \
+                 6 bases against a 6-base payload that is not a reverse complement"
             );
         }
 
