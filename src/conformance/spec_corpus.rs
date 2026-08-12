@@ -523,6 +523,37 @@ pub struct Row {
     /// emitted SVD-WG010's own worked example. So the shape is generated with the
     /// guard attached rather than left to be re-discovered.
     pub negative_guards: Vec<&'static str>,
+    /// Whether this row is in the population a **coding-axis** merge across
+    /// **two or more** unchanged nucleotides could be observed on. See
+    /// [`is_coding_axis_separation_two_or_more_shape`], which carries the
+    /// reasoning — including why the floor is two rather than one.
+    ///
+    /// # An instrument's denominator, not a guard and not a ruling
+    ///
+    /// [`Self::negative_guards`] marks a row whose merge would implement a
+    /// **rejected** proposal, so a violation there is a verdict. This flag marks
+    /// a row where a merge is merely *interesting*, and its counter reports how
+    /// many such merges happen. It asserts nothing about whether they are right:
+    /// the adjudication is the operator's and is open.
+    ///
+    /// What makes the population worth counting is that `general.md:34` and
+    /// `DNA/delins.md:17` speak to it in as many words — "two variants separated
+    /// by one or more nucleotides should be described individually and **not**
+    /// as a 'delins'".
+    ///
+    /// # Why it exists as a separate flag
+    ///
+    /// [`is_svd_wg010_shape`]'s domain and this one's are **disjoint by
+    /// construction**: that guard admits only the two frameless shapes
+    /// ([`RefShape::Genomic`], [`RefShape::NonCodingMultiExon`]) at a separation
+    /// of exactly one with exactly two members, so it cannot count a coding-axis
+    /// merge at any separation, for any member count. Widening it would silently
+    /// re-scope a guard for a rejected proposal into something else, so this is a
+    /// second marker beside it rather than a change to it.
+    ///
+    /// Set by [`build_family`] alone, so it is a property of family rows;
+    /// single, conflicting and prohibited rows carry `false`.
+    pub coding_axis_separation_two_or_more: bool,
     /// Member layout (#1456).
     pub geometry: Geometry,
     /// Transcript placement (#1478).
@@ -1483,6 +1514,20 @@ impl SpecCorpus {
         self.rows.iter().map(|row| row.spellings.len()).sum()
     }
 
+    /// Rows in the coding-axis merge instrument's population — the denominator
+    /// its count is `n of` (see [`Row::coding_axis_separation_two_or_more`]).
+    ///
+    /// Reported so a consumer can fail as VACUOUS rather than read `0` as a
+    /// result: a corpus that stopped generating coding-axis separated designs
+    /// would otherwise report no merges and look like a clean bill of health.
+    #[must_use]
+    pub fn coding_axis_separation_two_or_more_rows(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| row.coding_axis_separation_two_or_more)
+            .count()
+    }
+
     /// Rows of each kind.
     #[must_use]
     pub fn by_kind(&self) -> BTreeMap<RowKind, usize> {
@@ -2118,18 +2163,36 @@ fn build_family(design: Design<'_>) -> Attempt {
         return Err((design.id, DropReason::Singleton));
     }
 
+    // Both the negative guard and the coding-axis merge instrument want the same
+    // property of the design: that the unchanged bases between the members
+    // cannot be shifted away. Two members separated by one `T` inside a `T`-tract
+    // are the *same variant* as two adjacent members, so a merge there is the 3'
+    // rule rather than a merge across a separation. Computed once and read twice;
+    // see `is_svd_wg010_shape`'s "This is only half the test".
+    let irreducible = triples
+        .iter()
+        .all(|t| equivalent_placements(served, t.0, &t.1, &t.2).is_empty());
+
     // The negative guard survives only when the intervening base is
     // irreducible: see `is_svd_wg010_shape`.
-    let negative_guards = if design.negative_guard_candidate
-        && triples.len() == 2
-        && triples
-            .iter()
-            .all(|t| equivalent_placements(served, t.0, &t.1, &t.2).is_empty())
-    {
+    let negative_guards = if design.negative_guard_candidate && triples.len() == 2 && irreducible {
         vec![SVD_WG010_GUARD]
     } else {
         Vec::new()
     };
+
+    // The coding-axis merge instrument's population. `triples.len()` must equal
+    // the member count for `irreducible` to be a statement about every member —
+    // a design whose members collapsed into fewer triples has already been
+    // re-read by the applier, so its separations are not the authored ones.
+    let coding_axis_separation_two_or_more = triples.len() == design.members.len()
+        && irreducible
+        && is_coding_axis_separation_two_or_more_shape(
+            frame.shape,
+            &design.members,
+            design.separation,
+            design.mechanism,
+        );
 
     let window = hi - lo + 2 * 128;
     Ok(Row {
@@ -2146,6 +2209,7 @@ fn build_family(design: Design<'_>) -> Attempt {
         mechanism: design.mechanism,
         prohibition: None,
         negative_guards,
+        coding_axis_separation_two_or_more,
         geometry: design.geometry,
         region: design.region,
         scale_bands: scale_bands(hi - lo, window),
@@ -2392,6 +2456,85 @@ fn is_svd_wg010_shape(shape: RefShape, kinds: &[Kind], separation: usize) -> boo
 
 /// The guard label a design earns once irreducibility is confirmed.
 const SVD_WG010_GUARD: &str = "svd-wg010-frameless-separation-floor-of-two";
+
+/// The coding-axis merge instrument's population: a **coding** multi-member cis
+/// design whose members each consume reference and sit **two or more** unchanged
+/// nucleotides apart.
+///
+/// # This is an instrument, not a holding
+///
+/// It says which rows are worth *counting a merge on*. It does not say a merge
+/// there is wrong — that adjudication is the operator's and is open. What makes
+/// the population interesting is that a clause speaks to it in as many words:
+/// `general.md:34` and `DNA/delins.md:17`, "two variants separated by one or
+/// more nucleotides should be described individually and **not** as a
+/// 'delins'". The counter's job is to make the size of the merged set readable
+/// at corpus scale, rather than argued from a hand-listed set of tests.
+///
+/// # Why the floor is TWO, which is the conjunct that keeps this honest
+///
+/// `general.md:35` and `DNA/delins.md:18` carve out an exception on this very
+/// axis — two variants "separated by **one** nucleotide, together affecting one
+/// amino acid", which needs a reading frame and so can be met **only** here.
+/// Ferro implements it, and it fires: measured on the shipping rule, **16** rows
+/// of this corpus merge at a separation of exactly one and **none** at two or
+/// more.
+///
+/// A floor of one would therefore count that exception as though it were the
+/// phenomenon, and the counter would have to open at a non-zero pin — leaving a
+/// licensed merge and an unlicensed one summed into one figure that no later
+/// reader could take apart. The floor of two is read straight off the
+/// exception's own stated conjunct ("separated by one nucleotide"), which is a
+/// textual scope rather than a ruling: at two or more the exception cannot
+/// reach, whatever anyone decides about how it applies at one.
+///
+/// The cost is stated rather than hidden: a coding-axis merge at separation
+/// **one** is invisible to this counter, and `is_svd_wg010_shape` does not cover
+/// it either (that guard is frameless-only). That gap is real and is left open
+/// deliberately, because closing it means deciding when `general.md:35` licenses
+/// a merge, which is exactly the adjudication an instrument must not make.
+///
+/// # Why the domain is stated positively rather than as "not frameless"
+///
+/// [`is_svd_wg010_shape`] admits `Genomic | NonCodingMultiExon` only, at a
+/// separation of exactly one, with exactly two members. This admits
+/// `CodingSingleExon | CodingMultiExon` only, at two or more, with two or more
+/// members. The two are disjoint twice over and are meant to stay that way — the
+/// guard is a negative result about a **rejected** proposal, and relaxing its
+/// `frameless` conjunct to make it count coding rows would silently turn it into
+/// a different instrument carrying the guard's name and its published zero.
+///
+/// # The conjuncts
+///
+/// - **Coding shape.** The `c.` axis.
+/// - **`separation >= 2`.** See above. A separation of zero is adjacency, ruled
+///   on separately (`delins-adjacent-members-when-both-consume-reference`),
+///   where merging is required rather than interesting.
+/// - **Two or more members**, combined as allele members — a composite payload
+///   or a repeat count is one member however it is spelled.
+/// - **Every member consumes reference.** A pure insertion has no footprint of
+///   its own, so "the unchanged bases between the members" is not well defined
+///   for it; the same conjunct, for the same reason, scopes the sibling guard.
+///
+/// Irreducibility is the fifth conjunct and is checked in [`build_family`],
+/// which is the only place the served sequence is available.
+fn is_coding_axis_separation_two_or_more_shape(
+    shape: RefShape,
+    members: &[Member],
+    separation: usize,
+    mechanism: Mechanism,
+) -> bool {
+    let coding = matches!(
+        shape,
+        RefShape::CodingSingleExon | RefShape::CodingMultiExon(_)
+    );
+    let all_consume_reference = members.iter().all(|member| member.kind != Kind::Ins);
+    coding
+        && separation >= 2
+        && members.len() >= 2
+        && mechanism.combines_members()
+        && all_consume_reference
+}
 
 /// Stratum 2: transcript geometry (#1478) — the placements a single-exon
 /// `CDS_START = 1` transcript makes structurally impossible.
@@ -2735,6 +2878,8 @@ fn enumerate_conflicts(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
                             Strength::Absolute,
                         )),
                         negative_guards: Vec::new(),
+                        // Set by `build_family` alone; this row is not a family.
+                        coding_axis_separation_two_or_more: false,
                         geometry,
                         region: Region::MidCds,
                         scale_bands: Vec::new(),
@@ -2900,6 +3045,8 @@ fn enumerate_intronic(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
                             },
                             prohibition: None,
                             negative_guards: Vec::new(),
+                            // Set by `build_family` alone; this row is not a family.
+                            coding_axis_separation_two_or_more: false,
                             geometry: Geometry::Disjoint,
                             region: Region::Intronic,
                             scale_bands: Vec::new(),
@@ -2989,6 +3136,8 @@ fn enumerate_mechanisms(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
                                 Strength::Conditional,
                             )),
                             negative_guards: Vec::new(),
+                            // Set by `build_family` alone; this row is not a family.
+                            coding_axis_separation_two_or_more: false,
                             geometry: Geometry::Disjoint,
                             region: Region::MidCds,
                             scale_bands: Vec::new(),
@@ -3031,6 +3180,8 @@ fn enumerate_mechanisms(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
                         mechanism,
                         prohibition: None,
                         negative_guards: Vec::new(),
+                        // Set by `build_family` alone; this row is not a family.
+                        coding_axis_separation_two_or_more: false,
                         geometry: Geometry::Disjoint,
                         region: Region::MidCds,
                         scale_bands: Vec::new(),
@@ -3227,6 +3378,8 @@ fn enumerate_prohibited(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
                         mechanism,
                         prohibition: Some((prohibition.rule, prohibition.strength)),
                         negative_guards: Vec::new(),
+                        // Set by `build_family` alone; this row is not a family.
+                        coding_axis_separation_two_or_more: false,
                         geometry: Geometry::Disjoint,
                         region: Region::Anywhere,
                         scale_bands: Vec::new(),
@@ -3297,6 +3450,8 @@ fn enumerate_ambiguity(bounds: &CorpusBounds, out: &mut Vec<Attempt>) {
                     mechanism: Mechanism::Cis,
                     prohibition: None,
                     negative_guards: Vec::new(),
+                    // Set by `build_family` alone; this row is not a family.
+                    coding_axis_separation_two_or_more: false,
                     geometry: Geometry::Disjoint,
                     region: Region::MidCds,
                     scale_bands: Vec::new(),
@@ -3448,6 +3603,68 @@ mod tests {
         assert_eq!(
             apply_triples(reference, &[(4, "GGGG".to_string(), String::new())]),
             None
+        );
+    }
+
+    /// Every row the coding-axis merge instrument counts over really is in the
+    /// population it claims, and the population is not empty.
+    ///
+    /// Without this the counter's denominator is a number nobody checked: a
+    /// predicate that silently admitted a `g.` row, or a separation of one,
+    /// would make the census's zero mean something other than what its docs say
+    /// — and `spec_conformance_axis` asserts only that the denominator is
+    /// non-zero, never what is in it.
+    ///
+    /// It also pins the disjointness the instrument is built on: no row may
+    /// carry both this flag and the SVD-WG010 negative guard. That is what makes
+    /// "the guard cannot count these merges" a property of the corpus rather
+    /// than a claim in a doc comment.
+    #[test]
+    fn the_coding_axis_merge_population_is_what_it_says_it_is() {
+        let built = corpus(&CorpusBounds::default());
+        let mut checked = 0usize;
+        for row in &built.rows {
+            if !row.coding_axis_separation_two_or_more {
+                continue;
+            }
+            assert_eq!(
+                row.kind,
+                RowKind::Family,
+                "{}: only family rows carry the flag",
+                row.id
+            );
+            assert!(
+                matches!(
+                    row.shape,
+                    RefShape::CodingSingleExon | RefShape::CodingMultiExon(_)
+                ),
+                "{}: {:?} is not a coding axis",
+                row.id,
+                row.shape
+            );
+            assert!(
+                row.separation >= 2,
+                "{}: separation {} is below the floor the instrument documents",
+                row.id,
+                row.separation
+            );
+            assert!(row.is_multi_member(), "{}: not multi-member", row.id);
+            assert!(
+                row.negative_guards.is_empty(),
+                "{}: carries the SVD-WG010 guard as well, so the two domains overlap",
+                row.id
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "VACUOUS: the corpus builds no coding-axis row separated by two or more unchanged \
+             nucleotides, so the merge counter measures nothing"
+        );
+        assert_eq!(
+            checked,
+            built.coding_axis_separation_two_or_more_rows(),
+            "the accessor and a direct scan disagree"
         );
     }
 
