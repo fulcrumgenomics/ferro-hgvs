@@ -31,6 +31,28 @@ impl Boundaries {
         Self { left, right }
     }
 
+    /// Bounds that permit no shuffle travel at all, in either direction.
+    ///
+    /// [`crate::normalize::shuffle::shuffle`] walks 3' while
+    /// `new_end < right` and 5' while `new_start > left`, so a pair that is
+    /// empty in *both* senses — `left` above every position, `right` below every
+    /// one — makes each loop fall through on its first test whatever coordinates
+    /// the edit has. That is the point: the alternative is to derive a pinned
+    /// pair from the edit's own indices, which would have to reproduce
+    /// `normalize_na_edit`'s per-edit-type index adjustment (an insertion's
+    /// shuffle start and end are both shifted by one) and could only ever be
+    /// wrong in the same way twice.
+    ///
+    /// Used by `Normalizer::canonicalize_without_shifting` to re-type an edit
+    /// against the reference while refusing to move it — see that method for why
+    /// the two halves are separable.
+    pub fn pinned() -> Self {
+        Self {
+            left: u64::MAX,
+            right: 0,
+        }
+    }
+
     /// Check if a position is within the half-open bounds `[left, right)`.
     /// `right` itself is **not** contained — it's one past the last
     /// reachable position by the half-open convention documented on
