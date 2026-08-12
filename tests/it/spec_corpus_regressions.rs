@@ -70,10 +70,11 @@ fn normalize_3prime(frame: &Frame, input: &str) -> String {
 /// **Question.** May the 3' shift move a deletion out of an exon and into the
 /// following intron?
 ///
-/// **Yes — the shift is legal. It is the ACCESSION that is not.** This doc
-/// comment previously said "the clauses say no, twice" and cited `general.md:44`
-/// as forbidding the shift. That was backwards, and it mattered: it named a
-/// target that would implement an exception the spec explicitly withholds.
+/// **Yes — the shift is legal. It was the ACCESSION that was not, and #1704 fixed
+/// that.** This doc comment previously said "the clauses say no, twice" and cited
+/// `general.md:44` as forbidding the shift. That was backwards, and it mattered:
+/// it named a target that would implement an exception the spec explicitly
+/// withholds.
 ///
 /// `general.md:44` defers to `background/numbering.md`, which scopes its
 /// exception twice — `:23` applies it to **exon/exon** junctions "where shifting
@@ -85,9 +86,11 @@ fn normalize_3prime(frame: &Frame, input: &str) -> String {
 /// What IS violated is `checklist.md:20`: "NM reference sequences cover mature
 /// transcripts and **do not contain** intron and gene flanking sequences, and can
 /// only be used to describe variants in introns using a `c.` prefix when a
-/// genomic reference sequence is given". So the output names a position its own
-/// accession cannot express. Converging on the clamped `c.20del` would revert
-/// #670; the live candidates are re-parenting onto a genomic wrapper, or refusal.
+/// genomic reference sequence is given". The output used to name a position its
+/// own accession could not express; converging on the clamped `c.20del` would
+/// have reverted #670, so #1704 took the other route and re-parents onto the
+/// genomic wrapper the crossing had already resolved —
+/// `NC_SYNTH.1(NM_TEST.1):c.20+2del`. The coordinate is unchanged.
 ///
 /// **The strand is a confound, not a finding.** The plus/minus difference below
 /// is real but is a property of the fixture: the provider writes a literal
@@ -97,11 +100,13 @@ fn normalize_3prime(frame: &Frame, input: &str) -> String {
 /// `defect_371_transcript_exit.rs`, whose `junction_provider` takes the intron as
 /// a parameter for precisely this reason.
 ///
-/// This is the largest single class the corpus found — **371 outputs on the 3'
+/// This was the largest single class the corpus found — **371 outputs on the 3'
 /// direction and 0 on the 5'** — and it is structurally invisible to a
 /// single-exon fixture, which is #1478 exactly. The 0 at 5' is a claim about the
 /// code, not the corpus: all three copies of the #670 gate are guarded on
-/// `ThreePrime` with no 5' mirror.
+/// `ThreePrime` with no 5' mirror. All 371 now carry the wrapper and are counted
+/// by `spec_conformance_axis`'s `outputs_intronic_under_a_genomic_wrapper`;
+/// `outputs_leaving_the_transcript` is pinned at **0**.
 #[test]
 fn a_minus_strand_junction_shift_leaves_the_transcript() {
     let core = at_core();
@@ -120,12 +125,11 @@ fn a_minus_strand_junction_shift_leaves_the_transcript() {
     // The defect: on the minus strand it walks two bases into the intron.
     assert_eq!(
         normalize_3prime(&minus, "NM_TEST.1:c.17del"),
-        "NM_TEST.1:c.20+2del",
-        "PINNED DEFECT — the SHIFT is legal (numbering.md:26 withholds general.md:44's \
-         exception from exon/intron junctions); what is invalid is the ACCESSION, since \
-         checklist.md:20 forbids a bare NM_ from naming an intronic position. The target is \
-         therefore a genomic wrapper or a refusal — NOT c.20del, which would implement an \
-         exception the spec explicitly excludes and would revert #670."
+        "NC_SYNTH.1(NM_TEST.1):c.20+2del",
+        "the SHIFT is legal (numbering.md:26 withholds general.md:44's exception from \
+         exon/intron junctions) and the ACCESSION now satisfies checklist.md:20, which \
+         requires a genomic reference for an intronic position (#1704). NOT c.20del, which \
+         would implement an exception the spec explicitly excludes and would revert #670."
     );
 }
 
@@ -150,9 +154,12 @@ fn two_members_shifting_past_one_junction_collide_into_identical_members() {
 
     let output = normalize_3prime(&minus, "NM_TEST.1:c.[20del;17del]");
     assert_eq!(
-        output, "NM_TEST.1:c.[20+2del;20+2del]",
+        output, "NC_SYNTH.1(NM_TEST.1):c.[20+2del;20+2del]",
         "PINNED DEFECT — two identical members denote no sequence. Correct output: \
-         NM_TEST.1:c.19_20del, which is what the plus-strand control gives."
+         NM_TEST.1:c.19_20del, which is what the plus-strand control gives. #1704 fixed the \
+         ACCESSION half of this row (the wrapper is now present and correct) and deliberately \
+         did not touch the collision, which is a separate defect: the accession was invalid \
+         AND the description denotes nothing, and only the first is checklist.md:20's."
     );
 
     // The plus-strand control, so the strand-specificity is pinned too and a

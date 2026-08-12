@@ -3,14 +3,30 @@
 //!
 //! # What this file pins, and what it deliberately does not
 //!
-//! `spec_conformance_axis` measures `outputs_leaving_the_transcript` at **371**
+//! `spec_conformance_axis` measured `outputs_leaving_the_transcript` at **371**
 //! on the 3' direction and **0** on the 5'; `spec_corpus_regressions`'s
 //! `a_minus_strand_junction_shift_leaves_the_transcript` names one row of it. Both
 //! describe the *symptom*. These tests pin the **mechanism**, so that a fix can be
 //! judged against the cause rather than against one string.
 //!
-//! Nothing here is fixed. The fix locus is `src/normalize/`, and this is a
-//! characterization PR.
+//! # FIXED by #1704 — and the mechanism below is unchanged, which is the point
+//!
+//! The file kept its name and every one of its measurements, because none of them
+//! was wrong: the trigger is still the landing on the exon's last base, the
+//! traveller is still the intron's own bases rather than the strand, the exon→exon
+//! case is still correctly refused, and the 5' direction still has no mirror of the
+//! gate. **What changed is one thing only — the accession the answer is rendered
+//! against.** `checklist.md:20` needs a genomic reference for an intronic position,
+//! the genomic re-shuffle already resolved one to compute the crossing at all, and
+//! `Normalizer::reparent_junction_exit` now renders the result as
+//! `NC_SYNTH.1(NM_TEST.1):c.10+2del`. Every expectation below moved by exactly that
+//! prefix and by nothing else; a diff of this file against its pre-#1704 form is
+//! the cleanest statement available of what the fix did and did not do.
+//!
+//! The two candidates named at the end of this doc are therefore settled:
+//! re-parenting, not refusing. `Normalizer::reparent_junction_exit` carries the
+//! reasoning, including why refusing could not have closed the class (the census is
+//! a *lenient*-mode figure, so a strict-mode refusal leaves all 371 in place).
 //!
 //! # The fixtures are built here rather than drawn from `spec_corpus`
 //!
@@ -143,6 +159,41 @@ pub(crate) fn junction_provider(
     intron: &str,
     coding: bool,
 ) -> MockProvider {
+    junction_provider_on_chromosome(strand, exons, intron, coding, Some(CONTIG))
+}
+
+pub(crate) fn junction_provider_on_chromosome(
+    strand: Strand,
+    exons: [&str; 3],
+    intron: &str,
+    coding: bool,
+    chromosome: Option<&str>,
+) -> MockProvider {
+    junction_provider_named(
+        strand,
+        exons,
+        intron,
+        coding,
+        chromosome,
+        if coding { CODING } else { NONCODING },
+    )
+}
+
+/// As [`junction_provider_on_chromosome`], but the transcript's own accession is
+/// a parameter too.
+///
+/// Only [`a_self_referential_wrapper_is_declined`] needs this: every other test
+/// works on `NM_`/`NR_`, where the accession is decided by `coding`. `coding`
+/// here selects only whether [`CDS`] is applied, so an LRG record can be served
+/// with coding coordinates.
+pub(crate) fn junction_provider_named(
+    strand: Strand,
+    exons: [&str; 3],
+    intron: &str,
+    coding: bool,
+    chromosome: Option<&str>,
+    accession: &str,
+) -> MockProvider {
     for block in exons {
         assert_eq!(block.len(), EXON_LEN, "each exon block is {EXON_LEN} bases");
     }
@@ -191,16 +242,24 @@ pub(crate) fn junction_provider(
         .collect();
 
     let mut provider = MockProvider::new();
-    provider.add_genomic_sequence(CONTIG, contig);
+    provider.add_genomic_sequence(CONTIG, contig.clone());
+    // Serve the contig under whatever the transcript NAMES as its chromosome, so
+    // the crossing itself succeeds and the rendering guards are the only thing
+    // left to judge. Without this, renaming the chromosome also breaks the
+    // genomic fetch the `#670` gate needs, the answer falls back to the
+    // exon-confined `c.10del`, and a guard test would pass for the wrong reason.
+    if let Some(name) = chromosome.filter(|name| *name != CONTIG) {
+        provider.add_genomic_sequence(name, contig);
+    }
     provider.add_transcript(Transcript::new(
-        if coding { CODING } else { NONCODING }.to_string(),
+        accession.to_string(),
         Some("SYNTH".to_string()),
         strand,
         tx,
         coding.then_some(CDS.0),
         coding.then_some(CDS.1),
         exon_records,
-        Some(CONTIG.to_string()),
+        chromosome.map(str::to_string),
         Some(PAD as u64 + 1),
         Some((PAD + span) as u64),
         GenomeBuild::GRCh38,
@@ -314,11 +373,11 @@ fn the_exit_follows_the_intron_bases_not_the_strand() {
             let provider = junction_provider(strand, blocks, &continuing, true);
             assert_eq!(
                 normalize_3prime(&provider, &format!("{CODING}:c.7del")),
-                format!("{CODING}:c.10+2del"),
-                "PINNED DEFECT — base {base} on the {strand:?} strand, intron {continuing}. \
-                 checklist.md:20 makes an intronic position inexpressible against a bare NM_. \
-                 The SHIFT is correct (numbering.md:26 withholds the exon/exon exception from \
-                 exon/intron junctions); the ACCESSION is not."
+                format!("{CONTIG}({CODING}):c.10+2del"),
+                "base {base} on the {strand:?} strand, intron {continuing}. The SHIFT is \
+                 correct (numbering.md:26 withholds the exon/exon exception from exon/intron \
+                 junctions) and the ACCESSION now carries the genomic wrapper checklist.md:20 \
+                 requires (#1704)."
             );
         }
 
@@ -347,18 +406,20 @@ fn the_exit_follows_the_intron_bases_not_the_strand() {
 fn the_distance_travelled_is_the_length_of_the_matching_intron_prefix() {
     let exons = exons_with_run_at_exon1_end('A');
     let blocks = [exons[0].as_str(), exons[1].as_str(), exons[2].as_str()];
+    // The `CC` row stays inside the exon, so it keeps the bare accession; every
+    // row that travels into the intron carries the genomic wrapper (#1704).
     for (lead, expected) in [
-        ("CC", "c.10del"),
-        ("AC", "c.10+1del"),
-        ("AAC", "c.10+2del"),
-        ("AAAC", "c.10+3del"),
+        ("CC", format!("{CODING}:c.10del")),
+        ("AC", format!("{CONTIG}({CODING}):c.10+1del")),
+        ("AAC", format!("{CONTIG}({CODING}):c.10+2del")),
+        ("AAAC", format!("{CONTIG}({CODING}):c.10+3del")),
     ] {
         let intron = intron_leading_with(lead);
         for strand in [Strand::Plus, Strand::Minus] {
             let provider = junction_provider(strand, blocks, &intron, true);
             assert_eq!(
                 normalize_3prime(&provider, &format!("{CODING}:c.7del")),
-                format!("{CODING}:{expected}"),
+                expected,
                 "intron prefix {lead} on the {strand:?} strand"
             );
         }
@@ -400,7 +461,7 @@ fn the_exit_needs_the_shuffle_to_land_on_the_exons_last_base() {
                 &junction_provider(strand, flush_blocks, &intron, true),
                 &format!("{CODING}:c.7del")
             ),
-            format!("{CODING}:c.10+2del"),
+            format!("{CONTIG}({CODING}):c.10+2del"),
             "the {strand:?}-strand run landing ON the junction exits"
         );
 
@@ -599,13 +660,13 @@ fn the_exit_reaches_the_second_junction_the_dup_spelling_and_the_n_axis() {
         let provider = junction_provider(strand, second_junction, &intron, true);
         assert_eq!(
             normalize_3prime(&provider, &format!("{CODING}:c.27del")),
-            format!("{CODING}:c.30+2del"),
-            "the exon2/exon3 junction leaks identically ({strand:?})"
+            format!("{CONTIG}({CODING}):c.30+2del"),
+            "the exon2/exon3 junction crosses identically ({strand:?})"
         );
         assert_eq!(
             normalize_3prime(&provider, &format!("{CODING}:c.27dup")),
-            format!("{CODING}:c.30+2dup"),
-            "a duplication leaks identically to a deletion ({strand:?})"
+            format!("{CONTIG}({CODING}):c.30+2dup"),
+            "a duplication crosses identically to a deletion ({strand:?})"
         );
 
         // `n.` — no CDS at all, so the axis is the plain transcript numbering and
@@ -613,8 +674,8 @@ fn the_exit_reaches_the_second_junction_the_dup_spelling_and_the_n_axis() {
         let noncoding = junction_provider(strand, first_junction, &intron, false);
         assert_eq!(
             normalize_3prime(&noncoding, &format!("{NONCODING}:n.17del")),
-            format!("{NONCODING}:n.20+2del"),
-            "the `n.` axis carries its own copy of the gate ({strand:?})"
+            format!("{CONTIG}({NONCODING}):n.20+2del"),
+            "the `n.` axis carries its own copy of the gate, and its own wrapper ({strand:?})"
         );
     }
 }
@@ -650,37 +711,53 @@ fn an_allele_exits_member_by_member() {
         // Each member on its own.
         assert_eq!(
             normalize_3prime(&provider, &format!("{CODING}:c.7del")),
-            format!("{CODING}:c.10+2del")
+            format!("{CONTIG}({CODING}):c.10+2del")
         );
         assert_eq!(
             normalize_3prime(&provider, &format!("{CODING}:c.15del")),
-            format!("{CODING}:c.18del")
+            format!("{CODING}:c.18del"),
+            "the mid-exon member never crosses, so on its own it keeps the bare accession"
         );
-        // And the allele: precisely those two answers, side by side.
+        // And the allele: precisely those two answers, side by side — under ONE
+        // accession. The wrapper is lifted to the whole description rather than
+        // applied per member, because `AlleleVariant`'s compact form
+        // (`ACC:c.[a;b]`) requires the members to share an accession: wrapping
+        // only the crossing member would drop this into the expanded
+        // `[NC_SYNTH.1(NM_TEST.1):c.10+2del;NM_TEST.1:c.18del]`, a much larger
+        // representation change than the defect it repairs. A genomic wrapper on
+        // an exonic position is unremarkable, so lifting it is the cheap side.
         assert_eq!(
             normalize_3prime(&provider, &format!("{CODING}:c.[7del;15del]")),
-            format!("{CODING}:c.[10+2del;18del]"),
-            "PINNED DEFECT — the allele is its two members' independent answers, so the exit \
-             is a per-member property ({strand:?})"
+            format!("{CONTIG}({CODING}):c.[10+2del;18del]"),
+            "the allele is its two members' independent answers under one accession, so the \
+             crossing is a per-member property and the wrapper a whole-description one \
+             ({strand:?})"
         );
     }
 }
 
-/// **Question.** Is the intronic output at least a fixed point, so that the
-/// defect is one description rather than an oscillation?
+/// **Question.** Is the wrapped output a fixed point, and does ferro's own parser
+/// read it back?
 ///
-/// **Yes, and that is the bad news.** Re-normalizing `c.10+2del` returns it
-/// unchanged, which means `FERRO_ASSERT_IDEMPOTENT` cannot see this class either —
-/// the same blind spot `FERRO_ASSERT_IN_BOUNDS` has for it
-/// (`in_bounds_oracle_scope.rs`). Two of the three seam oracles are silent here
-/// for two independent reasons, and the third (`FERRO_ASSERT_REPARSE`) is silent
-/// because `parse_hgvs` accepts an intronic position on a bare `NM_` (pinned by
-/// `spec_corpus_regressions::a_bare_transcript_accession_accepts_an_intronic_position`).
+/// **Both, and both are load-bearing.** `FERRO_ASSERT_IDEMPOTENT` and
+/// `FERRO_ASSERT_REPARSE` run over the whole suite in CI, so a wrapper that
+/// normalized away on the second pass — or that `parse_hgvs` refused — would be a
+/// regression wearing a fix's clothes, and it is the second pass that is the real
+/// question: the re-parented output *is* an intronic position on a transcript
+/// axis, so it re-enters the very path that produced it.
 ///
-/// So **no seam oracle covers the corpus's largest defect class**, and this test
-/// is where that is stated as a measurement rather than as an inference.
+/// **Why this test still exists after the fix.** It was written to record that
+/// **no seam oracle covered the corpus's largest defect class** — the output was
+/// a fixed point, so `FERRO_ASSERT_IDEMPOTENT` was blind; it re-parsed, so
+/// `FERRO_ASSERT_REPARSE` was blind (`parse_hgvs` accepts an intronic position on
+/// a bare `NM_`, pinned by
+/// `spec_corpus_regressions::a_bare_transcript_accession_accepts_an_intronic_position`);
+/// and `FERRO_ASSERT_IN_BOUNDS` has its own blind spot for it
+/// (`in_bounds_oracle_scope.rs`). That is still true of the *shape*, which is why
+/// the class had to be caught by a census rather than by a seam oracle — and why
+/// this file, not an oracle, is where the fix is guarded.
 #[test]
-fn the_intronic_output_is_a_fixed_point_so_no_seam_oracle_sees_it() {
+fn the_wrapped_output_is_a_fixed_point_and_re_parses() {
     let intron = intron_leading_with("AA");
     let exons = exons_with_run_at_exon1_end('A');
     let blocks = [exons[0].as_str(), exons[1].as_str(), exons[2].as_str()];
@@ -688,16 +765,352 @@ fn the_intronic_output_is_a_fixed_point_so_no_seam_oracle_sees_it() {
     for strand in [Strand::Plus, Strand::Minus] {
         let provider = junction_provider(strand, blocks, &intron, true);
         let once = normalize_3prime(&provider, &format!("{CODING}:c.7del"));
-        assert_eq!(once, format!("{CODING}:c.10+2del"));
+        assert_eq!(once, format!("{CONTIG}({CODING}):c.10+2del"));
         assert_eq!(
             normalize_3prime(&provider, &once),
             once,
-            "the intronic output is its own fixed point on the {strand:?} strand, so the \
-             idempotency oracle is blind to it too"
+            "the wrapped output is its own fixed point on the {strand:?} strand — the wrapper \
+             survives a second pass rather than being re-derived or stripped"
         );
         assert!(
             parse_hgvs(&once).is_ok(),
-            "and it re-parses, so the re-parse oracle is blind to it as well"
+            "and ferro's own parser reads the compound reference back"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// #1704: the rendering, which is the half that was actually wrong
+// ---------------------------------------------------------------------------
+
+/// **Question.** `checklist.md:20` says a bare `NM_`/`NR_` "can only be used to
+/// describe variants in introns using a `c.` prefix when a genomic reference
+/// sequence is given". The junction crossing above is legal
+/// (`background/numbering.md:26` withholds `general.md:44`'s exon/exon exception
+/// from an exon/intron junction), so the coordinate stays — what must change is
+/// the **accession** it is rendered against. Does it?
+///
+/// **It must, and this is the pin.** The crossing is computed in genomic space
+/// against a named contig, so the genomic reference `checklist.md:20` asks for is
+/// already in hand at the moment the answer is adopted; the output is rendered as
+/// `NC_SYNTH.1(NM_TEST.1):c.10+2del`, the exact compound form the clause names.
+///
+/// Both axes and both strands, because the fix has to cover all three copies of
+/// the `#670` gate.
+#[test]
+fn a_junction_exit_is_rendered_against_the_genomic_wrapper() {
+    let intron = intron_leading_with("AA");
+    let exons = exons_with_run_at_exon1_end('A');
+    let blocks = [exons[0].as_str(), exons[1].as_str(), exons[2].as_str()];
+
+    for strand in [Strand::Plus, Strand::Minus] {
+        assert_eq!(
+            normalize_3prime(
+                &junction_provider(strand, blocks, &intron, true),
+                &format!("{CODING}:c.7del")
+            ),
+            format!("{CONTIG}({CODING}):c.10+2del"),
+            "checklist.md:20 — an intronic position needs the genomic wrapper, and the \
+             crossing resolved that contig itself ({strand:?})"
+        );
+        assert_eq!(
+            normalize_3prime(
+                &junction_provider(strand, blocks, &intron, false),
+                &format!("{NONCODING}:n.17del")
+            ),
+            format!("{CONTIG}({NONCODING}):n.20+2del"),
+            "the same on the n. axis, whose gate is a separate copy ({strand:?})"
+        );
+    }
+}
+
+/// **Question.** The fix adds the wrapper where ferro's own shuffle manufactured
+/// the offset. What about an input that **already** names an intronic position on
+/// a bare transcript?
+///
+/// **Left exactly as authored.** That class is settled by the
+/// `bare-transcript-intronic-position` ruling — strict input hygiene refuses it
+/// (`IntronicOnBareTranscript` / W4007), lenient accepts it as written — and
+/// re-spelling it here would overturn one decided record as a side effect of
+/// implementing another. It is also what keeps the two halves of `checklist.md:20`
+/// answered by one predicate: the same
+/// `intronic_on_bare_transcript_warning` that decides the strict refusal decides
+/// whether an output needs the wrapper.
+#[test]
+fn an_authored_intronic_position_is_left_as_authored() {
+    let intron = intron_leading_with("AA");
+    let exons = exons_with_run_at_exon1_end('A');
+    let blocks = [exons[0].as_str(), exons[1].as_str(), exons[2].as_str()];
+
+    for strand in [Strand::Plus, Strand::Minus] {
+        let provider = junction_provider(strand, blocks, &intron, true);
+        assert_eq!(
+            normalize_3prime(&provider, &format!("{CODING}:c.10+2del")),
+            format!("{CODING}:c.10+2del"),
+            "an authored intronic position is neither re-parented nor moved ({strand:?})"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The rendering guards, and the residue they leave
+// ---------------------------------------------------------------------------
+
+/// **Question.** `reparent_junction_exit` refuses to build a wrapper from three
+/// conditions — trailing input after the accession parse, a
+/// `is_valid_compound_outer` rejection, and an outer equal to the bare accession.
+/// Does any of them do anything?
+///
+/// **All three do, but only once the named chromosome also serves sequence** —
+/// and that precondition is the whole reason they looked like dead code. Renaming
+/// the chromosome alone does not reach them: the `#670` gate fetches genomic
+/// sequence *by that name*, so a name the provider cannot serve breaks the
+/// crossing itself and the answer falls back to the exon-confined `c.10del`,
+/// never reaching the rendering stage. A guard test built that way passes while
+/// asserting nothing about the guard, which is why
+/// [`junction_provider_on_chromosome`] serves the contig under whatever the
+/// transcript names.
+///
+/// Each case below therefore has a crossing to render (`c.10+2del` is reached)
+/// and is declined at the rendering step, returning the pre-`#1704` bare string.
+/// That is the documented safe direction, not a repair — see
+/// [`a_mixed_allele_still_ships_a_manufactured_offset_bare`] for what it costs.
+#[test]
+fn each_rendering_guard_declines_rather_than_emitting_a_bad_reference() {
+    let intron = intron_leading_with("AA");
+    let exons = exons_with_run_at_exon1_end('A');
+    let blocks = [exons[0].as_str(), exons[1].as_str(), exons[2].as_str()];
+    let declined = format!("{CODING}:c.10+2del");
+
+    // Which conjunct actually catches each case is MEASURED, not assumed —
+    // dropping `outer == bare` alone changes nothing *here*, because `bare` is a
+    // RefSeq transcript and `is_valid_compound_outer` rejects a transcript outer
+    // one conjunct earlier. So the third case below is the pairing rule firing
+    // again, and reading it as the self-reference check would credit that
+    // conjunct with a decline it does not make on this accession.
+    //
+    // It is not dead code, though — see
+    // [`a_self_referential_wrapper_is_declined`], which reaches it on the one
+    // accession class where the pairing rule lets a self-reference through.
+    for (chromosome, conjunct) in [
+        ("NC_SYNTH.1junk", "trailing input after the accession parse"),
+        (
+            "NM_OTHER.1",
+            "the pairing rule — a known transcript outer, backwards",
+        ),
+        (
+            CODING,
+            "the pairing rule again, NOT the `outer == bare` conjunct",
+        ),
+    ] {
+        let provider =
+            junction_provider_on_chromosome(Strand::Plus, blocks, &intron, true, Some(chromosome));
+        assert_eq!(
+            normalize_3prime(&provider, &format!("{CODING}:c.7del")),
+            declined,
+            "chromosome {chromosome:?} must be declined by {conjunct}, leaving the bare \
+             pre-#1704 string rather than a reference ferro cannot justify"
+        );
+    }
+
+    // The control: the one usable chromosome renders the wrapper. Without this
+    // the three assertions above would all pass on a build that never wraps.
+    let provider =
+        junction_provider_on_chromosome(Strand::Plus, blocks, &intron, true, Some(CONTIG));
+    assert_eq!(
+        normalize_3prime(&provider, &format!("{CODING}:c.7del")),
+        format!("{CONTIG}({CODING}):c.10+2del"),
+        "and a usable genomic accession still wraps, so the three declines above are the \
+         guards firing rather than the wrapper being unreachable"
+    );
+}
+
+/// **Question.** A SAM-style `chr17` must not be emitted as `chr17(NM_…)` —
+/// `refseq.md` admits no such reference. What actually stops it?
+///
+/// **The bare accession parse, NOT the compound-outer rule.** This is worth
+/// pinning because the obvious reading is the other way round, and the code
+/// comment asserted the other way round until this test was written.
+/// `is_valid_compound_outer` deliberately *admits* an unclassifiable custom
+/// accession (`inferred_variant_type().is_none()`, #1146) so that a custom or
+/// assembly reference can still carry a specification — and the assertion below
+/// proves it, because ferro's own parser reads `chr17(NM_TEST.1):c.10+2del` back
+/// happily. What excludes it is that `parse_accession("chr17")` fails on the
+/// *bare* string, so the guard never gets as far as the pairing rule.
+///
+/// `GRCh38` is the same story from the other direction: `is_assembly_ref` would
+/// admit it, and the bare parse is again what declines.
+#[test]
+fn a_sam_style_chromosome_is_excluded_by_the_bare_accession_parse() {
+    let intron = intron_leading_with("AA");
+    let exons = exons_with_run_at_exon1_end('A');
+    let blocks = [exons[0].as_str(), exons[1].as_str(), exons[2].as_str()];
+
+    for chromosome in ["chr17", "GRCh38"] {
+        assert!(
+            parse_hgvs(&format!("{chromosome}({CODING}):c.10+2del")).is_ok(),
+            "the compound form is one ferro's own parser accepts, so the pairing rule is NOT \
+             what refuses {chromosome:?}"
+        );
+        let provider =
+            junction_provider_on_chromosome(Strand::Plus, blocks, &intron, true, Some(chromosome));
+        assert_eq!(
+            normalize_3prime(&provider, &format!("{CODING}:c.7del")),
+            format!("{CODING}:c.10+2del"),
+            "and ferro still declines to emit it — the bare parse of {chromosome:?} is the \
+             mechanism, which is the half a reader would otherwise attribute wrongly"
+        );
+    }
+}
+
+/// **Question.** Is the `outer == bare` conjunct reachable, or is it dead code?
+///
+/// **Reachable, on exactly one accession class — a bare LRG record.** This is
+/// the case the sibling test above cannot make, and the reason that conjunct is
+/// kept rather than deleted.
+///
+/// For every RefSeq accession the guard can be handed, the conjunct is
+/// unreachable and the sibling test measures that: `bare` comes from
+/// [`bare_transcript_intronic_accession`], `is_valid_compound_outer` rejects a
+/// known transcript outer, so the pairing rule fires first and `NM_TEST.1` as its
+/// own chromosome is declined one conjunct earlier.
+///
+/// **LRG is the exception, and it is an accident of two rules meeting.** The
+/// `checklist.md:20` predicate admits an LRG reference by *prefix*
+/// (`Accession::is_lrg`), which covers the bare genomic record `LRG_<N>` as well
+/// as the transcript `LRG_<N>t<M>` — while `is_valid_compound_outer` keys off
+/// `inferred_variant_type`, which reads a bare `LRG_<N>` as **genomic** and so
+/// admits it as an outer. So for `bare == LRG_5` both earlier conjuncts pass, and
+/// only `outer == bare` stands between ferro and `LRG_5(LRG_5):c.10+2del`.
+///
+/// That string is not caught downstream either: `parse_hgvs` reads it back
+/// happily (asserted below), so `FERRO_ASSERT_REPARSE` would never see it. A
+/// self-referential wrapper is nonsense that no oracle in this repo detects.
+///
+/// The provider shape is not contrived. An LRG record *is* its own genomic
+/// reference — there is no separate contig for it — so a provider that fills
+/// `Transcript::chromosome` with the LRG accession is a reasonable thing to
+/// build, which is what makes this worth guarding rather than deleting.
+#[test]
+fn a_self_referential_wrapper_is_declined() {
+    let intron = intron_leading_with("AA");
+    let exons = exons_with_run_at_exon1_end('A');
+    let blocks = [exons[0].as_str(), exons[1].as_str(), exons[2].as_str()];
+    let lrg = "LRG_5";
+
+    // Both earlier conjuncts pass for this accession, so a decline here can only
+    // be the third. Stated as assertions rather than as prose, because the whole
+    // point of the test is that the first two do NOT fire.
+    assert!(
+        parse_hgvs(&format!("{lrg}({lrg}):c.10+2del")).is_ok(),
+        "ferro's own parser accepts the self-referential wrapper, so neither the bare parse nor \
+         the pairing rule refuses it — and no re-parse oracle would catch it either"
+    );
+
+    let provider = junction_provider_named(Strand::Plus, blocks, &intron, true, Some(lrg), lrg);
+    assert_eq!(
+        normalize_3prime(&provider, &format!("{lrg}:c.7del")),
+        format!("{lrg}:c.10+2del"),
+        "an LRG record naming itself as its chromosome must be declined by `outer == bare`, \
+         leaving the bare pre-#1704 string rather than the meaningless `{lrg}({lrg})`"
+    );
+
+    // The control: the same LRG record on a real contig still wraps, so the
+    // decline above is the self-reference and not LRG being unsupported.
+    let hosted = junction_provider_named(Strand::Plus, blocks, &intron, true, Some(CONTIG), lrg);
+    assert_eq!(
+        normalize_3prime(&hosted, &format!("{lrg}:c.7del")),
+        format!("{CONTIG}({lrg}):c.10+2del"),
+        "an LRG record hosted on a genomic contig wraps normally, so the decline above is \
+         specifically the self-reference"
+    );
+}
+
+/// **Question.** A transcript with no chromosome at all — same path?
+///
+/// **No, and the difference matters when reading a failure.** With no name there
+/// is nothing to fetch, so the `#670` gate never resolves a crossing and the
+/// answer is the exon-confined `c.10del` — the rendering guards are never
+/// reached. Every case in
+/// [`each_rendering_guard_declines_rather_than_emitting_a_bad_reference`] reaches
+/// `c.10+2del` first. Two distinct mechanisms with two distinct outputs, pinned
+/// apart so a regression in either cannot be read as the other.
+#[test]
+fn an_unnamed_chromosome_never_reaches_the_rendering_guards() {
+    let intron = intron_leading_with("AA");
+    let exons = exons_with_run_at_exon1_end('A');
+    let blocks = [exons[0].as_str(), exons[1].as_str(), exons[2].as_str()];
+    let provider = junction_provider_on_chromosome(Strand::Plus, blocks, &intron, true, None);
+    assert_eq!(
+        normalize_3prime(&provider, &format!("{CODING}:c.7del")),
+        format!("{CODING}:c.10del"),
+        "no chromosome means no genomic fetch, so the crossing never happens and there is no \
+         intronic offset to render — a different failure from a declined wrapper"
+    );
+}
+
+/// **Question — and this one records a DEFECT, not a decision.** An allele mixes
+/// a member whose intronic offset ferro *manufactured* with a member the author
+/// spelled intronic. What ships?
+///
+/// **The manufactured offset ships on a bare accession** — the exact class
+/// `#1704` exists to close, surviving in the one shape its guard cannot see.
+///
+/// The cause is a granularity mismatch. Provenance ("did ferro manufacture this
+/// offset?") is a property of each **leaf**, but it is asked here at
+/// whole-description granularity: `names_bare_transcript_intronic(input)` is an
+/// ANY-leaf existence test, so one authored member vetoes the wrapper for every
+/// other member, including one ferro moved itself. Compare the lone cases pinned
+/// in [`a_junction_exit_is_rendered_against_the_genomic_wrapper`] and
+/// [`an_authored_intronic_position_is_left_as_authored`]: each is correct alone,
+/// and only the mixture is wrong.
+///
+/// **This is pinned as it is, deliberately.** Closing it needs per-leaf
+/// provenance carried from the site that manufactures the offset, because it
+/// cannot be recovered by comparing input and output after the fact —
+/// normalization reorders, merges and splits members, so no identity map from
+/// output leaf back to input leaf survives. And the rendering question that then
+/// arises (the compact form `ACC:c.[a;b]` requires members to share an accession,
+/// so a mixed description must either lift the wrapper to the whole description
+/// or expand to per-member accessions) is a representation-policy choice that is
+/// not this PR's to make. Pinning the current string keeps the residue from
+/// changing unnoticed in either direction.
+#[test]
+fn a_mixed_allele_still_ships_a_manufactured_offset_bare() {
+    let intron = intron_leading_with("AA");
+    let filler: String = std::iter::repeat_n('C', EXON_LEN).collect();
+    // A run flush against exon 1's end (c.7..=c.10), and a second run wholly
+    // inside exon 2, so the two members take visibly different paths.
+    let mut exon1 = filler.clone();
+    exon1.replace_range(16..20, "AAAA");
+    let mut exon2 = filler.clone();
+    exon2.replace_range(4..8, "AAAA");
+    let blocks = [exon1.as_str(), exon2.as_str(), filler.as_str()];
+
+    for strand in [Strand::Plus, Strand::Minus] {
+        let provider = junction_provider(strand, blocks, &intron, true);
+        // The authored member sits at the SECOND junction, so it cannot collide
+        // with the offset the first member manufactures.
+        assert_eq!(
+            normalize_3prime(&provider, &format!("{CODING}:c.[7del;30+5del]")),
+            format!("{CODING}:c.[10+2del;30+5del]"),
+            "RESIDUE: `10+2` is ferro's own, and it ships bare because the authored `30+5` \
+             vetoed the wrapper for the whole description ({strand:?})"
+        );
+        // The same defect on the other side of the same intron, so the pin is on
+        // the mixture rather than on one offset's spelling.
+        assert_eq!(
+            normalize_3prime(&provider, &format!("{CODING}:c.[7del;11-5del]")),
+            format!("{CODING}:c.[10+2del;11-5del]"),
+            "and with the authored member spelled from the 3' side of intron 1 ({strand:?})"
+        );
+        // The negative control: with NO manufactured offset the description is
+        // correctly left alone, so the veto is not simply "any allele is skipped".
+        assert_eq!(
+            normalize_3prime(&provider, &format!("{CODING}:c.[15del;30+5del]")),
+            format!("{CODING}:c.[18del;30+5del]"),
+            "no member crosses, so nothing is manufactured and leaving it bare is correct \
+             ({strand:?})"
         );
     }
 }

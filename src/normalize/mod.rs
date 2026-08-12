@@ -76,8 +76,8 @@ use crate::hgvs::location::{
 use crate::hgvs::parser::position::{OFFSET_UNKNOWN_NEGATIVE, OFFSET_UNKNOWN_POSITIVE};
 use crate::hgvs::uncertainty::Mu;
 use crate::hgvs::variant::{
-    AllelePhase, AlleleVariant, CdsVariant, GenomeVariant, HgvsVariant, LocEdit, MtVariant,
-    RnaVariant, TxVariant,
+    Accession, AllelePhase, AlleleVariant, CdsVariant, GenomeVariant, HgvsVariant, LocEdit,
+    MtVariant, RnaVariant, TxVariant,
 };
 use crate::hgvs::HgvsVariant as HV;
 use crate::reference::transcript::Strand;
@@ -1116,6 +1116,37 @@ fn boundary_has_intronic<T>(
 /// the unknown-offset sentinel as intronic), which is correct — it is an
 /// intronic position whose exact offset is unspecified.
 fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<NormalizationWarning> {
+    intronic_on_bare_transcript_axis(variant).map(|coordinate_system| {
+        NormalizationWarning::IntronicOnBareTranscript {
+            variant: format!("{variant}"),
+            coordinate_system: coordinate_system.to_string(),
+        }
+    })
+}
+
+/// The predicate half of [`intronic_on_bare_transcript_warning`]: the coordinate
+/// system (`"c"` or `"n"`) whose bare transcript reference `variant` names an
+/// intronic position on, or `None`.
+///
+/// **One rule, two callers, and the split is deliberate.** The scope prose above
+/// documents this function as much as the warning constructor — the clause has
+/// exactly one reading in this crate, and that is load-bearing in both
+/// directions: the same question decides whether strict mode *refuses an input*
+/// and whether `#1704` must *re-parent an output*. Two readings of one clause is
+/// how ferro came to refuse a description in strict mode while manufacturing the
+/// identical description in lenient. So the warning is derived from this
+/// predicate rather than the two being written out separately, which is what
+/// makes them unable to drift.
+///
+/// The reason it is a separate function rather than
+/// `…_warning(v).is_some()` is cost, not taste. Every `normalize()` asks this
+/// question at least twice — once on the strict ladder and once at
+/// [`Normalizer::reparent_junction_exit`] — and the `is_some()` form built a
+/// `NormalizationWarning` carrying `format!("{variant}")`, rendering the whole
+/// description to a `String` only to drop it. The authored-bare-intronic class
+/// is common enough for that to be a real per-call allocation on a path that
+/// wants a `bool`.
+fn intronic_on_bare_transcript_axis(variant: &HgvsVariant) -> Option<&'static str> {
     match variant {
         HV::Cds(v) => {
             // A bare coding-DNA reference does not contain introns, so an
@@ -1131,10 +1162,7 @@ fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<Normaliz
             }
             let intronic = boundary_has_intronic(&v.loc_edit.location.start, CdsPos::is_intronic)
                 || boundary_has_intronic(&v.loc_edit.location.end, CdsPos::is_intronic);
-            intronic.then(|| NormalizationWarning::IntronicOnBareTranscript {
-                variant: format!("{variant}"),
-                coordinate_system: "c".to_string(),
-            })
+            intronic.then_some("c")
         }
         HV::Tx(v) => {
             // Same rule on the non-coding axis: a bare `NR_`/`XR_` or LRG
@@ -1147,12 +1175,89 @@ fn intronic_on_bare_transcript_warning(variant: &HgvsVariant) -> Option<Normaliz
             }
             let intronic = boundary_has_intronic(&v.loc_edit.location.start, TxPos::is_intronic)
                 || boundary_has_intronic(&v.loc_edit.location.end, TxPos::is_intronic);
-            intronic.then(|| NormalizationWarning::IntronicOnBareTranscript {
-                variant: format!("{variant}"),
-                coordinate_system: "n".to_string(),
-            })
+            intronic.then_some("n")
         }
         _ => None,
+    }
+}
+
+/// Whether `variant` — or any leaf of it — is the `checklist.md:20` form: an
+/// intronic position named on a **bare** transcript reference.
+///
+/// Delegates to [`intronic_on_bare_transcript_axis`] per leaf rather than
+/// re-stating its scope, so the clause has exactly one reading in this crate —
+/// the same reading [`intronic_on_bare_transcript_warning`] reports, since that
+/// warning is derived from this predicate rather than written out beside it.
+/// That matters in both directions: the same predicate decides whether strict
+/// mode *refuses an input* (the W4007 rung of `normalize_core_checked`'s ladder)
+/// and whether `#1704` must *re-parent an output*. Two readings of one clause is
+/// how ferro came to refuse a description in strict mode while manufacturing the
+/// identical description in lenient.
+fn names_bare_transcript_intronic(variant: &HgvsVariant) -> bool {
+    bare_transcript_intronic_accession(variant).is_some()
+}
+
+/// The accession of the first leaf that is the `checklist.md:20` form, if any.
+///
+/// Taken from the offending **leaf** rather than from
+/// [`HgvsVariant::accession`], which reports an allele's *first* member. Those
+/// coincide for every allele ferro normalizes today, since a cis allele's members
+/// share a reference — but a `products` allele (`[NM_A:c.…,NM_B:c.…]`) does not,
+/// and there the first member's accession would name a transcript the offending
+/// member is not on. The consequence would be silent: `reparent_leaves` matches
+/// on equality, so it would rewrite nothing and the invalid description would
+/// survive looking repaired.
+fn bare_transcript_intronic_accession(variant: &HgvsVariant) -> Option<&Accession> {
+    match variant {
+        HV::Allele(allele) => allele
+            .variants
+            .iter()
+            .find_map(bare_transcript_intronic_accession),
+        HV::Supernumerary(inner) => bare_transcript_intronic_accession(inner),
+        // The predicate, not the warning constructor: this runs on every
+        // `normalize()` and only wants the answer, while building the warning
+        // would render the description into a `String` and drop it.
+        leaf => intronic_on_bare_transcript_axis(leaf)
+            .is_some()
+            .then(|| leaf.accession())
+            .flatten(),
+    }
+}
+
+/// Re-parent every `c.`/`n.` leaf of `variant` whose accession is `bare` onto
+/// `wrapper`, which is `bare` carrying a genomic context.
+///
+/// **Every leaf on that accession, not only the intronic ones.** An allele
+/// renders in its compact form (`ACC:c.[a;b]`) only when its members share an
+/// accession — `use_compact_form` / `all_share_accession_and_type` — so wrapping
+/// the crossing member alone would drop `c.[10+2del;18del]` into the expanded
+/// `[NC_…(NM_…):c.10+2del;NM_…:c.18del]`. That is a far larger representation
+/// change than the defect it repairs, and no clause asks for it: a genomic
+/// wrapper on an *exonic* position is unremarkable
+/// (`NC_000023.10(NM_004006.2):c.94del`), so lifting it to the whole description
+/// is the cheap side of the trade.
+fn reparent_leaves(variant: HgvsVariant, bare: &Accession, wrapper: &Accession) -> HgvsVariant {
+    match variant {
+        HV::Cds(mut v) if v.accession == *bare => {
+            v.accession = wrapper.clone();
+            HV::Cds(v)
+        }
+        HV::Tx(mut v) if v.accession == *bare => {
+            v.accession = wrapper.clone();
+            HV::Tx(v)
+        }
+        HV::Allele(allele) => HV::Allele(AlleleVariant {
+            variants: allele
+                .variants
+                .into_iter()
+                .map(|member| reparent_leaves(member, bare, wrapper))
+                .collect(),
+            ..allele
+        }),
+        HV::Supernumerary(inner) => {
+            HV::Supernumerary(Box::new(reparent_leaves(*inner, bare, wrapper)))
+        }
+        other => other,
     }
 }
 
@@ -2935,7 +3040,129 @@ impl<P: ReferenceProvider> Normalizer<P> {
     ) -> Result<(HgvsVariant, Vec<NormalizationWarning>), FerroError> {
         let (normalized, warnings) = self.normalize_core(variant)?;
         let (normalized, warnings) = self.canonicalize_from_sequence(normalized, warnings)?;
-        Ok((self.split_protein_separation(normalized), warnings))
+        let normalized = self.split_protein_separation(normalized);
+        Ok((self.reparent_junction_exit(variant, normalized), warnings))
+    }
+
+    /// Render a junction-crossing output against the genomic reference the
+    /// crossing was computed against (#1704).
+    ///
+    /// # The defect
+    ///
+    /// `#670` (and its `normalize_tx`/`normalize_rna` mirrors) applies the 3'
+    /// rule across an exon/intron junction: when the exon-confined shuffle lands
+    /// exactly on an exon's last base, the shuffle is re-run in genomic space and
+    /// the answer adopted **only if it crossed into the intron**. The coordinate
+    /// that produces is correct — `background/numbering.md:26` explicitly
+    /// withholds `general.md:44`'s exon/exon exception from an exon/intron
+    /// junction, so the shift is required rather than merely permitted — but the
+    /// *accession* it was rendered against was not. `checklist.md:20`: an `NM_`
+    /// "can only be used to describe variants in introns using a `c.` prefix when
+    /// a genomic reference sequence is given". So ferro manufactured 371
+    /// descriptions (3' direction; 0 at 5', which has no mirror of the gate) that
+    /// its own strict mode refuses as `IntronicOnBareTranscript` / W4007 — the
+    /// reverse of the laundering `#1406` legislated against, and the residue the
+    /// `bare-transcript-intronic-position` ruling recorded as unexcused.
+    ///
+    /// # Why re-parenting rather than declining, and rather than clamping
+    ///
+    /// **Not clamping.** Converging these back on the in-exon answer would
+    /// implement the exception `numbering.md:26` withholds, and would silently
+    /// revert `#670`, whose own fixtures pin the intronic coordinate as correct.
+    /// The coordinate is not what is wrong.
+    ///
+    /// **Not declining.** The counter is a *lenient*-mode figure, so refusing in
+    /// strict mode leaves every one of the 371 exactly where it is; and the input
+    /// (`c.7del`) is a perfectly valid description, so refusing it because ferro's
+    /// own chosen output form is inexpressible fails rule 1 in the other
+    /// direction. It would also make the answer depend on the error mode, which
+    /// rule 4 does not admit.
+    ///
+    /// **Re-parenting closes the class.** The genomic reference `checklist.md:20`
+    /// asks for is not merely obtainable — the crossing could not have been
+    /// computed without it, since the genomic re-shuffle fetches bases from a
+    /// named contig and `#670` declines outright when `transcript.chromosome` is
+    /// `None`. So the wrapper is already in hand at the moment the answer is
+    /// adopted, and `NC_…(NM_…):c.10+2del` is the exact form the clause names.
+    ///
+    /// # Scope, and the two deliberate limits
+    ///
+    /// The trigger is *ferro manufactured the offset*: an output naming a
+    /// bare-transcript intronic position whose **input** named none. An input
+    /// that already carried one is left exactly as authored — that class is
+    /// settled by the `bare-transcript-intronic-position` ruling (strict refuses,
+    /// lenient accepts as written), and re-spelling it here would overturn a
+    /// decided record as a side effect of fixing a different one.
+    ///
+    /// The `r.` axis is **not** covered, matching
+    /// [`intronic_on_bare_transcript_warning`]'s scope exactly (`#486`/`#834`
+    /// put it out of scope, and `checklist.md:20` names the `c.` prefix). One
+    /// predicate governs input refusal and output rendering; widening only this
+    /// half would put the two back out of step, which is the defect being fixed.
+    ///
+    /// Declining is still possible and is the safe direction: when no usable
+    /// genomic accession can be built the output is returned untouched, which is
+    /// the pre-`#1704` string rather than a worse one.
+    fn reparent_junction_exit(&self, input: &HgvsVariant, output: HgvsVariant) -> HgvsVariant {
+        // Cheapest question first, and the one that is false for essentially
+        // every normalization: did ferro emit the `checklist.md:20` form at all?
+        let Some(bare) = bare_transcript_intronic_accession(&output).cloned() else {
+            return output;
+        };
+        // Authored intronic positions are the decided class; leave them alone.
+        if names_bare_transcript_intronic(input) {
+            return output;
+        }
+        let Ok(transcript) = self.provider.get_transcript_for_accession(&bare) else {
+            return output;
+        };
+        let Some(chromosome) = transcript.chromosome.as_deref() else {
+            return output;
+        };
+        // The chromosome field is a provider-supplied string, not necessarily an
+        // accession, so three separate questions stand between it and a compound
+        // reference ferro is willing to emit. Which one catches which input is
+        // MEASURED (`defect_371_transcript_exit`), because the intuitive reading
+        // credits the wrong one — and did, in this comment, until #1708:
+        //
+        // 1. **The bare parse** is what excludes a SAM-style `chr17` and an
+        //    assembly name `GRCh38`. Not the pairing rule:
+        //    `parse_hgvs("chr17(NM_TEST.1):c.10+2del")` is `Ok`, because
+        //    `is_valid_compound_outer` deliberately admits an unclassifiable
+        //    custom accession and an assembly reference (#1146). What refuses
+        //    `chr17` is that `parse_accession` fails on the *bare* string, one
+        //    step before the pairing rule is ever asked. A trailing `rest` is the
+        //    same question: `NC_SYNTH.1junk` parses a prefix and leaves residue.
+        // 2. **The pairing rule** is what excludes a known transcript or protein
+        //    outer: `parse_hgvs("NM_OTHER.1(NM_TEST.1):c.10+2del")` is `Err`, so
+        //    without this ferro could emit a compound reference its own parser
+        //    refuses to read back — the property `FERRO_ASSERT_REPARSE` checks at
+        //    this same seam.
+        // 3. **`outer == bare`** rejects a self-referential wrapper. It is
+        //    unreachable for every RefSeq accession — `bare` is a transcript, and
+        //    (2) rejects a transcript outer first — but it is NOT dead code, and
+        //    the one class that reaches it is a **bare LRG record**: the
+        //    `checklist.md:20` predicate admits LRG by prefix (`Accession::is_lrg`,
+        //    so `LRG_<N>` as well as `LRG_<N>t<M>`), while
+        //    `is_valid_compound_outer` keys off `inferred_variant_type`, which
+        //    reads a bare `LRG_<N>` as genomic and admits it. So for
+        //    `bare == LRG_5` the first two both pass and only this conjunct stops
+        //    `LRG_5(LRG_5):c.…`. Nothing downstream would: that string re-parses,
+        //    so `FERRO_ASSERT_REPARSE` cannot see it. The provider shape is not
+        //    contrived either — an LRG record *is* its own genomic reference, so
+        //    naming itself in `Transcript::chromosome` is a reasonable thing for a
+        //    provider to do. Pinned by `a_self_referential_wrapper_is_declined`.
+        let Ok((rest, outer)) = crate::hgvs::parser::accession::parse_accession(chromosome) else {
+            return output;
+        };
+        if !rest.is_empty()
+            || !crate::hgvs::parser::accession::is_valid_compound_outer(&outer)
+            || outer == bare
+        {
+            return output;
+        }
+        let wrapper = bare.clone().with_genomic_context(outer);
+        reparent_leaves(output, &bare, &wrapper)
     }
 
     /// The protein-axis partition pass, run once at the top level.

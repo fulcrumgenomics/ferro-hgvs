@@ -43,7 +43,13 @@ pub fn parse_accession(input: &str) -> IResult<&str, Accession> {
 /// treated consistently, and transcript/protein outers (`NM_`, `NR_`, `XM_`, `XR_`, `ENST`,
 /// `ENSP`, `NP_`, `LRG_<N>t<M>`, …) are rejected. The inner is intentionally not constrained:
 /// non-standard but real forms such as mutalyzer's `NG_x(NP_y)` protein wrapper must still parse.
-fn is_valid_compound_outer(outer: &Accession) -> bool {
+///
+/// `pub(crate)` because the normalizer asks the same question in the other
+/// direction: `#1704` builds a compound reference rather than reading one, and a
+/// wrapper this predicate would reject is one ferro's own parser would refuse to
+/// read back. One predicate for both directions is what keeps them from
+/// drifting.
+pub(crate) fn is_valid_compound_outer(outer: &Accession) -> bool {
     // The shared coordinate-class oracle already classifies `NC_`/`NG_`/`NT_`/`NW_`/`ENSG`/
     // bare `LRG_<N>` as genomic (`g`). Also accept the RefSeq genomic prefixes it does not
     // classify — `AC_` (alternate-assembly) and `NZ_` (WGS) — so a valid genomic outer is
