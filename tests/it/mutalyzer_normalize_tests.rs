@@ -4320,6 +4320,28 @@ fn axis_normalized_idempotent() {
     );
 }
 
+// There is deliberately no exemption list here, and the absence is the guard.
+//
+// #1672's first cut at #1664 re-merged the DERIVED genomic axis from the coding
+// axis's answer, which made `ferro project | ferro normalize` a non-fixed-point for
+// the codon-delins family — recorded at the time as a cost to be adjudicated. It has
+// since been adjudicated the other way: the genomic axis SPLITS, and the
+// projector does not inherit the coding merge.
+//
+// The ground is that `general.md:23-31` makes the prefix a statement about the
+// **type of reference sequence used** ("`c` for a coding DNA reference sequence,
+// `g` for a linear genomic reference sequence"), and every frame-derived rule is
+// conditioned on that type. A `g.` string therefore declares a genomic reference
+// however gene-scoped its accession — `LRG_199:g.…` is genomic, `LRG_199t1:c.…`
+// is the coding one — so merging on the derived axis put a reading frame into a
+// description that cannot carry one. The output was not re-derivable from its own
+// reference, and one genomic variant ended up with two stable strings depending
+// on whether it was reached by projection or by normalization.
+//
+// So every projected genomic axis must now be a fixed point of bare
+// normalization, with no exceptions, and this test asserts exactly that.
+// Re-introducing the merge fails it rather than being waved through by a list.
+
 #[test]
 fn axis_genomic_idempotent() {
     let (Some(projector), Some(normalizer)) = (variant_projector(), normalizer()) else {
@@ -4337,7 +4359,11 @@ fn axis_genomic_idempotent() {
         // (#870), compound alleles kept on the raw `project_to_genomic` pivot
         // (#851 cis-sort; #894), pure g./m. rows normalized only. Only
         // successfully-projected-and-normalized inputs participate. The fixpoint
-        // still holds because `project_variant` normalizes internally.
+        // held, before this change, because `project_variant` normalized internally and
+        // the normalizer had no context the projector was withholding. It now
+        // does — the reading frame — but the projector deliberately does not use
+        // it on the genomic axis, so the fixpoint holds again (see the note above
+        // this test).
         let projected = (|| -> Result<String, String> {
             let v = parse_hgvs(&case.input).map_err(|e| format!("parse: {e}"))?;
             let g = project_genomic_userfacing(&projector, &normalizer, &v)?;

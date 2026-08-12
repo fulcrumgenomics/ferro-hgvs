@@ -784,6 +784,26 @@ fn spec_equivalence_classes_converge() {
 /// is what stops one being upgraded to `decided` without a reviewable diff, and
 /// stops an inconvenient record being deleted.
 const RULING_STATUSES: &[(&str, &str)] = &[
+    // `DNA/delins.md:42`'s codon carve-out against `DNA/delins.md:17`'s
+    // default, on the axis a PROJECTION renders. **Decided by operator ruling
+    // (2026-08-11)**: `:42` reaches only an axis that declares a reading
+    // frame, so a projection does not re-merge its derived genomic axis to
+    // match the coding one. `:42` is a conditional whose second conjunct —
+    // "together affecting one amino acid" — is unstatable on a genomic
+    // reference, and `general.md:23`/`:26` make the prefix a claim about the
+    // type of reference sequence, so `LRG_199:g.…` is genomic however
+    // gene-scoped its accession. Corrects an over-reading of
+    // `delins-codon-carve-out-gap-one`, which settles *when* two variants
+    // merge and is silent on which axes — its `applies_to` holds six `c.`/`r.`
+    // strings and no genomic one. Scoped to DNA axes: `RNA/delins.md:18` is
+    // the `r.` axis's own authority and is not ruled on here, and the `n.`
+    // axis is left open. **Moves no row**: it declines a merge, so
+    // `ProjectionSplitsSingleMember` stays at 9 and `ProjectionPinned` at 1168,
+    // exactly as on `main`. Merging as #1664 asks would take them to 7 and 1170.
+    (
+        "projection-codon-exception-is-decided-by-the-rendered-axis",
+        "decided",
+    ),
     // `delins.md:17` ("described individually … not as a delins") against
     // `delins.md:47` ("the delins format is recommended"), both reaching the
     // `:44-47` example. **Decided for `:47` by operator ruling (2026-08-07),
