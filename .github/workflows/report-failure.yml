@@ -1,4 +1,5 @@
-# Reusable failure reporter for workflows that cannot fail on a pull request.
+# Reusable failure reporter for workflows whose red X would otherwise be
+# decoration.
 #
 # A workflow that only ever runs after a merge — on a schedule, or on push to
 # `main` — has no way to stop the break it detects. Its red X is decoration
@@ -7,6 +8,14 @@
 # demonstrated the consequence: it stayed red for 15 commits (`92da6d0` ..
 # `e90dff2`) while every pull request in that window reported a full green
 # board (#1225, #1226).
+#
+# NOT every caller is post-merge-only, and assuming so is what this file got
+# wrong. `coverage.yml` runs on `pull_request` as well as on `main` — added by
+# #1225, the same change that motivated this reporter — so one of the six
+# callers CAN fail before a merge. The issue body therefore derives its
+# provenance sentence from `github.event_name` rather than stating a fixed
+# claim; see the comment on that branch below. Adding a `pull_request` trigger
+# to another caller needs no change here, which is the point.
 #
 # `nightly-soak` already had the right pattern and this is a straight
 # generalisation of it: ONE rolling issue per workflow, updated rather than
@@ -88,6 +97,13 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           WORKFLOW: ${{ github.workflow }}
           SHA: ${{ github.sha }}
+          # The provenance sentence below is derived from THIS RUN rather than
+          # asserted about the workflow, because the assertion went stale the
+          # moment one caller gained a `pull_request` trigger. In a
+          # `workflow_call`, both of these describe the caller's own triggering
+          # event, which is exactly the fact a reader needs.
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
           # `--search "<title> in:title"` is a fuzzy full-text match, so an
@@ -120,6 +136,34 @@ jobs:
             echo "::warning::rolling-issue lookup failed; filing a new issue instead of commenting"
             EXISTING=""
           fi
+          # Provenance, derived rather than asserted. The previous text was the
+          # fixed sentence "This workflow does not run on pull requests, so this
+          # failure could not have been caught before merge" — true of five of
+          # the six callers and FALSE of `coverage.yml`, which gained a
+          # `pull_request` trigger in the very change that created this reporter
+          # (#1225). It failed in the misleading direction: it excused a failure
+          # that WAS visible on the pull request, and told the reader not to look
+          # where the answer was.
+          #
+          # Keying on `github.event_name` states a fact about this run, which
+          # cannot go stale when a caller's triggers change.
+          # Both reads are `${VAR:-}`, not `$VAR`, and that is load-bearing rather
+          # than defensive habit. The step runs under `set -u`, so a bare `$EVENT`
+          # aborts it when the variable is absent — and aborting here means the
+          # reporter files NOTHING, which is the exact failure
+          # `report_failure_degrades` exists to prevent. That test caught this by
+          # executing the block standalone; it is not reachable from real CI,
+          # where `env:` always supplies both, so nothing but the test would have
+          # said so.
+          if [ "${EVENT:-}" = "pull_request" ]; then
+            WHERE="pull request"
+            if [ -n "${PR_NUMBER:-}" ]; then
+              WHERE="pull request #${PR_NUMBER}"
+            fi
+            PROVENANCE="_This run was triggered by a ${WHERE}, so the failure is visible there and can be fixed before merge — check that pull request before treating this as a post-merge break._"
+          else
+            PROVENANCE="_This run was triggered by \`${EVENT:-unknown}\`, not by a pull request, so this failure was not visible on a pull request before the commit landed._"
+          fi
           BODY=$(printf '%s\n' \
             "$SUMMARY" \
             "" \
@@ -129,7 +173,7 @@ jobs:
             "" \
             "$HINT" \
             "" \
-            "_This workflow does not run on pull requests, so this failure could not have been caught before merge. One rolling issue is used per failure mode; repeat occurrences are added as comments._")
+            "$PROVENANCE One rolling issue is used per failure mode; repeat occurrences are added as comments.")
           if [ -n "$EXISTING" ]; then
             gh issue comment "$EXISTING" --body "$BODY"
           else

@@ -488,5 +488,6 @@ mod workflow_gh_repo_context;
 
 mod issue_1618_anchored_repeat_semantics;
 mod report_failure_degrades;
+mod report_failure_provenance;
 mod reported_confluence_pairs;
 mod ring_segment_wellformedness;
