@@ -104,8 +104,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 22 records, 19 decided / 3 undecided
-//! 97 clause lines, of which 22 are named by more than one record
+//! 23 records, 20 decided / 3 undecided
+//! 98 clause lines, of which 24 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -224,8 +224,9 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:80
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
-//! docs/recommendations/DNA/delins.md:81
+//! docs/recommendations/DNA/delins.md:81  [MULTI]
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-rule-force-modal-or-negation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:82
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
 //! docs/recommendations/DNA/delins.md:83  [MULTI]
@@ -243,6 +244,7 @@
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `separation-rule-force-modal-or-negation` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:26
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (governing)
 //! docs/recommendations/DNA/duplication.md:60
@@ -264,8 +266,11 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
 //! docs/recommendations/DNA/repeated.md:23
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
-//! docs/recommendations/DNA/substitution.md:32
+//! docs/recommendations/DNA/substitution.md:16
+//!     `separation-rule-force-modal-or-negation` — decided (cited)
+//! docs/recommendations/DNA/substitution.md:32  [MULTI]
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
+//!     `separation-rule-force-modal-or-negation` — decided (cited)
 //! docs/recommendations/DNA/substitution.md:95
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/RNA/delins.md:18
@@ -308,6 +313,7 @@
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
+//!     `separation-rule-force-modal-or-negation` — decided (cited)
 //! docs/recommendations/general.md:35
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //! docs/recommendations/general.md:39
@@ -389,6 +395,7 @@
 //!     `delins-recommendation-reach-when-the-input-arrives-split` — undecided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
+//!     `separation-rule-force-modal-or-negation` — decided (cited)
 //!
 //! -- same verdict across every record naming the line --
 //!
@@ -409,6 +416,9 @@
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
 //!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `projection-codon-exception-is-decided-by-the-rendered-axis` — decided (cited)
+//! docs/recommendations/DNA/delins.md:81
+//!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
+//!     `separation-rule-force-modal-or-negation` — decided (governing)
 //! docs/recommendations/DNA/delins.md:83
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
@@ -416,9 +426,13 @@
 //!     `codon-carve-out-shape-restriction` — decided (cited)
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `separation-rule-force-modal-or-negation` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:148
 //!     `confluence-gate-is-apply-equality-on-every-determined-axis` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
+//! docs/recommendations/DNA/substitution.md:32
+//!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
+//!     `separation-rule-force-modal-or-negation` — decided (cited)
 //! docs/recommendations/general.md:41
 //!     `contiguous-insertion-split-by-a-blocked-derivation` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
@@ -756,7 +770,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (22, 19, 3),
+        (23, 20, 3),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
@@ -920,7 +934,7 @@ fn clauses_named_by_several_records_are_flagged() {
         index.iter().filter(|(_, c)| c.len() > 1).collect();
     assert_eq!(
         multi.len(),
-        22,
+        24,
         "measured count of multiply-named clause lines changed; update the module docs with it"
     );
 

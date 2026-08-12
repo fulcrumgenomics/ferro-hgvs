@@ -1069,6 +1069,25 @@ const RULING_STATUSES: &[(&str, &str)] = &[
         "confluence-gate-is-apply-equality-on-every-determined-axis",
         "decided",
     ),
+    // Whether `general.md:34`'s negation — "should be described individually
+    // and **not** as a 'delins'" — carries prohibition force of its own, making
+    // the clause a README rule 1, or whether the modal grades the whole clause,
+    // making it rule 2. **Decided by operator ruling (2026-08-12): rule 2**, and
+    // the general reading is what makes the record reusable — "and not Y" names
+    // the excluded alternative, the MODAL grades the clause. Decisive because
+    // the two halves are complements here: "individually" and "as a delins"
+    // exhaust the forms, so forbidding one would make the other mandatory and
+    // leave "should" doing no work. `DNA/delins.md:81` then states the force
+    // outright, restating this very rule with "**preferably**"; and the spec
+    // pairs "and not" with "must" only where the alternatives are NOT exhaustive
+    // (`duplication.md:18`'s "and not as, **e.g.**, an insertion"). Changes the
+    // CLASSIFICATION only — rule 2 still binds, and README says a preference
+    // clause outranks maintainer judgment — but it means such an output is a
+    // deviation to disclose rather than a rule-7 bug, so it does not by itself
+    // block a release. Every negative guard measuring it is KEPT and pinned at
+    // its true value with a tripwire; re-pinning one to zero for a green build
+    // is the move the record forbids.
+    ("separation-rule-force-modal-or-negation", "decided"),
     // Whether `standards.md`'s **RNA** symbol table (`:47`–`:61`) plus
     // `general.md:50`'s lower-case bullet exclude an `x` from an `r.`
     // description, the way `:39`'s dagger plus `general.md:48`'s CAPITALS
