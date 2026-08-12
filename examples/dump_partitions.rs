@@ -104,11 +104,21 @@ impl Outcome {
     }
 }
 
-/// Command-line arguments: an optional input path and the shadow arm's
-/// separation threshold.
+/// Command-line arguments: an optional input path, the shadow arm's separation
+/// threshold, and which axis the live arm is asked about.
 struct Args {
     path: String,
     min_separation: u32,
+    /// Whether the live arm may apply `DNA/delins.md:44-47`'s
+    /// payload-coincidence carve-out, which the operator ruling
+    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes to
+    /// `c.` and nothing else.
+    ///
+    /// A TSV row is two bare blocks and names no axis, so the default is the
+    /// frameless reading — `general.md:34` governs and a split across one
+    /// unchanged base stands. `--coding-dna` asks the other question, which is
+    /// the only way to dump both sides of the ruling from one corpus.
+    coding_dna: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -118,6 +128,7 @@ fn parse_args() -> Result<Args, String> {
     // run looks like the first file simply contained nothing of interest.
     let mut path: Option<String> = None;
     let mut min_separation = DEFAULT_MIN_SEPARATION;
+    let mut coding_dna = false;
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
         match arg.as_str() {
@@ -129,8 +140,11 @@ fn parse_args() -> Result<Args, String> {
                     .parse()
                     .map_err(|_| format!("--min-separation: {value} is not a number"))?;
             }
+            "--coding-dna" => coding_dna = true,
             "-h" | "--help" => {
-                return Err("usage: dump_partitions [--min-separation N] [PATH]".to_string())
+                return Err(
+                    "usage: dump_partitions [--min-separation N] [--coding-dna] [PATH]".to_string(),
+                )
             }
             other if other.starts_with("--") => return Err(format!("unknown flag {other}")),
             other if path.is_some() => {
@@ -144,6 +158,7 @@ fn parse_args() -> Result<Args, String> {
     Ok(Args {
         path: path.unwrap_or_else(|| "-".to_string()),
         min_separation,
+        coding_dna,
     })
 }
 
@@ -211,7 +226,7 @@ fn main() {
 
         // `live` cannot decline, but it can panic, so it goes through the same
         // wrapper with a `Some` of its own.
-        let live = Outcome::of(|| Some(dev_partitioners::live(reference, alt)));
+        let live = Outcome::of(|| Some(dev_partitioners::live(reference, alt, args.coding_dna)));
         let shadow = Outcome::of(|| dev_partitioners::shadow(reference, alt, args.min_separation));
         let canonical = Outcome::of(|| dev_partitioners::canonical(reference, alt));
         let distance = match catch_unwind(AssertUnwindSafe(|| {

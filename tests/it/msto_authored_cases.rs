@@ -72,8 +72,17 @@ const TEMPLATE: &str = concat!(
 /// Every row is the **same locus** (29–33, interior `AC` at 30–31 unchanged)
 /// with only the inserted block varied. `delins.md:17` asks for the separated
 /// form in all five — the separation is two nucleotides, and `delins.md:18`'s
-/// one-nucleotide exception cannot apply to a `g.` description. ferro splits
-/// three and retains two.
+/// one-nucleotide exception cannot apply to a `g.` description. ferro split
+/// three and retained two.
+///
+/// **All five now split.** What retained the last two was
+/// `separations_are_meaningful`'s raise to `RAISED_PIECE_SEPARATION`, which
+/// disbelieves a one-base separation inside a large net change. That raise is
+/// `DNA/delins.md:44-47`'s payload-coincidence carve-out, and the operator
+/// ruling `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes it
+/// to the coding DNA axis. Every row here is `TEMPLATE:g.`, so the carve-out
+/// does not reach them and `delins.md:17` gets the answer this table says it
+/// asks for.
 ///
 /// `(label, input, current output, splits)`
 const ISSUE_1421_INSERT_BLOCKS: &[(&str, &str, &str, bool)] = &[
@@ -96,26 +105,31 @@ const ISSUE_1421_INSERT_BLOCKS: &[(&str, &str, &str, bool)] = &[
         true,
     ),
     // The headline case of #1421. Same locus, same net length as the row above,
-    // opposite verdict — which is the whole point of the table.
+    // and it used to reach the OPPOSITE verdict — which was the whole point of
+    // the table, and is what scoping the carve-out to `c.` removed. The two
+    // labels are kept as `-retained` so the table still reads against the
+    // issue's own text; what they retained is history, not behaviour.
     (
         "net+6-retained",
         "TEMPLATE:g.29_33delinsAACACATACTG",
-        "TEMPLATE:g.29_33delinsAACACATACTG",
-        false,
+        "TEMPLATE:g.[29C>A;32_33delinsACATACTG]",
+        true,
     ),
     (
         "net+7-retained",
         "TEMPLATE:g.29_33delinsAACTGCATGCTG",
-        "TEMPLATE:g.29_33delinsAACTGCATGCTG",
-        false,
+        "TEMPLATE:g.[29C>A;32_33delinsTGCATGCTG]",
+        true,
     ),
 ];
 
-/// How many of the five split today. `delins.md:17` wants all five.
+/// How many of the five split today. `delins.md:17` wants all five, and all
+/// five now do.
 ///
 /// **This may only ever go up.** A drop means a spelling that once obeyed the
-/// separated-description rule stopped.
-const ISSUE_1421_ROWS_THAT_SPLIT: usize = 3;
+/// separated-description rule stopped. At 5 of 5 the only way left to move it is
+/// down, which is exactly the regression this constant exists to catch.
+const ISSUE_1421_ROWS_THAT_SPLIT: usize = 5;
 
 fn provider_for(sequence: &str, accession: &str) -> JsonProvider {
     let n = sequence.len() as u64;
@@ -178,18 +192,26 @@ fn issue_1421_insert_block_table_is_unchanged() {
 /// positions changed — not of which bases the payload happens to carry. While
 /// this test passes, it is not.
 #[test]
-fn issue_1421_split_decision_still_depends_on_the_inserted_block() {
+fn issue_1421_split_decision_no_longer_depends_on_the_inserted_block() {
     let normalizer = Normalizer::new(provider_for(TEMPLATE, "TEMPLATE"));
     let split = normalize_with(&normalizer, "TEMPLATE:g.29_33delinsAACTGCATGTG");
     let retained = normalize_with(&normalizer, "TEMPLATE:g.29_33delinsAACACATACTG");
 
-    assert!(
-        split.contains(';'),
-        "expected the net+6 split row to still separate, got `{split}`"
-    );
-    assert!(
-        !retained.contains(';'),
-        "expected the net+6 retained row to still span, got `{retained}`"
+    // #1421's complaint, in one assertion: two inputs at one locus with one net
+    // length reached opposite verdicts, so the verdict was a property of the
+    // payload's bases rather than of the locus. On a frameless axis it no longer
+    // is — the payload-coincidence carve-out that read those bases is scoped to
+    // `c.` (`delins-payload-coincidence-carve-out-is-coding-dna-scoped`), so
+    // `general.md:34` decides both the same way.
+    //
+    // Asserted as a pair rather than as two independent `contains(';')` checks:
+    // what the issue is about is the two rows AGREEING, and two separate checks
+    // would both keep passing if a later change split them apart again in the
+    // other direction.
+    assert_eq!(
+        (split.contains(';'), retained.contains(';')),
+        (true, true),
+        "the two net+6 rows must reach the same verdict; got `{split}` and `{retained}`"
     );
 }
 

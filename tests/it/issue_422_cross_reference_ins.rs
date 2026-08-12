@@ -421,22 +421,25 @@ fn cross_reference_inv_suffix_expands_inside_a_complex_bracket() {
     // literal `A` followed by the reverse complement `AACCCC`, and the
     // flattening leaves no bracket behind.
     //
-    // Stays ONE spanning delins. A 6 nt span replaced by a 7 nt payload leaves
-    // `g.12` matching, but that is a lone coincidental base inside a net
-    // insertion, and `delins.md:44-47` prefers the spanning `delins` when the
-    // payload merely "aligns" — the corpus agrees, failing the same way when this
-    // split is allowed. A #1235 revision had re-blessed this to two members on
-    // the strength of that one match; that was the coincidental-alignment trap.
+    // SPLITS at `g.12`. A 6 nt span replaced by a 7 nt payload leaves that base
+    // matching, and until the carve-out was scoped this pinned the spanning form
+    // on the reading that `delins.md:44-47` prefers it when the payload merely
+    // "aligns". The operator ruling
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes that
+    // passage to `c.`, and #422 is filed on `NC_000022.10:g.` — so
+    // `general.md:34` governs, one unchanged base is "one or more", and the two
+    // changes are described individually.
+    //
+    // Worth stating plainly because this exact assertion has flipped twice: a
+    // #1235 revision re-blessed it to two members on the strength of the one
+    // match (the coincidental-alignment trap, correctly reverted), and it is two
+    // members again now for a different and axis-scoped reason. The rest of the
+    // test — that the bracket flattens and the `inv` suffix is honoured, which
+    // is what #1184 is about — is untouched either way.
     assert_eq!(
-        out, "NC_000022.10:g.10_15delinsAAACCCC",
-        "literal `A` then the reverse complement `AACCCC`; the match at 12 is coincidence",
-    );
-
-    // The collapsed form is a fixed point.
-    assert_eq!(
-        normalize("NC_000022.10:g.10_15delinsAAACCCC", inv_payload_provider()).expect("normalize"),
-        "NC_000022.10:g.10_15delinsAAACCCC",
-        "the spanning delins must be a normalization fixed point",
+        out, "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
+        "literal `A` then the reverse complement `AACCCC`, described individually \
+         across the unchanged base at 12",
     );
 
     // **CLOSED, 2026-08-10.** This was a KNOWN LIMITATION pinned deliberately: the
@@ -452,20 +455,37 @@ fn cross_reference_inv_suffix_expands_inside_a_complex_bracket() {
     // bound, and deleting it
     // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) converges
     // the pair without touching #999, which stays green.
+    //
+    // **STILL CLOSED, and now on the OTHER form.** Deleting the weight bound
+    // converged the pair on the spanning `delins`; scoping
+    // `delins.md:44-47`'s payload-coincidence carve-out to the coding DNA axis
+    // (`rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`)
+    // moves the shared answer to the split, because #422 is filed on `g.`.
+    // What this row asserts is CONFLUENCE — one variant, one string — and that
+    // survives the move. Which string it is is a separate question, settled by
+    // `canonical-form-choice-when-both-legal`: derive from the resulting
+    // sequence and emit what falls out.
+    //
+    // Compared against `out` — the *other* spelling's output — rather than
+    // against the literal. Asserting that the split form normalizes to that same
+    // literal states only that it is a fixed point: a property of one spelling,
+    // which cannot fail on a non-confluence and which a second, byte-identical
+    // copy of this assertion was separately making anyway. That copy is gone.
+    // Against `out`, a change that moved the two spellings apart fails here,
+    // which is the property #422 is about, and the fixed point is not lost —
+    // `out` is pinned to the literal above, so the two assertions together still
+    // say both spellings land on that exact string.
     assert_eq!(
         normalize(
             "NC_000022.10:g.[10_11delinsAA;13_15delinsCCCC]",
             inv_payload_provider()
         )
         .expect("normalize"),
-        "NC_000022.10:g.10_15delinsAAACCCC",
-        "converged on the spanning form: with the input-relative weight bound \
-         deleted (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) \
-         the two-member spelling is re-derived instead of being handed back, so \
-         this is no longer a non-confluence. SPEC-SILENT — the block is `CTATAG` \
-         -> `AAACCCC`, unequal 6/7, so `delins.md:15`/`:16`/`:17` have no defined \
-         input and the separation of 1 the old form presented is a property of \
-         that spelling rather than of the variant",
+        out,
+        "converged: both spellings of this variant reach the split form, so this \
+         is not a non-confluence. The block is `CTATAG` -> `AAACCCC`, unequal \
+         6/7, and on a frameless axis `general.md:34` governs the one unchanged \
+         base at 12 unopposed",
     );
 }
 

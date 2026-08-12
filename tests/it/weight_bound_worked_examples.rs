@@ -247,33 +247,46 @@ fn the_two_spellings_denote_the_same_sequence() {
     );
 }
 
-/// Example 2, **flipped**: the two spellings converge, on the spanning form.
+/// Example 2, **flipped**: the two spellings converge, on the separated form.
 ///
-/// This is #1421's non-confluence closed. `delins.md:47` recommends the spanning
-/// form on exactly the construction `:46` builds — an interior that survives the
-/// split only because payload bases coincide with the reference, here the `AC` at
-/// `g.30_31` — and the decided ruling
-/// `delins-merge-vs-individual-gap-two-or-more` scopes itself to that shape. Its
-/// SCOPE ADDENDUM of 2026-08-10 names **this pair by coordinate** as inside the
-/// scope, so the convergence target is adjudicated rather than merely measured.
+/// This is #1421's non-confluence closed. **The equality is the load-bearing
+/// assertion, not either string on its own** — it is what a re-introduced
+/// spelling-relative gate would break — and that is why this test survived the
+/// convergence target moving from the span to the split.
 ///
-/// The equality is the load-bearing assertion, not either string on its own: it
-/// is what a re-introduced spelling-relative gate would break.
+/// # Which form, and why it moved
+///
+/// This test converged on the SPANNING form when the input-relative weight
+/// bound was deleted, citing `delins.md:47` and the decided
+/// `delins-merge-vs-individual-gap-two-or-more`, whose 2026-08-10 scope addendum
+/// was read as placing this pair inside the merge scope. **That reading is
+/// superseded by the same record's 2026-08-11 DIRECTION scoping**, which
+/// restricts it to the net-DELETION case — payload shorter than the span — on
+/// the ground that every row its evidence base examined was one, and states
+/// that for net insertions "the split form stays canonical". This pair is a net
+/// insertion: 5 reference bases replaced by 11.
+///
+/// What actually held the spanning form in place mechanically was
+/// `separations_are_meaningful`'s raise to `RAISED_PIECE_SEPARATION`, i.e.
+/// `delins.md:44-47`'s payload-coincidence carve-out, which
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes to `c.`.
+/// `TEMPLATE:g.` is not `c.`, so `general.md:34` governs the unchanged base at
+/// `g.30_31` and the members are described individually.
 #[test]
-fn one_variant_normalizes_to_one_string_now_the_span_is_reachable() {
+fn one_variant_normalizes_to_one_string() {
     let from_span = oracle::normalize(SEQ, SPANNING_DELINS);
     let from_split = oracle::normalize(SEQ, SEPARATED_MEMBERS);
 
     assert_eq!(
-        from_span, SPANNING_DELINS,
-        "the spanning spelling is a fixed point"
+        from_split, SEPARATED_MEMBERS,
+        "the separated spelling is a fixed point"
     );
     assert_eq!(
-        from_split, SPANNING_DELINS,
-        "the separated spelling now re-derives to the span. It used to be a \
-         second fixed point: the span weighs 11 against the input's 9, and the \
-         deleted input-relative weight bound refused anything heavier than the \
-         input's own spelling"
+        from_span, SEPARATED_MEMBERS,
+        "the spanning spelling now re-derives to the separated form. Both were \
+         fixed points before the input-relative weight bound was deleted; the \
+         bound refused anything heavier than the input's own spelling, so each \
+         input was handed back to itself"
     );
     assert_eq!(
         from_span, from_split,

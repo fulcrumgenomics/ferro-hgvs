@@ -421,7 +421,52 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     //   shipping path: the pass is gated on `PartitionRule::CanonicalCoalesced`
     //   while the shipped rule is `Live`. That is a separate change which #1649
     //   neither makes nor blocks, and it is deliberately not made here.
-    (Status::ProjectionSplitsSingleMember, 12),
+    //
+    // # 12 -> 17: the carve-out is scoped on the SHIPPING path
+    //
+    // The paragraph above names the residue exactly right and then reaches the
+    // wrong conclusion about where it lives. `coalesce_payload_alignment_split`
+    // is not the only place the payload-coincidence carve-out is applied: the
+    // shipping `Live` partitioner applies it too, unconditionally and on every
+    // axis, through `separations_are_meaningful`'s raise to
+    // `RAISED_PIECE_SEPARATION` and through `split_buys_no_higher_priority_type`.
+    // So `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`
+    // was honoured on the arm that does not ship and contradicted on the arm
+    // that does. Scoping both to `c.` is what moves these five rows, and it is
+    // the same ruling the `n.` row above was already read against.
+    //
+    // The five, by input, none of them on a `c.`-rendered *derivation*:
+    //
+    // ```text
+    // project-c/NM_004006.2:r.2623_2803delins2804_2949   normalized on `r.`
+    // project-n/NM_004006.2:r.2623_2803delins2804_2949   normalized on `r.`
+    // project-r/NM_004006.2:r.2623_2803delins2804_2949   normalized on `r.`
+    // project-g/LRG_199t1:c.850_901delinsTTCCTCGATGCCTG  rendered on `g.`
+    // project-g/LRG_199t1:c.992_1004delinsAC             rendered on `g.`
+    // ```
+    //
+    // The `r.` input is the case `is_coding_dna` exists for and the one a
+    // reading-frame gate would get wrong: `NM_004006.2` is a coding transcript,
+    // so it carries a translated frame, and the ruling still puts it out of
+    // reach because a `DNA/` clause has no jurisdiction over the RNA axis.
+    //
+    // The two `project-g` rows are the third and fourth instances of the shape
+    // the "keeps this at 9" paragraph above already defends: a `c.` input whose
+    // derived **genomic** axis renders the split, which
+    // `rulings[projection-codon-exception-is-decided-by-the-rendered-axis]`
+    // holds is the conformant answer because `:42`'s second conjunct cannot be
+    // stated on a genomic reference. Note this makes the `LRG_199t1:c.850_901`
+    // row named in the `10 -> 9` paragraph re-enter — on its `g.` projection
+    // only. Its `c.` axis, the axis `delins.md:44-47` is actually written
+    // about, still renders the spanning form; `merge::tests::the_spec_delins_
+    // example_is_never_audited_as_a_split` pins that directly.
+    //
+    // `PASSING_CENSUS`'s `ProjectionPinned` falls by the same five (1167 ->
+    // 1162), so the pair still moves in equal and opposite steps and no row left
+    // the enumeration. The base is 1167 rather than 1165 because #1704 raised it
+    // by two — see that constant's own note, which is the side this paragraph
+    // must agree with, and which carries the re-measured value.
+    (Status::ProjectionSplitsSingleMember, 17),
 ];
 
 /// Census of the **conformant** statuses — the counting half of
@@ -525,7 +570,21 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // `NC_000023.11(NM_004006.2):c.1704+1del` / `:n.1948+1del` (and the `dup`
     // pair). Those are the same accession repair, on the axes that were already
     // rendering.
-    (Status::ProjectionPinned, 1167),
+    //
+    // # 1167 -> 1162: the payload-coincidence carve-out is scoped to `c.`
+    //
+    // The mirror of `DIVERGENCE_BUDGET`'s `ProjectionSplitsSingleMember`
+    // 12 -> 17. Read the pair, never this constant alone: equal and opposite
+    // means five rows moved between statuses, where an unequal move would mean
+    // rows left the enumeration. The five are three `r.`-axis projections of
+    // `NM_004006.2:r.2623_2803delins2804_2949` and two `g.` projections of an
+    // `LRG_199t1:c.` input; both classes are named on the budget entry.
+    //
+    // **Re-measured on this base, not composed from the two deltas.** #1704's
+    // +2 and this change's -5 land on disjoint rows, but composing them is how
+    // a stale figure gets published, so the value below is what the regenerated
+    // enumeration reports.
+    (Status::ProjectionPinned, 1162),
     // #1704: 487 -> 485, the two `project-g/c.1704{del,dup}` rows that stopped
     // being unavailable. See the note above; read the pair together, since a move
     // between these two statuses is invisible in either number alone.

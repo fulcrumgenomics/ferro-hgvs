@@ -2110,6 +2110,56 @@ const MAX_SINGLE_BASE_SEPARATION_CHANGE: usize = 4;
 /// `sequence_first_split_axis_separation_matches_general_rule`.
 const MIN_SEPARATION_NO_FRAME: u32 = 1;
 
+/// Whether `DNA/delins.md:44-47`'s payload-coincidence carve-out is in reach on
+/// the axis a block was cut from.
+///
+/// [`partition_block`] takes bare bytes and so cannot answer this itself, which
+/// is the whole reason this travels as a parameter: two of its three
+/// single-piece exits — [`separations_are_meaningful`]'s raise to
+/// [`RAISED_PIECE_SEPARATION`], and [`split_buys_no_higher_priority_type`] —
+/// exist to **disbelieve** a separation that survives only because payload
+/// bases coincide with reference bases. That is `:44-47`'s construction and
+/// nothing else, and the operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes it to
+/// `c.` **and nothing else**.
+///
+/// Off that axis `general.md:34` / `DNA/delins.md:17` — "two variants separated
+/// by one or more nucleotides should be described individually and **not** as a
+/// 'delins'" — govern unopposed, so a split across one unchanged base may not
+/// be refused. Merging it anyway is what the *rejected* SVD-WG010 proposal
+/// would have required, which is why `spec_conformance_axis` counts it as a
+/// negative guard rather than as a representation choice.
+///
+/// **Not a reading-frame gate**, and the ruling says so in terms: a coding `r.`
+/// carries a reading frame and is still out of reach, because a `DNA/` clause
+/// has no jurisdiction over the RNA axis. [`AxisFrame::is_coding_dna`] is the
+/// predicate; `n.` is a DNA axis and is also out, on `:47`'s stated reason —
+/// preventing "incorrect predictions for the consequences on protein level" —
+/// having nothing to bite on where no protein is coded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoincidenceCarveOut {
+    /// The coding DNA axis, `c.`: a coincidental separation may be disbelieved.
+    InReach,
+    /// Every other axis: `general.md:34` governs and the split stands.
+    OutOfReach,
+}
+
+impl CoincidenceCarveOut {
+    /// Which side of the ruling above `kind` falls on.
+    fn for_axis(kind: CisKind) -> Self {
+        if AxisFrame::is_coding_dna(kind) {
+            Self::InReach
+        } else {
+            Self::OutOfReach
+        }
+    }
+
+    /// Whether a separation `general.md:34` would accept may be refused here.
+    fn may_disbelieve_a_separation(self) -> bool {
+        matches!(self, Self::InReach)
+    }
+}
+
 /// One derived edit: a maximal run of change over the reference window, as
 /// 0-based half-open offsets into that window plus its replacement bases.
 ///
@@ -2519,13 +2569,14 @@ fn partition_block_for_rule(
     reference: &[u8],
     result: &[u8],
     min_separation: u32,
+    carve_out: CoincidenceCarveOut,
 ) -> Vec<Piece> {
     use std::sync::atomic::Ordering;
 
     let attempt = match rule {
         // The shipped rule, and the only configuration that ships. It has no
         // decline path, so it is not counted.
-        PartitionRule::Live => return partition_block(reference, result),
+        PartitionRule::Live => return partition_block(reference, result, carve_out),
         PartitionRule::Shadow => partition_block_sequence_first(reference, result, min_separation),
         // `CanonicalCoalesced` is identical to `Canonical` here on purpose: the
         // `delins.md:44-47` merge is applied *after* the downstream passes, not
@@ -2537,7 +2588,7 @@ fn partition_block_for_rule(
     SEQFIRST_ATTEMPTED.fetch_add(1, Ordering::Relaxed);
     attempt.unwrap_or_else(|| {
         SEQFIRST_DECLINED.fetch_add(1, Ordering::Relaxed);
-        partition_block(reference, result)
+        partition_block(reference, result, carve_out)
     })
 }
 
@@ -2793,6 +2844,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         &ref_bytes[lo..hi_ref],
         &result[lo..hi_alt],
         axis_min_separation(frame.carries_translated_frame()),
+        CoincidenceCarveOut::for_axis(frame.kind),
     );
     // Shadow the sequence-first splitter on the very same trimmed block, before
     // any 3'-shift or coalescing, so a reported disagreement is a disagreement
@@ -2813,7 +2865,11 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
         //
         // The extra `partition_block` call is paid only when the shadow audit is
         // on, which is already a measurement-only path.
-        let live = partition_block(&ref_bytes[lo..hi_ref], &result[lo..hi_alt]);
+        let live = partition_block(
+            &ref_bytes[lo..hi_ref],
+            &result[lo..hi_alt],
+            CoincidenceCarveOut::for_axis(frame.kind),
+        );
         // Per-axis separation threshold (see `axis_min_separation`) — the same
         // distinction `apply_coding_codon_exception` uses below, via the same
         // `AxisFrame`.
@@ -4666,7 +4722,11 @@ fn trim_common_flanks(reference: &[u8], result: &[u8]) -> (usize, usize, usize) 
 /// pieces — and break ties by placing the indel 5'-most. The tie-break is an
 /// implementer's choice; the spec does not reach it. Each piece is 3'-shifted
 /// afterwards, so the 3' rule is still honoured per member.
-fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
+///
+/// `carve_out` says whether this block's axis may *disbelieve* a separation the
+/// general rule accepts; see [`CoincidenceCarveOut`], which is what keeps the
+/// two coincidence gates below off the axes their authority does not reach.
+fn partition_block(reference: &[u8], result: &[u8], carve_out: CoincidenceCarveOut) -> Vec<Piece> {
     let whole = || {
         vec![Piece {
             ref_start: 0,
@@ -4716,7 +4776,7 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     // blocks are exempt because `best_alignment` compares position-wise there —
     // there is no gap to place, so no search to seize on a coincidental match.
     if reference.len() != result.len()
-        && !separations_are_meaningful(&pieces, result.len().abs_diff(reference.len()))
+        && !separations_are_meaningful(&pieces, result.len().abs_diff(reference.len()), carve_out)
     {
         return whole();
     }
@@ -4724,7 +4784,12 @@ fn partition_block(reference: &[u8], result: &[u8]) -> Vec<Piece> {
     // place, so every matched base is a genuine coordinate-wise identity rather
     // than an artefact of where the gap landed, and a split across one is real.
     // `separations_are_meaningful` above draws the same line.
+    //
+    // Scoped to the coding DNA axis for the reason on `CoincidenceCarveOut`:
+    // this rule's own doc grounds it on `delins.md:44-47`, and that passage
+    // reaches `c.` and nothing else.
     if reference.len() != result.len()
+        && carve_out.may_disbelieve_a_separation()
         && pieces.len() > 1
         && every_separation_is_a_single_base(&pieces)
         && split_buys_no_higher_priority_type(&pieces, reference)
@@ -6693,8 +6758,18 @@ pub mod dev_partitioners {
     /// The shipped rule: `partition_block`'s single-gap alignment search.
     ///
     /// Never declines — an unsplittable block comes back as one spanning member.
-    pub fn live(reference: &[u8], result: &[u8]) -> Vec<DevPiece> {
-        convert(&super::partition_block(reference, result))
+    ///
+    /// `coding_dna` is the axis fact `super::CoincidenceCarveOut` carries: two
+    /// of the splitter's single-piece exits are `DNA/delins.md:44-47`'s
+    /// payload-coincidence carve-out, which reaches `c.` and nothing else. A
+    /// bare-bytes caller with no axis in hand wants `false`.
+    pub fn live(reference: &[u8], result: &[u8], coding_dna: bool) -> Vec<DevPiece> {
+        let carve_out = if coding_dna {
+            super::CoincidenceCarveOut::InReach
+        } else {
+            super::CoincidenceCarveOut::OutOfReach
+        };
+        convert(&super::partition_block(reference, result, carve_out))
     }
 
     /// The dominator rule: cut at the steps common to every minimal alignment.
@@ -6853,13 +6928,26 @@ fn changed_columns_of_pieces(pieces: &[Piece]) -> usize {
 /// **zero**. Correcting it also moved the whole gap distribution materially
 /// (gap 2 had been quoted at 42.7%, gap 3 at 14.8%), so any figure taken from a
 /// pre-correction distribution must be **re-derived rather than adjusted**.
-fn separations_are_meaningful(pieces: &[Piece], net_change: usize) -> bool {
+fn separations_are_meaningful(
+    pieces: &[Piece],
+    net_change: usize,
+    carve_out: CoincidenceCarveOut,
+) -> bool {
     // `ref_end` is exclusive and a pure insertion has `ref_start == ref_end`, so
     // this already counts unchanged *bases* rather than event indices: a
     // junction contributes no width because it occupies none. The sequence-first
     // splitter had to be corrected for exactly this, because it works in event
     // space where a junction and a changed position are both one offset.
-    let required = if net_change > MAX_SINGLE_BASE_SEPARATION_CHANGE {
+    //
+    // The raise is a *disbelief*, not a floor: it refuses a separation
+    // `general.md:34` accepts, on the ground that one matched base inside a
+    // large replacement is payload coincidence rather than structure. That is
+    // `delins.md:44-47`'s construction, which reaches `c.` and nothing else —
+    // so off that axis `MIN_PIECE_SEPARATION` stands however much the block
+    // changes. See [`CoincidenceCarveOut`].
+    let required = if carve_out.may_disbelieve_a_separation()
+        && net_change > MAX_SINGLE_BASE_SEPARATION_CHANGE
+    {
         RAISED_PIECE_SEPARATION
     } else {
         MIN_PIECE_SEPARATION
@@ -11556,6 +11644,26 @@ mod tests {
     use crate::hgvs::variant::Accession;
     use crate::reference::MockProvider;
 
+    /// The carve-out a bare-bytes call to [`partition_block`] operates under.
+    ///
+    /// A block handed over as two byte slices carries no axis, and absent a
+    /// coding claim `general.md:34` is what governs it — so the default here is
+    /// [`CoincidenceCarveOut::OutOfReach`], deliberately spelled out at every
+    /// call site rather than defaulted in the function.
+    ///
+    /// A test that means to assert `DNA/delins.md:44-47`'s payload-coincidence
+    /// carve-out must pass [`CoincidenceCarveOut::InReach`] instead and say
+    /// which coding row it is standing on. That is the distinction the ruling
+    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` draws, and
+    /// leaving it implicit is how it was lost.
+    pub(super) const NO_AXIS: CoincidenceCarveOut = CoincidenceCarveOut::OutOfReach;
+
+    /// The coding DNA axis, `c.` — the one axis `DNA/delins.md:44-47` reaches.
+    ///
+    /// Used only by the tests that are *about* that passage, so a reader can
+    /// tell at the call site which side of the ruling a case is pinning.
+    const CODING_DNA: CoincidenceCarveOut = CoincidenceCarveOut::InReach;
+
     /// Every axis states which rule scope it is in, and the two scopes differ.
     ///
     /// # Why this exists
@@ -12767,13 +12875,13 @@ mod tests {
         // And the rule — not a length bound — is what refuses it.
         let net_change = deletion_result.len().abs_diff(reference.len());
         assert!(
-            !separations_are_meaningful(&proposed, net_change),
+            !separations_are_meaningful(&proposed, net_change, CODING_DNA),
             "the {} proposed pieces are separated by coincidence and must be \
              refused on their merits; got {proposed:?}",
             proposed.len()
         );
 
-        let pieces = partition_block(&reference, &deletion_result);
+        let pieces = partition_block(&reference, &deletion_result, CODING_DNA);
         assert_eq!(
             pieces.len(),
             1,
@@ -12786,7 +12894,7 @@ mod tests {
         // unchanged interior base still separates two pieces.
         let mut equal_result: Vec<u8> = reference.iter().map(|b| flip_base(*b)).collect();
         equal_result[25] = reference[25];
-        let pieces = partition_block(&reference, &equal_result);
+        let pieces = partition_block(&reference, &equal_result, NO_AXIS);
         assert_eq!(
             pieces.len(),
             2,
@@ -12806,7 +12914,7 @@ mod tests {
         insertion_result[2] = flip_base(reference[2]);
         insertion_result.splice(45..45, b"GG".iter().copied());
         assert!(insertion_result.len() > reference.len());
-        let pieces = partition_block(&reference, &insertion_result);
+        let pieces = partition_block(&reference, &insertion_result, NO_AXIS);
         assert!(
             pieces.len() >= 2,
             "a net insertion past 32 nt must reach the aligner and keep its \
@@ -12838,7 +12946,7 @@ mod tests {
         deletion_split_result.drain(45..47);
         assert!(deletion_split_result.len() < reference.len());
         assert_eq!(reference.len() - deletion_split_result.len(), 2);
-        let pieces = partition_block(&reference, &deletion_split_result);
+        let pieces = partition_block(&reference, &deletion_split_result, NO_AXIS);
         assert!(
             pieces.len() >= 2,
             "a net deletion past 32 nt with meaningful separations must reach \
@@ -12872,7 +12980,7 @@ mod tests {
              #1539 shape rather than a genuine separation",
         );
 
-        let pieces = partition_block(reference, result);
+        let pieces = partition_block(reference, result, NO_AXIS);
         assert_eq!(
             pieces.len(),
             2,
@@ -12955,7 +13063,10 @@ mod tests {
         // c.850 is column 0, so column 44 is c.894 and its flanks are c.893/c.895.
         assert!(!same_codon(893, 895));
 
-        let mut pieces = partition_block(reference, result);
+        // `LRG_199t1:c.…` — the coding DNA axis, which is the only axis
+        // `delins.md:44-47` reaches. On a frameless axis the same block splits;
+        // `long_delins_splits_at_unchanged_bases` pins both sides.
+        let mut pieces = partition_block(reference, result, CODING_DNA);
         assert_eq!(
             pieces.len(),
             1,
@@ -12983,7 +13094,7 @@ mod tests {
     fn an_equal_length_block_is_not_re_aligned_for_concealed_separations() {
         let reference = b"AATATA";
         let result = b"TAATAT";
-        let pieces = partition_block(reference, result);
+        let pieces = partition_block(reference, result, NO_AXIS);
         assert_eq!(pieces.len(), 2, "got {pieces:?}");
         assert_eq!(
             interior_forced_runs(&member_alignment(b"TATA", b"ATAT").forced),
@@ -13042,24 +13153,24 @@ mod tests {
         // two-base spans the same pair would compute as separation 0 and be
         // refused.
         assert!(
-            separations_are_meaningful(&[ins(10, b"A"), ins(11, b"T")], 2),
+            separations_are_meaningful(&[ins(10, b"A"), ins(11, b"T")], 2, NO_AXIS),
             "one unchanged base separates insertions at 10 and 11"
         );
         // Two insertions at the *same* junction genuinely have nothing between
         // them, and that is the only way a pair of insertions reaches 0.
         assert!(
-            !separations_are_meaningful(&[ins(10, b"A"), ins(10, b"T")], 2),
+            !separations_are_meaningful(&[ins(10, b"A"), ins(10, b"T")], 2, NO_AXIS),
             "insertions at one junction are not separated at all"
         );
         // Mixed pair: a substitution consuming offset 10 leaves offsets 11..12
         // unchanged before the insertion at 12.
         assert!(
-            separations_are_meaningful(&[sub(10, b"A"), ins(13, b"T")], 1),
+            separations_are_meaningful(&[sub(10, b"A"), ins(13, b"T")], 1, NO_AXIS),
             "two unchanged bases separate a substitution at 10 from an \
              insertion at 13"
         );
         assert!(
-            !separations_are_meaningful(&[sub(10, b"A"), ins(11, b"T")], 1),
+            !separations_are_meaningful(&[sub(10, b"A"), ins(11, b"T")], 1, NO_AXIS),
             "an insertion at the junction immediately 3' of a substitution is \
              adjacent to it, not separated"
         );
@@ -13074,14 +13185,16 @@ mod tests {
         assert!(
             !separations_are_meaningful(
                 &[sub(10, b"A"), ins(12, b"T")],
-                MAX_SINGLE_BASE_SEPARATION_CHANGE + 1
+                MAX_SINGLE_BASE_SEPARATION_CHANGE + 1,
+                CODING_DNA,
             ),
             "one unchanged base does not satisfy the raised separation"
         );
         assert!(
             separations_are_meaningful(
                 &[sub(10, b"A"), ins(13, b"T")],
-                MAX_SINGLE_BASE_SEPARATION_CHANGE + 1
+                MAX_SINGLE_BASE_SEPARATION_CHANGE + 1,
+                CODING_DNA,
             ),
             "two unchanged bases do satisfy the raised separation"
         );
@@ -13118,7 +13231,7 @@ mod tests {
     fn sequence_first_split_agrees_on_an_unambiguous_single_change() {
         let reference = b"GACTGACTGA";
         let result = b"GACTAACTGA";
-        let old = partition_block(reference, result);
+        let old = partition_block(reference, result, NO_AXIS);
         let new = partition_block_sequence_first(
             reference,
             result,
@@ -13464,12 +13577,13 @@ mod tests {
             &reference,
             &doubled,
             crate::normalize::seqfirst::MIN_SEPARATION,
+            NO_AXIS,
         );
         let after = partition_decline_counts();
 
         assert_eq!(
             pieces,
-            partition_block(&reference, &doubled),
+            partition_block(&reference, &doubled, NO_AXIS),
             "the declined block is served by `partition_block`, byte for byte"
         );
         assert_eq!(
@@ -13492,6 +13606,7 @@ mod tests {
             b"ACGTACGT",
             b"ATGTTCGT",
             crate::normalize::seqfirst::MIN_SEPARATION,
+            NO_AXIS,
         );
         let served = partition_decline_counts();
         assert!(!answered.is_empty());
@@ -13509,9 +13624,10 @@ mod tests {
             b"ACGTACGT",
             b"ATGTTCGT",
             crate::normalize::seqfirst::MIN_SEPARATION,
+            NO_AXIS,
         );
         let unchanged = partition_decline_counts();
-        assert_eq!(live, partition_block(b"ACGTACGT", b"ATGTTCGT"));
+        assert_eq!(live, partition_block(b"ACGTACGT", b"ATGTTCGT", NO_AXIS));
         assert_eq!(
             unchanged, served,
             "the `live` arm must not touch the census"
@@ -13598,7 +13714,7 @@ mod tests {
     #[test]
     fn coalesce_coding_frame_separation_merges_only_within_one_codon() {
         let reference = b"ACG";
-        let split = partition_block(reference, b"CT");
+        let split = partition_block(reference, b"CT", NO_AXIS);
         assert_eq!(
             split.len(),
             2,
@@ -13685,7 +13801,7 @@ mod tests {
     #[test]
     fn coalesce_coding_frame_separation_declines_a_span_wider_than_a_codon() {
         let reference = b"TGCA";
-        let split = partition_block(reference, b"AAC");
+        let split = partition_block(reference, b"AAC", NO_AXIS);
         assert_eq!(split.len(), 2, "got {split:?}");
         assert_eq!(
             split[1].ref_start - split[0].ref_end,
@@ -13799,7 +13915,7 @@ mod tests {
         /// follow-up).
         #[test]
         fn live_and_canonical_disagree_so_the_audit_baseline_is_observable() {
-            let live = partition_block(b"A", b"ACA");
+            let live = partition_block(b"A", b"ACA", NO_AXIS);
             let canonical =
                 partition_block_canonical(b"A", b"ACA").expect("grid is far below the bound");
             assert_ne!(
@@ -15576,7 +15692,7 @@ mod tests {
         ///
         /// Returns `(live, shadow)` for the caller to pin exactly.
         fn both_raw(reference: &[u8], result: &[u8]) -> (Vec<Piece>, Vec<Piece>) {
-            let live = partition_block(reference, result);
+            let live = partition_block(reference, result, NO_AXIS);
             let shadow = partition_block_sequence_first(
                 reference,
                 result,
@@ -15953,7 +16069,7 @@ mod tests {
                 (b"ACCAA", b"CAG"),
                 (b"AAAAAAAATA", b"TAAAAAAAAATG"),
             ] {
-                let live = partition_block(reference, result);
+                let live = partition_block(reference, result, NO_AXIS);
                 let shrunk = shrunk_sequence_first(reference, result);
                 assert_eq!(
                     shape(&shrunk),
@@ -16060,7 +16176,7 @@ mod tests {
         fn shrinking_never_moves_a_piece_the_live_splitter_produced() {
             let mut compared = 0usize;
             for (block, alt) in enumerated_blocks() {
-                let pieces = partition_block(&block, &alt);
+                let pieces = partition_block(&block, &alt, NO_AXIS);
                 let mut shrunk = pieces.clone();
                 shrink_pieces_to_differences(&mut shrunk, &block);
                 assert_eq!(
@@ -16195,7 +16311,7 @@ mod tests {
             // tie. Only the third leaves the match *between* the two changes,
             // which is what makes them separate members.
             assert_eq!(
-                partition_block(b"AAA", b"CA"),
+                partition_block(b"AAA", b"CA", NO_AXIS),
                 vec![
                     Piece {
                         ref_start: 0,
@@ -16221,7 +16337,7 @@ mod tests {
             // placements did not tie and that the score decided — measured,
             // that is false, and the test's name is the part that is wrong
             // rather than its assertion.
-            assert_eq!(partition_block(b"TTTTT", b"TA").len(), 2);
+            assert_eq!(partition_block(b"TTTTT", b"TA", NO_AXIS).len(), 2);
         }
 
         #[test]
@@ -16229,12 +16345,26 @@ mod tests {
             // Cluster A stays whole: these have no tie to break, because their
             // best placement is unique.
             assert_eq!(
-                partition_block(b"CAGTGACTAG", b"TGTCACGACT").len(),
+                partition_block(b"CAGTGACTAG", b"TGTCACGACT", NO_AXIS).len(),
                 1,
                 "#1040"
             );
-            assert_eq!(partition_block(b"GCT", b"AGC").len(), 1, "#1034");
-            assert_eq!(partition_block(b"CTATAG", b"AAACCCC").len(), 1, "#422");
+            assert_eq!(partition_block(b"GCT", b"AGC", NO_AXIS).len(), 1, "#1034");
+            // #422 is filed on `NC_000022.10:g.`, so `delins.md:44-47`'s
+            // payload-coincidence carve-out does not reach it and the tie-break
+            // leaves a two-member answer standing. On `c.` the carve-out
+            // collapses it — both sides pinned in
+            // `a_split_that_buys_no_higher_priority_type_collapses`.
+            assert_eq!(
+                partition_block(b"CTATAG", b"AAACCCC", NO_AXIS).len(),
+                2,
+                "#422 on a frameless axis"
+            );
+            assert_eq!(
+                partition_block(b"CTATAG", b"AAACCCC", CODING_DNA).len(),
+                1,
+                "#422 on the coding DNA axis"
+            );
         }
     }
 
@@ -16305,7 +16435,7 @@ mod tests {
                 "every reference base must survive, with `a = 1`"
             );
             assert_eq!(
-                partition_block(b"AAA", b"ACACA").len(),
+                partition_block(b"AAA", b"ACACA", NO_AXIS).len(),
                 2,
                 "and it must still partition into the two insertions"
             );
@@ -16316,13 +16446,13 @@ mod tests {
             // The asymmetric case: a restored base on the 5' side alone, so
             // `a = 1` and `b == ref.len()`.
             assert_eq!(
-                partition_block(b"AA", b"ACAC").len(),
+                partition_block(b"AA", b"ACAC", NO_AXIS).len(),
                 2,
                 "a > 0 with the retained chunk running to the block's end"
             );
             // ...and on the 3' side alone, so `a == 0` and `b < ref.len()`.
             assert_eq!(
-                partition_block(b"AA", b"CACA").len(),
+                partition_block(b"AA", b"CACA", NO_AXIS).len(),
                 2,
                 "b < ref.len() with the retained chunk starting at the block's start"
             );
@@ -16335,7 +16465,7 @@ mod tests {
             // places it, so this must decline rather than re-express it as two
             // members that a coalesce would immediately merge back.
             assert_eq!(
-                partition_block(b"AA", b"AACC").len(),
+                partition_block(b"AA", b"AACC", NO_AXIS).len(),
                 1,
                 "an insertion at one junction is one member, not two"
             );
@@ -16409,12 +16539,12 @@ mod tests {
             // delins". One base is one or more. #1260's trimmed block reaches
             // this only because the two-gap alignment can express it.
             assert_eq!(
-                partition_block(b"A", b"CAC").len(),
+                partition_block(b"A", b"CAC", NO_AXIS).len(),
                 2,
                 "#1260a: two insertions either side of the retained A"
             );
             assert_eq!(
-                partition_block(b"GC", b"CGA").len(),
+                partition_block(b"GC", b"CGA", NO_AXIS).len(),
                 2,
                 "#999-neg: the two-member count the corpus records as required"
             );
@@ -16429,7 +16559,16 @@ mod tests {
             // `split_buys_no_higher_priority_type`'s doc, not `general.md:56`.
             // #1235's own comment asks for
             // exactly this: a fix that resolves #422 and keeps #999 green.
-            assert_eq!(partition_block(b"CTATAG", b"AAACCCC").len(), 1);
+            //
+            // **The collapse is coding-DNA only.** Its licence is the analogy to
+            // `delins.md:44-47`, and the operator ruling
+            // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes
+            // that passage to `c.` and nothing else. #422 itself is filed on
+            // `NC_000022.10:g.`, so the shipped answer for the issue's own axis
+            // is now the two-member form `general.md:34` asks for — a
+            // representation change, declared, not a regression.
+            assert_eq!(partition_block(b"CTATAG", b"AAACCCC", CODING_DNA).len(), 1);
+            assert_eq!(partition_block(b"CTATAG", b"AAACCCC", NO_AXIS).len(), 2);
         }
 
         #[test]
@@ -16441,7 +16580,8 @@ mod tests {
             assert_eq!(
                 partition_block(
                     b"ACGTACGTACGTACGTACGTACGTACGTACGTACGTACGT",
-                    b"CATGCATGCATGCATGCATTCATGCATGCATGCATGCATG"
+                    b"CATGCATGCATGCATGCATTCATGCATGCATGCATGCATG",
+                    NO_AXIS,
                 )
                 .len(),
                 2
@@ -16454,7 +16594,7 @@ mod tests {
             // renderer type that hides inside one — and `inv` outranks `delins`,
             // so such a split is worth keeping. Measured: a naive all-`delins`
             // test collapses 694 of 1094 firings over an exhaustive `AT` sweep.
-            let pieces = partition_block(b"AAAAA", b"TATT");
+            let pieces = partition_block(b"AAAAA", b"TATT", NO_AXIS);
             assert!(
                 pieces.len() > 1,
                 "a member that is the reverse complement of its own span must \
@@ -16469,17 +16609,17 @@ mod tests {
             // (#1034/#1040/#182) that `merge.rs`'s single-gap restriction
             // exists to protect. Pinned as behaviour, not as a code path.
             assert_eq!(
-                partition_block(b"CAGTGACTAG", b"TGTCACGACT").len(),
+                partition_block(b"CAGTGACTAG", b"TGTCACGACT", NO_AXIS).len(),
                 1,
                 "#1040"
             );
             assert_eq!(
-                partition_block(b"GCT", b"AGC").len(),
+                partition_block(b"GCT", b"AGC", NO_AXIS).len(),
                 1,
                 "#1034 whole-run revcomp"
             );
             assert_eq!(
-                partition_block(b"AGTCAGT", b"GATTA").len(),
+                partition_block(b"AGTCAGT", b"GATTA", NO_AXIS).len(),
                 3,
                 "#1157A, net deletion"
             );

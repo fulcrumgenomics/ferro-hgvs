@@ -79,10 +79,35 @@
 //! | `prohibited_absolute_accepted` | 32 | 32 | a shape the spec calls "not allowed" was accepted |
 //! | `prohibition_violating_outputs` | ~~32~~ **8** | ~~32~~ **8** | and then EMITTED, so the prohibition is not enforced on output either. Re-blessed by #1627: see the fourth section below |
 //!
-//! `guard_violations` is **0 of 210 guarded rows**, which is a real negative
-//! result rather than a vacuous one: ferro does not merge an irreducible frameless
-//! separation of one, so it does not implement rejected SVD-WG010. The denominator
-//! is asserted non-zero, because `0 of 0` is what a rebuilt #1456 looks like.
+//! `guard_violations` is **2 of 210 guarded rows**, and the two are named in
+//! [`RESIDUAL_GUARD_VIOLATIONS`] rather than absorbed into a count. The
+//! denominator is asserted non-zero, because `0 of 0` is what a rebuilt #1456
+//! looks like.
+//!
+//! **It was 0, then 18, and is now 2**, and the middle figure is the one to
+//! understand. Deleting the input-relative weight bound
+//! (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) let the
+//! partitioner re-derive multi-member spellings instead of handing them back —
+//! and the partitioner was applying `DNA/delins.md:44-47`'s payload-coincidence
+//! carve-out on **every** axis, so 18 authored frameless pairs at separation one
+//! came back merged. Scoping that carve-out to `c.`, which
+//! `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]` had
+//! already decided and which the non-shipping `CanonicalCoalesced` arm already
+//! honoured, closed 16 of them.
+//!
+//! **The 2 that remain are not a clause question.** Both are 2 065-base blocks,
+//! over `merge::MAX_SPLIT_BLOCK` (1 024), so `partition_block` returns the whole
+//! block on length before any rule about the derived pieces runs. Raising that
+//! cap is a cost question, and it is open.
+//!
+//! **These are a rule-2 preference miss, not a rule-1 violation.**
+//! `rulings[separation-rule-force-modal-or-negation]` holds that
+//! `general.md:34`'s modal grades the whole clause and its "and not" names the
+//! excluded alternative rather than prohibiting it — the two halves are
+//! complements, so a prohibition would make the individual form mandatory and
+//! leave "should" doing no work. So this counter is a best-effort preference
+//! figure. It is still pinned at its true value and still tripwired, because a
+//! preference clause outranks maintainer judgment.
 //!
 //! The 3'/5' asymmetry is itself a finding: the junction-crossing class is
 //! **371 to 0**, and 3' is the default direction. #1704 makes those 371 outputs
@@ -626,13 +651,18 @@ pub(crate) const THREE_PRIME: Census = Census {
     // `converged`, which is why the three deltas below sum exactly to
     // `converged`'s: 215 + 25 + 21 = 261.
     //
-    // #1716 leaves `converged` alone and moves three family instances between
-    // the `split_*` buckets — see the module docs' fifth RE-BLESSED section for
-    // the three row ids and the diffed divergence sets.
-    converged: 9_402,
-    split_two: 2_223,
-    split_three: 226,
-    split_more: 31,
+    // **Re-blessed by #1616, and this is the branch's headline figure.**
+    // Deleting the input-relative weight bound
+    // (`rulings[derivation-may-not-be-bounded-by-the-inputs-spelling]`) lets a
+    // multi-member spelling be re-derived from the sequence instead of being
+    // handed back, so families whose spellings previously reached their own
+    // inputs now reach one answer: converged 9 402 -> 10 995, +1 593. The three
+    // split counters fall by 1 548 + 42 + 3 = 1 593, exactly the gain, so every
+    // family that moved went straight to `converged` and none left the corpus.
+    converged: 10_995,
+    split_two: 677,
+    split_three: 181,
+    split_more: 29,
     underdetermined: 0,
     // -- idempotency --
     //
@@ -650,11 +680,45 @@ pub(crate) const THREE_PRIME: Census = Census {
     // `rulings[bare-transcript-intronic-position]`.
     prohibited_conditional_accepted: 16,
     // -- negative guards --
-    guard_violations: 0,
-    // -- instruments --
+    //
+    // **2, and pinned at its TRUE value rather than at zero.** See
+    // [`RESIDUAL_GUARD_VIOLATIONS`], which names both rows and fails if either
+    // starts conforming, so the residual cannot rot into a silent permanent
+    // exemption. It was 18 while the shipping partitioner applied
+    // `DNA/delins.md:44-47`'s payload-coincidence carve-out on every axis; 16 of
+    // those closed when the carve-out was scoped to `c.` per
+    // `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`.
+    //
+    // The two left are `MAX_SPLIT_BLOCK` (1024): both are 2 065-base blocks, so
+    // `partition_block` short-circuits on length before any rule about the
+    // derived pieces is consulted. Raising that cap is a cost question rather
+    // than a clause question and is deliberately not decided here.
+    guard_violations: 2,
+    // -- instruments -- (added by #1710, kept across the #1616 rebase)
     coding_axis_separation_two_or_more_rows: 997,
     coding_axis_separation_two_or_more_merges: 0,
 };
+
+/// The rows that still merge a frameless separation of one, named.
+///
+/// # Why the residual is named rather than merely counted
+///
+/// `guard_violations` is pinned at 2, its true value. A count alone would let
+/// the residual drift — one row conforming while a different one regressed
+/// reads as "unchanged" — and, worse, a count that someone re-pinned to zero to
+/// make a run green would delete the finding rather than record it. So the two
+/// are listed, and `the_residual_guard_violations_are_exactly_these_rows`
+/// asserts the set both ways: a new row entering FAILS, and a listed row that
+/// starts conforming FAILS too, which is what stops a fixed defect sitting here
+/// as a permanent exemption.
+///
+/// Both are `MAX_SPLIT_BLOCK`, not a clause: their blocks are 2 065 bases, over
+/// the 1 024 cap, so the length short-circuit returns the whole block before
+/// `separations_are_meaningful` or `split_buys_no_higher_priority_type` is
+/// reached. They are the only rows in the corpus that exceed it, which is also
+/// why no smaller-scale corpus can see this class at all (#1460).
+pub(crate) const RESIDUAL_GUARD_VIOLATIONS: &[&str] =
+    &["scale-g-block1032-delins-del", "scale-g-block1032-inv-del"];
 
 /// The 5'-direction census, pinned.
 ///
@@ -695,7 +759,13 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // time**, by 284, and the same three measured zeros hold as at 3': no family
     // loses convergence, rises in arity, or becomes divergent that was not.
     // #1627 does not move it either: a refused row contributes no family.
-    converged: 9_228,
+    // **Re-blessed by #1616**, the mirror of [`THREE_PRIME`]'s move: 9 228 ->
+    // 10 789, +1 561, with `split 2`/`3`/`4+` falling by 1 516 + 43 + 2 = 1 561.
+    // The two directions gain by different amounts (1 593 against 1 561) for the
+    // reason every earlier re-bless in this file records: the partition is
+    // decided the same way in both, and the follow-on shuffle that it enables
+    // runs 3' or 5', so only some landings coincide with the sibling spelling's.
+    converged: 10_789,
     // Re-blessed by #1649, rank-2 only, same as [`THREE_PRIME`] — and measured on
     // the rebased branch rather than composed. Every moved family goes straight
     // to `converged`, so these three deltas sum exactly to `converged`'s:
@@ -706,12 +776,8 @@ pub(crate) const FIVE_PRIME: Census = Census {
     // is decided the same way in both, but the *follow-on* shuffle it enables
     // runs 3' or 5'. Here 5' moves the larger set (284 against 261), the reverse
     // of #1536.
-    //
-    // #1716 moves the same three family instances as at 3', all three
-    // *improving* on this side; `converged` is unchanged. Fifth RE-BLESSED
-    // section.
-    split_two: 2_462,
-    split_three: 168,
+    split_two: 945,
+    split_three: 124,
     split_more: 24,
     underdetermined: 0,
     non_idempotent_outputs: 4,
@@ -720,7 +786,11 @@ pub(crate) const FIVE_PRIME: Census = Census {
     prohibited_absolute_accepted: 32,
     // Re-blessed DOWN by #1627, by the same 24 rows as at 3'.
     prohibited_conditional_accepted: 16,
-    guard_violations: 0,
+    // 2, as at 3', and the same two rows — see [`RESIDUAL_GUARD_VIOLATIONS`].
+    // The guard is a property of the partition rather than of a shuffle
+    // direction, so the two directions agreeing here is the cross-check.
+    guard_violations: 2,
+    // -- instruments -- (added by #1710, kept across the #1616 rebase)
     coding_axis_separation_two_or_more_rows: 997,
     coding_axis_separation_two_or_more_merges: 0,
 };
@@ -1643,6 +1713,12 @@ fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
 
     // The honest-zero discipline: a property whose denominator is zero is
     // VACUOUS, not passing.
+    //
+    // Asserted FIRST, ahead of the residual set below. On an empty corpus every
+    // downstream property is vacuously satisfied except the residual one, which
+    // fails with "the negative-guard residual moved" — a message that sends the
+    // reader after a representation change when what actually happened is that
+    // nothing ran. The vacuity check names that, so it must get there first.
     assert!(
         census.outputs > 0,
         "{label}: VACUOUS — the corpus produced no outputs at all"
@@ -1654,6 +1730,60 @@ fn assert_census(direction: ShuffleDirection, label: &str, pinned: &Census) {
          nothing and its zero is a claim about the corpus rather than about the \
          implementation.\n{}",
         report(label, &measured)
+    );
+
+    // The negative-guard residual, as a SET and not only as a count.
+    //
+    // The FERRO_IS_WRONG shape: this fails when a listed row starts conforming,
+    // not only when an unlisted one stops. A residual that can only be asserted
+    // downwards becomes a permanent exemption, because the day it is fixed
+    // nothing says so and the list stays.
+    //
+    // Asserted here rather than in a test of its own because `measure` is the
+    // expensive call in this file — a standalone test would run it a third and
+    // fourth time for no new information, and it already takes ~80 s per
+    // direction.
+    //
+    // Deduplicated, because this is a claim about *membership* and
+    // `RESIDUAL_GUARD_VIOLATIONS` is a list of distinct row ids. The guard at the
+    // `negative_guards` block above fires once per authored spelling, so a row
+    // whose `spellings` carried its authored spelling twice would contribute the
+    // same id twice and fail this on arity rather than on membership — which
+    // reads as a moved residual and is not one. The multiplicity is not
+    // discarded, it is asserted separately just below.
+    let mut violating: Vec<&str> = measured
+        .findings
+        .iter()
+        .filter(|finding| finding.what.starts_with("merged a frameless separation"))
+        .map(|finding| finding.id.as_str())
+        .collect();
+    violating.sort_unstable();
+    let fired = violating.len();
+    violating.dedup();
+    let mut residual: Vec<&str> = RESIDUAL_GUARD_VIOLATIONS.to_vec();
+    residual.sort_unstable();
+    assert_eq!(
+        violating, residual,
+        "{label}: the negative-guard residual moved. A row that STOPPED \
+         violating is a fix — delete it from RESIDUAL_GUARD_VIOLATIONS and lower \
+         `guard_violations` in the same commit, so the residual cannot sit here \
+         as a permanent exemption. A row that STARTED violating is a \
+         representation regression on `general.md:34`."
+    );
+
+    // Membership and count must agree, or the pinned `guard_violations` below is
+    // counting something the set assertion above cannot see. They can only
+    // diverge by a row firing twice, which means a duplicated authored spelling
+    // in the corpus — a corpus defect, and one the dedup above would otherwise
+    // absorb silently.
+    assert_eq!(
+        fired,
+        violating.len(),
+        "{label}: a guarded row fired more than once, so `guard_violations` \
+         ({}) counts spellings while RESIDUAL_GUARD_VIOLATIONS counts rows. \
+         Look for a duplicated authored spelling in the corpus, not for a \
+         representation change.",
+        census.guard_violations
     );
 
     // The rank-1 counters are pinned rather than asserted at zero, because they

@@ -153,48 +153,48 @@
     },
     {
       "input": "NG_008660.1:g.58604_58617delinsC",
-      "expected": "NG_008660.1:g.58604_58617delinsC",
+      "expected": "NG_008660.1:g.[58604del;58606_58617del]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. Same open ruling as the row above. Carried additionally because it exercises an NG_ genomic parent, so it keeps the committed slice honest about the placement path as well as the base path."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. Carried additionally because it exercises an NG_ genomic parent, so it keeps the committed slice honest about the placement path as well as the base path. MOVED 2026-08-12 by `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`: the spanning form was held by `separations_are_meaningful`'s raise, which is `DNA/delins.md:44-47`'s payload-coincidence carve-out, and that passage reaches `c.` and nothing else. This row is `g.`, so `general.md:34` governs its one unchanged base and the members are described individually. The pin is UPDATED rather than dropped -- what it guards is that the answer does not move again unnoticed, and the citation stays `basics.md:38` because stability is still the property being pinned, now around the post-ruling string."
     },
     {
       "input": "NC_000019.10:g.45553632_45553643delinsG",
-      "expected": "NC_000019.10:g.45553632_45553643delinsG",
+      "expected": "NC_000019.10:g.[45553632del;45553634_45553643del]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 12 bp span collapsing to one base; fixed point on both binaries."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 12 bp span collapsing to one base; fixed point on both binaries. MOVED 2026-08-12 by `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`: the spanning form was held by `separations_are_meaningful`'s raise, which is `DNA/delins.md:44-47`'s payload-coincidence carve-out, and that passage reaches `c.` and nothing else. This row is `g.`, so `general.md:34` governs its one unchanged base and the members are described individually. The pin is UPDATED rather than dropped -- what it guards is that the answer does not move again unnoticed, and the citation stays `basics.md:38` because stability is still the property being pinned, now around the post-ruling string."
     },
     {
       "input": "NC_000009.12:g.106927023_106927043delinsA",
-      "expected": "NC_000009.12:g.106927023_106927043delinsA",
+      "expected": "NC_000009.12:g.[106927023_106927025del;106927027_106927043del]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 21 bp span, the longest of the collapsing group; fixed point on both binaries."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. A 21 bp span, the longest of the collapsing group; fixed point on both binaries. MOVED 2026-08-12 by `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`: the spanning form was held by `separations_are_meaningful`'s raise, which is `DNA/delins.md:44-47`'s payload-coincidence carve-out, and that passage reaches `c.` and nothing else. This row is `g.`, so `general.md:34` governs its one unchanged base and the members are described individually. The pin is UPDATED rather than dropped -- what it guards is that the answer does not move again unnoticed, and the citation stays `basics.md:38` because stability is still the property being pinned, now around the post-ruling string."
     },
     {
       "input": "NG_005905.2:g.172248_172253delinsGTCCTGCTGTCCTGGCACTG",
-      "expected": "NG_005905.2:g.172248_172253delinsGTCCTGCTGTCCTGGCACTG",
+      "expected": "NG_005905.2:g.[172248delinsGTCCTGCTGTCCTGG;172250_172253inv]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. The expanding direction -- a 6 bp reference span replaced by 20 bp -- so the pin covers both directions of length change, not just collapses. Second NG_ parent in the corpus."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. The expanding direction -- a 6 bp reference span replaced by 20 bp -- so the pin covers both directions of length change, not just collapses. Second NG_ parent in the corpus. MOVED 2026-08-12 by `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`: the spanning form was held by `separations_are_meaningful`'s raise, which is `DNA/delins.md:44-47`'s payload-coincidence carve-out, and that passage reaches `c.` and nothing else. This row is `g.`, so `general.md:34` governs its one unchanged base and the members are described individually. The pin is UPDATED rather than dropped -- what it guards is that the answer does not move again unnoticed, and the citation stays `basics.md:38` because stability is still the property being pinned, now around the post-ruling string."
     },
     {
       "input": "NC_000002.12:g.166052896_166052909delinsTGTG",
-      "expected": "NC_000002.12:g.166052896_166052909delinsTGTG",
+      "expected": "NC_000002.12:g.[166052896_166052897delinsTG;166052899_166052909delinsG]",
       "citation": {
         "clause": "docs/background/basics.md:38",
         "quote": "designed to be **stable**, **meaningful**, **memorable**, and **unequivocal**"
       },
-      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. 14 bp replaced by 4; fixed point on both binaries."
+      "note": "STABILITY PIN, NOT A SPEC-CORRECTNESS CLAIM. 14 bp replaced by 4; fixed point on both binaries. MOVED 2026-08-12 by `rulings[delins-payload-coincidence-carve-out-is-coding-dna-scoped]`: the spanning form was held by `separations_are_meaningful`'s raise, which is `DNA/delins.md:44-47`'s payload-coincidence carve-out, and that passage reaches `c.` and nothing else. This row is `g.`, so `general.md:34` governs its one unchanged base and the members are described individually. The pin is UPDATED rather than dropped -- what it guards is that the answer does not move again unnoticed, and the citation stays `basics.md:38` because stability is still the property being pinned, now around the post-ruling string."
     },
     {
       "input": "NC_000012.12:g.4517618_4518810delinsTCATAA",

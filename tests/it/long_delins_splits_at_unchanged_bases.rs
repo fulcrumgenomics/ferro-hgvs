@@ -14,24 +14,21 @@
 //! everywhere, and the coincidence question is answered by a rule about the
 //! derived pieces rather than by length.
 //!
+//! **And that rule is now scoped by AXIS as well**, which is what the second
+//! case below records. Disbelieving a separation is `delins.md:44-47`'s
+//! payload-coincidence carve-out, and the operator ruling
+//! `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes that
+//! passage to the coding DNA axis. Both cases here are on `NC_TEST.1:g.`, so
+//! both now split — the second one having pinned the spanning form until the
+//! scope was applied.
+//!
 //! It was not always so: net deletions were once the unguarded regime and were
 //! held instead by a second, smaller bound of 32 nt
 //! (`MAX_UNGUARDED_SPLIT_BLOCK`) that guarded by accident. #1271 retired it.
 //! The cases below pin the outcomes, which are unchanged by that move.
 
-use crate::common::synthetic::{hgvs, SyntheticBuilder};
-use ferro_hgvs::{parse_hgvs, MockProvider, Normalizer};
-
-fn normalize(provider: MockProvider, input: &str) -> String {
-    let normalizer = Normalizer::new(provider);
-    let variant = parse_hgvs(input).unwrap_or_else(|e| panic!("parse failed for `{input}`: {e}"));
-    format!(
-        "{}",
-        normalizer
-            .normalize(&variant)
-            .unwrap_or_else(|e| panic!("normalize failed for `{input}`: {e}"))
-    )
-}
+use crate::common::cis_apply_oracle::normalized_preserving;
+use crate::common::synthetic::hgvs;
 
 /// A 40 nt delins — comfortably past the old 32 nt cap — whose interior leaves
 /// one base untouched. It must be described as two members, exactly as the same
@@ -54,12 +51,18 @@ fn a_delins_longer_than_the_old_cap_still_splits() {
     replacement[19] = core.as_bytes()[19] as char;
     let replacement: String = replacement.into_iter().collect();
 
-    let provider = SyntheticBuilder::genomic(&core).build();
     let input = hgvs(
         &format!("NC_TEST.1:g.{{0}}_{{1}}delins{replacement}"),
         &[1, core.len() as u64],
     );
-    let out = normalize(provider, &input);
+    // Through the shared oracle, so the output is checked to denote the input's
+    // own bases BEFORE the string below is compared. The string pin alone is a
+    // re-bless waiting to happen: whoever next moves this expectation only has
+    // to make the literal agree with whatever came out, and a partition that
+    // dropped or duplicated a base would pass. `normalized_preserving` reaches
+    // the bases through `hgvs_to_spdi` and a splice, never through the
+    // normalizer, so it cannot agree merely because normalization produced it.
+    let out = normalized_preserving(&core, &input);
 
     // Pin the whole result, not just "it split somewhere". `contains(';')` plus
     // "the spanning payload is gone" is satisfied by *any* partition, including
@@ -79,52 +82,66 @@ fn a_delins_longer_than_the_old_cap_still_splits() {
     );
 }
 
-/// A long **net deletion** must stay one spanning delins.
+/// A long **net deletion** on a FRAMELESS axis splits at its coincidental
+/// matches, because `delins.md:44-47` does not reach that axis.
 ///
-/// `separations_are_meaningful` only covers net insertions, so nothing else
-/// stops `best_alignment` seizing on a coincidentally-surviving base here. The
-/// block is 52 nt replaced by 14 — the shape of `delins.md:44-47`'s own worked
-/// example, `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`, which raising the bound
-/// across the board split into three members and turned one correct protein
-/// consequence into three bogus ones.
+/// # This test asserted the opposite until the carve-out was scoped
+///
+/// It pinned the spanning form, on the reading that `delins.md:44-47`'s worked
+/// example — `LRG_199t1:c.850_901delinsTTCCTCGATGCCTG`, the very block this
+/// test plants here — settles the shape wherever it occurs. The operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` says it does
+/// not: `:47`'s stated reason is preventing "incorrect predictions for the
+/// consequences on protein level", which has nothing to bite on where no
+/// protein is coded, so the passage reaches `c.` and nothing else. The spec's
+/// own example is on `c.`; this test is on `NC_TEST.1:g.`, and the axis is the
+/// whole difference.
+///
+/// So the two halves are pinned on the two axes they belong to. The `c.` half —
+/// the spec's own block, staying one member — is
+/// `merge::tests::the_spec_delins_example_is_never_audited_as_a_split` and the
+/// `LRG_199` row of the reproducer corpus, both of which pass the block through
+/// `partition_block` with the carve-out in reach. This is the frameless half.
 ///
 /// The payload here is drawn from the reference's own alphabet on a periodic
-/// core, so coincidental matches are abundant — exactly the regime the spec
-/// warns about, and the case a length-blind cap gets wrong.
+/// core, so coincidental matches are abundant. That makes it the strongest
+/// available statement of the frameless answer rather than a corner case: if
+/// `general.md:34` governs unopposed off `c.`, it governs here.
 #[test]
-fn a_long_net_deletion_stays_one_spanning_delins() {
+fn a_long_net_deletion_splits_on_a_frameless_axis() {
     // 52 nt core, replaced by 14 — well past the 32 nt unguarded bound.
     let core = "ACGT".repeat(13);
     assert_eq!(core.len(), 52);
     let replacement = "TTCCTCGATGCCTG";
     assert_eq!(replacement.len(), 14);
 
-    let provider = SyntheticBuilder::genomic(&core).build();
     let input = hgvs(
         &format!("NC_TEST.1:g.{{0}}_{{1}}delins{replacement}"),
         &[1, core.len() as u64],
     );
-    let out = normalize(provider, &input);
+    // Through the shared oracle, for the reason the sibling above gives: the
+    // five-member pin below is a string comparison and nothing in it checks the
+    // members still reassemble to the input's bases. That matters most here,
+    // where the payload is drawn from the reference's own alphabet on a periodic
+    // core — a wrong partition of an `ACGT` tract is exactly the shape that
+    // looks plausible in a diff.
+    let out = normalized_preserving(&core, &input);
 
-    // Pin the whole result, for the reason the sibling test above gives:
-    // `!contains(';')` plus `contains(replacement)` is satisfied by *any*
-    // single-member output, including one whose span or trimming regressed —
-    // `1_51`, `2_52`, or a payload with something spliced onto it would all
-    // pass while the guard under test had stopped working.
+    // Pin the whole result, for the reason the sibling test above gives: a
+    // predicate over the string is satisfied by outputs whose span or trimming
+    // regressed, so the guard would keep passing after it had stopped working.
     //
     // The expected answer is fully determined. The block reaches the aligner,
-    // whose proposed split `separations_are_meaningful` then refuses — every gap
-    // between consecutive pieces is one base wide, against the
-    // `RAISED_PIECE_SEPARATION` this block's net change requires — so
-    // `partition_block` returns the whole block as one piece. (Before #1271 the
-    // same single piece came from a 32 nt bound instead; the outcome pinned here
-    // is the same either way, which is why this assertion did not move.) Neither
-    // endpoint trims, because the
-    // core begins `A`/ends `T` while the payload begins `T`/ends `G`. So the
-    // span is the full core and the payload is untouched.
-    let expected = format!("NC_TEST.1:g.1_{}delins{replacement}", core.len());
+    // whose proposed split `separations_are_meaningful` used to refuse — every
+    // gap between consecutive pieces is one base wide, against the
+    // `RAISED_PIECE_SEPARATION` this block's net change required. That raise is
+    // the payload-coincidence carve-out, so it now applies on the coding DNA
+    // axis only and the derived pieces stand here. Five members, every
+    // separation exactly one unchanged base, which is what `general.md:34` and
+    // `delins.md:17` ask for.
+    let expected = "NC_TEST.1:g.[1_39delinsT;41A>C;43del;45_49delinsCGATGC;51_52delinsTG]";
     assert_eq!(
         out, expected,
-        "a 52 nt -> 14 nt delins must stay one spanning member with its payload intact"
+        "a 52 nt -> 14 nt delins on a frameless axis splits at its unchanged bases"
     );
 }
