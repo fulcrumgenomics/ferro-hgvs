@@ -849,29 +849,46 @@ impl InputPreprocessor {
             }
         }
 
-        // Phase 12: Strip redundant base labels in RNA repeat descriptions (W3013).
+        // Phase 12: Repair redundant range-plus-unit RNA repeat descriptions
+        // (W3013). Which half is dropped depends on whether the range's span
+        // matches the unit's length — see `correct_redundant_repeat_label`.
         let (corrected, corrections) = correct_redundant_repeat_label(&current);
         if !corrections.is_empty() {
             let action = self.action_for(ErrorType::RedundantRepeatLabel);
             match action {
                 ResolvedAction::Reject => {
                     let first = &corrections[0];
-                    return PreprocessResult::failed(
-                        input.to_string(),
-                        FerroError::parse_with_diagnostic(
-                            first.start,
+                    // An empty replacement means the label was the redundant
+                    // half; otherwise the range and the unit disagree about the
+                    // unit's length and the range is the half that goes.
+                    let (message, hint) = if first.corrected.is_empty() {
+                        (
                             format!(
                                 "Repeat description has redundant base label '{}'",
                                 first.original
                             ),
+                            "RNA repeat descriptions should omit the base label when positions already define the unit",
+                        )
+                    } else {
+                        (
+                            format!(
+                                "Repeat description '{}' states a position range and a repeat unit of different lengths",
+                                first.original
+                            ),
+                            "The repeat unit carries the variant; a range beside it only restates the unit's length, so drop the range's end",
+                        )
+                    };
+                    return PreprocessResult::failed(
+                        input.to_string(),
+                        FerroError::parse_with_diagnostic(
+                            first.start,
+                            message,
                             Diagnostic::new()
                                 .with_code(ErrorCode::InvalidEdit)
                                 .with_span(SourceSpan::new(first.start, first.end))
                                 .with_source(input)
                                 .with_suggestion(corrected.clone())
-                                .with_hint(
-                                    "RNA repeat descriptions should omit the base label when positions already define the unit",
-                                ),
+                                .with_hint(hint),
                         ),
                     );
                 }

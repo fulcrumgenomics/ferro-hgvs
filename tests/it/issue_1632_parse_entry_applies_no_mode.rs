@@ -106,19 +106,36 @@ fn the_error_codes_do_not_discriminate_these_rungs() {
 /// `r.-6_-3g[6]` and `r.-125_-123cug[4]` state a base label that the range
 /// already determines — the `RedundantRepeatLabel` rung (`W3013`) of the
 /// hygiene ladder. The ladder never runs on `parse_hgvs`, so it has no opinion.
+/// The two inputs land on **different** rungs, which is why each is pinned to
+/// its own message rather than both to one substring. `-6_-3` spans four bases
+/// and states a one-base unit, so the two disagree on length; `-125_-123` spans
+/// three and states `cug`, three, so the unit is merely redundant. Asserting one
+/// shared substring across both would pass while a rung was misdiagnosed — which
+/// is exactly what #1631 found and fixed here, the length-disagreement case
+/// having previously been reported as redundancy.
 #[test]
 fn the_bare_entry_accepts_two_inputs_strict_refuses() {
-    for input in ["NM_024312.4:r.-6_-3g[6]", "NM_024312.4:r.-125_-123cug[4]"] {
+    for (input, rung) in [
+        (
+            "NM_024312.4:r.-6_-3g[6]",
+            "states a position range and a repeat unit of different lengths",
+        ),
+        (
+            "NM_024312.4:r.-125_-123cug[4]",
+            "has redundant base label 'cug'",
+        ),
+    ] {
         assert_eq!(
             bare(input).as_deref(),
             Ok(input),
             "parse_hgvs accepts the input unchanged"
         );
         let refusal = with_config(input, ErrorConfig::strict())
-            .expect_err("strict must refuse a redundant repeat base label");
+            .expect_err("strict must refuse a repeat unit the range already determines");
         assert!(
-            refusal.contains("Repeat description has redundant base label"),
-            "the refusal must name this rung, not merely fail; got: {refusal}"
+            refusal.contains(rung),
+            "the refusal must name this input's own rung, not merely fail; \
+             wanted {rung:?}, got: {refusal}"
         );
     }
 }
