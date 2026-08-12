@@ -1,0 +1,46 @@
+Minimal-description-length scoring and decomposition (src/normalize/mdl.rs)
+==========================================================================
+
+Source:  https://github.com/mutalyzer/description-extractor
+Commit:  155b79d29c4f74c32dfcb4ae3096a4a5a3b009bb
+License: MIT (Leiden University Medical Center)
+
+`src/normalize/mdl.rs` is a Rust port of the C++ algorithm in that
+repository's `extractor/extractor.{h,cc}` (author: Jonathan K. Vis),
+specifically the DNA path: `extract`, `extractor`, `LCS`, `LCS_1`,
+`LCS_k`, `prefix_match`, `suffix_match`, `string_match`,
+`string_match_reverse` and `IUPAC_complement`, together with the weight
+table from `extractor.h:100-106` and the `weight_position` derivation at
+`extractor.cc:100-103`.
+
+It is a port, not a copy: no upstream source text is reproduced in the
+Rust file, which cites upstream line numbers instead. The upstream MIT
+licence requires attribution; this file satisfies that requirement. See
+the upstream LICENSE for the full text.
+
+What is DELIBERATELY NOT ported
+-------------------------------
+* `extractor_transposition` and the `TRANSPOSITION_OPEN`/`_CLOSE`
+  variant types (`extractor.cc:516-655`). ferro's `Piece` carries a
+  literal replacement and has no cross-reference spelling, so a
+  transposition has nowhere to land. Every site that would have called
+  it takes the branch the C++ takes when the transposition is rejected
+  — see `mdl.rs`'s module doc for the exact list.
+* `extractor_protein`, `extractor_frame_shift`, `LCS_frame_shift`,
+  `backtranslation` and the codon/frame-shift maps: the protein path.
+* The `Variant::probability` union member and `debug.cc`/`sandbox.cc`.
+
+What is PARAMETERIZED beyond upstream
+-------------------------------------
+Upstream hard-codes its weight table, derives `weight_position` from the
+whole reference length, and applies its collapse test greedily. All
+three are exposed here as `mdl::Config` knobs, with the upstream values
+as the documented default (`Config::MUTALYZER`), because they are
+calibration rather than principle. See `mdl.rs`.
+
+Ported test cases
+-----------------
+`mdl::tests::upstream` replays the 18 `(reference, sample) -> variant
+list` cases from the upstream `tests/test_extractor.py` at the commit
+above, and the description-level expectations from
+`tests/test_describe.py`. Those files are MIT under the same licence.
