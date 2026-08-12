@@ -4124,6 +4124,94 @@ fn resolve_special_genome_pos<P: ReferenceProvider>(
     }
 }
 
+/// Widest **half**-width [`Normalizer::normalize_in_grown_window`] will grow the
+/// fetch to before refusing to shift any further.
+///
+/// **This bounds `window`, not the span read.** `normalize_in_grown_window`
+/// fetches `[start - window, end + window]`, so the widest reference span is
+/// roughly *twice* this plus the variant's own length — measured, a 60,000-base
+/// tract at contig offset 100,000 converges to `g.160000del` off a window
+/// covering `[34,465 .. 165,537]`, 131,073 bases. The *travel* bound is the
+/// half-width itself: a 65,000-base tract converges and a 66,000-base one is
+/// refused. [`MAX_INTRONIC_SHUFFLE_WINDOW`] at its own definition is tested as a
+/// **full** span, so the two constants are numerically equal and semantically a
+/// factor of two apart; do not read one off the other.
+///
+/// The value is **reused from** [`MAX_INTRONIC_SHUFFLE_WINDOW`] rather than
+/// independently sourced — that constant is this module's existing answer to the
+/// same question (how far a shuffle may fetch before the cost stops being worth
+/// the answer) and is itself unsourced. What justifies the reuse is that a run
+/// long enough to exhaust it is a structural feature (an assembly `N` gap, a
+/// synthetic contig) rather than a repeat tract: the pathogenic expansions that
+/// do run long — FMR1 `CGG`, RFC1 `AAGGG` — reach thousands of bases, which is
+/// still an order of magnitude inside 64 KiB. It is a cost bound picked to sit
+/// clear of the biology, not a bound derived from it.
+const MAX_SHUFFLE_FETCH_WINDOW: u64 = MAX_INTRONIC_SHUFFLE_WINDOW;
+
+/// Next window to try, or `None` once [`MAX_SHUFFLE_FETCH_WINDOW`] has been
+/// tried. Doubling keeps the number of re-fetches logarithmic in the distance
+/// the shuffle actually travels, so the overwhelmingly common case — a result
+/// that rests well inside the configured window — costs exactly one fetch and
+/// never consults this function at all.
+///
+/// `max(1)` guards a `window_size` of 0, which would otherwise double to itself
+/// forever.
+fn grow_shuffle_fetch_window(window: u64) -> Option<u64> {
+    if window >= MAX_SHUFFLE_FETCH_WINDOW {
+        return None;
+    }
+    Some(
+        window
+            .max(1)
+            .saturating_mul(2)
+            .min(MAX_SHUFFLE_FETCH_WINDOW),
+    )
+}
+
+/// Bases of reference kept either side of an edit's own span by
+/// [`Normalizer::canonicalize_without_shifting`].
+///
+/// Every type rule that survives the growth cap is decided within one payload
+/// length of the edit: `duplication.md:5` defines a duplication as a copy
+/// inserted "**directly 3'** of the original copy", so seeing the original costs
+/// exactly `|payload|` bases of 5' flank, and the mirror check on the 3' side
+/// costs the same. Delins trimming, the delins type ladder and the inversion
+/// shortening all read inside the span itself.
+///
+/// **The value must depend on the edit and on nothing else.** It is what bounds
+/// how far the capped answer can look, so a flank derived from the reference —
+/// a tract length, a window width — would make the answer depend on the very
+/// distance the cap declined to travel, and the walk would come straight back.
+/// The `max(1)` floor keeps a zero-payload edit (`del`, `inv`) from being handed
+/// a slice with no context at all.
+fn capped_typing_flank(edit: &NaEdit) -> u64 {
+    let payload = match edit {
+        NaEdit::Insertion { sequence } | NaEdit::Delins { sequence, .. } => {
+            sequence.bases().map_or(0, <[Base]>::len)
+        }
+        _ => 0,
+    };
+    (payload as u64).max(1)
+}
+
+/// One settled attempt at normalizing an edit against a fetched reference
+/// window. See [`Normalizer::normalize_in_grown_window`].
+struct WindowedNormalization {
+    /// 0-based offset of the window's first base within the contig. Positions
+    /// convert back with `contig = window_relative + window_start`.
+    window_start: u64,
+    /// The fetched bases.
+    ref_seq: String,
+    /// Window-relative 1-based start of the normalized edit.
+    new_rel_start: u64,
+    /// Window-relative 1-based end of the normalized edit.
+    new_rel_end: u64,
+    /// The normalized edit.
+    new_edit: NaEdit,
+    /// Warnings raised while normalizing it.
+    warnings: Vec<NormalizationWarning>,
+}
+
 impl<P: ReferenceProvider> Normalizer<P> {
     /// Clamp a window-fetch upper bound to the contig length.
     ///
@@ -4150,6 +4238,232 @@ impl<P: ReferenceProvider> Normalizer<P> {
             Ok(len) if end <= len => raw_end.min(len),
             _ => raw_end,
         }
+    }
+
+    /// Normalize an edit against a reference window sized so the shuffle can
+    /// actually reach its fixed point (#1691).
+    ///
+    /// The `±window_size` fetch is a *cost* bound, but `normalize_na_edit` is
+    /// handed `Boundaries::new(0, ref_seq.len())` and so treats the window's far
+    /// edges as hard limits on the shuffle. Those edges are where the fetch
+    /// stopped, not properties of the contig, so inside a repeat tract longer
+    /// than the window the shuffle reports the edge it reached rather than the
+    /// tract's end. Re-normalizing that answer re-centres the window on it and
+    /// advances another `window_size` bases — `g.100del -> g.200del ->
+    /// g.300del -> …`, which never terminates and trips
+    /// `FERRO_ASSERT_IDEMPOTENT`.
+    ///
+    /// So the window is grown geometrically until the result rests strictly
+    /// inside it, and the caller gets whichever attempt settled. Growth is only
+    /// attempted when the edge is *provably* artificial — the contig is known to
+    /// continue past the window's 3' end, or the window's 5' end is not the
+    /// contig's first base. Where flushness cannot be established (no length
+    /// from the provider) the window is left alone, which is the same
+    /// conservative choice [`Self::clamp_fetch_end_to_contig`] makes.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(None)` when the caller should fall back to minimal notation: **any**
+    /// fetch failed — the first one or a grown one (a grown failure is not
+    /// allowed to fall back to the truncated attempt that preceded it, which
+    /// would reinstate the walk) — or the growth cap was reached by an edit
+    /// [`Self::canonicalize_without_shifting`] declines to re-type.
+    ///
+    /// **Refusing to shift is the only capped answer that is still a fixed
+    /// point.** Capping the *shift* instead — returning the far edge of the
+    /// largest window we were willing to fetch — just changes the walk's step
+    /// size from `window_size` to the cap; the second call re-centres on the new
+    /// position and walks again.
+    ///
+    /// **What is refused at the cap is the travel, and only the travel.** The
+    /// edit is still re-typed against the reference by
+    /// [`Self::canonicalize_without_shifting`], because the type rules —
+    /// `ins -> dup`, `delins -> sub/inv/dup/del`, the inversion shortening — are
+    /// decided by the bases flanking the edit rather than by how far a tract
+    /// runs, so they are answerable at the cap and `DNA/duplication.md:18` says
+    /// they must be answered ("when a variant can be described as a duplication,
+    /// it **must** be described as a duplication and not as, e.g., an
+    /// insertion"). Refusing them alongside the shift bought idempotency with
+    /// conformance, which is the one thing the README ruleset never trades.
+    ///
+    /// `fetch_end_of` maps a raw `end + window` upper bound to the one the
+    /// caller wants read (each axis clamps differently), and is re-consulted on
+    /// every attempt because the raw bound changes as the window grows.
+    fn normalize_in_grown_window(
+        &self,
+        accession: &str,
+        start: u64,
+        end: u64,
+        edit: &NaEdit,
+        fetch_end_of: impl Fn(u64) -> u64,
+    ) -> Result<Option<WindowedNormalization>, FerroError> {
+        // Whether the contig continues past a window is a question about the
+        // contig, so the length is read once rather than per attempt.
+        let contig_len = self.provider.get_sequence_length(accession).ok();
+        let mut window = self.config.window_size;
+
+        loop {
+            let window_start = start.saturating_sub(window);
+            let fetch_end = fetch_end_of(end.saturating_add(window));
+            let Ok(ref_seq) = self
+                .provider
+                .get_sequence(accession, window_start, fetch_end)
+            else {
+                // A *grown* fetch that fails is reported the same as a failed
+                // first fetch rather than falling back to the truncated attempt,
+                // which would reinstate the walk this method exists to stop.
+                return Ok(None);
+            };
+
+            // Window-relative 1-based positions; `hgvs_pos_to_index` inside
+            // `normalize_na_edit` takes them the rest of the way.
+            let (new_rel_start, new_rel_end, new_edit, warnings) = self.normalize_na_edit(
+                ref_seq.as_bytes(),
+                edit,
+                start - window_start,
+                end - window_start,
+                &Boundaries::new(0, ref_seq.len() as u64),
+                // Neither the genomic nor the mitochondrial axis carries a
+                // reading frame; both callers passed this before the growth
+                // loop was factored out of them.
+                CodonGate::NotApplicable,
+            )?;
+
+            let seq_len = ref_seq.len() as u64;
+            // The 3' edge is artificial only where the contig is known to
+            // continue past it; the 5' edge only where the window did not start
+            // at the contig's first base.
+            let ran_to_three_prime_edge = new_rel_end >= seq_len
+                && contig_len.is_some_and(|len| window_start.saturating_add(seq_len) < len);
+            let ran_to_five_prime_edge = new_rel_start <= 1 && window_start > 0;
+
+            if !ran_to_three_prime_edge && !ran_to_five_prime_edge {
+                return Ok(Some(WindowedNormalization {
+                    window_start,
+                    ref_seq,
+                    new_rel_start,
+                    new_rel_end,
+                    new_edit,
+                    warnings,
+                }));
+            }
+
+            match grow_shuffle_fetch_window(window) {
+                Some(next) => window = next,
+                // Cap reached. Refuse the travel, not the typing: the sequence
+                // for the latter is already in hand, so it is re-derived from
+                // this last window rather than re-fetched.
+                None => {
+                    return self.canonicalize_without_shifting(
+                        &ref_seq,
+                        window_start,
+                        start,
+                        end,
+                        edit,
+                    )
+                }
+            }
+        }
+    }
+
+    /// Re-type an edit against the reference **without letting it travel**, for
+    /// the growth cap in [`Self::normalize_in_grown_window`].
+    ///
+    /// A normalized description answers three separable questions, and running
+    /// out of window costs it only two of them:
+    ///
+    /// - **Travel** — the 3' rule's resting place. Unanswerable past the cap by
+    ///   construction, and refusing it is what makes the capped answer a fixed
+    ///   point.
+    /// - **Extent** — repeat notation's `<first>_<last>unit[N]`, which states
+    ///   where the reference tract begins and ends. Equally unanswerable, and a
+    ///   *truncated* extent is worse than none: it is a false claim about the
+    ///   reference rather than a merely unshifted one. Declined below.
+    /// - **Type** — `ins -> dup`, `delins -> sub/inv/dup/del`, the inversion
+    ///   shortening. These read the bases flanking the edit and nothing else, so
+    ///   the cap does not touch them and `DNA/duplication.md:18` requires them.
+    ///
+    /// So the edit is re-normalized against a **slice** of the window whose
+    /// width is derived from the edit alone — never from the tract — with the
+    /// shuffle pinned by [`Boundaries::pinned`]. Both halves are load-bearing
+    /// for idempotency. Pinning alone is not enough: `insertion_to_duplication`
+    /// consults no boundaries, so on the full window it anchors the `dup` at the
+    /// far end of whatever tract it can see, which is the walk again wearing a
+    /// different edit type. Slicing alone is not enough either, for the same
+    /// reason the cap exists at all. Together, every base the answer reads sits
+    /// at a fixed offset from the edit the caller handed in, so re-normalizing
+    /// that answer reads the same relative bases and returns it unchanged.
+    ///
+    /// The result is returned as an ordinary [`WindowedNormalization`] over the
+    /// slice, so the callers' coordinate reconstruction, boundary clamp and
+    /// canonical split all apply to it unchanged — the capped answer is a
+    /// normalization like any other, not a second output path to keep in sync.
+    ///
+    /// `Ok(None)` means "no re-typing was available", and the caller falls back
+    /// to the syntactic minimal-notation cleanup exactly as it does for a failed
+    /// fetch.
+    fn canonicalize_without_shifting(
+        &self,
+        ref_seq: &str,
+        window_start: u64,
+        start: u64,
+        end: u64,
+        edit: &NaEdit,
+    ) -> Result<Option<WindowedNormalization>, FerroError> {
+        // A repeat's canonical form IS an extent claim, so there is no
+        // travel-free part of it to salvage: `normalize_repeat` would report the
+        // slice's own edges as the tract's. Hand it back untouched.
+        if matches!(edit, NaEdit::Repeat { .. } | NaEdit::MultiRepeat { .. }) {
+            return Ok(None);
+        }
+
+        let flank = capped_typing_flank(edit);
+        // Window-relative, 0-based: `p` sits at index `p - window_start - 1`.
+        let span_start_idx = (start - window_start).saturating_sub(1);
+        let span_end_idx = end - window_start;
+        let window_len = ref_seq.len() as u64;
+        // The slice has to hold the whole span, or the type rules would read a
+        // truncated edit and answer about a variant nobody described. The growth
+        // loop normalized this same span against this same window a moment ago,
+        // so a span that does not fit is a contradiction rather than a case —
+        // decline instead of clamping into a wrong answer.
+        if span_end_idx > window_len || span_start_idx >= span_end_idx {
+            return Ok(None);
+        }
+        let lo = span_start_idx.saturating_sub(flank);
+        let hi = span_end_idx.saturating_add(flank).min(window_len);
+        let slice = &ref_seq[lo as usize..hi as usize];
+        // The slice's own 0-based offset within the contig, which is what the
+        // caller adds back to the returned relative positions.
+        let slice_start = window_start + lo;
+
+        let (new_rel_start, new_rel_end, new_edit, warnings) = self.normalize_na_edit(
+            slice.as_bytes(),
+            edit,
+            start - slice_start,
+            end - slice_start,
+            &Boundaries::pinned(),
+            // Same reasoning as the growth loop's own call: neither axis
+            // reaching here carries a reading frame.
+            CodonGate::NotApplicable,
+        )?;
+
+        // Extent claim, arrived at from the other direction — an `ins` or `dup`
+        // the type rules promoted into repeat notation. The promotion itself is
+        // right; the tract it would name is the slice's, so decline it here
+        // rather than publish a span the reference does not have.
+        if matches!(new_edit, NaEdit::Repeat { .. } | NaEdit::MultiRepeat { .. }) {
+            return Ok(None);
+        }
+
+        Ok(Some(WindowedNormalization {
+            window_start: slice_start,
+            ref_seq: slice.to_string(),
+            new_rel_start,
+            new_rel_end,
+            new_edit,
+            warnings,
+        }))
     }
 
     /// Normalize a genomic variant
@@ -4321,42 +4635,34 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // `g.pter_<past-end>del` fetches the whole contig and relies on
         // `shuffle`'s per-index bounds guard to echo the input verbatim
         // (see `genome_mixed_special_plain_past_end_matches_plain_path`).
-        let window_start = start.saturating_sub(self.config.window_size);
-        let raw_end = end.saturating_add(self.config.window_size);
-        let fetch_end = if had_special {
-            raw_end.min(resolved_len)
-        } else {
-            self.clamp_fetch_end_to_contig(&accession, end, raw_end)
-        };
-        let seq_result = self
-            .provider
-            .get_sequence(&accession, window_start, fetch_end);
-
-        let ref_seq = match seq_result {
-            Ok(s) => s,
-            // Can't do full normalization without sequence, but apply minimal notation
-            Err(_) => {
-                return Ok((
-                    HV::Genome(self.canonicalize_genome_variant(variant)),
-                    vec![],
-                ))
+        //
+        // #1691: the window also bounds the SHUFFLE, and its far edges are not
+        // contig properties, so a tract longer than the window walks instead of
+        // converging. `normalize_in_grown_window` re-fetches until the result
+        // settles strictly inside; `None` means either no sequence or a shuffle
+        // still running at the growth cap, and both take the minimal-notation
+        // fallback that a failed fetch always took.
+        let attempt = self.normalize_in_grown_window(&accession, start, end, edit, |raw_end| {
+            if had_special {
+                raw_end.min(resolved_len)
+            } else {
+                self.clamp_fetch_end_to_contig(&accession, end, raw_end)
             }
+        })?;
+        let Some(WindowedNormalization {
+            window_start,
+            ref_seq,
+            mut new_rel_start,
+            mut new_rel_end,
+            mut new_edit,
+            mut warnings,
+        }) = attempt
+        else {
+            return Ok((
+                HV::Genome(self.canonicalize_genome_variant(variant)),
+                vec![],
+            ));
         };
-
-        // Adjust coordinates to be relative to the window
-        let rel_start = start - window_start;
-        let rel_end = end - window_start;
-
-        // Perform normalization
-        let (mut new_rel_start, mut new_rel_end, mut new_edit, mut warnings) = self
-            .normalize_na_edit(
-                ref_seq.as_bytes(),
-                edit,
-                rel_start,
-                rel_end,
-                &Boundaries::new(0, ref_seq.len() as u64),
-                CodonGate::NotApplicable, // genomic context: no reading frame
-            )?;
 
         // #1205: an insertion driven to rest against a contig end has no valid
         // pair of adjacent anchors there, exactly as on the transcript axes
@@ -8266,36 +8572,38 @@ impl<P: ReferenceProvider> Normalizer<P> {
         // the raw window and errors into the safe fallback. Wraparound
         // (`start > end`) already returned above, so `end` here is the
         // linear span end.
-        let window_start = start.saturating_sub(self.config.window_size);
-        let raw_end = end.saturating_add(self.config.window_size);
-        let fetch_end = self.clamp_fetch_end_to_contig(&accession, end, raw_end);
-        let seq_result = self
-            .provider
-            .get_sequence(&accession, window_start, fetch_end);
-
-        let ref_seq = match seq_result {
-            Ok(s) => s,
-            // No reference data → fall back to minimal-notation cleanup.
-            Err(_) => return Ok(mt_fallback(variant)),
-        };
-
-        let rel_start = start - window_start;
-        let rel_end = end - window_start;
-
+        //
+        // #1691: shared with `normalize_genome` for the same reason
+        // `clamp_fetch_end_to_contig` is — the window bounds the shuffle as well
+        // as the read, so a repeat tract longer than it walks instead of
+        // converging, and two copies of the growth loop would drift exactly as
+        // the two copies of the clamp did. The mitochondrial genome carries no
+        // homopolymer near that long, so this is a structural guarantee rather
+        // than a behaviour change for any real `m.` input; it is here so a
+        // synthetic contig cannot reach the defect through this door.
+        //
         // Mitochondrial reference is plus-strand and not subject to the
         // codon-frame `unit_len % 3 == 0` restriction (the mito genome
         // has no canonical "CDS" exemption boundary in the same sense as
         // nuclear `c.`; the spec's mito chapter doesn't carry the
-        // codon-frame clause), so the gate is `NotApplicable`.
-        let (mut new_rel_start, mut new_rel_end, mut new_edit, mut warnings) = self
-            .normalize_na_edit(
-                ref_seq.as_bytes(),
-                edit,
-                rel_start,
-                rel_end,
-                &Boundaries::new(0, ref_seq.len() as u64),
-                CodonGate::NotApplicable,
-            )?;
+        // codon-frame clause), so the gate `normalize_in_grown_window` passes
+        // (`NotApplicable`) is the one this path wants.
+        let attempt = self.normalize_in_grown_window(&accession, start, end, edit, |raw_end| {
+            self.clamp_fetch_end_to_contig(&accession, end, raw_end)
+        })?;
+        let Some(WindowedNormalization {
+            window_start,
+            ref_seq,
+            mut new_rel_start,
+            mut new_rel_end,
+            mut new_edit,
+            mut warnings,
+        }) = attempt
+        else {
+            // No reference data, or a shuffle still running at the growth cap →
+            // minimal-notation cleanup.
+            return Ok(mt_fallback(variant));
+        };
 
         // #1217: an insertion driven to rest against either mitochondrial
         // terminus has no valid pair of adjacent anchors there, exactly as on
@@ -12285,6 +12593,38 @@ mod tests {
     use super::*;
     use crate::hgvs::parser::parse_hgvs;
     use crate::reference::MockProvider;
+
+    /// The growth ladder must reach the cap and then stop, from any starting
+    /// window. #1691's fix depends on both halves: never terminating would spin
+    /// the fetch loop, and stopping early would leave a shorter, position-
+    /// relative bound in place — which is the defect itself.
+    #[test]
+    fn shuffle_fetch_window_growth_reaches_the_cap_and_then_stops() {
+        for start in [1_u64, 100, 1000, MAX_SHUFFLE_FETCH_WINDOW - 1] {
+            let mut window = start;
+            let mut steps = 0;
+            while let Some(next) = grow_shuffle_fetch_window(window) {
+                assert!(next > window, "growth from {window} did not advance");
+                assert!(next <= MAX_SHUFFLE_FETCH_WINDOW, "growth overshot the cap");
+                window = next;
+                steps += 1;
+                assert!(steps < 64, "growth from {start} did not terminate");
+            }
+            assert_eq!(
+                window, MAX_SHUFFLE_FETCH_WINDOW,
+                "growth from {start} stopped short of the cap",
+            );
+        }
+        assert_eq!(grow_shuffle_fetch_window(MAX_SHUFFLE_FETCH_WINDOW), None);
+    }
+
+    /// A configured `window_size` of 0 must still advance. Doubling alone leaves
+    /// it at 0 forever, and the fetch loop would never terminate — the one input
+    /// that turns a bounded retry into a hang.
+    #[test]
+    fn shuffle_fetch_window_growth_escapes_a_zero_window() {
+        assert_eq!(grow_shuffle_fetch_window(0), Some(2));
+    }
 
     /// `Normalizer` has exactly two public normalizing methods — `normalize` and
     /// `normalize_with_diagnostics` — and only the first went through
