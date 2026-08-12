@@ -659,7 +659,7 @@ pub(crate) fn collapse_overlapping_cis_edits<P: ReferenceProvider>(
 /// transcript kinds (`c.`/`n.`/`r.`) each collapse within their positive body
 /// region (issue #920). Every kind rebuilds to a distinct variant kind, and a
 /// mixed-kind group is refused.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CisKind {
     Genome,
     Mt,
@@ -2174,6 +2174,12 @@ enum PartitionRule {
     /// `Canonical`, plus the terminal `delins.md:44-47` re-spelling applied
     /// after the downstream passes — see
     /// [`coalesce_payload_alignment_split`].
+    ///
+    /// The re-spelling fires **only on the coding DNA axis** (`c.`), per the
+    /// operator ruling
+    /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`. On
+    /// `g.`/`m.`/`o.`/`n.`/`r.` this arm is therefore identical to
+    /// [`Self::Canonical`]. See [`payload_coalesce_applies`].
     CanonicalCoalesced,
 }
 
@@ -2184,6 +2190,37 @@ enum PartitionRule {
 /// text and the tests cannot drift apart — an arm added to [`PartitionRule`]
 /// without a name here is an arm the diagnostic would not offer.
 const PARTITION_RULE_NAMES: [&str; 4] = ["live", "shadow", "canonical", "canonical-coalesced"];
+
+impl PartitionRule {
+    /// Whether this arm cuts blocks with [`partition_block_canonical`], and so
+    /// takes the repair passes scoped to that partitioner.
+    ///
+    /// # Why this is a method with an exhaustive `match`
+    ///
+    /// Both call sites used to spell this inline as
+    /// `matches!(rule, Canonical | CanonicalCoalesced)`. A **positive** arm list
+    /// is silently wrong for the next arm added: an arm missing from it takes
+    /// the `else` branch, which is `live` behaviour, on an arm that does not cut
+    /// with `partition_block`. Measured while bake-off arms were being built —
+    /// a canonical-cutting arm absent from the list at
+    /// `coalesce_compensating_gap_split` scored as though it were `live` on that
+    /// pass alone, changing one stratum's count with nothing failing.
+    ///
+    /// Writing it as `!= Live` is not the fix either: that also selects
+    /// [`Self::Shadow`], whose pieces come from
+    /// `partition_block_sequence_first` and which those passes argue against —
+    /// the reasoning is at their call sites.
+    ///
+    /// An exhaustive `match` with no wildcard is the fix. Adding an arm is then
+    /// a compile error here, which forces the choice to be made rather than
+    /// defaulted. Pinned by `every_arm_declares_whether_it_cuts_canonically`.
+    fn cuts_with_canonical(self) -> bool {
+        match self {
+            PartitionRule::Live | PartitionRule::Shadow => false,
+            PartitionRule::Canonical | PartitionRule::CanonicalCoalesced => true,
+        }
+    }
+}
 
 /// Read a [`PartitionRule`] from what `FERRO_PARTITION` was set to.
 ///
@@ -2899,7 +2936,39 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // Placement relative to the 3'-shift and the width minimisation is NOT the
     // mechanism: moving the call across those produced byte-identical censuses.
     // Only the bound matters.
-    if partition_rule() == PartitionRule::CanonicalCoalesced {
+    //
+    // # Gated to the coding DNA axis, by operator ruling (2026-08-11)
+    //
+    // `delins-payload-coincidence-carve-out-is-coding-dna-scoped` scopes `:47`'s
+    // carve-out to `c.` and nothing else. On the other DNA axes —
+    // `g.`/`m.`/`o.`/`n.` — `general.md:34` governs and the members stay
+    // individual. `:47`'s own stated reason is that the merge "prevents software
+    // tools making incorrect predictions for the consequences on protein level",
+    // and off the coding axis there is no protein consequence to mispredict.
+    //
+    // The gate is the axis KIND, and deliberately **not**
+    // `AxisFrame::reading_frame` — see `payload_coalesce_applies`. The RNA axis
+    // is not something that ruling reaches: it rules under DNA recommendations,
+    // whose jurisdiction is the DNA directory, and `RNA/delins.md` states no
+    // `:47` counterpart that could carry the carve-out there. So RNA is outside
+    // the ruling rather than decided against, and the arm must not merge on it.
+    //
+    // # Do not add a CDS-region test here — it is unreachable, and that is measured
+    //
+    // `DNA/repeated.md:23` scopes its own restriction finer than the axis ("This
+    // restriction only applies to the coding sequence, which does not include the
+    // introns or the UTR sequence"), which invites an extra precondition
+    // excluding `c.-n`, `c.*n` and intronic `c.n±m` spans. Such a gate was built
+    // and measured: over the 11,272-class designed cis corpus it was **reached
+    // 60,194 times and rejected nothing**, and it changed no row of the 785,461
+    // normalized from ClinVar and Paraphase.
+    //
+    // The zero is STRUCTURAL, not reassurance. `collect_canonical_edits` refuses
+    // any member whose region is not the axis's positive body, so a UTR or
+    // intronic member never reaches this call at all. Relaxing *that* exclusion
+    // is the precondition for the refinement to become measurable; until then it
+    // is dead weight.
+    if payload_coalesce_applies(partition_rule(), kind) {
         coalesce_payload_alignment_split(&mut pieces, &ref_bytes);
     }
 
@@ -2974,10 +3043,7 @@ pub(crate) fn canonicalize_from_sequence<P: ReferenceProvider>(
     // partitioner produced the pieces. Shipped output is unaffected either way —
     // `FERRO_PARTITION` unset is `Live` — but a bake-off column can carry a
     // widening the arm it is labelled with did not cause.
-    if matches!(
-        partition_rule(),
-        PartitionRule::Canonical | PartitionRule::CanonicalCoalesced
-    ) {
+    if partition_rule().cuts_with_canonical() {
         coalesce_compensating_gap_split(&mut pieces, &ref_bytes);
     }
     coalesce_whole_block_inversion(&mut pieces, &ref_bytes);
@@ -5751,12 +5817,55 @@ fn payload_embeds_within_budget(span: &[u8], payload: &[u8], budget: usize) -> b
     best[0] as usize <= budget
 }
 
+/// Whether the `delins.md:44-47` re-spelling applies, given the arm and the axis
+/// the description is written on.
+///
+/// Two conditions. The pass is a [`PartitionRule::CanonicalCoalesced`] behaviour,
+/// and — per the operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped` (2026-08-11) —
+/// `:47`'s carve-out reaches the **coding DNA axis only**.
+///
+/// # Why this keys on [`CisKind::Cds`] and not on `AxisFrame::reading_frame`
+///
+/// The two are not the same question, and the difference is a jurisdiction
+/// boundary rather than a detail. `reading_frame` is true for [`CisKind::Rna`]
+/// whenever the transcript resolves a `cds_start`, so keying on it would extend
+/// `DNA/delins.md:47` onto the RNA axis — which the ruling does not reach, since
+/// it rules under DNA recommendations and `RNA/delins.md` states no `:47`
+/// counterpart that could carry the carve-out there. RNA is outside the ruling
+/// rather than decided against, so the arm must not merge on it.
+///
+/// The `match` is exhaustive on purpose, for the reason
+/// [`PartitionRule::cuts_with_canonical`] gives: a new axis must be decided
+/// rather than defaulted.
+///
+/// A free function rather than an inline conjunction because `partition_rule()`
+/// caches its read in a `OnceLock`, so one test binary can never exercise two
+/// arms through the call site. This half is pure and therefore pinnable — see
+/// `the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis`.
+fn payload_coalesce_applies(rule: PartitionRule, kind: CisKind) -> bool {
+    let coding_dna = match kind {
+        CisKind::Cds => true,
+        CisKind::Genome | CisKind::Mt | CisKind::Tx | CisKind::Rna => false,
+    };
+    rule == PartitionRule::CanonicalCoalesced && coding_dna
+}
+
 /// Re-spell a multi-member allele as the single `delins` the spec recommends,
 /// when the split exists only because payload bases coincide with reference
 /// bases between the members.
 ///
 /// This is `DNA/delins.md:44-47` — "parts of the inserted sequence *align* with
 /// the reference sequence ... **The 'delins' format is recommended**".
+///
+/// # It fires on the coding DNA axis only
+///
+/// The caller gates this to `c.` — [`CisKind::Cds`] — per the operator ruling
+/// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`. Not to "any axis
+/// with a reading frame": that would include a coding `r.`, and `DNA/delins.md`
+/// does not reach the RNA axis. See [`payload_coalesce_applies`] and the call
+/// site in [`canonicalize_from_sequence`]. Nothing in this function tests the
+/// axis, so reading it alone will overstate where it runs.
 ///
 /// # It runs last, and that placement is the whole design
 ///
@@ -12670,6 +12779,112 @@ mod tests {
                 partition_rule_env_value(Ok("canonical".to_owned())),
                 Some("canonical".to_owned()),
                 "a readable value must reach the parser unaltered"
+            );
+        }
+
+        /// Every arm on this build states whether it cuts with the canonical
+        /// partitioner, and the passes scoped to that partitioner honour it.
+        ///
+        /// Guards the trap `PartitionRule::cuts_with_canonical` was extracted
+        /// for: the two call sites previously spelled a **positive** arm list
+        /// inline, so an arm missing from it silently took `live` behaviour on
+        /// that pass. The `match` in `cuts_with_canonical` is exhaustive, so
+        /// adding an arm is a compile error there — this pins the *values*, and
+        /// the length check ties the table below to `PARTITION_RULE_NAMES` so a
+        /// new arm cannot be added without landing here too.
+        #[test]
+        fn every_arm_declares_whether_it_cuts_canonically() {
+            let arms = [
+                (PartitionRule::Live, false),
+                (PartitionRule::Shadow, false),
+                (PartitionRule::Canonical, true),
+                (PartitionRule::CanonicalCoalesced, true),
+            ];
+            assert_eq!(
+                arms.len(),
+                PARTITION_RULE_NAMES.len(),
+                "an arm was added without deciding whether it cuts with the \
+                 canonical partitioner; the passes scoped to that partitioner \
+                 would silently give it `live` behaviour"
+            );
+            for (rule, expected) in arms {
+                assert_eq!(
+                    rule.cuts_with_canonical(),
+                    expected,
+                    "{rule:?} declares the wrong partitioner family"
+                );
+            }
+        }
+
+        /// `delins.md:44-47`'s re-spelling needs **both** the arm and the coding
+        /// DNA axis.
+        ///
+        /// The operator ruling
+        /// `delins-payload-coincidence-carve-out-is-coding-dna-scoped`
+        /// (2026-08-11) scopes `:47`'s carve-out to `c.`, because its stated
+        /// reason — preventing "incorrect predictions for the consequences on
+        /// protein level" — has nothing to bite on off the coding axis. On every
+        /// other axis the arm must behave exactly like `canonical`.
+        ///
+        /// Pinning the pure predicate rather than the call site is deliberate:
+        /// `partition_rule()` caches in a `OnceLock`, so one test binary cannot
+        /// drive two arms through `canonicalize_from_sequence`.
+        #[test]
+        fn the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis() {
+            assert!(
+                payload_coalesce_applies(PartitionRule::CanonicalCoalesced, CisKind::Cds),
+                "the carve-out must still fire on `c.` -- that is the axis \
+                 `delins.md:44-47`'s own worked example is written on"
+            );
+            for kind in [CisKind::Genome, CisKind::Mt, CisKind::Tx, CisKind::Rna] {
+                assert!(
+                    !payload_coalesce_applies(PartitionRule::CanonicalCoalesced, kind),
+                    "{kind:?} is outside `DNA/delins.md:47`'s scope; \
+                     `general.md:34` governs and the members stay individual"
+                );
+            }
+            for rule in [
+                PartitionRule::Live,
+                PartitionRule::Shadow,
+                PartitionRule::Canonical,
+            ] {
+                for kind in [
+                    CisKind::Genome,
+                    CisKind::Mt,
+                    CisKind::Cds,
+                    CisKind::Tx,
+                    CisKind::Rna,
+                ] {
+                    assert!(
+                        !payload_coalesce_applies(rule, kind),
+                        "{rule:?} must not run the `delins.md:44-47` re-spelling"
+                    );
+                }
+            }
+        }
+
+        /// A **coding** `r.` row does not coalesce, and that is a jurisdiction
+        /// question rather than a frame one.
+        ///
+        /// Its own test because the boolean this gate used to key on —
+        /// `AxisFrame::reading_frame` — is **true** for [`CisKind::Rna`] whenever
+        /// the transcript resolves a `cds_start`. So a coding `r.` description
+        /// was having `DNA/delins.md:47` applied to it, and a DNA document has no
+        /// authority over the RNA axis. Nor is there anything to inherit:
+        /// `RNA/delins.md` has no counterpart to `:47` — no "align" note, no
+        /// "recommended", no protein-level rationale — so RNA supplies no clause
+        /// of its own either. Unauthorised in both directions, so excluded.
+        ///
+        /// The regression this guards is invisible to
+        /// `the_payload_coalesce_needs_both_the_arm_and_the_coding_dna_axis`
+        /// alone if that test is ever rewritten in terms of a frame flag, which
+        /// is exactly how the defect arose.
+        #[test]
+        fn a_coding_rna_row_is_outside_the_dna_carve_out() {
+            assert!(
+                !payload_coalesce_applies(PartitionRule::CanonicalCoalesced, CisKind::Rna),
+                "`r.` is the RNA axis; `DNA/delins.md:47` does not reach it and \
+                 `RNA/delins.md` states no counterpart"
             );
         }
 

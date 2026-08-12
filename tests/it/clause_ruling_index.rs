@@ -85,8 +85,8 @@
 //! <!-- BEGIN GENERATED INDEX -->
 //! ```text
 //! CLAUSE -> RECORD INDEX
-//! 16 records, 14 decided / 2 undecided
-//! 72 clause lines, of which 14 are named by more than one record
+//! 17 records, 15 decided / 2 undecided
+//! 74 clause lines, of which 14 are named by more than one record
 //!
 //! == every clause line ==
 //!
@@ -147,14 +147,17 @@
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
 //! docs/recommendations/DNA/delins.md:17  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18  [MULTI]
 //!     `codon-carve-out-shape-restriction` — decided (governing)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/recommendations/DNA/delins.md:46
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47  [MULTI]
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:79
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (deviates-from, via docs/recommendations/DNA/delins.md:79-84)
@@ -195,6 +198,8 @@
 //!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
 //! docs/recommendations/DNA/inversion.md:34
 //!     `inversion-vs-two-delins-76-83` — decided (cited, via docs/recommendations/DNA/inversion.md:33-34)
+//! docs/recommendations/DNA/repeated.md:23
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/recommendations/DNA/substitution.md:32
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (governing)
 //! docs/recommendations/DNA/substitution.md:95
@@ -222,6 +227,7 @@
 //! docs/recommendations/general.md:34  [MULTI]
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //! docs/recommendations/general.md:35
@@ -230,6 +236,8 @@
 //!     `delins-codon-carve-out-gap-one` — decided (cited)
 //! docs/recommendations/general.md:41
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
+//! docs/recommendations/general.md:43
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/recommendations/general.md:44  [MULTI]
 //!     `bare-transcript-intronic-position` — decided (cited)
 //!     `exon-junction-dup-converge-from-the-far-side` — decided (cited)
@@ -281,12 +289,15 @@
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited, via docs/consultation/open-issues.md:77-78)
 //! docs/recommendations/DNA/delins.md:17
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (cited)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/delins.md:18
 //!     `codon-carve-out-shape-restriction` — decided (governing)
 //!     `delins-codon-carve-out-gap-one` — decided (governing)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //! docs/recommendations/DNA/delins.md:47
 //!     `delins-merge-vs-individual-gap-two-or-more` — decided (governing)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (governing)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (cited)
 //! docs/recommendations/DNA/duplication.md:18
 //!     `codon-carve-out-shape-restriction` — decided (cited)
@@ -294,6 +305,7 @@
 //! docs/recommendations/general.md:34
 //!     `canonical-form-choice-when-both-legal` — decided (cited)
 //!     `delins-adjacent-members-when-both-consume-reference` — decided (cited)
+//!     `delins-payload-coincidence-carve-out-is-coding-dna-scoped` — decided (cited)
 //!     `inversion-vs-two-delins-76-83` — decided (cited)
 //!     `separation-is-a-property-of-the-spelling-not-of-the-variant` — decided (governing)
 //! docs/recommendations/general.md:44
@@ -609,7 +621,7 @@ fn the_index_is_not_vacuous() {
     let undecided = records.iter().filter(|r| r.status == "undecided").count();
     assert_eq!(
         (records.len(), decided, undecided),
-        (16, 14, 2),
+        (17, 15, 2),
         "measured ledger census changed. If this is a real ledger change, update the module docs \
          and this pin together. Note the repo `CLAUDE.md` claims 8 records with 5 unanswered, \
          which was already wrong before this test existed"
