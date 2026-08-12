@@ -27,7 +27,7 @@ target, not the swept one.
 ## Run
 ```bash
 cargo install critcmp        # once
-git lfs pull                 # ensure the 500k corpus is real, not a pointer
+scripts/fetch-test-fixtures.sh   # fetch + verify the 500k corpus (a release asset)
 scripts/perf/sweep_tags.sh   # ~5 release builds (LTO); run on a quiet machine
 ```
 

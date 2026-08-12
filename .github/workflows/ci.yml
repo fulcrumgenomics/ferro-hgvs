@@ -532,12 +532,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`. The only LFS-tracked paths are
-          # `tests/fixtures/bulk/*.gz` and
-          # `tests/fixtures/validation/*_exhaustive.json.gz` (.gitattributes),
-          # 149 MB read at test RUNTIME by the bulk-fixture and exhaustive
-          # suites. Nothing here reads them: no `include_str!`/`include_bytes!`
-          # names a path under those directories, and this job only compiles.
+          # No `lfs: true`, and nothing to fetch: this repository no longer
+          # tracks anything with LFS. The 156 MB of bulk corpora are release
+          # assets now (`tests/fixtures/CHECKSUMS.sha256`), fetched by the
+          # `fixtures` job for the jobs that read them at test RUNTIME. Nothing
+          # here reads them: no `include_str!`/`include_bytes!` names a path
+          # under `tests/fixtures/bulk/` or `tests/fixtures/validation/`, and
+          # this job only compiles.
           # Required here, and ONLY here: the generators harvest HGVS strings
           # from the vendored spec checkout at runtime.
           submodules: true
@@ -733,12 +734,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`. The only LFS-tracked paths are
-          # `tests/fixtures/bulk/*.gz` and
-          # `tests/fixtures/validation/*_exhaustive.json.gz` (.gitattributes),
-          # 149 MB read at test RUNTIME by the bulk-fixture and exhaustive
-          # suites. Nothing here reads them: no `include_str!`/`include_bytes!`
-          # names a path under those directories, and this job only compiles.
+          # No `lfs: true`, and nothing to fetch: this repository no longer
+          # tracks anything with LFS. The 156 MB of bulk corpora are release
+          # assets now (`tests/fixtures/CHECKSUMS.sha256`), fetched by the
+          # `fixtures` job for the jobs that read them at test RUNTIME. Nothing
+          # here reads them: no `include_str!`/`include_bytes!` names a path
+          # under `tests/fixtures/bulk/` or `tests/fixtures/validation/`, and
+          # this job only compiles.
           # No `submodules: true`. The spec checkout is read at generator
           # RUNTIME, in the `spec-fixtures` job — nothing here reads it at
           # compile time (verified: no `include_str!`/`include_bytes!` under
@@ -826,12 +828,13 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`. The only LFS-tracked paths are
-          # `tests/fixtures/bulk/*.gz` and
-          # `tests/fixtures/validation/*_exhaustive.json.gz` (.gitattributes),
-          # 149 MB read at test RUNTIME by the bulk-fixture and exhaustive
-          # suites. Nothing here reads them: no `include_str!`/`include_bytes!`
-          # names a path under those directories, and this job only compiles.
+          # No `lfs: true`, and nothing to fetch: this repository no longer
+          # tracks anything with LFS. The 156 MB of bulk corpora are release
+          # assets now (`tests/fixtures/CHECKSUMS.sha256`), fetched by the
+          # `fixtures` job for the jobs that read them at test RUNTIME. Nothing
+          # here reads them: no `include_str!`/`include_bytes!` names a path
+          # under `tests/fixtures/bulk/` or `tests/fixtures/validation/`, and
+          # this job only compiles.
           # No `submodules: true` either, for the same reason as `test-build`:
           # the spec checkout is read at generator RUNTIME, in `spec-fixtures`.
           # `cargo nextest archive --test it` compiles and packs targets, and
@@ -927,13 +930,78 @@ jobs:
           path: nextest-soak.tar.zst
           retention-days: 1
 
+  # The four large HGVS corpora the bulk-fixture and exhaustive suites read at
+  # RUNTIME (156 MB), fetched ONCE per run and handed to the ten jobs that need
+  # them as a workflow artifact.
+  #
+  # They used to be Git LFS objects fetched by `lfs: true` in each of those jobs.
+  # LFS bandwidth is metered even on a public repository, so ten jobs x 156 MB
+  # was ~1.56 GB of LFS egress per CI run; at 192 runs in a day that is ~146 GB,
+  # and it exhausted the account's LFS budget outright — at which point EVERY
+  # `lfs: true` job died at checkout with "This repository exceeded its LFS
+  # budget". Release-asset downloads are NOT metered, so the corpora live on the
+  # `test-fixtures-v1` release and this job fetches them over plain HTTPS.
+  #
+  # Egress after this change is 156 MB per run against ~1.56 GB, and none of it
+  # is LFS.
+  #
+  # NOT `actions/cache`. The repository's Actions cache sits at ~9.9 GiB of a
+  # 10 GiB cap across ~137 entries, so a 156 MB entry would evict Rust build
+  # caches by LRU — which is #1218, where eviction took the nightly's 3.25 GiB
+  # entry as collateral. A workflow artifact is a different quota, and one day of
+  # retention is all a single run needs.
+  #
+  # Slots into the existing `needs: [test-build, spec-fixtures]` chain, so it
+  # adds no serialization point: it runs in parallel with the two build jobs and
+  # finishes long before either.
+  fixtures:
+    name: Fetch bulk test fixtures
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Neither `lfs: true` (nothing in this repository is LFS-tracked any
+          # more) nor `submodules: true` — this job only needs the checksum
+          # manifest and the fetch script.
+          persist-credentials: false
+      # Plain HTTPS against the public release assets, so no token is involved
+      # and this works unchanged on a forked-PR runner.
+      #
+      # A FAILED FETCH MUST FAIL THE JOB. The three consuming suites skip green
+      # when their fixtures are absent, so a fetch that failed quietly would
+      # delete the ClinVar, CMRG and Paraphase coverage while making CI look
+      # faster. The script verifies every download against
+      # `tests/fixtures/CHECKSUMS.sha256` and exits non-zero on a bad download, a
+      # digest mismatch or a missing asset; `test` and `test-oracle` then set
+      # `FERRO_REQUIRE_BULK_FIXTURES`, which turns a fixture that still failed to
+      # arrive into a test failure rather than a silent skip.
+      - name: Fetch and verify the bulk fixtures
+        run: scripts/fetch-test-fixtures.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: bulk-fixtures
+          # Named explicitly, not globbed. `if-no-files-found: error` catches
+          # an EMPTY artifact, not a short one, and the four paths are exactly
+          # what `CHECKSUMS.sha256` lists and the step above verified.
+          path: |
+            tests/fixtures/bulk/clinvar_hgvs_500k.json.gz
+            tests/fixtures/bulk/clinvar_hgvs_unique.json.gz
+            tests/fixtures/validation/cmrg_genes_exhaustive.json.gz
+            tests/fixtures/validation/paraphase_genes_exhaustive.json.gz
+          if-no-files-found: error
+          # Ephemeral run data: nothing outside this run reads it, and artifact
+          # storage counts against a quota of its own.
+          retention-days: 1
+          # Already gzip, so re-compressing costs CPU for ~nothing.
+          compression-level: 0
+
   # The suite, split across shards. `--partition hash:K/N` assigns each test to
   # a shard by a hash of its name, so the split is deterministic and stays
   # stable as tests are added. Verified even on this suite: 8646 tests split
   # 2148 / 2181 / 2162 / 2155 across four shards.
   test:
     name: Test (${{ matrix.shard }}/6)
-    needs: [test-build, spec-fixtures]
+    needs: [test-build, spec-fixtures, fixtures]
     runs-on: ubuntu-latest
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -944,7 +1012,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          lfs: true
+          # No `lfs: true`: nothing in this repository is LFS-tracked any more.
+          # The 156 MB of bulk corpora this job reads at RUNTIME arrive as the
+          # `bulk-fixtures` artifact below, fetched once per run by the
+          # `fixtures` job from the `test-fixtures-v1` release.
+          #
           # The spec worked-examples gate resolves each row's `file:line`
           # citation against the vendored checkout at RUN time and asserts the
           # quote verbatim, so this job needs the submodule (4.4 MB). Without
@@ -969,6 +1041,13 @@ jobs:
         with:
           name: cis-corpus
           path: tests/fixtures/cis/
+      # The four bulk corpora, fetched and digest-verified once by `fixtures`.
+      # `tests/fixtures/` preserves the artifact's two subdirectories, so the
+      # files land back on the paths the suites read.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: bulk-fixtures
+          path: tests/fixtures/
       - name: "Note: reference-aware tests are skipped without a manifest"
         # `tests/mutalyzer_normalize_tests.rs` and the biocommons reference-aware
         # suite both silently no-op when `FERRO_MANIFEST` is unset (PR CI does
@@ -978,6 +1057,13 @@ jobs:
         run: |
           echo "::notice title=Reference-aware tests skipped on PR CI::PR CI does not provision FERRO_MANIFEST; the mutalyzer / biocommons reference-aware test suites silently skip. The nightly nightly-mutalyzer.yml workflow runs the full suite against a real manifest."
       - name: Run Rust tests (shard ${{ matrix.shard }} of 6)
+        env:
+          # Absence of a bulk fixture must FAIL here, never skip. The bulk and
+          # exhaustive suites `return` early on a missing file, so without this
+          # a `fixtures` artifact that failed to arrive would delete the ClinVar,
+          # CMRG and Paraphase coverage and report a faster green run — the one
+          # outcome worse than a red one. See `tests/it/common/bulk_fixtures.rs`.
+          FERRO_REQUIRE_BULK_FIXTURES: "1"
         # Consumes the standard archive `test-build` produces — see the note
         # there for why `--extract-to .` is load-bearing. Only the optimized
         # archive from `test-build-soak` is reserved for `soak` and `sweeps`.
@@ -1000,7 +1086,7 @@ jobs:
   # run. The deep random coverage lives in the `soak` job below instead.
   test-oracle:
     name: Test oracle (${{ matrix.shard }}/3)
-    needs: [test-build, spec-fixtures]
+    needs: [test-build, spec-fixtures, fixtures]
     runs-on: ubuntu-latest
     env:
       CARGO_PROFILE_TEST_DEBUG: "0"
@@ -1011,7 +1097,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          lfs: true
+          # No `lfs: true`: nothing in this repository is LFS-tracked any more.
+          # The 156 MB of bulk corpora this job reads at RUNTIME arrive as the
+          # `bulk-fixtures` artifact below, fetched once per run by the
+          # `fixtures` job from the `test-fixtures-v1` release.
+          #
           # The spec worked-examples gate resolves each row's `file:line`
           # citation against the vendored checkout at RUN time and asserts the
           # quote verbatim, so this job needs the submodule (4.4 MB). Without
@@ -1036,6 +1126,13 @@ jobs:
         with:
           name: cis-corpus
           path: tests/fixtures/cis/
+      # The four bulk corpora, fetched and digest-verified once by `fixtures`.
+      # `tests/fixtures/` preserves the artifact's two subdirectories, so the
+      # files land back on the paths the suites read.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: bulk-fixtures
+          path: tests/fixtures/
       - name: Run Rust tests with the normalization self-checks
         # `FERRO_ASSERT_IDEMPOTENT` turns every reference-backed test into an
         # assertion that `norm(norm(x)) == norm(x)`. The gate is
@@ -1101,6 +1198,8 @@ jobs:
           FERRO_ASSERT_IDEMPOTENT: "1"
           FERRO_ASSERT_REPARSE: "1"
           FERRO_ASSERT_IN_BOUNDS: "1"
+          # As in `test` above: an absent bulk fixture fails rather than skips.
+          FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: |
           cargo nextest run --archive-file nextest.tar.zst --workspace-remap . \
             --extract-to . --extract-overwrite \
@@ -1168,11 +1267,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`. The 149 MB of LFS fixtures
-          # (`tests/fixtures/bulk/*.gz`,
-          # `tests/fixtures/validation/*_exhaustive.json.gz`) are read only by
-          # the bulk-fixture and exhaustive suites, which this job never
-          # selects — verified against every module it runs.
+          # No `lfs: true`, and no `bulk-fixtures` artifact. Nothing in this
+          # repository is LFS-tracked any more, and the 156 MB of bulk corpora
+          # (now release assets) are read only by the bulk-fixture and
+          # exhaustive suites, which this job never selects — verified against
+          # every module it runs.
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       # Safe to run from the archive: this job runs ONLY the proptest modules,
@@ -1237,11 +1336,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          # No `lfs: true`. The 149 MB of LFS fixtures
-          # (`tests/fixtures/bulk/*.gz`,
-          # `tests/fixtures/validation/*_exhaustive.json.gz`) are read only by
-          # the bulk-fixture and exhaustive suites, which this job never
-          # selects — verified against every module it runs.
+          # No `lfs: true`, and no `bulk-fixtures` artifact. Nothing in this
+          # repository is LFS-tracked any more, and the 156 MB of bulk corpora
+          # (now release assets) are read only by the bulk-fixture and
+          # exhaustive suites, which this job never selects — verified against
+          # every module it runs.
           persist-credentials: false
       - uses: taiki-e/install-action@8e83571c9a797c9e42a58141f098806bfec453a0  # nextest
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1

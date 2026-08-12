@@ -89,6 +89,25 @@ manuscript/
 /tests/fixtures/cis/cis_confluence_nr_corpus.json
 /tests/fixtures/cis/.cis_confluence_nr_corpus.*.tmp
 
+# The four large HGVS corpora, fetched from the `test-fixtures-v1` release by
+# `scripts/fetch-test-fixtures.sh` and verified against
+# `tests/fixtures/CHECKSUMS.sha256`. They were Git LFS objects until the metered
+# LFS bandwidth (156 MB x 10 CI jobs x ~192 runs/day) exhausted the account's
+# budget and reddened every `lfs: true` job at checkout. Ignored so a local fetch
+# does not show as a dirty tree — and so 156 MB of binaries cannot be committed
+# by accident.
+/tests/fixtures/bulk/clinvar_hgvs_500k.json.gz
+/tests/fixtures/bulk/clinvar_hgvs_unique.json.gz
+/tests/fixtures/validation/cmrg_genes_exhaustive.json.gz
+/tests/fixtures/validation/paraphase_genes_exhaustive.json.gz
+# Partial downloads from an interrupted fetch.
+/tests/fixtures/bulk/*.download.*
+/tests/fixtures/validation/*.download.*
+
+# The full ClinVar source file (~461 MB), downloaded on demand when regenerating
+# the corpora above. Never committed, never an LFS object.
+/tests/fixtures/bulk/hgvs4variation.txt.gz
+
 # Generated reference caches (cdot rkyv, TranscriptDb)
 *.tdb
 *.rkyv

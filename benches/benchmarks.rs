@@ -158,8 +158,9 @@ fn bench_parsing_throughput(c: &mut Criterion) {
     let corpus = load_corpus(N);
     assert!(
         !corpus.is_empty(),
-        "throughput corpus empty: set FERRO_BENCH_CORPUS or ensure \
-         tests/fixtures/bulk/clinvar_hgvs_500k.json.gz exists (git lfs)"
+        "throughput corpus empty: set FERRO_BENCH_CORPUS or run \
+         scripts/fetch-test-fixtures.sh to obtain \
+         tests/fixtures/bulk/clinvar_hgvs_500k.json.gz"
     );
 
     let mut group = c.benchmark_group("throughput");

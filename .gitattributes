@@ -1,2 +1,21 @@
-tests/fixtures/bulk/*.gz filter=lfs diff=lfs merge=lfs -text
-tests/fixtures/validation/*_exhaustive.json.gz filter=lfs diff=lfs merge=lfs -text
+# This repository no longer uses Git LFS.
+#
+# Two globs used to live here:
+#
+#     tests/fixtures/bulk/*.gz                      filter=lfs diff=lfs merge=lfs -text
+#     tests/fixtures/validation/*_exhaustive.json.gz filter=lfs diff=lfs merge=lfs -text
+#
+# They tracked four corpora totalling 156 MB, fetched by ten jobs per CI run
+# (`test` x6, `test-oracle` x3, `coverage`). LFS bandwidth is metered even for a
+# public repository, so that was ~1.56 GB of LFS egress per run; the account's
+# LFS budget was exhausted and every `lfs: true` job began failing at checkout.
+#
+# Those four files are now hosted as assets on the `test-fixtures-v1` release,
+# whose downloads are NOT metered, and are fetched on demand:
+#
+#     scripts/fetch-test-fixtures.sh
+#
+# Digests are committed at `tests/fixtures/CHECKSUMS.sha256`; provenance and
+# regeneration are in `tests/fixtures/README.md`.
+#
+# Do not re-add an LFS filter here without reading that history.

@@ -175,8 +175,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         captured.unwindowed
     );
     // Gzipped: the pretty JSON is ~740 KB, past the repo's 500 KB pre-commit
-    // limit, and compresses to ~100 KB — small enough to commit plainly, so no
-    // LFS pointer and no test that skips green when the fixture is absent.
+    // limit, and compresses to ~100 KB — small enough to commit plainly, so it
+    // is not an out-of-tree release asset and there is no test that skips green
+    // when the fixture is absent.
     let json = serde_json::to_string_pretty(&captured)? + "\n";
     let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
     std::io::Write::write_all(&mut encoder, json.as_bytes())?;

@@ -15,9 +15,24 @@ Thank you for considering contributing to ferro-hgvs!
 ```bash
 git clone https://github.com/fulcrumgenomics/ferro-hgvs.git
 cd ferro-hgvs
+git submodule update --init assets/hgvs-nomenclature   # the pinned HGVS spec
+scripts/fetch-test-fixtures.sh                         # the 156 MB bulk corpora
 cargo build
 cargo test --features dev
 ```
+
+`scripts/fetch-test-fixtures.sh` is not optional if you want the full suite. Four
+large HGVS corpora (156 MB) are **not in the git tree** — they are assets on the
+`test-fixtures-v1` release, because Git LFS bandwidth is metered even for a
+public repository and ten CI jobs per run exhausted the budget. The script
+downloads them over plain HTTPS (no token) and verifies every one against
+`tests/fixtures/CHECKSUMS.sha256`, refusing anything that does not match.
+
+Skipping it is safe but lossy: the four suites that read those corpora
+(`clinvar_hgvs_tests`, `cmrg_exhaustive_tests`, `paraphase_exhaustive_tests`,
+`normalize_axis_preserving`) return early and **report PASS** rather than
+failing. See [Testing](#testing) for the flag that turns that into a failure, and
+`tests/fixtures/README.md` for provenance and regeneration.
 
 ### Python Bindings Setup
 
@@ -213,6 +228,27 @@ cargo nextest run -E 'test(test_name)'    # Specific test
 cargo test -- --nocapture                 # With output
 cargo bench --features dev               # Benchmarks (`dev` is required by seqfirst_align)
 ```
+
+### Bulk corpora: a skip that reads as a pass
+
+The same trap as the conformance axis below, from a different direction. The four
+large corpora fetched by `scripts/fetch-test-fixtures.sh` are release assets
+rather than git objects, and the suites reading them return early when a fixture
+is absent — reported as PASSED, not skipped. So a run without them looks clean
+*and faster*, which is the worst way for coverage to disappear.
+
+`FERRO_REQUIRE_BULK_FIXTURES=1` turns every such skip into a failure naming the
+missing path and the command that fixes it:
+
+```bash
+scripts/fetch-test-fixtures.sh --verify   # are they present and correct?
+FERRO_REQUIRE_BULK_FIXTURES=1 cargo nextest run --features dev --lib --test it
+```
+
+CI sets it in every job that fetches the fixtures (`test`, `test-oracle`,
+`coverage`, `external-validation`), so a fetch that failed reddens the job instead
+of quietly deleting the ClinVar, CMRG and Paraphase coverage. Leave it unset
+locally unless you have fetched the corpora.
 
 ### Conformance axis (manifest-backed)
 

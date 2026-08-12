@@ -331,9 +331,9 @@ comparison, not of the field, and both halves have to be present for this
 paragraph to mean anything.
 
 Regenerate whenever `cis/multi_member_cis_alleles.json` is re-harvested, or when
-`to_sequences`' window or padding changes. It is **not** LFS, on purpose: an
-absent LFS fixture makes its suite skip green, which is the failure this file
-exists to remove.
+`to_sequences`' window or padding changes. It is committed rather than hosted
+out of tree, on purpose: an absent fixture makes its suite skip green, which is
+the failure this file exists to remove.
 
 ## Consumers
 

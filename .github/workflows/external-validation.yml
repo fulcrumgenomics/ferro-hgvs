@@ -247,8 +247,11 @@ jobs:
         with:
           # The spec-normalization fixture is generated (not committed) from the
           # HGVS spec submodule, so the standard test suite needs it checked out.
+          #
+          # No `lfs: true`: nothing in this repository is LFS-tracked any more.
+          # The bulk corpora `cargo test` reads are fetched from the
+          # `test-fixtures-v1` release by the step below.
           submodules: true
-          lfs: true
           persist-credentials: false
 
       - name: Set up Rust
@@ -275,10 +278,19 @@ jobs:
       - name: Generate HGVS spec test enumeration
         run: cargo run --features dev --bin generate_spec_enumeration
 
+      # The four bulk corpora, verified against `tests/fixtures/CHECKSUMS.sha256`.
+      # A failed fetch fails the job: the suites reading them skip green when
+      # they are absent, so continuing would silently drop that coverage.
+      - name: Fetch and verify the bulk fixtures
+        run: scripts/fetch-test-fixtures.sh
+
       # `dev` bundles every testable feature; `slow-tests` is
       # intentionally opt-in because it requires a ~1 GB ClinVar
       # fixture that is not committed to the repo.
       - name: Run standard tests
+        env:
+          # Absence of a bulk fixture fails rather than skips.
+          FERRO_REQUIRE_BULK_FIXTURES: "1"
         run: cargo test --features dev
 
       - name: Run clippy

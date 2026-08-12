@@ -138,7 +138,8 @@
 //! between a representation change and a defect.
 //!
 //! Fully hermetic: a `JsonProvider` (the type the sibling hermetic tests still
-//! name by its `MockProvider` alias), no `FERRO_MANIFEST`, no fixtures, no LFS.
+//! name by its `MockProvider` alias), no `FERRO_MANIFEST`, no fixtures, no
+//! out-of-tree corpora.
 
 use ferro_hgvs::reference::JsonProvider;
 use ferro_hgvs::{parse_hgvs, NormalizeConfig, Normalizer};

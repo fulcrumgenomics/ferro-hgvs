@@ -98,9 +98,10 @@ fn captured() -> &'static Captured {
     static FIXTURE: OnceLock<Captured> = OnceLock::new();
     FIXTURE.get_or_init(|| {
         // Gzipped to clear the repo's 500 KB pre-commit limit; ~100 KB packed,
-        // so it is a plain committed file rather than an LFS pointer — which
-        // matters, because an LFS fixture that is absent makes its suite skip
-        // green, the exact failure this module was written to remove.
+        // so it is a plain committed file rather than an out-of-tree release
+        // asset — which matters, because a fixture that is absent makes its
+        // suite skip green, the exact failure this module was written to
+        // remove.
         let file = fs::File::open(FIXTURE_PATH)
             .unwrap_or_else(|e| panic!("failed to open {FIXTURE_PATH}: {e}"));
         let mut text = String::new();

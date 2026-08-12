@@ -17,6 +17,22 @@ concurrency:
   group: release-wheels-${{ github.event.release.tag_name || github.event.inputs.tag || github.ref }}
   cancel-in-progress: false
 
+# Only a VERSION tag builds and publishes wheels. `release: published` carries no
+# tag filter of its own — GitHub offers none for that event — so without this
+# guard *any* release fires the whole matrix, uploads wheels onto it and attempts
+# a PyPI publish. That is not hypothetical: the `test-fixtures-v1` data release
+# (which hosts the bulk test corpora, since Git LFS bandwidth is metered)
+# triggered exactly that and had to be cancelled by hand.
+#
+# `workflow_dispatch` is deliberately NOT gated: the dry-run form takes a blank
+# tag, and its `upload`/`publish-pypi` jobs already require `github.event_name ==
+# 'release'` or a non-empty tag input.
+#
+# The condition is repeated on each of the four building jobs rather than hoisted
+# into `env:` — a job-level `if:` cannot read the `env` context. Everything
+# downstream (`check-metadata`, the two smoke matrices, `upload`, `publish-pypi`,
+# `verify-pypi`) reaches these four through `needs:` and so skips with them.
+
 jobs:
   # abi3 wheels: one wheel per (OS, arch) tagged `cp310-abi3`, runs on
   # every CPython >= 3.10. The `-i python<X>` flag is omitted so maturin
@@ -26,6 +42,7 @@ jobs:
   # and https://www.maturin.rs/bindings#py_limited_apiabi3
   linux:
     name: Linux ${{ matrix.target }} ${{ matrix.manylinux }}
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -65,6 +82,7 @@ jobs:
 
   macos:
     name: macOS ${{ matrix.target }}
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -105,6 +123,7 @@ jobs:
 
   windows:
     name: Windows
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -128,6 +147,7 @@ jobs:
 
   sdist:
     name: sdist
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

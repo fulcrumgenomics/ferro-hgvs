@@ -41,9 +41,9 @@ struct ClinvarHgvsCase<'a> {
 
 fn load_fixture_bytes(filename: &str) -> Option<Vec<u8>> {
     let path = format!("tests/fixtures/bulk/{}", filename);
-    if !std::path::Path::new(&path).exists() {
-        return None;
-    }
+    // Absent means "skip" locally and "fail" under `FERRO_REQUIRE_BULK_FIXTURES`,
+    // which CI sets — see `common::bulk_fixtures`.
+    crate::common::bulk_fixtures::present_or_skip(&path)?;
     // See cmrg_exhaustive_tests::load_fixture_bytes for why we
     // decompress to a Vec and use `from_slice`.
     let file = File::open(&path).unwrap_or_else(|e| panic!("Failed to open {}: {}", filename, e));
@@ -73,13 +73,12 @@ fn load_fixture_bytes(filename: &str) -> Option<Vec<u8>> {
 fn test_clinvar_hgvs_500k_benchmark() {
     let buf = match load_fixture_bytes("clinvar_hgvs_500k.json.gz") {
         Some(b) => b,
-        None => {
-            eprintln!("Skipping: clinvar_hgvs_500k.json.gz not found");
-            return;
-        }
+        // `load_fixture_bytes` has already reported the skip, or panicked
+        // under `FERRO_REQUIRE_BULK_FIXTURES`.
+        None => return,
     };
-    let fixture: ClinvarHgvsFixture<'_> = serde_json::from_slice(&buf)
-        .expect("Failed to parse clinvar_hgvs_500k.json.gz (is Git LFS installed?)");
+    let fixture: ClinvarHgvsFixture<'_> =
+        serde_json::from_slice(&buf).expect("Failed to parse clinvar_hgvs_500k.json.gz");
 
     let total = fixture.test_cases.len();
     eprintln!("\n========================================");
@@ -183,13 +182,12 @@ fn test_clinvar_hgvs_500k_benchmark() {
 fn test_clinvar_hgvs_unique_benchmark() {
     let buf = match load_fixture_bytes("clinvar_hgvs_unique.json.gz") {
         Some(b) => b,
-        None => {
-            eprintln!("Skipping: clinvar_hgvs_unique.json.gz not found");
-            return;
-        }
+        // `load_fixture_bytes` has already reported the skip, or panicked
+        // under `FERRO_REQUIRE_BULK_FIXTURES`.
+        None => return,
     };
-    let fixture: ClinvarHgvsFixture<'_> = serde_json::from_slice(&buf)
-        .expect("Failed to parse clinvar_hgvs_unique.json.gz (is Git LFS installed?)");
+    let fixture: ClinvarHgvsFixture<'_> =
+        serde_json::from_slice(&buf).expect("Failed to parse clinvar_hgvs_unique.json.gz");
 
     let total = fixture.test_cases.len();
     eprintln!("\n========================================");

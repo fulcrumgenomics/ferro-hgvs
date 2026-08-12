@@ -1,0 +1,19 @@
+# SHA-256 digests of the large test fixtures hosted as release assets.
+#
+# These four corpora are NOT in the git tree. They are fetched from the
+# `test-fixtures-v1` GitHub release by `scripts/fetch-test-fixtures.sh` and by
+# CI's `fixtures` job, both of which verify every download against this file
+# and REFUSE a mismatch. See `tests/fixtures/README.md`.
+#
+# Format is `sha256sum -c` compatible, so from the repository root:
+#
+#     sha256sum -c tests/fixtures/CHECKSUMS.sha256      # Linux
+#     shasum -a 256 -c tests/fixtures/CHECKSUMS.sha256  # macOS
+#
+# The digests are also the files' Git LFS object ids, since LFS keys objects by
+# their SHA-256 — so they can be cross-checked against any pre-removal commit
+# with `git lfs ls-files -s`.
+7ad4c369e26a0b9c3813fdd89544c760a3e6afed6fc60a641662080d375c3df8  tests/fixtures/bulk/clinvar_hgvs_500k.json.gz
+504deb075b361c8565c46ca3ee0ccad39c81ecb83fcad36b8e9837dd29a529ec  tests/fixtures/bulk/clinvar_hgvs_unique.json.gz
+20adbf8c136106f22f3addd042a639bc7c208f7a4c4a834b35c428b60e4062de  tests/fixtures/validation/cmrg_genes_exhaustive.json.gz
+d29608fdf707ee6de051895791eb467c65044566c5fe8f2f2c3b818410164a81  tests/fixtures/validation/paraphase_genes_exhaustive.json.gz

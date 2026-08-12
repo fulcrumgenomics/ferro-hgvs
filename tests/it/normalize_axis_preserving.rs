@@ -48,10 +48,13 @@
 //! rejects: both are counted and skipped, not judged. And nothing about the
 //! projector, whose whole purpose is to change axis.
 //!
-//! The bulk fixtures are git-lfs artifacts. Following the sibling corpus suites
+//! The bulk fixtures are release assets rather than git objects
+//! (`scripts/fetch-test-fixtures.sh`). Following the sibling corpus suites
 //! (`clinvar_hgvs_tests`, `cmrg_exhaustive_tests`, `paraphase_exhaustive_tests`),
 //! a missing fixture skips green rather than failing — so an absent corpus is
-//! reported as a skip, never as a pass.
+//! reported as a skip, never as a pass. Under `FERRO_REQUIRE_BULK_FIXTURES`,
+//! which CI sets, that skip becomes a hard failure instead; see
+//! `common::bulk_fixtures`.
 
 use ferro_hgvs::{parse_hgvs, CoordinateAxis, HgvsVariant, MockProvider, Normalizer};
 use flate2::read::GzDecoder;
@@ -102,9 +105,9 @@ struct SpecRow {
 }
 
 fn load_gzipped(path: &str) -> Option<Vec<u8>> {
-    if !std::path::Path::new(path).exists() {
-        return None;
-    }
+    // Absent means "skip" locally and "fail" under `FERRO_REQUIRE_BULK_FIXTURES`,
+    // which CI sets — see `common::bulk_fixtures`.
+    crate::common::bulk_fixtures::present_or_skip(path)?;
     let file = File::open(path).unwrap_or_else(|e| panic!("failed to open {path}: {e}"));
     let mut buf = Vec::new();
     GzDecoder::new(file)
@@ -325,15 +328,17 @@ where
         .reduce(AxisCensus::default, AxisCensus::merge)
 }
 
-/// Run the census over one gzipped bulk fixture, skipping green when the git-lfs
-/// artifact is absent — the idiom the sibling corpus suites use.
+/// Run the census over one gzipped bulk fixture, skipping green when the
+/// release-asset fixture is absent — the idiom the sibling corpus suites use —
+/// or failing, under `FERRO_REQUIRE_BULK_FIXTURES`.
 fn assert_axis_preserved_over_bulk_fixture(path: &str) {
+    // `load_gzipped` has already reported the skip, or panicked under
+    // `FERRO_REQUIRE_BULK_FIXTURES`.
     let Some(buf) = load_gzipped(path) else {
-        eprintln!("Skipping axis-preservation census: {path} not found (git-lfs artifact)");
         return;
     };
-    let fixture: BulkFixture<'_> = serde_json::from_slice(&buf)
-        .unwrap_or_else(|e| panic!("failed to parse {path} (is Git LFS installed?): {e}"));
+    let fixture: BulkFixture<'_> =
+        serde_json::from_slice(&buf).unwrap_or_else(|e| panic!("failed to parse {path}: {e}"));
     let start = Instant::now();
     let census = census_of(&fixture.test_cases[..]);
     census.report_and_assert(path, start.elapsed().as_secs_f64());
