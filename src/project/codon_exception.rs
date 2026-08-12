@@ -10,29 +10,32 @@
 //! governing — and the normalizer implements it, in
 //! `merge::apply_coding_codon_exception`, gated on `AxisFrame::reading_frame`.
 //! That gate asks whether *the axis a description is written on* carries a
-//! reading frame, which is the right question for a bare description and the
-//! wrong one for a projection: a projection names a transcript, so the frame is
-//! in hand on every axis it renders. Deciding the partition once, on whichever
-//! axis the caller happened to author, and letting the other axes inherit it is
-//! what makes `LRG_199t1:c.145_147delinsTGG` render as
-//! `LRG_199:g.[494841C>T;494843C>G]` — the exact string `DNA/delins.md:42`
-//! renders `class="invalid"` and calls "not correct".
+//! reading frame. For a bare description that is the whole question. For a
+//! projection it is half of one, because the axes are not independent: a genomic
+//! input is partitioned by a frameless normalization, and the `c.`/`n.`/`r.`/`p.`
+//! axes derived from it inherit a partition the frame would not have chosen. One
+//! variant then renders as one member or as two on the *coding* axis depending
+//! only on which spelling the caller happened to hand in.
 //!
-//! This module holds the two shape tests the projector needs to re-decide it
-//! against the transcript, and nothing else: the merge itself is either the
-//! normalizer's (on the coding axis, which has a frame already) or a
-//! three-base rewrite of a pair the normalizer has just split (on the genomic
-//! axis, which does not).
+//! This module holds the shape test the projector needs to re-decide that
+//! against the transcript, plus the member count it compares either side of the
+//! attempt, and nothing else: the merge itself is the normalizer's, performed by
+//! re-normalizing the coding axis, which has a frame already.
 //!
-//! # What is deliberately *not* changed: the bare `g.` axis
+//! # What is deliberately *not* changed: any `g.` axis, bare or derived
 //!
 //! Closed issue #79 scoped the exception out of the bare genomic axis, on the
 //! grounds that a `g.` description names no transcript and so offers no frame
-//! to consult. Nothing here reopens that. The predicates below are only ever
-//! reached from [`crate::project::VariantProjector`], which always has a
-//! transcript, and the projector applies the genomic half only to a genomic
-//! axis it *derived* — a genomic input's own axis is still returned as that
-//! input normalizes on its own, which is #79's answer.
+//! to consult. Nothing here reopens that, and
+//! `rulings[projection-codon-exception-is-decided-by-the-rendered-axis]`
+//! (`decided`) gives a derived genomic axis the same answer for a reason of its
+//! own: `:18` is a conditional whose second conjunct — "together affecting one
+//! amino acid" — cannot be stated on a genomic reference, so the exception does
+//! not fire there and `DNA/delins.md:17` governs unopposed, asking for the
+//! individual descriptions. The predicates below are only ever reached from
+//! [`crate::project::VariantProjector`], which always has a transcript, and they
+//! re-decide the transcript axes only. A genomic input's own genomic axis is
+//! still returned as that input normalizes on its own, which is #79's answer.
 
 use crate::hgvs::edit::{Base, NaEdit};
 use crate::hgvs::interval::UncertainBoundary;

@@ -4322,13 +4322,13 @@ fn axis_normalized_idempotent() {
 
 // There is deliberately no exemption list here, and the absence is the guard.
 //
-// #1664's first cut re-merged the DERIVED genomic axis from the coding axis's
-// answer, which made `ferro project | ferro normalize` a non-fixed-point for the
-// codon-delins family — recorded at the time as a cost to be adjudicated. It has
+// #1672's first cut at #1664 re-merged the DERIVED genomic axis from the coding
+// axis's answer, which made `ferro project | ferro normalize` a non-fixed-point for
+// the codon-delins family — recorded at the time as a cost to be adjudicated. It has
 // since been adjudicated the other way: the genomic axis SPLITS, and the
 // projector does not inherit the coding merge.
 //
-// The ground is that `general.md:22-31` makes the prefix a statement about the
+// The ground is that `general.md:23-31` makes the prefix a statement about the
 // **type of reference sequence used** ("`c` for a coding DNA reference sequence,
 // `g` for a linear genomic reference sequence"), and every frame-derived rule is
 // conditioned on that type. A `g.` string therefore declares a genomic reference
@@ -4359,7 +4359,7 @@ fn axis_genomic_idempotent() {
         // (#870), compound alleles kept on the raw `project_to_genomic` pivot
         // (#851 cis-sort; #894), pure g./m. rows normalized only. Only
         // successfully-projected-and-normalized inputs participate. The fixpoint
-        // held, before #1664, because `project_variant` normalized internally and
+        // held, before this change, because `project_variant` normalized internally and
         // the normalizer had no context the projector was withholding. It now
         // does — the reading frame — but the projector deliberately does not use
         // it on the genomic axis, so the fixpoint holds again (see the note above
@@ -4372,9 +4372,7 @@ fn axis_genomic_idempotent() {
         let Ok(g1) = projected else { continue };
         tested += 1;
         match renormalize_once(&normalizer, &g1) {
-            Ok(g2) if g2 != g1 => {
-                failures.push(format!("{} : {g1} -> {g2}", case.input));
-            }
+            Ok(g2) if g2 != g1 => failures.push(format!("{} : {g1} -> {g2}", case.input)),
             Err(e) => failures.push(format!("{} : {g1} -> {e}", case.input)),
             _ => {}
         }

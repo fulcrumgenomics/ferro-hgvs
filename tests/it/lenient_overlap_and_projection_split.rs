@@ -1,12 +1,17 @@
 //! Two validity items: a conflict lenient mode drops, and a projection split.
 //!
-//! Both are descriptions ferro should refuse and does not, and both are rank-1
-//! validity failures — "the output re-parses, denotes a sequence, and violates no
-//! absolute prohibition" is rank 1 of the operator's precedence order
+//! Item 1 is a description ferro should refuse and does not — a rank-1 validity
+//! failure, "the output re-parses, denotes a sequence, and violates no absolute
+//! prohibition" being rank 1 of the operator's precedence order
 //! (`rulings[adjudication-precedence-order]`, tabulated at
-//! `tests/it/spec_conformance_axis.rs:20`). They are kept in one module because
-//! the *shape* of each defect is the same: a stage detects something and the
-//! finding does not survive to the caller.
+//! `tests/it/spec_conformance_axis.rs:20`). Item 2 was filed as the same thing
+//! and is not: the ruling below decided that the split it names is the
+//! recommendation's own answer on that axis.
+//!
+//! They are kept in one module because the *shape* of the question is the same
+//! — a stage decides something and the decision does or does not survive to the
+//! next one — and because the two outcomes are worth reading together: one is a
+//! pinned defect, the other a filing that measurement withdrew.
 //!
 //! # Item 1 — the conflict is detected and then dropped at the API seam
 //!
@@ -46,28 +51,34 @@
 //! what makes the pass-through a decline rather than an endorsement. Refusal
 //! stays strict mode's job, and strict mode already does it.
 //!
-//! # Item 2 — a single-member description projecting into several members (#1664, fixed)
+//! # Item 2 — which axis of a projection may split a single-member description
 //!
-//! Same shape one stage over: a rule fired on one axis and did not survive to
+//! Same shape one stage over: a rule fires on one axis and does not survive to
 //! the others. `LRG_199t1:c.145_147delinsTGG` — the spec's own worked example at
-//! `DNA/delins.md:37` — projected as one member on `c.`, `n.`, `r.` and `p.`, and
-//! as `LRG_199:g.[494841C>T;494843C>G]` on the genomic axis. Those two genomic
-//! positions are `c.145` and `c.147`, so that was exactly the description
-//! `DNA/delins.md:42` renders `class="invalid"` and calls "not correct".
+//! `DNA/delins.md:37` — projects as one member on `c.`, `n.`, `r.` and `p.`, and
+//! as `LRG_199:g.[494841C>T;494843C>G]` on the genomic axis.
 //!
-//! The cause was that the codon-frame exception (`DNA/delins.md:18`, decided for
-//! ferro in `rulings[delins-codon-carve-out-gap-one]`) was evaluated against the
-//! axis being rendered rather than against the transcript. The `g.` axis has no
-//! reading frame of its own, so `general.md:34`'s separation floor of one applied
-//! unopposed. None of the cis-allele partitioning work was implicated: the input
-//! has no members to partition. The projector now re-decides the exception
-//! against the transcript it is projecting against
-//! (`src/project/codon_exception.rs`).
+//! **#1664 read that genomic split as the defect, and that reading is
+//! withdrawn.** The argument was that those two genomic positions are `c.145`
+//! and `c.147`, so the string is the one `DNA/delins.md:42` renders
+//! `class="invalid"`. `rulings[projection-codon-exception-is-decided-by-the-rendered-axis]`
+//! (`decided`) rules otherwise: `:42` is a conditional whose second conjunct,
+//! "together affecting one amino acid", cannot be stated on a genomic reference,
+//! so the exception does not fire on `g.` and `DNA/delins.md:17` governs
+//! unopposed — asking for exactly these individual descriptions.
+//!
+//! What the projector does re-decide against the transcript is the other
+//! direction. A genomic *input* arrives partitioned by a frameless
+//! normalization, and its `c.`/`n.`/`r.`/`p.` axes no longer inherit that
+//! partition (`src/project/codon_exception.rs`), so one variant renders the same
+//! five axes whichever spelling the caller hands in. The derived `g.` axis is
+//! deliberately left split. None of the cis-allele partitioning work is
+//! implicated: a single-member input has no members to partition.
 //!
 //! The repository counts the *shape* — `Status::ProjectionSplitsSingleMember`,
-//! budgeted at 9 before this and 7 after — but the shape is not by itself a
-//! defect, and the section header below says which of the nine rows were and
-//! which were not.
+//! budgeted at 9 in `DIVERGENCE_BUDGET` and unchanged by either half of this —
+//! but the shape is not by itself a defect, and the section header below says
+//! which of the nine rows the ruling is about.
 
 use ferro_hgvs::conformance::spec_corpus::{
     corpus_cores, denotation_of, Denotation, Frame, RefShape, DENSE_CORE_LEN,
@@ -288,23 +299,28 @@ fn the_lenient_output_is_still_refused_by_strict() {
 // ---------------------------------------------------------------------------
 //
 // The repository already has a name and a counter for the shape — the spec
-// enumeration's `Status::ProjectionSplitsSingleMember`, budgeted at 9
-// (`tests/it/spec_enumeration_tests.rs:356`) — but no test names the rows and
-// no issue has ever been filed on it. It has only ever been mentioned inside
-// other work: created by #1272, moved 10 -> 9 by #1271, measured 9 -> 13 -> 9
-// across #1235's branch.
+// enumeration's `Status::ProjectionSplitsSingleMember`, budgeted at 9 in
+// `DIVERGENCE_BUDGET` (`tests/it/spec_enumeration_tests.rs`) — but no test names
+// the rows and no issue has ever been filed on it. It has only ever been
+// mentioned inside other work: created by #1272, moved 10 -> 9 by #1271,
+// measured 9 -> 13 -> 9 across #1235's branch.
 //
 // **The shape alone is not the defect, and saying otherwise is the trap.** Of
 // the nine rows, seven are inputs whose members end up two or more bases
 // apart, where `general.md:34` — "two variants separated by one or more
 // nucleotides should be described individually and **not** as a 'delins'" —
 // plainly asks for the split. The enumeration's own comment says as much: the
-// rows "enter by *shape* … not by the divergence `delins.md:42` names". Those
-// seven are still there; the budget is 7 rather than 0 on purpose, and driving
-// it lower would mean merging something `:34` wanted split.
+// rows "enter by *shape* … not by the divergence `delins.md:42` names".
 //
-// The two rows that WERE a violation are the ones pinned below, and what made
-// them one was not the split but *which axis* split.
+// The other two are the `LRG_199t1` codon-delins rows pinned below, and they
+// are counted here for a different reason: their `g.` axis splits because
+// `DNA/delins.md:17` asks it to, which
+// `rulings[projection-codon-exception-is-decided-by-the-rendered-axis]` settles.
+// #1664 read them as violations, on the ground that it was *which axis* split;
+// that reading is withdrawn and the rows stay.
+//
+// So the budget is 9 rather than 0 on purpose, and driving it lower would mean
+// merging something `:17`/`:34` wanted split.
 
 use ferro_hgvs::conformance::spec_projection::load_slice;
 use ferro_hgvs::data::{CdotMapper, CdotTranscript, Projector};
@@ -369,7 +385,7 @@ fn splits_into_members(rendered: &str) -> bool {
 /// `c.[145C>T;147C>G]` is not correct" — with that split spelling rendered
 /// `class="invalid"` in the published page.
 ///
-/// **But `:42` reaches only an axis that declares a reading frame (#161).** The
+/// **But `:42` reaches only an axis that declares a reading frame (#1672).** The
 /// clause is a conditional with two conjuncts — "separated by one nucleotide"
 /// **and** "together affecting one amino acid". The second is unstatable on a
 /// genomic reference, so the exception does not fire there, and `:17` — same
@@ -377,7 +393,7 @@ fn splits_into_members(rendered: &str) -> bool {
 /// descriptions. The genomic split is the recommendation's default, not a gap in
 /// it.
 ///
-/// `general.md:22-31` is what makes the axis, not the biology, the thing that
+/// `general.md:23-31` is what makes the axis, not the biology, the thing that
 /// decides: the prefix is mandatory and states "the **type of reference
 /// sequence** used … `c` for a coding DNA reference sequence, `g` for a linear
 /// genomic reference sequence". So `LRG_199:g.…` is genomic however gene-scoped

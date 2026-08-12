@@ -797,8 +797,9 @@ const RULING_STATUSES: &[(&str, &str)] = &[
     // merge and is silent on which axes — its `applies_to` holds six `c.`/`r.`
     // strings and no genomic one. Scoped to DNA axes: `RNA/delins.md:18` is
     // the `r.` axis's own authority and is not ruled on here, and the `n.`
-    // axis is left open. Moves two rows, 7 -> 9 in
-    // `ProjectionSplitsSingleMember`, mirrored in `ProjectionPinned`.
+    // axis is left open. **Moves no row**: it declines a merge, so
+    // `ProjectionSplitsSingleMember` stays at 9 and `ProjectionPinned` at 1168,
+    // exactly as on `main`. Merging as #1664 asks would take them to 7 and 1170.
     (
         "projection-codon-exception-is-decided-by-the-rendered-axis",
         "decided",

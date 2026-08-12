@@ -354,33 +354,35 @@ const DIVERGENCE_BUDGET: &[(Status, usize)] = &[
     // unseen. That is exactly why these are the guards that judge behaviour and
     // `enumeration_replays_recorded_behavior` is not.
     //
-    // **9 -> 7 in #1664, and back to 9 in #161 — the reversal is the ruling, not
-    // a regression.** #1664 read the two `LRG_199t1` rows
-    // (`c.145_147delinsTGG`, `delins.md:37`; `c.235_237delinsTAT`,
-    // `delins.md:19`) as defects because their `g.` axis rendered the split
-    // `delins.md:42` calls "not correct", and merged that axis to match the
-    // coding one.
+    // **#1672 holds this at 9; it moves no row.** Two of the nine are the
+    // `LRG_199t1` rows `c.145_147delinsTGG` (`delins.md:37`) and
+    // `c.235_237delinsTAT` (`delins.md:19`), whose derived `g.` axis renders the
+    // split `delins.md:42` calls "not correct". #1664 reads that as a defect and
+    // asks for the genomic axis to be merged to match the coding one, which
+    // would take this constant to 7.
     //
-    // It should not have. `:42` is a conditional whose second conjunct is
-    // "together affecting one amino acid", and that cannot be stated on a
-    // genomic reference — `general.md:22-31` makes the prefix a claim about the
-    // **type of reference sequence**, so `LRG_199:g.…` is genomic however
-    // gene-scoped its accession. With `:42` not firing, `DNA/delins.md:17`
-    // governs unopposed and asks for exactly these individual descriptions. The
-    // two rows are therefore conformant output, and this status is where
-    // conformant-but-split rows belong.
+    // It is declined. `:42` is a conditional whose second conjunct is "together
+    // affecting one amino acid", and that cannot be stated on a genomic
+    // reference — `general.md:23-31` makes the prefix a claim about the **type
+    // of reference sequence**, so `LRG_199:g.…` is genomic however gene-scoped
+    // its accession. With `:42` not firing, `DNA/delins.md:17` governs unopposed
+    // and asks for exactly these individual descriptions. The two rows are
+    // therefore conformant output, and this status is where conformant-but-split
+    // rows belong.
     //
-    // See `rulings[projection-codon-exception-is-decided-by-the-rendered-axis]`.
-    // The merge it removed also produced a string not re-derivable from its own
-    // reference, which is why `axis_genomic_idempotent` can now assert every
-    // projected genomic axis is a fixed point with no exemption list at all.
+    // See `rulings[projection-codon-exception-is-decided-by-the-rendered-axis]`,
+    // which is what #1672 contributes here: the ruling that KEEPS this at 9.
+    // Declining the merge is also what lets `axis_genomic_idempotent` assert
+    // every projected genomic axis is a fixed point with no exemption list at
+    // all — a merged genomic string is not re-derivable from its own reference.
     //
     // **Driving this to zero is not the goal, and neither is driving it to 7.** A
     // change that takes it below 9 has merged something `DNA/delins.md:17` wanted
     // split. Read it with its mirror in `PASSING_CENSUS` (`ProjectionPinned`,
-    // 1170 -> 1168): equal and opposite deltas mean the rows moved between
-    // statuses rather than leaving the enumeration. The other seven are the shape
-    // doing its job — `NM_000797.3:c.812_829delins908_925` over four axes and
+    // 1168): the two constants move in equal and opposite steps, so a row that
+    // vanished from one without appearing in the other left the enumeration
+    // rather than moving between statuses. The other seven are the shape doing
+    // its job — `NM_000797.3:c.812_829delins908_925` over four axes and
     // `c.235_238delinsTAGT` over three, whose members end up two or more bases
     // apart, where `general.md:34` asks for the split.
     (Status::ProjectionSplitsSingleMember, 9),
@@ -458,9 +460,11 @@ const PASSING_CENSUS: &[(Status, usize)] = &[
     // net is zero and the total is again unchanged. The analysis of those rows,
     // and the reason the two constants must always be read as a pair, are with
     // `ProjectionSplitsSingleMember` in `DIVERGENCE_BUDGET`.
-    // 1170 -> 1168 in #161: the mirror of `ProjectionSplitsSingleMember`'s
-    // 7 -> 9. Equal and opposite, so the two `LRG_199t1` rows moved between
-    // statuses rather than leaving the enumeration.
+    // #1672 leaves this at 1168 and moves no row. Merging the derived genomic
+    // axis of the two `LRG_199t1` rows — what #1664 asks for — would take this
+    // to 1170 and `ProjectionSplitsSingleMember` to 7; the ruling declines it,
+    // so both constants stand. See that status's note in `DIVERGENCE_BUDGET`
+    // for why, and read the two as a pair either way.
     (Status::ProjectionPinned, 1168),
     (Status::ProjectionUnavailablePinned, 487),
     (Status::ProjectionErrorPinned, 210),
