@@ -285,7 +285,7 @@ static MSTO_ISSUES: &[MstoIssue] = &[
     // #1430's slice is one or more guards per proposed stage, not a
     // reproduction — see
     // `issue_1430_is_measured_by_a_property_not_by_an_expected_output`.
-    MstoIssue { number: 1430, high: true, state: State::Open, tests: &[("src/normalize/merge.rs", "the_coalesce_pass_merges_a_payload_alignment_split"), ("src/normalize/merge.rs", "the_coalesce_pass_reaches_the_spec_worked_example"), ("src/normalize/seqfirst/partition.rs", "canonical_members_claim_exactly_the_blocks_edit_distance"), ("src/normalize/seqfirst/partition.rs", "canonical_members_rebuild_the_alternate_block"), ("src/normalize/seqfirst/partition.rs", "round_trips_exhaustively_over_a_small_alphabet"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged")], note: None },
+    MstoIssue { number: 1430, high: true, state: State::Open, tests: &[("src/normalize/merge.rs", "an_all_survivor_payload_is_not_an_alignment_artifact"), ("src/normalize/merge.rs", "the_coalesce_pass_reaches_the_spec_worked_example"), ("src/normalize/seqfirst/partition.rs", "canonical_members_claim_exactly_the_blocks_edit_distance"), ("src/normalize/seqfirst/partition.rs", "canonical_members_rebuild_the_alternate_block"), ("src/normalize/seqfirst/partition.rs", "round_trips_exhaustively_over_a_small_alphabet"), ("tests/it/reported_confluence_pairs.rs", "every_reported_pair_denotes_one_sequence"), ("tests/it/reported_confluence_pairs.rs", "no_reported_pair_normalizes_to_a_different_sequence"), ("tests/it/reported_confluence_pairs.rs", "the_reported_pair_census_is_unchanged")], note: None },
 ];
 
 /// #1430's slice, split by the stage of its proposal each guard measures.
@@ -339,7 +339,7 @@ const ISSUE_1430_STAGE_GUARDS: &[(u8, &str, &str)] = &[
     (
         3,
         "src/normalize/merge.rs",
-        "the_coalesce_pass_merges_a_payload_alignment_split",
+        "an_all_survivor_payload_is_not_an_alignment_artifact",
     ),
     // The measure of the whole proposal: does the reported family converge? A
     // census rather than a pin, because #1430's success criterion is confluence
