@@ -642,8 +642,9 @@ pub(crate) fn variant_edit_triples_reason<P: ReferenceProvider + ?Sized>(
 /// breaking change, matching `SpdiParseError` and `ConversionError` in this
 /// module. The set is demonstrably still growing:
 /// [`Self::UnresolvableSpecialPosition`] exists only until `hgvs_to_spdi` stops
-/// resolving `pter` silently, and #1618/#1619 are two more disagreements in
-/// flight.
+/// resolving `pter` silently — which as of #1643 is true of the **transcript**
+/// axis only, the genomic half now being refused outright — and #1618/#1619 are
+/// two more disagreements in flight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NotComparable {
@@ -668,12 +669,21 @@ pub enum NotComparable {
     /// One side names `pter`/`qter`/`cen`.
     ///
     /// Those carry no numeric coordinate — `GenomePos::pter()` and
-    /// `CdsPos::pter()` both set `base: 0` — and `hgvs_to_spdi` reads the `base`
-    /// field, so it resolves them *silently* to a position that is not the one
-    /// meant. Measured: `NM_003002.2:c.pterdel` transliterates to a deletion of
-    /// the sequence's LAST base. Comparing against that would report every
-    /// correct `pter` normalization as a corruption, so the pair is declined
-    /// until the transliteration is fixed.
+    /// `CdsPos::pter()` both set `base: 0` — and comparing against a position
+    /// that is not the one meant would report every correct `pter`
+    /// normalization as a corruption. So `names_a_special_position` declines
+    /// the pair on **both** axes, before either side is transliterated.
+    ///
+    /// **Only the transcript half is still resolved silently.** #1643 closed
+    /// the genomic one: `hgvs_to_spdi` now refuses a `g.`/`m.`/`o.` special
+    /// position with `ConversionError::InvalidPosition` (see
+    /// `convert::reject_unresolvable_genomic_position`), so on that axis this
+    /// decline has become belt-and-braces rather than the only thing standing
+    /// between the oracle and a false fault. On the transcript axis `CdsPos`
+    /// still flattens onto `base: 0` and `hgvs_to_spdi` still reads it as a
+    /// coordinate — measured: `NM_003002.2:c.pterdel` transliterates to a
+    /// deletion of the sequence's LAST base — which is the half this variant
+    /// now exists for, and it retires when that half is fixed.
     UnresolvableSpecialPosition,
     /// The two descriptions name different accessions, so their sequences are
     /// not comparable at all. Normalization can do this legitimately (the #785

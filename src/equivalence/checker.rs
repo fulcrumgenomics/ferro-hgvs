@@ -405,6 +405,64 @@ impl<P: ReferenceProvider> EquivalenceChecker<P> {
     /// refuse pairs the checker answers today on no evidence that any of those
     /// answers is wrong. Add it when a wrong answer is measured, with the pair
     /// that measures it.
+    ///
+    /// **A third shape now shares the SPDI blindness and is deliberately not
+    /// listed either: a genomic `pter`/`qter`/`cen` description (#1643).**
+    /// `hgvs_to_spdi` used to flatten those onto `base: 0` and convert; it now
+    /// refuses, so [`Self::edit_triples`]'s `.ok()?` swallows the new error and
+    /// the `SequenceMatch` rung stops firing for them. The reach is narrower
+    /// than it looks, and the reason is worth writing down because it is not
+    /// visible from this file: both rungs run on the **normalized** forms, and
+    /// normalization *resolves* a marker against the provider
+    /// (`g.10_qterdelACGTACGTAC` -> `g.10_28del` on a 28-base contig), so most
+    /// of the class never reaches the sequence rung carrying one at all.
+    ///
+    /// **Which markers survive normalization is a property of the PROVIDER, not
+    /// of the marker.** `cen` always does — `resolve_special_genome_pos` returns
+    /// `Ok(None)` for it unconditionally, there being no centromere annotation
+    /// on a sequence accession to resolve against. But `pter` and `qter` survive
+    /// too whenever the length lookup fails: that arm falls through to
+    /// `canonicalize_genome_variant`, which rewrites only the edit body and
+    /// clones the location, so the marker is echoed. Measured, on a provider
+    /// holding no sequence for the accession: `g.10_qterdelACGTACGTAC` ->
+    /// `g.10_qterdel` and `g.pter_10delACGTACGTAC` -> `g.pter_10del`. So this is
+    /// "`cen` plus any marker whose reference is unservable", not "`cen`".
+    ///
+    /// **One verdict class moved, and the old answer was wrong.** Both figures
+    /// below come from disabling the guard in place and re-running, and they are
+    /// **two separate corpora** — do not read either denominator onto the other:
+    ///
+    /// | corpus | pairs | verdicts that moved |
+    /// |---|---|---|
+    /// | 22 mixed `cen`/`qter`/`pter` descriptors, on a serving and a non-serving provider | 231 x 2 | **0** |
+    /// | 10 descriptors whose 3' anchor is `cen`, serving provider | 45 | **3** |
+    ///
+    /// The three are what the first corpus could not reach, and they say why: a
+    /// `cen` on the END of a *duplication* is what zeroes the triple, because
+    /// the `Duplication` arm emits `end_one_based` as the SPDI position. So
+    /// `g.10_cendupACGTACGTAC`, `g.12_cendupACGTACGTAC` and
+    /// `g.4_cendupACGTACGTAC` all converted to `NC_000001.11:0::ACGTACGTAC`, and
+    /// each of the three pairs among them answered `SequenceMatch` — **wrong**,
+    /// since they duplicate different spans. All three now answer
+    /// `NotEquivalent`. The `del`/`inv` spellings of the same shape never
+    /// collided: those arms emit `start_one_based - 1`, which the `cen` does not
+    /// touch.
+    ///
+    /// So the sibling in such a pair has to be another special position, and an
+    /// earlier revision of this note gave `g.10_19dupACGTACGTAC` instead. That
+    /// is not a case: on a fully numeric anchor the same arm emits
+    /// `end_one_based` as a real coordinate, so it converts at **19**, and two
+    /// triples at different positions cannot match however blind the rung is.
+    ///
+    /// **No genuinely-equivalent pair lost an answer**, which is why nothing
+    /// here changed. Every equivalent `cen` pair tried (cis decompositions,
+    /// member reorderings, delins/substitution respellings) is decided one rung
+    /// earlier by `NormalizedMatch`, because normalization's own cis merge
+    /// collapses them, and no pair moved in the `NotEquivalent` -> equivalent
+    /// direction in either corpus. The residual hazard is the honesty one this
+    /// predicate exists for — a `NotEquivalent` reached with the sequence rung
+    /// blind — not a wrong answer left standing, so per the standard above it
+    /// earns this note rather than a decline.
     fn undecidable_reason(&self, variant: &HgvsVariant) -> Option<String> {
         // SPDI first, at every level: if `edit_triples` succeeds the `SequenceMatch`
         // rung can decide, so there is nothing undecidable to report. Keeping this
