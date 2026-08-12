@@ -96,6 +96,7 @@ mod defect_non_idempotent_outputs;
 mod del_shift_matrix;
 mod delins_equal_vs_unequal_length_discriminator;
 mod delins_equal_vs_unequal_length_hermetic;
+mod downstream_flag_and_offset_sentinel;
 mod dup_shift_matrix;
 mod edge_case_notation_tests;
 mod equivalence_cross_axis_rung;

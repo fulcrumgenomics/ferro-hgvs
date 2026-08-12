@@ -1163,8 +1163,18 @@ impl<P: ReferenceProvider + Clone> VariantProjector<P> {
                         msg: "Tx interval start is unknown".to_string(),
                     }
                 })?;
-                let pos =
-                    nr_representative_genome_pos(cdot_tx, start_tx.base, start_tx.offset, false)?;
+                // `start_tx.downstream` is the `n.` axis's `*` marker and must be
+                // passed, exactly as the `Rna` arm below passes `start_rna.utr3`.
+                // Hard-coding `false` here seeded `n.*5` at the genomic coordinate
+                // of *in-transcript* base 5, contradicting this function's own doc
+                // comment, which lists "downstream/utr3 markers" among the cases
+                // that fall back to the first-exon start.
+                let pos = nr_representative_genome_pos(
+                    cdot_tx,
+                    start_tx.base,
+                    start_tx.offset,
+                    start_tx.downstream,
+                )?;
                 Ok((cdot_tx.contig.clone(), pos))
             }
             HgvsVariant::Rna(r) => {
@@ -6031,9 +6041,9 @@ fn variant_decline_explanation(e: &FerroError) -> Option<String> {
 /// (n.) or RNA (r.) transcript coordinate, suitable for seeding
 /// `Projector::project`'s stab query.
 ///
-/// - For "simple" exonic positions (`offset.is_none() && !utr3 &&
+/// - For "simple" exonic positions (`offset.is_none() && !star_marker &&
 ///   base >= 1`), the exact `tx_to_genome` mapping is returned.
-/// - For intronic (`offset.is_some()`), downstream/3'UTR (`utr3`), or
+/// - For intronic (`offset.is_some()`), `*`-marked (`star_marker`), or
 ///   non-positive `base`, the conversion is best-effort: the
 ///   transcript's first-exon genome_start is returned. The stab query
 ///   at that position still lands inside the transcript, and the
@@ -6042,13 +6052,21 @@ fn variant_decline_explanation(e: &FerroError) -> Option<String> {
 ///   inputs the precise tx-to-genome path can't resolve (which is also
 ///   what `project_to_genomic` itself rejects elsewhere for intronic
 ///   non-coding offsets).
+///
+/// `star_marker` is deliberately axis-neutral: it is `RnaPos.utr3` on the `r.`
+/// axis and `TxPos.downstream` on the `n.` axis. The two mean different things
+/// about the sequence — `r.*N` is the 3'UTR, `n.*N` is past the transcript end —
+/// but they answer this function's only question identically, namely "is this a
+/// position `tx_to_genome` can resolve directly?", to which both say no. Naming
+/// the parameter `utr3` was how the `n.` caller came to pass a hard-coded
+/// `false` and seed `n.*5` at the coordinate of `n.5`.
 fn nr_representative_genome_pos(
     cdot_tx: &CdotTranscript,
     base: i64,
     offset: Option<i64>,
-    utr3: bool,
+    star_marker: bool,
 ) -> Result<u64, FerroError> {
-    if offset.is_some() || utr3 || base < 1 {
+    if offset.is_some() || star_marker || base < 1 {
         return cdot_tx
             .exons
             .first()
@@ -8972,6 +8990,76 @@ mod tests {
             results.iter().any(|p| p.transcript_id == "NM_TX1.1"),
             "expected at least the input transcript's projection, got {:?}",
             results.iter().map(|p| &p.transcript_id).collect::<Vec<_>>()
+        );
+    }
+
+    /// The fan-out seed must honour `TxPos.downstream`, exactly as its `r.`
+    /// sibling honours `RnaPos.utr3`.
+    ///
+    /// `extract_contig_and_pos`'s own doc comment already promises this — it
+    /// lists "intronic offsets, **downstream**/utr3 markers, non-positive
+    /// bases" as the cases that fall back to the transcript's first-exon
+    /// genomic start — but the `Tx` arm passed a hard-coded `false`, so `n.*5`
+    /// was seeded at the genomic coordinate of the *in-transcript* base 5.
+    ///
+    /// On this fixture (one exon, genome 1000..1009, tx 0..9) that is the
+    /// difference between 1004 (base 5, wrong) and 1000 (the first-exon
+    /// fallback the contract names). Asserted on the seed rather than on the
+    /// projection so the check cannot be satisfied by a downstream repair.
+    #[test]
+    fn fanout_seed_honours_the_downstream_marker_on_the_n_axis() {
+        use crate::hgvs::edit::{Base, NaEdit};
+        use crate::hgvs::interval::{RnaInterval, TxInterval};
+        use crate::hgvs::location::{RnaPos, TxPos};
+        use crate::hgvs::variant::{Accession, HgvsVariant, LocEdit, RnaVariant, TxVariant};
+        let (projector, provider) = make_two_transcript_setup();
+        let vp = VariantProjector::new(projector, provider);
+
+        let accession = || {
+            parse_accession("NM_TX1.1").with_genomic_context(Accession::new(
+                "NC",
+                "000001",
+                Some(11),
+            ))
+        };
+        let edit = || NaEdit::Substitution {
+            reference: Base::C,
+            alternative: Base::A,
+        };
+        let seed = |variant: HgvsVariant| {
+            vp.extract_contig_and_pos(&variant)
+                .expect("seeding must succeed")
+                .1
+        };
+
+        let plain = seed(HgvsVariant::Tx(TxVariant {
+            accession: accession(),
+            gene_symbol: Some("GENE1".to_string()),
+            loc_edit: LocEdit::new(TxInterval::point(TxPos::new(5)), edit()),
+        }));
+        assert_eq!(plain, 1004, "control: n.5 seeds at its own exonic position");
+
+        let downstream = seed(HgvsVariant::Tx(TxVariant {
+            accession: accession(),
+            gene_symbol: Some("GENE1".to_string()),
+            loc_edit: LocEdit::new(TxInterval::point(TxPos::downstream(5)), edit()),
+        }));
+        assert_eq!(
+            downstream, 1000,
+            "n.*5 must take the first-exon fallback the contract names, not \
+             the coordinate of in-transcript base 5"
+        );
+
+        // The `r.` arm already passes its `*` marker through; pinned as the
+        // sibling this is being made to match.
+        let rna_utr3 = seed(HgvsVariant::Rna(RnaVariant {
+            accession: accession(),
+            gene_symbol: Some("GENE1".to_string()),
+            loc_edit: LocEdit::new(RnaInterval::point(RnaPos::utr3(5)), edit()),
+        }));
+        assert_eq!(
+            rna_utr3, downstream,
+            "the two `*` arms must seed identically"
         );
     }
 
